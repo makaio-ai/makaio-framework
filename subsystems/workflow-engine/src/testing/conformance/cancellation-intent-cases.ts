@@ -22,7 +22,12 @@ export function registerCancellationIntentCases(
     const claim = await allocateAttempt(repository, ids);
     await repository.requestCancellation({ executionId: ids.executionId, reason: 'operator cancelled' });
     const intent = await peer.readCancellation(ids.executionAttemptId);
-    expect(intent).toEqual({ requestedAt: expect.any(String), reason: 'operator cancelled' });
+    expect(intent).toEqual({
+      requestKey: expect.any(String),
+      controlRevision: 1,
+      requestedAt: expect.any(String),
+      reason: 'operator cancelled',
+    });
     expect(Number.isFinite(Date.parse(intent!.requestedAt))).toBe(true);
     expect(await peer.recovery.getAttemptWithAllocation(ids.executionAttemptId)).toMatchObject({
       status: 'allocated',
@@ -51,9 +56,10 @@ export function registerCancellationIntentCases(
     const ids = nextIds();
     const other = nextIds();
     await allocateAttempt(repository, ids);
+    const outcome = repository.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId));
     await repository.commitOutcome({
       ...ids,
-      result: repository.canonicalizeOutcome(makeTestWorkflowResult(ids.executionId)),
+      result: outcome,
     });
     const successor = { ...ids, executionAttemptId: `${ids.executionAttemptId}-next` };
     await allocateAttempt(repository, successor);
@@ -64,6 +70,12 @@ export function registerCancellationIntentCases(
     expect(await repository.readCancellation(other.executionAttemptId)).toBeNull();
     expect(await repository.getAttemptControlState(other.executionAttemptId)).toMatchObject({
       operationStartGate: 'open',
+    });
+    expect(await repository.readAttemptSettlement(ids)).toMatchObject({
+      kind: 'outcome',
+      isCurrentAttempt: false,
+      result: outcome,
+      controlObservation: { controlRevision: 0, cancellation: null },
     });
   });
 

@@ -22,12 +22,18 @@ export function registerSettlementReplayCases(
 
     const accepted = await harness.repository.commitOutcome({ ...ids, result: outcome });
     if (accepted.kind !== 'accepted') throw new Error(`Expected outcome acceptance, got '${accepted.kind}'`);
-    expect(accepted).toEqual({ kind: 'accepted', outcome: outcome.outcome, text: outcome.text });
+    expect(accepted).toEqual({
+      kind: 'accepted',
+      outcome: outcome.outcome,
+      text: outcome.text,
+      controlObservation: { controlRevision: 0, cancellation: null },
+    });
     await assertSettlementUnchanged(harness, ids, allocationRef, 'outcome', async () => {
       expect(await harness.peer.commitOutcome({ ...ids, result: outcome })).toEqual({
         kind: 'duplicate',
         outcome: accepted.outcome,
         text: accepted.text,
+        controlObservation: { controlRevision: 0, cancellation: null },
       });
     });
   });

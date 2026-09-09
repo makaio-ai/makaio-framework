@@ -970,6 +970,7 @@ describe('ExecutionAttemptAuthority', () => {
         kind: 'accepted',
         outcome: result,
         text: authority.canonicalizeOutcome(result).text,
+        controlObservation: { controlRevision: 0, cancellation: null },
       });
 
       // commitOutcome no longer settles the waiter for accepted outcomes —
@@ -1011,6 +1012,7 @@ describe('ExecutionAttemptAuthority', () => {
         kind: 'accepted',
         outcome: result,
         text: authority.canonicalizeOutcome(result).text,
+        controlObservation: { controlRevision: 0, cancellation: null },
       });
     });
 
@@ -1033,6 +1035,7 @@ describe('ExecutionAttemptAuthority', () => {
         kind: 'accepted',
         outcome: result,
         text: authority.canonicalizeOutcome(result).text,
+        controlObservation: { controlRevision: 0, cancellation: null },
       });
     });
 
@@ -1084,6 +1087,7 @@ describe('ExecutionAttemptAuthority', () => {
         kind: 'duplicate',
         outcome: result,
         text: authority.canonicalizeOutcome(result).text,
+        controlObservation: { controlRevision: 0, cancellation: null },
       });
     });
   });
@@ -1232,6 +1236,7 @@ describe('ExecutionAttemptAuthority', () => {
         kind: 'accepted',
         outcome: pausedResult,
         text: authority.canonicalizeOutcome(pausedResult).text,
+        controlObservation: { controlRevision: 0, cancellation: null },
       });
 
       // The waiter is NOT resolved yet — convergence must happen first.

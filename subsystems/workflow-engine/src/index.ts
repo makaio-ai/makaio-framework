@@ -88,6 +88,10 @@ export {
   evaluateOperationAdmission,
   evaluateOperationCompletion,
   evaluateRuntimeReadiness,
+  evaluateAttemptCancellation,
+  snapshotAttemptOutcomeControl,
+  snapshotRequestAttemptCancellationInput,
+  snapshotRequestExecutionCancellationInput,
 } from './execution-attempt-repository.js';
 export {
   snapshotEnsureExecutionAttemptInput,
@@ -118,7 +122,10 @@ export type {
   ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
   ExecutionAttemptCancellationIntent,
+  ExecutionAttemptCancellationDecision,
+  RequestAttemptCancellationInput,
   RequestExecutionCancellationInput,
+  AttemptOutcomeControlObservation,
   ExecutionAttemptRecord,
   RecoverableAttemptRecord,
   ExecutionAttemptCreate,

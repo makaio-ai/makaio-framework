@@ -17,6 +17,41 @@ import type {
   RuntimeRegistrationDecision,
 } from './execution-attempt-repository.js';
 
+/** Runtime and operation expected to remain current when an outcome becomes durable. */
+export interface RuntimeOutcomeFence {
+  /** Registered runtime generation that produced the result. */
+  readonly runtimeGeneration: number;
+  /** Admitted operation, or null for a startup failure before any operation. */
+  readonly operationId: string | null;
+}
+
+/** A runtime result lost its execution slot before commit; the attempt remains available to its current runtime. */
+export class RuntimeOutcomeFenceMismatchError extends Error {
+  public constructor() {
+    super('Runtime outcome no longer matches the current generation and operation');
+    this.name = 'RuntimeOutcomeFenceMismatchError';
+  }
+}
+
+/**
+ * Require a fresh runtime outcome to belong to the coherently read execution slot.
+ * Repositories call this after canonical replay/settlement decisions and repeat its
+ * predicates in the committing write. A mismatch must not settle the attempt's waiter.
+ * @param control - Current runtime and operation facts.
+ * @param fence - Expected runtime slot, absent for owner-only outcome submission.
+ * @throws RuntimeOutcomeFenceMismatchError when the originating runtime slot changed.
+ */
+export function assertRuntimeOutcomeFence(control: AttemptControlState, fence: RuntimeOutcomeFence | undefined): void {
+  if (fence === undefined) return;
+  if (
+    control.runtimeGeneration !== fence.runtimeGeneration ||
+    control.activeOperationId !== fence.operationId ||
+    (fence.operationId !== null && control.activeOperationGeneration !== fence.runtimeGeneration)
+  ) {
+    throw new RuntimeOutcomeFenceMismatchError();
+  }
+}
+
 /** Facts read coherently by a realization before decoding runtime control state. */
 export interface AttemptReachability {
   /** Whether the requested attempt exists and belongs to the requested owner. */

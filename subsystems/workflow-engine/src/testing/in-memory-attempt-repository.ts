@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { BoundedRecoveryEvidenceSchema, type ExecutionAttemptInstruction } from '@makaio/contracts';
 import {
   DuplicateExecutionAttemptError,
@@ -13,6 +14,10 @@ import {
   assertRuntimeOutcomeFence,
   sameAllocationRef,
   sameDurableOutcome,
+  evaluateAttemptCancellation,
+  snapshotAttemptOutcomeControl,
+  snapshotRequestAttemptCancellationInput,
+  snapshotRequestExecutionCancellationInput,
 } from '../execution-attempt-repository.js';
 import {
   snapshotEnsureExecutionAttemptPersistenceInput,
@@ -27,6 +32,7 @@ import type {
   AllocationRefEvolutionDecision,
   AllocationTerminationDecision,
   AttemptControlState,
+  AttemptOutcomeControlObservation,
   AttemptReachabilityDecision,
   AttemptSettlementRead,
   BeginProvisioningInput,
@@ -44,6 +50,8 @@ import type {
   ExecutionAttemptOutcomeDecision,
   ExecutionAttemptRecord,
   ExecutionAttemptCancellationIntent,
+  ExecutionAttemptCancellationDecision,
+  RequestAttemptCancellationInput,
   RequestExecutionCancellationInput,
   ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
@@ -129,6 +137,8 @@ export interface InMemoryAttemptRepositoryState {
    * freeze can protect.
    */
   readonly committedOutcomes: Map<string, string>;
+  /** Commit-time control facts, absent only for outcomes created before this observation existed. */
+  readonly outcomeControlObservations: Map<string, AttemptOutcomeControlObservation>;
   /** Active attempt per `executionId`, the fence every bootstrap path reads. */
   readonly activeAttempts: Map<string, string>;
   /** Request-to-attempt bindings, nested by owner and then opaque request key. */
@@ -236,6 +246,8 @@ export function createInMemoryAttemptRepository<TOutcome>(
   const allocationTerminated = (executionAttemptId: string): boolean =>
     operations.get(executionAttemptId)?.obligation === 'terminal-convergence';
   const committedOutcomes = seed.committedOutcomes ?? new Map<string, string>();
+  const outcomeControlObservations =
+    seed.outcomeControlObservations ?? new Map<string, AttemptOutcomeControlObservation>();
   const activeAttempts = seed.activeAttempts ?? new Map<string, string>();
   const requestBindings = seed.requestBindings ?? new Map<string, Map<string, string>>();
   const cancellations = seed.cancellations ?? new Map<string, ExecutionAttemptCancellationIntent>();
@@ -503,6 +515,7 @@ export function createInMemoryAttemptRepository<TOutcome>(
           attempt: attempts.get(snapshot.executionAttemptId) ?? null,
           activeAttemptId: activeAttempts.get(snapshot.executionId) ?? null,
           outcomeText: committedOutcomes.get(snapshot.executionAttemptId) ?? null,
+          controlObservation: outcomeControlObservations.get(snapshot.executionAttemptId) ?? null,
         },
         codec,
       );
@@ -867,14 +880,38 @@ export function createInMemoryAttemptRepository<TOutcome>(
       return attempt === undefined ? null : toAttemptControlState(attempt);
     },
 
+    async requestAttemptCancellation(
+      input: RequestAttemptCancellationInput,
+    ): Promise<ExecutionAttemptCancellationDecision> {
+      const snapshot = snapshotRequestAttemptCancellationInput(input);
+      const attempt = attempts.get(snapshot.executionAttemptId);
+      if (attempt === undefined || attempt.executionId !== snapshot.executionId) return { kind: 'not-found' };
+      const decision = evaluateAttemptCancellation(
+        cancellations.get(snapshot.executionAttemptId) ?? null,
+        snapshot,
+        new Date().toISOString(),
+      );
+      if (decision.kind === 'conflict') return decision;
+      cancellations.set(snapshot.executionAttemptId, { ...decision.intent });
+      attempts.set(snapshot.executionAttemptId, { ...attempt, operationStartGate: 'closed' });
+      return decision;
+    },
+
     async requestCancellation(input: RequestExecutionCancellationInput): Promise<void> {
-      const intent = {
-        requestedAt: new Date().toISOString(),
-        ...(input.reason !== undefined ? { reason: input.reason } : {}),
-      };
-      for (const [id, attempt] of attempts) {
-        if (attempt.executionId !== input.executionId) continue;
-        if (!cancellations.has(id)) cancellations.set(id, intent);
+      const snapshot = snapshotRequestExecutionCancellationInput(input);
+      const candidate = { ...snapshot, requestKey: randomUUID() };
+      const requestedAt = new Date().toISOString();
+      // Evaluate the entire owner fanout before mutating any row. Historical
+      // attempts still need cleanup, but their outcome observations stay frozen.
+      const decisions = [...attempts]
+        .filter(([, attempt]) => attempt.executionId === snapshot.executionId)
+        .map(([id, attempt]) => {
+          const decision = evaluateAttemptCancellation(cancellations.get(id) ?? null, candidate, requestedAt);
+          if (decision.kind === 'conflict') throw new Error('Conflicting generated cancellation request key');
+          return { id, attempt, intent: decision.intent };
+        });
+      for (const { id, attempt, intent } of decisions) {
+        cancellations.set(id, { ...intent });
         attempts.set(id, { ...attempt, operationStartGate: 'closed' });
       }
     },
@@ -933,7 +970,12 @@ export function createInMemoryAttemptRepository<TOutcome>(
         // being the same text, and what a caller decodes for a waiter must
         // be the representation the attempt holds.
         return sameDurableOutcome(storedText, submission.text)
-          ? { kind: 'duplicate', outcome: committed, text: storedText }
+          ? {
+              kind: 'duplicate',
+              outcome: committed,
+              text: storedText,
+              controlObservation: structuredClone(outcomeControlObservations.get(input.executionAttemptId) ?? null),
+            }
           : { kind: 'conflict' };
       }
 
@@ -943,17 +985,24 @@ export function createInMemoryAttemptRepository<TOutcome>(
       if (attempt.settlementKind != null) return { kind: 'conflict' };
 
       assertRuntimeOutcomeFence(attempt, input.runtimeFence);
+      const controlObservation = snapshotAttemptOutcomeControl(cancellations.get(input.executionAttemptId) ?? null);
 
-      // What this realization keeps is the codec text and nothing else, the
-      // column a durable realization holds. Keeping the submitter's copy
+      // The outcome payload stays codec text, with control facts held separately.
+      // Keeping the submitter's copy
       // instead would let an owner converge on a value no reload ever yields.
       committedOutcomes.set(input.executionAttemptId, submission.text);
+      outcomeControlObservations.set(input.executionAttemptId, controlObservation);
       attempts.set(input.executionAttemptId, settleAttempt(attempt, 'outcome'));
       // Decoded from the text that was just stored, not taken from
       // `submission.outcome`: the caller has held that value since before its
       // own validation, and a mutable outcome it changed there would be
       // reported back as the committed one — a value no later read yields.
-      return { kind: 'accepted', outcome: decodeDurableOutcome(codec, submission.text), text: submission.text };
+      return {
+        kind: 'accepted',
+        outcome: decodeDurableOutcome(codec, submission.text),
+        text: submission.text,
+        controlObservation: structuredClone(controlObservation),
+      };
     },
 
     async abandonPendingAttempt(
@@ -979,6 +1028,7 @@ export function createInMemoryAttemptRepository<TOutcome>(
     attempts,
     operations,
     committedOutcomes,
+    outcomeControlObservations,
     activeAttempts,
     requestBindings,
     cancellations,

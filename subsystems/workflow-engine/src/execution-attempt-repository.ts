@@ -11,6 +11,13 @@ import type {
 } from '@makaio/contracts';
 import { canonicalStringify } from '@makaio/utils';
 import type { OwnerRequestRecoveryRepository } from './execution-attempt-owner-recovery.js';
+import type { ExecutionAttemptOutcomeCommit, ExecutionAttemptOutcomeDecision } from './execution-attempt-outcome.js';
+import type {
+  ExecutionAttemptCancellationDecision,
+  ExecutionAttemptCancellationIntent,
+  RequestAttemptCancellationInput,
+  RequestExecutionCancellationInput,
+} from './execution-attempt-cancellation.js';
 import type {
   CompleteProviderOperationInput,
   HandoffProviderOperationInput,
@@ -42,6 +49,7 @@ export type {
 } from './provider-operation.js';
 
 export {
+  assertRuntimeOutcomeFence,
   evaluateAttemptReachability,
   evaluateProvisionerIncarnationLoss,
   evaluateRuntimeRegistration,
@@ -49,8 +57,27 @@ export {
   evaluateOperationCompletion,
   evaluatePreparationReport,
   evaluateRuntimeReadiness,
+  RuntimeOutcomeFenceMismatchError,
 } from './execution-attempt-decisions.js';
-export type { AttemptReachability, AttemptReachabilityDecision } from './execution-attempt-decisions.js';
+export type {
+  AttemptReachability,
+  AttemptReachabilityDecision,
+  RuntimeOutcomeFence,
+} from './execution-attempt-decisions.js';
+export type { ExecutionAttemptOutcomeCommit, ExecutionAttemptOutcomeDecision } from './execution-attempt-outcome.js';
+export type {
+  AttemptOutcomeControlObservation,
+  ExecutionAttemptCancellationDecision,
+  ExecutionAttemptCancellationIntent,
+  RequestAttemptCancellationInput,
+  RequestExecutionCancellationInput,
+} from './execution-attempt-cancellation.js';
+export {
+  evaluateAttemptCancellation,
+  snapshotAttemptOutcomeControl,
+  snapshotRequestAttemptCancellationInput,
+  snapshotRequestExecutionCancellationInput,
+} from './execution-attempt-cancellation.js';
 export type {
   AttemptSettlementRead,
   AttemptSettlementSnapshot,
@@ -189,22 +216,6 @@ export function sameAllocationRef(stored: ProviderAllocationRef, candidate: Prov
  * workflow-storage lookup keys keep plain `string`.
  */
 export type ExecutionOwnerId = string;
-
-/** A durable request to stop an attempt, never evidence that it stopped. */
-export interface ExecutionAttemptCancellationIntent {
-  /** First accepted request time, preserved across duplicate requests and controller handoff. */
-  readonly requestedAt: string;
-  /** Optional owner-supplied explanation. */
-  readonly reason?: string;
-}
-
-/** Owner-scoped cancellation of attempts that exist when the request commits. */
-export interface RequestExecutionCancellationInput {
-  /** Owner authorizing the cancellation of its existing attempts. */
-  readonly executionId: ExecutionOwnerId;
-  /** Explanation retained only when this is the first request for an attempt. */
-  readonly reason?: string;
-}
 
 /**
  * Compare two durable outcome texts as values.
@@ -740,68 +751,6 @@ export interface BeginProvisioningInput {
   readonly leaseExpiresAt: string;
 }
 
-/**
- * Input for committing a terminal outcome to an attempt.
- *
- * The repository makes the durable accept/duplicate/conflict/fence decision
- * and returns the canonical outcome for convergence. Outcome commitment
- * carries no claim: a worker's answer never depends on who currently owns
- * the attempt's provider operation.
- * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
- */
-export interface ExecutionAttemptOutcomeCommit<TOutcome> {
-  /** Authority-created attempt identifier. */
-  readonly executionAttemptId: string;
-  /** Owner identifier the attempt belongs to. */
-  readonly executionId: ExecutionOwnerId;
-  /**
-   * The rendering to commit, from
-   * {@link ExecutionAttemptRepository.canonicalizeOutcome}.
-   *
-   * A rendering rather than a raw outcome so the value a caller validated and
-   * the value that becomes durable are the same one: the caller renders the
-   * submission once and never reads its own object again.
-   */
-  readonly result: DurableOutcome<TOutcome>;
-  /** Runtime correlation checked atomically for a fresh commit; owner-only paths may omit it. */
-  readonly runtimeFence?: RuntimeOutcomeFence;
-}
-
-/** Runtime and operation expected to remain current when an outcome becomes durable. */
-export interface RuntimeOutcomeFence {
-  /** Registered runtime generation that produced the result. */
-  readonly runtimeGeneration: number;
-  /** Admitted operation, or null for a startup failure before any operation. */
-  readonly operationId: string | null;
-}
-
-/** A runtime result lost its execution slot before commit; the attempt remains available to its current runtime. */
-export class RuntimeOutcomeFenceMismatchError extends Error {
-  public constructor() {
-    super('Runtime outcome no longer matches the current generation and operation');
-    this.name = 'RuntimeOutcomeFenceMismatchError';
-  }
-}
-
-/**
- * Require a fresh runtime outcome to belong to the coherently read execution slot.
- * Repositories call this after canonical replay/settlement decisions and repeat its
- * predicates in the committing write. A mismatch must not settle the attempt's waiter.
- * @param control - Current runtime and operation facts.
- * @param fence - Expected runtime slot, absent for owner-only outcome submission.
- * @throws RuntimeOutcomeFenceMismatchError when the originating runtime slot changed.
- */
-export function assertRuntimeOutcomeFence(control: AttemptControlState, fence: RuntimeOutcomeFence | undefined): void {
-  if (fence === undefined) return;
-  if (
-    control.runtimeGeneration !== fence.runtimeGeneration ||
-    control.activeOperationId !== fence.operationId ||
-    (fence.operationId !== null && control.activeOperationGeneration !== fence.runtimeGeneration)
-  ) {
-    throw new RuntimeOutcomeFenceMismatchError();
-  }
-}
-
 /** Input for recording an allocation reference against a held operation. */
 export interface RecordAllocationInput {
   /** Claim authorizing the record. */
@@ -1119,37 +1068,6 @@ export type PendingAttemptAbandonmentDecision =
   | { readonly kind: 'already-settled' }
   | { readonly kind: 'allocated' }
   | { readonly kind: 'provisioning' }
-  | { readonly kind: 'fenced' };
-
-/**
- * Durable outcome decision returned by {@link ExecutionAttemptRepository.commitOutcome}.
- *
- * - `accepted`: the outcome was committed as canonical for the first time.
- *   The stored text decoded is reported, never the caller's copy of it.
- * - `duplicate`: an outcome whose durable text {@link sameDurableOutcome}
- *   judges identical to the committed one was submitted again; this is a
- *   replay. The committed outcome is reported, never the caller's copy of it.
- * - `conflict`: the attempt already reached a different terminal state — either
- *   a different committed outcome, or a competing terminal transition that
- *   settled it without one.
- * - `fenced`: the attempt is no longer the active attempt for this execution.
- *
- * Both settling kinds carry `text`: the durable text the attempt holds for
- * this outcome. For `accepted` that is the text the commit just wrote; for
- * `duplicate` it is the text the earlier commit wrote, which is not
- * necessarily the retry's own rendering — {@link sameDurableOutcome} judges
- * two texts the same outcome while member order, and anything else a codec
- * may render differently, still differs between them. A caller that needs a
- * copy of the committed outcome nobody else has held decodes this text
- * through {@link ExecutionAttemptRepository.decodeOutcome}; decoding its own
- * submission's text instead would hand out the retry's representation rather
- * than the committed one.
- * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
- */
-export type ExecutionAttemptOutcomeDecision<TOutcome> =
-  | { readonly kind: 'accepted'; readonly outcome: TOutcome; readonly text: string }
-  | { readonly kind: 'duplicate'; readonly outcome: TOutcome; readonly text: string }
-  | { readonly kind: 'conflict' }
   | { readonly kind: 'fenced' };
 
 // ─────────────────────────────────────────────────────────────
@@ -1501,11 +1419,26 @@ export type RuntimeReadinessDecision =
  */
 export interface ExecutionAttemptRepository<TOutcome> extends OwnerRequestRecoveryRepository<TOutcome> {
   /**
+   * Atomically accept an owner's exact-attempt Cancel and close its operation start gate.
+   * Pending and historical attempts remain eligible for monotone cleanup; this grants no
+   * authority to reopen them, rewrite their outcomes or settle their owner. No runtime
+   * registration, allocation or provider claim is required. Owner mismatch is not-found.
+   * The first request establishes revision one, time and reason. Reusing its key with a
+   * different reason conflicts; every other request replays the original winner. Losing
+   * keys are not accepted commands and are not recorded in a separate request history.
+   * @param input - Trusted owner, exact attempt, stable request key and optional reason.
+   * @returns Detached winning receipt or a refusal without mutation.
+   */
+  requestAttemptCancellation(input: RequestAttemptCancellationInput): Promise<ExecutionAttemptCancellationDecision>;
+
+  /**
    * Persist first-wins cancellation intent and close operation start gates atomically
    * for every existing attempt of this owner, including historical allocations.
    * This does not settle an attempt or confirm provider termination. The owner must
    * prevent later attempts after cancellation; this port does not install a permanent
-   * owner-wide creation fence. Repeated requests preserve the first time and reason.
+   * owner-wide creation fence. One opaque request key is generated per fanout call;
+   * each target uses the exact-attempt cancellation decision inside the same transaction.
+   * Repeated requests preserve the first key, revision, time and reason.
    * @param input - Owner identity and optional explanation, snapshotted before awaiting.
    */
   requestCancellation(input: RequestExecutionCancellationInput): Promise<void>;
@@ -1975,6 +1908,13 @@ export interface ExecutionAttemptRepository<TOutcome> extends OwnerRequestRecove
    * `result.text` for `accepted`, and the stored text for `duplicate` — the
    * record's own, not the submission's, because the two are the same outcome
    * without being the same text.
+   *
+   * The first accepted commit stores its control observation in the same transaction:
+   * revision zero with no cancellation, or the winning cancellation receipt and revision.
+   * This side field never changes the opaque outcome. Duplicate decisions return that
+   * original observation even after a later cleanup Cancel; they do not reread current
+   * cancellation to reinterpret history. Null means an outcome committed before this
+   * observation existed, never a claim that no cancellation had been accepted.
    * @param input - Attempt identity and the rendering to commit.
    * @returns The durable decision with the canonical outcome when applicable.
    */

@@ -7,6 +7,7 @@ import { canonicalStringify } from '@makaio/utils';
 import { parseInstruction } from './attempt-value-snapshot.js';
 import { decodeDurableOutcome } from './execution-attempt-repository.js';
 import type {
+  AttemptOutcomeControlObservation,
   DurableOutcome,
   ExecutionAttemptRecord,
   ExecutionOwnerId,
@@ -56,6 +57,8 @@ export type AttemptSettlementRead<TOutcome> =
       readonly attempt: ExecutionAttemptRecord;
       readonly isCurrentAttempt: boolean;
       readonly result: DurableOutcome<TOutcome>;
+      /** Original commit-time facts, or null for a legacy outcome lacking that observation. */
+      readonly controlObservation: AttemptOutcomeControlObservation | null;
     };
 
 /** Raw facts a realization must read within one coherent store observation. */
@@ -63,6 +66,8 @@ export interface AttemptSettlementSnapshot {
   readonly attempt: ExecutionAttemptRecord | null;
   readonly activeAttemptId: string | null;
   readonly outcomeText: string | null;
+  /** Stored commit-time observation; never reconstructed from current cancellation state. */
+  readonly controlObservation: AttemptOutcomeControlObservation | null;
 }
 
 /** Required owner-recovery methods composed into every execution attempt repository. */
@@ -193,6 +198,7 @@ export function readAttemptSettlementSnapshot<TOutcome>(
       kind: 'outcome',
       ...facts,
       result: { text: outcomeText, outcome: decodeDurableOutcome(codec, outcomeText) },
+      controlObservation: structuredClone(snapshot.controlObservation),
     };
   }
   if (

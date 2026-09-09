@@ -10,6 +10,7 @@
  * @packageDocumentation
  */
 import { sql, type SQL } from 'drizzle-orm';
+import { z } from 'zod';
 import type { ExecutionAttemptInstruction, ProviderAllocationRef } from '@makaio/contracts';
 import {
   BoundedRecoveryEvidenceSchema,
@@ -44,6 +45,10 @@ import {
   assertRuntimeOutcomeFence,
   sameAllocationRef,
   sameDurableOutcome,
+  evaluateAttemptCancellation,
+  snapshotAttemptOutcomeControl,
+  snapshotRequestAttemptCancellationInput,
+  snapshotRequestExecutionCancellationInput,
 } from '../execution-attempt-repository.js';
 import {
   snapshotEnsureExecutionAttemptPersistenceInput,
@@ -58,6 +63,7 @@ import type {
   AllocationRefEvolutionDecision,
   AllocationTerminationDecision,
   AttemptControlState,
+  AttemptOutcomeControlObservation,
   AttemptReachabilityDecision,
   BeginProvisioningInput,
   CompleteOperationInput,
@@ -75,6 +81,8 @@ import type {
   ExecutionAttemptOutcomeDecision,
   ExecutionAttemptRecord,
   ExecutionAttemptCancellationIntent,
+  ExecutionAttemptCancellationDecision,
+  RequestAttemptCancellationInput,
   RequestExecutionCancellationInput,
   ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
@@ -145,6 +153,8 @@ import { parseInstruction } from '../attempt-value-snapshot.js';
 const SCHEMA_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS test_execution_attempt_cancellation (
      execution_attempt_id TEXT PRIMARY KEY,
+     request_key TEXT NOT NULL,
+     control_revision INTEGER NOT NULL,
      requested_at TEXT NOT NULL,
      reason TEXT
    )`,
@@ -160,6 +170,7 @@ const SCHEMA_STATEMENTS = [
      allocation_ref TEXT,
      settlement_kind TEXT,
      workflow_result TEXT,
+     outcome_control_observation TEXT,
      claimable INTEGER NOT NULL DEFAULT 0,
      claim_expires_at TEXT,
      created_at TEXT NOT NULL,
@@ -218,6 +229,7 @@ interface AttemptRow extends Record<string, unknown> {
   readonly allocation_ref: string | null;
   readonly settlement_kind: string | null;
   readonly workflow_result: string | null;
+  readonly outcome_control_observation: string | null;
   readonly claimable: number;
   readonly claim_expires_at: string | null;
   readonly created_at: string;
@@ -283,6 +295,30 @@ function parseMember<TMember extends string>(members: readonly TMember[], value:
  */
 function parseJsonColumn<TValue>(json: string | null, parse: (value: unknown) => TValue): TValue | null {
   return json === null ? null : parse(JSON.parse(json));
+}
+
+const cancellationReceiptSchema = z.object({
+  requestKey: z.string().min(1),
+  controlRevision: z.number().int().positive(),
+  requestedAt: z.string().datetime(),
+  reason: z.string().optional(),
+});
+const outcomeControlSchema = z.object({
+  controlRevision: z.number().int().nonnegative(),
+  cancellation: cancellationReceiptSchema.nullable(),
+});
+
+/**
+ * Decode immutable evidence without treating missing legacy evidence as no cancellation.
+ * @param json - Stored observation, or null when no historical observation was recorded.
+ */
+function decodeOutcomeControl(json: string | null): AttemptOutcomeControlObservation | null {
+  if (json === null) return null;
+  const observation = outcomeControlSchema.parse(JSON.parse(json));
+  if (observation.controlRevision !== (observation.cancellation?.controlRevision ?? 0)) {
+    throw new Error('Stored outcome control revision does not match its cancellation receipt');
+  }
+  return observation;
 }
 
 /**
@@ -691,6 +727,33 @@ export async function createSqliteAttemptRepository<TOutcome>(
     if (!columns.some((column) => column.name === 'bootstrap_deadline_at')) {
       await executor.run(sql.raw('ALTER TABLE test_execution_attempt ADD COLUMN bootstrap_deadline_at TEXT'));
     }
+    if (!columns.some((column) => column.name === 'outcome_control_observation')) {
+      // Old outcomes carry no ordering evidence. NULL stays unknown rather
+      // than reconstructing an observation from today's cancellation receipt.
+      await executor.run(sql.raw('ALTER TABLE test_execution_attempt ADD COLUMN outcome_control_observation TEXT'));
+    }
+    const cancellationColumns = await executor.all<{ name: string }>(
+      sql.raw('PRAGMA table_info(test_execution_attempt_cancellation)'),
+    );
+    if (!cancellationColumns.some((column) => column.name === 'request_key')) {
+      await executor.run(sql.raw('ALTER TABLE test_execution_attempt_cancellation ADD COLUMN request_key TEXT'));
+    }
+    if (!cancellationColumns.some((column) => column.name === 'control_revision')) {
+      await executor.run(
+        sql.raw(
+          'ALTER TABLE test_execution_attempt_cancellation ADD COLUMN control_revision INTEGER NOT NULL DEFAULT 1',
+        ),
+      );
+    }
+    const unkeyedCancellations = await executor.all<{ execution_attempt_id: string }>(
+      sql`SELECT execution_attempt_id FROM test_execution_attempt_cancellation WHERE request_key IS NULL`,
+    );
+    for (const row of unkeyedCancellations) {
+      // This is a new framework correlation key, not a recovered caller key.
+      // Persist it once, like the key generated for owner-wide cancellation.
+      await executor.run(sql`UPDATE test_execution_attempt_cancellation SET request_key = ${crypto.randomUUID()}
+        WHERE execution_attempt_id = ${row.execution_attempt_id} AND request_key IS NULL`);
+    }
     // Test databases persist across repository construction in restart tests.
     // Add the positive-completion fact separately so rows created by the
     // earlier operation protocol remain open rather than being misread as
@@ -764,6 +827,51 @@ export async function createSqliteAttemptRepository<TOutcome>(
         }
       }),
     );
+  };
+
+  /**
+   * Read the winning receipt from the caller's transaction, never from a later mutable view.
+   * @param session - Session inside the caller's atomic transition.
+   * @param executionAttemptId - Exact attempt whose winning receipt is read.
+   */
+  const readCancellationInSession = async (
+    session: RawSqlSession,
+    executionAttemptId: string,
+  ): Promise<ExecutionAttemptCancellationIntent | null> => {
+    const [row] = await session.all<{
+      request_key: string;
+      control_revision: number;
+      requested_at: string;
+      reason: string | null;
+    }>(sql`SELECT request_key, control_revision, requested_at, reason
+      FROM test_execution_attempt_cancellation WHERE execution_attempt_id = ${executionAttemptId}`);
+    return row === undefined
+      ? null
+      : cancellationReceiptSchema.parse({
+          requestKey: row.request_key,
+          controlRevision: row.control_revision,
+          requestedAt: row.requested_at,
+          ...(row.reason === null ? {} : { reason: row.reason }),
+        });
+  };
+
+  /**
+   * Receipt and admission closure are one atomic cancellation decision.
+   * @param session - Session inside the caller's atomic transition.
+   * @param executionAttemptId - Exact attempt whose admission is closed.
+   * @param intent - Accepted winning receipt to persist with admission closure.
+   */
+  const writeCancellationInSession = async (
+    session: RawSqlSession,
+    executionAttemptId: string,
+    intent: ExecutionAttemptCancellationIntent,
+  ): Promise<void> => {
+    await session.run(sql`INSERT INTO test_execution_attempt_cancellation
+      (execution_attempt_id, request_key, control_revision, requested_at, reason)
+      VALUES (${executionAttemptId}, ${intent.requestKey}, ${intent.controlRevision},
+        ${intent.requestedAt}, ${intent.reason ?? null})`);
+    await session.run(sql`UPDATE test_execution_attempt SET operation_start_gate = 'closed'
+      WHERE execution_attempt_id = ${executionAttemptId}`);
   };
 
   /**
@@ -1297,6 +1405,7 @@ export async function createSqliteAttemptRepository<TOutcome>(
             attempt: toAttemptRecord(row),
             activeAttemptId: await readActiveAttemptId(session, snapshot.executionId),
             outcomeText: row.workflow_result,
+            controlObservation: decodeOutcomeControl(row.outcome_control_observation),
           },
           codec,
         );
@@ -1929,32 +2038,53 @@ export async function createSqliteAttemptRepository<TOutcome>(
       });
     },
 
+    async requestAttemptCancellation(
+      input: RequestAttemptCancellationInput,
+    ): Promise<ExecutionAttemptCancellationDecision> {
+      const snapshot = snapshotRequestAttemptCancellationInput(input);
+      return transact(async (session) => {
+        const row = await readAttemptRow(session, snapshot.executionAttemptId);
+        if (row === undefined || row.execution_id !== snapshot.executionId) return { kind: 'not-found' };
+        const decision = evaluateAttemptCancellation(
+          await readCancellationInSession(session, snapshot.executionAttemptId),
+          snapshot,
+          new Date().toISOString(),
+        );
+        if (decision.kind === 'accepted') {
+          await writeCancellationInSession(session, snapshot.executionAttemptId, decision.intent);
+        }
+        return decision;
+      });
+    },
+
     async requestCancellation(input: RequestExecutionCancellationInput): Promise<void> {
-      const { executionId, reason } = input;
-      const requestedAt = new Date().toISOString();
+      const snapshot = snapshotRequestExecutionCancellationInput(input);
+      const request = { requestKey: crypto.randomUUID(), reason: snapshot.reason };
       await transact(async (session) => {
-        await session.run(sql`INSERT OR IGNORE INTO test_execution_attempt_cancellation
-          (execution_attempt_id, requested_at, reason)
-          SELECT execution_attempt_id, ${requestedAt}, ${reason ?? null}
-          FROM test_execution_attempt WHERE execution_id = ${executionId}`);
-        await session.run(sql`UPDATE test_execution_attempt SET operation_start_gate = 'closed'
-          WHERE execution_id = ${executionId}`);
+        const rows = await session.all<{ execution_attempt_id: string }>(
+          sql`SELECT execution_attempt_id FROM test_execution_attempt WHERE execution_id = ${snapshot.executionId}`,
+        );
+        const requestedAt = new Date().toISOString();
+        const decisions = [];
+        for (const row of rows) {
+          const decision = evaluateAttemptCancellation(
+            await readCancellationInSession(session, row.execution_attempt_id),
+            request,
+            requestedAt,
+          );
+          if (decision.kind === 'conflict')
+            throw new Error('Generated cancellation request key conflicts with its receipt');
+          decisions.push({ executionAttemptId: row.execution_attempt_id, decision });
+        }
+        for (const { executionAttemptId, decision } of decisions) {
+          if (decision.kind === 'accepted')
+            await writeCancellationInSession(session, executionAttemptId, decision.intent);
+        }
       });
     },
 
     async readCancellation(executionAttemptId: string): Promise<ExecutionAttemptCancellationIntent | null> {
-      return transact(async (session) => {
-        const [row] = await session.all<{ requested_at: string; reason: string | null }>(
-          sql`SELECT requested_at, reason FROM test_execution_attempt_cancellation
-            WHERE execution_attempt_id = ${executionAttemptId}`,
-        );
-        return row === undefined
-          ? null
-          : {
-              requestedAt: row.requested_at,
-              ...(row.reason !== null ? { reason: row.reason } : {}),
-            };
-      });
+      return transact((session) => readCancellationInSession(session, executionAttemptId));
     },
 
     async getActiveAttempt(executionId: string, executionAttemptId: string): Promise<ExecutionAttemptRecord | null> {
@@ -1995,8 +2125,9 @@ export async function createSqliteAttemptRepository<TOutcome>(
             : sql`active_operation_id = ${fence.operationId}
                 AND active_operation_generation = ${fence.runtimeGeneration}`
         }`;
-      return transact((session) =>
-        decideByWrite<ExecutionAttemptOutcomeDecision<TOutcome>>(
+      return transact((session) => {
+        let controlObservation: AttemptOutcomeControlObservation | null = null;
+        return decideByWrite<ExecutionAttemptOutcomeDecision<TOutcome>>(
           async () => {
             // Deliberately claim-independent: a worker's answer is never fenced
             // by provider-operation ownership. The precedence below is the one
@@ -2032,7 +2163,12 @@ export async function createSqliteAttemptRepository<TOutcome>(
               // `sameDurableOutcome` without being the same text, and what a
               // caller decodes for a waiter must be what the row holds.
               return sameDurableOutcome(storedText, submission.text)
-                ? { kind: 'duplicate', outcome: committed, text: storedText }
+                ? {
+                    kind: 'duplicate',
+                    outcome: committed,
+                    text: storedText,
+                    controlObservation: decodeOutcomeControl(attemptRow.outcome_control_observation),
+                  }
                 : { kind: 'conflict' };
             }
             // A settlement without a committed outcome means a competing
@@ -2042,9 +2178,14 @@ export async function createSqliteAttemptRepository<TOutcome>(
 
             if (fence !== undefined) assertRuntimeOutcomeFence(decodeAttemptControlState(attemptRow), fence);
 
+            controlObservation = snapshotAttemptOutcomeControl(
+              await readCancellationInSession(session, input.executionAttemptId),
+            );
+
             return async () => {
               const committed = await session.run(
-                sql`UPDATE test_execution_attempt SET workflow_result = ${submission.text}
+                sql`UPDATE test_execution_attempt SET workflow_result = ${submission.text},
+                    outcome_control_observation = ${JSON.stringify(controlObservation)}
                   WHERE execution_attempt_id = ${input.executionAttemptId}
                     AND workflow_result IS NULL
                     AND settlement_kind IS NULL
@@ -2061,9 +2202,14 @@ export async function createSqliteAttemptRepository<TOutcome>(
           // value has been in the caller's hands since before its own
           // validation, and a mutable outcome mutated there would be reported
           // as committed while the column holds the original.
-          { kind: 'accepted', outcome: decodeDurableOutcome(codec, submission.text), text: submission.text },
-        ),
-      );
+          () => ({
+            kind: 'accepted',
+            outcome: decodeDurableOutcome(codec, submission.text),
+            text: submission.text,
+            controlObservation,
+          }),
+        );
+      });
     },
 
     async abandonPendingAttempt(

@@ -773,7 +773,12 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
     // its claim until positive provider completion.
     expect(takeover.kind).toBe('claimed');
     if (takeover.kind !== 'claimed') throw new Error(`Expected takeover, got '${takeover.kind}'`);
-    expect(commit).toEqual({ kind: 'accepted', outcome: result, text: harness.alpha.canonicalizeOutcome(result).text });
+    expect(commit).toEqual({
+      kind: 'accepted',
+      outcome: result,
+      text: harness.alpha.canonicalizeOutcome(result).text,
+      controlObservation: { controlRevision: 0, cancellation: null },
+    });
     const settled = await readRawAttempt(ids.executionAttemptId);
     expect(settled.settlement_kind).toBe('outcome');
     // A settled attempt leaves provider work open until its provider proves
@@ -803,8 +808,18 @@ describe('execution attempt repository contract (transactional SQLite)', () => {
 
     // Both decisions report the text the row holds: the first commit's.
     const storedText = harness.alpha.canonicalizeOutcome(result).text;
-    expect(accepted).toEqual({ kind: 'accepted', outcome: result, text: storedText });
-    expect(replay).toEqual({ kind: 'duplicate', outcome: result, text: storedText });
+    expect(accepted).toEqual({
+      kind: 'accepted',
+      outcome: result,
+      text: storedText,
+      controlObservation: { controlRevision: 0, cancellation: null },
+    });
+    expect(replay).toEqual({
+      kind: 'duplicate',
+      outcome: result,
+      text: storedText,
+      controlObservation: { controlRevision: 0, cancellation: null },
+    });
     expect(divergent).toEqual({ kind: 'conflict' });
     const stored = await readRawAttempt(ids.executionAttemptId);
     expect(stored.workflow_result === null ? null : JSON.parse(stored.workflow_result)).toEqual(result);

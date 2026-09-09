@@ -29,7 +29,8 @@ export function registerNormalizingCases(factory: ExecutionAttemptRepositoryCont
         ...ids,
         result: harness.repository.canonicalizeOutcome(1.2),
       });
-      expect(accepted).toEqual({ kind: 'accepted', outcome: 1, text: '{"counter":1}' });
+      const controlObservation = { controlRevision: 0, cancellation: null };
+      expect(accepted).toEqual({ kind: 'accepted', outcome: 1, text: '{"counter":1}', controlObservation });
 
       // A different submission with the same durable form is the same answer
       // replayed, so it owes `duplicate` — comparing the submitted values would
@@ -41,7 +42,7 @@ export function registerNormalizingCases(factory: ExecutionAttemptRepositoryCont
       // The text is the *stored* one, which the retry's own rendering also
       // happens to equal here — the truncating codec renders `1.2` and `1.7`
       // alike.
-      expect(replay).toEqual({ kind: 'duplicate', outcome: 1, text: '{"counter":1}' });
+      expect(replay).toEqual({ kind: 'duplicate', outcome: 1, text: '{"counter":1}', controlObservation });
 
       // Normalization narrows what counts as the same outcome; it does not
       // dissolve the distinction. `2.5` persists as `2`, which is a second,

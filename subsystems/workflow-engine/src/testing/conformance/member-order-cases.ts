@@ -67,10 +67,21 @@ export function registerMemberOrderCases(factory: ExecutionAttemptRepositoryCont
       expect(original.text).not.toBe(reordered.text);
 
       const accepted = await harness.repository.commitOutcome({ ...ids, result: original });
-      expect(accepted).toEqual({ kind: 'accepted', outcome: { alpha: 1, beta: 2 }, text: original.text });
+      const controlObservation = { controlRevision: 0, cancellation: null };
+      expect(accepted).toEqual({
+        kind: 'accepted',
+        outcome: { alpha: 1, beta: 2 },
+        text: original.text,
+        controlObservation,
+      });
 
       const duplicate = await harness.peer.commitOutcome({ ...ids, result: reordered });
-      expect(duplicate).toEqual({ kind: 'duplicate', outcome: { alpha: 1, beta: 2 }, text: original.text });
+      expect(duplicate).toEqual({
+        kind: 'duplicate',
+        outcome: { alpha: 1, beta: 2 },
+        text: original.text,
+        controlObservation,
+      });
 
       const changed = await harness.peer.commitOutcome({
         ...ids,

@@ -37,9 +37,18 @@ describe('workflow durable cancellation intent', () => {
     await expect(
       MakaioBus.request(WorkflowSubjects.cancel, { executionId: execution.id, reason: 'operator' }),
     ).resolves.toEqual({ cancelled: true });
-    expect(delivered).toEqual([{ requestedAt: expect.any(String), reason: 'operator' }]);
+    expect(delivered).toEqual([
+      {
+        requestKey: expect.any(String),
+        controlRevision: 1,
+        requestedAt: expect.any(String),
+        reason: 'operator',
+      },
+    ]);
     const replacement = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec, repository);
     expect(await replacement.readCancellation(attempt.executionAttemptId)).toEqual(delivered[0]);
+    await authority.requestCancellation({ executionId: execution.id, reason: 'later request' });
+    expect(await authority.readCancellation(attempt.executionAttemptId)).toEqual(delivered[0]);
     expect(repository.attempts.get(attempt.executionAttemptId)).toMatchObject({
       status: 'pending',
       settlementKind: null,
