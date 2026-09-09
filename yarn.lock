@@ -4891,6 +4891,19 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@makaio/evidence-git-file-resolver@workspace:packages/evidence-git-file-resolver":
+  version: 0.0.0-use.local
+  resolution: "@makaio/evidence-git-file-resolver@workspace:packages/evidence-git-file-resolver"
+  dependencies:
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    tsdown: "npm:0.22.0"
+    tsx: "npm:^4.22.3"
+    vitest: "npm:4.1.10"
+  languageName: unknown
+  linkType: soft
+
 "@makaio/expression@workspace:*, @makaio/expression@workspace:packages/expression":
   version: 0.0.0-use.local
   resolution: "@makaio/expression@workspace:packages/expression"

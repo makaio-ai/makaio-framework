@@ -22,7 +22,7 @@ const initialEvidence: NonNullable<ArtifactRevision['evidence']> = [
   {
     source: {
       kind: 'git-file',
-      repository: 'makaio-ai/makaio',
+      repository: { kind: 'github-cloud', path: 'makaio-ai/makaio' },
       path: 'src/initial.ts',
       commit: '0123456789abcdef0123456789abcdef01234567',
     },

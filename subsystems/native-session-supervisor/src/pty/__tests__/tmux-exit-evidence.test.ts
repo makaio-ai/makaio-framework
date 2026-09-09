@@ -36,6 +36,8 @@ import { isTmuxAvailable, TmuxBackend } from '../tmux-backend.js';
 
 const describeWithTmux = isTmuxAvailable() ? describe : describe.skip;
 const REAL_TMUX_TEST_TIMEOUT_MS = 20_000;
+// Ordinary stub fixtures use the normal command budget so parallel suites cannot starve their setup.
+const STUB_FIXTURE_COMMAND_TIMEOUT_MS = 5_000;
 
 // ---------------------------------------------------------------------------
 // PID-probe spy over the real implementation
@@ -222,7 +224,7 @@ describe('TmuxBackend exit evidence — a tmux that fails in a chosen way', () =
 
   // Arm (b): the command reached a server and failed for an unrelated reason.
   it('publishes no exit when the kill command answers some other error', async () => {
-    const { proc, exits } = await spawnStubbed(1_000);
+    const { proc, exits } = await spawnStubbed(STUB_FIXTURE_COMMAND_TIMEOUT_MS);
 
     process.env['MAKAIO_TMUX_STUB_MODE'] = 'other-error';
     proc.kill();
@@ -233,7 +235,7 @@ describe('TmuxBackend exit evidence — a tmux that fails in a chosen way', () =
   // Arm (c): nothing was asked, so nothing is known. This is the arm that fails
   // an implementation which keeps reading "no output" as "session absent".
   it('publishes no exit when tmux cannot be run at all', async () => {
-    const { proc, exits } = await spawnStubbed(1_000);
+    const { proc, exits } = await spawnStubbed(STUB_FIXTURE_COMMAND_TIMEOUT_MS);
 
     // Remove the stub from PATH so the next invocation cannot resolve `tmux`.
     process.env['PATH'] = '/nonexistent-path-for-tmux-evidence-test';
@@ -245,7 +247,7 @@ describe('TmuxBackend exit evidence — a tmux that fails in a chosen way', () =
   // Arm (e): the kill succeeded but its confirmation never reached a server, so
   // the end was not observed and must not be claimed.
   it('publishes no exit when a successful kill cannot be confirmed', async () => {
-    const { proc, exits } = await spawnStubbed(1_000);
+    const { proc, exits } = await spawnStubbed(STUB_FIXTURE_COMMAND_TIMEOUT_MS);
 
     process.env['MAKAIO_TMUX_STUB_MODE'] = 'server-vanished';
     proc.kill();
@@ -285,7 +287,7 @@ describe('TmuxBackend exit evidence — a tmux that fails in a chosen way', () =
   // what an exit-marking release would leave behind), and the reported evidence is
   // still the same nothing arm (b) demands.
   it('releases session tracking on a committed kill without touching the evidence', async () => {
-    const { backend, proc, exits } = await spawnStubbed(1_000);
+    const { backend, proc, exits } = await spawnStubbed(STUB_FIXTURE_COMMAND_TIMEOUT_MS);
 
     process.env['MAKAIO_TMUX_STUB_MODE'] = 'other-error';
     proc.kill();

@@ -9,7 +9,7 @@ import { ARTIFACT_VALUE_TYPE_KEYWORD, EVIDENCE_VALUE_TYPE, EvidenceValueSchema }
 const evidence = {
   source: {
     kind: 'git-file' as const,
-    repository: 'makaio-ai/makaio',
+    repository: { kind: 'github-cloud', path: 'makaio-ai/makaio' },
     path: 'src/index.ts',
     commit: '0123456789abcdef0123456789abcdef01234567',
   },

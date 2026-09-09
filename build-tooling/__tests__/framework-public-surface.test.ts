@@ -47,6 +47,15 @@ describe('FRAMEWORK_DIST_SUBPATHS', () => {
     expect(entry?.sourceDist).toBe('subsystems/git/dist');
   });
 
+  it('includes the reusable Git-file evidence resolver subpath', () => {
+    const entry = FRAMEWORK_DIST_SUBPATHS.find((e) => e.subpath === 'evidence/git-file');
+    expect(entry).toEqual({
+      subpath: 'evidence/git-file',
+      sourceDist: 'packages/evidence-git-file-resolver/dist',
+      packageName: '@makaio/evidence-git-file-resolver',
+    });
+  });
+
   it('includes the node machine-identity subpath for downstream hooks', () => {
     const entry = FRAMEWORK_DIST_SUBPATHS.find((e) => e.subpath === 'node/machine-identity');
     expect(entry).toBeDefined();
@@ -124,6 +133,9 @@ describe('FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS', () => {
     expect(getFrameworkPublicPackageByName('@makaio/inbound-hooks')?.frameworkSubpath).toBe('inbound-hooks');
     expect(getFrameworkPublicPackageByName('@makaio/ai-adapters-claude-shared')?.frameworkSubpath).toBe(
       'adapters/claude',
+    );
+    expect(getFrameworkPublicPackageByName('@makaio/evidence-git-file-resolver')?.frameworkSubpath).toBe(
+      'evidence/git-file',
     );
   });
 

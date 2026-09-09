@@ -37,6 +37,8 @@ export {
   ConfidenceMetadataSchema,
   defineArtifactKind,
   EvidenceRefSchema,
+  EvidenceResolveRequestSchema,
+  EvidenceResolveResponseSchema,
   EvidenceValueSchema,
   EntityRefSchema,
   hydrateArtifactContextTree,
@@ -63,6 +65,8 @@ export type {
   ArtifactContextTree,
   ArtifactContextUnresolvedReason,
   ArtifactCreatedPayload,
+  ArtifactEvidenceResolveRequest,
+  ArtifactEvidenceResolveResponse,
   ArtifactCreateRequest,
   ArtifactCreateResponse,
   ArtifactKindChangedPayload,
@@ -103,6 +107,8 @@ export type {
   ConfidenceLevel,
   ConfidenceMetadata,
   EvidenceRef,
+  EvidenceResolveRequest,
+  EvidenceResolveResponse,
   EvidenceValue,
   EntityRef,
   LocalRef,
@@ -885,7 +891,14 @@ export type {
   SkillSource,
   SkillTurnEntry,
 } from './skill/index.js';
-export type { ActionIntent, FocusContext, SurfaceType } from './common/index.js';
+export {
+  formatRepoContextKey,
+  normalizeRepoContext,
+  parseRepoContextKey,
+  RepoContextSchema,
+  sameRepoContext,
+} from './common/index.js';
+export type { ActionIntent, FocusContext, RepoContext, SurfaceType } from './common/index.js';
 export {
   CompletionModeSchema,
   ContextModeSchema,

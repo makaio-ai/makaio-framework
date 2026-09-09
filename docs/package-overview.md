@@ -142,6 +142,7 @@ shared service lifecycle behavior, inspect `packages/service-base` before adding
 | --------------------------- | -------------------------- | ----------------------------------------------------------------------------------- |
 | `packages/utils`            | `@makaio/utils`            | Utility primitives: DeferredPromise, timeouts, JSON extraction. Zero internal deps. |
 | `packages/file-watcher`     | `@makaio/file-watcher`     | Polling file watcher with cursor-based change tracking. Zero internal deps.         |
+| `packages/evidence-git-file-resolver` | `@makaio/evidence-git-file-resolver` | Resolves pinned Git-file evidence through a caller-provided source reader. |
 | `packages/machine-identity` | `@makaio/machine-identity` | Persistent ECDH + signing key pairs for device authentication. Zero internal deps.  |
 | `packages/type-lens`        | `@makaio/type-lens`        | TypeScript AST indexer and symbol graph engine. Zero internal deps.                 |
 | `packages/subprocess`       | `@makaio/subprocess`       | Subprocess lifecycle and JSONL-framed JSON-RPC communication.                       |

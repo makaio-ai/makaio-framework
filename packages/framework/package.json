@@ -105,6 +105,10 @@
       "types": "./dist/contracts/index.d.mts",
       "default": "./dist/contracts/index.mjs"
     },
+    "./evidence/git-file": {
+      "types": "./dist/evidence/git-file/index.d.mts",
+      "default": "./dist/evidence/git-file/index.mjs"
+    },
     "./contracts/adapter": {
       "types": "./dist/contracts/adapter/index.d.mts",
       "default": "./dist/contracts/adapter/index.mjs"
