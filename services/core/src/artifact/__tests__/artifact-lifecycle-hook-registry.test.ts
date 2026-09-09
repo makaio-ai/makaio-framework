@@ -18,6 +18,25 @@ const baseArtifact: ArtifactRevision = {
   timestamp: 1,
 };
 
+const initialEvidence: NonNullable<ArtifactRevision['evidence']> = [
+  {
+    source: {
+      kind: 'git-file',
+      repository: 'makaio-ai/makaio',
+      path: 'src/initial.ts',
+      commit: '0123456789abcdef0123456789abcdef01234567',
+    },
+    location: { kind: 'whole-source' },
+  },
+];
+
+const replacementEvidence: NonNullable<ArtifactRevision['evidence']> = [
+  {
+    source: { kind: 'confluence-page', site: 'makaio.atlassian.net', pageId: '10715138', version: 2 },
+    location: { kind: 'whole-source' },
+  },
+];
+
 describe('ArtifactLifecycleHookRegistry', () => {
   it('runs before hooks in priority order and applies draft patches', async () => {
     const bus = createBusInstance();
@@ -55,7 +74,39 @@ describe('ArtifactLifecycleHookRegistry', () => {
     expect(result.skipMaterialization).toBe(false);
   });
 
-  it('lets draft patches clear optional confidence and representations', async () => {
+  it('exposes and replaces evidence across hooks without mutating the source revision', async () => {
+    const bus = createBusInstance();
+    const registry = new ArtifactLifecycleHookRegistry(bus);
+    const source = { ...baseArtifact, evidence: initialEvidence };
+    const observed: (ArtifactRevision['evidence'] | undefined)[] = [];
+
+    registry.registerHooks('evidence', [
+      {
+        id: 'replace-evidence',
+        event: 'beforeCreate',
+        priority: 10,
+        handler: (ctx) => {
+          observed.push(ctx.draft.evidence);
+          ctx.updateDraft({ evidence: replacementEvidence });
+        },
+      },
+      {
+        id: 'read-replacement',
+        event: 'beforeCreate',
+        handler: (ctx) => {
+          observed.push(ctx.draft.evidence);
+        },
+      },
+    ]);
+
+    const result = await registry.runBeforeCreate({ draft: source, kindRegistration: undefined });
+
+    expect(observed).toEqual([initialEvidence, replacementEvidence]);
+    expect(result.draft.evidence).toEqual(replacementEvidence);
+    expect(source.evidence).toEqual(initialEvidence);
+  });
+
+  it('lets draft patches clear optional evidence, confidence, and representations', async () => {
     const bus = createBusInstance();
     const registry = new ArtifactLifecycleHookRegistry(bus);
     registry.registerHooks('cleanup', [
@@ -63,7 +114,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
         id: 'clear-optionals',
         event: 'beforeRevise',
         handler: (ctx) => {
-          ctx.updateDraft({ confidence: undefined, representations: undefined });
+          ctx.updateDraft({ evidence: undefined, confidence: undefined, representations: undefined });
         },
       },
     ]);
@@ -71,6 +122,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
     const result = await registry.runBeforeRevise({
       draft: {
         ...baseArtifact,
+        evidence: initialEvidence,
         confidence: {
           level: 'stated',
           basis: [
@@ -87,6 +139,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
       kindRegistration: undefined,
     });
 
+    expect('evidence' in result.draft).toBe(false);
     expect('confidence' in result.draft).toBe(false);
     expect('representations' in result.draft).toBe(false);
   });

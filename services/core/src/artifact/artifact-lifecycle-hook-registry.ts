@@ -197,6 +197,7 @@ function applyPatch(current: ArtifactDraft, patch: ArtifactDraftPatch): Artifact
     ...current,
     ...('data' in patch ? { data: patch.data } : {}),
     ...('relations' in patch ? { relations: patch.relations } : {}),
+    ...('evidence' in patch ? { evidence: patch.evidence } : {}),
     ...('confidence' in patch ? { confidence: patch.confidence } : {}),
     ...('representations' in patch ? { representations: patch.representations } : {}),
     ...('actor' in patch ? { actor: patch.actor } : {}),
@@ -212,11 +213,12 @@ function applyPatch(current: ArtifactDraft, patch: ArtifactDraftPatch): Artifact
  * @returns Updated revision with identity fields intact.
  */
 function mergeBack(original: ArtifactRevision, draft: ArtifactDraft): ArtifactRevision {
-  const { confidence: _confidence, representations: _representations, ...base } = original;
+  const { evidence: _evidence, confidence: _confidence, representations: _representations, ...base } = original;
   return {
     ...base,
     data: draft.data,
     relations: [...draft.relations],
+    ...(draft.evidence !== undefined ? { evidence: draft.evidence } : {}),
     ...(draft.confidence !== undefined ? { confidence: draft.confidence } : {}),
     ...(draft.representations !== undefined ? { representations: draft.representations } : {}),
     actor: draft.actor,
@@ -362,6 +364,7 @@ export class ArtifactLifecycleHookRegistry extends BaseService {
       scope: inputRevision.scope,
       data: inputRevision.data,
       relations: inputRevision.relations,
+      ...(inputRevision.evidence !== undefined ? { evidence: inputRevision.evidence } : {}),
       ...(inputRevision.confidence !== undefined ? { confidence: inputRevision.confidence } : {}),
       ...(inputRevision.representations !== undefined ? { representations: inputRevision.representations } : {}),
       actor: inputRevision.actor,
