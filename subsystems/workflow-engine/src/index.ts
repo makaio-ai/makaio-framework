@@ -46,6 +46,7 @@ export {
   workflowAttemptOutcomeCodec,
   decodeWorkflowAttemptOutcome,
   toCommittedWorkflowRunnerResult,
+  toCommittedWorkflowRunnerCompletion,
 } from './workflow-attempt-outcome.js';
 export type {
   WorkflowAttemptOutcome,
@@ -65,6 +66,8 @@ export { runAuthorityDispatchedAttempt } from './authority-dispatch-runner.js';
 export type { AuthorityDispatchRunnerOptions } from './authority-dispatch-runner.js';
 export { submitAttemptOutcome } from './outcome-convergence.js';
 export type {
+  AcceptedAttemptOutcome,
+  OutcomeAcceptance,
   AttemptOutcomeSubmission,
   AttemptOutcomeSubmissionDeps,
   OutcomeConvergence,

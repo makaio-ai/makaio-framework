@@ -93,7 +93,7 @@ describe('InProcessWorkflowRunner', () => {
         new AbortController().signal,
       );
 
-      expect(result.result.status).toBe('completed');
+      expect(result).toMatchObject({ state: 'uncommitted', result: { status: 'completed' } });
     } finally {
       cleanup();
     }
@@ -188,7 +188,7 @@ describe('InProcessWorkflowRunner', () => {
 
       const result = await observed;
       expect(result.state).toBe('uncommitted');
-      expect(result.result.status).toBe('completed');
+      expect(result).toMatchObject({ state: 'uncommitted', result: { status: 'completed' } });
     } finally {
       cleanup();
     }

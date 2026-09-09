@@ -2,21 +2,20 @@ import { z } from 'zod';
 import {
   ExecutionAttemptOutcomeSchema,
   WorkflowRunResultSchema,
-  type ExecutionAttemptOutcome,
+  type AcceptedAttemptOutcome,
+  type WorkflowAttemptOutcome,
+  type WorkflowRunnerCompletion,
   type WorkflowRunResult,
 } from '@makaio/contracts';
 import type { AttemptOutcomeDecodingInput } from './execution-attempt-handlers.js';
 import type { OutcomeCodec } from './execution-attempt-repository.js';
 import { parseWorkflowAttemptInstruction } from './workflow-attempt-instruction.js';
 
-/** Technical failure retained as such rather than fabricated into a workflow-produced result. */
-export type WorkflowAttemptTechnicalFailure = Extract<ExecutionAttemptOutcome, { kind: 'technical-failure' }>;
-
-/** Confirmed cooperative stop retained independently of a workflow-produced result. */
-export type WorkflowAttemptCancellation = Extract<ExecutionAttemptOutcome, { kind: 'cancelled' }>;
-
-/** Canonical owner outcome: a workflow result, infrastructure failure, or confirmed cancellation. */
-export type WorkflowAttemptOutcome = WorkflowRunResult | WorkflowAttemptTechnicalFailure | WorkflowAttemptCancellation;
+export type {
+  WorkflowAttemptOutcome,
+  WorkflowAttemptTechnicalFailure,
+  WorkflowAttemptCancellation,
+} from '@makaio/contracts';
 
 const runtimeOutcomeSchema = ExecutionAttemptOutcomeSchema.transform((outcome, ctx) => {
   if (outcome.kind === 'technical-failure' || outcome.kind === 'cancelled') return outcome;
@@ -57,6 +56,38 @@ export interface CommittedWorkflowOutcomeIdentity {
   readonly executionId: string;
   /** Workflow definition that owns that execution. */
   readonly workflowId: string;
+}
+
+/**
+ * Preserve owner acceptance when returning a canonical fact to a workflow runner.
+ * @param acceptedOutcome - Committed fact and explicit owner interpretation.
+ * @param identity - Immutable workflow identity bound to the attempt.
+ * @returns A no-projection completion or an already-projected lifecycle result.
+ */
+export function toCommittedWorkflowRunnerCompletion(
+  acceptedOutcome: AcceptedAttemptOutcome<WorkflowAttemptOutcome>,
+  identity: CommittedWorkflowOutcomeIdentity,
+): WorkflowRunnerCompletion {
+  const { outcome, acceptance } = acceptedOutcome;
+  if (
+    'executionId' in outcome &&
+    (outcome.executionId !== identity.executionId || outcome.workflowId !== identity.workflowId)
+  ) {
+    throw new Error('Committed workflow result does not match its owner identity');
+  }
+  if (acceptance === 'recorded-only') {
+    return {
+      state: 'authority-recorded-only',
+      executionId: identity.executionId,
+      workflowId: identity.workflowId,
+      acceptedOutcome: { ...acceptedOutcome, acceptance },
+    };
+  }
+  return {
+    state: 'authority-committed',
+    result: toCommittedWorkflowRunnerResult(outcome, identity),
+    acceptedOutcome: { ...acceptedOutcome, acceptance },
+  };
 }
 
 /**

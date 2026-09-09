@@ -26,6 +26,7 @@
  */
 
 export { INITIAL_ATTEMPT_CONTROL_STATE } from './attempt-record-codec.js';
+export { requireCommittedOutcome } from './committed-outcome.js';
 export { createInMemoryAttemptRepository } from './in-memory-attempt-repository.js';
 export type { InMemoryAttemptRepository, InMemoryAttemptRepositoryState } from './in-memory-attempt-repository.js';
 export {

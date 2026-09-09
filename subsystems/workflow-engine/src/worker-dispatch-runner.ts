@@ -4,7 +4,7 @@ import { WorkerSubjects, type IWorkflowRunner, type WorkerRequirements } from '@
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import { runAuthorityDispatchedAttempt } from './authority-dispatch-runner.js';
 import { buildWorkflowAttemptInstruction } from './workflow-attempt-instruction.js';
-import { toCommittedWorkflowRunnerResult, type WorkflowAttemptOutcome } from './workflow-attempt-outcome.js';
+import { toCommittedWorkflowRunnerCompletion, type WorkflowAttemptOutcome } from './workflow-attempt-outcome.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 
 /**
@@ -53,8 +53,8 @@ export interface WorkerDispatchRunnerOptions {
  *
  * The returned runner creates an execution attempt through the
  * Authority before dispatch and waits for the committed outcome
- * via the Authority's in-process waiter. Returns
- * `authority-committed` completions.
+ * via the Authority's in-process waiter. Returns `authority-committed` or
+ * `authority-recorded-only` according to the owner's explicit acceptance.
  * @param options - Bus, requirements, optional dispatch metadata,
  *   and Authority.
  * @returns A Worker dispatch runner, or `undefined` when no
@@ -81,7 +81,7 @@ export function createWorkerDispatchRunner(options: WorkerDispatchRunnerOptions)
         preservation: { required: [] },
       });
       // The runner contract owes a completion wrapper; the generic dispatch
-      // path yields the committed outcome itself.
+      // path yields the canonical outcome together with its owner acceptance.
       const result = await runAuthorityDispatchedAttempt({
         authority,
         executionId: config.executionId,
@@ -102,7 +102,7 @@ export function createWorkerDispatchRunner(options: WorkerDispatchRunnerOptions)
             { signal },
           ),
       });
-      return { state: 'authority-committed', result: toCommittedWorkflowRunnerResult(result, config) };
+      return toCommittedWorkflowRunnerCompletion(result, config);
     },
   };
 }

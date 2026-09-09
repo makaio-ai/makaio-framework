@@ -21,6 +21,7 @@ import {
 } from '../workflow-attempt-outcome.js';
 import { cancelExecution, completeExecutionWithFailure, type FinalizerDeps } from '../workflow-execution-finalizer.js';
 import { registerOutcomeSubmissionHandler } from '../workflow-outcome-submission.js';
+import { acceptWorkflowOwnerOutcome, type WorkflowOwnerOutcomeDeps } from '../workflow-owner-outcome.js';
 import { AttemptGateTransport, attemptPeer } from './execution-attempt-gate-harness.js';
 import { createTestDbForBus, createWorkflowExecution } from './shared.js';
 
@@ -58,9 +59,8 @@ async function createHarness() {
   const cleanupCancelledEvent = bus.on(WorkflowSubjects.execution.cancelled, () => {
     observations.cancelledEvents++;
   });
-  const cleanupHandlers = registerOutcomeSubmissionHandler(bus, {
-    bus,
-    authority,
+  const owner: WorkflowOwnerOutcomeDeps = {
+    lifecycle: finalizer,
     acceptTerminalResult: async (ownerId, result) => {
       if (result.status !== 'failed') throw new Error('This fixture exercises failed workflow results');
       const stored = await bus.request(WorkflowStorageSubjects.getExecution, { executionId: ownerId });
@@ -92,6 +92,11 @@ async function createHarness() {
       const settled = await bus.request(WorkflowStorageSubjects.getExecution, { executionId: ownerId });
       return { accepted: settled.execution?.status === 'cancelled', status: settled.execution!.status };
     },
+  };
+  const cleanupHandlers = registerOutcomeSubmissionHandler(bus, {
+    bus,
+    authority,
+    acceptOutcome: (input) => acceptWorkflowOwnerOutcome(owner, input),
   });
   await bus.request(WorkflowStorageSubjects.setExecution, {
     execution: createWorkflowExecution({ id: executionId, workflowId }),
@@ -182,7 +187,11 @@ describe('workflow owner canonical outcome ingress', () => {
     const response = await submit({ ...identity, outcome: failure });
     expect(response.error).toBeUndefined();
     expect(response.result).toEqual({ decision: 'accepted' });
-    await expect(waiter).resolves.toEqual(failure);
+    await expect(waiter).resolves.toEqual({
+      outcome: failure,
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
     const stored = await harness.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(stored.execution).toMatchObject({ status: 'failed', error: 'startup: Adapter missing' });
     expect(JSON.parse(harness.repository.committedOutcomes.get(identity.executionAttemptId)!)).toEqual(failure);
@@ -262,7 +271,11 @@ describe('workflow owner canonical outcome ingress', () => {
       reason: cancellation.reason,
     });
     expect((await submit(request)).result).toEqual({ decision: 'duplicate' });
-    await expect(waiter).resolves.toEqual(cancellation);
+    await expect(waiter).resolves.toEqual({
+      outcome: cancellation,
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
     expect(harness.observations.cancellations).toEqual([cancellation, cancellation]);
     expect(harness.observations.cancelledEvents).toBe(1);
     expect(harness.observations.failures).toEqual([]);

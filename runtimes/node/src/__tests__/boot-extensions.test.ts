@@ -26,7 +26,7 @@ import {
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import { ExecutionAttemptAuthority, workflowAttemptOutcomeCodec } from '@makaio/subsystem-workflow-engine';
-import { createInMemoryAttemptRepository } from '@makaio/subsystem-workflow-engine/testing';
+import { createInMemoryAttemptRepository, requireCommittedOutcome } from '@makaio/subsystem-workflow-engine/testing';
 import type { DiscoveredExtension } from '../extension-discovery.js';
 import { ExtensionCoordinator, type KernelMakaioExtension } from '@makaio/kernel';
 import { ExplicitDescriptorDiscovery, FilesystemDescriptorDiscovery } from '../extension-discovery.js';
@@ -926,7 +926,12 @@ describe('workflow-level runner boot composition', () => {
           ctx.payload.config.executionId,
           stubAuthority.canonicalizeOutcome(result),
         )
-        .then((decision) => stubAuthority.settleOutcome(ctx.payload.executionAttemptId, decision));
+        .then((decision) =>
+          stubAuthority.settleOutcome(ctx.payload.executionAttemptId, {
+            ...requireCommittedOutcome(decision),
+            acceptance: 'projected',
+          }),
+        );
       ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
     });
     const runner = createNodeWorkflowRunner({
@@ -945,7 +950,7 @@ describe('workflow-level runner boot composition', () => {
       const completion = await runner.run(config, new AbortController().signal);
 
       expect(runner).toBeInstanceOf(WorkerRunner);
-      expect(completion.result.status).toBe('completed');
+      expect(completion).toMatchObject({ state: 'authority-committed', result: { status: 'completed' } });
       expect(capturedConfig).toEqual({ ...config, terminalAuthority: 'authority' });
     } finally {
       cleanup();
@@ -968,7 +973,10 @@ describe('workflow-level runner boot composition', () => {
         request.config.executionId,
         stubAuthority.canonicalizeOutcome(result),
       );
-      stubAuthority.settleOutcome(request.executionAttemptId, decision);
+      stubAuthority.settleOutcome(request.executionAttemptId, {
+        ...requireCommittedOutcome(decision),
+        acceptance: 'projected',
+      });
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
     const runner = createNodeWorkflowRunner({

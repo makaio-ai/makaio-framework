@@ -25,6 +25,7 @@ async function createHarness() {
   const convergence = {
     async converge(input: { outcome: number }) {
       converged.push(input.outcome);
+      return 'projected' as const;
     },
   };
   return { repository, authority, identity, converged, convergence };
@@ -81,7 +82,11 @@ describe('runtime outcome commit fence', () => {
         },
       ),
     ).toBe('accepted');
-    await expect(waiter).resolves.toBe(2);
+    await expect(waiter).resolves.toEqual({
+      outcome: 2,
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
   });
 
   it('rechecks the active operation after awaited validation', async () => {
@@ -160,7 +165,11 @@ describe('runtime outcome commit fence', () => {
       ),
     ).toBe('duplicate');
     expect(converged).toEqual([1]);
-    await expect(waiter).resolves.toBe(1);
+    await expect(waiter).resolves.toEqual({
+      outcome: 1,
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
   });
 
   it('snapshots the expected runtime slot before asynchronous owner validation', async () => {

@@ -71,7 +71,7 @@ describe('malformed opaque workflow input', () => {
       expect(result.outcome.message).toContain('executionId');
       expect(result.outcome.message).not.toContain('Malformed workflow input reached');
       expect(attempt.convergedOutcomes).toEqual([result.outcome]);
-      await expect(pendingOutcome).resolves.toEqual(result.outcome);
+      await expect(pendingOutcome).resolves.toMatchObject({ outcome: result.outcome, acceptance: 'projected' });
       await expect(attempt.authority.getAttemptWithAllocation(attempt.executionAttemptId)).resolves.toMatchObject({
         status: 'settled',
         operationStartGate: 'closed',

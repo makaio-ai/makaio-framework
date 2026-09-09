@@ -143,6 +143,7 @@ export async function createAttemptAuthorityHarness(
                 throw new Error('Convergence ran before durable commitment');
               await options.beforeConverge?.();
               convergedOutcomes.push(outcome);
+              return 'projected';
             },
           },
         });

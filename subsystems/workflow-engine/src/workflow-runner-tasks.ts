@@ -17,12 +17,10 @@ import {
   cancelExecution,
   completeExecutionWithFailure,
   completeExecutionWithSuccess,
-  commitExecutionLifecycleTransition,
   withExecutionDurableTransition,
-  isAcceptedRunnerResultStatus,
 } from './workflow-execution-finalizer.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
-import { WorkflowSubjects } from './namespace.js';
+import { parkExecution } from './workflow-execution-pause.js';
 
 /** OS values accepted by {@link WorkflowWorkerConfig}. */
 export type WorkerOs = 'darwin' | 'linux' | 'win32';
@@ -122,59 +120,6 @@ async function cancelRunningExecutionAfterRunnerAbort(
   if (!cancelled) {
     console.error(`[WorkflowExecutor] Failed to persist runner cancellation for ${executionId}: execution not active`);
   }
-}
-
-/**
- * Transition a paused execution to the `paused` storage status and emit
- * `execution.paused` when the host executor still sees a `running` execution.
- *
- * This is the host-side complement to the orchestrator's
- * `persistPausedExecution`. When an isolated runner (Piscina thread, Docker
- * container, remote worker) returns a `paused` result the orchestrator has
- * already updated storage and emitted the event on its own bus connection. When
- * storage is already paused, this helper releases active executor ownership
- * without writing duplicate storage rows or emitting duplicate events.
- *
- * For stub runners used in tests (or future runners that return paused results
- * without running the orchestrator), the host executor still holds a `running`
- * execution and must perform the state transition itself.
- * @param deps - Runner task dependencies.
- * @param result - Paused runner result carrying gate identity.
- */
-async function parkExecution(deps: RunnerTaskDeps, result: WorkflowRunResult): Promise<void> {
-  if (result.pausedAtGateId === undefined || result.pausedAtFrameId === undefined) {
-    throw new Error(`Paused runner result for '${result.executionId}' is missing gate identity`);
-  }
-  const finalizerDeps = deps.buildFinalizerDeps();
-  const paused = await commitExecutionLifecycleTransition(
-    finalizerDeps,
-    result.executionId,
-    async () => {
-      const { paused: transitioned } = await finalizerDeps.bus.request(WorkflowStorageSubjects.pauseRunningExecution, {
-        executionId: result.executionId,
-      });
-      if (!transitioned) {
-        const { execution } = await finalizerDeps.bus.request(WorkflowStorageSubjects.getExecution, {
-          executionId: result.executionId,
-        });
-        if (execution?.status !== 'paused') return false;
-      }
-      const active = deps.activeExecutions.get(result.executionId);
-      if (active !== undefined) active.execution.status = 'paused';
-      deps.activeExecutions.delete(result.executionId);
-      return transitioned;
-    },
-    async (committed) => {
-      if (!committed) return;
-      await finalizerDeps.bus.emit(WorkflowSubjects.execution.paused, {
-        executionId: result.executionId,
-        workflowId: result.workflowId,
-        pausedAtGateId: result.pausedAtGateId,
-        pausedAtFrameId: result.pausedAtFrameId,
-      });
-    },
-  );
-  if (!paused) return;
 }
 
 /**
@@ -301,43 +246,54 @@ export interface FileRunnerTaskParams {
  *   transition has not been performed. The host executor must finalize
  *   terminal results or park paused executions.
  * - `authority-committed`: the Authority outcome RPC has converged canonical
- *   state. The host executor verifies durable state and releases active
- *   execution ownership without invoking the fallback finalizer.
+ *   state. Do not reinterpret that acceptance from current mutable owner state:
+ *   a paused subscriber may already have resumed the next attempt.
+ * - `authority-recorded-only`: the owner accepted a technical fact without a
+ *   lifecycle projection. Release local task bookkeeping only.
  * @param deps - Runner task dependencies.
  * @param completion - Completion envelope returned by the runner.
+ * @param config - Identity bound to this runner invocation.
+ * @param ownedExecution - Active entry captured before invoking the runner.
  */
-async function handleRunnerCompletion(deps: RunnerTaskDeps, completion: WorkflowRunnerCompletion): Promise<void> {
-  const { result } = completion;
-
-  if (completion.state === 'authority-committed') {
-    const { execution } = await deps.buildFinalizerDeps().bus.request(WorkflowStorageSubjects.getExecution, {
-      executionId: result.executionId,
-    });
-    // A technical stop failure still projects a failed diagnostic after public
-    // cancellation. Accept it only when this runner was actually told to stop.
-    const cancelledWithFailure =
-      execution?.status === 'cancelled' &&
-      result.status === 'failed' &&
-      deps.workflowAbortControllers.get(result.executionId)?.signal.aborted === true;
-    if (
-      !execution ||
-      execution.workflowId !== result.workflowId ||
-      (!isAcceptedRunnerResultStatus(execution.status, result.status) && !cancelledWithFailure)
-    ) {
-      throw new Error(`Authority-committed runner result was not durably converged for '${result.executionId}'`);
-    }
-    // The Authority has committed and converged the outcome durably. Release
-    // active execution ownership without running the fallback finalizer.
-    deps.activeExecutions.delete(result.executionId);
-    return;
+async function handleRunnerCompletion(
+  deps: RunnerTaskDeps,
+  completion: WorkflowRunnerCompletion,
+  config: Pick<WorkflowWorkerConfig, 'executionId' | 'workflowId'>,
+  ownedExecution: ActiveExecution | undefined,
+): Promise<void> {
+  const identity = completion.state === 'authority-recorded-only' ? completion : completion.result;
+  if (identity.executionId !== config.executionId || identity.workflowId !== config.workflowId) {
+    throw new Error(`Runner completion does not match its invocation '${config.executionId}'`);
   }
+  // Authority acceptance is already the owner's decision. Cleanup belongs to
+  // this task's finally block, which cannot remove a resumed successor's entries.
+  if (completion.state !== 'uncommitted') return;
+  if (deps.activeExecutions.get(config.executionId) !== ownedExecution) return;
 
   // Uncommitted: host executor owns finalization.
+  const { result } = completion;
   if (result.status === 'paused') {
-    await parkExecution(deps, result);
+    await parkExecution(deps.buildFinalizerDeps(), result);
     return;
   }
   await finalizeResolvedRunnerResult(deps, result);
+}
+
+/**
+ * Release only bookkeeping still owned by this invocation, never a fast resume.
+ * @param deps - Shared task registries.
+ * @param executionId - Logical execution shared by predecessor and successor.
+ * @param active - Original active execution entry.
+ * @param controller - This invocation's cancellation controller.
+ */
+function releaseRunnerTask(
+  deps: RunnerTaskDeps,
+  executionId: string,
+  active: ActiveExecution | undefined,
+  controller: AbortController,
+): void {
+  if (deps.activeExecutions.get(executionId) === active) deps.activeExecutions.delete(executionId);
+  if (deps.workflowAbortControllers.get(executionId) === controller) deps.workflowAbortControllers.delete(executionId);
 }
 
 /**
@@ -381,7 +337,8 @@ function buildFileWorkerConfig(deps: RunnerTaskDeps, params: FileRunnerTaskParam
  */
 export function buildFileExecutionTask(deps: RunnerTaskDeps, params: FileRunnerTaskParams): Promise<void> {
   const { executionId } = params;
-  const { workflowRunner, workflowAbortControllers, executionTasks, activeExecutions } = deps;
+  const { workflowRunner, workflowAbortControllers, activeExecutions } = deps;
+  const ownedExecution = activeExecutions.get(executionId);
 
   const controller = new AbortController();
   workflowAbortControllers.set(executionId, controller);
@@ -392,9 +349,13 @@ export function buildFileExecutionTask(deps: RunnerTaskDeps, params: FileRunnerT
   return Promise.resolve()
     .then(() => workflowRunner.run(workerConfig, controller.signal, undefined, runOptions))
     .then(async (completion) => {
-      await handleRunnerCompletion(deps, completion);
+      await handleRunnerCompletion(deps, completion, workerConfig, ownedExecution);
     })
     .catch(async (error: unknown) => {
+      if (activeExecutions.get(executionId) !== ownedExecution) {
+        console.error(`[WorkflowExecutor] Superseded file runner task failed for ${executionId}:`, error);
+        return;
+      }
       if (controller.signal.aborted) {
         await cancelRunningExecutionAfterRunnerAbort(deps, executionId, controller.signal).catch(
           (persistError: unknown) => {
@@ -419,11 +380,7 @@ export function buildFileExecutionTask(deps: RunnerTaskDeps, params: FileRunnerT
         );
       }
     })
-    .finally(() => {
-      workflowAbortControllers.delete(executionId);
-      executionTasks.delete(executionId);
-      activeExecutions.delete(executionId);
-    });
+    .finally(() => releaseRunnerTask(deps, executionId, ownedExecution, controller));
 }
 
 /**
@@ -473,7 +430,8 @@ function buildDefinitionWorkerConfig(deps: RunnerTaskDeps, params: DefinitionRun
  */
 export function buildExecutionTask(deps: RunnerTaskDeps, params: DefinitionRunnerTaskParams): Promise<void> {
   const { executionId } = params;
-  const { workflowRunner, workflowAbortControllers, executionTasks, activeExecutions } = deps;
+  const { workflowRunner, workflowAbortControllers, activeExecutions } = deps;
+  const ownedExecution = activeExecutions.get(executionId);
 
   const controller = new AbortController();
   workflowAbortControllers.set(executionId, controller);
@@ -487,9 +445,13 @@ export function buildExecutionTask(deps: RunnerTaskDeps, params: DefinitionRunne
   return Promise.resolve()
     .then(() => workflowRunner.run(workerConfig, controller.signal, undefined, runOptions))
     .then(async (completion) => {
-      await handleRunnerCompletion(deps, completion);
+      await handleRunnerCompletion(deps, completion, workerConfig, ownedExecution);
     })
     .catch(async (error: unknown) => {
+      if (activeExecutions.get(executionId) !== ownedExecution) {
+        console.error(`[WorkflowExecutor] Superseded runner task failed for ${executionId}:`, error);
+        return;
+      }
       if (controller.signal.aborted) {
         await cancelRunningExecutionAfterRunnerAbort(deps, executionId, controller.signal).catch(
           (persistError: unknown) => {
@@ -511,15 +473,7 @@ export function buildExecutionTask(deps: RunnerTaskDeps, params: DefinitionRunne
         );
       }
     })
-    .finally(() => {
-      workflowAbortControllers.delete(executionId);
-      executionTasks.delete(executionId);
-      // Remove from active executions in case the runner completed without
-      // calling a lifecycle finalizer (e.g., resolved without persisting
-      // completed/failed/cancelled). The finalizer already removes the entry
-      // on the success/failure paths; deleting a missing key is a no-op.
-      activeExecutions.delete(executionId);
-    });
+    .finally(() => releaseRunnerTask(deps, executionId, ownedExecution, controller));
 }
 
 /**

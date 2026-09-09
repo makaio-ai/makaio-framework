@@ -9,6 +9,7 @@ import type { StartExecutionDeps } from '../workflow-execution-start.js';
 import type { DefinitionRunnerTaskParams } from '../workflow-runner-tasks.js';
 import { beginTestProvisioning, createInMemoryAttemptRepository } from '../testing/index.js';
 import { workflowAttemptOutcomeCodec } from '../workflow-attempt-outcome.js';
+import { submitAttemptOutcome } from '../outcome-convergence.js';
 import { parseWorkflowAttemptInstruction } from '../workflow-attempt-instruction.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import { createWorkflowExecution } from './shared.js';
@@ -46,6 +47,47 @@ const TEST_ALLOCATION_REF: ProviderAllocationRef = {
 // ─────────────────────────────────────────────────────────────
 
 describe('hasWorkerDispatchRequirements', () => {
+  it('delivers recorded-only Completed without producing a projected result', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkerNamespace);
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
+    const config = makeWorkerConfig();
+    const outcome: WorkflowRunResult = {
+      executionId: config.executionId,
+      workflowId: config.workflowId,
+      status: 'completed',
+    };
+    const off = bus.on(WorkerSubjects.dispatch, async (ctx) => {
+      await submitAttemptOutcome(
+        { authority, convergence: { converge: async () => 'recorded-only' } },
+        {
+          executionAttemptId: ctx.payload.executionAttemptId,
+          executionId: config.executionId,
+          outcome,
+        },
+      );
+      ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
+    });
+    try {
+      const runner = createWorkerDispatchRunner({ bus, authority, requirements: { recoverableAllocation: true } });
+      const completion = await runner!.run(config, new AbortController().signal);
+      expect(completion).toEqual({
+        state: 'authority-recorded-only',
+        executionId: config.executionId,
+        workflowId: config.workflowId,
+        acceptedOutcome: {
+          outcome,
+          acceptance: 'recorded-only',
+          controlObservation: { controlRevision: 0, cancellation: null },
+        },
+      });
+      expect(completion).not.toHaveProperty('result');
+      expect([...repository.committedOutcomes.values()]).toEqual([JSON.stringify(outcome)]);
+    } finally {
+      off();
+    }
+  });
   it('honors local owner admission before creating a bus-dispatched attempt', async () => {
     const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
@@ -199,7 +241,12 @@ describe('createWorkerDispatchRunner', () => {
           status: 'completed',
         }),
       );
-      authority.settleOutcome(ctx.payload.executionAttemptId, decision);
+      authority.settleOutcome(
+        ctx.payload.executionAttemptId,
+        decision.kind === 'accepted' || decision.kind === 'duplicate'
+          ? { ...decision, acceptance: 'projected' }
+          : decision,
+      );
       ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
     });
     try {
@@ -319,7 +366,12 @@ describe('createWorkerDispatchRunner', () => {
           ctx.payload.config.executionId,
           authority.canonicalizeOutcome(result),
         );
-        authority.settleOutcome(ctx.payload.executionAttemptId, decision);
+        authority.settleOutcome(
+          ctx.payload.executionAttemptId,
+          decision.kind === 'accepted' || decision.kind === 'duplicate'
+            ? { ...decision, acceptance: 'projected' }
+            : decision,
+        );
       });
       throw new Error('dispatch acknowledgement lost');
     });
@@ -440,7 +492,12 @@ describe('createWorkerDispatchRunner', () => {
         ctx.payload.config.executionId,
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(ctx.payload.executionAttemptId, decision);
+      authority.settleOutcome(
+        ctx.payload.executionAttemptId,
+        decision.kind === 'accepted' || decision.kind === 'duplicate'
+          ? { ...decision, acceptance: 'projected' }
+          : decision,
+      );
       ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
     });
 
@@ -456,6 +513,7 @@ describe('createWorkerDispatchRunner', () => {
 
       expect(capturedAttemptId).toBeTruthy();
       expect(completion.state).toBe('authority-committed');
+      if (completion.state !== 'authority-committed') throw new Error('Expected projected completion');
       expect(completion.result.status).toBe('completed');
     } finally {
       offDispatch();
@@ -484,7 +542,12 @@ describe('createWorkerDispatchRunner', () => {
         ctx.payload.config.executionId,
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(ctx.payload.executionAttemptId, decision);
+      authority.settleOutcome(
+        ctx.payload.executionAttemptId,
+        decision.kind === 'accepted' || decision.kind === 'duplicate'
+          ? { ...decision, acceptance: 'projected' }
+          : decision,
+      );
       ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
     });
 
@@ -532,7 +595,12 @@ describe('createWorkerDispatchRunner', () => {
         ctx.payload.config.executionId,
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(ctx.payload.executionAttemptId, decision);
+      authority.settleOutcome(
+        ctx.payload.executionAttemptId,
+        decision.kind === 'accepted' || decision.kind === 'duplicate'
+          ? { ...decision, acceptance: 'projected' }
+          : decision,
+      );
       ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
     });
 
@@ -546,6 +614,7 @@ describe('createWorkerDispatchRunner', () => {
 
       const completion = await runner!.run(makeWorkerConfig(), new AbortController().signal);
       expect(completion.state).toBe('authority-committed');
+      if (completion.state !== 'authority-committed') throw new Error('Expected projected completion');
       expect(capturedRequirements).toEqual({ recoverableAllocation: true });
     } finally {
       offDispatch();
@@ -572,7 +641,12 @@ describe('createWorkerDispatchRunner', () => {
         ctx.payload.config.executionId,
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(ctx.payload.executionAttemptId, decision);
+      authority.settleOutcome(
+        ctx.payload.executionAttemptId,
+        decision.kind === 'accepted' || decision.kind === 'duplicate'
+          ? { ...decision, acceptance: 'projected' }
+          : decision,
+      );
       ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
     });
 
@@ -586,6 +660,7 @@ describe('createWorkerDispatchRunner', () => {
 
       const completion = await runner!.run(makeWorkerConfig(), new AbortController().signal);
       expect(completion.state).toBe('authority-committed');
+      if (completion.state !== 'authority-committed') throw new Error('Expected projected completion');
       expect(capturedRequirements).toEqual({
         materializationModes: ['workspace-snapshot'],
       });
@@ -614,7 +689,12 @@ describe('createWorkerDispatchRunner', () => {
         ctx.payload.config.executionId,
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(ctx.payload.executionAttemptId, decision);
+      authority.settleOutcome(
+        ctx.payload.executionAttemptId,
+        decision.kind === 'accepted' || decision.kind === 'duplicate'
+          ? { ...decision, acceptance: 'projected' }
+          : decision,
+      );
       ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
     });
 
@@ -685,7 +765,12 @@ describe('launchDefinitionExecutionTask requirements threading', () => {
         ctx.payload.config.executionId,
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(ctx.payload.executionAttemptId, decision);
+      authority.settleOutcome(
+        ctx.payload.executionAttemptId,
+        decision.kind === 'accepted' || decision.kind === 'duplicate'
+          ? { ...decision, acceptance: 'projected' }
+          : decision,
+      );
       ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
     });
 

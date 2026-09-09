@@ -1,4 +1,4 @@
-import type { ExecutionAttemptInstruction } from '@makaio/contracts';
+import type { AcceptedAttemptOutcome, ExecutionAttemptInstruction } from '@makaio/contracts';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import type { ExecutionOwnerId, PendingAttemptAbandonmentDecision } from './execution-attempt-repository.js';
 
@@ -26,11 +26,11 @@ export interface AuthorityDispatchRunnerOptions<TOutcome> {
  * request. The pending-abandonment CAS distinguishes a confirmed pre-allocation
  * failure from a lost acknowledgement after provisioning, allocation, or settlement.
  * @param options - Authority, owner identity, immutable instruction, and dispatch operation.
- * @returns The Authority-committed outcome.
+ * @returns The canonical outcome, frozen control observation, and owner acceptance.
  */
 export async function runAuthorityDispatchedAttempt<TOutcome>(
   options: AuthorityDispatchRunnerOptions<TOutcome>,
-): Promise<TOutcome> {
+): Promise<AcceptedAttemptOutcome<TOutcome>> {
   const { authority, executionId, instruction, dispatch } = options;
   const create = () => authority.createAttempt(executionId, instruction);
   const attempt = await (options.withAttemptCreation?.(create) ?? create());
@@ -66,7 +66,7 @@ interface UnacknowledgedDispatchFailureOptions<TOutcome> {
   readonly authority: ExecutionAttemptAuthority<TOutcome>;
   readonly executionId: ExecutionOwnerId;
   readonly executionAttemptId: string;
-  readonly outcomePromise: Promise<TOutcome>;
+  readonly outcomePromise: Promise<AcceptedAttemptOutcome<TOutcome>>;
   readonly dispatchError: unknown;
 }
 
@@ -78,11 +78,11 @@ interface UnacknowledgedDispatchFailureOptions<TOutcome> {
  * unreachable waiter. `provisioning`, `allocated`, and `already-settled` instead retain the
  * waiter because the Authority still owns a canonical terminalization.
  * @param options - Failed dispatch and the Authority-owned attempt state.
- * @returns The canonical outcome when allocation or settlement won the race.
+ * @returns The accepted canonical outcome when allocation or settlement won the race.
  */
 async function handleUnacknowledgedDispatchFailure<TOutcome>(
   options: UnacknowledgedDispatchFailureOptions<TOutcome>,
-): Promise<TOutcome> {
+): Promise<AcceptedAttemptOutcome<TOutcome>> {
   const { authority, executionId, executionAttemptId, outcomePromise, dispatchError } = options;
 
   let abandonment: PendingAttemptAbandonmentDecision;

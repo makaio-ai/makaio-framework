@@ -275,7 +275,11 @@ describe('workflow owner technical failure convergence', () => {
       submission = attempt.submit(stopFailure);
     }
     expect(await submission).toMatchObject({ result: { decision: 'accepted' } });
-    await expect(waiter).resolves.toEqual(stopFailure);
+    await expect(waiter).resolves.toEqual({
+      outcome: stopFailure,
+      acceptance: 'recorded-only',
+      controlObservation: expect.objectContaining({ controlRevision: race ? 0 : 1 }),
+    });
     expect(await attempt.submit(stopFailure)).toMatchObject({ result: { decision: 'duplicate' } });
     expect(repository.committedOutcomes.get(attempt.executionAttemptId)).toBe(JSON.stringify(stopFailure));
     const stored = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
@@ -310,5 +314,23 @@ describe('workflow owner technical failure convergence', () => {
     expect(response.result).toBeUndefined();
     const stored = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(stored.execution?.status).toBe('completed');
+  });
+
+  it('accepts a real stopped outcome when control committed but owner cancellation is still pending', async () => {
+    const attempt = await cancellationAttempt(false);
+    await authority.requestCancellation({ executionId, reason: 'Operator requested stop' });
+    expect((await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status).toBe(
+      'running',
+    );
+    const waiter = authority.waitForOutcome(attempt.executionAttemptId);
+    expect(await attempt.submit()).toMatchObject({ result: { decision: 'accepted' } });
+    await expect(waiter).resolves.toEqual({
+      outcome: attempt.outcome,
+      acceptance: 'projected',
+      controlObservation: expect.objectContaining({ controlRevision: 1 }),
+    });
+    expect((await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status).toBe(
+      'cancelled',
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import {
   WorkerNamespace,
@@ -11,6 +11,7 @@ import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { registerOutcomeSubmissionHandler } from '../workflow-outcome-submission.js';
+import { submitAttemptOutcome } from '../outcome-convergence.js';
 import {
   setupWorkflowExecutorTest,
   teardownWorkflowExecutorTest,
@@ -20,6 +21,7 @@ import { createWorkflowDefinition, createWorkflowExecution } from './shared.js';
 import { createInMemoryAttemptRepository, type InMemoryAttemptRepository } from '../testing/index.js';
 import { buildWorkflowAttemptInstruction } from '../workflow-attempt-instruction.js';
 import { workflowAttemptOutcomeCodec, type WorkflowAttemptOutcome } from '../workflow-attempt-outcome.js';
+import { createSqliteAttemptRepository } from '../testing/sqlite.js';
 
 describe('authority runner result acceptance', () => {
   let setup: WorkflowExecutorTestSetup | undefined;
@@ -196,6 +198,85 @@ describe('authority runner result acceptance', () => {
       status: 'completed',
     });
   });
+
+  it('records a legacy outcome for a durably cancelled owner without inventing its unknown control ordering', async () => {
+    if (!setup) throw new Error('Workflow executor test setup did not initialize.');
+    const executionId = 'authority-legacy-cancelled';
+    const workflow = await seedAuthorityExecution({ executionId });
+    const outcome: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
+    await expect(MakaioBus.request(WorkflowSubjects.cancel, { executionId })).resolves.toEqual({ cancelled: true });
+    const input = {
+      executionId,
+      executionAttemptId: 'legacy-attempt',
+      outcome,
+      decision: 'duplicate' as const,
+      controlObservation: null,
+    };
+    const unchanged = structuredClone(input);
+    await expect(setup.workflowExecutor.acceptAuthorityOutcome(input)).resolves.toBe('recorded-only');
+    expect(input).toEqual(unchanged);
+    expect((await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status).toBe(
+      'cancelled',
+    );
+  });
+
+  it.each([
+    'completed',
+    'finalizing',
+  ] as const)('keeps a %s outcome projected after later technical cleanup Cancel without rewriting revision zero', async (status) => {
+    if (!setup) throw new Error('Workflow executor test setup did not initialize.');
+    const executionId = `authority-cleanup-${status}`;
+    const finalizerId = status === 'finalizing' ? 'test.cleanup-pending' : undefined;
+    if (finalizerId !== undefined) {
+      const { namespace, subjects } = createWorkflowFinalizerNamespace(finalizerId);
+      MakaioBus.registerNamespace(namespace);
+      MakaioBus.on(subjects.finalize, (ctx) => {
+        ctx.setResult({ accepted: true });
+      });
+    }
+    const workflow = await seedAuthorityExecution({ executionId, finalizerId });
+    const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    if (runContext === null) throw new Error('Expected persisted workflow context');
+    const repository = await createSqliteAttemptRepository(setup.dbContext.db, workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
+    const attempt = await authority.createAttempt(
+      executionId,
+      buildWorkflowAttemptInstruction({
+        id: `instruction-${executionId}`,
+        revision: '1',
+        runContext,
+        config: WorkflowWorkerConfigSchema.parse({ ...runContext, definition: workflow }),
+        preservation: { required: [] },
+      }),
+    );
+    const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
+    const durable = authority.canonicalizeOutcome(result);
+    const first = await authority.commitOutcome(attempt.executionAttemptId, executionId, durable);
+    if (first.kind !== 'accepted') throw new Error('Initial outcome must be accepted');
+    const input = {
+      executionId,
+      executionAttemptId: attempt.executionAttemptId,
+      outcome: first.outcome,
+      decision: first.kind,
+      controlObservation: first.controlObservation,
+    };
+    await expect(setup.workflowExecutor.acceptAuthorityOutcome(input)).resolves.toBe('projected');
+    await expect(MakaioBus.request(WorkflowSubjects.cancel, { executionId })).resolves.toEqual({ cancelled: false });
+    await authority.requestCancellation({ executionId, reason: 'technical cleanup' });
+    expect(await repository.readCancellation(attempt.executionAttemptId)).toMatchObject({ controlRevision: 1 });
+    const duplicate = await authority.commitOutcome(attempt.executionAttemptId, executionId, durable);
+    expect(duplicate).toEqual({ ...first, kind: 'duplicate' });
+    expect(duplicate).toMatchObject({
+      outcome: result,
+      controlObservation: { controlRevision: 0, cancellation: null },
+    });
+    await expect(setup.workflowExecutor.acceptAuthorityOutcome({ ...input, decision: 'duplicate' })).resolves.toBe(
+      'projected',
+    );
+    expect((await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status).toBe(
+      status,
+    );
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -216,12 +297,7 @@ describe('outcome submission handler', () => {
     handlerCleanup = registerOutcomeSubmissionHandler(MakaioBus, {
       bus: MakaioBus,
       authority,
-      acceptTerminalResult: (executionId, result) =>
-        setup!.workflowExecutor.acceptAuthorityRunnerResult(executionId, result),
-      acceptTechnicalFailure: (executionId, failure) =>
-        setup!.workflowExecutor.acceptAuthorityTechnicalFailure(executionId, failure),
-      acceptCancellation: (executionId, cancellation) =>
-        setup!.workflowExecutor.acceptAuthorityCancellation(executionId, cancellation),
+      acceptOutcome: (input) => setup!.workflowExecutor.acceptAuthorityOutcome(input),
     });
   });
 
@@ -285,6 +361,142 @@ describe('outcome submission handler', () => {
 
     const stored = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(stored.execution?.status).toBe('completed');
+  });
+
+  it.each([
+    { status: 'completed' as const, committedBeforeCancel: false },
+    { status: 'completed' as const, committedBeforeCancel: true },
+    { status: 'paused' as const, committedBeforeCancel: false },
+    { status: 'paused' as const, committedBeforeCancel: true },
+  ])('records $status after owner Cancel (earlier commit: $committedBeforeCancel)', async (scenario) => {
+    const executionId = `cancel-wins-${scenario.status}-${scenario.committedBeforeCancel}`;
+    const workflow = await seedExecution(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
+    const result: WorkflowRunResult = {
+      executionId,
+      workflowId: workflow.id,
+      ...(scenario.status === 'paused'
+        ? { status: 'paused', pausedAtGateId: 'gate', pausedAtFrameId: 'frame' }
+        : { status: 'completed' }),
+    };
+    const projected: string[] = [];
+    const offCompleted = MakaioBus.on(WorkflowSubjects.execution.completed, () => {
+      projected.push('completed');
+    });
+    const offPaused = MakaioBus.on(WorkflowSubjects.execution.paused, () => {
+      projected.push('paused');
+    });
+    try {
+      if (scenario.committedBeforeCancel) {
+        await authority.commitOutcome(attempt.executionAttemptId, executionId, authority.canonicalizeOutcome(result));
+      }
+      await authority.requestCancellation({ executionId, reason: 'Owner decision' });
+      await MakaioBus.request(WorkflowSubjects.cancel, { executionId, reason: 'Owner decision' });
+      const waiter = authority.waitForOutcome(attempt.executionAttemptId);
+      const response = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
+        executionAttemptId: attempt.executionAttemptId,
+        executionId,
+        result,
+      });
+      expect(response.decision).toBe(scenario.committedBeforeCancel ? 'duplicate' : 'accepted');
+      await expect(waiter).resolves.toEqual({
+        outcome: result,
+        acceptance: 'recorded-only',
+        controlObservation: scenario.committedBeforeCancel
+          ? { controlRevision: 0, cancellation: null }
+          : expect.objectContaining({ controlRevision: 1 }),
+      });
+      expect(projected).toEqual([]);
+      expect((await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status).toBe(
+        'cancelled',
+      );
+    } finally {
+      offCompleted();
+      offPaused();
+    }
+  });
+
+  it('projects a real cancellation result after durable owner cancellation', async () => {
+    const executionId = 'real-cancel-after-owner-cancel';
+    const workflow = await seedExecution(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
+    await authority.requestCancellation({ executionId });
+    await MakaioBus.request(WorkflowSubjects.cancel, { executionId });
+    const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'cancelled' };
+    const waiter = authority.waitForOutcome(attempt.executionAttemptId);
+    await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
+      executionAttemptId: attempt.executionAttemptId,
+      executionId,
+      result,
+    });
+    await expect(waiter).resolves.toEqual({
+      outcome: result,
+      acceptance: 'projected',
+      controlObservation: expect.objectContaining({ controlRevision: 1 }),
+    });
+  });
+
+  it('lets a genuine stopped outcome finish an owner cancellation whose second write is still pending', async () => {
+    const executionId = 'actual-stop-before-owner-cancel';
+    await seedExecution(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
+    await authority.requestCancellation({ executionId });
+    expect((await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status).toBe(
+      'running',
+    );
+    const waiter = authority.waitForOutcome(attempt.executionAttemptId);
+    const outcome: WorkflowAttemptOutcome = { kind: 'cancelled', reason: 'Workload actually stopped' };
+    await expect(
+      submitAttemptOutcome(
+        { authority, convergence: { converge: (input) => setup!.workflowExecutor.acceptAuthorityOutcome(input) } },
+        { executionId, executionAttemptId: attempt.executionAttemptId, outcome },
+      ),
+    ).resolves.toBe('accepted');
+    await expect(waiter).resolves.toEqual({
+      outcome,
+      acceptance: 'projected',
+      controlObservation: expect.objectContaining({ controlRevision: 1 }),
+    });
+    expect((await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status).toBe(
+      'cancelled',
+    );
+    expect(repository.committedOutcomes.get(attempt.executionAttemptId)).toBe(JSON.stringify(outcome));
+  });
+
+  it.each([
+    false,
+    true,
+  ])('handles Cancel between owner read and finalizer without masking failures (%s)', async (fail) => {
+    const executionId = `cancel-finalizer-gap-${fail}`;
+    const workflow = await seedExecution(executionId);
+    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
+    const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
+    const executor = setup!.workflowExecutor;
+    const acceptTerminal = executor.acceptAuthorityRunnerResult.bind(executor);
+    vi.spyOn(executor, 'acceptAuthorityRunnerResult').mockImplementationOnce(async (ownerId, outcome) => {
+      await MakaioBus.request(WorkflowSubjects.cancel, { executionId: ownerId });
+      if (fail) throw new Error('Unrelated projection storage failure');
+      return acceptTerminal(ownerId, outcome);
+    });
+    const waiter = authority.waitForOutcome(attempt.executionAttemptId);
+    const submit = () =>
+      MakaioBus.request(WorkerSubjects.control.outcome.submit, {
+        executionAttemptId: attempt.executionAttemptId,
+        executionId,
+        result,
+      });
+    if (fail) {
+      await expect(submit()).rejects.toThrow('Unrelated projection storage failure');
+      // Only the explicit retry may accept against the now-durable owner Cancel.
+      expect((await submit()).decision).toBe('duplicate');
+    } else {
+      expect((await submit()).decision).toBe('accepted');
+    }
+    await expect(waiter).resolves.toEqual({
+      outcome: result,
+      acceptance: 'recorded-only',
+      controlObservation: { controlRevision: 0, cancellation: null },
+    });
   });
 
   it('accepts a terminal failed outcome and ACKs', async () => {
@@ -420,7 +632,11 @@ describe('outcome submission handler', () => {
     });
 
     expect(resumedDecision.decision).toBe('accepted');
-    await expect(resumedWaiter).resolves.toEqual(terminal);
+    await expect(resumedWaiter).resolves.toEqual({
+      outcome: terminal,
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
 
     // The paused attempt's own worker may still retry: its outcome stays
     // durably committed, but the execution it would converge is no longer its
@@ -610,15 +826,10 @@ describe('outcome submission handler', () => {
       status: 'completed',
     };
 
-    // Sabotage workflow convergence: mark the execution as already completed
-    // so acceptTerminalResult raises an error on convergence.
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, {
-      execution: createWorkflowExecution({
-        id: executionId,
-        workflowId: workflow.id,
-        status: 'cancelled',
-      }),
-    });
+    // Inject one owner projection outage, without reopening terminal state.
+    vi.spyOn(setup!.workflowExecutor, 'acceptAuthorityRunnerResult').mockRejectedValueOnce(
+      new Error('Owner projection unavailable'),
+    );
 
     // The submission itself should throw because convergence fails.
     await expect(
@@ -646,15 +857,9 @@ describe('outcome submission handler', () => {
       status: 'completed',
     };
 
-    // Sabotage workflow convergence on first attempt: mark execution
-    // as cancelled so acceptTerminalResult raises an error.
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, {
-      execution: createWorkflowExecution({
-        id: executionId,
-        workflowId: workflow.id,
-        status: 'cancelled',
-      }),
-    });
+    vi.spyOn(setup!.workflowExecutor, 'acceptAuthorityRunnerResult').mockRejectedValueOnce(
+      new Error('Owner projection unavailable'),
+    );
 
     // First submission: convergence fails, but outcome is durably accepted.
     await expect(
@@ -668,15 +873,6 @@ describe('outcome submission handler', () => {
     // Waiter is still pending after first failed convergence.
     expect(authority.waitForOutcome(attempt.executionAttemptId)).toBeDefined();
 
-    // Fix the execution state so convergence succeeds on retry.
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, {
-      execution: createWorkflowExecution({
-        id: executionId,
-        workflowId: workflow.id,
-        status: 'running',
-      }),
-    });
-
     // Retry submission: receives duplicate, converges, and settles waiter.
     const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
       executionAttemptId: attempt.executionAttemptId,
@@ -686,7 +882,11 @@ describe('outcome submission handler', () => {
     expect(decision).toBe('duplicate');
 
     // Waiter must resolve with the committed outcome.
-    await expect(waiter).resolves.toEqual(result);
+    await expect(waiter).resolves.toEqual({
+      outcome: result,
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
 
     // Workflow must have converged to the correct terminal state.
     const stored = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });

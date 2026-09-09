@@ -54,7 +54,5 @@ export function launchDefinitionExecutionTask(
       terminalAuthority: params.terminalAuthority ?? dispatch.runner.terminalAuthority,
     });
   }
-  return deps.runExecution(params.executionId).finally(() => {
-    deps.executionTasks.delete(params.executionId);
-  });
+  return deps.runExecution(params.executionId);
 }

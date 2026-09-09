@@ -55,3 +55,9 @@ export type {
   WorkspaceRequirement,
   WorkspaceSetupCommand,
 } from './instruction.js';
+export type {
+  AcceptedAttemptOutcome,
+  AttemptOutcomeControlObservation,
+  ExecutionAttemptCancellationIntent,
+  OutcomeAcceptance,
+} from './outcome-acceptance.js';

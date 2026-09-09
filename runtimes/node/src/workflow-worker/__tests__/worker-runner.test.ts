@@ -161,11 +161,16 @@ describe('WorkerRunner', () => {
         );
         if (decision.kind === 'accepted' || decision.kind === 'duplicate') committedOutcome = decision.outcome;
         // Host convergence precedes settling the waiter; the runner only projects the already-settled result.
-        authority.settleOutcome(request.executionAttemptId, decision);
+        authority.settleOutcome(
+          request.executionAttemptId,
+          decision.kind === 'accepted' || decision.kind === 'duplicate'
+            ? { ...decision, acceptance: 'projected' }
+            : decision,
+        );
         return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
       },
     });
-    await expect(runner.run(config, new AbortController().signal)).resolves.toEqual({
+    await expect(runner.run(config, new AbortController().signal)).resolves.toMatchObject({
       state: 'authority-committed',
       result: {
         executionId: config.executionId,
@@ -193,7 +198,12 @@ describe('WorkerRunner', () => {
         'wfx-1',
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(request.executionAttemptId, decision);
+      authority.settleOutcome(
+        request.executionAttemptId,
+        decision.kind === 'accepted' || decision.kind === 'duplicate'
+          ? { ...decision, acceptance: 'projected' }
+          : decision,
+      );
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
     const runner = new WorkerRunner({ dispatch, authority });
@@ -203,6 +213,7 @@ describe('WorkerRunner', () => {
 
     expect(capturedAttemptId).toBeTruthy();
     expect(completion.state).toBe('authority-committed');
+    if (completion.state !== 'authority-committed') throw new Error('Expected projected completion');
     expect(completion.result.status).toBe('completed');
   });
 
@@ -221,7 +232,12 @@ describe('WorkerRunner', () => {
         'wfx-1',
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(request.executionAttemptId, decision);
+      authority.settleOutcome(
+        request.executionAttemptId,
+        decision.kind === 'accepted' || decision.kind === 'duplicate'
+          ? { ...decision, acceptance: 'projected' }
+          : decision,
+      );
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
     const manifest: WorkerContributionManifest = { contributionRefs: [] };
@@ -257,7 +273,12 @@ describe('WorkerRunner', () => {
         'wfx-1',
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(request.executionAttemptId, decision);
+      authority.settleOutcome(
+        request.executionAttemptId,
+        decision.kind === 'accepted' || decision.kind === 'duplicate'
+          ? { ...decision, acceptance: 'projected' }
+          : decision,
+      );
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
     const runner = new WorkerRunner({ dispatch, authority, manifest, requirements });
@@ -284,7 +305,12 @@ describe('WorkerRunner', () => {
         'wfx-1',
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(request.executionAttemptId, decision);
+      authority.settleOutcome(
+        request.executionAttemptId,
+        decision.kind === 'accepted' || decision.kind === 'duplicate'
+          ? { ...decision, acceptance: 'projected' }
+          : decision,
+      );
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
     const runner = new WorkerRunner({ dispatch, authority });
@@ -311,7 +337,12 @@ describe('WorkerRunner', () => {
         'wfx-1',
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(request.executionAttemptId, decision);
+      authority.settleOutcome(
+        request.executionAttemptId,
+        decision.kind === 'accepted' || decision.kind === 'duplicate'
+          ? { ...decision, acceptance: 'projected' }
+          : decision,
+      );
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
     const runner = new WorkerRunner({ dispatch, authority, manifest });
@@ -337,7 +368,12 @@ describe('WorkerRunner', () => {
         'wfx-1',
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(request.executionAttemptId, decision);
+      authority.settleOutcome(
+        request.executionAttemptId,
+        decision.kind === 'accepted' || decision.kind === 'duplicate'
+          ? { ...decision, acceptance: 'projected' }
+          : decision,
+      );
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
     const runner = new WorkerRunner({ dispatch, authority });
@@ -393,7 +429,12 @@ describe('WorkerRunner', () => {
             'wfx-1',
             authority.canonicalizeOutcome(result),
           );
-          authority.settleOutcome(request.executionAttemptId, decision);
+          authority.settleOutcome(
+            request.executionAttemptId,
+            decision.kind === 'accepted' || decision.kind === 'duplicate'
+              ? { ...decision, acceptance: 'projected' }
+              : decision,
+          );
         });
         throw new Error('dispatch acknowledgement lost');
       },
@@ -420,7 +461,12 @@ describe('WorkerRunner', () => {
         'exec-1',
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(request.executionAttemptId, decision);
+      authority.settleOutcome(
+        request.executionAttemptId,
+        decision.kind === 'accepted' || decision.kind === 'duplicate'
+          ? { ...decision, acceptance: 'projected' }
+          : decision,
+      );
       return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
     };
     const runner = new WorkerRunner({
@@ -477,7 +523,12 @@ describe('WorkerRunner', () => {
           'wfx-1',
           authority.canonicalizeOutcome(result),
         );
-        authority.settleOutcome(request.executionAttemptId, decision);
+        authority.settleOutcome(
+          request.executionAttemptId,
+          decision.kind === 'accepted' || decision.kind === 'duplicate'
+            ? { ...decision, acceptance: 'projected' }
+            : decision,
+        );
         resolveOutcome();
       }, 10);
 
@@ -490,6 +541,7 @@ describe('WorkerRunner', () => {
     await outcomeBarrier;
 
     expect(completion.state).toBe('authority-committed');
+    if (completion.state !== 'authority-committed') throw new Error('Expected projected completion');
     expect(completion.result.status).toBe('completed');
   });
 
@@ -518,7 +570,12 @@ describe('WorkerRunner', () => {
             'wfx-1',
             authority.canonicalizeOutcome(result),
           );
-          authority.settleOutcome(request.executionAttemptId, decision);
+          authority.settleOutcome(
+            request.executionAttemptId,
+            decision.kind === 'accepted' || decision.kind === 'duplicate'
+              ? { ...decision, acceptance: 'projected' }
+              : decision,
+          );
         }, 0);
         expect(signal.aborted).toBe(false);
         dispatchStarted();
