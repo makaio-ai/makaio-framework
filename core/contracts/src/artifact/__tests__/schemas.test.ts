@@ -178,14 +178,21 @@ describe('Artifact core schemas', () => {
       }).kind,
     ).toBe('implementation-plan');
 
+    const relationType = RelationTypeRegistrationSchema.parse({
+      type: 'derives_from',
+      symmetry: 'asymmetric',
+      implication: 'Causal chain',
+      targetRefClasses: ['artifact', 'evidence', 'entity'],
+    });
+    expect(relationType.type).toBe('derives_from');
+    expect(relationType.targetRefClasses).toEqual(['artifact', 'evidence', 'entity']);
     expect(
-      RelationTypeRegistrationSchema.parse({
+      RelationTypeRegistrationSchema.safeParse({
         type: 'derives_from',
         symmetry: 'asymmetric',
-        implication: 'Causal chain',
-        targetRefClasses: ['artifact', 'evidence'],
-      }).type,
-    ).toBe('derives_from');
+        targetRefClasses: ['external'],
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects whitespace-only artifact kind descriptions', () => {
