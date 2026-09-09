@@ -93,7 +93,8 @@ function defineOutcomeParity<TOutcome>(
         result: harness.repository.canonicalizeOutcome(result),
       });
 
-      expect(accepted).toEqual({ kind: 'accepted', outcome: result, text: storedText });
+      const controlObservation = { controlRevision: 0, cancellation: null };
+      expect(accepted).toEqual({ kind: 'accepted', outcome: result, text: storedText, controlObservation });
       // Presence, not truthiness, decides that an outcome is already
       // committed: the counter variant commits `0` here, and a realization
       // that probed the stored value for truthiness would answer `accepted` a
@@ -104,13 +105,38 @@ function defineOutcomeParity<TOutcome>(
         ...ids,
         result: harness.repository.canonicalizeOutcome(variant.makeOutcome(ids.executionId, 0)),
       });
-      expect(replay).toEqual({ kind: 'duplicate', outcome: result, text: storedText });
+      expect(replay).toEqual({ kind: 'duplicate', outcome: result, text: storedText, controlObservation });
 
       const competing = await harness.repository.commitOutcome({
         ...ids,
         result: harness.repository.canonicalizeOutcome(variant.makeOutcome(ids.executionId, 1)),
       });
       expect(competing).toEqual({ kind: 'conflict' });
+    });
+
+    it('stores prior cancellation beside an opaque outcome without transforming its value', async () => {
+      const { repository, peer } = getHarness();
+      const ids = nextIds();
+      await repository.createAttempt({
+        ...ids,
+        instruction: makeTestInstruction(),
+        bootstrapTimeoutMs: TEST_BOOTSTRAP_TIMEOUT_MS,
+      });
+      await peer.requestAttemptCancellation({ ...ids, requestKey: 'stop-opaque-owner' });
+      const cancellation = await repository.readCancellation(ids.executionAttemptId);
+      const result = repository.canonicalizeOutcome(variant.makeOutcome(ids.executionId, 0));
+      const controlObservation = { controlRevision: 1, cancellation };
+      expect(await repository.commitOutcome({ ...ids, result })).toEqual({
+        kind: 'accepted',
+        ...result,
+        controlObservation,
+      });
+      expect(await peer.commitOutcome({ ...ids, result })).toEqual({
+        kind: 'duplicate',
+        ...result,
+        controlObservation,
+      });
+      expect(await peer.readAttemptSettlement(ids)).toMatchObject({ kind: 'outcome', result, controlObservation });
     });
   });
 }

@@ -37,6 +37,7 @@ export function registerGenerationCases(factory: ExecutionAttemptRepositoryContr
         kind: 'accepted',
         outcome: { counter: 0, generation: 1 },
         text: '{"counter":0,"generation":1}',
+        controlObservation: { controlRevision: 0, cancellation: null },
       });
 
       // The worker's honest retry. Its submission would write the same text
@@ -52,6 +53,7 @@ export function registerGenerationCases(factory: ExecutionAttemptRepositoryContr
         kind: 'duplicate',
         outcome: { counter: 0, generation: 1 },
         text: '{"counter":0,"generation":1}',
+        controlObservation: { controlRevision: 0, cancellation: null },
       });
 
       // A genuinely different submission still conflicts: comparing stored

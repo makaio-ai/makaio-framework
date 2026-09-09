@@ -37,11 +37,13 @@ export function registerTerminalAtomicityCases(
       kind: 'accepted',
       outcome: winner.outcome,
       text: winner.text,
+      controlObservation: { controlRevision: 0, cancellation: null },
     });
     expect(await harness.peer.commitOutcome({ ...ids, result: winner })).toEqual({
       kind: 'duplicate',
       outcome: winner.outcome,
       text: winner.text,
+      controlObservation: { controlRevision: 0, cancellation: null },
     });
     expect(await harness.repository.getActiveAttempt(ids.executionId, ids.executionAttemptId)).toMatchObject({
       status: 'settled',
@@ -67,13 +69,19 @@ export function registerTerminalAtomicityCases(
 
     expect(peerRead).toEqual(primaryRead);
     if (outcomeDecision.kind === 'accepted') {
-      expect(outcomeDecision).toEqual({ kind: 'accepted', outcome: outcome.outcome, text: outcome.text });
+      expect(outcomeDecision).toEqual({
+        kind: 'accepted',
+        outcome: outcome.outcome,
+        text: outcome.text,
+        controlObservation: { controlRevision: 0, cancellation: null },
+      });
       expect(infrastructureDecision).toEqual({ kind: 'resolved' });
       expect(primaryRead).toMatchObject({ status: 'settled', settlementKind: 'outcome' });
       expect(await harness.peer.commitOutcome({ ...ids, result: outcome })).toEqual({
         kind: 'duplicate',
         outcome: outcome.outcome,
         text: outcome.text,
+        controlObservation: { controlRevision: 0, cancellation: null },
       });
       return;
     }

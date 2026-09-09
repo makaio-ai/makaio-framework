@@ -43,6 +43,7 @@ export function registerAdmissionCases(
       kind: 'accepted',
       outcome: result,
       text: harness.repository.canonicalizeOutcome(result).text,
+      controlObservation: { controlRevision: 0, cancellation: null },
     });
     expect(['admitted', 'resolved']).toContain(admission.kind);
     for (const repository of [harness.repository, harness.peer]) {

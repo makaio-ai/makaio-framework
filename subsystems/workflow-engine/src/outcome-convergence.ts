@@ -207,6 +207,7 @@ export async function submitAttemptOutcome<TOutcome>(
       kind: decision.kind,
       outcome: deps.authority.decodeOutcome(decision.text),
       text: decision.text,
+      controlObservation: decision.controlObservation,
     });
   }
 

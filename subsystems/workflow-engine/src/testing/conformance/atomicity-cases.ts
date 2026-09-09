@@ -34,7 +34,12 @@ export function registerAtomicityCases(
 
     expect(takeover.kind).toBe('claimed');
     if (takeover.kind !== 'claimed') throw new Error(`Expected takeover, got '${takeover.kind}'`);
-    expect(commit).toEqual({ kind: 'accepted', outcome: result.outcome, text: result.text });
+    expect(commit).toEqual({
+      kind: 'accepted',
+      outcome: result.outcome,
+      text: result.text,
+      controlObservation: { controlRevision: 0, cancellation: null },
+    });
     expect(await harness.repository.getActiveAttempt(ids.executionId, ids.executionAttemptId)).toMatchObject({
       settlementKind: 'outcome',
     });

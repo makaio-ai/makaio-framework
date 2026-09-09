@@ -161,7 +161,16 @@ describe('submitAttemptOutcome (generic contract)', () => {
       { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: { counter: 3 } },
     ).catch(() => undefined);
 
+    // Later cleanup intent cannot replace the control facts recorded with the
+    // original outcome. This fake owner exercises forwarding, not Job semantics.
+    const cancellation = await boxedAuthority.requestAttemptCancellation({
+      executionId: EXECUTION_ID,
+      executionAttemptId: attempt.executionAttemptId,
+      requestKey: 'cleanup-after-outcome',
+    });
+    expect(cancellation).toMatchObject({ kind: 'accepted', intent: { controlRevision: 1 } });
     const commitOutcome = vi.spyOn(boxedAuthority, 'commitOutcome');
+    const settleOutcome = vi.spyOn(boxedAuthority, 'settleOutcome');
     const resubmitted: BoxedCounterOutcome = { counter: 3 };
     const decision = await submitAttemptOutcome(
       { authority: boxedAuthority, convergence: boxedConvergence },
@@ -171,7 +180,13 @@ describe('submitAttemptOutcome (generic contract)', () => {
     expect(decision).toBe('duplicate');
     expect(boxedConvergence.calls.map((call) => call.decision)).toEqual(['accepted', 'duplicate']);
     const reported = await commitOutcome.mock.results[0]?.value;
-    expect(reported).toEqual({ kind: 'duplicate', outcome: { counter: 3 }, text: '{"counter":3}' });
+    expect(reported).toEqual({
+      kind: 'duplicate',
+      outcome: { counter: 3 },
+      text: '{"counter":3}',
+      controlObservation: { controlRevision: 0, cancellation: null },
+    });
+    expect(settleOutcome).toHaveBeenCalledExactlyOnceWith(attempt.executionAttemptId, reported);
     const committed = reported?.kind === 'duplicate' ? reported.outcome : undefined;
     expect(boxedConvergence.calls[1]?.outcome).toBe(committed);
     expect(boxedConvergence.calls[1]?.outcome).not.toBe(resubmitted);

@@ -18,6 +18,8 @@ import type {
   ExecutionAttemptOutcomeDecision,
   ExecutionAttemptRecord,
   ExecutionAttemptCancellationIntent,
+  ExecutionAttemptCancellationDecision,
+  RequestAttemptCancellationInput,
   RequestExecutionCancellationInput,
   ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
@@ -56,6 +58,10 @@ import {
   snapshotEnsureExecutionAttemptInput,
   snapshotReadAttemptSettlementInput,
 } from './execution-attempt-owner-recovery.js';
+import {
+  snapshotRequestAttemptCancellationInput,
+  snapshotRequestExecutionCancellationInput,
+} from './execution-attempt-cancellation.js';
 import type {
   ProviderOperationClaimDecision,
   ProviderOperationCompletionDecision,
@@ -221,12 +227,24 @@ export class ExecutionAttemptAuthority<TOutcome> implements BootstrapStartAuthor
   }
 
   /**
+   * Commit one owner-authorized Cancel before any best-effort control notification.
+   * Historical cleanup does not restore outcome or owner mutation authority.
+   * @param input - Trusted owner, exact attempt and stable cancellation request key.
+   * @returns Winning durable receipt, replay or refusal without waiter settlement.
+   */
+  public async requestAttemptCancellation(
+    input: RequestAttemptCancellationInput,
+  ): Promise<ExecutionAttemptCancellationDecision> {
+    return this.repository.requestAttemptCancellation(snapshotRequestAttemptCancellationInput(input));
+  }
+
+  /**
    * Commit cancellation intent before any best-effort control notification.
    * @param input - Owner of existing attempts and optional cancellation reason.
    * @returns Completion of the durable cancellation request write.
    */
   public async requestCancellation(input: RequestExecutionCancellationInput): Promise<void> {
-    return this.repository.requestCancellation({ ...input });
+    return this.repository.requestCancellation(snapshotRequestExecutionCancellationInput(input));
   }
 
   /**

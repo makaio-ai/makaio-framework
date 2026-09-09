@@ -66,6 +66,7 @@ export function registerProviderCompletionCases(
       kind: 'accepted',
       outcome: outcome.outcome,
       text: outcome.text,
+      controlObservation: { controlRevision: 0, cancellation: null },
     });
     // The legacy recovery selector remains about bootstrap-recoverable,
     // unsettled attempts. Settlement now joins the already durable provider
@@ -247,6 +248,7 @@ export function registerProviderCompletionCases(
         kind: 'duplicate',
         outcome: outcome.outcome,
         text: outcome.text,
+        controlObservation: { controlRevision: 0, cancellation: null },
       });
     } else {
       expect(outcomeDecision).toEqual({ kind: 'conflict' });
