@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
+// Load the real contribution during collection; these assertions check its contract, not CLI startup latency.
+import promptCli from '../src/cli.js';
 
 const extensionRoot = path.resolve(import.meta.dirname, '..');
 
@@ -18,13 +20,8 @@ describe('Prompt Extension Contract', () => {
     ]);
   });
 
-  it('CLI entrypoint exports a valid CliContribution', async () => {
-    const cliModule = (await import('../src/cli.js')) as { default: unknown };
-    const contribution = cliModule.default as {
-      name: string;
-      description: string;
-      subcommands: unknown[];
-    };
+  it('CLI entrypoint exports a valid CliContribution', () => {
+    const contribution = promptCli;
     expect(contribution).toBeDefined();
     expect(contribution.name).toBe('prompt');
     expect(contribution.description).toBeDefined();
@@ -33,11 +30,8 @@ describe('Prompt Extension Contract', () => {
     expect(contribution.subcommands.length).toBeGreaterThan(0);
   });
 
-  it('subcommand has a Zod schema with model field', async () => {
-    const cliModule = (await import('../src/cli.js')) as { default: unknown };
-    const contribution = cliModule.default as {
-      subcommands: Array<{ schema: { safeParse: (input: unknown) => { success: boolean } } }>;
-    };
+  it('subcommand has a Zod schema with model field', () => {
+    const contribution = promptCli;
     const subcommand = contribution.subcommands[0];
     expect(subcommand).toBeDefined();
     expect(subcommand?.schema).toBeDefined();
@@ -45,21 +39,15 @@ describe('Prompt Extension Contract', () => {
     expect(result?.success).toBe(true);
   });
 
-  it('subcommand schema accepts omitted model (optional)', async () => {
-    const cliModule = (await import('../src/cli.js')) as { default: unknown };
-    const contribution = cliModule.default as {
-      subcommands: Array<{ schema: { safeParse: (input: unknown) => { success: boolean } } }>;
-    };
+  it('subcommand schema accepts omitted model (optional)', () => {
+    const contribution = promptCli;
     const subcommand = contribution.subcommands[0];
     const result = subcommand?.schema.safeParse({});
     expect(result?.success).toBe(true);
   });
 
-  it('subcommand schema normalizes comma and quoted-space tool lists', async () => {
-    const cliModule = (await import('../src/cli.js')) as { default: unknown };
-    const contribution = cliModule.default as {
-      subcommands: Array<{ schema: { safeParse: (input: unknown) => { success: boolean; data?: unknown } } }>;
-    };
+  it('subcommand schema normalizes comma and quoted-space tool lists', () => {
+    const contribution = promptCli;
     const subcommand = contribution.subcommands[0];
 
     const result = subcommand?.schema.safeParse({

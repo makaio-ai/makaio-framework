@@ -55,24 +55,17 @@ const MCP_FIXTURE_TIMEOUT_MS = 15_000;
 /**
  * Start a bridge connected to the fixture MCP server.
  * @param onToolsChanged - Optional callback for tool-list change notifications.
- * @param fixtureDelayMs - `MCP_FIXTURE_DELAY_MS` env var for the fixture; use
- *   a high value to suppress the self-sent notification in tests that do not
- *   need it.
  * @returns The connected bridge handle.
  */
 async function startFixtureBridge(
   onToolsChanged?: (tools: { name: string }[]) => void,
-  fixtureDelayMs = 99_999,
 ): Promise<McpClientBridgeHandle> {
   return startMcpClientBridge({
     command: TSX_BIN,
     args: [FIXTURE_PATH],
     extensionName: 'test-extension',
     onToolsChanged,
-    env: {
-      ...(process.env as Record<string, string>),
-      MCP_FIXTURE_DELAY_MS: String(fixtureDelayMs),
-    },
+    env: process.env as Record<string, string>,
   });
 }
 
@@ -228,39 +221,37 @@ describe('startMcpClientBridge', { timeout: MCP_FIXTURE_TIMEOUT_MS }, () => {
   it('calls onToolsChanged when the server sends tools/list_changed', async () => {
     const toolChanges: string[][] = [];
 
-    // Use a short delay so the fixture sends the notification soon after
-    // the bridge connects and completes its initial listTools() call.
     handle = await startFixtureBridge((tools) => {
       toolChanges.push(tools.map((t) => t.name));
-    }, 300);
+    });
 
-    // Wait until the fixture's self-timer fires and we receive the
-    // tools/list_changed notification (debounced by the SDK at 300 ms by
-    // default, fixture fires after 300 ms → expect arrival within 4 s).
+    expect(handle.toolNames).toEqual(['echo']);
+    expect(toolChanges).toEqual([]);
+
+    // Explicitly trigger the update after observing initial state; elapsed
+    // time since connection does not establish that ordering under load.
+    await handle.callTool('echo', { message: 'enable add', enableAddTool: true });
     await waitForCondition(() => toolChanges.length > 0, 4000, 50, 'Timed out waiting for onToolsChanged');
 
     const updatedNames = toolChanges[toolChanges.length - 1];
-    expect(updatedNames).toContain('echo');
-    expect(updatedNames).toContain('add');
+    expect(updatedNames).toEqual(['echo', 'add']);
   });
 
   it('handle.tools is live-updated after tools/list_changed', async () => {
-    // Use a short delay so the fixture sends the notification soon after
-    // the bridge connects and completes its initial listTools() call.
     let notified = false;
     handle = await startFixtureBridge(() => {
       notified = true;
-    }, 300);
+    });
 
     // Verify initial state: only echo
     expect(handle.tools.map((t) => t.name)).toEqual(['echo']);
+    expect(notified).toBe(false);
 
-    // Wait for the notification to arrive.
+    await handle.callTool('echo', { message: 'enable add', enableAddTool: true });
     await waitForCondition(() => notified, 4000, 50, 'Timed out waiting for handle.tools live update');
 
     // After notification: internal list must contain both tools.
-    expect(handle.toolNames).toContain('echo');
-    expect(handle.toolNames).toContain('add');
+    expect(handle.toolNames).toEqual(['echo', 'add']);
     expect(handle.tools.map((t) => t.name)).toEqual(handle.toolNames);
   });
 
@@ -274,10 +265,7 @@ describe('startMcpClientBridge', { timeout: MCP_FIXTURE_TIMEOUT_MS }, () => {
       command: TSX_BIN,
       args: [FIXTURE_PATH],
       extensionName: 'test-extension',
-      env: {
-        ...(process.env as Record<string, string>),
-        MCP_FIXTURE_DELAY_MS: '99999',
-      },
+      env: process.env as Record<string, string>,
       bus,
     });
 
