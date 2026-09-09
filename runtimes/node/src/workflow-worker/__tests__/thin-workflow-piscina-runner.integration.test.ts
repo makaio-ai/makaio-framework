@@ -388,6 +388,7 @@ describe('ThinWorkflowPiscinaRunner integration', () => {
         ),
         new AbortController().signal,
       );
+      if (outcome.kind !== 'allocated') throw new Error(`Expected allocation, got '${outcome.kind}'`);
       const { allocationRef, handle } = outcome;
 
       expect(allocationRef.version).toBe(PROVIDER_ALLOCATION_REF_VERSION);
@@ -624,6 +625,7 @@ describe('process-bound allocation lifetime', () => {
         ),
         new AbortController().signal,
       );
+      if (outcome.kind !== 'allocated') throw new Error(`Expected allocation, got '${outcome.kind}'`);
       // Waiting on the acknowledged outcome rather than on elapsed time is what
       // makes this a real worker thread that really ran.
       await expect(first.acknowledgedAttemptId).resolves.toBe(executionAttemptId);

@@ -3,11 +3,15 @@ import { createBusInstance } from '@makaio/bus-core';
 import type {
   WorkerContributionManifest,
   WorkerCapabilities,
+  WorkerAllocatedOutcome,
+  WorkerProvisionOutcome,
   WorkerProvisionRequest,
   WorkflowRunResult,
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import {
+  BoundedRecoveryEvidenceSchema,
+  PRE_REQUEST_REJECTION_CODE,
   PROVIDER_ALLOCATION_REF_VERSION,
   ProviderAllocationRefSchema,
   WorkerNamespace,
@@ -20,6 +24,7 @@ import {
   type PiscinaThinWorkflowProviderOptions,
   type ReadinessAwareWorkflowRunner,
 } from '../piscina-thin-workflow-provider.js';
+import type { WorkflowLaunchResolver } from '../workflow-launch-resolver.js';
 import { WORKFLOW_WORKER_READY_MESSAGE_TYPE, type WorkflowWorkerReadyMessage } from '../worker-ready-message.js';
 import { makeWorkerConfig } from './fixtures.js';
 
@@ -82,13 +87,15 @@ function makeProvisionRequest(
 /**
  * Build a provider with the explicit workflow adapter used by this suite.
  * @param options - Provider dependencies excluding the explicit test resolver.
+ * @param launchResolver - Explicit resolver override for pre-allocation tests.
  */
 function makeProvider(
   options: Omit<PiscinaThinWorkflowProviderOptions, 'launchResolver'>,
+  launchResolver: WorkflowLaunchResolver = async (request) => testLaunchConfig(request),
 ): PiscinaThinWorkflowProvider {
   return new PiscinaThinWorkflowProvider({
     ...options,
-    launchResolver: async (request) => testLaunchConfig(request),
+    launchResolver,
   });
 }
 
@@ -100,6 +107,31 @@ function testLaunchConfig(request: WorkerProvisionRequest): WorkflowWorkerConfig
   const config = launchConfigurations.get(request);
   if (config === undefined) throw new Error(`Missing test workflow config for '${request.executionAttemptId}'`);
   return config;
+}
+
+/**
+ * Assert that a fixture request reaches the allocation branch.
+ * @param outcome - Provider conclusion under test.
+ * @returns The allocated branch of the provider conclusion.
+ */
+function expectAllocated(outcome: WorkerProvisionOutcome): WorkerAllocatedOutcome {
+  if (outcome.kind !== 'allocated') throw new Error(`Expected an allocation, got '${outcome.kind}'`);
+  return outcome;
+}
+
+/**
+ * Provision a fixture request that is expected to create a local thread.
+ * @param provider - Provider under test.
+ * @param request - Generic Worker request under test.
+ * @param signal - Caller cancellation signal.
+ * @returns Allocated provider conclusion.
+ */
+async function provisionAllocated(
+  provider: PiscinaThinWorkflowProvider,
+  request: WorkerProvisionRequest,
+  signal: AbortSignal,
+): Promise<WorkerAllocatedOutcome> {
+  return expectAllocated(await provider.provision(request, signal));
 }
 
 /** Terminal result the default runner fake settles with. */
@@ -273,7 +305,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus: createTestBus(),
     });
 
-    const { allocationRef } = await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    const { allocationRef } = await provisionAllocated(provider, makeProvisionRequest(), new AbortController().signal);
 
     expect(allocationRef.version).toBe(PROVIDER_ALLOCATION_REF_VERSION);
     // The reference names the instance that created it, so two providers of
@@ -296,7 +328,8 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus: createTestBus(),
     });
 
-    const { allocationRef } = await provider.provision(
+    const { allocationRef } = await provisionAllocated(
+      provider,
       makeProvisionRequest({ executionAttemptId: 'attempt-42' }),
       new AbortController().signal,
     );
@@ -306,7 +339,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     });
   });
 
-  it('does not start a runner that cannot return a valid allocation response', async () => {
+  it('rejects when local allocation-reference validation fails before thread start', async () => {
     const runner = makeRunner();
     const provider = makeProvider({
       // The allocation-reference contract rejects empty provider IDs.
@@ -332,7 +365,8 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus: createTestBus(),
     });
 
-    const { handle } = await provider.provision(
+    const { handle } = await provisionAllocated(
+      provider,
       makeProvisionRequest({ executionAttemptId: 'attempt-99' }),
       new AbortController().signal,
     );
@@ -349,7 +383,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus: createTestBus(),
     });
 
-    const { handle } = await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    const { handle } = await provisionAllocated(provider, makeProvisionRequest(), new AbortController().signal);
 
     expect(typeof handle.cancel).toBe('function');
     expect(typeof handle.terminate).toBe('function');
@@ -376,7 +410,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     });
     const request = makeProvisionRequest();
 
-    const { handle } = await provider.provision(request, new AbortController().signal);
+    const { handle } = await provisionAllocated(provider, request, new AbortController().signal);
 
     // Readiness is published by the Authority from the thread's own
     // registration, so this provider has nothing left to announce.
@@ -417,7 +451,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus: createTestBus(),
     });
 
-    await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    await provisionAllocated(provider, makeProvisionRequest(), new AbortController().signal);
 
     // A rejected readiness used to be swallowed. It now ends the allocation,
     // which is the only honest answer for a runtime the Authority refused.
@@ -446,7 +480,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus,
     });
 
-    const outcome = await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    const outcome = await provisionAllocated(provider, makeProvisionRequest(), new AbortController().signal);
     if (outcome.kind !== 'allocated') throw new Error(`Expected an allocation, got '${outcome.kind}'`);
 
     const conclusions: string[] = [];
@@ -480,7 +514,36 @@ describe('PiscinaThinWorkflowProvider', () => {
 
   // ── Attempt-scoped bus identity ───────────────────────────
 
-  it('rejects a provision whose worker configuration carries no bus URL', async () => {
+  it('confirms absence when workflow launch resolution rejects before local allocation setup', async () => {
+    const runner = makeRunner();
+    const provider = makeProvider(
+      {
+        id: 'piscina-launch-rejection',
+        displayName: 'Piscina',
+        runner,
+        bus: createTestBus(),
+      },
+      async () => {
+        throw new Error('Workflow instruction is unavailable: secret=resolver-secret-value');
+      },
+    );
+
+    const outcome = await provider.provision(
+      makeProvisionRequest({ executionAttemptId: 'attempt-launch-rejection' }),
+      new AbortController().signal,
+    );
+
+    expect(outcome.kind).toBe('confirmed-absent');
+    if (outcome.kind !== 'confirmed-absent') throw new Error('Expected confirmed absence');
+    expect(BoundedRecoveryEvidenceSchema.parse(outcome.evidence)).toEqual(outcome.evidence);
+    expect(outcome.evidence.code).toBe(PRE_REQUEST_REJECTION_CODE);
+    expect(outcome.evidence.summary).toBe('Workflow launch resolution failed before Piscina local allocation setup');
+    expect(JSON.stringify(outcome.evidence)).not.toContain('resolver-secret-value');
+    expect(runner.runWithReadiness).not.toHaveBeenCalled();
+    expect(resolveWorkflowExecutionBusSecret('attempt-launch-rejection')).toBeUndefined();
+  });
+
+  it('confirms absence when resolved workflow configuration carries no bus URL', async () => {
     const runner = makeRunner();
     const provider = makeProvider({
       id: 'piscina-no-bus',
@@ -489,20 +552,54 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus: createTestBus(),
     });
 
-    await expect(
-      provider.provision(
-        makeProvisionRequest({
-          executionAttemptId: 'attempt-no-bus',
-          workerConfig: makeWorkerConfig(),
-        }),
-        new AbortController().signal,
-      ),
-    ).rejects.toThrow('requires a bus URL');
+    const outcome = await provider.provision(
+      makeProvisionRequest({
+        executionAttemptId: 'attempt-no-bus',
+        workerConfig: makeWorkerConfig(),
+      }),
+      new AbortController().signal,
+    );
+
+    expect(outcome.kind).toBe('confirmed-absent');
+    if (outcome.kind !== 'confirmed-absent') throw new Error('Expected confirmed absence');
+    expect(BoundedRecoveryEvidenceSchema.parse(outcome.evidence)).toEqual(outcome.evidence);
+    expect(outcome.evidence.code).toBe(PRE_REQUEST_REJECTION_CODE);
+    expect(outcome.evidence.summary).toBe(
+      'Piscina workflow configuration has no bus URL before local allocation setup',
+    );
 
     // A thread with no transport could never register its runtime, so none is
     // started and no identity is minted for an attempt that cannot use it.
     expect(runner.runWithReadiness).not.toHaveBeenCalled();
     expect(resolveWorkflowExecutionBusSecret('attempt-no-bus')).toBeUndefined();
+  });
+
+  it('confirms absence when resolved workflow configuration carries an empty bus URL', async () => {
+    const runner = makeRunner();
+    const provider = makeProvider({
+      id: 'piscina-empty-bus',
+      displayName: 'Piscina',
+      runner,
+      bus: createTestBus(),
+    });
+
+    const outcome = await provider.provision(
+      makeProvisionRequest({
+        executionAttemptId: 'attempt-empty-bus',
+        workerConfig: makeWorkerConfig({ busUrl: '' }),
+      }),
+      new AbortController().signal,
+    );
+
+    expect(outcome.kind).toBe('confirmed-absent');
+    if (outcome.kind !== 'confirmed-absent') throw new Error('Expected confirmed absence');
+    expect(BoundedRecoveryEvidenceSchema.parse(outcome.evidence)).toEqual(outcome.evidence);
+    expect(outcome.evidence.code).toBe(PRE_REQUEST_REJECTION_CODE);
+    expect(outcome.evidence.summary).toBe(
+      'Piscina workflow configuration has no bus URL before local allocation setup',
+    );
+    expect(runner.runWithReadiness).not.toHaveBeenCalled();
+    expect(resolveWorkflowExecutionBusSecret('attempt-empty-bus')).toBeUndefined();
   });
 
   it('hands the worker an attempt-scoped bus identity instead of the host process secret', async () => {
@@ -525,7 +622,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     });
     const request = makeProvisionRequest({ executionAttemptId: 'attempt-identity' });
 
-    const { handle } = await provider.provision(request, new AbortController().signal);
+    const { handle } = await provisionAllocated(provider, request, new AbortController().signal);
 
     expect(capturedAttempt).toEqual({
       executionAttemptId: 'attempt-identity',
@@ -561,7 +658,8 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus,
     });
 
-    const { handle } = await provider.provision(
+    const { handle } = await provisionAllocated(
+      provider,
       makeProvisionRequest({ executionAttemptId: 'attempt-released' }),
       new AbortController().signal,
     );
@@ -589,7 +687,8 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus: createTestBus(),
     });
 
-    const { handle } = await provider.provision(
+    const { handle } = await provisionAllocated(
+      provider,
       makeProvisionRequest({ executionAttemptId: 'attempt-terminated' }),
       new AbortController().signal,
     );
@@ -615,7 +714,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus: createTestBus(),
     });
 
-    const { handle } = await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    const { handle } = await provisionAllocated(provider, makeProvisionRequest(), new AbortController().signal);
 
     await expect(handle.release()).resolves.toBeUndefined();
     expect(capturedSignal?.aborted).toBe(false);
@@ -648,7 +747,8 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus,
     });
 
-    const { handle } = await provider.provision(
+    const { handle } = await provisionAllocated(
+      provider,
       makeProvisionRequest({ executionAttemptId: 'attempt-completion' }),
       new AbortController().signal,
     );
@@ -715,6 +815,30 @@ describe('PiscinaThinWorkflowProvider', () => {
     expect(runner.runWithReadiness).not.toHaveBeenCalled();
   });
 
+  it('preserves a caller abort reason observed while launch resolution is pending', async () => {
+    const runner = makeRunner();
+    const provider = makeProvider(
+      {
+        id: 'piscina-1',
+        displayName: 'Piscina',
+        runner,
+        bus: createTestBus(),
+      },
+      async (_request, signal) =>
+        new Promise<WorkflowWorkerConfig>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        }),
+    );
+    const reason = new Error('cancelled during workflow resolution');
+    const controller = new AbortController();
+
+    const provision = provider.provision(makeProvisionRequest(), controller.signal);
+    controller.abort(reason);
+
+    await expect(provision).rejects.toBe(reason);
+    expect(runner.runWithReadiness).not.toHaveBeenCalled();
+  });
+
   it('does not start the runner when cancellation arrives as the forwarder is attached', async () => {
     const runner = makeRunner();
     const provider = makeProvider({
@@ -776,7 +900,7 @@ describe('PiscinaThinWorkflowProvider', () => {
     });
 
     const callerController = new AbortController();
-    const { handle } = await provider.provision(makeProvisionRequest(), callerController.signal);
+    const { handle } = await provisionAllocated(provider, makeProvisionRequest(), callerController.signal);
 
     expect(capturedSignal?.aborted).toBe(false);
     callerController.abort('caller cancel');
@@ -826,7 +950,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus: createTestBus(),
     });
 
-    const { handle } = await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    const { handle } = await provisionAllocated(provider, makeProvisionRequest(), new AbortController().signal);
 
     await handle.cancel('test cancel');
 
@@ -849,7 +973,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus: createTestBus(),
     });
 
-    const { handle } = await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    const { handle } = await provisionAllocated(provider, makeProvisionRequest(), new AbortController().signal);
 
     await handle.terminate();
 
@@ -865,7 +989,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus: createTestBus(),
     });
 
-    const { handle } = await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    const { handle } = await provisionAllocated(provider, makeProvisionRequest(), new AbortController().signal);
 
     const cancelResult = Promise.race([
       handle.cancel('test').then(() => 'cancelled'),
@@ -903,7 +1027,11 @@ describe('PiscinaThinWorkflowProvider', () => {
       ],
     };
 
-    await provider.provision(makeProvisionRequest({ workerManifest: requestManifest }), new AbortController().signal);
+    await provisionAllocated(
+      provider,
+      makeProvisionRequest({ workerManifest: requestManifest }),
+      new AbortController().signal,
+    );
 
     expect(capturedManifest).toStrictEqual(requestManifest);
   });
@@ -919,7 +1047,8 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus: createTestBus(),
     });
 
-    const { allocationRef, handle } = await provider.provision(
+    const { allocationRef, handle } = await provisionAllocated(
+      provider,
       makeProvisionRequest({ executionAttemptId: 'correlated-attempt' }),
       new AbortController().signal,
     );
@@ -941,7 +1070,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus: createTestBus(),
     });
 
-    await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    await provisionAllocated(provider, makeProvisionRequest(), new AbortController().signal);
 
     expect(runner.runWithReadiness).toHaveBeenCalledOnce();
   });
@@ -964,7 +1093,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus,
     });
 
-    await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    await provisionAllocated(provider, makeProvisionRequest(), new AbortController().signal);
 
     // Allow the fire-and-forget settlement chain to complete.
     await vi.waitFor(() => {
@@ -998,7 +1127,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       bus,
     });
 
-    await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    await provisionAllocated(provider, makeProvisionRequest(), new AbortController().signal);
 
     await vi.waitFor(() => {
       expect(submissions).toHaveLength(1);
@@ -1038,7 +1167,7 @@ describe('PiscinaThinWorkflowProvider', () => {
       outcomeRetry: { maxRetries: 3, baseDelayMs: 10, maxDelayMs: 20, deadlineMs: 5_000 },
     });
 
-    await provider.provision(makeProvisionRequest(), new AbortController().signal);
+    await provisionAllocated(provider, makeProvisionRequest(), new AbortController().signal);
 
     await vi.waitFor(
       () => {
@@ -1068,7 +1197,8 @@ describe('PiscinaThinWorkflowProvider', () => {
 
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const { handle } = await provider.provision(
+    const { handle } = await provisionAllocated(
+      provider,
       makeProvisionRequest({ executionAttemptId: 'attempt-submit-failed' }),
       new AbortController().signal,
     );

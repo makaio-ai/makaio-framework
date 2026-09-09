@@ -4,17 +4,19 @@ import type {
   IWorkflowRunner,
   NormalizedWorkerCapabilities,
   ProviderAllocationRef,
-  WorkerAllocatedOutcome,
   BoundedRecoveryEvidence,
   WorkerCapabilities,
+  WorkerConfirmedAbsentOutcome,
   WorkerHandle,
   WorkerInfrastructureConclusion,
+  WorkerProvisionOutcome,
   WorkerProvisionRequest,
   WorkflowWorkerConfig,
   WorkflowRunResult,
 } from '@makaio/contracts';
 import {
   BoundedRecoveryEvidenceSchema,
+  PRE_REQUEST_REJECTION_CODE,
   PROVIDER_ALLOCATION_REF_VERSION,
   ProviderAllocationRefSchema,
   RECOVERY_EVIDENCE_LIMITS,
@@ -496,22 +498,24 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
    * runner. Cancellation is never flattened into an outcome, so callers
    * can tell it apart from an ambiguous infrastructure rejection.
    *
-   * The return type is narrower than {@link IWorkerProvider.provision}:
-   * this provider allocates a local worker thread or rejects, and it has no
-   * way to positively prove that nothing was created. The narrow type states
-   * what it can prove today. Gaining the ability to confirm absence means
-   * deliberately widening this signature back to the contract union.
-   * A resolved workflow configuration without a bus URL is rejected loudly rather than
-   * allocated: the thread would have no transport, so it could never
-   * authenticate as the attempt or register its runtime, and the allocation
-   * would be a worker that is provisioned and permanently unready.
+   * Workflow launch resolution and its required bus URL are an explicit
+   * pre-allocation boundary: a non-cancellation failure there returns
+   * `confirmed-absent`, because no local allocation setup has begun.
+   * Cancellation still rejects with the caller's exact reason. Every later
+   * failure remains rejected because this provider cannot prove that a local
+   * startup side effect did not occur.
    * @param request - Generic provision request with selected Runtime inputs.
    * @param signal - AbortSignal for cooperative cancellation of the provision operation.
-   * @returns Allocated outcome with a validated allocation reference and infrastructure handle.
-   * @throws When the workflow adapter cannot resolve a launch configuration or it carries no bus URL.
+   * @returns Allocated outcome, or confirmed absence when no local allocation could exist.
+   * @throws When cancellation occurs or a failure follows the pre-allocation boundary.
    */
-  public async provision(request: WorkerProvisionRequest, signal: AbortSignal): Promise<WorkerAllocatedOutcome> {
+  public async provision(request: WorkerProvisionRequest, signal: AbortSignal): Promise<WorkerProvisionOutcome> {
     signal.throwIfAborted();
+
+    const preflight = await this.resolveLaunchBeforeAllocation(request, signal);
+    signal.throwIfAborted();
+    if ('kind' in preflight) return preflight;
+    const workerConfig = preflight;
 
     const controller = new AbortController();
     const infrastructure = createInfrastructureConclusionSignal(this.id);
@@ -535,18 +539,6 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
       // settle. A rejected provision must never leave a runner that can submit
       // an outcome for an allocation the caller could not record.
       const { executionAttemptId, executionId } = request;
-      const workerConfig = await this.options.launchResolver(request, signal);
-      signal.throwIfAborted();
-      if (!workerConfig.busUrl) {
-        // A thread with no transport cannot hold an authenticated, fenced
-        // control endpoint, so it can never register its runtime with the
-        // attempt. Failing here is the honest answer; allocating it would
-        // produce a worker that is provisioned but permanently unready.
-        throw new Error(
-          `PiscinaThinWorkflowProvider requires a bus URL to provision an execution attempt ` +
-            `(executionAttemptId=${executionAttemptId}, executionId=${executionId})`,
-        );
-      }
       const allocationRef = this.buildAllocationRef(executionAttemptId);
       // The thread authenticates as the attempt, not as this process: the
       // registration and admission gates take the caller's identity from the
@@ -631,6 +623,48 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
       revokeBusIdentity?.();
       throw error;
     }
+  }
+
+  /**
+   * Resolve workflow-specific inputs before beginning local allocation setup.
+   * @param request - Generic Worker request whose workflow launch data is resolved.
+   * @param signal - Caller cancellation signal.
+   * @returns A resolved configuration or proof that no local allocation was created.
+   */
+  private async resolveLaunchBeforeAllocation(
+    request: WorkerProvisionRequest,
+    signal: AbortSignal,
+  ): Promise<WorkflowWorkerConfig | WorkerConfirmedAbsentOutcome> {
+    try {
+      const workerConfig = await this.options.launchResolver(request, signal);
+      signal.throwIfAborted();
+      if (!workerConfig.busUrl) {
+        return this.confirmedAbsent('Piscina workflow configuration has no bus URL before local allocation setup');
+      }
+      return workerConfig;
+    } catch {
+      // Preserve the caller's exact abort reason rather than converting
+      // cancellation observed by a resolver into an absence conclusion.
+      signal.throwIfAborted();
+      return this.confirmedAbsent('Workflow launch resolution failed before Piscina local allocation setup');
+    }
+  }
+
+  /**
+   * State that a local request failed before this provider could create a thread.
+   * @param summary - Fixed provider-authored explanation safe for durable evidence.
+   * @returns Bounded absence evidence suitable for the durable provisioning record.
+   */
+  private confirmedAbsent(summary: string): WorkerConfirmedAbsentOutcome {
+    return {
+      kind: 'confirmed-absent',
+      evidence: BoundedRecoveryEvidenceSchema.parse({
+        source: 'piscina-thin-workflow-provider',
+        code: PRE_REQUEST_REJECTION_CODE,
+        summary,
+        observedAt: new Date().toISOString(),
+      }),
+    };
   }
 
   /**
