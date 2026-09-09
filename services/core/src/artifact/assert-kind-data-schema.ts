@@ -1,7 +1,7 @@
 import Ajv from 'ajv';
 import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
-import type { ArtifactKindRegistration } from '@makaio/contracts';
+import { ARTIFACT_VALUE_TYPE_KEYWORD, type ArtifactKindRegistration } from '@makaio/contracts/artifact';
 
 /**
  * Compile the complete schema before an authoritative registration can change state.
@@ -18,6 +18,7 @@ export function assertKindDataSchema(registration: ArtifactKindRegistration): vo
         ? new Ajv2020(options)
         : new Ajv(options);
     addFormats(compiler);
+    compiler.addKeyword({ keyword: ARTIFACT_VALUE_TYPE_KEYWORD, schemaType: 'string', valid: true });
     compiler.compile(registration.dataSchema);
   } catch (error) {
     throw new Error(
