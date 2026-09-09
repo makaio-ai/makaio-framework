@@ -17,6 +17,8 @@ import type {
   EnsureExecutionAttemptInput,
   ExecutionAttemptOutcomeDecision,
   ExecutionAttemptRecord,
+  ExecutionAttemptCancellationIntent,
+  RequestExecutionCancellationInput,
   ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
   ExecutionOwnerId,
@@ -216,6 +218,24 @@ export class ExecutionAttemptAuthority<TOutcome> implements BootstrapStartAuthor
    */
   public async getInstruction(input: GetInstructionInput): Promise<ExecutionAttemptInstruction | null> {
     return this.repository.getInstruction(input);
+  }
+
+  /**
+   * Commit cancellation intent before any best-effort control notification.
+   * @param input - Owner of existing attempts and optional cancellation reason.
+   * @returns Completion of the durable cancellation request write.
+   */
+  public async requestCancellation(input: RequestExecutionCancellationInput): Promise<void> {
+    return this.repository.requestCancellation({ ...input });
+  }
+
+  /**
+   * Read cancellation intent for a controller adopting or retaining an allocation.
+   * @param executionAttemptId - Exact attempt whose control is held.
+   * @returns Durable request, which is not confirmation that cancellation completed.
+   */
+  public async readCancellation(executionAttemptId: string): Promise<ExecutionAttemptCancellationIntent | null> {
+    return this.repository.readCancellation(executionAttemptId);
   }
 
   /**

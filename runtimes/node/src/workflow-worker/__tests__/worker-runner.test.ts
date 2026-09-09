@@ -43,6 +43,21 @@ function createTestAuthority(): ExecutionAttemptAuthority<WorkflowAttemptOutcome
 }
 
 describe('WorkerRunner', () => {
+  it('honors local owner admission before creating an attempt', async () => {
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
+    const dispatch = vi.fn();
+    const runner = new WorkerRunner({ authority, dispatch });
+    await expect(
+      runner.run(makeWorkerConfig(), new AbortController().signal, undefined, {
+        withAttemptCreation: async () => {
+          throw new Error('Owner already cancelled');
+        },
+      }),
+    ).rejects.toThrow('Owner already cancelled');
+    expect(repository.attempts.size).toBe(0);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
   it.each([
     false,
     true,

@@ -15,6 +15,8 @@ export interface AuthorityDispatchRunnerOptions<TOutcome> {
   readonly instruction: ExecutionAttemptInstruction;
   /** Dispatch operation whose successful return acknowledges acceptance. */
   readonly dispatch: (executionAttemptId: string) => Promise<unknown>;
+  /** Local owner admission; never encloses provider dispatch or outcome waiting. */
+  readonly withAttemptCreation?: <T>(create: () => Promise<T>) => Promise<T>;
 }
 
 /**
@@ -30,7 +32,8 @@ export async function runAuthorityDispatchedAttempt<TOutcome>(
   options: AuthorityDispatchRunnerOptions<TOutcome>,
 ): Promise<TOutcome> {
   const { authority, executionId, instruction, dispatch } = options;
-  const attempt = await authority.createAttempt(executionId, instruction);
+  const create = () => authority.createAttempt(executionId, instruction);
+  const attempt = await (options.withAttemptCreation?.(create) ?? create());
   const outcomePromise = authority.waitForOutcome(attempt.executionAttemptId);
   if (outcomePromise === undefined) {
     throw new Error(

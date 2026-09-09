@@ -43,6 +43,8 @@ import type {
   ExecutionAttemptOutcomeCommit,
   ExecutionAttemptOutcomeDecision,
   ExecutionAttemptRecord,
+  ExecutionAttemptCancellationIntent,
+  RequestExecutionCancellationInput,
   ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
   GetInstructionInput,
@@ -131,6 +133,8 @@ export interface InMemoryAttemptRepositoryState {
   readonly activeAttempts: Map<string, string>;
   /** Request-to-attempt bindings, nested by owner and then opaque request key. */
   readonly requestBindings: Map<string, Map<string, string>>;
+  /** First owner cancellation request for each attempt, surviving controller replacement. */
+  readonly cancellations: Map<string, ExecutionAttemptCancellationIntent>;
 }
 
 /**
@@ -234,6 +238,7 @@ export function createInMemoryAttemptRepository<TOutcome>(
   const committedOutcomes = seed.committedOutcomes ?? new Map<string, string>();
   const activeAttempts = seed.activeAttempts ?? new Map<string, string>();
   const requestBindings = seed.requestBindings ?? new Map<string, Map<string, string>>();
+  const cancellations = seed.cancellations ?? new Map<string, ExecutionAttemptCancellationIntent>();
 
   /**
    * Read runtime reachability without touching the control-state decoder.
@@ -523,6 +528,7 @@ export function createInMemoryAttemptRepository<TOutcome>(
       if (activeAttempts.get(input.executionId) !== input.executionAttemptId) return { kind: 'fenced' };
       if (attempt.settlementKind != null) return { kind: 'resolved', allocationRef: attempt.allocationRef };
       if (attempt.allocationRef !== null) return { kind: 'allocated', allocationRef: attempt.allocationRef };
+      if (attempt.operationStartGate === 'closed') return { kind: 'fenced' };
       if (attempt.status !== 'pending') return { kind: 'already-provisioning' };
 
       // One transaction: bind the provider immutably and open the operation.
@@ -861,6 +867,23 @@ export function createInMemoryAttemptRepository<TOutcome>(
       return attempt === undefined ? null : toAttemptControlState(attempt);
     },
 
+    async requestCancellation(input: RequestExecutionCancellationInput): Promise<void> {
+      const intent = {
+        requestedAt: new Date().toISOString(),
+        ...(input.reason !== undefined ? { reason: input.reason } : {}),
+      };
+      for (const [id, attempt] of attempts) {
+        if (attempt.executionId !== input.executionId) continue;
+        if (!cancellations.has(id)) cancellations.set(id, intent);
+        attempts.set(id, { ...attempt, operationStartGate: 'closed' });
+      }
+    },
+
+    async readCancellation(executionAttemptId: string): Promise<ExecutionAttemptCancellationIntent | null> {
+      const intent = cancellations.get(executionAttemptId);
+      return intent === undefined ? null : { ...intent };
+    },
+
     async getActiveAttempt(executionId: string, executionAttemptId: string): Promise<ExecutionAttemptRecord | null> {
       // Settled is not superseded: a settled attempt is still the active
       // attempt for its execution until a newer one replaces it.
@@ -950,5 +973,14 @@ export function createInMemoryAttemptRepository<TOutcome>(
     },
   };
 
-  return { ...repository, recovery, attempts, operations, committedOutcomes, activeAttempts, requestBindings };
+  return {
+    ...repository,
+    recovery,
+    attempts,
+    operations,
+    committedOutcomes,
+    activeAttempts,
+    requestBindings,
+    cancellations,
+  };
 }

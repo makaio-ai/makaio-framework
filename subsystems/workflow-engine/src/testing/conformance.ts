@@ -43,6 +43,7 @@ import { registerMixedAuthorityRaceCases } from './conformance/mixed-authority-r
 import { registerOwnerRequestCases } from './conformance/owner-request-cases.js';
 import { registerOwnerResultRecoveryCases } from './conformance/owner-result-recovery-cases.js';
 import { registerProviderCompletionCases } from './conformance/provider-completion-cases.js';
+import { registerCancellationIntentCases } from './conformance/cancellation-intent-cases.js';
 import type { ExecutionAttemptRepositoryContractFactory } from './conformance/types.js';
 
 export type {
@@ -90,6 +91,7 @@ export function runExecutionAttemptRepositoryContract(factory: ExecutionAttemptR
     registerMixedAuthorityRaceCases(getHarness);
     registerOwnerRequestCases(getHarness);
     registerProviderCompletionCases(getHarness);
+    registerCancellationIntentCases(getHarness);
   });
   registerOutcomeCases(factory);
   registerNormalizingCases(factory);

@@ -31,6 +31,18 @@ export interface FinalizerDeps {
   stepRunner?: IStepRunner;
   /** Grace period in ms before forceKill is issued after cooperative abort. */
   cancelTimeoutMs?: number;
+  /**
+   * Persist owner-authorized cancellation before aborting or notifying workers.
+   * @param executionId - Eligible running or paused owner.
+   * @param reason - Optional cancellation explanation.
+   */
+  requestAttemptCancellation?(executionId: string, reason?: string): Promise<void>;
+  /**
+   * Best-effort fast-path delivery after an initiating cancellation commits.
+   * @param executionId - Owner whose cancellation request committed.
+   * @param reason - Optional cancellation explanation.
+   */
+  notifyAttemptCancellation?(executionId: string, reason?: string): Promise<void>;
   /** Registered success-finalizer subjects keyed by their stable identity. */
   successFinalizers?: ReadonlyMap<string, WorkflowSuccessFinalizer>;
   /** Resolve the immutable workflow-selected success finalizer for one execution. */
@@ -89,6 +101,7 @@ export async function withExecutionDurableTransition<T>(
  * @param executionId - Execution being transitioned.
  * @param transition - Durable storage transition.
  * @param publish - Publication derived from the committed transition result.
+ * @param afterCommit - Optional control effect started outside the durable queue and independent of prior publications.
  * @returns The durable transition result.
  */
 export async function commitExecutionLifecycleTransition<T>(
@@ -96,6 +109,7 @@ export async function commitExecutionLifecycleTransition<T>(
   executionId: string,
   transition: () => Promise<T>,
   publish: (result: T) => Promise<void>,
+  afterCommit?: (result: T) => void | Promise<void>,
 ): Promise<T> {
   let startPublication: (() => void) | undefined;
   let publication: Promise<void> | undefined;
@@ -120,7 +134,6 @@ export async function commitExecutionLifecycleTransition<T>(
     startPublication = start.resolve;
     return committed;
   });
-  startPublication?.();
   if (publication !== undefined) {
     const currentPublication = publication;
     void currentPublication.then(
@@ -133,8 +146,17 @@ export async function commitExecutionLifecycleTransition<T>(
           deps.lifecyclePublications.delete(executionId);
       },
     );
-    if (awaitPublication) await currentPublication;
   }
+  let controlEffect: void | Promise<void>;
+  try {
+    controlEffect = afterCommit?.(result);
+  } finally {
+    // Start publication even if the effect throws. Never keep this barrier
+    // closed while awaiting a control subscriber that may itself await an event.
+    startPublication?.();
+  }
+  await controlEffect;
+  if (awaitPublication && publication !== undefined) await publication;
   return result;
 }
 
@@ -401,14 +423,20 @@ async function cancelPausedExecution(
  * @param deps - Finalizer dependencies.
  * @param executionId - Execution identifier to cancel.
  * @param reason - Optional human-readable cancellation reason.
+ * @param mode - Control initiation persists intent; outcome convergence does not.
  * @returns True when a running or parked execution was cancelled.
  */
 async function cancelExecutionDurably(
   deps: FinalizerDeps,
   executionId: string,
   reason?: string,
+  mode: 'request' | 'converge' = 'converge',
 ): Promise<undefined | { workflowId: string; completedAt: number; gates: Array<{ nodeId: string; frameId: string }> }> {
   const { execution } = await deps.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+  if (execution?.status !== 'running' && execution?.status !== 'paused') return undefined;
+  // This runs inside the existing lifecycle ordering point, so a completed or
+  // finalizing owner cannot acquire a new cancel intent after refusing cancel.
+  if (mode === 'request') await deps.requestAttemptCancellation?.(executionId, reason);
   if (execution?.status !== 'running') {
     return cancelPausedExecution(deps, executionId, reason);
   }
@@ -452,10 +480,43 @@ async function cancelExecutionDurably(
  * @returns Whether cancellation changed the execution state.
  */
 export async function cancelExecution(deps: FinalizerDeps, executionId: string, reason?: string): Promise<boolean> {
+  return transitionCancellation(deps, executionId, reason, 'converge');
+}
+
+/**
+ * Initiate owner cancellation, persisting provider control intent before notification.
+ * Do not use this to converge an already observed worker cancellation outcome.
+ * @param deps - Finalizer dependencies.
+ * @param executionId - Owner being cancelled by control-plane policy.
+ * @param reason - Optional cancellation explanation.
+ * @returns Whether the owner accepted cancellation.
+ */
+export async function requestExecutionCancellation(
+  deps: FinalizerDeps,
+  executionId: string,
+  reason?: string,
+): Promise<boolean> {
+  return transitionCancellation(deps, executionId, reason, 'request');
+}
+
+/**
+ * Share lifecycle ordering without confusing a control request with its outcome.
+ * @param deps - Finalizer dependencies.
+ * @param executionId - Owner whose cancellation is being recorded.
+ * @param reason - Optional cancellation explanation.
+ * @param mode - Explicit control initiation or observed outcome convergence.
+ * @returns Whether the durable owner state changed.
+ */
+async function transitionCancellation(
+  deps: FinalizerDeps,
+  executionId: string,
+  reason: string | undefined,
+  mode: 'request' | 'converge',
+): Promise<boolean> {
   const transition = await commitExecutionLifecycleTransition(
     deps,
     executionId,
-    () => cancelExecutionDurably(deps, executionId, reason),
+    () => cancelExecutionDurably(deps, executionId, reason, mode),
     async (committed) => {
       if (committed === undefined) return;
       for (const gate of committed.gates) {
@@ -477,6 +538,11 @@ export async function cancelExecution(deps: FinalizerDeps, executionId: string, 
         reason,
         completedAt: committed.completedAt,
       });
+    },
+    (committed) => {
+      // Control must not queue behind a paused-event subscriber. Its durable
+      // request already committed; ordered lifecycle publication is independent.
+      if (committed !== undefined && mode === 'request') return deps.notifyAttemptCancellation?.(executionId, reason);
     },
   );
   if (transition === undefined) return false;

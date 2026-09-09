@@ -117,6 +117,8 @@ export type {
   RuntimeRegistrationDecision,
   ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
+  ExecutionAttemptCancellationIntent,
+  RequestExecutionCancellationInput,
   ExecutionAttemptRecord,
   RecoverableAttemptRecord,
   ExecutionAttemptCreate,
@@ -158,6 +160,8 @@ export { isProviderOperationResolved, PROVIDER_OPERATION_OBLIGATIONS } from './p
 export type {
   InitialProviderOperationClaimContext,
   InitialProviderOperationClaimContextSource,
+  ProviderOperationLeasePolicy,
+  ProviderOperationLeaseRenewal,
   ProcessBoundProvisionerLossProof,
   ProviderOperationClaim,
   ProviderOperationClaimDecision,

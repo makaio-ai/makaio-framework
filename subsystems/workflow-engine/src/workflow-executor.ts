@@ -29,6 +29,8 @@ import {
 } from './workflow-executor-handlers.js';
 import {
   cancelExecution,
+  requestExecutionCancellation,
+  withExecutionDurableTransition,
   completeExecutionWithFailure,
   completeExecutionWithSuccess,
   isAcceptedRunnerResultStatus,
@@ -356,7 +358,7 @@ export class WorkflowExecutor extends BaseService {
     // 1. Cancel all active executions (aborts controllers, schedules hard-kill timers).
     await Promise.allSettled(
       [...this.activeExecutions.keys()].map(async (executionId) => {
-        const cancelled = await cancelExecution(finalizerDeps, executionId, 'Workflow engine shutdown');
+        const cancelled = await requestExecutionCancellation(finalizerDeps, executionId, 'Workflow engine shutdown');
         if (cancelled) {
           this.workflowAbortControllers.get(executionId)?.abort();
           this.workflowAbortControllers.delete(executionId);
@@ -394,18 +396,38 @@ export class WorkflowExecutor extends BaseService {
    * @returns Finalizer dependency bundle.
    */
   private buildFinalizerDeps(): FinalizerDeps {
+    const authority = this.executionAttemptAuthority;
     return {
       bus: this.bus,
       activeExecutions: this.activeExecutions,
       shellAbortControllers: this.shellAbortControllers,
       activeRunnerSteps: this.activeRunnerSteps,
       cancelTimeoutMs: this.config.cancelTimeoutMs,
+      requestAttemptCancellation:
+        authority === undefined
+          ? undefined
+          : (executionId, reason) => authority.requestCancellation({ executionId, reason }),
+      notifyAttemptCancellation: (executionId, reason) => this.notifyAttemptCancellation(executionId, reason),
       successFinalizers: this.successFinalizers,
       resolveSuccessFinalizerId: (executionId) => this.activeExecutions.get(executionId)?.workflow.successFinalizerId,
       durableLifecycleTransitions: this.durableLifecycleTransitions,
       lifecyclePublications: this.lifecyclePublications,
       publishingLifecycleExecutions: this.publishingLifecycleExecutions,
     };
+  }
+
+  /**
+   * Deliver best-effort worker control only after owner-authorized intent commits.
+   * @param executionId - Owner whose cancellation request was accepted.
+   * @param reason - Optional cancellation explanation.
+   */
+  private async notifyAttemptCancellation(executionId: string, reason?: string): Promise<void> {
+    this.workflowAbortControllers.get(executionId)?.abort(reason ?? WORKFLOW_CANCELLED_REASON);
+    await this.bus
+      .emit(createWorkflowCancelSubject(`workflow.${executionId}.cancel`), { executionId, reason })
+      .catch((error: unknown) => {
+        console.error(`[WorkflowExecutor] Failed to emit workflow cancel for ${executionId}:`, error);
+      });
   }
 
   /**
@@ -557,25 +579,7 @@ export class WorkflowExecutor extends BaseService {
 
     this.registerHandler(WorkflowSubjects.cancel, async (ctx) => {
       const { executionId, reason } = ctx.payload;
-      // Emit the per-execution cancel subject before terminalizing local state
-      // so that remote workers subscribed via their bus connection can abort
-      // cooperatively before we forcefully clean up local execution state.
-      await this.bus
-        .emit(createWorkflowCancelSubject(`workflow.${executionId}.cancel`), { executionId, reason })
-        .catch((error: unknown) => {
-          console.error(`[WorkflowExecutor] Failed to emit workflow cancel for ${executionId}:`, error);
-        });
-
-      const workflowController = this.workflowAbortControllers.get(executionId);
-      if (workflowController) {
-        workflowController.abort(reason ?? WORKFLOW_CANCELLED_REASON);
-        const cancelled = await cancelExecution(this.buildFinalizerDeps(), executionId, reason);
-        ctx.setResult({ cancelled });
-        return;
-      }
-
-      const finalizerDeps = this.buildFinalizerDeps();
-      const cancelled = await cancelExecution(finalizerDeps, executionId, reason);
+      const cancelled = await requestExecutionCancellation(this.buildFinalizerDeps(), executionId, reason);
       ctx.setResult({ cancelled });
     });
 
@@ -758,7 +762,7 @@ export class WorkflowExecutor extends BaseService {
       await this.resumePausedExecution(execution.id);
     } catch (error) {
       await restorePausedGateAfterResumeFailure(
-        this.bus,
+        this.buildFinalizerDeps(),
         this.activeExecutions,
         this.executionTasks,
         this.workflowAbortControllers,
@@ -808,35 +812,35 @@ export class WorkflowExecutor extends BaseService {
         throw new Error(`[WorkflowExecutor] Workflow definition not found for paused execution: ${executionId}`);
       })();
 
-    const { execution } = await this.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
-    if (execution === null) {
-      throw new Error(`[WorkflowExecutor] Execution not found for paused execution: ${executionId}`);
-    }
-    if (execution.status !== 'paused') return false;
-
     await assertDurableResumeFramesPresent(this.bus, runContext);
 
     const params = buildDefinitionRunnerParamsFromRunContext(runContext, definition, { resume: true });
     const dispatch = selectDefinitionExecutionDispatch(this.buildStartDeps(), params);
 
-    await this.bus.request(WorkflowStorageSubjects.setExecution, {
-      execution: { ...execution, status: 'running' },
-    });
+    return withExecutionDurableTransition(this.buildFinalizerDeps(), executionId, async () => {
+      // Frame loading may have yielded to cancellation. Re-read under the same
+      // owner boundary that admits the next attempt; never resurrect stale state.
+      const { execution } = await this.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      if (execution === null)
+        throw new Error(`[WorkflowExecutor] Execution not found for paused execution: ${executionId}`);
+      if (execution.status !== 'paused') return false;
+      await this.bus.request(WorkflowStorageSubjects.setExecution, {
+        execution: { ...execution, status: 'running' },
+      });
 
-    this.activeExecutions.set(executionId, {
-      execution: { ...execution, status: 'running' },
-      workflow: definition,
-      runContext,
-      runtimeHandlers: new Map(),
-      runtimeLoopGates: new Map(),
-    });
+      this.activeExecutions.set(executionId, {
+        execution: { ...execution, status: 'running' },
+        workflow: definition,
+        runContext,
+        runtimeHandlers: new Map(),
+        runtimeLoopGates: new Map(),
+      });
 
-    const executionTask = launchDefinitionExecutionTask(this.buildStartDeps(), params, dispatch);
-    const trackedExecutionTask = executionTask.finally(() => {
-      this.resumeDispatches.delete(executionId);
+      const trackedExecutionTask = launchDefinitionExecutionTask(this.buildStartDeps(), params, dispatch).finally(() =>
+        this.resumeDispatches.delete(executionId),
+      );
+      this.executionTasks.set(executionId, trackedExecutionTask);
+      return true;
     });
-    this.executionTasks.set(executionId, trackedExecutionTask);
-    void trackedExecutionTask;
-    return true;
   }
 }

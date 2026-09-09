@@ -18,6 +18,7 @@ import {
   completeExecutionWithFailure,
   completeExecutionWithSuccess,
   commitExecutionLifecycleTransition,
+  withExecutionDurableTransition,
   isAcceptedRunnerResultStatus,
 } from './workflow-execution-finalizer.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
@@ -386,9 +387,10 @@ export function buildFileExecutionTask(deps: RunnerTaskDeps, params: FileRunnerT
   workflowAbortControllers.set(executionId, controller);
 
   const workerConfig = buildFileWorkerConfig(deps, params);
+  const runOptions = ownerAdmissionOptions(deps, executionId, controller.signal);
 
   return Promise.resolve()
-    .then(() => workflowRunner.run(workerConfig, controller.signal))
+    .then(() => workflowRunner.run(workerConfig, controller.signal, undefined, runOptions))
     .then(async (completion) => {
       await handleRunnerCompletion(deps, completion);
     })
@@ -477,8 +479,10 @@ export function buildExecutionTask(deps: RunnerTaskDeps, params: DefinitionRunne
   workflowAbortControllers.set(executionId, controller);
 
   const workerConfig = buildDefinitionWorkerConfig(deps, params);
-  const runOptions: WorkflowRunnerRunOptions | undefined =
-    params.dispatchMetadata === undefined ? undefined : { dispatchMetadata: params.dispatchMetadata };
+  const runOptions: WorkflowRunnerRunOptions = {
+    ...ownerAdmissionOptions(deps, executionId, controller.signal),
+    ...(params.dispatchMetadata === undefined ? {} : { dispatchMetadata: params.dispatchMetadata }),
+  };
 
   return Promise.resolve()
     .then(() => workflowRunner.run(workerConfig, controller.signal, undefined, runOptions))
@@ -516,6 +520,35 @@ export function buildExecutionTask(deps: RunnerTaskDeps, params: DefinitionRunne
       // on the success/failure paths; deleting a missing key is a no-op.
       activeExecutions.delete(executionId);
     });
+}
+
+/**
+ * Bind attempt creation to the current single-owner executor's lifecycle queue.
+ * The durable status check also rejects work resumed from stale local state.
+ * This is owner admission, not a distributed lock between arbitrary executors.
+ * @param deps - Current owner's shared lifecycle dependencies.
+ * @param executionId - Owner whose new attempt requires admission.
+ * @param signal - Local cancellation, checked after acquiring admission.
+ * @returns Local-only runner controls, never serialized onto the bus.
+ */
+function ownerAdmissionOptions(
+  deps: RunnerTaskDeps,
+  executionId: string,
+  signal: AbortSignal,
+): WorkflowRunnerRunOptions {
+  return {
+    withAttemptCreation: (create) => {
+      const finalizerDeps = deps.buildFinalizerDeps();
+      return withExecutionDurableTransition(finalizerDeps, executionId, async () => {
+        signal.throwIfAborted();
+        const { execution } = await finalizerDeps.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+        signal.throwIfAborted();
+        if (execution?.status !== 'running')
+          throw new Error(`Execution '${executionId}' no longer permits attempt creation`);
+        return create();
+      });
+    },
+  };
 }
 
 /**

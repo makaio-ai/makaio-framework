@@ -776,6 +776,66 @@ describe('WorkflowExecutor — paused gate integration', () => {
     }
   });
 
+  it.each([
+    false,
+    true,
+  ])('does not resurrect a cancelled owner after paused resume loading (fails: %s)', async (fails) => {
+    const workflowId = `wf-cancel-resume-${crypto.randomUUID()}`;
+    const executionId = `execution-cancel-resume-${crypto.randomUUID()}`;
+    const gateId = 'gate-approve';
+    const frameId = 'frame-gate-1';
+    const runner: IWorkflowRunner = {
+      run: vi.fn(async () => {
+        throw new Error('cancelled owner must not dispatch');
+      }),
+    };
+    setup = await setupWorkflowExecutorTest({ workflowRunner: runner });
+    await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId);
+    const loading = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let frameReads = 0;
+    const off = MakaioBus.on(
+      WorkflowStorageSubjects.listFrames,
+      async (ctx) => {
+        await ctx.next();
+        if (ctx.payload.executionId === executionId && ++frameReads === 2) {
+          loading.resolve();
+          await release.promise;
+          if (fails) throw new Error('Resume frame preparation failed after cancellation');
+        }
+      },
+      { priority: 100 },
+    );
+    const resuming = MakaioBus.request(WorkflowSubjects.gate.respond, {
+      executionId,
+      gateId,
+      frameId,
+      action: 'approve',
+      resumeData: { decision: 'approved' },
+    });
+    try {
+      await loading.promise;
+      await expect(MakaioBus.request(WorkflowSubjects.cancel, { executionId })).resolves.toEqual({ cancelled: true });
+      release.resolve();
+      if (fails) await expect(resuming).rejects.toThrow('Resume frame preparation failed after cancellation');
+      else await resuming;
+      expect((await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution).toMatchObject({
+        status: 'cancelled',
+      });
+      const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+        executionId,
+        nodeId: gateId,
+        frameId,
+      });
+      expect(gate?.status).toBe('resumed');
+      expect(runner.run).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await resuming.catch(() => undefined);
+      off();
+    }
+  });
+
   it('fails paused gate response dispatch when durable resume frames are missing', async () => {
     const workflowId = `wf-missing-resume-frames-${Math.random().toString(36).slice(2)}`;
     const executionId = `wfx-missing-resume-frames-${Math.random().toString(36).slice(2)}`;

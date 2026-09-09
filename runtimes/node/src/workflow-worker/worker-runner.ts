@@ -133,6 +133,7 @@ export class WorkerRunner implements IWorkflowRunner {
       authority: this.options.authority,
       executionId: config.executionId,
       instruction,
+      withAttemptCreation: options?.withAttemptCreation,
       dispatch: (executionAttemptId) =>
         this.options.dispatch(
           {

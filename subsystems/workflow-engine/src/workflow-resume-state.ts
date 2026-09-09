@@ -3,6 +3,7 @@ import type { WorkflowExecution, WorkflowGateInstance, WorkflowRunContext } from
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import type { ActiveExecution } from './types.js';
 import type { WorkflowGateTimeoutPayload } from './workflow-gate-timeout-scheduler.js';
+import { withExecutionDurableTransition, type FinalizerDeps } from './workflow-execution-finalizer.js';
 
 type PausedWorkflowExecution = WorkflowExecution & { readonly status: 'paused' };
 type WaitingWorkflowGateInstance = WorkflowGateInstance & { readonly status: 'waiting' };
@@ -35,7 +36,9 @@ function isWaitingGateInstance(gate: WorkflowGateInstance | null): gate is Waiti
  * `waiting`; if the subsequent paused-\>running dispatch cannot launch, the
  * original paused execution and waiting gate must be restored together so
  * another response or timeout can retry the same gate.
- * @param bus - Bus used to restore durable execution and gate rows.
+ * Restoration shares the owner's lifecycle queue with cancellation and refuses
+ * terminal owners; a delayed preparation failure must not resurrect stale state.
+ * @param deps - Storage bus and the current owner's lifecycle transition queue.
  * @param activeExecutions - Active execution ownership map maintained by the executor.
  * @param executionTasks - In-flight execution task map maintained by the executor.
  * @param workflowAbortControllers - Abort controllers registered for workflow-level runner tasks.
@@ -44,7 +47,7 @@ function isWaitingGateInstance(gate: WorkflowGateInstance | null): gate is Waiti
  * @param gateId - Gate node ID used in rollback diagnostics.
  */
 export async function restorePausedGateAfterResumeFailure(
-  bus: IMakaioBus,
+  deps: Pick<FinalizerDeps, 'bus' | 'durableLifecycleTransitions'>,
   activeExecutions: Map<string, ActiveExecution>,
   executionTasks: Map<string, Promise<void>>,
   workflowAbortControllers: Map<string, AbortController>,
@@ -52,12 +55,15 @@ export async function restorePausedGateAfterResumeFailure(
   gate: WaitingWorkflowGateInstance,
   gateId: string,
 ): Promise<void> {
-  activeExecutions.delete(execution.id);
-  executionTasks.delete(execution.id);
-  workflowAbortControllers.delete(execution.id);
-
   try {
-    await bus.request(WorkflowStorageSubjects.restorePausedGateResumeState, { execution, gate });
+    await withExecutionDurableTransition(deps, execution.id, async () => {
+      const current = await deps.bus.request(WorkflowStorageSubjects.getExecution, { executionId: execution.id });
+      if (current.execution?.status !== 'paused' && current.execution?.status !== 'running') return;
+      activeExecutions.delete(execution.id);
+      executionTasks.delete(execution.id);
+      workflowAbortControllers.delete(execution.id);
+      await deps.bus.request(WorkflowStorageSubjects.restorePausedGateResumeState, { execution, gate });
+    });
   } catch (rollbackError: unknown) {
     console.error(
       `[WorkflowExecutor] Failed to restore paused gate '${gateId}' after resume launch failure:`,

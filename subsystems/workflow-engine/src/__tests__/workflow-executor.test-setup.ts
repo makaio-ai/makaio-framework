@@ -26,6 +26,8 @@ import {
 } from '@makaio/services-core/session';
 import { SubagentService } from '@makaio/services-core/subagent';
 import { WorkflowExecutor } from '../workflow-executor.js';
+import type { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
+import type { WorkflowAttemptOutcome } from '../workflow-attempt-outcome.js';
 import { createTestDb, type TestDbContext } from './shared.js';
 
 export interface WorkflowExecutorTestSetup {
@@ -235,7 +237,11 @@ function registerCommonMockHandlers(cleanupFns: Array<() => void>): void {
  * @returns Initialized workflow executor test setup.
  */
 export async function setupWorkflowExecutorTest(
-  options: { readonly workflowRunner?: IWorkflowRunner; readonly initExecutor?: boolean } = {},
+  options: {
+    readonly workflowRunner?: IWorkflowRunner;
+    readonly initExecutor?: boolean;
+    readonly executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowAttemptOutcome>;
+  } = {},
 ): Promise<WorkflowExecutorTestSetup> {
   MakaioBus.__resetHandlers?.();
   MakaioBus.registerNamespace(SessionNamespace);
@@ -266,6 +272,7 @@ export async function setupWorkflowExecutorTest(
       stepTimeoutMs: 10_000,
     },
     options.workflowRunner,
+    options.executionAttemptAuthority,
   );
   if (options.initExecutor !== false) {
     await workflowExecutor.init();

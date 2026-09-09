@@ -86,6 +86,7 @@ export function createWorkerDispatchRunner(options: WorkerDispatchRunnerOptions)
         authority,
         executionId: config.executionId,
         instruction,
+        withAttemptCreation: runOptions?.withAttemptCreation,
         dispatch: (executionAttemptId) =>
           bus.request(
             WorkerSubjects.dispatch,
