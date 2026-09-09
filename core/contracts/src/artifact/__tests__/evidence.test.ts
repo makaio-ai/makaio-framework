@@ -25,14 +25,24 @@ const acceptedEvidence = [
   {
     label: 'whole Git file pinned to SHA-1',
     value: {
-      source: { kind: 'git-file', repository: 'makaio-ai/makaio', path: 'src/index.ts', commit: SHA_1 },
+      source: {
+        kind: 'git-file',
+        repository: { kind: 'github-cloud', path: 'makaio-ai/makaio' },
+        path: 'src/index.ts',
+        commit: SHA_1,
+      },
       location: { kind: 'whole-source' },
     },
   },
   {
     label: 'Git line range pinned to SHA-256',
     value: {
-      source: { kind: 'git-file', repository: 'makaio-ai/makaio', path: 'src/index.ts', commit: SHA_256 },
+      source: {
+        kind: 'git-file',
+        repository: { kind: 'github-cloud', path: 'makaio-ai/makaio' },
+        path: 'src/index.ts',
+        commit: SHA_256,
+      },
       location: { kind: 'lines', startLine: 12, lineCount: 4 },
       excerpt: 'export const value = 1;',
     },
@@ -62,30 +72,56 @@ const acceptedEvidence = [
 
 const rejectedEvidence = [
   {
+    label: 'legacy Git repository string',
+    value: {
+      source: { kind: 'git-file', repository: 'makaio-ai/makaio', path: 'src/index.ts', commit: SHA_1 },
+      location: { kind: 'whole-source' },
+    },
+  },
+  {
     label: 'branch name instead of a concrete commit',
     value: {
-      source: { kind: 'git-file', repository: 'makaio-ai/makaio', path: 'src/index.ts', commit: 'main' },
+      source: {
+        kind: 'git-file',
+        repository: { kind: 'github-cloud', path: 'makaio-ai/makaio' },
+        path: 'src/index.ts',
+        commit: 'main',
+      },
       location: { kind: 'whole-source' },
     },
   },
   {
     label: 'abbreviated commit',
     value: {
-      source: { kind: 'git-file', repository: 'makaio-ai/makaio', path: 'src/index.ts', commit: '0123456' },
+      source: {
+        kind: 'git-file',
+        repository: { kind: 'github-cloud', path: 'makaio-ai/makaio' },
+        path: 'src/index.ts',
+        commit: '0123456',
+      },
       location: { kind: 'whole-source' },
     },
   },
   {
     label: 'Git file without a commit',
     value: {
-      source: { kind: 'git-file', repository: 'makaio-ai/makaio', path: 'src/index.ts' },
+      source: {
+        kind: 'git-file',
+        repository: { kind: 'github-cloud', path: 'makaio-ai/makaio' },
+        path: 'src/index.ts',
+      },
       location: { kind: 'whole-source' },
     },
   },
   {
     label: 'Git file with a whitespace-only repository',
     value: {
-      source: { kind: 'git-file', repository: '   ', path: 'src/index.ts', commit: SHA_1 },
+      source: {
+        kind: 'git-file',
+        repository: { kind: 'github-cloud', path: '   ' },
+        path: 'src/index.ts',
+        commit: SHA_1,
+      },
       location: { kind: 'whole-source' },
     },
   },
@@ -119,7 +155,12 @@ const rejectedEvidence = [
   {
     label: 'data path on a Git file',
     value: {
-      source: { kind: 'git-file', repository: 'makaio-ai/makaio', path: 'src/index.ts', commit: SHA_1 },
+      source: {
+        kind: 'git-file',
+        repository: { kind: 'github-cloud', path: 'makaio-ai/makaio' },
+        path: 'src/index.ts',
+        commit: SHA_1,
+      },
       location: { kind: 'data-path', path: 'findings.summary' },
     },
   },
@@ -140,7 +181,12 @@ const rejectedEvidence = [
   {
     label: 'unknown top-level field',
     value: {
-      source: { kind: 'git-file', repository: 'makaio-ai/makaio', path: 'src/index.ts', commit: SHA_1 },
+      source: {
+        kind: 'git-file',
+        repository: { kind: 'github-cloud', path: 'makaio-ai/makaio' },
+        path: 'src/index.ts',
+        commit: SHA_1,
+      },
       location: { kind: 'whole-source' },
       note: 'undeclared',
     },
@@ -154,6 +200,18 @@ const rejectedEvidence = [
         pageId: '10715138',
         version: 7,
         url: 'https://example.atlassian.net/wiki/10715138',
+      },
+      location: { kind: 'whole-source' },
+    },
+  },
+  {
+    label: 'unknown nested repository field',
+    value: {
+      source: {
+        kind: 'git-file',
+        repository: { kind: 'github-cloud', path: 'makaio-ai/makaio', host: 'github.com' },
+        path: 'src/index.ts',
+        commit: SHA_1,
       },
       location: { kind: 'whole-source' },
     },
@@ -192,15 +250,26 @@ describe('EvidenceValueSchema', () => {
     expect(EvidenceValueSchema.safeParse(value).success).toBe(false);
   });
 
-  it('preserves source identities byte-for-byte while rejecting whitespace-only identities', () => {
+  it('canonicalizes repository identity while preserving file paths and rejecting whitespace-only identities', () => {
     const value = {
-      source: { kind: 'git-file', repository: ' makaio-ai/makaio ', path: ' src/index.ts ', commit: SHA_1 },
+      source: {
+        kind: 'git-file',
+        repository: { kind: ' github-cloud ', path: ' makaio-ai/makaio ' },
+        path: ' src/index.ts ',
+        commit: SHA_1,
+      },
       location: { kind: 'whole-source' },
     };
-    expect(EvidenceValueSchema.parse(value)).toEqual(value);
+    expect(EvidenceValueSchema.parse(value)).toEqual({
+      ...value,
+      source: {
+        ...value.source,
+        repository: { kind: 'github-cloud', path: 'makaio-ai/makaio' },
+      },
+    });
 
     for (const source of [
-      { ...value.source, repository: '   ' },
+      { ...value.source, repository: { ...value.source.repository, path: '   ' } },
       { ...value.source, path: '\t' },
     ]) {
       expect(EvidenceValueSchema.safeParse({ ...value, source }).success).toBe(false);
@@ -217,6 +286,25 @@ describe('EvidenceValueSchema', () => {
     expect(EvidenceRefSchema.parse(relationRef)).toEqual({ refClass: 'evidence', ...relationRef });
     expect(ArtifactRelationTargetSchema.parse(relationRef)).toEqual({ refClass: 'evidence', ...relationRef });
     expect(EvidenceValueSchema.safeParse(relationRef).success).toBe(false);
+  });
+
+  it('preserves source and location pairings in evidence resolution responses', () => {
+    const responseSchema = ArtifactSchemas['evidence.resolve'].response;
+    const content = { kind: 'text' as const, text: 'resolved' };
+    expect(
+      responseSchema.safeParse({
+        source: acceptedEvidence[0].value.source,
+        location: { kind: 'lines', startLine: 1, lineCount: 1 },
+        content,
+      }).success,
+    ).toBe(true);
+    expect(
+      responseSchema.safeParse({
+        source: acceptedEvidence[2].value.source,
+        location: { kind: 'lines', startLine: 1, lineCount: 1 },
+        content,
+      }).success,
+    ).toBe(false);
   });
 
   it('preserves evidence omission and explicit empty lists across writes and lifecycle events', () => {

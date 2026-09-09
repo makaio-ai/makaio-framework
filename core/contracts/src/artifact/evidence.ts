@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { ArtifactRefSchema } from './artifact-reference.js';
 import { ArtifactDataPathSchema } from './kind-registration.js';
+import { RepoContextSchema } from '../common/repo-context.js';
 
 /** JSON Schema annotation identifying values with canonical evidence semantics. */
 export const ARTIFACT_VALUE_TYPE_KEYWORD = 'x-makaio-value-type';
@@ -33,7 +34,7 @@ const ArtifactDataPathLocationSchema = z.strictObject({
 /** A Git file pinned to a complete SHA-1 or SHA-256 object ID. */
 const GitFileEvidenceSourceSchema = z.strictObject({
   kind: z.literal('git-file'),
-  repository: EvidenceIdentitySchema,
+  repository: RepoContextSchema.strict(),
   path: EvidenceIdentitySchema,
   commit: z.string().regex(/^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$/),
 });

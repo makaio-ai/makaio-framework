@@ -48,6 +48,8 @@ export type {
   RelationTypeRegistration,
 } from './schemas.js';
 export type { EvidenceValue } from './evidence.js';
+export { EvidenceResolveRequestSchema, EvidenceResolveResponseSchema } from './evidence-resolution.js';
+export type { EvidenceResolveRequest, EvidenceResolveResponse } from './evidence-resolution.js';
 export { extractEvidenceOccurrences } from './evidence-occurrences.js';
 export type { EvidenceOccurrence, EvidenceOccurrenceExtractionOptions } from './evidence-occurrences.js';
 export { defineArtifactKind } from './kind-definition.js';
@@ -104,6 +106,8 @@ export type {
 export { ArtifactNamespace, ArtifactSchemas, ArtifactSubjects } from './namespace.js';
 export type {
   ArtifactCreatedPayload,
+  ArtifactEvidenceResolveRequest,
+  ArtifactEvidenceResolveResponse,
   ArtifactCreateRequest,
   ArtifactCreateResponse,
   ArtifactKindChangedPayload,

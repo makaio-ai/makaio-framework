@@ -14,6 +14,7 @@ import {
 } from './schemas.js';
 import { ArtifactContextSelectorSchema } from './context-selectors.js';
 import { ResolvedArtifactContextWireSchema } from './context-resolution.js';
+import { EvidenceResolveRequestSchema, EvidenceResolveResponseSchema } from './evidence-resolution.js';
 
 /**
  * Framework-level artifact bus schemas.
@@ -106,6 +107,12 @@ export const ArtifactSchemas = {
     response: ArtifactCompareResponseSchema,
   },
 
+  /** Resolve one immutable evidence pointer to its complete content (RPC). */
+  'evidence.resolve': {
+    request: EvidenceResolveRequestSchema,
+    response: EvidenceResolveResponseSchema,
+  },
+
   /** Resolve a selector-driven outbound artifact context graph (RPC). */
   resolveContext: {
     request: z.object({
@@ -179,6 +186,7 @@ export const ArtifactNamespace = createBusNamespace('artifact', ArtifactSchemas)
  * - `ArtifactSubjects.resolve` — resolve artifact by ref (RPC)
  * - `ArtifactSubjects.query` — query artifacts (RPC)
  * - `ArtifactSubjects.compare` — compare two revisions (RPC)
+ * - `ArtifactSubjects.evidence.resolve` — resolve immutable evidence content (RPC)
  * - `ArtifactSubjects.resolveContext` — resolve artifact context graph (RPC)
  * - `ArtifactSubjects.created` — artifact created event
  * - `ArtifactSubjects.revised` — artifact revised event
@@ -238,6 +246,12 @@ export type ArtifactResolveRequest = z.infer<(typeof ArtifactSchemas)['resolve']
 
 /** Response payload for resolving an artifact by reference. */
 export type ArtifactResolveResponse = z.infer<(typeof ArtifactSchemas)['resolve']['response']>;
+
+/** Request payload for resolving immutable evidence content. */
+export type ArtifactEvidenceResolveRequest = z.infer<(typeof ArtifactSchemas)['evidence.resolve']['request']>;
+
+/** Fully resolved immutable evidence content. */
+export type ArtifactEvidenceResolveResponse = z.infer<(typeof ArtifactSchemas)['evidence.resolve']['response']>;
 
 /** Response payload for querying artifacts. */
 export type ArtifactQueryResponse = z.infer<(typeof ArtifactSchemas)['query']['response']>;

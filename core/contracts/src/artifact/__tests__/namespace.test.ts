@@ -9,6 +9,7 @@ describe('Artifact namespace', () => {
         'compare',
         'create',
         'created',
+        'evidence.resolve',
         'kind.changed',
         'kind.list',
         'kind.register',
@@ -26,6 +27,7 @@ describe('Artifact namespace', () => {
     );
     expect(ArtifactSubjects.create.subject).toBe('create');
     expect(ArtifactSubjects.kind.register.subject).toBe('kind.register');
+    expect(ArtifactSubjects.evidence.resolve.subject).toBe('evidence.resolve');
     expect(ArtifactSubjects.status.changed.subject).toBe('status.changed');
   });
 
