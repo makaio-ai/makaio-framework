@@ -74,6 +74,8 @@ import type {
   ExecutionAttemptOutcomeCommit,
   ExecutionAttemptOutcomeDecision,
   ExecutionAttemptRecord,
+  ExecutionAttemptCancellationIntent,
+  RequestExecutionCancellationInput,
   ExecutionAttemptRecoveryOperations,
   ExecutionAttemptRepository,
   GetInstructionInput,
@@ -141,6 +143,11 @@ import { parseInstruction } from '../attempt-value-snapshot.js';
  * a durable implementation must make it.
  */
 const SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS test_execution_attempt_cancellation (
+     execution_attempt_id TEXT PRIMARY KEY,
+     requested_at TEXT NOT NULL,
+     reason TEXT
+   )`,
   `CREATE TABLE IF NOT EXISTS test_execution_attempt (
      execution_attempt_id TEXT PRIMARY KEY,
      execution_id TEXT NOT NULL,
@@ -1336,6 +1343,7 @@ export async function createSqliteAttemptRepository<TOutcome>(
             if (activeAttemptId !== input.executionAttemptId) return { kind: 'fenced' };
             if (attempt.settlementKind != null) return { kind: 'resolved', allocationRef: attempt.allocationRef };
             if (attempt.allocationRef !== null) return { kind: 'allocated', allocationRef: attempt.allocationRef };
+            if (attempt.operationStartGate === 'closed') return { kind: 'fenced' };
             if (attempt.status !== 'pending') return { kind: 'already-provisioning' };
 
             // One transaction: bind the provider immutably and open the
@@ -1351,6 +1359,7 @@ export async function createSqliteAttemptRepository<TOutcome>(
                   WHERE execution_attempt_id = ${input.executionAttemptId}
                     AND execution_id = ${input.executionId}
                     AND status = ${'pending'}
+                    AND operation_start_gate = 'open'
                     AND allocation_ref IS NULL
                     AND settlement_kind IS NULL
                     AND ${isActiveAttemptRow()}`,
@@ -1917,6 +1926,34 @@ export async function createSqliteAttemptRepository<TOutcome>(
       return transact(async (session) => {
         const row = await readAttemptRow(session, executionAttemptId);
         return row === undefined ? null : decodeAttemptControlState(row);
+      });
+    },
+
+    async requestCancellation(input: RequestExecutionCancellationInput): Promise<void> {
+      const { executionId, reason } = input;
+      const requestedAt = new Date().toISOString();
+      await transact(async (session) => {
+        await session.run(sql`INSERT OR IGNORE INTO test_execution_attempt_cancellation
+          (execution_attempt_id, requested_at, reason)
+          SELECT execution_attempt_id, ${requestedAt}, ${reason ?? null}
+          FROM test_execution_attempt WHERE execution_id = ${executionId}`);
+        await session.run(sql`UPDATE test_execution_attempt SET operation_start_gate = 'closed'
+          WHERE execution_id = ${executionId}`);
+      });
+    },
+
+    async readCancellation(executionAttemptId: string): Promise<ExecutionAttemptCancellationIntent | null> {
+      return transact(async (session) => {
+        const [row] = await session.all<{ requested_at: string; reason: string | null }>(
+          sql`SELECT requested_at, reason FROM test_execution_attempt_cancellation
+            WHERE execution_attempt_id = ${executionAttemptId}`,
+        );
+        return row === undefined
+          ? null
+          : {
+              requestedAt: row.requested_at,
+              ...(row.reason !== null ? { reason: row.reason } : {}),
+            };
       });
     },
 

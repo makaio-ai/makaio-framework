@@ -393,6 +393,30 @@ export interface InitialProviderOperationClaimContext {
 }
 
 /**
+ * Host policy for renewing one live provider-operation claim.
+ *
+ * The policy supplies time only. The Authority remains the sole writer of the
+ * durable claim, so a host cannot turn a local timer into a second ownership
+ * protocol.
+ */
+export interface ProviderOperationLeasePolicy {
+  /**
+   * State the next requested lease deadline and when local custody must renew.
+   * @param claim - Current durable claim whose lease is still held locally.
+   * @returns Next durable deadline and the host-chosen delay before renewal.
+   */
+  nextRenewal(claim: ProviderOperationClaim): ProviderOperationLeaseRenewal;
+}
+
+/** Host-selected schedule for one claim renewal. */
+export interface ProviderOperationLeaseRenewal {
+  /** ISO-8601 deadline requested from the durable Authority on renewal. */
+  readonly leaseExpiresAt: string;
+  /** Positive delay in milliseconds after which local custody must renew. */
+  readonly renewAfterMs: number;
+}
+
+/**
  * Host seam that produces the initial claim context for an attempt.
  *
  * Hosts implement this to inject controller identity and lease policy.
@@ -400,7 +424,7 @@ export interface InitialProviderOperationClaimContext {
  * duration: a hidden default would silently attach remediation authority to
  * an anonymous owner.
  */
-export interface InitialProviderOperationClaimContextSource {
+export interface InitialProviderOperationClaimContextSource extends ProviderOperationLeasePolicy {
   /**
    * Produce the initial claim context for one attempt about to be provisioned.
    * @param input - Execution, attempt, and provider the claim is being created for.

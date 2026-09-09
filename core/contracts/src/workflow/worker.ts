@@ -369,6 +369,16 @@ export type WorkerContributionManifest = z.infer<typeof WorkerContributionManife
  */
 export interface WorkflowRunnerRunOptions {
   /**
+   * Local owner admission around durable attempt creation only. A runner must
+   * release this boundary before dispatching or awaiting the workload outcome.
+   * This callback never travels in worker configuration or dispatch metadata.
+   * Direct runner consumers that omit it own their own admission policy.
+   * @param create - Creation operation executed only while the owner permits new work.
+   * @returns The result of the admitted creation operation.
+   * @typeParam T - Creation result retained by the dispatch runner.
+   */
+  readonly withAttemptCreation?: <T>(create: () => Promise<T>) => Promise<T>;
+  /**
    * Opaque metadata forwarded to dispatch layers that support it.
    *
    * Runners that do not call through Worker dispatch may ignore this.

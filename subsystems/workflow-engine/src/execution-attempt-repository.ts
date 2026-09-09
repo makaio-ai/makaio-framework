@@ -123,7 +123,8 @@ export const ATTEMPT_OPERATION_START_GATES = ['open', 'closed'] as const;
  *   guard.
  * - `closed`: the attempt will never admit another operation. Closing is
  *   one-way and happens exactly where the attempt stops being a place work may
- *   begin — when a newer attempt supersedes it, and when it settles.
+ *   begin — when a newer attempt supersedes it, when cancellation is requested,
+ *   and when it settles.
  */
 export type AttemptOperationStartGate = (typeof ATTEMPT_OPERATION_START_GATES)[number];
 
@@ -188,6 +189,22 @@ export function sameAllocationRef(stored: ProviderAllocationRef, candidate: Prov
  * workflow-storage lookup keys keep plain `string`.
  */
 export type ExecutionOwnerId = string;
+
+/** A durable request to stop an attempt, never evidence that it stopped. */
+export interface ExecutionAttemptCancellationIntent {
+  /** First accepted request time, preserved across duplicate requests and controller handoff. */
+  readonly requestedAt: string;
+  /** Optional owner-supplied explanation. */
+  readonly reason?: string;
+}
+
+/** Owner-scoped cancellation of attempts that exist when the request commits. */
+export interface RequestExecutionCancellationInput {
+  /** Owner authorizing the cancellation of its existing attempts. */
+  readonly executionId: ExecutionOwnerId;
+  /** Explanation retained only when this is the first request for an attempt. */
+  readonly reason?: string;
+}
 
 /**
  * Compare two durable outcome texts as values.
@@ -460,8 +477,8 @@ export interface AttemptControlState {
    * Whether the attempt still admits operations.
    *
    * `open` from creation. Closed by {@link ExecutionAttemptRepository.createAttempt}
-   * on the attempt it supersedes, and by every terminal settlement on the
-   * attempt it settles. Closing is one-way.
+   * on the attempt it supersedes, by an owner cancellation request, and by every
+   * terminal settlement on the attempt it settles. Closing is one-way.
    */
   readonly operationStartGate: AttemptOperationStartGate;
   /**
@@ -980,7 +997,8 @@ export interface MarkRuntimeReadyInput {
  * - `allocated`: an allocation is already recorded for this attempt.
  * - `resolved`: the attempt has settled, so it cannot begin provisioning.
  * - `fenced`: the attempt exists but is no longer the active attempt for its
- *   execution, so it may not bootstrap a new provider call.
+ *   execution, or its operation start gate is closed by cancellation, so it
+ *   may not bootstrap a new provider call.
  * - `not-found`: no such attempt for the given execution.
  */
 export type ProvisioningClaimDecision =
@@ -1482,6 +1500,24 @@ export type RuntimeReadinessDecision =
  * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
 export interface ExecutionAttemptRepository<TOutcome> extends OwnerRequestRecoveryRepository<TOutcome> {
+  /**
+   * Persist first-wins cancellation intent and close operation start gates atomically
+   * for every existing attempt of this owner, including historical allocations.
+   * This does not settle an attempt or confirm provider termination. The owner must
+   * prevent later attempts after cancellation; this port does not install a permanent
+   * owner-wide creation fence. Repeated requests preserve the first time and reason.
+   * @param input - Owner identity and optional explanation, snapshotted before awaiting.
+   */
+  requestCancellation(input: RequestExecutionCancellationInput): Promise<void>;
+
+  /**
+   * Read replayable cancellation intent independently of controller ownership.
+   * Intent is never cleared merely because a controller delivered a cancel call.
+   * @param executionAttemptId - Attempt whose provider control is being adopted.
+   * @returns First accepted intent, or null when absent (including an unknown attempt).
+   */
+  readCancellation(executionAttemptId: string): Promise<ExecutionAttemptCancellationIntent | null>;
+
   /**
    * Persist a new execution attempt record.
    *

@@ -11,6 +11,7 @@ import { beginTestProvisioning, createInMemoryAttemptRepository } from '../testi
 import { workflowAttemptOutcomeCodec } from '../workflow-attempt-outcome.js';
 import { parseWorkflowAttemptInstruction } from '../workflow-attempt-instruction.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
+import { createWorkflowExecution } from './shared.js';
 
 function makeWorkerConfig(): Parameters<NonNullable<ReturnType<typeof createWorkerDispatchRunner>>['run']>[0] {
   return {
@@ -45,6 +46,24 @@ const TEST_ALLOCATION_REF: ProviderAllocationRef = {
 // ─────────────────────────────────────────────────────────────
 
 describe('hasWorkerDispatchRequirements', () => {
+  it('honors local owner admission before creating a bus-dispatched attempt', async () => {
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
+    const runner = createWorkerDispatchRunner({
+      bus: createBusInstance(),
+      authority,
+      requirements: { recoverableAllocation: true },
+    });
+    if (runner === undefined) throw new Error('Expected dispatch-capable runner');
+    await expect(
+      runner.run(makeWorkerConfig(), new AbortController().signal, undefined, {
+        withAttemptCreation: async () => {
+          throw new Error('Owner already cancelled');
+        },
+      }),
+    ).rejects.toThrow('Owner already cancelled');
+    expect(repository.attempts.size).toBe(0);
+  });
   it('returns false when no requirements are present', () => {
     expect(hasWorkerDispatchRequirements(undefined)).toBe(false);
   });
@@ -627,11 +646,30 @@ describe('launchDefinitionExecutionTask requirements threading', () => {
   it('routes through Worker dispatch when definition declares customCapabilities', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
 
     const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
 
     let dispatchCalled = false;
+    const offOwner = bus.on(WorkflowStorageSubjects.getExecution, (ctx) => {
+      ctx.setResult({
+        execution: createWorkflowExecution({
+          id: 'wfx-dispatch-req',
+          workflowId: 'workflow-with-req',
+          status: dispatchCalled ? 'completed' : 'running',
+        }),
+      });
+    });
+    const finalizerDeps = {
+      bus,
+      activeExecutions: new Map(),
+      shellAbortControllers: new Map(),
+      activeRunnerSteps: new Map(),
+      durableLifecycleTransitions: new Map(),
+      lifecyclePublications: new Map(),
+      publishingLifecycleExecutions: new Set<string>(),
+    };
     let capturedRequirements: Record<string, unknown> | undefined;
     const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
       dispatchCalled = true;
@@ -672,10 +710,10 @@ describe('launchDefinitionExecutionTask requirements threading', () => {
         workflowAbortControllers: new Map(),
         executionTasks: new Map(),
         activeExecutions: new Map(),
-        buildFinalizerDeps: vi.fn() as never,
+        buildFinalizerDeps: () => finalizerDeps,
         config: deps.config,
       }),
-      buildFinalizerDeps: vi.fn() as never,
+      buildFinalizerDeps: () => finalizerDeps,
       resolveExecutionWorkspaceRoot: vi.fn(),
       runExecution: fallbackRunner,
       executionAttemptAuthority: authority,
@@ -711,6 +749,7 @@ describe('launchDefinitionExecutionTask requirements threading', () => {
       });
       expect(fallbackRunner).not.toHaveBeenCalled();
     } finally {
+      offOwner();
       offDispatch();
     }
   });
