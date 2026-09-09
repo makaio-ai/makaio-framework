@@ -157,6 +157,18 @@ describe('ArtifactSchemaRegistry', () => {
     expect(registry.getKind('position', 1)).toEqual(registration);
   });
 
+  it('accepts the canonical evidence semantic annotation during authoritative registration', () => {
+    const registration = makeKind('evidence-record', 1, {
+      properties: {
+        evidence: { type: 'object', 'x-makaio-value-type': 'evidence/v1' },
+      },
+    });
+
+    registry.registerKind(registration);
+
+    expect(registry.getKind('evidence-record', 1)).toEqual(registration);
+  });
+
   it.each([
     { optional: { type: 'string', pattern: '[' } },
     { optional: { type: 'string', format: 'not-a-supported-format' } },

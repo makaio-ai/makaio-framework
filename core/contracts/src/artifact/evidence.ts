@@ -3,6 +3,12 @@ import { z } from 'zod';
 import { ArtifactRefSchema } from './artifact-reference.js';
 import { ArtifactDataPathSchema } from './kind-registration.js';
 
+/** JSON Schema annotation identifying values with canonical evidence semantics. */
+export const ARTIFACT_VALUE_TYPE_KEYWORD = 'x-makaio-value-type';
+
+/** Versioned semantic identity serialized on every {@link EvidenceValueSchema} use. */
+export const EVIDENCE_VALUE_TYPE = 'evidence/v1';
+
 /** A nonblank identity that remains enforceable after JSON Schema conversion. */
 const EvidenceIdentitySchema = z.string().min(1).regex(/\S/);
 
@@ -74,6 +80,7 @@ export const EvidenceValueSchema = z
   .meta({
     title: 'EvidenceValue',
     description: 'An immutable, directly cited source and its source-specific location.',
+    [ARTIFACT_VALUE_TYPE_KEYWORD]: EVIDENCE_VALUE_TYPE,
   });
 
 /** Direct, immutable evidence pointer attached to an artifact revision. */

@@ -301,7 +301,7 @@ describe('EvidenceValueSchema', () => {
     }).toRegistration();
 
     expect(registration.dataSchema).toMatchObject({
-      properties: { evidence: { title: 'EvidenceValue' } },
+      properties: { evidence: { title: 'EvidenceValue', 'x-makaio-value-type': 'evidence/v1' } },
     });
   });
 

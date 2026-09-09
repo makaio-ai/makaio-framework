@@ -20,7 +20,11 @@ export {
   LocalRefSchema,
   RelationTypeRegistrationSchema,
 } from './schemas.js';
-export { EvidenceValueSchema } from './evidence.js';
+export {
+  ARTIFACT_VALUE_TYPE_KEYWORD,
+  EVIDENCE_VALUE_TYPE,
+  EvidenceValueSchema,
+} from './evidence.js';
 export type {
   ArtifactActor,
   ArtifactCompareRequest,
@@ -44,6 +48,8 @@ export type {
   RelationTypeRegistration,
 } from './schemas.js';
 export type { EvidenceValue } from './evidence.js';
+export { extractEvidenceOccurrences } from './evidence-occurrences.js';
+export type { EvidenceOccurrence, EvidenceOccurrenceExtractionOptions } from './evidence-occurrences.js';
 export { defineArtifactKind } from './kind-definition.js';
 export type {
   AnyArtifactKindDefinition,
