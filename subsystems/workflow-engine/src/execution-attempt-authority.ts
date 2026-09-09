@@ -1,4 +1,9 @@
-import type { ExecutionAttemptInstruction, ExecutionAttemptBootstrapAwaitStartResponse } from '@makaio/contracts';
+import type {
+  AcceptedAttemptOutcome,
+  OutcomeAcceptance,
+  ExecutionAttemptInstruction,
+  ExecutionAttemptBootstrapAwaitStartResponse,
+} from '@makaio/contracts';
 import { awaitBootstrapStart, type BootstrapStartAuthority, type BootstrapStartOptions } from './bootstrap-start.js';
 import type {
   AdmitOperationInput,
@@ -88,7 +93,14 @@ import { buildDeferred, type Deferred } from './runtime/deferred.js';
  *   succeeds.
  * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
-type OutcomeWaiter<TOutcome> = Deferred<TOutcome, Error>;
+type OutcomeWaiter<TOutcome> = Deferred<AcceptedAttemptOutcome<TOutcome>, Error>;
+
+/** A committed outcome may settle only with an explicit owner interpretation. */
+type OutcomeSettlementDecision<TOutcome> =
+  | (Extract<ExecutionAttemptOutcomeDecision<TOutcome>, { kind: 'accepted' | 'duplicate' }> & {
+      readonly acceptance: OutcomeAcceptance;
+    })
+  | Extract<ExecutionAttemptOutcomeDecision<TOutcome>, { kind: 'conflict' | 'fenced' }>;
 
 // ─────────────────────────────────────────────────────────────
 // Authority Service
@@ -588,22 +600,21 @@ export class ExecutionAttemptAuthority<TOutcome> implements BootstrapStartAuthor
    * Returns `undefined` when no waiter exists for the given attempt
    * (e.g. after a process restart or for attempts created by other hosts).
    * @param executionAttemptId - The attempt to wait for.
-   * @returns Promise that resolves with the canonical outcome, or `undefined`.
+   * @returns Promise of canonical outcome, frozen control facts and owner acceptance, or `undefined`.
    */
-  public waitForOutcome(executionAttemptId: string): Promise<TOutcome> | undefined {
+  public waitForOutcome(executionAttemptId: string): Promise<AcceptedAttemptOutcome<TOutcome>> | undefined {
     return this.waiters.get(executionAttemptId)?.promise;
   }
 
   /**
    * Settle the in-process waiter after owner-state convergence succeeds.
    *
-   * Called by the outcome-submission handler only after the durable owner
-   * transition has completed. This ensures runners observe the committed
-   * outcome only when canonical owner state is consistent.
+   * Called only after the owner accepts the canonical fact, either through
+   * its normal result path or without projecting a new lifecycle transition.
    * @param executionAttemptId - The attempt whose waiter to settle.
    * @param decision - The durable outcome decision (must be accepted or duplicate).
    */
-  public settleOutcome(executionAttemptId: string, decision: ExecutionAttemptOutcomeDecision<TOutcome>): void {
+  public settleOutcome(executionAttemptId: string, decision: OutcomeSettlementDecision<TOutcome>): void {
     this.settleWaiterInternal(executionAttemptId, decision);
   }
 
@@ -814,18 +825,18 @@ export class ExecutionAttemptAuthority<TOutcome> implements BootstrapStartAuthor
    * @param executionAttemptId - Attempt to install a waiter for.
    */
   private installWaiter(executionAttemptId: string): void {
-    this.waiters.set(executionAttemptId, buildDeferred<TOutcome, Error>());
+    this.waiters.set(executionAttemptId, buildDeferred<AcceptedAttemptOutcome<TOutcome>, Error>());
   }
 
   /**
    * Settle the in-process waiter based on a repository decision.
    *
-   * For accepted/duplicate, resolves with the canonical outcome.
+   * For accepted/duplicate, resolves with canonical facts and explicit owner acceptance.
    * For conflict/fenced, rejects with a descriptive error.
    * @param executionAttemptId - Attempt whose waiter to settle.
    * @param decision - The durable outcome decision from the repository.
    */
-  private settleWaiterInternal(executionAttemptId: string, decision: ExecutionAttemptOutcomeDecision<TOutcome>): void {
+  private settleWaiterInternal(executionAttemptId: string, decision: OutcomeSettlementDecision<TOutcome>): void {
     const waiter = this.waiters.get(executionAttemptId);
     if (!waiter) {
       return;
@@ -834,7 +845,11 @@ export class ExecutionAttemptAuthority<TOutcome> implements BootstrapStartAuthor
     switch (decision.kind) {
       case 'accepted':
       case 'duplicate':
-        waiter.resolve(decision.outcome);
+        waiter.resolve({
+          outcome: decision.outcome,
+          controlObservation: decision.controlObservation,
+          acceptance: decision.acceptance,
+        });
         break;
       case 'conflict':
         waiter.reject(

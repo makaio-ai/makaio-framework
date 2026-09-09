@@ -4,6 +4,7 @@ import { buildWorkflowAttemptInstruction } from '../workflow-attempt-instruction
 import {
   decodeWorkflowAttemptOutcome,
   toCommittedWorkflowRunnerResult,
+  toCommittedWorkflowRunnerCompletion,
   workflowAttemptOutcomeCodec,
   type WorkflowAttemptOutcome,
 } from '../workflow-attempt-outcome.js';
@@ -22,6 +23,50 @@ const instruction = buildWorkflowAttemptInstruction({
 });
 
 describe('workflow Attempt outcome owner adapter', () => {
+  it.each([
+    { ...identity, status: 'completed' },
+    { ...identity, status: 'paused', pausedAtGateId: 'gate-1', pausedAtFrameId: 'frame-1' },
+    { kind: 'technical-failure', stage: 'workload-invocation', message: 'Process did not stop' },
+    { kind: 'cancelled', reason: 'Worker stopped' },
+  ] satisfies WorkflowAttemptOutcome[])('retains a recorded-only fact without fabricating a runner result: %j', (outcome) => {
+    const acceptedOutcome = {
+      outcome,
+      acceptance: 'recorded-only' as const,
+      controlObservation: { controlRevision: 0, cancellation: null },
+    };
+    const completion = toCommittedWorkflowRunnerCompletion(acceptedOutcome, identity);
+    expect(completion).toEqual({ state: 'authority-recorded-only', ...identity, acceptedOutcome });
+    expect(completion).not.toHaveProperty('result');
+  });
+
+  it('keeps an unknown legacy observation unknown in a recorded-only completion', () => {
+    const completion = toCommittedWorkflowRunnerCompletion(
+      {
+        outcome: { ...identity, status: 'completed' },
+        acceptance: 'recorded-only',
+        controlObservation: null,
+      },
+      identity,
+    );
+    expect(completion).toMatchObject({
+      state: 'authority-recorded-only',
+      acceptedOutcome: { controlObservation: null },
+    });
+  });
+
+  it('refuses a mismatched owner identity even for recorded-only acceptance', () => {
+    expect(() =>
+      toCommittedWorkflowRunnerCompletion(
+        {
+          outcome: { ...identity, executionId: 'wrong-owner', status: 'completed' },
+          acceptance: 'recorded-only',
+          controlObservation: null,
+        },
+        identity,
+      ),
+    ).toThrow('owner identity');
+  });
+
   it.each([
     { kind: 'technical-failure', stage: 'startup', message: 'Invalid workflow input' },
     { kind: 'cancelled', reason: 'Stopped before the workflow could be loaded' },

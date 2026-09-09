@@ -1145,6 +1145,9 @@ export type {
   WorkerRuntimeContext,
   WorkflowRunResult,
   WorkflowRunnerCompletion,
+  WorkflowAttemptOutcome,
+  WorkflowAttemptTechnicalFailure,
+  WorkflowAttemptCancellation,
   WorkflowRunnerRunOptions,
   IWorkflowRunner,
   WorkerContributionManifest,
@@ -1270,6 +1273,10 @@ export {
 } from './execution-attempt/index.js';
 export type {
   ExecutionAttemptAnnouncedOperationKind,
+  AcceptedAttemptOutcome,
+  AttemptOutcomeControlObservation,
+  ExecutionAttemptCancellationIntent,
+  OutcomeAcceptance,
   ExecutionAttemptBootstrapAwaitStartRequest,
   ExecutionAttemptBootstrapAwaitStartResponse,
   ExecutionAttemptBootstrapStartRefusalReason,

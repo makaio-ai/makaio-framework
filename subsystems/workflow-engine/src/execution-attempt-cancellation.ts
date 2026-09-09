@@ -1,16 +1,6 @@
 import type { ExecutionOwnerId } from './execution-attempt-repository.js';
-
-/** A durable request to stop an attempt, never evidence that it stopped. */
-export interface ExecutionAttemptCancellationIntent {
-  /** Winning owner request key, scoped to this attempt and retained for replay. */
-  readonly requestKey: string;
-  /** Accepted control-request revision; delivery and runtime reports never advance it. */
-  readonly controlRevision: number;
-  /** First accepted request time, preserved across duplicate requests and controller handoff. */
-  readonly requestedAt: string;
-  /** Optional owner-supplied explanation. */
-  readonly reason?: string;
-}
+import type { AttemptOutcomeControlObservation, ExecutionAttemptCancellationIntent } from '@makaio/contracts';
+export type { AttemptOutcomeControlObservation, ExecutionAttemptCancellationIntent } from '@makaio/contracts';
 
 /** Owner-scoped cancellation of attempts that exist when the request commits. */
 export interface RequestExecutionCancellationInput {
@@ -32,14 +22,6 @@ export type ExecutionAttemptCancellationDecision =
   | { readonly kind: 'accepted' | 'replayed'; readonly intent: ExecutionAttemptCancellationIntent }
   | { readonly kind: 'not-found' }
   | { readonly kind: 'conflict' };
-
-/** Accepted control requests observed atomically with the first canonical outcome commit. */
-export interface AttemptOutcomeControlObservation {
-  /** Zero before Cancel; the winning request revision afterwards. */
-  readonly controlRevision: number;
-  /** A detached winning receipt, or null when no Cancel had been accepted. */
-  readonly cancellation: ExecutionAttemptCancellationIntent | null;
-}
 
 /**
  * Require an opaque identity without normalizing its scope.

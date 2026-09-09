@@ -84,7 +84,7 @@ async function createHarness(
       decodeOutcome: ({ outcome }) => outcome,
       convergence: {
         converge: async () => {
-          if (options.failOwnerConvergenceAfterCommit === undefined) return;
+          if (options.failOwnerConvergenceAfterCommit === undefined) return 'projected';
           throw new Error('Simulated owner convergence failure after outcome commit');
         },
       },
@@ -535,7 +535,7 @@ describe('generic workload invocation', () => {
     });
     expect(invocationWorkspace).toBeDefined();
     await expect(readFile(join(workspaceRoot, 'marker'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(outcome).resolves.toEqual(result.outcome);
+    await expect(outcome).resolves.toMatchObject({ outcome: result.outcome, acceptance: 'projected' });
   });
 
   it('settles a missing installed adapter as startup failure without inventing a Workspace', async () => {
@@ -552,7 +552,7 @@ describe('generic workload invocation', () => {
 
     expect(result.decision).toBe('accepted');
     expect(result.outcome).toMatchObject({ kind: 'technical-failure', stage: 'startup' });
-    await expect(outcome).resolves.toEqual(result.outcome);
+    await expect(outcome).resolves.toMatchObject({ outcome: result.outcome, acceptance: 'projected' });
   });
 
   it.each([
@@ -618,7 +618,7 @@ describe('generic workload invocation', () => {
         ? { kind: 'technical-failure', stage: 'startup', message: 'Foreign control failure' }
         : { kind: 'cancelled' };
     expect(result).toEqual({ outcome: expected, decision: 'accepted' });
-    await expect(outcome).resolves.toEqual(result.outcome);
+    await expect(outcome).resolves.toMatchObject({ outcome: result.outcome, acceptance: 'projected' });
     await expect(harness.authority.getAttemptControlState(harness.executionAttemptId)).resolves.toMatchObject({
       activeOperationId: null,
     });
@@ -936,7 +936,7 @@ describe('generic workload invocation', () => {
     expect(result.outcome).toMatchObject({ kind: 'technical-failure', stage: 'workspace-preparation' });
     expect(invoked).toBe(false);
     await expect(readFile(join(workspaceRoot, 'marker'), 'utf8')).resolves.toBe('diagnose');
-    await expect(outcome).resolves.toEqual(result.outcome);
+    await expect(outcome).resolves.toMatchObject({ outcome: result.outcome, acceptance: 'projected' });
   });
 
   it('settles cancellation before admission without executing the adapter', async () => {
@@ -1068,7 +1068,7 @@ describe('generic workload invocation', () => {
       ? { kind: 'technical-failure', stage: 'workspace-preparation', message: 'Independent setup storage failure' }
       : { kind: 'cancelled' };
     expect(result).toEqual({ outcome: expected, decision: 'accepted' });
-    await expect(settled).resolves.toEqual(expected);
+    await expect(settled).resolves.toMatchObject({ outcome: expected, acceptance: 'projected' });
     expect(invocations).toBe(0);
     expect(reports).toEqual([]);
     expect(outer.signal.aborted).toBe(false);
@@ -1269,7 +1269,7 @@ describe('generic workload invocation', () => {
     });
 
     expect(result).toEqual({ outcome: expectedOutcome, decision: 'accepted' });
-    await expect(settled).resolves.toEqual(expectedOutcome);
+    await expect(settled).resolves.toMatchObject({ outcome: expectedOutcome, acceptance: 'projected' });
     await expect(writeFile(join(workspaceRoot, 'retained-after-abort'), 'yes')).resolves.toBeUndefined();
   });
 });

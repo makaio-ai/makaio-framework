@@ -53,6 +53,7 @@ function createHarness(beforeDecode?: () => Promise<void>) {
           observations.failNext = false;
           throw new Error('Owner convergence temporarily unavailable');
         }
+        return 'projected';
       },
     },
   });
@@ -207,7 +208,11 @@ describe('generic execution Attempt ingress', () => {
     });
     const retry = await submit(request);
     expect(retry.result).toEqual({ decision: 'duplicate' });
-    await expect(waiter).resolves.toEqual(request.outcome);
+    await expect(waiter).resolves.toEqual({
+      outcome: request.outcome,
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
     expect(harness.observations.calls.map((call) => call.decision)).toEqual(['accepted', 'duplicate']);
   });
 
@@ -221,7 +226,11 @@ describe('generic execution Attempt ingress', () => {
     } as const;
     const response = await submit({ ...identity, outcome });
     expect(response.result).toEqual({ decision: 'accepted' });
-    await expect(waiter).resolves.toEqual(outcome);
+    await expect(waiter).resolves.toEqual({
+      outcome,
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
   });
 
   it.each([
@@ -251,7 +260,11 @@ describe('generic execution Attempt ingress', () => {
     expect(harness.authority.waitForOutcome(identity.executionAttemptId)).toBe(waiter);
     failDecode = false;
     expect((await submit(request)).result).toEqual({ decision: 'accepted' });
-    await expect(waiter).resolves.toEqual(request.outcome);
+    await expect(waiter).resolves.toEqual({
+      outcome: request.outcome,
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
   });
 
   it.each([
@@ -289,7 +302,11 @@ describe('generic execution Attempt ingress', () => {
       outcome: { kind: 'cancelled', reason: 'Cooperative work stopped' },
     };
     expect((await submit(request)).result).toEqual({ decision: 'accepted' });
-    await expect(waiter).resolves.toEqual(request.outcome);
+    await expect(waiter).resolves.toEqual({
+      outcome: request.outcome,
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
     expect((await submit(request)).result).toEqual({ decision: 'duplicate' });
     expect(harness.repository.committedOutcomes.size).toBe(1);
     expect(await harness.authority.getAttemptControlState(identity.executionAttemptId)).toMatchObject({
@@ -390,7 +407,11 @@ describe('generic execution Attempt ingress', () => {
     expect(harness.observations.calls).toEqual([]);
     expect(harness.authority.waitForOutcome(identity.executionAttemptId)).toBe(waiter);
     expect((await submit(currentRequest)).result).toEqual({ decision: 'accepted' });
-    await expect(waiter).resolves.toEqual(currentRequest.outcome);
+    await expect(waiter).resolves.toEqual({
+      outcome: currentRequest.outcome,
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
   });
 
   it('refuses an outcome for the wrong operation or Runtime generation before commitment', async () => {
@@ -412,7 +433,11 @@ describe('generic execution Attempt ingress', () => {
     expect(harness.repository.committedOutcomes.size).toBe(0);
     expect(harness.authority.waitForOutcome(identity.executionAttemptId)).toBe(waiter);
     expect((await submit({ ...identity, operationId, outcome })).result).toEqual({ decision: 'accepted' });
-    await expect(waiter).resolves.toEqual(outcome);
+    await expect(waiter).resolves.toEqual({
+      outcome,
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
   });
 
   it('refuses foreign Attempt peers at all three generic request seams', async () => {

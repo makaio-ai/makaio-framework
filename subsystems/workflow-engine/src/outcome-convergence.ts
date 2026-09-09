@@ -1,5 +1,8 @@
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import type { ExecutionOwnerId, RuntimeOutcomeFence } from './execution-attempt-repository.js';
+import type { AttemptOutcomeControlObservation, OutcomeAcceptance } from '@makaio/contracts';
+
+export type { AcceptedAttemptOutcome, OutcomeAcceptance } from '@makaio/contracts';
 
 export type { ExecutionOwnerId };
 
@@ -19,6 +22,8 @@ export interface OutcomeConvergenceInput<TOutcome> {
   readonly outcome: TOutcome;
   /** The durable decision that produced the committed outcome. */
   readonly decision: 'accepted' | 'duplicate';
+  /** Frozen first-commit control facts; null means unknown, never revision zero. */
+  readonly controlObservation: AttemptOutcomeControlObservation | null;
 }
 
 /**
@@ -35,8 +40,9 @@ export interface OutcomeConvergence<TOutcome> {
    * Converge owner state with the committed outcome.
    * @param input - Attempt identity, the canonical committed outcome, and the
    *   durable decision that produced it.
+   * @returns Explicit owner acceptance; recorded-only does not project lifecycle state.
    */
-  converge(input: OutcomeConvergenceInput<TOutcome>): Promise<void>;
+  converge(input: OutcomeConvergenceInput<TOutcome>): Promise<OutcomeAcceptance>;
 }
 
 /**
@@ -133,8 +139,8 @@ export interface AttemptOutcomeSubmission<TOutcome> {
  * Order: one canonicalization of the submitted outcome, optional pre-commit
  * validation of that canonical value, durable commit of that same rendering
  * through the authority, owner convergence for `accepted` and `duplicate`,
- * then waiter settlement on a fresh decode of the text the decision reports
- * as committed. The decision kind is returned for the caller's
+ * then waiter settlement with that classification, the original control
+ * observation, and a fresh decode of the committed text. The decision kind is returned for the caller's
  * acknowledgement.
  *
  * Invariants this function keeps:
@@ -188,11 +194,12 @@ export async function submitAttemptOutcome<TOutcome>(
   );
 
   if (decision.kind === 'accepted' || decision.kind === 'duplicate') {
-    await deps.convergence.converge({
+    const acceptance = await deps.convergence.converge({
       executionId: input.executionId,
       executionAttemptId: input.executionAttemptId,
       outcome: decision.outcome,
       decision: decision.kind,
+      controlObservation: structuredClone(decision.controlObservation),
     });
     // The waiter is settled from `decision.text`, not from `decision.outcome`
     // and not from `durable.text` — convergence has just held
@@ -208,6 +215,7 @@ export async function submitAttemptOutcome<TOutcome>(
       outcome: deps.authority.decodeOutcome(decision.text),
       text: decision.text,
       controlObservation: decision.controlObservation,
+      acceptance,
     });
   }
 

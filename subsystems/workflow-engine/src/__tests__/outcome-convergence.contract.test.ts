@@ -1,3 +1,4 @@
+import type { AcceptedAttemptOutcome } from '@makaio/contracts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { submitAttemptOutcome, type OutcomeConvergence, type OutcomeConvergenceInput } from '../outcome-convergence.js';
@@ -44,6 +45,7 @@ function createConvergenceFake<TOutcome>(): ConvergenceFake<TOutcome> {
         this.failNext = undefined;
         throw error;
       }
+      return 'projected';
     },
   };
 }
@@ -87,6 +89,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
     convergence.converge = async (input) => {
       convergence.calls.push(input);
       committedWhenConverging = repository.committedOutcomes.get(attempt.executionAttemptId);
+      return 'projected';
     };
 
     const decision = await submitAttemptOutcome(
@@ -102,9 +105,74 @@ describe('submitAttemptOutcome (generic contract)', () => {
         executionAttemptId: attempt.executionAttemptId,
         outcome: 1,
         decision: 'accepted',
+        controlObservation: { controlRevision: 0, cancellation: null },
       },
     ]);
-    await expect(waiter).resolves.toBe(1);
+    await expect(waiter).resolves.toEqual({
+      outcome: 1,
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
+  });
+
+  it('settles recorded-only acceptance without rewriting the outcome or the frozen control facts', async () => {
+    const attempt = await authority.createAttempt(EXECUTION_ID, makeTestInstruction());
+    const waiter = authority.waitForOutcome(attempt.executionAttemptId);
+    const cancellation = await authority.requestAttemptCancellation({
+      executionId: EXECUTION_ID,
+      executionAttemptId: attempt.executionAttemptId,
+      requestKey: 'owner-cancel',
+      reason: 'Owner cancelled',
+    });
+    if (cancellation.kind !== 'accepted') throw new Error('Expected cancellation acceptance');
+    const expectedObservation = { controlRevision: 1, cancellation: cancellation.intent };
+    convergence.converge = async (input) => {
+      expect(input.controlObservation).toEqual(expectedObservation);
+      // Owner code receives a detached observation, including its nested receipt.
+      // Mutating that copy cannot rewrite the canonical fact seen by the waiter.
+      Object.assign(input.controlObservation ?? {}, { controlRevision: 99 });
+      Object.assign(input.controlObservation?.cancellation ?? {}, { reason: 'Changed locally' });
+      return 'recorded-only';
+    };
+
+    await expect(
+      submitAttemptOutcome(
+        { authority, convergence },
+        { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 8 },
+      ),
+    ).resolves.toBe('accepted');
+
+    await expect(waiter).resolves.toEqual({
+      outcome: 8,
+      controlObservation: expectedObservation,
+      acceptance: 'recorded-only',
+    });
+    expect(repository.committedOutcomes.get(attempt.executionAttemptId)).toBe('{"counter":8}');
+    expect(repository.outcomeControlObservations.get(attempt.executionAttemptId)).toEqual(expectedObservation);
+    expect(authority.waitForOutcome(attempt.executionAttemptId)).toBeUndefined();
+  });
+
+  it('forwards unknown legacy observation on duplicate convergence without inventing revision zero', async () => {
+    const attempt = await authority.createAttempt(EXECUTION_ID, makeTestInstruction());
+    const waiter = authority.waitForOutcome(attempt.executionAttemptId);
+    await authority.commitOutcome(attempt.executionAttemptId, EXECUTION_ID, authority.canonicalizeOutcome(9));
+    // A pre-observation record has durable outcome text but no observation column value.
+    repository.outcomeControlObservations.delete(attempt.executionAttemptId);
+    convergence.converge = async (input) => {
+      expect(input.decision).toBe('duplicate');
+      expect(input.controlObservation).toBeNull();
+      return 'recorded-only';
+    };
+
+    await expect(
+      submitAttemptOutcome(
+        { authority, convergence },
+        { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 9 },
+      ),
+    ).resolves.toBe('duplicate');
+
+    await expect(waiter).resolves.toEqual({ outcome: 9, controlObservation: null, acceptance: 'recorded-only' });
+    expect(repository.outcomeControlObservations.has(attempt.executionAttemptId)).toBe(false);
   });
 
   it('runs pre-commit validation before the durable commit and commits nothing when it throws', async () => {
@@ -125,7 +193,9 @@ describe('submitAttemptOutcome (generic contract)', () => {
 
   it('leaves the outcome committed and the waiter pending when convergence throws', async () => {
     const attempt = await authority.createAttempt(EXECUTION_ID, makeTestInstruction());
-    const waiter = authority.waitForOutcome(attempt.executionAttemptId) as Promise<CounterOutcome>;
+    const waiter = authority.waitForOutcome(attempt.executionAttemptId) as Promise<
+      AcceptedAttemptOutcome<CounterOutcome>
+    >;
     convergence.failNext = new Error('owner state unavailable');
 
     await expect(
@@ -147,14 +217,16 @@ describe('submitAttemptOutcome (generic contract)', () => {
   //
   // The witness is the decision, not the repository's state: every read of a
   // committed outcome is a fresh decode, so there is no stored instance to
-  // compare against. What the boundary owes is that convergence and the
-  // waiter receive exactly the object `commitOutcome` reported.
+  // compare against. Convergence receives the object `commitOutcome`
+  // reported; the waiter receives a fresh decode of its durable text.
   it('re-converges an identical retry as duplicate with the committed outcome and then settles the waiter', async () => {
     const boxedRepository = createInMemoryAttemptRepository(boxedCounterCodec);
     const boxedAuthority = new ExecutionAttemptAuthority(boxedRepository, { bootstrapTimeoutMs: 60_000 });
     const boxedConvergence = createConvergenceFake<BoxedCounterOutcome>();
     const attempt = await boxedAuthority.createAttempt(EXECUTION_ID, makeTestInstruction());
-    const waiter = boxedAuthority.waitForOutcome(attempt.executionAttemptId) as Promise<BoxedCounterOutcome>;
+    const waiter = boxedAuthority.waitForOutcome(attempt.executionAttemptId) as Promise<
+      AcceptedAttemptOutcome<BoxedCounterOutcome>
+    >;
     boxedConvergence.failNext = new Error('first convergence failed');
     await submitAttemptOutcome(
       { authority: boxedAuthority, convergence: boxedConvergence },
@@ -186,16 +258,27 @@ describe('submitAttemptOutcome (generic contract)', () => {
       text: '{"counter":3}',
       controlObservation: { controlRevision: 0, cancellation: null },
     });
-    expect(settleOutcome).toHaveBeenCalledExactlyOnceWith(attempt.executionAttemptId, reported);
+    expect(settleOutcome).toHaveBeenCalledExactlyOnceWith(attempt.executionAttemptId, {
+      ...reported,
+      acceptance: 'projected',
+    });
+    expect(boxedConvergence.calls.map((call) => call.controlObservation)).toEqual([
+      { controlRevision: 0, cancellation: null },
+      { controlRevision: 0, cancellation: null },
+    ]);
     const committed = reported?.kind === 'duplicate' ? reported.outcome : undefined;
     expect(boxedConvergence.calls[1]?.outcome).toBe(committed);
     expect(boxedConvergence.calls[1]?.outcome).not.toBe(resubmitted);
     // The waiter is not that same object: it is settled from the durable
     // text, after convergence has had the decision's outcome in its hands.
     const settled = await waiter;
-    expect(settled).toEqual({ counter: 3 });
-    expect(settled).not.toBe(committed);
-    expect(settled).not.toBe(resubmitted);
+    expect(settled).toEqual({
+      outcome: { counter: 3 },
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
+    expect(settled.outcome).not.toBe(committed);
+    expect(settled.outcome).not.toBe(resubmitted);
     expect(boxedRepository.committedOutcomes.get(attempt.executionAttemptId)).toBe('{"counter":3}');
   });
 
@@ -206,7 +289,9 @@ describe('submitAttemptOutcome (generic contract)', () => {
   // settle. An input-only validator lets the documented recovery path work.
   it('re-runs an input-only validation on the retry of a committed outcome and settles the waiter', async () => {
     const attempt = await authority.createAttempt(EXECUTION_ID, makeTestInstruction());
-    const waiter = authority.waitForOutcome(attempt.executionAttemptId) as Promise<CounterOutcome>;
+    const waiter = authority.waitForOutcome(attempt.executionAttemptId) as Promise<
+      AcceptedAttemptOutcome<CounterOutcome>
+    >;
     // Owner state the convergence moves forward before it fails, exactly the
     // shape of state a validator must not consult.
     let ownerCompleted = false;
@@ -215,6 +300,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
       const alreadyCompleted = ownerCompleted;
       ownerCompleted = true;
       if (!alreadyCompleted) throw new Error('notification publish failed');
+      return 'projected';
     };
     const validation = {
       validate: vi.fn(async (_executionId: string, outcome: CounterOutcome) => {
@@ -233,7 +319,11 @@ describe('submitAttemptOutcome (generic contract)', () => {
     expect(decision).toBe('duplicate');
     expect(validation.validate).toHaveBeenCalledTimes(2);
     expect(convergence.calls.map((call) => call.decision)).toEqual(['accepted', 'duplicate']);
-    await expect(waiter).resolves.toBe(7);
+    await expect(waiter).resolves.toEqual({
+      outcome: 7,
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
   });
 
   // The submitter keeps a handle on a mutable outcome and changes it while an
@@ -246,7 +336,9 @@ describe('submitAttemptOutcome (generic contract)', () => {
     const boxedAuthority = new ExecutionAttemptAuthority(boxedRepository, { bootstrapTimeoutMs: 60_000 });
     const boxedConvergence = createConvergenceFake<BoxedCounterOutcome>();
     const attempt = await boxedAuthority.createAttempt(EXECUTION_ID, makeTestInstruction());
-    const waiter = boxedAuthority.waitForOutcome(attempt.executionAttemptId) as Promise<BoxedCounterOutcome>;
+    const waiter = boxedAuthority.waitForOutcome(attempt.executionAttemptId) as Promise<
+      AcceptedAttemptOutcome<BoxedCounterOutcome>
+    >;
     // Declared mutable here and only here: the boundary's outcome type is
     // `readonly`, and this case is about a caller that ignores that.
     const submitted: { counter: number } = { counter: 3 };
@@ -272,12 +364,18 @@ describe('submitAttemptOutcome (generic contract)', () => {
     expect(validated).toEqual([{ counter: 3 }]);
     expect(boxedRepository.committedOutcomes.get(attempt.executionAttemptId)).toBe('{"counter":3}');
     expect(boxedConvergence.calls.map((call) => call.outcome)).toEqual([{ counter: 3 }]);
-    await expect(waiter).resolves.toEqual({ counter: 3 });
+    await expect(waiter).resolves.toEqual({
+      outcome: { counter: 3 },
+      controlObservation: { controlRevision: 0, cancellation: null },
+      acceptance: 'projected',
+    });
   });
 
   it('returns conflict without converging when a different outcome was already committed', async () => {
     const attempt = await authority.createAttempt(EXECUTION_ID, makeTestInstruction());
-    const waiter = authority.waitForOutcome(attempt.executionAttemptId) as Promise<CounterOutcome>;
+    const waiter = authority.waitForOutcome(attempt.executionAttemptId) as Promise<
+      AcceptedAttemptOutcome<CounterOutcome>
+    >;
     await submitAttemptOutcome(
       { authority, convergence },
       { executionId: EXECUTION_ID, executionAttemptId: attempt.executionAttemptId, outcome: 4 },
@@ -295,7 +393,9 @@ describe('submitAttemptOutcome (generic contract)', () => {
 
   it('returns fenced without converging and observes the waiter already rejected by commitOutcome', async () => {
     const first = await authority.createAttempt(EXECUTION_ID, makeTestInstruction());
-    const firstWaiter = authority.waitForOutcome(first.executionAttemptId) as Promise<CounterOutcome>;
+    const firstWaiter = authority.waitForOutcome(first.executionAttemptId) as Promise<
+      AcceptedAttemptOutcome<CounterOutcome>
+    >;
     void firstWaiter.catch(() => undefined);
     await authority.createAttempt(EXECUTION_ID, makeTestInstruction());
     const settleOutcome = vi.spyOn(authority, 'settleOutcome');
@@ -347,7 +447,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
     const urlAuthority = new ExecutionAttemptAuthority(urlRepository, { bootstrapTimeoutMs: 60_000 });
     const urlConvergence = createConvergenceFake<URL>();
     const attempt = await urlAuthority.createAttempt(EXECUTION_ID, makeTestInstruction());
-    const waiter = urlAuthority.waitForOutcome(attempt.executionAttemptId) as Promise<URL>;
+    const waiter = urlAuthority.waitForOutcome(attempt.executionAttemptId) as Promise<AcceptedAttemptOutcome<URL>>;
     const validated: URL[] = [];
     const validation = {
       validate: async (_executionId: string, outcome: URL) => {
@@ -370,7 +470,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
     expect(validated[0]?.href).toBe('https://outcome.test/mutated');
     expect(urlRepository.committedOutcomes.get(attempt.executionAttemptId)).toBe('"https://outcome.test/a"');
     expect(urlConvergence.calls.map((call) => call.outcome.href)).toEqual(['https://outcome.test/a']);
-    await expect(waiter.then((settled) => settled.href)).resolves.toBe('https://outcome.test/a');
+    await expect(waiter.then((settled) => settled.outcome.href)).resolves.toBe('https://outcome.test/a');
   });
 
   it('settles the waiter from the durable text even when convergence mutates the committed outcome', async () => {
@@ -378,11 +478,12 @@ describe('submitAttemptOutcome (generic contract)', () => {
     const urlAuthority = new ExecutionAttemptAuthority(urlRepository, { bootstrapTimeoutMs: 60_000 });
     const urlConvergence = createConvergenceFake<URL>();
     const attempt = await urlAuthority.createAttempt(EXECUTION_ID, makeTestInstruction());
-    const waiter = urlAuthority.waitForOutcome(attempt.executionAttemptId) as Promise<URL>;
+    const waiter = urlAuthority.waitForOutcome(attempt.executionAttemptId) as Promise<AcceptedAttemptOutcome<URL>>;
     const converged: URL[] = [];
     urlConvergence.converge = async (input) => {
       converged.push(input.outcome);
       input.outcome.pathname = '/mutated';
+      return 'projected';
     };
 
     const decision = await submitAttemptOutcome(
@@ -398,8 +499,8 @@ describe('submitAttemptOutcome (generic contract)', () => {
     // The mutation took, so the assertions below cannot pass vacuously.
     expect(converged[0]?.href).toBe('https://outcome.test/mutated');
     const settled = await waiter;
-    expect(settled.href).toBe('https://outcome.test/a');
-    expect(settled).not.toBe(converged[0]);
+    expect(settled.outcome.href).toBe('https://outcome.test/a');
+    expect(settled.outcome).not.toBe(converged[0]);
     expect(urlRepository.committedOutcomes.get(attempt.executionAttemptId)).toBe('"https://outcome.test/a"');
   });
 
@@ -414,7 +515,9 @@ describe('submitAttemptOutcome (generic contract)', () => {
     const orderAuthority = new ExecutionAttemptAuthority(orderRepository, { bootstrapTimeoutMs: 60_000 });
     const orderConvergence = createConvergenceFake<MemberOrderOutcome>();
     const attempt = await orderAuthority.createAttempt(EXECUTION_ID, makeTestInstruction());
-    const waiter = orderAuthority.waitForOutcome(attempt.executionAttemptId) as Promise<MemberOrderOutcome>;
+    const waiter = orderAuthority.waitForOutcome(attempt.executionAttemptId) as Promise<
+      AcceptedAttemptOutcome<MemberOrderOutcome>
+    >;
     // The first submission commits, then convergence fails, so the worker
     // retries — the documented recovery path, and the only way a `duplicate`
     // ever reaches waiter settlement.
@@ -436,7 +539,7 @@ describe('submitAttemptOutcome (generic contract)', () => {
     // Convergence receives the stored outcome...
     expect(Object.keys(orderConvergence.calls[1]?.outcome ?? {})).toEqual(['a', 'b']);
     // ...and so does the runner waiting on the attempt.
-    expect(Object.keys(await waiter)).toEqual(['a', 'b']);
+    expect(Object.keys((await waiter).outcome)).toEqual(['a', 'b']);
   });
 
   it('rejects an outcome the codec refuses before any durable decision', async () => {

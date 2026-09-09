@@ -13,7 +13,7 @@ import type { ExecutionAttemptAuthority, WorkflowAttemptOutcome } from '@makaio/
 import {
   buildWorkflowAttemptInstruction,
   runAuthorityDispatchedAttempt,
-  toCommittedWorkflowRunnerResult,
+  toCommittedWorkflowRunnerCompletion,
 } from '@makaio/subsystem-workflow-engine';
 
 /**
@@ -31,7 +31,7 @@ export interface WorkerRunnerOptions {
    * Execution attempt Authority used to create attempts before dispatch and
    * wait for committed outcomes after dispatch returns.
    *
-   * Required for authority-committed completions. When absent, the runner
+   * Required for Authority-accepted completions. When absent, the runner
    * cannot create attempts or wait for durable outcomes.
    */
   readonly authority: ExecutionAttemptAuthority<WorkflowAttemptOutcome>;
@@ -85,9 +85,9 @@ export class WorkerRunner implements IWorkflowRunner {
    *
    * Creates an execution attempt through the Authority before dispatch. After
    * the dispatch completes (allocation acceptance), waits for the committed
-   * outcome through the Authority's in-process waiter. Returns an
-   * `authority-committed` completion so the host executor skips fallback
-   * finalization.
+   * outcome through the Authority's in-process waiter. Returns either
+   * `authority-committed` or `authority-recorded-only`, preserving the owner's
+   * acceptance without invoking host-side fallback finalization.
    *
    * When `manifest` is supplied it takes precedence over the manifest baked into
    * the runner at construction time, enabling per-call contribution sets.
@@ -95,7 +95,7 @@ export class WorkerRunner implements IWorkflowRunner {
    * @param signal - AbortSignal for cooperative cancellation forwarded to the dispatch function.
    * @param manifest - Optional per-call contribution manifest. Overrides the runner's default.
    * @param options - Optional per-run controls forwarded to dispatch-capable providers.
-   * @returns Authority-committed completion after the outcome RPC converges.
+   * @returns Explicitly accepted completion after the outcome RPC converges.
    */
   public async run(
     config: WorkflowWorkerConfig,
@@ -128,7 +128,7 @@ export class WorkerRunner implements IWorkflowRunner {
     });
 
     // The runner contract owes a completion wrapper; the generic dispatch
-    // path yields the committed outcome itself.
+    // path yields the canonical outcome together with its owner acceptance.
     const result = await runAuthorityDispatchedAttempt({
       authority: this.options.authority,
       executionId: config.executionId,
@@ -146,6 +146,6 @@ export class WorkerRunner implements IWorkflowRunner {
           signal,
         ),
     });
-    return { state: 'authority-committed', result: toCommittedWorkflowRunnerResult(result, config) };
+    return toCommittedWorkflowRunnerCompletion(result, config);
   }
 }

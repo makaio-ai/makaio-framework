@@ -31,6 +31,7 @@ import {
 import { launchDefinitionExecutionTask, selectDefinitionExecutionDispatch } from './workflow-definition-dispatch.js';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import type { WorkflowAttemptOutcome } from './workflow-attempt-outcome.js';
+import { registerExecutionTask } from './workflow-execution-task-registration.js';
 
 /**
  * Dependencies injected into the execution start helpers.
@@ -365,8 +366,7 @@ async function dispatchAndAwait(
   executionTask: Promise<void>,
   startedEventTask: Promise<void>,
 ): Promise<string> {
-  executionTasks.set(executionId, executionTask);
-  void executionTask;
+  registerExecutionTask(executionTasks, executionId, executionTask);
   await startedEventTask;
   return executionId;
 }

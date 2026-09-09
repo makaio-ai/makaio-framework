@@ -23,12 +23,16 @@ describe('Authority-dispatched Attempt instruction', () => {
         instruction.revision = 'changed-after-creation';
         expect((await authority.getInstruction({ executionId, executionAttemptId }))?.revision).toBe('1');
         await submitAttemptOutcome(
-          { authority, convergence: { converge: async () => undefined } },
+          { authority, convergence: { converge: async () => 'projected' } },
           { executionId, executionAttemptId, outcome },
         );
       },
     });
-    expect(completion).toEqual(outcome);
+    expect(completion).toEqual({
+      outcome,
+      acceptance: 'projected',
+      controlObservation: { controlRevision: 0, cancellation: null },
+    });
     expect([...repository.committedOutcomes.values()]).toEqual([JSON.stringify(outcome)]);
   });
 
@@ -79,13 +83,17 @@ describe('Authority-dispatched Attempt instruction', () => {
       dispatch: async (executionAttemptId) => {
         await driveTestAttemptToAllocated(authority, executionAttemptId, executionId);
         await submitAttemptOutcome(
-          { authority, convergence: { converge: async () => undefined } },
+          { authority, convergence: { converge: async () => 'projected' } },
           { executionId, executionAttemptId, outcome },
         );
         throw new Error('Dispatch acknowledgement lost');
       },
     });
-    expect(completion).toEqual(outcome);
+    expect(completion).toEqual({
+      outcome,
+      acceptance: 'projected',
+      controlObservation: { controlRevision: 0, cancellation: null },
+    });
     expect([...repository.attempts.values()][0]).toMatchObject({ status: 'settled', settlementKind: 'outcome' });
   });
 });

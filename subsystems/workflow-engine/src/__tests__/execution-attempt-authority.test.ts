@@ -21,6 +21,7 @@ import {
   makeProcessLossProof,
   type InMemoryAttemptRepository,
   workflowRunResultOutcomeCodec,
+  requireCommittedOutcome,
 } from '../testing/index.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -259,8 +260,15 @@ describe('ExecutionAttemptAuthority', () => {
       expect(authority.waitForOutcome(legacy.executionAttemptId)).toBe(waiter);
       expect(resolved).toBe(false);
 
-      authority.settleOutcome(legacy.executionAttemptId, committed);
-      await expect(waiter).resolves.toEqual(result);
+      authority.settleOutcome(legacy.executionAttemptId, {
+        ...requireCommittedOutcome(committed),
+        acceptance: 'projected',
+      });
+      await expect(waiter).resolves.toEqual({
+        outcome: result,
+        controlObservation: { controlRevision: 0, cancellation: null },
+        acceptance: 'projected',
+      });
     });
 
     it('keeps owner recovery required even without provider-allocation recovery', async () => {
@@ -557,7 +565,10 @@ describe('ExecutionAttemptAuthority', () => {
         'exec-1',
         authority.canonicalizeOutcome(makeCompletedResult('exec-1')),
       );
-      authority.settleOutcome(attempt.executionAttemptId, decision);
+      authority.settleOutcome(attempt.executionAttemptId, {
+        ...requireCommittedOutcome(decision),
+        acceptance: 'projected',
+      });
 
       const renewedLeaseExpiresAt = leaseAt(60_000);
       await expect(
@@ -883,8 +894,15 @@ describe('ExecutionAttemptAuthority', () => {
           completionEvidence: earlyEvidence,
         });
       }
-      authority.settleOutcome(attempt.executionAttemptId, committed);
-      await expect(waiter).resolves.toEqual(result);
+      authority.settleOutcome(attempt.executionAttemptId, {
+        ...requireCommittedOutcome(committed),
+        acceptance: 'projected',
+      });
+      await expect(waiter).resolves.toEqual({
+        outcome: result,
+        controlObservation: { controlRevision: 0, cancellation: null },
+        acceptance: 'projected',
+      });
     });
   });
 
@@ -993,9 +1011,16 @@ describe('ExecutionAttemptAuthority', () => {
 
       // Waiter is NOT resolved yet — convergence has not happened.
       // Settle it explicitly to simulate post-convergence settlement.
-      authority.settleOutcome(attempt.executionAttemptId, decision);
+      authority.settleOutcome(attempt.executionAttemptId, {
+        ...requireCommittedOutcome(decision),
+        acceptance: 'projected',
+      });
 
-      await expect(waiterPromise).resolves.toEqual(result);
+      await expect(waiterPromise).resolves.toEqual({
+        outcome: result,
+        controlObservation: { controlRevision: 0, cancellation: null },
+        acceptance: 'projected',
+      });
     });
 
     it('accepts a failed result as a valid terminal outcome', async () => {
@@ -1048,7 +1073,10 @@ describe('ExecutionAttemptAuthority', () => {
         'exec-1',
         authority.canonicalizeOutcome(makeCompletedResult('exec-1')),
       );
-      authority.settleOutcome(attempt.executionAttemptId, decision);
+      authority.settleOutcome(attempt.executionAttemptId, {
+        ...requireCommittedOutcome(decision),
+        acceptance: 'projected',
+      });
 
       await expect(authority.getProviderOperation(attempt.executionAttemptId)).resolves.toMatchObject({
         ownerId: claim.ownerId,
@@ -1241,8 +1269,15 @@ describe('ExecutionAttemptAuthority', () => {
 
       // The waiter is NOT resolved yet — convergence must happen first.
       // Settle it explicitly to simulate post-convergence settlement.
-      authority.settleOutcome(attempt.executionAttemptId, decision);
-      await expect(waiterPromise).resolves.toEqual(pausedResult);
+      authority.settleOutcome(attempt.executionAttemptId, {
+        ...requireCommittedOutcome(decision),
+        acceptance: 'projected',
+      });
+      await expect(waiterPromise).resolves.toEqual({
+        outcome: pausedResult,
+        controlObservation: { controlRevision: 0, cancellation: null },
+        acceptance: 'projected',
+      });
     });
 
     it('allows a new attempt to be created after pause settlement', async () => {
@@ -1308,7 +1343,10 @@ describe('ExecutionAttemptAuthority', () => {
       // Waiter still exists after commit (not settled yet).
       expect(authority.waitForOutcome(attempt.executionAttemptId)).toBeDefined();
 
-      authority.settleOutcome(attempt.executionAttemptId, decision);
+      authority.settleOutcome(attempt.executionAttemptId, {
+        ...requireCommittedOutcome(decision),
+        acceptance: 'projected',
+      });
       // After explicit settlement the waiter is removed.
       expect(authority.waitForOutcome(attempt.executionAttemptId)).toBeUndefined();
     });
@@ -1407,7 +1445,10 @@ describe('ExecutionAttemptAuthority', () => {
         'exec-1',
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(attempt.executionAttemptId, decision);
+      authority.settleOutcome(attempt.executionAttemptId, {
+        ...requireCommittedOutcome(decision),
+        acceptance: 'projected',
+      });
 
       // getActiveAttempt would return null for a settled attempt that has
       // been superseded, but getAttemptWithAllocation always returns.
@@ -1631,7 +1672,10 @@ describe('ExecutionAttemptAuthority', () => {
         'exec-1',
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(attempt.executionAttemptId, decision);
+      authority.settleOutcome(attempt.executionAttemptId, {
+        ...requireCommittedOutcome(decision),
+        acceptance: 'projected',
+      });
 
       const recoverable = await authority.getRecoverableAttempts('exec-1');
       expect(recoverable).toHaveLength(0);
@@ -1665,7 +1709,10 @@ describe('ExecutionAttemptAuthority', () => {
         'exec-1',
         authority.canonicalizeOutcome(pausedResult),
       );
-      authority.settleOutcome(attempt.executionAttemptId, decision);
+      authority.settleOutcome(attempt.executionAttemptId, {
+        ...requireCommittedOutcome(decision),
+        acceptance: 'projected',
+      });
 
       const recoverable = await authority.getRecoverableAttempts('exec-1');
       expect(recoverable).toHaveLength(0);
@@ -1730,7 +1777,10 @@ describe('ExecutionAttemptAuthority', () => {
         'exec-1',
         authority.canonicalizeOutcome(result),
       );
-      authority.settleOutcome(attempt.executionAttemptId, outcomeDecision);
+      authority.settleOutcome(attempt.executionAttemptId, {
+        ...requireCommittedOutcome(outcomeDecision),
+        acceptance: 'projected',
+      });
 
       await expect(authority.recordInfrastructureFailure({ claim, executionId: 'exec-1' })).resolves.toEqual({
         kind: 'resolved',

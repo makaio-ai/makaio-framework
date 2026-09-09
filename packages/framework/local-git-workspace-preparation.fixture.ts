@@ -128,7 +128,7 @@ try {
   const offIngress = registerExecutionAttemptHandlers(authorityBus, {
     authority,
     decodeOutcome: async (input) => decodeWorkflowAttemptOutcome(input),
-    convergence: { async converge() {} },
+    convergence: { async converge() { return 'projected'; } },
   });
   const offRegister = registerRuntimeRegistrationHandler(authorityBus, { bus: authorityBus, authority });
   const offBootstrap = registerBootstrapStartHandler(authorityBus, authority);

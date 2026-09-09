@@ -5,6 +5,8 @@ import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 import { SuspensionStrategySchema } from '../worker/suspension.js';
 import { ArtifactRevisionSchema, type ArtifactRevision } from '../artifact/index.js';
 import { WorkerContributionRefSchema, WorkerMaterializationSpecSchema } from '../capabilities/worker/types.js';
+import type { ExecutionAttemptOutcome } from '../execution-attempt/instruction.js';
+import type { AcceptedAttemptOutcome } from '../execution-attempt/outcome-acceptance.js';
 
 // ─────────────────────────────────────────────────────────────
 // Worker Bus Auth
@@ -399,12 +401,36 @@ export interface WorkflowRunnerRunOptions {
  *   transition has not been performed. The host executor must finalize or
  *   park the execution (in-process and Piscina runners).
  * - `authority-committed`: the Authority outcome RPC has converged canonical
- *   state. The host executor verifies durable state but must not invoke
- *   the fallback finalizer (Worker dispatch runners).
+ *   state. The host verifies invocation identity and trusts that acceptance,
+ *   without reinterpreting later owner state or invoking a fallback finalizer.
+ * - `authority-recorded-only`: the Authority accepted the canonical technical
+ *   fact without changing the owner's lifecycle. The host releases local task
+ *   bookkeeping, without projecting a result or inferring that a worker stopped.
  */
 export type WorkflowRunnerCompletion =
   | { readonly state: 'uncommitted'; readonly result: WorkflowRunResult }
-  | { readonly state: 'authority-committed'; readonly result: WorkflowRunResult };
+  | {
+      readonly state: 'authority-committed';
+      readonly result: WorkflowRunResult;
+      readonly acceptedOutcome: AcceptedAttemptOutcome<WorkflowAttemptOutcome> & { readonly acceptance: 'projected' };
+    }
+  | {
+      readonly state: 'authority-recorded-only';
+      readonly executionId: string;
+      readonly workflowId: string;
+      readonly acceptedOutcome: AcceptedAttemptOutcome<WorkflowAttemptOutcome> & {
+        readonly acceptance: 'recorded-only';
+      };
+    };
+
+/** Technical failure retained without inventing a workflow-produced result. */
+export type WorkflowAttemptTechnicalFailure = Extract<ExecutionAttemptOutcome, { kind: 'technical-failure' }>;
+
+/** Confirmed cooperative stop retained independently of a workflow-produced result. */
+export type WorkflowAttemptCancellation = Extract<ExecutionAttemptOutcome, { kind: 'cancelled' }>;
+
+/** Canonical workflow-owner outcome, separate from its lifecycle interpretation. */
+export type WorkflowAttemptOutcome = WorkflowRunResult | WorkflowAttemptTechnicalFailure | WorkflowAttemptCancellation;
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Runner Interface
@@ -420,7 +446,7 @@ export type WorkflowRunnerCompletion =
 export interface IWorkflowRunner {
   /**
    * Completion ownership known before the owner persists and starts a run.
-   * Authority runners return an authority-committed completion; worker runners
+   * Authority runners return an authority-committed or authority-recorded-only completion; worker runners
    * leave finalization to the invoking executor. Omission retains the worker
    * completion protocol. This declaration does not select a compute provider.
    */

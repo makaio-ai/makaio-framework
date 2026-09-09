@@ -43,6 +43,7 @@ import { WorkerRunner } from '../worker-runner.js';
 import {
   createInMemoryAttemptRepository,
   driveTestAttemptToAllocated,
+  requireCommittedOutcome,
 } from '@makaio/subsystem-workflow-engine/testing';
 import {
   createDeterministicAdapterContribution,
@@ -322,7 +323,10 @@ describe('authority Worker finalization integration', () => {
             request.config.executionId,
             authority.canonicalizeOutcome(result),
           );
-          authority.settleOutcome(request.executionAttemptId, decision);
+          authority.settleOutcome(request.executionAttemptId, {
+            ...requireCommittedOutcome(decision),
+            acceptance: 'projected',
+          });
           return { executionAttemptId: request.executionAttemptId, allocationRef: testAllocationRef };
         } finally {
           await runtime.shutdown();

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { WorkerNamespace, WorkerSubjects, WorkflowWorkerConfigSchema } from '@makaio/contracts';
 import type {
   WorkflowWorkerConfig,
   IWorkflowRunner,
@@ -12,6 +13,10 @@ import type {
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { createWorkflowDefinition, createWorkflowExecution } from './shared.js';
+import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
+import { buildWorkflowAttemptInstruction } from '../workflow-attempt-instruction.js';
+import { workflowAttemptOutcomeCodec } from '../workflow-attempt-outcome.js';
+import { createInMemoryAttemptRepository } from '../testing/in-memory-attempt-repository.js';
 import {
   setupWorkflowExecutorTest,
   teardownWorkflowExecutorTest,
@@ -513,7 +518,15 @@ describe('WorkflowExecutor — paused gate integration', () => {
         if (terminalAuthority === 'authority') {
           if (!setup) throw new Error('Missing executor setup');
           await setup.workflowExecutor.acceptAuthorityRunnerResult(config.executionId, result);
-          return { state: 'authority-committed', result };
+          return {
+            state: 'authority-committed',
+            result,
+            acceptedOutcome: {
+              outcome: result,
+              controlObservation: { controlRevision: 0, cancellation: null },
+              acceptance: 'projected',
+            },
+          };
         }
         return { state: 'uncommitted', result };
       }),
@@ -667,6 +680,148 @@ describe('WorkflowExecutor — paused gate integration', () => {
     await vi.waitFor(() => {
       expect(stubRunner.run).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it('resumes the next gate while the previous resumed task is still publishing its pause', async () => {
+    const executionId = 'consecutive-gate-owner';
+    const workflowId = 'consecutive-gate-workflow';
+    const secondResponse = Promise.withResolvers<boolean>();
+    const releaseSecondRunner = Promise.withResolvers<WorkflowRunnerCompletion>();
+    let dispatches = 0;
+    const runner: IWorkflowRunner = {
+      run: vi.fn(async (): Promise<WorkflowRunnerCompletion> => {
+        dispatches++;
+        if (dispatches !== 1) return releaseSecondRunner.promise;
+        await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
+          gate: {
+            executionId,
+            nodeId: 'gate-two',
+            frameId: 'frame-two',
+            schema: {},
+            status: 'waiting',
+            autoAction: 'reject',
+            timeoutMs: null,
+            createdAt: Date.now(),
+          },
+        });
+        return {
+          state: 'uncommitted',
+          result: makePausedRunResult(executionId, workflowId, 'gate-two', 'frame-two'),
+        };
+      }),
+    };
+    setup = await setupWorkflowExecutorTest({ workflowRunner: runner });
+    await seedPausedExecutionAndGate(workflowId, executionId, 'gate-one', 'frame-one');
+    const offPaused = MakaioBus.on(WorkflowSubjects.execution.paused, async () => {
+      const response = await MakaioBus.request(WorkflowSubjects.gate.respond, {
+        executionId,
+        gateId: 'gate-two',
+        frameId: 'frame-two',
+        action: 'approve',
+        resumeData: {},
+      });
+      secondResponse.resolve(response.accepted);
+    });
+    try {
+      await expect(
+        MakaioBus.request(WorkflowSubjects.gate.respond, {
+          executionId,
+          gateId: 'gate-one',
+          frameId: 'frame-one',
+          action: 'approve',
+          resumeData: {},
+        }),
+      ).resolves.toMatchObject({ accepted: true });
+      await expect(secondResponse.promise).resolves.toBe(true);
+      expect(dispatches).toBe(2);
+      expect((await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status).toBe(
+        'running',
+      );
+    } finally {
+      offPaused();
+      releaseSecondRunner.resolve({
+        state: 'uncommitted',
+        result: { executionId, workflowId, status: 'completed' },
+      });
+    }
+  });
+
+  it('ACKs the accepted pause even when a gate response resumes during its slow publication', async () => {
+    const executionId = 'pause-publication-resume';
+    const workflowId = 'pause-publication-workflow';
+    const gateId = 'gate-approve';
+    const frameId = 'frame-approve';
+    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
+    const releaseRunner = Promise.withResolvers<WorkflowRunnerCompletion>();
+    const runner: IWorkflowRunner = {
+      terminalAuthority: 'authority',
+      run: vi.fn(() => releaseRunner.promise),
+    };
+    setup = await setupWorkflowExecutorTest({ workflowRunner: runner, executionAttemptAuthority: authority });
+    MakaioBus.registerNamespace(WorkerNamespace);
+    await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId, {}, { terminalAuthority: 'authority' });
+    await MakaioBus.request(WorkflowStorageSubjects.updateExecution, { executionId, status: 'running' });
+    const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    if (!runContext) throw new Error('Expected portable owner context');
+    const instruction = buildWorkflowAttemptInstruction({
+      id: 'pause-publication-instruction',
+      revision: '1',
+      config: WorkflowWorkerConfigSchema.parse({ ...runContext, definition: runContext.definitionSnapshot }),
+      runContext,
+      preservation: { required: [] },
+    });
+    const attempt = await authority.createAttempt(executionId, instruction);
+    const publicationReached = Promise.withResolvers<void>();
+    const releasePublication = Promise.withResolvers<void>();
+    const offPaused = MakaioBus.on(WorkflowSubjects.execution.paused, async () => {
+      publicationReached.resolve();
+      await releasePublication.promise;
+    });
+    const result = makePausedRunResult(executionId, workflowId, gateId, frameId);
+    const submission = MakaioBus.request(WorkerSubjects.control.outcome.submit, {
+      executionId,
+      executionAttemptId: attempt.executionAttemptId,
+      result,
+    });
+    const waiter = authority.waitForOutcome(attempt.executionAttemptId);
+    try {
+      await publicationReached.promise;
+      expect(
+        await MakaioBus.request(WorkflowSubjects.gate.respond, {
+          executionId,
+          gateId,
+          frameId,
+          action: 'approve',
+          resumeData: {},
+        }),
+      ).toMatchObject({ accepted: true });
+      expect((await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status).toBe(
+        'running',
+      );
+      releasePublication.resolve();
+      await expect(submission).resolves.toEqual({ decision: 'accepted' });
+      await expect(waiter).resolves.toEqual({
+        outcome: result,
+        controlObservation: { controlRevision: 0, cancellation: null },
+        acceptance: 'projected',
+      });
+    } finally {
+      offPaused();
+      releasePublication.resolve();
+      await submission.catch(() => undefined);
+      const completed: WorkflowRunResult = { executionId, workflowId, status: 'completed' };
+      await setup.workflowExecutor.acceptAuthorityRunnerResult(executionId, completed);
+      releaseRunner.resolve({
+        state: 'authority-committed',
+        result: completed,
+        acceptedOutcome: {
+          outcome: completed,
+          controlObservation: { controlRevision: 0, cancellation: null },
+          acceptance: 'projected',
+        },
+      });
+    }
   });
 
   it('restores a waiting paused gate when manual resume dispatch cannot launch', async () => {

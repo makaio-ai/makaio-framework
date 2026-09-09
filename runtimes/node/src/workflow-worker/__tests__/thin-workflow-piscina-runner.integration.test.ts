@@ -344,6 +344,7 @@ describe('ThinWorkflowPiscinaRunner integration', () => {
 
     try {
       const completion = await runner.run(config, new AbortController().signal, workspace.manifest);
+      if (completion.state !== 'uncommitted') throw new Error('Piscina leaves owner finalization to its caller');
       expect(completion.result).toMatchObject({
         status: 'completed',
         task: {
