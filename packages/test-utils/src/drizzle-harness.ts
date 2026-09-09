@@ -175,6 +175,14 @@ export interface RestartableTestDb {
    */
   connect(): Promise<MakaioDatabase>;
   /**
+   * Close all connections currently handed out while preserving the database file.
+   *
+   * Restart tests use this after tearing down one controller composition and
+   * before opening the replacement composition against the same durable file.
+   * @returns Promise that settles after every currently open connection closed.
+   */
+  closeConnections(): Promise<void>;
+  /**
    * Close every connection handed out and remove the database files.
    * @returns Promise that settles once all connections are closed.
    */
@@ -200,17 +208,25 @@ export function createRestartableTempDb(name: string): RestartableTestDb {
   const closers: Array<() => void | Promise<void>> = [];
   let closePromise: Promise<void> | undefined;
 
+  const closeConnections = async (): Promise<void> => {
+    // Drain before awaiting so a restarted composition opens only after every
+    // preceding connection has begun closing.
+    const results = await Promise.allSettled(closers.splice(0).map((closeConnection) => closeConnection()));
+    const failures = results.filter((result) => result.status === 'rejected');
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((failure) => failure.reason),
+        `Failed to close ${failures.length} restartable test database connections`,
+      );
+    }
+  };
+
   const close = (): Promise<void> =>
     (closePromise ??= (async () => {
-      // Drain before awaiting so repeated teardown shares this complete run.
-      const results = await Promise.allSettled(closers.splice(0).map((closeConnection) => closeConnection()));
-      removeDatabaseFiles(dbPath);
-      const failures = results.filter((result) => result.status === 'rejected');
-      if (failures.length > 0) {
-        throw new AggregateError(
-          failures.map((failure) => failure.reason),
-          `Failed to close ${failures.length} restartable test database connections`,
-        );
+      try {
+        await closeConnections();
+      } finally {
+        removeDatabaseFiles(dbPath);
       }
     })());
 
@@ -230,7 +246,7 @@ export function createRestartableTempDb(name: string): RestartableTestDb {
     return client.db;
   };
 
-  return { dbPath, connect, close };
+  return { dbPath, connect, closeConnections, close };
 }
 
 /**

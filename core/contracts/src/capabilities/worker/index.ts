@@ -53,6 +53,7 @@ export type {
   WorkerProvisionOutcome,
   WorkerProvisionRequest,
   WorkerProviderContext,
+  WorkerRuntimeConnection,
   WorkerRequirements,
 } from './types.js';
 export { ProviderAllocationRefError, createAllocationRefCodec } from './allocation-ref-codec.js';

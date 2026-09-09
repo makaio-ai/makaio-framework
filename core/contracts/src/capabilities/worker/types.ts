@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import type { ICapabilityProvider } from '../../capability/index.js';
-import type { WorkflowWorkerConfig, WorkerContributionManifest } from '../../workflow/index.js';
+import type { WorkflowWorkerBusAuth, WorkflowWorkerConfig, WorkerContributionManifest } from '../../workflow/index.js';
 import { JsonObjectContractSchema } from '../../shared/json-value.js';
+import type { WorkerRuntimeInputs } from '../../worker/runtime-inputs.js';
 import { SuspensionStrategySchema } from '../../worker/suspension.js';
 
 /** Capability identifier used for Worker providers. */
@@ -530,6 +531,22 @@ export type NormalizedWorkerRequirements = z.output<typeof WorkerRequirementsSch
 // ─────────────────────────────────────────────────────────────
 
 /**
+ * Private, ephemeral connection values supplied to a Worker provider.
+ *
+ * These values are resolved only for the current provisioning or recovery
+ * operation. They must not be persisted in provider bindings or exposed
+ * through public runtime inputs.
+ */
+export interface WorkerRuntimeConnection {
+  /** Bus server WebSocket URL for the Worker to connect to, when applicable. */
+  readonly busUrl?: string;
+  /** Bus authentication strategy resolved for this Worker connection. */
+  readonly busAuth: WorkflowWorkerBusAuth;
+  /** Additional resolved environment variables injected into the Worker process. */
+  readonly env?: Readonly<Record<string, string>>;
+}
+
+/**
  * Attempt context shared by initial provisioning and allocation recovery.
  *
  * The Authority creates `executionAttemptId` before dispatch. Providers and
@@ -537,16 +554,16 @@ export type NormalizedWorkerRequirements = z.output<typeof WorkerRequirementsSch
  * in the host-owned dispatch layer above this contract.
  */
 export interface WorkerProviderContext {
-  /** Unique workflow execution identifier. */
+  /** Generic execution-owner key that scopes this Worker allocation. */
   readonly executionId: string;
   /** Authority-created attempt identifier for this dispatch. */
   readonly executionAttemptId: string;
   /** Execution environment tag matching the provider's `environment` field. */
   readonly environment: string;
-  /** Full worker configuration including bus connection and workflow source. */
-  readonly workerConfig: WorkflowWorkerConfig;
-  /** Extension contribution manifest resolved for this worker. */
-  readonly workerManifest: WorkerContributionManifest;
+  /** Non-secret Runtime composition selected for this Worker allocation. */
+  readonly runtimeInputs: WorkerRuntimeInputs;
+  /** Private, ephemeral connection values resolved for this provider operation. */
+  readonly connection: WorkerRuntimeConnection;
   /**
    * Non-secret ISO 8601 instant, with `Z` or a numeric offset, at which
    * provisioning for this attempt began.
@@ -782,10 +799,10 @@ export interface WorkerConfirmedAbsentOutcome {
 export type WorkerProvisionOutcome = WorkerAllocatedOutcome | WorkerConfirmedAbsentOutcome;
 
 /**
- * Capability provider that can provision one-shot Worker allocations for workflow execution.
+ * Capability provider that can provision one-shot Worker allocations for workload execution.
  *
  * Implementations must extend {@link ICapabilityProvider} and declare the
- * execution `environment` tag used to match dispatch requirements, plus the
+ * execution `environment` tag used to match workload requirements, plus the
  * {@link WorkerAllocationLifetime} of the allocations they create.
  *
  * Provisioning accepts a cancellation signal from its first async operation.
@@ -811,7 +828,7 @@ export interface IWorkerProvider extends ICapabilityProvider {
    * allocation with a validated reference and infrastructure-only handle, or
    * a positively confirmed absence supported by bounded evidence. Ambiguous
    * failures reject instead of resolving.
-   * @param request - Full provision request containing worker config and manifest.
+   * @param request - Full provision request containing Runtime inputs and private connection values.
    * @param signal - AbortSignal for cooperative cancellation of the provision operation.
    * @returns Allocated reference and handle, or confirmed absence with bounded evidence.
    */

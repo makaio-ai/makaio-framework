@@ -10,6 +10,7 @@ import type {
   WorkerHandle,
   WorkerInfrastructureConclusion,
   WorkerProvisionRequest,
+  WorkflowWorkerConfig,
   WorkflowRunResult,
 } from '@makaio/contracts';
 import {
@@ -25,6 +26,7 @@ import type {
   ThinWorkflowPiscinaAttemptBinding,
   ThinWorkflowPiscinaRunWithReadiness,
 } from './thin-workflow-piscina-runner.js';
+import type { WorkflowLaunchResolver } from './workflow-launch-resolver.js';
 
 /**
  * Construction options for {@link PiscinaThinWorkflowProvider}.
@@ -53,6 +55,11 @@ export interface PiscinaThinWorkflowProviderOptions {
    * durable `control.outcome.submit` protocol after the runner settles.
    */
   readonly bus: IMakaioBus;
+  /**
+   * Workflow adapter that reconstructs a launch configuration from the
+   * Attempt's canonical instruction and the selected Worker Runtime inputs.
+   */
+  readonly launchResolver: WorkflowLaunchResolver;
   /**
    * Capabilities advertised when this provider is registered.
    *
@@ -116,9 +123,9 @@ export interface ReadinessAwareWorkflowRunner extends IWorkflowRunner {
    * @returns Terminal result promise and registration readiness promise.
    */
   runWithReadiness(
-    config: WorkerProvisionRequest['workerConfig'],
+    config: WorkflowWorkerConfig,
     signal: AbortSignal,
-    manifest: WorkerProvisionRequest['workerManifest'] | undefined,
+    manifest: WorkerProvisionRequest['runtimeInputs']['workerManifest'] | undefined,
     attempt: ThinWorkflowPiscinaAttemptBinding,
   ): ThinWorkflowPiscinaRunWithReadiness;
 }
@@ -476,8 +483,7 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
   }
 
   /**
-   * Provision a new local execution allocation for the given workflow
-   * request.
+   * Provision a new local execution allocation for the given Worker request.
    *
    * Starts the underlying runner and returns a validated allocation
    * reference together with an infrastructure-only handle. The handle
@@ -495,14 +501,14 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
    * way to positively prove that nothing was created. The narrow type states
    * what it can prove today. Gaining the ability to confirm absence means
    * deliberately widening this signature back to the contract union.
-   * A worker configuration without a bus URL is rejected loudly rather than
+   * A resolved workflow configuration without a bus URL is rejected loudly rather than
    * allocated: the thread would have no transport, so it could never
    * authenticate as the attempt or register its runtime, and the allocation
    * would be a worker that is provisioned and permanently unready.
-   * @param request - Full provision request containing worker config and manifest.
+   * @param request - Generic provision request with selected Runtime inputs.
    * @param signal - AbortSignal for cooperative cancellation of the provision operation.
    * @returns Allocated outcome with a validated allocation reference and infrastructure handle.
-   * @throws When the worker configuration carries no bus URL.
+   * @throws When the workflow adapter cannot resolve a launch configuration or it carries no bus URL.
    */
   public async provision(request: WorkerProvisionRequest, signal: AbortSignal): Promise<WorkerAllocatedOutcome> {
     signal.throwIfAborted();
@@ -528,7 +534,9 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
       // Construct the complete allocation response before the runner can
       // settle. A rejected provision must never leave a runner that can submit
       // an outcome for an allocation the caller could not record.
-      const { executionAttemptId, executionId, workerConfig } = request;
+      const { executionAttemptId, executionId } = request;
+      const workerConfig = await this.options.launchResolver(request, signal);
+      signal.throwIfAborted();
       if (!workerConfig.busUrl) {
         // A thread with no transport cannot hold an authenticated, fenced
         // control endpoint, so it can never register its runtime with the
@@ -574,7 +582,7 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
       const dispatch = this.options.runner.runWithReadiness(
         { ...workerConfig, busAuth: { kind: 'hmac', secret: busIdentity.secret } },
         controller.signal,
-        request.workerManifest,
+        request.runtimeInputs.workerManifest,
         { executionAttemptId, bootstrapDeadlineAt: request.bootstrapDeadlineAt },
       );
       // Readiness is the Authority's own published fact now, so nothing is
