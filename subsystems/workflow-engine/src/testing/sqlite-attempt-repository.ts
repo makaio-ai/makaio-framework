@@ -15,6 +15,8 @@ import type { ExecutionAttemptInstruction, ProviderAllocationRef } from '@makaio
 import {
   BoundedRecoveryEvidenceSchema,
   ExecutionAttemptOperationKindSchema,
+  ExecutionAttemptControlReceiptSchema,
+  ExecutionAttemptControlReportSchema,
   ProviderAllocationRefSchema,
   WorkerAllocationLifetimeSchema,
   type BoundedRecoveryEvidence,
@@ -137,6 +139,18 @@ import {
   toRecoverableAttempt,
 } from './attempt-record-codec.js';
 import { parseInstruction } from '../attempt-value-snapshot.js';
+import {
+  evaluateAttemptControlReceipt,
+  evaluateAttemptControlReport,
+  snapshotAttemptControlReceipt,
+  snapshotAttemptControlReport,
+  type AttemptControlEvidence,
+  type AttemptCancellationControlState,
+  type AttemptControlEvidenceDecision,
+  type ReadAttemptCancellationControlInput,
+  type RecordAttemptControlReceiptInput,
+  type ReportAttemptControlInput,
+} from '../attempt-control-evidence.js';
 
 // ─────────────────────────────────────────────────────────────
 // Schema
@@ -151,6 +165,14 @@ import { parseInstruction } from '../attempt-value-snapshot.js';
  * a durable implementation must make it.
  */
 const SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS test_execution_attempt_control_evidence (
+     execution_attempt_id TEXT NOT NULL,
+     control_revision INTEGER NOT NULL,
+     runtime_generation INTEGER NOT NULL,
+     receipt_json TEXT,
+     report_json TEXT,
+     PRIMARY KEY (execution_attempt_id, control_revision, runtime_generation)
+   )`,
   `CREATE TABLE IF NOT EXISTS test_execution_attempt_cancellation (
      execution_attempt_id TEXT PRIMARY KEY,
      request_key TEXT NOT NULL,
@@ -853,6 +875,33 @@ export async function createSqliteAttemptRepository<TOutcome>(
           requestedAt: row.requested_at,
           ...(row.reason === null ? {} : { reason: row.reason }),
         });
+  };
+
+  /**
+   * Read detached runtime facts under the same snapshot as Attempt and intent.
+   * @param session - Session inside the caller's transaction.
+   * @param executionAttemptId - Exact Attempt whose evidence is read.
+   * @returns Independent receipt and report pairs ordered by revision and generation.
+   */
+  const readControlEvidenceInSession = async (
+    session: RawSqlSession,
+    executionAttemptId: string,
+  ): Promise<AttemptControlEvidence[]> => {
+    const rows = await session.all<{
+      control_revision: number;
+      runtime_generation: number;
+      receipt_json: string | null;
+      report_json: string | null;
+    }>(sql`SELECT control_revision, runtime_generation, receipt_json, report_json
+      FROM test_execution_attempt_control_evidence WHERE execution_attempt_id = ${executionAttemptId}
+      ORDER BY control_revision, runtime_generation`);
+    return rows.map((row) => ({
+      controlRevision: row.control_revision,
+      runtimeGeneration: row.runtime_generation,
+      receipt:
+        row.receipt_json === null ? null : ExecutionAttemptControlReceiptSchema.parse(JSON.parse(row.receipt_json)),
+      report: row.report_json === null ? null : ExecutionAttemptControlReportSchema.parse(JSON.parse(row.report_json)),
+    }));
   };
 
   /**
@@ -2085,6 +2134,77 @@ export async function createSqliteAttemptRepository<TOutcome>(
 
     async readCancellation(executionAttemptId: string): Promise<ExecutionAttemptCancellationIntent | null> {
       return transact((session) => readCancellationInSession(session, executionAttemptId));
+    },
+
+    async readAttemptCancellationControl(
+      input: ReadAttemptCancellationControlInput,
+    ): Promise<AttemptCancellationControlState | null> {
+      const { executionId, executionAttemptId } = input;
+      return transact(async (session) => {
+        const row = await readAttemptRow(session, executionAttemptId);
+        if (row === undefined || row.execution_id !== executionId) return null;
+        return {
+          control: decodeAttemptControlState(row),
+          cancellation: await readCancellationInSession(session, executionAttemptId),
+          evidence: await readControlEvidenceInSession(session, executionAttemptId),
+        };
+      });
+    },
+
+    async recordAttemptControlReceipt(
+      input: RecordAttemptControlReceiptInput,
+    ): Promise<AttemptControlEvidenceDecision> {
+      const snapshot = snapshotAttemptControlReceipt(input);
+      const { executionId: _owner, ...receipt } = snapshot;
+      const { executionAttemptId, controlRevision, runtimeGeneration } = snapshot;
+      return transact(async (session) => {
+        const row = await readAttemptRow(session, executionAttemptId);
+        const facts = await readControlEvidenceInSession(session, executionAttemptId);
+        const previous = facts.find(
+          (fact) => fact.controlRevision === controlRevision && fact.runtimeGeneration === runtimeGeneration,
+        );
+        const decision = evaluateAttemptControlReceipt(
+          row === undefined ? null : toAttemptRecord(row),
+          await readCancellationInSession(session, executionAttemptId),
+          previous?.receipt ?? null,
+          snapshot,
+        );
+        if (decision.kind === 'accepted') {
+          await session.run(sql`INSERT INTO test_execution_attempt_control_evidence
+            (execution_attempt_id, control_revision, runtime_generation, receipt_json)
+            VALUES (${executionAttemptId}, ${controlRevision}, ${runtimeGeneration}, ${JSON.stringify(receipt)})
+            ON CONFLICT (execution_attempt_id, control_revision, runtime_generation)
+            DO UPDATE SET receipt_json = excluded.receipt_json`);
+        }
+        return decision;
+      });
+    },
+
+    async reportAttemptControl(input: ReportAttemptControlInput): Promise<AttemptControlEvidenceDecision> {
+      const snapshot = snapshotAttemptControlReport(input);
+      const { executionId: _owner, ...report } = snapshot;
+      const { executionAttemptId, controlRevision, runtimeGeneration } = snapshot;
+      return transact(async (session) => {
+        const row = await readAttemptRow(session, executionAttemptId);
+        const facts = await readControlEvidenceInSession(session, executionAttemptId);
+        const previous = facts.find(
+          (fact) => fact.controlRevision === controlRevision && fact.runtimeGeneration === runtimeGeneration,
+        );
+        const decision = evaluateAttemptControlReport(
+          row === undefined ? null : toAttemptRecord(row),
+          await readCancellationInSession(session, executionAttemptId),
+          previous?.report ?? null,
+          snapshot,
+        );
+        if (decision.kind === 'accepted') {
+          await session.run(sql`INSERT INTO test_execution_attempt_control_evidence
+            (execution_attempt_id, control_revision, runtime_generation, report_json)
+            VALUES (${executionAttemptId}, ${controlRevision}, ${runtimeGeneration}, ${JSON.stringify(report)})
+            ON CONFLICT (execution_attempt_id, control_revision, runtime_generation)
+            DO UPDATE SET report_json = excluded.report_json`);
+        }
+        return decision;
+      });
     },
 
     async getActiveAttempt(executionId: string, executionAttemptId: string): Promise<ExecutionAttemptRecord | null> {

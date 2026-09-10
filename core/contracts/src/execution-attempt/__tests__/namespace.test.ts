@@ -21,6 +21,8 @@ describe('ExecutionAttempt namespace', () => {
 
   it('carries the static Attempt subjects without a separate readiness producer', () => {
     expect(Object.keys(ExecutionAttemptSchemas)).toStrictEqual([
+      'control.deliver',
+      'control.report',
       'bootstrap.awaitStart',
       'runtime.register',
       'runtime.ready',
@@ -35,6 +37,8 @@ describe('ExecutionAttempt namespace', () => {
 
   it('registers every subject token under the execution-attempt namespace', () => {
     const tokens = [
+      ExecutionAttemptSubjects.control.deliver,
+      ExecutionAttemptSubjects.control.report,
       ExecutionAttemptSubjects.bootstrap.awaitStart,
       ExecutionAttemptSubjects.runtime.register,
       ExecutionAttemptSubjects.runtime.ready,
@@ -46,8 +50,10 @@ describe('ExecutionAttempt namespace', () => {
       ExecutionAttemptSubjects.outcome.submit,
     ];
 
-    expect(tokens.map((token) => token.$meta.namespace)).toStrictEqual(Array<string>(9).fill('execution-attempt'));
+    expect(tokens.map((token) => token.$meta.namespace)).toStrictEqual(Array<string>(11).fill('execution-attempt'));
     expect(tokens.map((token) => token.subject)).toStrictEqual([
+      'control.deliver',
+      'control.report',
       'bootstrap.awaitStart',
       'runtime.register',
       'runtime.ready',

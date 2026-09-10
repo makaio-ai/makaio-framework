@@ -1,14 +1,8 @@
+import type { z } from 'zod';
+import type { ExecutionAttemptCancellationIntentSchema } from './control.js';
+
 /** A durable request to stop an attempt, never evidence that it stopped. */
-export interface ExecutionAttemptCancellationIntent {
-  /** Winning owner request key, scoped to this attempt and retained for replay. */
-  readonly requestKey: string;
-  /** Accepted control-request revision; delivery and runtime reports never advance it. */
-  readonly controlRevision: number;
-  /** First acceptance time, preserved across retries and controller handoff. */
-  readonly requestedAt: string;
-  /** Optional owner-supplied explanation. */
-  readonly reason?: string;
-}
+export type ExecutionAttemptCancellationIntent = Readonly<z.infer<typeof ExecutionAttemptCancellationIntentSchema>>;
 
 /** Accepted control facts observed atomically with the first canonical outcome commit. */
 export interface AttemptOutcomeControlObservation {

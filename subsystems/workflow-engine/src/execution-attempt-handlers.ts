@@ -124,7 +124,7 @@ function registerInstructionHandler<TOutcome>(
  * handlers follow the same authenticated-peer rule as Runtime registration.
  * @param bus - Bus that receives authenticated Runtime requests.
  * @param deps - Authority and owner-side outcome adapter.
- * @returns Cleanup function for all three handlers.
+ * @returns Cleanup function for instruction, Preparation, outcome and control-report handlers.
  */
 export function registerExecutionAttemptHandlers<TOutcome>(
   bus: IMakaioBus,
@@ -132,6 +132,16 @@ export function registerExecutionAttemptHandlers<TOutcome>(
 ): () => void {
   const cleanups = [
     registerInstructionHandler(bus, deps.authority),
+    bus.on(ExecutionAttemptSubjects.control.report, async (ctx) => {
+      const request = ExecutionAttemptSchemas['control.report'].request.parse(ctx.payload);
+      const peer = requireAttemptPeer(ctx, request.executionAttemptId);
+      const decision = await deps.authority.reportAttemptControl({ ...request, executionId: peer.executionId });
+      if (decision.kind === 'accepted' || decision.kind === 'duplicate') {
+        ctx.setResult({ decision: decision.kind });
+      } else {
+        ctx.setResult({ decision: 'refused', reason: decision.kind });
+      }
+    }),
     bus.on(ExecutionAttemptSubjects.operation.report, async (ctx) => {
       const request = ExecutionAttemptSchemas['operation.report'].request.parse(ctx.payload);
       const peer = requireAttemptPeer(ctx, request.executionAttemptId);

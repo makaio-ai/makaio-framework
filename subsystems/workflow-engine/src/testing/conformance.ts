@@ -45,6 +45,7 @@ import { registerOwnerResultRecoveryCases } from './conformance/owner-result-rec
 import { registerProviderCompletionCases } from './conformance/provider-completion-cases.js';
 import { registerCancellationIntentCases } from './conformance/cancellation-intent-cases.js';
 import { registerAttemptCancellationControlCases } from './conformance/attempt-cancellation-control-cases.js';
+import { registerAttemptControlEvidenceCases } from './conformance/attempt-control-evidence-cases.js';
 import { registerOutcomeControlCases } from './conformance/outcome-control-cases.js';
 import type { ExecutionAttemptRepositoryContractFactory } from './conformance/types.js';
 
@@ -95,6 +96,7 @@ export function runExecutionAttemptRepositoryContract(factory: ExecutionAttemptR
     registerProviderCompletionCases(getHarness);
     registerCancellationIntentCases(getHarness);
     registerAttemptCancellationControlCases(getHarness);
+    registerAttemptControlEvidenceCases(getHarness);
     registerOutcomeControlCases(getHarness);
   });
   registerOutcomeCases(factory);

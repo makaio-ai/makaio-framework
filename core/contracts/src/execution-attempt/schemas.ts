@@ -1,5 +1,11 @@
 import { z } from 'zod';
 import type { SchemaRecord } from '@makaio/core';
+import {
+  ExecutionAttemptControlDeliverySchema,
+  ExecutionAttemptControlDeliveryResponseSchema,
+  ExecutionAttemptControlReportSchema,
+  ExecutionAttemptControlReportResponseSchema,
+} from './control.js';
 import { OutcomeAckDecisionSchema } from '../capabilities/worker/types.js';
 import {
   ExecutionAttemptInstructionSchema,
@@ -114,7 +120,8 @@ export const ExecutionAttemptOperationReceiptSchema = z
  *   subjects. Every interested component installs its own listener scoped to its
  *   own attempt and returns on mismatch; another attempt's message is not an error.
  *
- * No payload carries `executionId`, and none carries `controlRevision`.
+ * No payload carries `executionId`. Control messages carry the accepted
+ * cancellation revision, independently of operation admission and outcome submission.
  */
 /** Refusal vocabulary of `execution-attempt.runtime.register`. */
 export const ExecutionAttemptRuntimeRegisterRefusalReasonSchema = z.enum([
@@ -181,6 +188,24 @@ export type ExecutionAttemptBootstrapStartRefusalReason = z.infer<
 >;
 
 export const ExecutionAttemptSchemas = {
+  /**
+   * Deliver accepted Cancel without acquiring an operation slot.
+   * Subject: `execution-attempt.control.deliver`
+   * Type: Request (RPC) — Authority → Runtime filtered by Attempt and incarnation.
+   */
+  'control.deliver': {
+    request: ExecutionAttemptControlDeliverySchema,
+    response: ExecutionAttemptControlDeliveryResponseSchema,
+  },
+  /**
+   * Persist the runtime's final scoped conclusion independently of delivery ACK.
+   * Subject: `execution-attempt.control.report`
+   * Type: Request (RPC) — authenticated Runtime → Authority.
+   */
+  'control.report': {
+    request: ExecutionAttemptControlReportSchema,
+    response: ExecutionAttemptControlReportResponseSchema,
+  },
   /**
    * An authenticated attempt waits for its allocation to become durably available.
    * The authority rechecks owner, settlement, fencing, allocation and deadline.
@@ -339,8 +364,7 @@ export const ExecutionAttemptSchemas = {
   /**
    * The authority hands one admitted operation to the runtime that owns the attempt.
    *
-   * This is the only subject in the namespace on which the authority is the
-   * requester and the runtime the responder.
+   * Like control.deliver, the authority is the requester and the runtime the responder.
    *
    * Emitter: attempt authority (`runtime-registration.ts`).
    * Handlers: every live Worker Runtime, each subscribing through

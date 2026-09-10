@@ -11,6 +11,7 @@ import type {
 } from '@makaio/contracts';
 import { canonicalStringify } from '@makaio/utils';
 import type { OwnerRequestRecoveryRepository } from './execution-attempt-owner-recovery.js';
+import type { AttemptControlEvidenceRepository } from './attempt-control-evidence.js';
 import type { ExecutionAttemptOutcomeCommit, ExecutionAttemptOutcomeDecision } from './execution-attempt-outcome.js';
 import type {
   ExecutionAttemptCancellationDecision,
@@ -1417,7 +1418,9 @@ export type RuntimeReadinessDecision =
  * value no reload of the attempt ever yields.
  * @typeParam TOutcome - Owner-specific outcome type committed per attempt.
  */
-export interface ExecutionAttemptRepository<TOutcome> extends OwnerRequestRecoveryRepository<TOutcome> {
+export interface ExecutionAttemptRepository<TOutcome>
+  extends OwnerRequestRecoveryRepository<TOutcome>,
+    AttemptControlEvidenceRepository {
   /**
    * Atomically accept an owner's exact-attempt Cancel and close its operation start gate.
    * Pending and historical attempts remain eligible for monotone cleanup; this grants no

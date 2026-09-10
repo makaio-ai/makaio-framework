@@ -18,7 +18,7 @@ export const ExecutionAttemptNamespace = createBusNamespace('execution-attempt',
  *
  * Use these tokens in `bus.on()`, `bus.emit()`, and `bus.request()` calls instead
  * of raw subject strings to get schema validation and type inference. Dotted
- * schema keys nest under `bootstrap`, `runtime`, `operation`, `instruction`, and `outcome`.
+ * schema keys nest under `bootstrap`, `runtime`, `operation`, `instruction`, `control`, and `outcome`.
  * @example
  * ```typescript
  * bus.on(ExecutionAttemptSubjects.runtime.ready, (ctx) => {

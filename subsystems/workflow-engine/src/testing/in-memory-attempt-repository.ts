@@ -107,6 +107,18 @@ import {
   toRecoverableAttempt,
 } from './attempt-record-codec.js';
 import { parseInstruction } from '../attempt-value-snapshot.js';
+import {
+  evaluateAttemptControlReceipt,
+  evaluateAttemptControlReport,
+  snapshotAttemptControlReceipt,
+  snapshotAttemptControlReport,
+  type AttemptControlEvidence,
+  type AttemptCancellationControlState,
+  type AttemptControlEvidenceDecision,
+  type ReadAttemptCancellationControlInput,
+  type RecordAttemptControlReceiptInput,
+  type ReportAttemptControlInput,
+} from '../attempt-control-evidence.js';
 
 /**
  * Durable state the in-memory realization keeps.
@@ -145,6 +157,8 @@ export interface InMemoryAttemptRepositoryState {
   readonly requestBindings: Map<string, Map<string, string>>;
   /** First owner cancellation request for each attempt, surviving controller replacement. */
   readonly cancellations: Map<string, ExecutionAttemptCancellationIntent>;
+  /** Immutable facts keyed by Attempt, then numeric revision and generation. */
+  readonly controlEvidence: Map<string, Map<string, AttemptControlEvidence>>;
 }
 
 /**
@@ -251,6 +265,7 @@ export function createInMemoryAttemptRepository<TOutcome>(
   const activeAttempts = seed.activeAttempts ?? new Map<string, string>();
   const requestBindings = seed.requestBindings ?? new Map<string, Map<string, string>>();
   const cancellations = seed.cancellations ?? new Map<string, ExecutionAttemptCancellationIntent>();
+  const controlEvidence = seed.controlEvidence ?? new Map<string, Map<string, AttemptControlEvidence>>();
 
   /**
    * Read runtime reachability without touching the control-state decoder.
@@ -921,6 +936,63 @@ export function createInMemoryAttemptRepository<TOutcome>(
       return intent === undefined ? null : { ...intent };
     },
 
+    async readAttemptCancellationControl(
+      input: ReadAttemptCancellationControlInput,
+    ): Promise<AttemptCancellationControlState | null> {
+      const { executionId, executionAttemptId } = input;
+      const attempt = attempts.get(executionAttemptId);
+      if (attempt === undefined || attempt.executionId !== executionId) return null;
+      return structuredClone({
+        control: toAttemptControlState(attempt),
+        cancellation: cancellations.get(executionAttemptId) ?? null,
+        evidence: [...(controlEvidence.get(executionAttemptId)?.values() ?? [])].sort(
+          (a, b) => a.controlRevision - b.controlRevision || a.runtimeGeneration - b.runtimeGeneration,
+        ),
+      });
+    },
+
+    async recordAttemptControlReceipt(
+      input: RecordAttemptControlReceiptInput,
+    ): Promise<AttemptControlEvidenceDecision> {
+      const snapshot = snapshotAttemptControlReceipt(input);
+      const { executionId: _owner, ...receipt } = snapshot;
+      const { executionAttemptId, controlRevision, runtimeGeneration } = snapshot;
+      const key = `${controlRevision}:${runtimeGeneration}`;
+      const facts = controlEvidence.get(executionAttemptId) ?? new Map<string, AttemptControlEvidence>();
+      const previous = facts.get(key);
+      const decision = evaluateAttemptControlReceipt(
+        attempts.get(executionAttemptId) ?? null,
+        cancellations.get(executionAttemptId) ?? null,
+        previous?.receipt ?? null,
+        snapshot,
+      );
+      if (decision.kind === 'accepted') {
+        facts.set(key, { controlRevision, runtimeGeneration, receipt, report: previous?.report ?? null });
+        controlEvidence.set(executionAttemptId, facts);
+      }
+      return decision;
+    },
+
+    async reportAttemptControl(input: ReportAttemptControlInput): Promise<AttemptControlEvidenceDecision> {
+      const snapshot = snapshotAttemptControlReport(input);
+      const { executionId: _owner, ...report } = snapshot;
+      const { executionAttemptId, controlRevision, runtimeGeneration } = snapshot;
+      const key = `${controlRevision}:${runtimeGeneration}`;
+      const facts = controlEvidence.get(executionAttemptId) ?? new Map<string, AttemptControlEvidence>();
+      const previous = facts.get(key);
+      const decision = evaluateAttemptControlReport(
+        attempts.get(executionAttemptId) ?? null,
+        cancellations.get(executionAttemptId) ?? null,
+        previous?.report ?? null,
+        snapshot,
+      );
+      if (decision.kind === 'accepted') {
+        facts.set(key, { controlRevision, runtimeGeneration, receipt: previous?.receipt ?? null, report });
+        controlEvidence.set(executionAttemptId, facts);
+      }
+      return decision;
+    },
+
     async getActiveAttempt(executionId: string, executionAttemptId: string): Promise<ExecutionAttemptRecord | null> {
       // Settled is not superseded: a settled attempt is still the active
       // attempt for its execution until a newer one replaces it.
@@ -1032,5 +1104,6 @@ export function createInMemoryAttemptRepository<TOutcome>(
     activeAttempts,
     requestBindings,
     cancellations,
+    controlEvidence,
   };
 }
