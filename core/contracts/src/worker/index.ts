@@ -5,6 +5,8 @@ export {
   WorkerBootstrapGrantedClaimResponseSchema,
   WorkerBootstrapClaimRefusalReasonSchema,
   WorkerBootstrapClaimResponseSchema,
+  WorkerCancelUndeliveredKindSchema,
+  WorkerCancelUndeliveredSchema,
 } from './schemas.js';
 export type {
   WorkerBootstrapCredentials,
@@ -14,6 +16,8 @@ export type {
   WorkerBootstrapClaimResponse,
   WorkerRuntimeInputsGetRequest,
   WorkerRuntimeInputsGetResponse,
+  WorkerCancelUndelivered,
+  WorkerCancelUndeliveredKind,
 } from './schemas.js';
 export { WORKER_BOOTSTRAP_IDENTITY_ID, WorkerNamespace, WorkerSubjects } from './namespace.js';
 export { SuspensionStrategySchema } from './suspension.js';

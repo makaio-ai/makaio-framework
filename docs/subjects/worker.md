@@ -23,6 +23,7 @@ next: false
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
 | `control.bootstrap.claim` | [`worker.control.bootstrap.claim`](#worker.control.bootstrap.claim) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
+| `control.cancel-undelivered` | [`worker.control.cancel-undelivered`](#worker.control.cancel-undelivered) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
 | `control.outcome.submit` | [`worker.control.outcome.submit`](#worker.control.outcome.submit) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
 | `dispatch` | [`worker.dispatch`](#worker.dispatch) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
 | `lifecycle.booting` | [`worker.lifecycle.booting`](#worker.lifecycle.booting) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/worker/schemas.ts) |
@@ -65,6 +66,33 @@ Type: Request (RPC)
 | `runtimeEnv` | `Record<string, string> \| undefined` | no |
 | `status` | `"granted" \| "pending" \| "refused"` | yes |
 
+### <a id="worker.control.cancel-undelivered"></a>`worker.control.cancel-undelivered` (event)
+
+One bounded cooperative-Cancel delivery pass produced no stop evidence.
+
+Emitted by the party that owns delivery of an owner-authorized Cancel, once
+per pass that ended without evidence that the addressed runtime stopped. It
+is the only channel that makes that absence visible, and it reports a
+delivery fact only: never a Worker state, and never permission to reclaim
+the Worker's compute.
+
+Not a lifecycle subject by design — see
+`WorkerCancelUndeliveredSchema`. Status projections consume
+`lifecycle.*` and must stay unaffected by this diagnostic.
+
+Subject: `worker.control.cancel-undelivered`
+Type: Event (notification; no reply)
+
+| Field | Type | Required |
+|-------|------|----------|
+| `detail` | `string` | yes |
+| `environment` | `string` | yes |
+| `executionAttemptId` | `string` | yes |
+| `executionId` | `string` | yes |
+| `kind` | `"refused" \| "unavailable" \| "invalid-receipt" \| "receipt-not-recorded"` | yes |
+| `metadata` | `Record<string, unknown> \| undefined` | no |
+| `observedAt` | `string` | yes |
+
 ### <a id="worker.control.outcome.submit"></a>`worker.control.outcome.submit` (rpc)
 
 Worker submits a terminal workflow outcome for durable acknowledgement.
@@ -82,13 +110,13 @@ Type: Request (RPC)
 |-------|------|----------|
 | `executionAttemptId` | `string` | yes |
 | `executionId` | `string` | yes |
-| `result` | `{ executionId: string; workflowId: string; status: "completed"; artifact?: { kind: string; id: string; revision: string; scope: { level: string; ids?: Record<string, string> \| undefined; }; schemaVersion: string; data: Record<string, unknown>; relations: { type: string; target: unknown; }[]; actor: { kind: string; id: string; displayName?: string \| undefined; }; timestamp: number; confidence?: { level: "assumed" \| "inferred" \| "stated" \| "confirmed" \| "verified"; basis: { kind: string; actor: { kind: string; id: string; displayName?: string \| undefined; }; timestamp: number; detail?: string \| undefined; evidenceRef?: unknown; }[]; } \| undefined; representations?: { markdown?: string \| undefined; summary?: string \| undefined; plaintext?: string \| undefined; } \| undefined; createdAt?: number \| undefined; } \| undefined; } \| { executionId: string; workflowId: string; status: "failed"; error: string; } \| { executionId: string; workflowId: string; status: "cancelled"; reason?: string \| undefined; } \| { executionId: string; workflowId: string; status: "paused"; pausedAtGateId: string; pausedAtFrameId: string; }` | yes |
+| `result` | `{ executionId: string; workflowId: string; status: "completed"; artifact?: { kind: string; id: string; revision: string; scope: { level: string; ids?: Record<string, string> \| undefined; }; schemaVersion: number; data: Record<string, unknown>; relations: { type: string; target: unknown; }[]; actor: { kind: string; id: string; displayName?: string \| undefined; }; timestamp: number; evidence?: ({ source: { kind: "git-file"; repository: { kind: string; path: string; }; path: string; commit: string; }; location: { kind: "whole-source"; } \| { kind: "lines"; startLine: number; lineCount: number; }; excerpt?: string \| undefined; } \| { source: { kind: "confluence-page"; site: string; pageId: string; version: number; }; location: { kind: "whole-source"; }; excerpt?: string \| undefined; } \| { source: { kind: "artifact"; reference: { refClass: "artifact"; kind: string; id: string; revision: string; }; }; location: { kind: "whole-source"; } \| { kind: "data-path"; path: string; }; excerpt?: string \| undefined; })[] \| undefined; confidence?: { level: "assumed" \| "inferred" \| "stated" \| "confirmed" \| "verified"; basis: { kind: string; actor: { kind: string; id: string; displayName?: string \| undefined; }; timestamp: number; detail?: string \| undefined; evidenceRef?: unknown; }[]; } \| undefined; representations?: { markdown?: string \| undefined; summary?: string \| undefined; plaintext?: string \| undefined; } \| undefined; createdAt?: number \| undefined; } \| undefined; } \| { executionId: string; workflowId: string; status: "failed"; error: string; } \| { executionId: string; workflowId: string; status: "cancelled"; reason?: string \| undefined; } \| { executionId: string; workflowId: string; status: "paused"; pausedAtGateId: string; pausedAtFrameId: string; }` | yes |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `decision` | `"accepted" \| "fenced" \| "duplicate" \| "conflict"` | yes |
+| `decision` | `"accepted" \| "duplicate" \| "conflict" \| "fenced"` | yes |
 
 ### <a id="worker.dispatch"></a>`worker.dispatch` (rpc)
 
@@ -101,7 +129,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `config` | `{ source: { kind: "path"; path: string; } \| { kind: "source"; filename: string; source: string; } \| { kind: "definition"; workflowId: string; }; executionId: string; workflowId: string; coordinatorSessionId: string; cancelSubject: string; definition?: { id: string; root: { id: string; type: "sequence"; nodes: unknown; when?: string \| undefined; skip?: string \| undefined; writes?: { kind: string; schemaVersion: string; scope: { level: string; ids?: Record<string, string> \| undefined; }; dataExpression?: string \| undefined; }[] \| undefined; }; name?: string \| undefined; description?: string \| undefined; inputSchema?: Record<string, JsonValue> \| undefined; configSchema?: Record<string, JsonValue> \| undefined; outputSchema?: Record<string, JsonValue> \| undefined; state?: { schema: Record<string, JsonValue>; initial?: JsonValue \| undefined; } \| undefined; artifact?: { kind: string; schemaVersion: string; scope: { level: string; ids?: Record<string, string> \| undefined; }; resolve?: string \| undefined; create?: string \| undefined; statusPath?: string \| undefined; } \| undefined; triggers?: { kind: string; params: Record<string, JsonValue>; filter?: Record<string, string \| number \| boolean \| { $in: (string \| number \| boolean \| null)[]; } \| { $ne: string \| number \| boolean \| null; } \| { $exists: boolean; } \| { $startsWith: string; } \| { $endsWith: string; } \| null> \| undefined; filterExpression?: string \| undefined; }[] \| undefined; scope?: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; } \| undefined; canvasLayout?: Record<string, JsonValue> \| undefined; source?: { kind: "editor"; } \| { kind: "extension"; extension: string; externalId?: string \| undefined; syncedAt?: string \| undefined; metadata?: Record<string, unknown> \| undefined; } \| undefined; executableSource?: { kind: "path"; path: string; } \| { kind: "source"; filename: string; source: string; } \| { kind: "definition"; workflowId: string; } \| undefined; requirements?: { maxRuntimeMs?: number \| undefined; persistentStorage?: boolean \| undefined; customCapabilities?: string[] \| undefined; recoverableAllocation?: boolean \| undefined; materializationModes?: ("local-directory" \| "workspace-snapshot")[] \| undefined; } \| undefined; successFinalizerId?: string \| undefined; } \| undefined; triggerPayload?: Record<string, unknown> \| undefined; triggerMode?: "immediate" \| "await-trigger" \| undefined; inputs?: JsonValue \| undefined; config?: Record<string, unknown> \| undefined; artifactRef?: { kind: string; id: string; } \| undefined; scope?: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; } \| undefined; busUrl?: string \| undefined; busAuth?: { kind: "none"; } \| { kind: "hmac"; secret: string; } \| undefined; env?: Record<string, string> \| undefined; suspensionStrategy?: "wait-in-process" \| "exit-and-redispatch" \| "exit-and-resume" \| undefined; terminalAuthority?: "authority" \| "worker" \| undefined; materializationSpec?: { kind: "local-directory"; workspaceId: string; rootDigest: string; sourcePath: string; } \| { kind: "workspace-snapshot"; snapshotId: string; digest: string; sourcePath: string; } \| undefined; }` | yes |
+| `config` | `{ source: { kind: "path"; path: string; } \| { kind: "source"; filename: string; source: string; } \| { kind: "definition"; workflowId: string; }; executionId: string; workflowId: string; coordinatorSessionId: string; cancelSubject: string; definition?: { id: string; root: { id: string; type: "sequence"; nodes: unknown; when?: string \| undefined; skip?: string \| undefined; writes?: { kind: string; schemaVersion: number; scope: { level: string; ids?: Record<string, string> \| undefined; }; dataExpression?: string \| undefined; }[] \| undefined; }; name?: string \| undefined; description?: string \| undefined; inputSchema?: Record<string, JsonValue> \| undefined; configSchema?: Record<string, JsonValue> \| undefined; outputSchema?: Record<string, JsonValue> \| undefined; state?: { schema: Record<string, JsonValue>; initial?: JsonValue \| undefined; } \| undefined; artifact?: { kind: string; schemaVersion: number; scope: { level: string; ids?: Record<string, string> \| undefined; }; resolve?: string \| undefined; create?: string \| undefined; statusPath?: string \| undefined; } \| undefined; triggers?: { kind: string; params: Record<string, JsonValue>; filter?: Record<string, string \| number \| boolean \| { $in: (string \| number \| boolean \| null)[]; } \| { $ne: string \| number \| boolean \| null; } \| { $exists: boolean; } \| { $startsWith: string; } \| { $endsWith: string; } \| null> \| undefined; filterExpression?: string \| undefined; }[] \| undefined; scope?: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; } \| undefined; canvasLayout?: Record<string, JsonValue> \| undefined; source?: { kind: "editor"; } \| { kind: "extension"; extension: string; externalId?: string \| undefined; syncedAt?: string \| undefined; metadata?: Record<string, unknown> \| undefined; } \| undefined; executableSource?: { kind: "path"; path: string; } \| { kind: "source"; filename: string; source: string; } \| { kind: "definition"; workflowId: string; } \| undefined; requirements?: { maxRuntimeMs?: number \| undefined; persistentStorage?: boolean \| undefined; customCapabilities?: string[] \| undefined; recoverableAllocation?: boolean \| undefined; materializationModes?: ("local-directory" \| "workspace-snapshot")[] \| undefined; } \| undefined; successFinalizerId?: string \| undefined; } \| undefined; triggerPayload?: Record<string, unknown> \| undefined; triggerMode?: "immediate" \| "await-trigger" \| undefined; inputs?: JsonValue \| undefined; config?: Record<string, unknown> \| undefined; artifactRef?: { kind: string; id: string; } \| undefined; scope?: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; } \| undefined; busUrl?: string \| undefined; busAuth?: { kind: "none"; } \| { kind: "hmac"; secret: string; } \| undefined; env?: Record<string, string> \| undefined; suspensionStrategy?: "wait-in-process" \| "exit-and-redispatch" \| "exit-and-resume" \| undefined; terminalAuthority?: "authority" \| "worker" \| undefined; materializationSpec?: { kind: "local-directory"; workspaceId: string; rootDigest: string; sourcePath: string; } \| { kind: "workspace-snapshot"; snapshotId: string; digest: string; sourcePath: string; } \| undefined; }` | yes |
 | `executionAttemptId` | `string` | yes |
 | `manifest` | `{ contributionRefs: { packageName: string; version: string; entrypoint: string; integrity: string; }[]; } \| undefined` | no |
 | `metadata` | `Record<string, unknown> \| undefined` | no |
