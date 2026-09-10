@@ -20,11 +20,7 @@ export {
   LocalRefSchema,
   RelationTypeRegistrationSchema,
 } from './schemas.js';
-export {
-  ARTIFACT_VALUE_TYPE_KEYWORD,
-  EVIDENCE_VALUE_TYPE,
-  EvidenceValueSchema,
-} from './evidence.js';
+export { ARTIFACT_VALUE_TYPE_KEYWORD, EVIDENCE_VALUE_TYPE, EvidenceValueSchema } from './evidence.js';
 export type {
   ArtifactActor,
   ArtifactCompareRequest,
@@ -157,3 +153,56 @@ export type {
   ArtifactKindRegistration,
 } from './kind-registration.js';
 export { isArtifactDataPathDeclared, readArtifactTitle } from './kind-paths.js';
+
+export {
+  ARTIFACT_LIFECYCLE_REJECTED_CODE,
+  ArtifactLifecycleIdentitySchema,
+  ArtifactLifecycleVersionSchema,
+  ArtifactLifecycleSnapshotSchema,
+  ArtifactLifecycleCurrentSchema,
+  ArtifactLifecycleSituationSchema,
+  ArtifactLifecycleTransitionIntentSchema,
+  ArtifactLifecycleTransitionCommandSchema,
+  ArtifactLifecycleInitializedEntrySchema,
+  ArtifactLifecycleTransitionedEntrySchema,
+  ArtifactLifecycleHistoryEntrySchema,
+  ArtifactLifecycleRejectionSchema,
+  ArtifactLifecycleError,
+  initialArtifactLifecycle,
+  advanceArtifactLifecycle,
+  isArtifactLifecycleTransitionAllowed,
+} from './lifecycle.js';
+export type {
+  ArtifactLifecycleSnapshot,
+  ArtifactLifecycleCurrent,
+  ArtifactLifecycleSituation,
+  ArtifactLifecycleTransitionIntent,
+  ArtifactLifecycleTransitionCommand,
+  ArtifactLifecycleInitializedEntry,
+  ArtifactLifecycleTransitionedEntry,
+  ArtifactLifecycleHistoryEntry,
+  ArtifactLifecycleRejection,
+} from './lifecycle.js';
+
+export {
+  ArtifactLifecycleGetRequestSchema,
+  ArtifactLifecycleGetResponseSchema,
+  ArtifactLifecycleHistoryRequestSchema,
+  ArtifactLifecycleHistoryResponseSchema,
+  ArtifactLifecycleTransitionResponseSchema,
+  ArtifactLifecycleCommittedPayloadSchema,
+  ArtifactLifecycleFailureSchema,
+  ArtifactLifecycleRejectedPayloadSchema,
+  ArtifactLifecycleSchemas,
+  toArtifactLifecycleFailure,
+} from './lifecycle-namespace.js';
+export type {
+  ArtifactLifecycleGetRequest,
+  ArtifactLifecycleGetResponse,
+  ArtifactLifecycleHistoryRequest,
+  ArtifactLifecycleHistoryResponse,
+  ArtifactLifecycleTransitionResponse,
+  ArtifactLifecycleCommittedPayload,
+  ArtifactLifecycleFailure,
+  ArtifactLifecycleRejectedPayload,
+} from './lifecycle-namespace.js';

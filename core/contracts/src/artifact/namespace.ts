@@ -15,23 +15,26 @@ import {
 import { ArtifactContextSelectorSchema } from './context-selectors.js';
 import { ResolvedArtifactContextWireSchema } from './context-resolution.js';
 import { EvidenceResolveRequestSchema, EvidenceResolveResponseSchema } from './evidence-resolution.js';
+import { ArtifactLifecycleSchemas } from './lifecycle-namespace.js';
 
 /**
  * Framework-level artifact bus schemas.
  *
- * Defines the full set of lifecycle events and core RPCs for hosts that
- * opt into the framework artifact contract. The schema set covers:
+ * Defines the full set of revision events, business-lifecycle subjects and core
+ * RPCs for hosts that opt into the framework artifact contract. The schema set covers:
  *
+ * - Shared lifecycle get / history / transition RPCs and committed / rejected events
  * - Kind and relation-type registration RPCs
  * - Revision create / revise / resolve / query / compare RPCs
  * - `created`, `revised`, `relation.added`, `observation.added`,
- *   `status.changed`, and `kind.changed` lifecycle events
+ *   `status.changed`, and `kind.changed` revision and registry events
  *
  * Product hosts that extend the framework artifact namespace should
  * register a product-owned namespace instead of merging additional
  * subjects into this one.
  */
 export const ArtifactSchemas = {
+  ...ArtifactLifecycleSchemas,
   /** Register a new artifact kind with the artifact service (RPC). */
   'kind.register': {
     request: ArtifactKindRegistrationSchema,
@@ -181,6 +184,11 @@ export const ArtifactNamespace = createBusNamespace('artifact', ArtifactSchemas)
  * - `ArtifactSubjects['kind.list']` — list kinds (RPC)
  * - `ArtifactSubjects['relation-type.register']` — register a relation type (RPC)
  * - `ArtifactSubjects['relation-type.list']` — list relation types (RPC)
+ * - `ArtifactSubjects.lifecycle.get` — current administration state (RPC)
+ * - `ArtifactSubjects.lifecycle.history` — ordered lifecycle history (RPC)
+ * - `ArtifactSubjects.lifecycle.transition` — conditional state change (RPC)
+ * - `ArtifactSubjects.lifecycle.committed` — committed state transition event
+ * - `ArtifactSubjects.lifecycle.rejected` — supplemental rejected transition event
  * - `ArtifactSubjects.create` — create artifact (RPC)
  * - `ArtifactSubjects.revise` — revise artifact (RPC)
  * - `ArtifactSubjects.resolve` — resolve artifact by ref (RPC)
