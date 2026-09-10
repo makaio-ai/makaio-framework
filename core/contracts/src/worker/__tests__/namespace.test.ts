@@ -63,6 +63,49 @@ describe('worker namespace', () => {
     expect(WorkerSubjects.control.outcome.submit.subject).toBe('control.outcome.submit');
   });
 
+  describe('control.cancel-undelivered', () => {
+    const undelivered = {
+      executionAttemptId: 'attempt-1',
+      executionId: 'wfx-1',
+      environment: 'piscina',
+      kind: 'unavailable',
+      detail: 'no stop evidence: the addressed runtime did not answer',
+      observedAt: '2026-09-10T10:00:00.000Z',
+    };
+
+    it('registers the undelivered-Cancel diagnostic outside the lifecycle prefix', () => {
+      const subject = WorkerSubjects.control['cancel-undelivered'];
+
+      expect(subject.$meta.namespace).toBe('worker');
+      expect(subject.subject).toBe('control.cancel-undelivered');
+      // Terminal-state projections key off the `lifecycle.` prefix, so the
+      // diagnostic must never carry it (FACT-145 R2).
+      expect(subject.subject.startsWith('lifecycle.')).toBe(false);
+    });
+
+    it('is a notification: no request/response pair', () => {
+      expect(WorkerSubjects.control['cancel-undelivered'].$meta.isRequest).toBe(false);
+    });
+
+    it('carries the lifecycle identity plus the delivery outcome', () => {
+      expect(WorkerSchemas['control.cancel-undelivered'].parse(undelivered)).toStrictEqual(undelivered);
+    });
+
+    it.each(['refused', 'invalid-receipt', 'receipt-not-recorded'])('accepts the %s outcome', (kind) => {
+      expect(WorkerSchemas['control.cancel-undelivered'].safeParse({ ...undelivered, kind }).success).toBe(true);
+    });
+
+    it.each([
+      ['stopped', 'kind'],
+      ['', 'detail'],
+      ['not-an-instant', 'observedAt'],
+    ])('refuses %s for %s', (value, field) => {
+      expect(WorkerSchemas['control.cancel-undelivered'].safeParse({ ...undelivered, [field]: value }).success).toBe(
+        false,
+      );
+    });
+  });
+
   it('keeps pool identity out of framework lifecycle payloads', () => {
     const parsed = WorkerSchemas['lifecycle.ready'].parse({
       executionAttemptId: 'attempt-1',

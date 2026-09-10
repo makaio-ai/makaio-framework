@@ -87,6 +87,62 @@ const WorkerLifecycleBaseSchema = z.object({
 });
 
 /**
+ * Why an owner-authorized Cancel is still undelivered after one bounded pass.
+ *
+ * Every member names something a delivery pass observed *instead of* stop
+ * evidence. None of them asserts that the Worker stopped, that it kept
+ * running, or that its compute may be reclaimed.
+ */
+export const WorkerCancelUndeliveredKindSchema = z.enum([
+  /** The addressed runtime did not answer the bounded delivery request. */
+  'unavailable',
+  /** The addressed runtime answered that it refuses cooperative stop. */
+  'refused',
+  /** An answer arrived that does not correlate to this delivery. */
+  'invalid-receipt',
+  /** A correlated receipt arrived, and the Authority refused to store it. */
+  'receipt-not-recorded',
+]);
+
+/**
+ * One bounded cooperative-Cancel pass that produced no stop evidence.
+ *
+ * This is a **control-delivery diagnostic, never a terminal state**. It reports
+ * what one delivery pass did not prove and leaves the Attempt's real outcome to
+ * the canonical lifecycle events. A still-running Worker whose Cancel went
+ * undelivered must remain able to reach `lifecycle.completed`,
+ * `lifecycle.failed` or `lifecycle.terminated` afterwards.
+ *
+ * That is why the subject deliberately lives under `control.`, not under
+ * `lifecycle.`: `lifecycle.*` is the Worker status vocabulary, and any status
+ * consumer may treat `lifecycle.failed` as terminal and ignore later
+ * transitions. Reporting an undelivered Cancel there would terminalize a live
+ * Worker and drop its later canonical outcome. A diagnostic under `control.`
+ * is additive and stays outside the status vocabulary by construction.
+ *
+ * The identity fields are the Worker lifecycle identity on purpose: a consumer
+ * correlates a diagnostic to the same Attempt row a lifecycle event projects.
+ */
+export const WorkerCancelUndeliveredSchema = WorkerLifecycleBaseSchema.extend({
+  /** Which delivery outcome left the Cancel undelivered. */
+  kind: WorkerCancelUndeliveredKindSchema,
+  /**
+   * Human-readable specifics of that outcome — a refusal reason, an Authority
+   * persistence decision, or the bare observation that no stop evidence came
+   * back. Free-form: consumers branch on `kind`, not on this text.
+   */
+  detail: z.string().min(1),
+  /** ISO instant at which the pass observed the missing stop evidence. */
+  observedAt: z.iso.datetime({ offset: true }),
+});
+
+/** Delivery outcome that left an owner-authorized Cancel undelivered. */
+export type WorkerCancelUndeliveredKind = z.infer<typeof WorkerCancelUndeliveredKindSchema>;
+
+/** One reported cooperative-Cancel pass that produced no stop evidence. */
+export type WorkerCancelUndelivered = z.infer<typeof WorkerCancelUndeliveredSchema>;
+
+/**
  * Framework-level Worker dispatch request.
  *
  * Pool selection and provider allocation remain caller-owned. This request is
@@ -148,6 +204,10 @@ export const WorkerDispatchResponseSchema = z
  * - `control.outcome.submit` — worker submits an execution outcome for durable ACK
  * - `control.bootstrap.claim`— worker claims execution-scoped bus credentials
  * - `runtime.inputs.get` — authenticated runtime pulls its selected realization inputs
+ * - `control.cancel-undelivered` — one cooperative Cancel pass produced no stop evidence
+ *
+ * `control.cancel-undelivered` is a delivery diagnostic, not a lifecycle state:
+ * it never terminalizes a Worker and never supersedes a canonical outcome.
  */
 export const WorkerSchemas = {
   /**
@@ -236,6 +296,24 @@ export const WorkerSchemas = {
       .strict(),
     response: WorkerBootstrapClaimResponseSchema,
   },
+
+  /**
+   * One bounded cooperative-Cancel delivery pass produced no stop evidence.
+   *
+   * Emitted by the party that owns delivery of an owner-authorized Cancel, once
+   * per pass that ended without evidence that the addressed runtime stopped. It
+   * is the only channel that makes that absence visible, and it reports a
+   * delivery fact only: never a Worker state, and never permission to reclaim
+   * the Worker's compute.
+   *
+   * Not a lifecycle subject by design — see
+   * {@link WorkerCancelUndeliveredSchema}. Status projections consume
+   * `lifecycle.*` and must stay unaffected by this diagnostic.
+   *
+   * Subject: `worker.control.cancel-undelivered`
+   * Type: Event (notification; no reply)
+   */
+  'control.cancel-undelivered': WorkerCancelUndeliveredSchema,
 
   /**
    * Dispatch has selected a provider; Worker allocation is in progress.
