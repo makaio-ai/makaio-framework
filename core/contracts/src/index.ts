@@ -1257,6 +1257,15 @@ export type {
   WorkflowArtifactBinding,
 } from './workflow/index.js';
 export {
+  ExecutionAttemptCancellationIntentSchema,
+  ExecutionAttemptControlCorrelationSchema,
+  ExecutionAttemptControlDeliverySchema,
+  ExecutionAttemptControlDeliveryResponseSchema,
+  ExecutionAttemptControlReceiptSchema,
+  ExecutionAttemptControlConclusionSchema,
+  ExecutionAttemptControlReportSchema,
+  ExecutionAttemptControlRefusalReasonSchema,
+  ExecutionAttemptControlReportResponseSchema,
   ExecutionAttemptAnnouncedOperationKindSchema,
   ExecutionAttemptBootstrapAwaitStartRequestSchema,
   ExecutionAttemptBootstrapAwaitStartResponseSchema,
@@ -1277,6 +1286,14 @@ export {
   ExecutionAttemptSubjects,
 } from './execution-attempt/index.js';
 export type {
+  ExecutionAttemptControlCorrelation,
+  ExecutionAttemptControlDelivery,
+  ExecutionAttemptControlDeliveryResponse,
+  ExecutionAttemptControlReceipt,
+  ExecutionAttemptControlConclusion,
+  ExecutionAttemptControlReport,
+  ExecutionAttemptControlRefusalReason,
+  ExecutionAttemptControlReportResponse,
   ExecutionAttemptAnnouncedOperationKind,
   AcceptedAttemptOutcome,
   AttemptOutcomeControlObservation,

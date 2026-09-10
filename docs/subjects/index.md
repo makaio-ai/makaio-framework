@@ -12,7 +12,7 @@ next: false
 | Metric | Count |
 |--------|-------|
 | Namespaces | 105 |
-| Subjects | 999 (400 events, 599 RPCs) |
+| Subjects | 1001 (400 events, 601 RPCs) |
 | framework | 101 |
 | extension | 4 |
 | kind: bus | 74 |
@@ -61,7 +61,7 @@ next: false
 | [`code-execution`](./code-execution.md) | bus | 1 | 0E / 1R |
 | [`config`](./config.md) | bus | 2 | 0E / 2R |
 | [`credential`](./credential.md) | bus | 12 | 0E / 12R |
-| [`execution-attempt`](./execution-attempt.md) | bus | 9 | 2E / 7R |
+| [`execution-attempt`](./execution-attempt.md) | bus | 11 | 2E / 9R |
 | [`facet`](./facet.md) | bus | 3 | 1E / 2R |
 | [`gitHook`](./githook.md) | bus | 3 | 2E / 1R |
 | [`harness`](./harness.md) | bus | 10 | 3E / 7R |

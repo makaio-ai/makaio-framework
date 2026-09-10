@@ -29,6 +29,27 @@ export { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 export { resolveExecutionAttemptPeer } from './execution-bound-access.js';
 export type { ExecutionAttemptPeerIdentity } from './execution-bound-access.js';
 export { registerExecutionAttemptHandlers } from './execution-attempt-handlers.js';
+export {
+  evaluateAttemptControlReceipt,
+  evaluateAttemptControlReport,
+  snapshotAttemptControlReceipt,
+  snapshotAttemptControlReport,
+} from './attempt-control-evidence.js';
+export type {
+  AttemptControlEvidence,
+  AttemptCancellationControlState,
+  AttemptControlEvidenceDecision,
+  AttemptControlEvidenceRepository,
+  ReadAttemptCancellationControlInput,
+  RecordAttemptControlReceiptInput,
+  ReportAttemptControlInput,
+} from './attempt-control-evidence.js';
+export { reconcileAttemptCancellation } from './attempt-control-delivery.js';
+export type {
+  AttemptControlDeliveryDeps,
+  ReconcileAttemptCancellationInput,
+  AttemptControlDeliveryResult,
+} from './attempt-control-delivery.js';
 export type { AttemptOutcomeDecodingInput, ExecutionAttemptHandlersDeps } from './execution-attempt-handlers.js';
 export {
   WORKFLOW_WORKLOAD_KIND,

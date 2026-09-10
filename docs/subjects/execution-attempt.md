@@ -23,6 +23,8 @@ next: false
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
 | `bootstrap.awaitStart` | [`execution-attempt.bootstrap.awaitStart`](#execution-attempt.bootstrap.awaitStart) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/execution-attempt/schemas.ts) |
+| `control.deliver` | [`execution-attempt.control.deliver`](#execution-attempt.control.deliver) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/execution-attempt/schemas.ts) |
+| `control.report` | [`execution-attempt.control.report`](#execution-attempt.control.report) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/execution-attempt/schemas.ts) |
 | `instruction.get` | [`execution-attempt.instruction.get`](#execution-attempt.instruction.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/execution-attempt/schemas.ts) |
 | `operation.admit` | [`execution-attempt.operation.admit`](#execution-attempt.operation.admit) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/execution-attempt/schemas.ts) |
 | `operation.admitted` | [`execution-attempt.operation.admitted`](#execution-attempt.operation.admitted) | event | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/execution-attempt/schemas.ts) |
@@ -56,6 +58,54 @@ Type: Request (RPC)
 | `reason` | `"resolved" \| "not-found" \| "fenced" \| "allocation-terminated" \| "gate-closed" \| "bootstrap-expired" \| undefined` | no |
 | `status` | `"permitted" \| "pending" \| "refused"` | yes |
 
+### <a id="execution-attempt.control.deliver"></a>`execution-attempt.control.deliver` (rpc)
+
+Deliver accepted Cancel without acquiring an operation slot.
+Subject: `execution-attempt.control.deliver`
+Type: Request (RPC) — Authority → Runtime filtered by Attempt and incarnation.
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `cancellation` | `{ requestKey: string; controlRevision: number; requestedAt: string; reason?: string \| undefined; }` | yes |
+| `executionAttemptId` | `string` | yes |
+| `runtimeGeneration` | `number` | yes |
+| `runtimeIncarnationId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `decision` | `"received" \| "refused"` | yes |
+| `reason` | `"stale-generation" \| "unsupported" \| undefined` | no |
+| `receipt` | `{ executionAttemptId: string; runtimeIncarnationId: string; runtimeGeneration: number; controlRevision: number; requestKey: string; receivedAt: string; } \| undefined` | no |
+
+### <a id="execution-attempt.control.report"></a>`execution-attempt.control.report` (rpc)
+
+Persist the runtime's final scoped conclusion independently of delivery ACK.
+Subject: `execution-attempt.control.report`
+Type: Request (RPC) — authenticated Runtime → Authority.
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `conclusion` | `{ status: "unsupported" \| "achieved" \| "unconfirmed"; boundary: "admission-closed" \| "setup-process-group" \| "workload"; evidence: { source: string; summary: string; observedAt: string; code?: string \| undefined; }; }` | yes |
+| `controlRevision` | `number` | yes |
+| `executionAttemptId` | `string` | yes |
+| `operationId` | `string \| undefined` | no |
+| `requestKey` | `string` | yes |
+| `runtimeGeneration` | `number` | yes |
+| `runtimeIncarnationId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `decision` | `"accepted" \| "duplicate" \| "refused"` | yes |
+| `reason` | `"not-found" \| "stale-generation" \| "cancel-mismatch" \| "operation-mismatch" \| "conflict" \| undefined` | no |
+
 ### <a id="execution-attempt.instruction.get"></a>`execution-attempt.instruction.get` (rpc)
 
 Read only the frozen assignment bound to the authenticated Attempt.
@@ -75,7 +125,7 @@ Type: Request (RPC) — Worker Runtime → Authority
 |-------|------|----------|
 | `decision` | `"found" \| "refused"` | yes |
 | `instruction` | `{ id: string; revision: string; workload: { kind: string; version: string; input: JsonValue; }; preservation: { required: ("source-state" \| "diagnostics" \| "workspace-state" \| "live-state")[]; }; workspace?: { provisioning: "create" \| "bind"; custody: "external" \| "disposable"; sourceRoots: { id: string; path: string; source?: { kind: string; input: JsonValue; } \| undefined; }[]; setup: { command: string; args: string[]; env: Record<string, string>; timeoutMs: number; }[]; } \| undefined; } \| undefined` | no |
-| `refusalReason` | `"resolved" \| "not-found" \| "fenced" \| "not-ready" \| "stale-generation" \| undefined` | no |
+| `refusalReason` | `"resolved" \| "not-found" \| "stale-generation" \| "fenced" \| "not-ready" \| undefined` | no |
 
 ### <a id="execution-attempt.operation.admit"></a>`execution-attempt.operation.admit` (rpc)
 
@@ -107,7 +157,7 @@ Type: Request (RPC) — command → decision
 |-------|------|----------|
 | `decision` | `"refused" \| "duplicate" \| "admitted"` | yes |
 | `operationId` | `string \| undefined` | no |
-| `refusalReason` | `"resolved" \| "not-found" \| "fenced" \| "gate-closed" \| "not-allocated" \| "operation-active" \| "not-ready" \| "stale-generation" \| "preparation-required" \| "preparation-not-required" \| "preparation-already-completed" \| undefined` | no |
+| `refusalReason` | `"resolved" \| "not-found" \| "stale-generation" \| "fenced" \| "gate-closed" \| "not-allocated" \| "operation-active" \| "not-ready" \| "preparation-required" \| "preparation-not-required" \| "preparation-already-completed" \| undefined` | no |
 
 ### <a id="execution-attempt.operation.admitted"></a>`execution-attempt.operation.admitted` (event)
 
@@ -134,8 +184,7 @@ Type: Event
 
 The authority hands one admitted operation to the runtime that owns the attempt.
 
-This is the only subject in the namespace on which the authority is the
-requester and the runtime the responder.
+Like control.deliver, the authority is the requester and the runtime the responder.
 
 Emitter: attempt authority (`runtime-registration.ts`).
 Handlers: every live Worker Runtime, each subscribing through
@@ -188,7 +237,7 @@ Type: Request (RPC) — Worker Runtime → Authority
 |-------|------|----------|
 | `binding` | `{ workspaceRoot: string; sourceRoots: { id: string; path: string; }[]; } \| undefined` | no |
 | `decision` | `"accepted" \| "duplicate" \| "refused"` | yes |
-| `refusalReason` | `"resolved" \| "not-found" \| "fenced" \| "not-allocated" \| "stale-generation" \| "preparation-not-required" \| "no-active-operation" \| "operation-mismatch" \| "binding-mismatch" \| "conflict" \| undefined` | no |
+| `refusalReason` | `"resolved" \| "not-found" \| "stale-generation" \| "operation-mismatch" \| "conflict" \| "fenced" \| "not-allocated" \| "preparation-not-required" \| "no-active-operation" \| "binding-mismatch" \| undefined` | no |
 
 ### <a id="execution-attempt.outcome.submit"></a>`execution-attempt.outcome.submit` (rpc)
 
@@ -211,7 +260,7 @@ Type: Request (RPC) — Worker Runtime → Authority
 
 | Field | Type | Required |
 |-------|------|----------|
-| `decision` | `"accepted" \| "fenced" \| "duplicate" \| "conflict"` | yes |
+| `decision` | `"accepted" \| "duplicate" \| "conflict" \| "fenced"` | yes |
 
 ### <a id="execution-attempt.runtime.ready"></a>`execution-attempt.runtime.ready` (event)
 

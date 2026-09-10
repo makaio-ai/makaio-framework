@@ -38,6 +38,27 @@ export type {
 } from './schemas.js';
 export { ExecutionAttemptNamespace, ExecutionAttemptSubjects } from './namespace.js';
 export {
+  ExecutionAttemptCancellationIntentSchema,
+  ExecutionAttemptControlCorrelationSchema,
+  ExecutionAttemptControlDeliverySchema,
+  ExecutionAttemptControlDeliveryResponseSchema,
+  ExecutionAttemptControlReceiptSchema,
+  ExecutionAttemptControlConclusionSchema,
+  ExecutionAttemptControlReportSchema,
+  ExecutionAttemptControlRefusalReasonSchema,
+  ExecutionAttemptControlReportResponseSchema,
+} from './control.js';
+export type {
+  ExecutionAttemptControlCorrelation,
+  ExecutionAttemptControlDelivery,
+  ExecutionAttemptControlDeliveryResponse,
+  ExecutionAttemptControlReceipt,
+  ExecutionAttemptControlConclusion,
+  ExecutionAttemptControlReport,
+  ExecutionAttemptControlRefusalReason,
+  ExecutionAttemptControlReportResponse,
+} from './control.js';
+export {
   ExecutionAttemptInstructionSchema,
   ExecutionAttemptOutcomeSchema,
   ExecutionAttemptPreparationResultSchema,

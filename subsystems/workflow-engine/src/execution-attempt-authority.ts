@@ -6,6 +6,13 @@ import type {
 } from '@makaio/contracts';
 import { awaitBootstrapStart, type BootstrapStartAuthority, type BootstrapStartOptions } from './bootstrap-start.js';
 import type {
+  AttemptCancellationControlState,
+  AttemptControlEvidenceDecision,
+  ReadAttemptCancellationControlInput,
+  RecordAttemptControlReceiptInput,
+  ReportAttemptControlInput,
+} from './attempt-control-evidence.js';
+import type {
   AdmitOperationInput,
   AllocationRecordingDecision,
   AllocationRefEvolution,
@@ -506,6 +513,37 @@ export class ExecutionAttemptAuthority<TOutcome> implements BootstrapStartAuthor
    */
   public async getAttemptControlState(executionAttemptId: string): Promise<AttemptControlState | null> {
     return this.repository.getAttemptControlState(executionAttemptId);
+  }
+
+  /**
+   * Read accepted Cancel and runtime observations together, including historical attempts.
+   * @param input - Exact owner and Attempt identity.
+   * @returns Coherent durable state, or null when the scope does not exist.
+   */
+  public async readAttemptCancellationControl(
+    input: ReadAttemptCancellationControlInput,
+  ): Promise<AttemptCancellationControlState | null> {
+    return this.repository.readAttemptCancellationControl(input);
+  }
+
+  /**
+   * Record an actual addressed-runtime receipt without settling any waiter.
+   * @param input - Original receipt and trusted owner.
+   * @returns Atomic acceptance or replay decision.
+   */
+  public async recordAttemptControlReceipt(
+    input: RecordAttemptControlReceiptInput,
+  ): Promise<AttemptControlEvidenceDecision> {
+    return this.repository.recordAttemptControlReceipt(input);
+  }
+
+  /**
+   * Accept scoped technical evidence without completing operations or interpreting outcomes.
+   * @param input - Runtime report and trusted owner.
+   * @returns Atomic acceptance or replay decision.
+   */
+  public async reportAttemptControl(input: ReportAttemptControlInput): Promise<AttemptControlEvidenceDecision> {
+    return this.repository.reportAttemptControl(input);
   }
 
   /**
