@@ -18,6 +18,19 @@ function isSchemaObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+type ArtifactSchemaFragment = boolean | Record<string, unknown>;
+
+/**
+ * Apply draft 2020-12 sibling constraints to a boolean reference target.
+ * @param target - Boolean target reached through a local reference.
+ * @param siblings - Constraints declared alongside the reference.
+ * @returns The equivalent schema fragment.
+ */
+function applyBooleanReferenceSiblings(target: boolean, siblings: Record<string, unknown>): ArtifactSchemaFragment {
+  if (Object.keys(siblings).length === 0) return target;
+  return target ? siblings : false;
+}
+
 /**
  * Look up a fragment target without following further references.
  * @param root - Root schema.
@@ -43,19 +56,25 @@ function resolvePointer(root: Record<string, unknown>, ref: string): unknown {
  * Resolve a local JSON Schema reference.
  * @param root - Root schema.
  * @param source - Reference node, including dialect-dependent sibling constraints.
- * @returns The referenced object schema, when resolvable.
+ * @returns The referenced schema fragment, when resolvable.
  */
 function resolveRef(
   root: Record<string, unknown>,
   source: Record<string, unknown>,
-): Record<string, unknown> | undefined {
+): ArtifactSchemaFragment | undefined {
   const ref = source.$ref;
   if (typeof ref !== 'string') return undefined;
-  const target = schemaObject(resolvePointer(root, ref));
-  if (!target || root.$schema !== 'https://json-schema.org/draft/2020-12/schema') return target;
+  const target = resolvePointer(root, ref);
+  if (typeof target === 'boolean') {
+    if (root.$schema !== 'https://json-schema.org/draft/2020-12/schema') return target;
+    const { $ref: _reference, ...siblings } = source;
+    return applyBooleanReferenceSiblings(target, siblings);
+  }
+  const schema = schemaObject(target);
+  if (!schema || root.$schema !== 'https://json-schema.org/draft/2020-12/schema') return schema;
   const { $ref: _reference, ...siblings } = source;
-  if (Object.keys(siblings).length === 0) return target;
-  return { ...target, allOf: [siblings, ...(Array.isArray(target.allOf) ? target.allOf : [])] };
+  if (Object.keys(siblings).length === 0) return schema;
+  return { ...schema, allOf: [siblings, ...(Array.isArray(schema.allOf) ? schema.allOf : [])] };
 }
 
 /**
@@ -79,6 +98,19 @@ function requiredProperties(node: Record<string, unknown>): string[] {
 }
 
 /**
+ * Read a declared object property without following the prototype chain.
+ * @param node - Object schema containing properties.
+ * @param key - Data-relative property name.
+ * @returns The property's schema fragment, when declared.
+ */
+function declaredPropertySchema(node: Record<string, unknown>, key: string): ArtifactSchemaFragment | undefined {
+  const properties = schemaObject(node.properties);
+  if (!properties || !Object.hasOwn(properties, key)) return undefined;
+  const property = properties[key];
+  return typeof property === 'boolean' ? property : schemaObject(property);
+}
+
+/**
  * Combine object intersections for property lookup, retaining shared constraints.
  * This is schema inspection only; payload validation remains the schema engine's job.
  * Declared path/type coverage does not prove that the complete schema is satisfiable;
@@ -96,7 +128,7 @@ function combineConjuncts(
   if (typeof node.$ref === 'string') {
     if (refs.has(node.$ref)) return undefined;
     const target = resolveRef(root, node);
-    return target ? combineConjuncts(root, target, new Set([...refs, node.$ref])) : undefined;
+    return isSchemaObject(target) ? combineConjuncts(root, target, new Set([...refs, node.$ref])) : undefined;
   }
   if (!Array.isArray(node.allOf)) return node;
   const { allOf, ...base } = node;
@@ -118,6 +150,32 @@ function combineConjuncts(
 }
 
 /**
+ * Resolve one local reference while preserving terminal boolean schema semantics.
+ * @param root - Root schema used for local reference resolution.
+ * @param node - Reference schema node.
+ * @param ref - Local reference identifier.
+ * @param parts - Remaining data-relative property names.
+ * @param required - Whether each path segment must be required.
+ * @param refs - References already traversed at this position.
+ * @param objectGuaranteed - Whether the artifact envelope guarantees an object at this location.
+ * @returns All matching schema fragments, or undefined when the reference cannot satisfy the path.
+ */
+function fieldSchemasForReference(
+  root: Record<string, unknown>,
+  node: Record<string, unknown>,
+  ref: string,
+  parts: string[],
+  required: boolean,
+  refs: Set<string>,
+  objectGuaranteed: boolean,
+): ArtifactSchemaFragment[] | undefined {
+  if (refs.has(ref)) return undefined;
+  const target = resolveRef(root, node);
+  if (typeof target === 'boolean') return parts.length === 0 ? [target] : undefined;
+  return target ? fieldSchemas(root, target, parts, required, new Set([...refs, ref]), objectGuaranteed) : undefined;
+}
+
+/**
  * Find schemas at an object-property path, requiring coverage in every union branch.
  * @param root - Root schema for resolving local references.
  * @param node - Current schema.
@@ -134,13 +192,9 @@ function fieldSchemas(
   required: boolean,
   refs = new Set<string>(),
   objectGuaranteed = false,
-): Record<string, unknown>[] | undefined {
+): ArtifactSchemaFragment[] | undefined {
   if (typeof node.$ref === 'string') {
-    if (refs.has(node.$ref)) return undefined;
-    const target = resolveRef(root, node);
-    return target
-      ? fieldSchemas(root, target, parts, required, new Set([...refs, node.$ref]), objectGuaranteed)
-      : undefined;
+    return fieldSchemasForReference(root, node, node.$ref, parts, required, refs, objectGuaranteed);
   }
   const unionKey = Array.isArray(node.anyOf) ? 'anyOf' : 'oneOf';
   const alternatives = node[unionKey];
@@ -165,9 +219,42 @@ function fieldSchemas(
   if (node.type !== 'object' && !(node.type === undefined && objectGuaranteed)) return undefined;
   const [key, ...rest] = parts;
   if (!key || (required && !requiredProperties(node).includes(key))) return undefined;
-  const child = schemaObject(schemaObject(node.properties)?.[key]);
+  const child = declaredPropertySchema(node, key);
   // The root envelope does not constrain the type of a nested property.
+  if (typeof child === 'boolean') return rest.length === 0 ? [child] : undefined;
   return child ? fieldSchemas(root, child, rest, required) : undefined;
+}
+
+/**
+ * Inspect the serialized schema fragments selected by one data-relative path.
+ *
+ * Paths traverse named object properties only. A terminal array is valid and
+ * represents the complete original array; selecting its elements is outside
+ * this contract. Multiple fragments represent the path's coverage across all
+ * schema variants.
+ * @param dataSchema - Serialized artifact data schema.
+ * @param path - Data-relative object-property path.
+ * @returns Covered schema fragments, or undefined when the path is not declared in every variant.
+ */
+function inspectArtifactDataPath(
+  dataSchema: Record<string, unknown>,
+  path: string,
+): readonly ArtifactSchemaFragment[] | undefined {
+  return fieldSchemas(dataSchema, dataSchema, path.split('.'), false, new Set(), true);
+}
+
+/**
+ * Determine whether a data-relative path is declared in every schema variant.
+ *
+ * Paths traverse named object properties only. A terminal array is valid and
+ * represents the complete original array; selecting its elements is outside
+ * this contract.
+ * @param dataSchema - Serialized artifact data schema.
+ * @param path - Data-relative object-property path.
+ * @returns Whether the path is declared in every schema variant.
+ */
+export function isArtifactDataPathDeclared(dataSchema: Record<string, unknown>, path: string): boolean {
+  return inspectArtifactDataPath(dataSchema, path) !== undefined;
 }
 
 /**
@@ -242,7 +329,11 @@ function containsClosedObject(
   if (node.additionalProperties === false) return true;
   if (typeof node.$ref === 'string' && !refs.has(node.$ref)) {
     const target = resolveRef(root, node);
-    if (!target || containsClosedObject(root, target, new Set([...refs, node.$ref]))) return true;
+    if (
+      target === undefined ||
+      (isSchemaObject(target) && containsClosedObject(root, target, new Set([...refs, node.$ref])))
+    )
+      return true;
   }
   return childSchemas(node).some((child) => containsClosedObject(root, child.node, refs));
 }
@@ -363,13 +454,14 @@ export function validateKindDataPaths(
     titlePath: string;
     indexedFields?: string[];
     searchableFields?: string[];
+    views?: Record<string, { fields: string[] }>;
     uniqueness?: { by: ({ kind: 'data'; path: string } | { kind: 'relation-target'; relationType: string })[] }[];
   },
   ctx: z.RefinementCtx,
 ): void {
   validateSchemaCompositions(value.dataSchema, value.dataSchema, ctx);
   const title = fieldSchemas(value.dataSchema, value.dataSchema, value.titlePath.split('.'), true, new Set(), true);
-  if (!title?.length || title.some((field) => field.type !== 'string')) {
+  if (!title?.length || title.some((field) => !isSchemaObject(field) || field.type !== 'string')) {
     ctx.addIssue({
       code: 'custom',
       path: ['titlePath'],
@@ -386,9 +478,12 @@ export function validateKindDataPaths(
           : [],
       ),
     ),
+    ...Object.entries(value.views ?? {}).flatMap(([name, view]) =>
+      view.fields.map((path, index) => ({ path, location: ['views', name, 'fields', index] })),
+    ),
   ];
   for (const { path, location } of paths) {
-    if (!fieldSchemas(value.dataSchema, value.dataSchema, path.split('.'), false, new Set(), true)) {
+    if (!isArtifactDataPathDeclared(value.dataSchema, path)) {
       ctx.addIssue({ code: 'custom', path: location, message: `Data path ${path} must select a declared field` });
     }
   }

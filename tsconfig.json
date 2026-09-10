@@ -39,6 +39,7 @@
       "@makaio/runtime-node/runtime/namespace": ["./runtimes/node/src/bus/runtime/namespace.ts"],
       "@makaio/tools-core": ["./core/tools-core/src/index.ts"],
       "@makaio/tools-core/testing": ["./core/tools-core/src/testing/index.ts"],
+      "@makaio/extension-artifact-query": ["./extensions/artifact-query/src/index.ts"],
       "@makaio/extension-filesystem": ["./extensions/filesystem/src/index.ts"],
       "@makaio/extension-shell": ["./extensions/shell/src/index.ts"],
       "@makaio/extension-shell/schemas": ["./extensions/shell/src/bus/schemas.ts"],

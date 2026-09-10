@@ -1,6 +1,7 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { z } from 'zod';
 import { Ajv2020 } from 'ajv/dist/2020.js';
+import { ArtifactKindViewSchema, isArtifactDataPathDeclared } from '../../index.js';
 import { defineArtifactKind, type ArtifactDataOf, type ArtifactOf } from '../kind-definition.js';
 import { ArtifactKindRegistrationSchema, ArtifactSchemaVersionSchema } from '../schemas.js';
 import { defineArtifactLifecycleHooks } from '../lifecycle-hooks.js';
@@ -934,6 +935,165 @@ describe('defineArtifactKind', () => {
     });
     expect(definition.hooks?.hooks[0]?.handler).toBe(handler);
     expect(definition.toRegistration()).not.toHaveProperty('hooks');
+  });
+
+  it('serializes named original-field views independently from live kind behavior', () => {
+    const definition = defineArtifactKind({
+      ...options,
+      titlePath: 'subject',
+      dataSchema: z.strictObject({
+        subject: z.string(),
+        statement: z.string(),
+        details: z.strictObject({ rationale: z.string() }),
+        rejectedAlternatives: z.array(z.strictObject({ alternative: z.string(), reason: z.string() })),
+      }),
+      views: {
+        compact: { fields: ['subject', 'statement'] },
+        detailed: { fields: ['subject', 'details.rationale', 'rejectedAlternatives'] },
+      },
+    });
+
+    const registration = definition.toRegistration();
+    expect(registration.views).toEqual({
+      compact: { fields: ['subject', 'statement'] },
+      detailed: { fields: ['subject', 'details.rationale', 'rejectedAlternatives'] },
+    });
+    registration.views?.compact?.fields.push('details.rationale');
+    expect(definition.toRegistration().views?.compact?.fields).toEqual(['subject', 'statement']);
+  });
+
+  it('validates named view paths against object properties and permits whole terminal arrays', () => {
+    const registration = defineArtifactKind({
+      ...options,
+      titlePath: 'subject',
+      dataSchema: z.strictObject({
+        subject: z.string(),
+        details: z.strictObject({ rationale: z.string() }),
+        rejectedAlternatives: z.array(z.strictObject({ alternative: z.string(), reason: z.string() })),
+      }),
+      views: { compact: { fields: ['details.rationale', 'rejectedAlternatives'] } },
+    }).toRegistration();
+
+    expect(isArtifactDataPathDeclared(registration.dataSchema, 'details.rationale')).toBe(true);
+    expect(isArtifactDataPathDeclared(registration.dataSchema, 'rejectedAlternatives')).toBe(true);
+    expect(isArtifactDataPathDeclared(registration.dataSchema, 'rejectedAlternatives.reason')).toBe(false);
+
+    const result = ArtifactKindRegistrationSchema.safeParse({
+      ...registration,
+      views: { compact: { fields: ['rejectedAlternatives.reason'] } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success)
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ['views', 'compact', 'fields', 0],
+          message: 'Data path rejectedAlternatives.reason must select a declared field',
+        }),
+      );
+  });
+
+  it('does not treat inherited property names as declared paths', () => {
+    const registration = defineArtifactKind(options).toRegistration();
+    expect(isArtifactDataPathDeclared(registration.dataSchema, '__proto__')).toBe(false);
+
+    const rejected = ArtifactKindRegistrationSchema.safeParse({
+      ...registration,
+      views: { compact: { fields: ['__proto__'] } },
+    });
+    expect(rejected.success).toBe(false);
+
+    const ownProperties = JSON.parse('{"title":{"type":"string"},"__proto__":{"type":"string"}}') as Record<
+      string,
+      unknown
+    >;
+    expect(isArtifactDataPathDeclared({ type: 'object', properties: ownProperties }, '__proto__')).toBe(true);
+  });
+
+  it('allows boolean schema terminals but does not traverse through them', () => {
+    const booleanSchema = {
+      type: 'object',
+      properties: {
+        topic: { type: 'string' },
+        allowed: true,
+        denied: false,
+        allowedReference: { $ref: '#/$defs/allowed' },
+        deniedReference: { $ref: '#/$defs/denied' },
+      },
+      required: ['topic'],
+      $defs: { allowed: true, denied: false },
+    };
+    const registration = ArtifactKindRegistrationSchema.parse({
+      ...defineArtifactKind(options).toRegistration(),
+      dataSchema: booleanSchema,
+      views: { compact: { fields: ['allowed', 'denied', 'allowedReference', 'deniedReference'] } },
+    });
+
+    for (const path of registration.views?.compact?.fields ?? []) {
+      expect(isArtifactDataPathDeclared(registration.dataSchema, path)).toBe(true);
+    }
+    expect(isArtifactDataPathDeclared(registration.dataSchema, 'allowed.nested')).toBe(false);
+    expect(
+      ArtifactKindRegistrationSchema.safeParse({
+        ...registration,
+        dataSchema: { ...booleanSchema, properties: { ...booleanSchema.properties, topic: true } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    { name: 'true', target: true },
+    { name: 'false', target: false },
+  ])('keeps a 2020-12 boolean $ref terminal when it has sibling constraints ($name)', ({ target }) => {
+    const registration = ArtifactKindRegistrationSchema.parse({
+      ...defineArtifactKind(options).toRegistration(),
+      dataSchema: {
+        $schema: 'https://json-schema.org/draft/2020-12/schema',
+        type: 'object',
+        properties: {
+          topic: { type: 'string' },
+          referenced: { $ref: '#/$defs/target', description: 'A constrained boolean reference.' },
+        },
+        required: ['topic'],
+        $defs: { target },
+      },
+      views: { compact: { fields: ['referenced'] } },
+    });
+
+    expect(isArtifactDataPathDeclared(registration.dataSchema, 'referenced')).toBe(true);
+    expect(isArtifactDataPathDeclared(registration.dataSchema, 'referenced.nested')).toBe(false);
+  });
+
+  it('allows extensible view names and optional declared fields', () => {
+    const definition = defineArtifactKind({
+      ...options,
+      titlePath: 'subject',
+      dataSchema: z.strictObject({
+        subject: z.string(),
+        details: z.strictObject({ rationale: z.string() }).optional(),
+      }),
+      views: { 'implementation-planner': { fields: ['subject', 'details.rationale'] } },
+    });
+
+    expect(definition.toRegistration().views).toEqual({
+      'implementation-planner': { fields: ['subject', 'details.rationale'] },
+    });
+  });
+
+  it('reserves full for the generic complete-payload view', () => {
+    const registration = defineArtifactKind(options).toRegistration();
+    expect(ArtifactKindViewSchema.safeParse({ fields: [] }).success).toBe(false);
+    const result = ArtifactKindRegistrationSchema.safeParse({
+      ...registration,
+      views: { full: { fields: ['topic'] } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success)
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ['views', 'full'],
+          message: 'Artifact kind view full is reserved for the generic complete-payload view',
+        }),
+      );
   });
 
   it('rejects obsolete registration metadata instead of silently accepting it', () => {

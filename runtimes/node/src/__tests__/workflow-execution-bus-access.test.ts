@@ -337,7 +337,9 @@ describe('workflow execution bus access', () => {
       expect(allowed!.has('workflow.frame.started')).toBe(true);
       expect(allowed!.has('workflow.gate.suspended')).toBe(true);
       expect(allowed!.has('workflow.state.get')).toBe(true);
+      expect(allowed!.has('artifact.kind.list')).toBe(true);
       expect(allowed!.has('artifact.query')).toBe(true);
+      expect(allowed!.has('artifact.resolve')).toBe(true);
       expect(allowed!.has('subagent.spawn')).toBe(true);
       expect(allowed!.has('subagent.getStatus')).toBe(true);
     });
@@ -366,6 +368,23 @@ describe('workflow execution bus access', () => {
       expect(allowed!.has('workflow.define')).toBe(false);
       expect(allowed!.has('workflow.delete')).toBe(false);
       expect(allowed!.has('workflow.create')).toBe(false);
+    });
+
+    it('keeps selected-artifact reads and existing writes limited to explicit operations', () => {
+      mintWorkflowExecutionBusSecret({
+        executionAttemptId: 'attempt-artifact-read',
+        executionId: 'exec-artifact-read',
+      });
+
+      const allowed = resolveHmacIdentityAllowedSubjects('attempt-artifact-read');
+      expect(allowed).not.toBeNull();
+      expect([...allowed!].filter((subject) => subject.startsWith('artifact.')).sort()).toStrictEqual([
+        'artifact.create',
+        'artifact.kind.list',
+        'artifact.query',
+        'artifact.resolve',
+        'artifact.revise',
+      ]);
     });
 
     it('preserves allowedSubjects after rotation', () => {
@@ -467,7 +486,9 @@ describe('workflow execution bus access', () => {
       expect(subjects).toContain('workflow.resolveRole');
 
       // Artifact subjects
+      expect(subjects).toContain('artifact.kind.list');
       expect(subjects).toContain('artifact.query');
+      expect(subjects).toContain('artifact.resolve');
       expect(subjects).toContain('artifact.create');
       expect(subjects).toContain('artifact.revise');
       expect(subjects).toContain('workflow.artifact.updated');

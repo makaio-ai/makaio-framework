@@ -59,6 +59,8 @@ export type {
   ArtifactKindDefinition,
   ArtifactOf,
 } from './kind-definition.js';
+export { compileArtifactDataSchema } from './data-schema-validator.js';
+export type { ArtifactDataValidator } from './data-schema-validator.js';
 export { defineArtifactLifecycleHooks } from './lifecycle-hooks.js';
 export type {
   AfterArtifactHookContext,
@@ -142,6 +144,7 @@ export {
   ArtifactUniquenessSelectorSchema,
   ArtifactUniquenessRuleSchema,
   ArtifactEvidenceRequirementsSchema,
+  ArtifactKindViewSchema,
   ArtifactKindRegistrationSchema,
 } from './kind-registration.js';
 export type {
@@ -150,6 +153,7 @@ export type {
   ArtifactRelationRequirement,
   ArtifactUniquenessRule,
   ArtifactEvidenceRequirements,
+  ArtifactKindView,
   ArtifactKindRegistration,
 } from './kind-registration.js';
-export { readArtifactTitle } from './kind-paths.js';
+export { isArtifactDataPathDeclared, readArtifactTitle } from './kind-paths.js';

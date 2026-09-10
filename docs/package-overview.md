@@ -312,6 +312,7 @@ Read [`.agents/policies/extensions.md`](../.agents/policies/extensions.md),
 | Path                                | Package                                    | Description                                     |
 | ----------------------------------- | ------------------------------------------ | ----------------------------------------------- |
 | `extensions/account-manager`        | `@makaio/extension-account-manager`        | Account management extension.                   |
+| `extensions/artifact-query`         | `@makaio/extension-artifact-query`         | Selected Artifact read tools for AI agents.     |
 | `extensions/claude-code-statusline` | `@makaio/extension-claude-code-statusline` | Claude Code status line extension.              |
 | `extensions/client-commands`        | `@makaio/extension-client-commands`        | Client command contributions.                   |
 | `extensions/client-hooks`           | `@makaio/extension-client-hooks`           | Client lifecycle hooks.                         |
