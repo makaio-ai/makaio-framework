@@ -87,11 +87,18 @@ function toMigrationChainRelativePath(file: string): string | undefined {
 /**
  * Return whether a packed file violates the runtime migration artifact contract.
  * @param file - Packlist file path using slash separators.
+ * @param packedFiles - Complete packlist used to distinguish migration chains from compiled modules.
  * @returns Whether the file is source-only content inside a migration chain.
  */
-function isForbiddenRuntimeMigrationChainFile(file: string): boolean {
+function isForbiddenRuntimeMigrationChainFile(file: string, packedFiles: ReadonlySet<string>): boolean {
   const relativePath = toMigrationChainRelativePath(file);
-  return relativePath !== undefined && !isRuntimeMigrationChainFile(relativePath);
+  if (relativePath === undefined) return false;
+  const chainRoot = file.slice(0, file.length - relativePath.length);
+  const emittedModule = /^dist\/.*\.(?:[cm]?js|d\.[cm]?ts)$/u.test(file);
+  // Compiled storage modules also use directories named drizzle. A journal
+  // identifies an actual migration chain, where executable modules must not ship.
+  if (emittedModule && !packedFiles.has(`${chainRoot}meta/_journal.json`)) return false;
+  return !isRuntimeMigrationChainFile(relativePath);
 }
 
 /**
@@ -105,7 +112,8 @@ export function checkPacklist(packageName: string, files: readonly string[]): Pa
   const required = ['package.json', 'README.md', 'LICENSE'];
   const missingRequired = required.filter((file) => !fileSet.has(file));
   const forbidden = files.filter(
-    (file) => FORBIDDEN_PATTERNS.some((pattern) => pattern.test(file)) || isForbiddenRuntimeMigrationChainFile(file),
+    (file) =>
+      FORBIDDEN_PATTERNS.some((pattern) => pattern.test(file)) || isForbiddenRuntimeMigrationChainFile(file, fileSet),
   );
   return { packageName, missingRequired, forbidden };
 }

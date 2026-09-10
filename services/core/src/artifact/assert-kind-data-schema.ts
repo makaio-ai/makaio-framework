@@ -1,7 +1,4 @@
-import Ajv from 'ajv';
-import Ajv2020 from 'ajv/dist/2020.js';
-import addFormats from 'ajv-formats';
-import { ARTIFACT_VALUE_TYPE_KEYWORD, type ArtifactKindRegistration } from '@makaio/contracts/artifact';
+import { compileArtifactDataSchema, type ArtifactKindRegistration } from '@makaio/contracts/artifact';
 
 /**
  * Compile the complete schema before an authoritative registration can change state.
@@ -10,16 +7,7 @@ import { ARTIFACT_VALUE_TYPE_KEYWORD, type ArtifactKindRegistration } from '@mak
  */
 export function assertKindDataSchema(registration: ArtifactKindRegistration): void {
   try {
-    // Each Kind owns its local schema identifiers; compiler caches must not allow
-    // one Kind's definitions to satisfy another Kind's references.
-    const options = { allErrors: true, strict: false, strictSchema: true };
-    const compiler =
-      registration.dataSchema.$schema === 'https://json-schema.org/draft/2020-12/schema'
-        ? new Ajv2020(options)
-        : new Ajv(options);
-    addFormats(compiler);
-    compiler.addKeyword({ keyword: ARTIFACT_VALUE_TYPE_KEYWORD, schemaType: 'string', valid: true });
-    compiler.compile(registration.dataSchema);
+    compileArtifactDataSchema(registration);
   } catch (error) {
     throw new Error(
       `Invalid data schema for artifact kind '${registration.kind}' version '${registration.schemaVersion}': ${error instanceof Error ? error.message : String(error)}`,

@@ -9,6 +9,15 @@ export const ArtifactCategorySchema = z.enum(['knowledge', 'commitment', 'intera
 /** Named object properties relative to data. Array indices and wildcards are not supported. */
 export const ArtifactDataPathSchema = z.string().regex(/^[A-Za-z_$][\w$-]*(?:\.[A-Za-z_$][\w$-]*)*$/);
 
+/** A named, lossless selection of original fields from an artifact payload. */
+export const ArtifactKindViewSchema = z.strictObject({
+  /** Data-relative object-property paths included in this view. */
+  fields: z.array(ArtifactDataPathSchema).min(1),
+});
+
+/** Name reserved for the generic complete-payload view. */
+const RESERVED_ARTIFACT_KIND_VIEW_NAMES = new Set(['full']);
+
 /** Category states usable in declarative uniqueness conditions, not a transition engine. */
 export const ARTIFACT_CATEGORY_LIFECYCLE_STATES = {
   knowledge: ['valid', 'retired'],
@@ -73,6 +82,7 @@ export const ArtifactKindRegistrationSchema = z
     evidenceRequirements: ArtifactEvidenceRequirementsSchema.optional(),
     indexedFields: z.array(ArtifactDataPathSchema).optional(),
     searchableFields: z.array(ArtifactDataPathSchema).optional(),
+    views: z.record(z.string().trim().min(1), ArtifactKindViewSchema).optional(),
   })
   .superRefine((value, ctx) => {
     if (!ArtifactDataSchemaDialectSchema.safeParse(value.dataSchema.$schema).success) {
@@ -93,6 +103,15 @@ export const ArtifactKindRegistrationSchema = z
         });
       }
     });
+    Object.keys(value.views ?? {}).forEach((name) => {
+      if (RESERVED_ARTIFACT_KIND_VIEW_NAMES.has(name)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['views', name],
+          message: `Artifact kind view ${name} is reserved for the generic complete-payload view`,
+        });
+      }
+    });
     validateKindDataPaths(value, ctx);
   });
 
@@ -106,5 +125,7 @@ export type ArtifactRelationRequirement = z.infer<typeof ArtifactRelationRequire
 export type ArtifactUniquenessRule = z.infer<typeof ArtifactUniquenessRuleSchema>;
 /** Direct evidence cardinality declaration. */
 export type ArtifactEvidenceRequirements = z.infer<typeof ArtifactEvidenceRequirementsSchema>;
+/** Named lossless field selection declared by an artifact kind. */
+export type ArtifactKindView = z.infer<typeof ArtifactKindViewSchema>;
 /** Serializable artifact kind definition. */
 export type ArtifactKindRegistration = z.infer<typeof ArtifactKindRegistrationSchema>;

@@ -126,6 +126,29 @@ describe('npm packlist policy', () => {
     ]);
   });
 
+  it('distinguishes compiled Drizzle modules from migration chains without allowing authoring files', () => {
+    const result = checkPacklist('@makaio/framework', [
+      'package.json',
+      'README.md',
+      'LICENSE',
+      'dist/storage/drizzle/index.mjs',
+      'dist/storage/drizzle/index.d.mts',
+      'dist/storage/handlers/drizzle/index.mjs',
+      'dist/storage/handlers/drizzle/index.d.mts',
+      'dist/storage/drizzle/notes.md',
+      'dist/storage/drizzle/meta/0000_snapshot.json',
+      'dist/storage/migrations/drizzle/0000_init.sql',
+      'dist/storage/migrations/drizzle/meta/_journal.json',
+      'dist/storage/migrations/drizzle/unexpected.mjs',
+    ]);
+
+    expect(result.forbidden).toEqual([
+      'dist/storage/drizzle/notes.md',
+      'dist/storage/drizzle/meta/0000_snapshot.json',
+      'dist/storage/migrations/drizzle/unexpected.mjs',
+    ]);
+  });
+
   it('reports missing README and LICENSE', () => {
     const result = checkPacklist('@makaio/test', ['package.json', 'dist/index.js']);
     expect(result.missingRequired).toContain('README.md');
