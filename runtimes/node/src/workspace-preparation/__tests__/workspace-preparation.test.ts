@@ -172,7 +172,9 @@ describe('local workspace preparation', () => {
         ],
       }),
     });
-    expect(await handle.runSetup()).toEqual({ status: 'failed', exitCode: 7, commandIndex: 1 });
+    const setupResult = await handle.runSetup();
+    expect(setupResult).toMatchObject({ status: 'failed', exitCode: 7, commandIndex: 1 });
+    expect(setupResult.processGroup).toBeDefined();
     expect(await fs.readFile(path.join(workspaceRoot, 'first'), 'utf8')).toBe('ready');
     await expect(fs.stat(path.join(workspaceRoot, 'never'))).rejects.toMatchObject({ code: 'ENOENT' });
     await handle.release();

@@ -4,7 +4,10 @@ import type { ExecutionAttemptWorkspaceBinding, WorkspaceRequirement } from '@ma
 import { assertContainedIn, assertNoSymlinkEscape } from '../workflow-worker/local-directory-materializer.js';
 import { runSetupCommand, type SetupCommandResult } from './setup-command.js';
 
-/** First failed setup command, or successful completion of the complete frozen recipe. */
+/**
+ * First failed setup command, or successful completion of the complete frozen recipe.
+ * Inherits `processGroup` from `SetupCommandResult` — present when a process was spawned.
+ */
 export interface WorkspaceSetupResult extends SetupCommandResult {
   readonly commandIndex?: number;
 }
@@ -132,12 +135,22 @@ function createHandle(
       if (options.signal?.aborted) return { status: 'cancelled', exitCode: null };
       setupActive = true;
       try {
+        let lastResult: SetupCommandResult | undefined;
         for (const [commandIndex, recipe] of requirement.setup.entries()) {
           const result = await runSetupCommand({ ...options, recipe, workspaceRoot });
+          lastResult = result;
           safeToRelease = result.status !== 'stop-failed';
           if (result.status !== 'completed') return { ...result, commandIndex };
         }
-        return { status: 'completed', exitCode: 0 };
+        // Commands run strictly sequentially, and each runSetupCommand resolves
+        // only after its own process group is proven quiescent or reported
+        // stop-failed. Any non-completed status returns from inside the loop, so
+        // reaching here means every command completed and the last command's
+        // observation is the recipe's own process-group fact.
+        const processGroup = lastResult?.processGroup;
+        return processGroup !== undefined
+          ? { status: 'completed', exitCode: 0, processGroup }
+          : { status: 'completed', exitCode: 0 };
       } finally {
         setupActive = false;
       }

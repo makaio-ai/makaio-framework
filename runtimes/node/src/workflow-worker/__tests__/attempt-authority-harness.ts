@@ -18,6 +18,7 @@ import {
   registerOperationAdmissionHandler,
   registerRuntimeRegistrationHandler,
   workflowAttemptOutcomeCodec,
+  type ExecutionAttemptRepository,
   type WorkflowAttemptOutcome,
 } from '@makaio/subsystem-workflow-engine';
 import {
@@ -68,6 +69,15 @@ export interface AttemptAuthorityHarnessOptions {
   readonly instruction: ExecutionAttemptInstruction;
   readonly beforeCommit?: (outcome: WorkflowAttemptOutcome, report: ExecutionAttemptOutcome) => Promise<void>;
   readonly beforeConverge?: () => Promise<void>;
+  /**
+   * Optional pre-constructed attempt repository.
+   *
+   * When supplied, the harness uses this repository instead of creating a fresh
+   * in-memory one. Callers that want a durable SQLite-backed store (e.g. for
+   * restart-recovery tests) create the repository themselves and pass it here.
+   * Defaults to the in-memory repository (`createInMemoryAttemptRepository`).
+   */
+  readonly repository?: ExecutionAttemptRepository<WorkflowAttemptOutcome>;
 }
 
 /**
@@ -88,6 +98,41 @@ export function freezeWorkflowInstruction(
     ...(workspace === undefined ? {} : { workspace }),
     preservation: { required: [] },
   });
+}
+
+/** Repository the harness runs against, plus the commit probe its convergence gate uses. */
+interface ResolvedHarnessRepository {
+  /** Port every Authority write and read goes through. */
+  readonly repository: ExecutionAttemptRepository<WorkflowAttemptOutcome>;
+  /**
+   * Report whether a durable outcome exists for an Attempt.
+   * @param executionAttemptId - Attempt whose commit is being probed.
+   * @returns True when the outcome is durably committed.
+   */
+  readonly hasCommittedOutcome: (executionAttemptId: string) => boolean;
+}
+
+/**
+ * Resolve the attempt repository and the synchronous commit probe behind it.
+ *
+ * The in-memory double exposes its commit ledger, so the default harness can
+ * assert synchronously that convergence never runs before durable commitment.
+ * An injected repository (SQLite, say) is only an
+ * {@link ExecutionAttemptRepository} and carries no such ledger; probing it
+ * would mean a second read inside the commit path, so the ordering invariant
+ * is left to the suites that own that repository.
+ * @param injected - Caller-supplied repository, or undefined for the in-memory default.
+ * @returns The repository to use and its commit probe.
+ */
+function resolveHarnessRepository(
+  injected: ExecutionAttemptRepository<WorkflowAttemptOutcome> | undefined,
+): ResolvedHarnessRepository {
+  if (injected !== undefined) return { repository: injected, hasCommittedOutcome: () => true };
+  const inMemory = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+  return {
+    repository: inMemory,
+    hasCommittedOutcome: (executionAttemptId) => inMemory.committedOutcomes.has(executionAttemptId),
+  };
 }
 
 /**
@@ -116,7 +161,7 @@ export async function createAttemptAuthorityHarness(
   executionId: string,
   options?: AttemptAuthorityHarnessOptions,
 ): Promise<AttemptAuthorityHarness> {
-  const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
+  const { repository, hasCommittedOutcome } = resolveHarnessRepository(options?.repository);
   const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 120_000 });
   const { executionAttemptId, bootstrapDeadlineAt } = await authority.createAttempt(
     executionId,
@@ -139,8 +184,7 @@ export async function createAttemptAuthorityHarness(
           },
           convergence: {
             async converge({ executionAttemptId: attemptId, outcome }) {
-              if (!repository.committedOutcomes.has(attemptId))
-                throw new Error('Convergence ran before durable commitment');
+              if (!hasCommittedOutcome(attemptId)) throw new Error('Convergence ran before durable commitment');
               await options.beforeConverge?.();
               convergedOutcomes.push(outcome);
               return 'projected';

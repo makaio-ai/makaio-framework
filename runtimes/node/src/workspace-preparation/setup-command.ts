@@ -2,12 +2,36 @@ import { execFile, spawn } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { WorkspaceSetupCommand } from '@makaio/contracts';
 
+/**
+ * Bounded fact about the Setup process group, recorded by the driver itself.
+ * `exited`: the group closed on its own and quiescence of the whole group was proven.
+ * `signalled-and-quiesced`: the driver signalled the group and proved it quiescent afterwards.
+ * `signalled-unconfirmed`: the driver signalled the group but could not prove quiescence
+ *   (poll timed out, `ps` unavailable, or a signal failed) — never treat as a stop proof.
+ * `unsignalled-unconfirmed`: no signal reached the group (all attempts were absent or EPERM)
+ *   and quiescence could not be proven either — the group state is entirely unknown.
+ *
+ * The driver records raw values only. Rendering a human-readable summary and
+ * formatting the instant belong to whoever reports the fact, not to the driver:
+ * one fact can be reported to several boundaries with different wording.
+ */
+export type SetupProcessGroupObservation = {
+  readonly pid: number;
+  readonly outcome: 'exited' | 'signalled-and-quiesced' | 'signalled-unconfirmed' | 'unsignalled-unconfirmed';
+  /** Why quiescence stayed unproven; absent whenever the outcome proves quiescence. */
+  readonly cause?: 'poll-timeout' | 'ps-unavailable' | 'signal-error';
+  /** Instant the driver recorded this outcome. */
+  readonly observedAt: Date;
+};
+
 /** Result of one bounded setup command, after its owned process group has stopped. */
 export interface SetupCommandResult {
   readonly status: 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'spawn-failed' | 'stop-failed';
   readonly exitCode: number | null;
   /** Generic diagnostics deliberately exclude command arguments and environment values. */
   readonly message?: string;
+  /** Process-group observation, present exactly when a process was spawned. */
+  readonly processGroup?: SetupProcessGroupObservation;
 }
 
 /** Local inputs to an already-authorized command; this helper grants no permissions. */
@@ -29,16 +53,58 @@ export function isValidSetupCommandTimeoutMs(timeoutMs: number): boolean {
 }
 
 /**
+ * Tagged observation of group liveness after a kill(group,0) + ps probe.
+ * `psMissing` is set only when the host has no `ps` executable at all, which
+ * is the one failure no later probe in the same poll can recover from.
+ */
+type GroupLivenessResult = { readonly alive: false } | { readonly alive: true; readonly psMissing?: true };
+
+/**
+ * Tagged conclusion from the final owned-group cleanup pass.
+ * `signalledLiveGroup` records that the cleanup signal reached a group that
+ * still existed, which is a signalled stop even when the leader had exited.
+ * Present in both branches so the caller can determine whether any signal
+ * reached the group even when quiescence could not be proven.
+ */
+type StopGroupResult =
+  | { readonly quiesced: true; readonly signalledLiveGroup: boolean }
+  | {
+      readonly quiesced: false;
+      readonly cause: 'poll-timeout' | 'ps-unavailable' | 'signal-error';
+      readonly signalledLiveGroup: boolean;
+    };
+
+/** Whether a group signal reached an existing group or found nothing left (ESRCH). */
+type GroupSignalResult = 'signalled' | 'absent';
+
+/**
  * Signal the ordinary owned process group, tolerating an already-exited group.
  * @param pid - Leader of the setup process group.
  * @param signal - Signal delivered to the whole group.
+ * @returns Whether the group still existed when the signal was delivered.
  */
-function signalGroup(pid: number, signal: NodeJS.Signals): void {
+function signalGroup(pid: number, signal: NodeJS.Signals): GroupSignalResult {
   try {
     process.kill(-pid, signal);
+    return 'signalled';
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+    return 'absent';
   }
+}
+
+/**
+ * Decide whether a failed `ps` query proves the host has no usable `ps` at all.
+ *
+ * A missing executable is permanent; a timeout, a transient launch failure or
+ * unparseable output is not, and `ps` is the only probe that distinguishes a
+ * zombie-only group from a live descendant. Latching on a recoverable failure
+ * would turn a quiescent group into `stop-failed`.
+ * @param error - Rejection reported by the host `ps` query.
+ * @returns True when no later query in this poll can succeed either.
+ */
+function isPsMissing(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as NodeJS.ErrnoException).code === 'ENOENT';
 }
 
 /**
@@ -46,35 +112,49 @@ function signalGroup(pid: number, signal: NodeJS.Signals): void {
  * or write files, but still make kill(group, 0) succeed until their parent reaps them.
  * @param pid - Owned process group leader.
  * @param psTimeoutMs - Remaining bounded time available for the ps query.
- * @returns Whether the group contains any process that has not exited.
+ * @param psMissing - Whether an earlier probe in this poll proved ps permanently absent.
+ * @returns Tagged group liveness, noting a permanently missing ps for the caller.
  */
-async function groupHasLiveProcesses(pid: number, psTimeoutMs: number): Promise<boolean> {
+async function groupHasLiveProcesses(
+  pid: number,
+  psTimeoutMs: number,
+  psMissing: boolean,
+): Promise<GroupLivenessResult> {
   try {
     process.kill(-pid, 0);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
+    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return { alive: false };
     // Darwin can report EPERM for a zombie-only group. It proves neither
     // liveness nor quiescence; require the same positive ps evidence below.
     if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
   }
+  // A host without a ps executable does not grow one mid-poll, so spend the
+  // remaining budget on the cheap group probe instead of the same failure.
+  if (psMissing) return { alive: true };
   let stdout: string;
   try {
     stdout = await readProcessGroups(psTimeoutMs);
-  } catch {
+  } catch (error) {
     // Unlike a naive kill-only check, a successful group probe does not prove
-    // quiescence: it may name a live descendant or an unreaped zombie. If ps
-    // is unavailable or unparseable, wait conservatively for ESRCH instead.
-    return true;
+    // quiescence: it may name a live descendant or an unreaped zombie. Without
+    // ps evidence, wait conservatively for ESRCH instead. Only a missing ps
+    // latches; a timed-out or transiently failing query is retried on the next
+    // tick, inside the same bounded deadline.
+    return isPsMissing(error) ? { alive: true, psMissing: true } : { alive: true };
   }
   let sawGroup = false;
   for (const line of stdout.trim().split('\n')) {
     const [group, state, extra] = line.trim().split(/\s+/);
-    if (group === '' || state === undefined || extra !== undefined || !/^\d+$/.test(group) || state === '') return true;
+    if (group === '' || state === undefined || extra !== undefined || !/^\d+$/.test(group) || state === '') {
+      return { alive: true };
+    }
     if (Number(group) !== pid) continue;
     sawGroup = true;
-    if (!state.startsWith('Z')) return true;
+    if (!state.startsWith('Z')) return { alive: true };
   }
-  return !sawGroup;
+  // sawGroup=true: all matching processes are zombies → quiescent.
+  // sawGroup=false: group not found in ps but kill(group,0) did not return ESRCH → conservative.
+  return sawGroup ? { alive: false } : { alive: true };
 }
 
 /**
@@ -97,30 +177,77 @@ function readProcessGroups(timeoutMs: number): Promise<string> {
 /**
  * Stop remaining descendants and confirm no live process remains in the owned group.
  * @param pid - Spawned group leader, absent when process creation failed.
- * @returns Whether release is safe with respect to this command's process tree.
+ * @returns Tagged quiescence conclusion, with the cause when quiescence is unproven.
  */
-async function stopRemainingGroup(pid: number | undefined): Promise<boolean> {
-  if (pid === undefined) return true;
+async function stopRemainingGroup(pid: number | undefined): Promise<StopGroupResult> {
+  if (pid === undefined) return { quiesced: true, signalledLiveGroup: false };
+  let signalledLiveGroup = false;
   try {
     try {
-      signalGroup(pid, 'SIGKILL');
+      signalledLiveGroup = signalGroup(pid, 'SIGKILL') === 'signalled';
     } catch (error) {
       // XNU excludes zombies from group signalling, so final cleanup can
       // return EPERM after termination. Only the bounded proof below may
-      // establish safe release; a denied signal alone never does.
+      // establish safe release; a denied signal alone never does, and it
+      // proves no live group either — it stays out of `signalledLiveGroup`.
       if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
     }
     const deadline = Date.now() + 2_000;
+    let psMissing = false;
     while (Date.now() < deadline) {
+      // The deadline can pass between the loop condition and this read; a
+      // non-positive budget would become an unbounded execFile timeout.
       const remaining = deadline - Date.now();
       if (remaining <= 0) break;
-      if (!(await groupHasLiveProcesses(pid, Math.min(1_000, remaining)))) return true;
+      const liveness = await groupHasLiveProcesses(pid, Math.min(1_000, remaining), psMissing);
+      if (!liveness.alive) return { quiesced: true, signalledLiveGroup };
+      psMissing = psMissing || liveness.psMissing === true;
       await delay(20);
     }
+    // Only a permanently missing ps is reported as `ps-unavailable`; a poll that
+    // ended with recoverable failures simply ran out of time.
+    return { quiesced: false, cause: psMissing ? 'ps-unavailable' : 'poll-timeout', signalledLiveGroup };
   } catch {
     // Do not claim safe release when the host cannot stop the process group.
+    return { quiesced: false, cause: 'signal-error', signalledLiveGroup };
   }
-  return false;
+}
+
+/**
+ * Build an honest, bounded process-group observation from driver-recorded facts.
+ * @param pid - Spawned group leader PID.
+ * @param signalDelivered - Whether a stop signal reached the group during the stop phase
+ *   (SIGTERM or escalation SIGKILL via `stop()`); does not include the cleanup SIGKILL.
+ * @param stopResult - Tagged quiescence conclusion from the final cleanup pass, carrying
+ *   whether the cleanup SIGKILL itself reached a live group.
+ * @returns Typed observation: `exited` or `signalled-and-quiesced` when quiescence is
+ *   proven; `signalled-unconfirmed` when the group was signalled but quiescence is not;
+ *   `unsignalled-unconfirmed` when no signal reached the group and quiescence is also
+ *   unproven — the group state is entirely unknown.
+ */
+function buildProcessGroupObservation(
+  pid: number,
+  signalDelivered: boolean,
+  stopResult: StopGroupResult,
+): SetupProcessGroupObservation {
+  const observedAt = new Date();
+  if (stopResult.quiesced) {
+    // A cleanup signal that reached an existing group killed a surviving
+    // descendant, so the group did not simply exit — even if the leader did.
+    return signalDelivered || stopResult.signalledLiveGroup
+      ? { pid, outcome: 'signalled-and-quiesced', observedAt }
+      : { pid, outcome: 'exited', observedAt };
+  }
+  // When neither the stop-phase signals nor the cleanup SIGKILL reached any
+  // live group, we cannot claim the group was ever signalled — use the
+  // distinct unsignalled-unconfirmed outcome instead of signalled-unconfirmed.
+  const anySig = signalDelivered || stopResult.signalledLiveGroup;
+  return {
+    pid,
+    outcome: anySig ? 'signalled-unconfirmed' : 'unsignalled-unconfirmed',
+    cause: stopResult.cause,
+    observedAt,
+  };
 }
 
 /**
@@ -166,12 +293,17 @@ function executeSetupCommand(options: SetupCommandOptions): Promise<SetupCommand
     });
     let status: SetupCommandResult['status'] | undefined;
     let escalation: ReturnType<typeof setTimeout> | undefined;
+    // A terminal status is no signal evidence: a group that exited between the
+    // leader's exit and its close event answers ESRCH, and a denied signal
+    // delivers nothing either. Only a signal that reached an existing group
+    // counts, exactly as `signalledLiveGroup` counts the cleanup signal.
+    let signalDelivered = false;
     const stop = (reason: 'cancelled' | 'timed-out'): void => {
       if (status !== undefined) return;
       status = reason;
       if (child.pid === undefined) return;
       try {
-        signalGroup(child.pid, 'SIGTERM');
+        if (signalGroup(child.pid, 'SIGTERM') === 'signalled') signalDelivered = true;
       } catch (error) {
         // EPERM is inconclusive throughout termination, not just at close.
         // Keep escalation and the final quiescence proof responsible for safety.
@@ -182,7 +314,7 @@ function executeSetupCommand(options: SetupCommandOptions): Promise<SetupCommand
       }
       escalation = setTimeout(() => {
         try {
-          if (child.pid !== undefined) signalGroup(child.pid, 'SIGKILL');
+          if (child.pid !== undefined && signalGroup(child.pid, 'SIGKILL') === 'signalled') signalDelivered = true;
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'EPERM') status = 'stop-failed';
         }
@@ -199,8 +331,13 @@ function executeSetupCommand(options: SetupCommandOptions): Promise<SetupCommand
       clearTimeout(timeout);
       clearTimeout(escalation);
       options.signal?.removeEventListener('abort', abort);
-      void stopRemainingGroup(child.pid).then((stopped) => {
-        resolve({ status: stopped ? (status ?? (exitCode === 0 ? 'completed' : 'failed')) : 'stop-failed', exitCode });
+      // The escalation timer is cleared above, so no further signal can be
+      // delivered and the delivery flag is final from here on.
+      void stopRemainingGroup(child.pid).then((stopResult) => {
+        const finalStatus = stopResult.quiesced ? (status ?? (exitCode === 0 ? 'completed' : 'failed')) : 'stop-failed';
+        const processGroup =
+          child.pid !== undefined ? buildProcessGroupObservation(child.pid, signalDelivered, stopResult) : undefined;
+        resolve({ status: finalStatus, exitCode, processGroup });
       });
     });
   });
