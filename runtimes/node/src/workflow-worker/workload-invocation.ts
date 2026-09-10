@@ -18,6 +18,14 @@ import {
   type OutcomeReconnect,
   type OutcomeSubmitRetryConfig,
 } from './outcome-submission.js';
+import {
+  errorMessage,
+  preparationFailureOutcome,
+  setupFailureOutcome,
+  type LocalSetupStatus,
+} from './local-failure-classification.js';
+import { OperationAdmissionRefusedError } from './runtime-registration-client.js';
+import type { AttemptOperationObserver, ConcludedOperation, SetupConclusion } from './attempt-control-conclusion.js';
 
 /** One installed, versioned local executor for an opaque workload instruction. */
 export interface InstalledWorkloadAdapter {
@@ -91,6 +99,11 @@ export interface RunWorkloadInvocationOptions {
   readonly retry?: OutcomeSubmitRetryConfig;
   /** Local Workspace realization seam; defaults to the Node bind/create helper. */
   readonly preparation?: WorkloadInvocationPreparation;
+  /**
+   * Optional observer fed by the invocation path so the control endpoint can
+   * derive an honest scoped conclusion after a cancel delivery.
+   */
+  readonly control?: AttemptOperationObserver;
 }
 
 /** Durable result visible after generic terminal-outcome acknowledgement. */
@@ -100,9 +113,6 @@ export interface WorkloadInvocationResult {
   /** Authority acknowledgement after canonical owner convergence. */
   readonly decision: OutcomeAckDecision;
 }
-
-/** Result shape returned by the local Workspace setup handle. */
-type LocalSetupStatus = Awaited<ReturnType<LocalWorkspaceHandle['runSetup']>>;
 
 /**
  * Read the frozen Attempt instruction through the Runtime's authenticated bus.
@@ -132,6 +142,7 @@ async function getInstruction(
  * @param operationKind - Fixed operation requested by this Runtime.
  * @param admissionKey - Replay-stable key for the operation admission.
  * @returns The Authority-created admitted operation identity.
+ * @throws {@link OperationAdmissionRefusedError} When the Authority refuses the admission.
  */
 async function admitOperation(
   bus: IMakaioBus,
@@ -140,6 +151,7 @@ async function admitOperation(
   admissionKey: string,
 ): Promise<string> {
   const { executionAttemptId, runtimeGeneration } = options;
+  options.control?.admissionPending();
   // Admission can durably occupy the Attempt before its RPC receipt returns.
   // Never abort this replay-safe request: recover its receipt, then correlate
   // any cancellation with the admitted operation instead of starting new work.
@@ -154,20 +166,80 @@ async function admitOperation(
       { retry: options.retry, reconnect: options.reconnect },
     ),
   );
-  if (response.decision === 'refused' || response.operationId === undefined) {
-    throw new Error(`Attempt ${operationKind} admission refused: ${response.refusalReason ?? 'missing-operation-id'}`);
+  // Any completed response settles admission. A refusal for any reason leaves
+  // this Runtime holding no operation, so the control report may conclude
+  // admission-closed; an admitted response is settled by operationAdmitted()
+  // below, in one transition, so the observer never sees "settled without an
+  // operation" for an operation that was in fact admitted. Only the transport
+  // throw above keeps the question open, because an unanswered admit may still
+  // have occupied the Attempt durably.
+  if (response.decision === 'refused') {
+    options.control?.admissionSettled(response.refusalReason);
+    throw new OperationAdmissionRefusedError(options.executionAttemptId, admissionKey, response.refusalReason);
   }
+  if (response.operationId === undefined) {
+    throw new Error(
+      `Attempt ${operationKind} admission decision '${response.decision}' named no operation ` +
+        `(executionAttemptId=${executionAttemptId}, admissionKey=${admissionKey})`,
+    );
+  }
+  options.control?.operationAdmitted(operationKind, response.operationId);
   return response.operationId;
 }
 
+/** One admission request, plus what settling a cancellation at that point requires. */
+interface AdmissionAttempt {
+  /** Fixed operation this Runtime requests. */
+  readonly operationKind: 'workspace-preparation' | 'workload-invocation';
+  /** Replay-stable key for the operation admission. */
+  readonly admissionKey: string;
+  /** Workload-local cancellation signal the refusal is judged against. */
+  readonly signal: AbortSignal;
+  /** Frozen owner assignment, needed for preservation-aware acknowledgement. */
+  readonly instruction: ExecutionAttemptInstruction;
+  /** Locally retained Workspace handle, when Preparation already completed. */
+  readonly workspace?: LocalWorkspaceHandle;
+}
+
 /**
- * Convert an unknown local failure to bounded non-secret diagnostics.
- * @param error - Local exception or rejected value.
- * @returns Bounded diagnostic text safe for the technical outcome.
+ * Admit one operation, settling a cancellation that closed the start gate.
+ *
+ * Requesting a durable Cancel closes the Attempt's operation start gate
+ * without settling the Attempt, so an admission that loses that race is
+ * refused with `gate-closed` while the effective signal is already aborted.
+ * This Runtime is registered, holds a bound generation, and `commitOutcome` is
+ * never gated, so the settlement is its own: it submits the same cancellation
+ * it would have submitted had the signal won slightly earlier. The `aborted`
+ * guard is load-bearing — the same gate closes on supersession and on
+ * settlement, neither of which is this Runtime's cancellation to report.
+ * @param bus - Runtime bus authenticated as the Attempt peer.
+ * @param options - Fenced Attempt identity and retry inputs.
+ * @param attempt - Admission request and its cancellation-settlement inputs.
+ * @returns The admitted operation identity, or the acknowledged cancelled result.
+ * @throws {@link OperationAdmissionRefusedError} For every refusal that is not this cancellation.
  */
-function errorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.slice(0, 8_192) || 'Local execution failed without a diagnostic message';
+async function admitOperationOrSettleCancellation(
+  bus: IMakaioBus,
+  options: RunWorkloadInvocationOptions,
+  attempt: AdmissionAttempt,
+): Promise<{ readonly operationId: string } | WorkloadInvocationResult> {
+  try {
+    return { operationId: await admitOperation(bus, options, attempt.operationKind, attempt.admissionKey) };
+  } catch (error) {
+    const cancellationRefusal =
+      error instanceof OperationAdmissionRefusedError &&
+      error.refusalReason === 'gate-closed' &&
+      attempt.signal.aborted;
+    if (!cancellationRefusal) throw error;
+    return await acknowledgeOutcome(
+      bus,
+      options,
+      attempt.instruction,
+      { kind: 'cancelled' },
+      undefined,
+      attempt.workspace,
+    );
+  }
 }
 
 /**
@@ -200,7 +272,7 @@ function unboundControl(signal: AbortSignal | undefined): WorkloadControlBinding
  * @param options - Fenced Attempt and retry inputs.
  * @param instruction - Frozen preservation requirements, if the read completed.
  * @param outcome - Terminal technical failure or workload result.
- * @param operationId - Correlated admitted operation when one exists.
+ * @param concluded - Correlated admitted operation and its terminal fact, when one exists.
  * @param workspace - Locally retained Workspace handle, if preparation ran.
  * @returns Acknowledged terminal result.
  */
@@ -209,15 +281,18 @@ async function acknowledgeOutcome(
   options: RunWorkloadInvocationOptions,
   instruction: ExecutionAttemptInstruction | undefined,
   outcome: ExecutionAttemptOutcome,
-  operationId: string | undefined,
+  concluded: ConcludedOperation | undefined,
   workspace: LocalWorkspaceHandle | undefined,
 ): Promise<WorkloadInvocationResult> {
+  // Record the operation's terminal fact before the submit await, so a control
+  // report never waits on the Authority's outcome acknowledgement.
+  if (concluded !== undefined) options.control?.operationConcluded(concluded);
   const decision = await submitAttemptOutcomeWithAck(
     bus,
     {
       executionAttemptId: options.executionAttemptId,
       runtimeGeneration: options.runtimeGeneration,
-      ...(operationId === undefined ? {} : { operationId }),
+      ...(concluded === undefined ? {} : { operationId: concluded.operationId }),
       outcome,
     },
     { retry: options.retry, reconnect: options.reconnect },
@@ -272,24 +347,6 @@ async function reportPreparedWorkspace(
 }
 
 /**
- * Classify a completed local setup attempt without making any Authority call.
- * @param status - Local command completion status from the Workspace handle.
- * @returns Terminal outcome when setup cannot continue, otherwise undefined.
- */
-function setupFailureOutcome(status: LocalSetupStatus): ExecutionAttemptOutcome | undefined {
-  if (status.status === 'completed') return undefined;
-  if (status.status === 'cancelled') return { kind: 'cancelled' };
-  if (status.status === 'stop-failed') {
-    return { kind: 'technical-failure', stage: 'workspace-preparation', message: 'Workspace setup stop-failed' };
-  }
-  return {
-    kind: 'technical-failure',
-    stage: 'workspace-preparation',
-    message: `Workspace setup ${status.status}`,
-  };
-}
-
-/**
  * Run declared local setup and report its accepted binding to the Authority.
  * @param bus - Runtime bus authenticated as the Attempt peer.
  * @param options - Fenced Attempt, local root and retry inputs.
@@ -309,17 +366,27 @@ async function prepareWorkspace(
   if (signal.aborted) {
     return await acknowledgeOutcome(bus, options, instruction, { kind: 'cancelled' }, undefined, undefined);
   }
-  const operationId = await admitOperation(
-    bus,
-    options,
-    'workspace-preparation',
-    `workspace-preparation:${instruction.id}:${options.runtimeGeneration}`,
-  );
+  const admitted = await admitOperationOrSettleCancellation(bus, options, {
+    operationKind: 'workspace-preparation',
+    admissionKey: `workspace-preparation:${instruction.id}:${options.runtimeGeneration}`,
+    signal,
+    instruction,
+  });
+  if ('outcome' in admitted) return admitted;
+  const operationId = admitted.operationId;
   if (signal.aborted) {
-    return await acknowledgeOutcome(bus, options, instruction, { kind: 'cancelled' }, operationId, undefined);
+    return await acknowledgeOutcome(
+      bus,
+      options,
+      instruction,
+      { kind: 'cancelled' },
+      concludedPreparation(operationId, 'not-started'),
+      undefined,
+    );
   }
   let handle: LocalWorkspaceHandle | undefined;
   let setupStatus: LocalSetupStatus;
+  let setupEntered = false;
   try {
     if (options.workspaceRoot === undefined) throw new Error('Workspace preparation requires an explicit local root');
     const boundHandle = await (options.preparation ?? { prepare: bindLocalWorkspace }).prepare({
@@ -328,25 +395,32 @@ async function prepareWorkspace(
       signal,
     });
     handle = boundHandle;
+    setupEntered = true;
     setupStatus = await boundHandle.runSetup({ signal, env: options.setupEnv });
   } catch (error) {
+    // A throw out of runSetup is the driver failing without handing over any
+    // observation, so nothing is known about a process group; a throw before it
+    // means setup never started at all.
     return await acknowledgeOutcome(
       bus,
       options,
       instruction,
-      isCooperativeCancellation(error, signal)
-        ? { kind: 'cancelled' }
-        : { kind: 'technical-failure', stage: 'workspace-preparation', message: errorMessage(error) },
-      operationId,
+      preparationFailureOutcome(error, signal),
+      concludedPreparation(operationId, setupEntered ? 'no-observation' : 'not-started'),
       handle,
     );
   }
+  // A returned result without a process group proves no setup process was
+  // spawned under this operation (SetupCommandResult contract), which is not
+  // the same as a driver that handed over no observation at all.
+  const concluded = concludedPreparation(operationId, setupStatus.processGroup ?? 'no-spawn');
+  // Conclusion recorded before any Authority await so a failed report cannot strand the durable Cancel.
+  options.control?.operationConcluded(concluded);
   const setupOutcome = setupFailureOutcome(setupStatus);
   if (setupOutcome !== undefined)
-    return await acknowledgeOutcome(bus, options, instruction, setupOutcome, operationId, handle);
-  if (signal.aborted) {
-    return await acknowledgeOutcome(bus, options, instruction, { kind: 'cancelled' }, operationId, handle);
-  }
+    return await acknowledgeOutcome(bus, options, instruction, setupOutcome, concluded, handle);
+  if (signal.aborted)
+    return await acknowledgeOutcome(bus, options, instruction, { kind: 'cancelled' }, concluded, handle);
   const binding = await reportPreparedWorkspace(bus, options, operationId, handle);
   if (binding === undefined) {
     return await acknowledgeOutcome(
@@ -358,7 +432,7 @@ async function prepareWorkspace(
         stage: 'workspace-preparation',
         message: 'Workspace preparation report refused by the Authority',
       },
-      operationId,
+      concluded,
       handle,
     );
   }
@@ -368,6 +442,16 @@ async function prepareWorkspace(
     return await acknowledgeOutcome(bus, options, instruction, { kind: 'cancelled' }, undefined, handle);
   }
   return { handle, binding };
+}
+
+/**
+ * Name one concluded Workspace Preparation operation and its terminal setup fact.
+ * @param operationId - Preparation operation admitted by the Authority.
+ * @param setup - What the Runtime knows about the Setup process group.
+ * @returns The terminal fact recorded for the control conclusion.
+ */
+function concludedPreparation(operationId: string, setup: SetupConclusion): ConcludedOperation {
+  return { kind: 'workspace-preparation', operationId, setup };
 }
 
 /**
@@ -400,14 +484,18 @@ async function runBoundWorkloadInvocation(
   if (control.signal.aborted) {
     return await acknowledgeOutcome(bus, options, instruction, { kind: 'cancelled' }, undefined, workspace);
   }
-  const operationId = await admitOperation(
-    bus,
-    options,
-    'workload-invocation',
-    `workload-invocation:${instruction.id}:${options.runtimeGeneration}`,
-  );
+  const admitted = await admitOperationOrSettleCancellation(bus, options, {
+    operationKind: 'workload-invocation',
+    admissionKey: `workload-invocation:${instruction.id}:${options.runtimeGeneration}`,
+    signal: control.signal,
+    instruction,
+    ...(workspace === undefined ? {} : { workspace }),
+  });
+  if ('outcome' in admitted) return admitted;
+  const operationId = admitted.operationId;
+  const concluded: ConcludedOperation = { kind: 'workload-invocation', operationId };
   if (control.signal.aborted) {
-    return await acknowledgeOutcome(bus, options, instruction, { kind: 'cancelled' }, operationId, workspace);
+    return await acknowledgeOutcome(bus, options, instruction, { kind: 'cancelled' }, concluded, workspace);
   }
   let outcome: ExecutionAttemptOutcome;
   try {
@@ -424,7 +512,7 @@ async function runBoundWorkloadInvocation(
       ? { kind: 'cancelled' }
       : { kind: 'technical-failure', stage: 'workload-invocation', message: errorMessage(error) };
   }
-  return await acknowledgeOutcome(bus, options, instruction, outcome, operationId, workspace);
+  return await acknowledgeOutcome(bus, options, instruction, outcome, concluded, workspace);
 }
 
 /**

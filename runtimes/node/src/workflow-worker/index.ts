@@ -115,3 +115,11 @@ export {
   type BootstrapWorkerRuntimeOptions,
   type StartedWorkerRuntime,
 } from './bootstrap-start-client.js';
+export {
+  installAttemptControlEndpoint,
+  type AttemptControlEndpointDeps,
+  type AttemptControlEndpointIdentity,
+  type AttemptControlReportOptions,
+  type InstalledAttemptControlEndpoint,
+  type AttemptControlLastReport,
+} from './attempt-control-client.js';

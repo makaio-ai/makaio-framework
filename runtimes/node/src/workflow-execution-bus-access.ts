@@ -80,6 +80,15 @@ const STATIC_EXECUTION_SUBJECTS = [
   ExecutionAttemptSubjects.operation.report,
   ExecutionAttemptSubjects.operation.deliver,
   ExecutionAttemptSubjects.outcome.submit,
+  // Known framework gap (see runtime-registration-client.ts trust-boundary note):
+  // the per-identity allowlist is one flat set, so subscribe and request grants
+  // cannot be separated. Granting control.deliver/control.report here lets any
+  // authenticated attempt identity also *originate* those requests, not only
+  // answer them. Blast radius is fenced by the in-process attempt/incarnation
+  // filter and the runtimeGeneration check in attempt-control-client.ts; closing
+  // it needs direction-aware transport authorization. Tracked in FACT-153.
+  ExecutionAttemptSubjects.control.deliver,
+  ExecutionAttemptSubjects.control.report,
   WorkerSubjects.runtime.inputs.get,
   WorkerSubjects.control.outcome.submit,
   WorkflowSubjects.getRunContext,

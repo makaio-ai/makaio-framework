@@ -20,6 +20,7 @@ import { createWorkflowWorkloadAdapter } from './workflow-workload-adapter.js';
 import { registerWorkerRuntime } from './runtime-registration-client.js';
 import { bootstrapWorkerRuntime, type BootstrapRuntimeConnection } from './bootstrap-start-client.js';
 import { withWorkerBootstrapDeadline } from './worker-bootstrap-exchange.js';
+import { installAttemptControlEndpoint, type InstalledAttemptControlEndpoint } from './attempt-control-client.js';
 
 // ─────────────────────────────────────────────────────────────
 // Dependency types
@@ -247,13 +248,25 @@ export async function runHeadlessWorkflowWorker(
   const preBus = connection.bus;
   const workflow = createWorkflowWorkloadAdapter({ ...deps, workflowEnv }, credentials, preBus);
   let result: HeadlessWorkflowWorkerResult | undefined;
+  let control: InstalledAttemptControlEndpoint | undefined;
   try {
+    // Control is installed here rather than inside bootstrapWorkerRuntime
+    // because that bootstrap is shared with worker-entry.ts, which has no
+    // control observer to feed, and because the Authority refuses a control
+    // delivery for an unregistered runtime anyway — installing it before
+    // registration in this harness is early enough.
+    control = await installAttemptControlEndpoint(
+      preBus,
+      { executionAttemptId: deps.executionAttemptId, runtimeIncarnationId },
+      { reportOptions: { retry: deps.outcomeRetry, reconnect: () => preBus.reconnect() }, signal },
+    );
     const runtimeGeneration = await registerWorkerRuntime(preBus, {
       executionAttemptId: deps.executionAttemptId,
       runtimeIncarnationId,
       signal,
     });
     endpoint.bindGeneration(runtimeGeneration);
+    control.bindGeneration(runtimeGeneration);
     result = await runWorkloadInvocation(preBus, {
       executionAttemptId: deps.executionAttemptId,
       runtimeGeneration,
@@ -261,7 +274,8 @@ export async function runHeadlessWorkflowWorker(
       setupEnv: deps.setupEnv,
       preparation: deps.preparation,
       adapters: [workflow.adapter],
-      signal,
+      signal: AbortSignal.any([signal, control.signal]),
+      control: control.observer,
       retry: deps.outcomeRetry,
       reconnect: () => preBus.reconnect(),
     });
@@ -271,6 +285,19 @@ export async function runHeadlessWorkflowWorker(
     try {
       await workflow.releaseExecutable(result);
     } finally {
+      // Order matters: `finished()` may be the transition that makes the
+      // conclusion derivable, so it runs before anything is torn down.
+      // `cleanup()` then removes the subscription, so no further delivery is
+      // answered, and only then is the drain awaited — draining before cleanup
+      // would let a delivery arriving mid-drain dispatch a report the drain
+      // has already stopped waiting for.
+      control?.observer.finished();
+      control?.cleanup();
+      // The drain is bounded by the report transport's own retry deadline
+      // (120 s by default), not by a shutdown budget of its own. A dedicated
+      // control-report drain deadline is a host shutdown-policy decision,
+      // tracked in FACT-145.
+      await control?.settle();
       endpoint.cleanup();
       await connection.close();
     }

@@ -423,6 +423,8 @@ describe('workflow execution bus access', () => {
         'execution-attempt.operation.report',
         'execution-attempt.operation.deliver',
         'execution-attempt.outcome.submit',
+        'execution-attempt.control.deliver',
+        'execution-attempt.control.report',
         'worker.runtime.inputs.get',
         'worker.control.outcome.submit',
       ]);

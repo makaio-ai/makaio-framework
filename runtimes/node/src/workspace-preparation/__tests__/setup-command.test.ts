@@ -119,7 +119,7 @@ function holdTwoGroupProbes(): { readonly probes: () => number; readonly restore
 describe('bounded setup commands', () => {
   it('supports the maximum Node timer duration without premature timeout', async () => {
     const options = command("require('fs').writeFileSync('maximum-timeout','ran')", 2_147_483_647);
-    expect(await runSetupCommand(options)).toEqual({
+    expect(await runSetupCommand(options)).toMatchObject({
       status: 'completed',
       exitCode: 0,
     });
@@ -157,7 +157,7 @@ describe('bounded setup commands', () => {
   it('uses workspace cwd, explicit arguments and locally merged environment', async () => {
     const options = command("require('fs').writeFileSync('marker',process.argv[1]+process.env.SETUP_TEST_VALUE)");
     options.recipe.args.push('literal;not-a-shell');
-    expect(await runSetupCommand({ ...options, env: { SETUP_TEST_VALUE: '-injected' } })).toEqual({
+    expect(await runSetupCommand({ ...options, env: { SETUP_TEST_VALUE: '-injected' } })).toMatchObject({
       status: 'completed',
       exitCode: 0,
     });
@@ -165,7 +165,7 @@ describe('bounded setup commands', () => {
   });
 
   it('classifies non-zero exit and missing executable', async () => {
-    expect(await runSetupCommand(command('process.exit(4)'))).toEqual({ status: 'failed', exitCode: 4 });
+    expect(await runSetupCommand(command('process.exit(4)'))).toMatchObject({ status: 'failed', exitCode: 4 });
     const missing = command('');
     missing.recipe.command = path.join(workspaceRoot, 'missing-executable');
     expect(await runSetupCommand(missing)).toMatchObject({ status: 'spawn-failed' });
@@ -327,11 +327,11 @@ describe('bounded setup commands', () => {
     }
   });
 
-  it('waits conservatively for ESRCH when ps is unavailable after a group close', async () => {
+  it('latches a missing ps (ENOENT) and waits conservatively for ESRCH after a group close', async () => {
     let psQueries = 0;
     childProcessMocks.execFile.mockImplementation((_file, _args, _options, callback) => {
       psQueries += 1;
-      callback(new Error('ps unavailable'), '', '');
+      callback(Object.assign(new Error('ps not found'), { code: 'ENOENT' }), '', '');
       return undefined;
     });
     const childProgram = 'setInterval(()=>{},100)';
@@ -339,9 +339,12 @@ describe('bounded setup commands', () => {
     const probes = holdTwoGroupProbes();
 
     try {
-      expect(await runSetupCommand(command(parentProgram))).toEqual({ status: 'completed', exitCode: 0 });
+      expect(await runSetupCommand(command(parentProgram))).toMatchObject({ status: 'completed', exitCode: 0 });
       expect(probes.probes()).toBe(2);
-      expect(psQueries).toBeGreaterThanOrEqual(2);
+      // A host without a ps executable never grows one, so the first ENOENT
+      // latches: later rounds rely on kill(-pid, 0) reporting ESRCH instead of
+      // spending the budget on the same certain failure.
+      expect(psQueries).toBe(1);
     } finally {
       probes.restore();
     }
@@ -490,11 +493,211 @@ describe('bounded setup commands', () => {
     const probes = holdTwoGroupProbes();
 
     try {
-      expect(await runSetupCommand(command(parentProgram))).toEqual({ status: 'completed', exitCode: 0 });
+      expect(await runSetupCommand(command(parentProgram))).toMatchObject({ status: 'completed', exitCode: 0 });
       expect(probes.probes()).toBe(2);
       expect(psQueries).toBeGreaterThanOrEqual(2);
     } finally {
       probes.restore();
     }
+  });
+
+  it('natural completion yields an exited process-group observation with the spawned pid', async () => {
+    const result = await runSetupCommand(command('process.exit(0)'));
+    expect(result.processGroup).toBeDefined();
+    expect(result.processGroup?.outcome).toBe('exited');
+    expect(result.processGroup?.pid).toBeGreaterThan(0);
+    expect(result.processGroup?.observedAt).toBeInstanceOf(Date);
+    expect(result.processGroup?.cause).toBeUndefined();
+  });
+
+  it('a surviving descendant makes final cleanup a signalled stop, never a natural exit', async () => {
+    // The leader exits on its own, so `stop()` never runs — but the group still
+    // holds a live grandchild that final cleanup has to kill. Reporting `exited`
+    // here would claim a stop nobody performed.
+    const childProgram = "require('fs').writeFileSync('survivor-ready','yes');setInterval(()=>{},100)";
+    const parentProgram = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(childProgram)}],{stdio:'ignore'});setTimeout(()=>process.exit(0),400)`;
+    const result = await runSetupCommand(command(parentProgram));
+    expect(await fs.readFile(path.join(workspaceRoot, 'survivor-ready'), 'utf8')).toBe('yes');
+    expect(result).toMatchObject({ status: 'completed', exitCode: 0 });
+    expect(result.processGroup?.outcome).toBe('signalled-and-quiesced');
+    expect(result.processGroup?.cause).toBeUndefined();
+  });
+
+  it('abort yields signalled-and-quiesced when the process group is proven quiescent', async () => {
+    const childProgram = "require('fs').writeFileSync('gchild-ready','yes');setInterval(()=>{},100)";
+    const parentProgram = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(childProgram)}],{stdio:'ignore'});setInterval(()=>{},100)`;
+    const abort = new AbortController();
+    const running = runSetupCommand({ ...command(parentProgram), signal: abort.signal });
+    await expect.poll(async () => fs.readFile(path.join(workspaceRoot, 'gchild-ready'), 'utf8')).toBe('yes');
+    abort.abort();
+    const result = await running;
+    expect(result.processGroup?.outcome).toBe('signalled-and-quiesced');
+    expect(result.processGroup?.pid).toBeGreaterThan(0);
+  });
+
+  it('a group signal that finds nothing left is not signal evidence: the observation stays exited', async () => {
+    // stop() runs while the group is already gone, so SIGTERM answers ESRCH and
+    // nothing is delivered even though a terminal status is set. The leader then
+    // exits on its own: claiming a signalled stop here would be a false proof.
+    const kill = process.kill.bind(process);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      // Every group signal reports a vanished group; the liveness probe stays real.
+      if (typeof pid === 'number' && pid < 0 && signal !== 0) {
+        throw Object.assign(new Error('no such process group'), { code: 'ESRCH' });
+      }
+      return kill(pid, signal);
+    });
+    const abort = new AbortController();
+    try {
+      const running = runSetupCommand({
+        ...command("require('fs').writeFileSync('exit-ready','yes');setTimeout(()=>process.exit(0),1000)"),
+        signal: abort.signal,
+      });
+      await expect.poll(async () => fs.readFile(path.join(workspaceRoot, 'exit-ready'), 'utf8')).toBe('yes');
+      abort.abort();
+      const result = await running;
+      // The command keeps its own cancelled status; only the process-group
+      // observation is at stake, and no signal ever reached the group.
+      expect(result.status).toBe('cancelled');
+      expect(result.processGroup?.outcome).toBe('exited');
+      expect(result.processGroup?.cause).toBeUndefined();
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it('a missing ps yields signalled-unconfirmed with a ps-unavailable cause after one spawn', async () => {
+    const kill = process.kill.bind(process);
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      // Deny group liveness probes so stopRemainingGroup cannot confirm quiescence via kill(group,0).
+      if (typeof pid === 'number' && pid < 0 && signal === 0) {
+        throw Object.assign(new Error('probe denied'), { code: 'EPERM' });
+      }
+      return kill(pid, signal);
+    });
+    let psQueries = 0;
+    childProcessMocks.execFile.mockImplementation((_file, _args, _options, callback) => {
+      psQueries += 1;
+      callback(Object.assign(new Error('ps not found'), { code: 'ENOENT' }), '', '');
+      return undefined;
+    });
+    const abort = new AbortController();
+    try {
+      const running = runSetupCommand({
+        ...command("require('fs').writeFileSync('ps-ready','yes');setInterval(()=>{},100)"),
+        signal: abort.signal,
+      });
+      await expect.poll(async () => fs.readFile(path.join(workspaceRoot, 'ps-ready'), 'utf8')).toBe('yes');
+      abort.abort();
+      const result = await running;
+      expect(result.processGroup?.outcome).toBe('signalled-unconfirmed');
+      expect(result.processGroup?.cause).toBe('ps-unavailable');
+      // Permanent unavailability is the one case that latches the whole poll.
+      expect(psQueries).toBe(1);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it('both stop signals denied by EPERM and probe unable to prove quiescence yields unsignalled-unconfirmed', {
+    timeout: 10_000,
+  }, async () => {
+    // Both the SIGTERM and SIGKILL that stop() sends to the process group are
+    // denied with EPERM, so signalDelivered stays false. The cleanup SIGKILL in
+    // stopRemainingGroup is also denied, so signalledLiveGroup stays false. The
+    // liveness probe (kill(-pid,0)) gets EPERM and ps is permanently absent
+    // (ENOENT), so quiescence cannot be proven within the 2-second deadline.
+    // The expected outcome is 'unsignalled-unconfirmed', not 'signalled-unconfirmed'.
+    const kill = process.kill.bind(process);
+    let groupPid = 0;
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      if (typeof pid !== 'number' || pid >= 0) return kill(pid, signal);
+      groupPid = -pid;
+      // For SIGTERM to the group, covertly terminate the process leader via a
+      // direct (non-group) kill so the child eventually closes, then report the
+      // group signal as denied — signalDelivered stays false in the driver.
+      if (signal === 'SIGTERM') kill(groupPid, signal);
+      throw Object.assign(new Error('group signal denied'), { code: 'EPERM' });
+    });
+    childProcessMocks.execFile.mockImplementation((_file, _args, _options, callback) => {
+      callback(Object.assign(new Error('ps not found'), { code: 'ENOENT' }), '', '');
+      return undefined;
+    });
+    const abort = new AbortController();
+    try {
+      const running = runSetupCommand({
+        ...command("require('fs').writeFileSync('unsig-ready','yes');setInterval(()=>{},100)"),
+        signal: abort.signal,
+      });
+      await expect.poll(async () => fs.readFile(path.join(workspaceRoot, 'unsig-ready'), 'utf8')).toBe('yes');
+      abort.abort();
+      const result = await running;
+      // No signal reached the group and quiescence was never proven → stop-failed.
+      expect(result.status).toBe('stop-failed');
+      expect(result.processGroup?.outcome).toBe('unsignalled-unconfirmed');
+      expect(result.processGroup?.cause).toBe('ps-unavailable');
+      expect(groupPid).toBeGreaterThan(0);
+    } finally {
+      killSpy.mockRestore();
+      if (groupPid !== 0) {
+        try {
+          kill(-groupPid, 'SIGKILL');
+        } catch {
+          // Already gone after the test.
+        }
+      }
+    }
+  });
+
+  it('a transient ps failure does not latch: the next probe still proves quiescence', async () => {
+    const kill = process.kill.bind(process);
+    let groupPid = 0;
+    let psQueries = 0;
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+      // Only ps may decide quiescence here: the real SIGTERM still terminates
+      // the command, while every group probe and the cleanup SIGKILL are denied.
+      if (typeof pid !== 'number' || pid >= 0 || signal === 'SIGTERM') return kill(pid, signal);
+      groupPid = -pid;
+      throw Object.assign(new Error('group signal denied'), { code: 'EPERM' });
+    });
+    childProcessMocks.execFile.mockImplementation((_file, _args, _options, callback) => {
+      psQueries += 1;
+      if (psQueries === 1) {
+        // A ps killed by its own deadline: no errno of its own, and a host that
+        // answers the next query is exactly what must not be latched away.
+        callback(Object.assign(new Error('ps timed out'), { killed: true, signal: 'SIGTERM' }), '', '');
+        return undefined;
+      }
+      callback(null, `${groupPid} Z\n`, '');
+      return undefined;
+    });
+    const abort = new AbortController();
+    try {
+      const running = runSetupCommand({
+        ...command("require('fs').writeFileSync('transient-ready','yes');setInterval(()=>{},100)"),
+        signal: abort.signal,
+      });
+      await expect.poll(async () => fs.readFile(path.join(workspaceRoot, 'transient-ready'), 'utf8')).toBe('yes');
+      abort.abort();
+      const result = await running;
+      // The second probe proved the group quiescent, so the command keeps its
+      // own cancelled status instead of being downgraded to stop-failed.
+      expect(result.status).toBe('cancelled');
+      expect(result.processGroup?.outcome).toBe('signalled-and-quiesced');
+      expect(result.processGroup?.cause).toBeUndefined();
+      expect(psQueries).toBe(2);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
+  it('spawn-failed and pre-aborted results carry no processGroup', async () => {
+    const abort = new AbortController();
+    abort.abort();
+    const cancelled = await runSetupCommand({ ...command(''), signal: abort.signal });
+    expect(cancelled.processGroup).toBeUndefined();
+
+    const invalid = await runSetupCommand(command('', 0));
+    expect(invalid.processGroup).toBeUndefined();
   });
 });
