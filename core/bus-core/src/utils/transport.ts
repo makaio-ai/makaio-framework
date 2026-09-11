@@ -7,6 +7,7 @@ import type {
 } from '../types/index.js';
 import type { BusTransportKeys } from '../registries/transport-registry.js';
 import { NoHandlerError, NO_HANDLER_ERROR_CODE } from '../errors/index.js';
+import { isJsonObject } from '@makaio/contracts';
 
 /**
  * Detects a "no handler" error for a specific request subject.
@@ -132,6 +133,26 @@ function isSerializableValue(value: unknown): boolean {
 }
 
 /**
+ * Collects own enumerable properties from `source`, skipping keys in `skip`
+ * and values that are not serializable. Reads values through
+ * `Object.getOwnPropertyDescriptor` so getter-backed properties are handled
+ * safely. Returns `undefined` when no properties pass the filter.
+ * @param source - Object to collect from
+ * @param skip - Set of property names to exclude
+ * @returns Shallow record of collected properties, or undefined when empty
+ */
+function collectStructuredProps(source: object, skip: ReadonlySet<string>): Record<string, unknown> | undefined {
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(source)) {
+    if (skip.has(key)) continue;
+    const value = Object.getOwnPropertyDescriptor(source, key)?.value as unknown;
+    if (!isSerializableValue(value)) continue;
+    result[key] = value;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+/**
  * Serialize an unknown error into a structured {@link BusTransportError} for wire transmission.
  *
  * Extracts `code`, `subject`, and all own enumerable properties from the
@@ -142,9 +163,15 @@ function isSerializableValue(value: unknown): boolean {
  *
  * Standard `Error` fields (`message`, `name`, `stack`, `cause`), the already
  * top-level `subject` and `code` fields, as well as functions, `undefined`,
- * `bigint`, and `symbol` values are excluded from `data`.
+ * `bigint`, and `symbol` values are excluded from `data`. An own `data`
+ * property on the structured source is copied like any other member, so it
+ * round-trips as a nested bag at `result.data.data` and is restored by
+ * {@link deserializeTransportError} as an own `data` property on the
+ * reconstructed error. Use {@link transportErrorData} to read structured
+ * members uniformly regardless of which serializer authored the wire payload.
  * @param error - Any thrown value
  * @returns Structured error payload safe for JSON serialization
+ * @see transportErrorData
  */
 export function serializeError(error: unknown): BusTransportError {
   if (!(error instanceof Error)) {
@@ -180,12 +207,9 @@ export function serializeError(error: unknown): BusTransportError {
   // throw raw third-party errors through the bus. If a handler does, the
   // transport's JSON.stringify will fail and the error response is lost,
   // which is the correct signal that the handler's error shape is broken.
-  for (const key of Object.keys(structuredSource)) {
-    if (SKIP_PROPS.has(key)) continue;
-    const value = Object.getOwnPropertyDescriptor(structuredSource, key)?.value as unknown;
-    if (!isSerializableValue(value)) continue;
-    result.data ??= {};
-    result.data[key] = value;
+  const data = collectStructuredProps(structuredSource, SKIP_PROPS);
+  if (data !== undefined) {
+    result.data = data;
   }
 
   return result;
@@ -235,36 +259,49 @@ export function deserializeTransportError(transportError: BusTransportError): Er
 }
 
 /**
- * Read the structured members of an error regardless of which side of the codec produced it.
- * A class instance carries them under `error.data`; an error rebuilt by
- * {@link deserializeTransportError} carries them flat on the Error. Standard Error fields and
- * the top-level codec fields (`message`, `name`, `stack`, `cause`, `subject`, `code`) are never
- * part of the result. Returns undefined when the value is not an object or has no members.
- * @param error - Any error value (class instance or deserialized transport error)
- * @returns Shallow copy of structured members, or undefined when none are present
+ * Read the structured members of an error regardless of which serializer authored
+ * the wire payload.
+ *
+ * Three producible shapes exist depending on which serializer ran:
+ *
+ * - **`serializeError`** copies every own enumerable prop of the structured
+ *   source into `result.data`, including an authored `data` bag (which lands at
+ *   `result.data.data`). After {@link deserializeTransportError} the rebuilt
+ *   error has `.data` (the nested bag) as an own prop alongside any flat
+ *   siblings (e.g. `.retryable`).
+ * - **`serializeTransportError`** uses `error.data` as the wire bag directly, so
+ *   after deserialization the members are promoted flat onto the Error with no
+ *   `data` key present.
+ * - A **raw `BusTransportError` object** (not yet deserialized) carries the bag
+ *   under its own `data` property.
+ *
+ * Merge rule: own enumerable props are collected (skipping codec fields), then,
+ * if the object has an own `data` that is a plain JSON object, the `data` key is
+ * removed from the flat set and the bag members are spread in — bag members win
+ * on collision. A non-plain-object `data` (array, primitive) is kept as a
+ * verbatim member of the flat set.
+ *
+ * Standard Error fields and top-level codec fields (`message`, `name`, `stack`,
+ * `cause`, `subject`, `code`) are never part of the result. Returns `undefined`
+ * when the value is not an object or has no qualifying members.
+ * @param error - Any error value (class instance, deserialized transport error,
+ *   or raw `BusTransportError` object)
+ * @returns Shallow record of structured members, or undefined when none are present
+ * @see serializeError
  */
 export function transportErrorData(error: unknown): Record<string, unknown> | undefined {
   if (typeof error !== 'object' || error === null) return undefined;
 
-  const obj = error as Record<string, unknown>;
+  const flat = collectStructuredProps(error as object, SKIP_PROPS) ?? {};
 
-  // Class-instance / pre-serialization shape: own enumerable `data` is a plain object.
-  if (Object.prototype.hasOwnProperty.call(obj, 'data')) {
-    const d = obj['data'];
-    if (typeof d === 'object' && d !== null && !Array.isArray(d)) {
-      return { ...(d as Record<string, unknown>) };
-    }
+  if (Object.prototype.hasOwnProperty.call(error, 'data') && isJsonObject((error as Record<string, unknown>)['data'])) {
+    const bag = (error as Record<string, unknown>)['data'] as Record<string, unknown>;
+    delete flat['data'];
+    const merged = { ...flat, ...bag };
+    return Object.keys(merged).length > 0 ? merged : undefined;
   }
 
-  // Deserialized (flat) shape: collect own enumerable properties, skipping codec fields.
-  const result: Record<string, unknown> = {};
-  for (const key of Object.keys(obj)) {
-    if (SKIP_PROPS.has(key)) continue;
-    const value = Object.getOwnPropertyDescriptor(obj, key)?.value as unknown;
-    if (!isSerializableValue(value)) continue;
-    result[key] = value;
-  }
-  return Object.keys(result).length > 0 ? result : undefined;
+  return Object.keys(flat).length > 0 ? flat : undefined;
 }
 
 /**
