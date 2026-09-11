@@ -7,6 +7,7 @@ import {
   type BusMessage,
   type BusRequestMessage,
   type BusEventMessage,
+  type BusTransportError,
 } from '../index.js';
 import { serializeError, deserializeTransportError, transportErrorData, findInErrorChain } from '../utils/transport.js';
 import { serializeTransportError } from '../utils/transport-helpers.js';
@@ -379,6 +380,113 @@ describe('transportErrorData and findInErrorChain', () => {
     it('returns undefined for a non-object error', () => {
       expect(findInErrorChain(null, transportErrorData)).toBeUndefined();
       expect(findInErrorChain('string', transportErrorData)).toBeUndefined();
+    });
+
+    // ── Hardening: codec-field reservation and __proto__ safety ──────────────
+
+    it('does not clobber Error fields when the data bag contains codec-named keys', () => {
+      // A wire bag with message/stack/code must not overwrite the real Error
+      // fields set by new Error(transportError.message).
+      const wire: BusTransportError = {
+        message: 'real message',
+        code: 'REAL_CODE',
+        data: { message: 'inner', stack: 'forged-stack', code: 'OVERRIDE', ok: 42 },
+      };
+      const result = deserializeTransportError(wire) as Error & Record<string, unknown>;
+      expect(result.message).toBe('real message');
+      expect(result.stack).not.toBe('forged-stack');
+      // The dedicated top-level codec field wins — a bag 'code' never overwrites it.
+      expect(result['code']).toBe('REAL_CODE');
+      // Non-codec bag key must still be promoted.
+      expect(result['ok']).toBe(42);
+    });
+
+    it('fills code and subject from the bag when the top-level codec fields are absent', () => {
+      // Compatibility contract: peers historically carried code/subject inside
+      // data, and isNoHandlerErrorForSubject depends on them being promoted.
+      const wire: BusTransportError = {
+        message: 'No handler registered for request subject "dialog.confirm"',
+        code: 'NO_HANDLER',
+        data: { subject: 'dialog.confirm' },
+      };
+      const result = deserializeTransportError(wire) as Error & Record<string, unknown>;
+      expect(result['code']).toBe('NO_HANDLER');
+      expect(result['subject']).toBe('dialog.confirm');
+    });
+
+    it('keeps instanceof Error after deserializeTransportError when bag has a __proto__ key (JSON.parse)', () => {
+      // JSON.parse produces an object with an own "__proto__" entry; direct
+      // property assignment would invoke Object.prototype.__proto__'s setter and
+      // break the instanceof chain.
+      const transportError = JSON.parse('{"message":"real","data":{"__proto__":{"x":1},"ok":2}}') as BusTransportError;
+      const result = deserializeTransportError(transportError);
+      expect(result).toBeInstanceOf(Error);
+      expect(Object.getPrototypeOf(result)).toBe(Error.prototype);
+      expect((result as Error & Record<string, unknown>)['ok']).toBe(2);
+      // The __proto__ bag key is dropped, not preserved as an own member — an
+      // own enumerable "__proto__" would re-arm the legacy prototype setter at
+      // any downstream copy site that uses [[Set]] semantics.
+      expect(Object.prototype.hasOwnProperty.call(result, '__proto__')).toBe(false);
+      expect(Object.getPrototypeOf(Object.assign({}, result))).toBe(Object.prototype);
+    });
+
+    it('transportErrorData parity: raw wire and deserialized path agree, codec-named bag keys excluded from both', () => {
+      // A raw BusTransportError whose bag contains a codec-named key ("message").
+      // Both the raw-wire path and the post-deserialize path must exclude it.
+      const raw = { message: 'err', code: 'EC', data: { message: 'inner', retryable: true } };
+      const rawResult = transportErrorData(raw);
+      const deserialized = deserializeTransportError(raw as BusTransportError) as Error & Record<string, unknown>;
+      const deserializedResult = transportErrorData(deserialized);
+      expect(rawResult).not.toHaveProperty('message');
+      expect(deserializedResult).not.toHaveProperty('message');
+      expect(rawResult).toHaveProperty('retryable', true);
+      expect(deserializedResult).toHaveProperty('retryable', true);
+    });
+
+    it('transportErrorData: accessor-backed data property does not invoke the getter and does not throw', () => {
+      // If `data` is defined via Object.defineProperty with only get/set, reading
+      // the descriptor's `.value` field returns undefined — the getter must never run.
+      let getterCallCount = 0;
+      const obj: Record<string, unknown> = { retryable: true };
+      Object.defineProperty(obj, 'data', {
+        get(): unknown {
+          getterCallCount++;
+          throw new Error('getter must not be called');
+        },
+        enumerable: true,
+        configurable: true,
+      });
+      expect(() => transportErrorData(obj)).not.toThrow();
+      expect(getterCallCount).toBe(0);
+      // The flat member is still accessible.
+      expect(transportErrorData(obj)).toHaveProperty('retryable', true);
+    });
+
+    it('raw-wire bag with a __proto__ key does not forge the result prototype and keeps its siblings', () => {
+      // The bag-merge path in transportErrorData writes bag entries into a fresh
+      // record; a JSON.parse-produced own "__proto__" bag key must not poison
+      // that record's prototype or drop sibling members.
+      const raw = JSON.parse('{"message":"m","data":{"__proto__":{"x":1},"ok":2}}') as Record<string, unknown>;
+      const result = transportErrorData(raw);
+      expect(result).toBeDefined();
+      expect(result).toHaveProperty('ok', 2);
+      expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+      expect((result as Record<string, unknown>)['x']).toBeUndefined();
+      expect(Object.prototype.hasOwnProperty.call(result, '__proto__')).toBe(false);
+    });
+
+    it('collectStructuredProps path: JSON.parse __proto__ member does not forge result prototype', () => {
+      // JSON.parse produces an own "__proto__" key on the result object; if
+      // collectStructuredProps uses plain assignment, the forged prototype would
+      // poison the returned record. defineOwnValue must prevent this.
+      const raw = JSON.parse('{"__proto__":{"x":1},"ok":2}') as Record<string, unknown>;
+      const result = transportErrorData(raw);
+      expect(result).toBeDefined();
+      expect(result).toHaveProperty('ok', 2);
+      // Prototype chain of the result must not be forged.
+      expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+      expect((result as Record<string, unknown>)['x']).toBeUndefined();
+      expect(Object.prototype.hasOwnProperty.call(result, '__proto__')).toBe(false);
     });
 
     it('symmetry: findInErrorChain finds cause data before and after a round-trip', () => {

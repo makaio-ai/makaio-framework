@@ -245,9 +245,12 @@ export function buildUniquenessKeys(
     const derivations = rule.by.map((selector, selectorIndex) =>
       deriveSelectorPart(selector, relations, ruleIndex, selectorIndex),
     );
-    const firstIssue = derivations.find((d): d is UniquenessKeyIssue => 'reason' in d);
-    if (firstIssue !== undefined) {
-      issues.push(firstIssue);
+    // Collect all issues for this rule — not just the first — so every failing
+    // selector is surfaced, consistent with assessUniquenessSupport which is
+    // exhaustive per selector.
+    const ruleIssues = derivations.filter((d): d is UniquenessKeyIssue => 'reason' in d);
+    if (ruleIssues.length > 0) {
+      issues.push(...ruleIssues);
       continue;
     }
     const parts = derivations.filter((d): d is UniquenessKeyPart => !('reason' in d));

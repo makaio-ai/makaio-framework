@@ -349,4 +349,31 @@ describe('buildUniquenessKeys', () => {
     expect(description).toContain('about →');
     expect(description).toContain('owned-by →');
   });
+
+  it('returns all issues when one rule has two unresolvable selectors (no key produced)', () => {
+    // Both selectors have no matching relation — each produces a missing-target
+    // issue. Only the first was historically pushed; this test pins the fix that
+    // collects all issues per rule, consistent with assessUniquenessSupport.
+    const twoUnresolvableRule: ArtifactUniquenessRule = {
+      by: [
+        { kind: 'relation-target', relationType: 'about' },
+        { kind: 'relation-target', relationType: 'owned-by' },
+      ],
+    };
+    const { keys, issues } = buildUniquenessKeys([twoUnresolvableRule], []);
+    expect(keys).toHaveLength(0);
+    expect(issues).toHaveLength(2);
+    expect(issues[0]).toMatchObject({
+      ruleIndex: 0,
+      selectorIndex: 0,
+      reason: 'missing-target',
+      relationType: 'about',
+    });
+    expect(issues[1]).toMatchObject({
+      ruleIndex: 0,
+      selectorIndex: 1,
+      reason: 'missing-target',
+      relationType: 'owned-by',
+    });
+  });
 });
