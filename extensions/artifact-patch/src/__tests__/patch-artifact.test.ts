@@ -808,6 +808,33 @@ describe('host boundary', () => {
     expect(target.writes[0]).not.toHaveProperty('statusPath');
   });
 
+  it('hands the host replacement rendering hints when the request names them', async () => {
+    const target = host();
+
+    await patch(
+      request({ $set: { summary: 'Rewritten.' } }, { representations: { summary: 'Rewritten summary.' } }),
+      target,
+    );
+
+    expect(target.writes[0]?.representations).toStrictEqual({ summary: 'Rewritten summary.' });
+  });
+
+  it('hands the host an explicit null to clear rendering hints', async () => {
+    const target = host();
+
+    await patch(request({ $set: { summary: 'Cleared.' } }, { representations: null }), target);
+
+    expect(target.writes[0]).toHaveProperty('representations', null);
+  });
+
+  it('omits rendering hints the request did not name so the host keeps the previous ones', async () => {
+    const target = host();
+
+    await patch(request({ $set: { summary: 'Untouched hints.' } }), target);
+
+    expect(target.writes[0]).not.toHaveProperty('representations');
+  });
+
   it('refuses a store result that is not a new revision', async () => {
     const response = await patch(request({ $set: { summary: 'x' } }), host({ storedRevision: 'rev-1' }));
 
@@ -884,6 +911,22 @@ describe('concurrent writes', () => {
     expect(response).toMatchObject({
       ok: false,
       error: { repair: expect.stringContaining('Resend the same patch') },
+    });
+  });
+
+  it('tells a caller who appends but also replaces rendering hints to re-read first', async () => {
+    // The hints were written against the base the caller read; resending them
+    // would overwrite whatever the concurrent revision put there.
+    const target = host({ storeConflictsWith: 'rev-9' });
+
+    const response = await patch(
+      request({ $push: { blockers: 'awaiting publish' } }, { representations: { summary: 'Blocked.' } }),
+      target,
+    );
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: 'BASE_REVISION_CONFLICT', repair: expect.stringContaining('Re-read the artifact') },
     });
   });
 

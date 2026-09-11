@@ -42,7 +42,9 @@ can pass the first comparison concurrently. A `store` that reports a conflict is
 
 A conflict names the current revision and says what to do with it in the error's `repair` field.
 Only an append at a fixed path can be resent as written: a `$push` whose every path segment is a
-plain property adds an entry, and that means the same thing whatever else landed in between.
+plain property adds an entry, and that means the same thing whatever else landed in between — and
+only when the request does not also name `representations`, which were authored against the base
+the caller read.
 Everything else has to be rebased against a fresh read. `$set` replaces a value the caller has not
 seen since; `$unset` and `$pull` delete state the caller has not re-read, which the concurrent
 revision may have written for a reason; a position addresses a different entry once something is
@@ -65,7 +67,10 @@ An integrating product supplies an `ArtifactPatchHost` through `createArtifactPa
 `createArtifactPatchPackage(host)`. The host owns authorization, repository scope, effective Kind
 discovery, and persistence. `store` receives the resolved previous revision — payload included — and
 the request's optional `statusPath`, so a host layered over a lifecycle writer can derive the same
-status observation a full revise produces. The package never issues raw Artifact bus requests and
+status observation a full revise produces. It also receives the request's `representations` when
+the caller named them — an object to replace the rendering hints wholesale, `null` to clear them —
+and must carry the previous revision's hints over when the property is absent, because hints are
+caller-authored and the engine cannot tell whether the change made them stale. The package never issues raw Artifact bus requests and
 never reaches a store directly, so a service handling `artifact.patch` and the `artifacts_patch` MCP
 tool run the same engine over the same contract. Its default package marker contributes no tools until a host is
 explicitly bound.

@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { JsonValueSchema, rejectingLossyJsonValues } from '../shared/json-value.js';
 import { ArtifactRefSchema } from './artifact-reference.js';
-import { ArtifactStatusPathSchema } from './schemas.js';
+import { ArtifactRepresentationsSchema, ArtifactStatusPathSchema } from './schemas.js';
 
 /**
  * Update operators this contract declares.
@@ -297,6 +297,27 @@ export const ArtifactPatchRequestSchema = z.strictObject({
    * revisions around the write; this metadata is never stored.
    */
   statusPath: ArtifactStatusPathSchema.optional(),
+  /**
+   * Human-readable rendering hints for the new revision.
+   *
+   * Absent, the host carries the previous revision's representations over
+   * unchanged. An object replaces them wholesale — hints are caller-authored
+   * and may describe the fields the patch just changed, so there is no
+   * field-wise merge. `null` clears them, leaving the new revision without
+   * hints so consumers fall back to `data`.
+   *
+   * The shared shape is strict here, unlike on a stored revision: a misspelled
+   * key would otherwise be stripped and the remainder forwarded as a deliberate
+   * replacement, so a typo could silently clear every hint.
+   */
+  representations: ArtifactRepresentationsSchema.strict()
+    .nullable()
+    .optional()
+    .describe(
+      'Rendering hints (markdown, summary, plaintext) for the new revision. Omit to keep the previous ' +
+        "revision's hints. An object replaces all of them, it does not merge: send every hint you want to keep. " +
+        'null clears them.',
+    ),
 });
 
 /** Stable failure classifications for a patch request. */

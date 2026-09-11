@@ -21,7 +21,8 @@ export function createPatchArtifactTool(host: ArtifactPatchHost) {
       'unknown operator and addressing nothing are all errors, never silent no-ops. Use dryRun to check a patch ' +
       'without writing. A stale baseRevision reports the current revision; follow the repair field of that error: ' +
       'only an append at a fixed path (no position, no filter) may be resent with the new baseRevision, anything ' +
-      'else needs a fresh read and a rewritten patch.',
+      'else needs a fresh read and a rewritten patch. Rendering hints are separate from data: omit ' +
+      'representations to keep them, send an object to replace all of them (no merge), or null to clear them.',
     annotations: { readOnly: false, idempotent: false },
     inputSchema: ArtifactPatchRequestSchema,
     outputSchema: ArtifactPatchResponseSchema,

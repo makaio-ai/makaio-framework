@@ -11,6 +11,7 @@ import {
   type ArtifactPatchRequest,
   type ArtifactPatchResponse,
   type ArtifactRef,
+  type ArtifactRepresentations,
   type ArtifactRevision,
 } from '@makaio/contracts';
 import { ToolErrorCodes, toolError, toolSuccess, type ToolExecutionContext, type ToolResult } from '@makaio/tools-core';
@@ -36,6 +37,14 @@ export interface ArtifactPatchStoreRequest {
    * persists, exactly as a full revise does.
    */
   readonly statusPath?: string;
+  /**
+   * Rendering hints for the new revision, present exactly when the request
+   * named them. An object replaces the previous revision's hints wholesale and
+   * `null` clears them; when the property is absent the host carries
+   * `previous.representations` over unchanged, because hints are caller-owned
+   * and the patch engine cannot tell whether the change made them stale.
+   */
+  readonly representations?: ArtifactRepresentations | null;
 }
 
 /** The artifact moved on before the write landed; nothing was persisted. */
@@ -155,11 +164,15 @@ function toResponseIssue(issue: ArtifactDataIssue): ArtifactPatchIssue {
  * append to a different set of collections than the caller addressed. Every
  * other operator depends on the payload the caller read: `$set` replaces a value
  * it has not seen since, and `$unset` and `$pull` delete state it has not
- * re-read, which the concurrent revision may have written for a reason.
+ * re-read, which the concurrent revision may have written for a reason. A
+ * request that names `representations` is never rebasable either: the hints
+ * were authored against the base the caller read, and resending them would
+ * overwrite whatever hints the concurrent revision wrote.
  * @param input - The rejected patch request.
  * @returns Whether every instruction still means the same thing on a newer revision.
  */
 function isRebasable(input: ArtifactPatchRequest): boolean {
+  if (input.representations !== undefined) return false;
   return artifactPatchInstructions(input.patch).every(
     ({ operator, path }) =>
       operator === '$push' && artifactPatchSegments(path).every((segment) => segment.kind === 'property'),
@@ -179,7 +192,7 @@ function baseRevisionConflict(input: ArtifactPatchRequest, currentRevision: stri
     currentRevision,
     repair: isRebasable(input)
       ? `Resend the same patch with baseRevision '${currentRevision}'; it only appends at a fixed path, with no position and no filter, so it does not depend on the payload you read.`
-      : `Re-read the artifact at revision '${currentRevision}' and rewrite the patch: only an append at a fixed path survives a concurrent write, with no position and no filter. Replacing, removing, addressing an entry by position, and appending through a $[filter] placeholder all depend on the payload you read, which the concurrent revision may have changed.`,
+      : `Re-read the artifact at revision '${currentRevision}' and rewrite the patch: only an append at a fixed path survives a concurrent write, with no position and no filter. Replacing, removing, addressing an entry by position, appending through a $[filter] placeholder, and replacing or clearing representations all depend on the payload you read, which the concurrent revision may have changed.`,
   };
 }
 
@@ -370,6 +383,7 @@ export async function patchArtifact(
         previous: artifact,
         data: applied.application.data,
         ...(input.statusPath === undefined ? {} : { statusPath: input.statusPath }),
+        ...(input.representations === undefined ? {} : { representations: input.representations }),
       },
       context,
     );
