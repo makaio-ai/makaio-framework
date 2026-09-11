@@ -36,4 +36,11 @@ describe('sortJsonValue', () => {
     const result = sortJsonValue(input);
     expect(Object.keys(result as object)).toEqual(['a', 'B', 'c']);
   });
+
+  it('breaks case-folded ties by code point so insertion order never leaks into the result', () => {
+    const lowerFirst = sortJsonValue({ a: 1, A: 2 });
+    const upperFirst = sortJsonValue({ A: 2, a: 1 });
+    expect(Object.keys(lowerFirst as object)).toEqual(['A', 'a']);
+    expect(JSON.stringify(lowerFirst)).toBe(JSON.stringify(upperFirst));
+  });
 });

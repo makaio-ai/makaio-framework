@@ -2,4 +2,4 @@
 '@makaio/contracts': minor
 ---
 
-Exports `sortJsonValue` as the canonical stable-key-order serializer for use across the framework.
+Exports `sortJsonValue`, the canonical key-order normalisation for JSON values, so consumers sign or hash the same tree the same way instead of carrying their own copy.
