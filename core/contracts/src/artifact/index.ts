@@ -260,3 +260,8 @@ export type {
   ArtifactLifecycleFailure,
   ArtifactLifecycleRejectedPayload,
 } from './lifecycle-namespace.js';
+export {
+  ArtifactRelationTargetIdentitySchema,
+  artifactRelationTargetIdentity,
+} from './relation-target-identity.js';
+export type { ArtifactRelationTargetIdentity } from './relation-target-identity.js';
