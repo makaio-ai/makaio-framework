@@ -1,12 +1,24 @@
 import type { ArtifactUniquenessRule } from './kind-registration.js';
 import type { ArtifactRelation } from './schemas.js';
-import { artifactRelationTargetIdentity, type ArtifactRelationTargetIdentity } from './relation-target-identity.js';
+import {
+  artifactRelationTargetIdentity,
+  describeArtifactRelationTargetIdentity,
+  serializeArtifactRelationTargetIdentity,
+  type ArtifactRelationTargetIdentity,
+} from './relation-target-identity.js';
+
+/**
+ * Selector kinds that {@link buildUniquenessKeys} can derive from artifact
+ * relations. Data-path selectors are excluded: FACT-141 owns that derivation
+ * path.
+ */
+const DERIVABLE_SELECTOR_KINDS: readonly ArtifactUniquenessRule['by'][number]['kind'][] = ['relation-target'];
 
 /**
  * What a store can derive and enforce; declared rules outside this set are
  * reported as issues rather than silently dropped.
  */
-export type UniquenessSelectorCapability = 'relation-target' | 'data' | 'lifecycle-states';
+export type UniquenessSelectorCapability = 'relation-target' | 'lifecycle-states';
 
 /** Per-rule or per-selector issue surfaced when a capability is missing. */
 export interface UniquenessSupportIssue {
@@ -17,8 +29,13 @@ export interface UniquenessSupportIssue {
    * Absent when the issue concerns `lifecycleStates` rather than a selector.
    */
   selectorIndex?: number;
-  /** The missing capability. */
-  capability: UniquenessSelectorCapability;
+  /**
+   * The missing capability.
+   * May be `'data'` even though it is not in {@link UniquenessSelectorCapability},
+   * because a data-path selector is always undeivable regardless of what the
+   * store declares.
+   */
+  capability: ArtifactUniquenessRule['by'][number]['kind'] | 'lifecycle-states';
   /** Human-readable explanation. */
   message: string;
 }
@@ -27,6 +44,8 @@ export interface UniquenessSupportIssue {
  * Split declared rules into enforceable rules and issues, given a store's
  * capabilities. A rule is enforceable when every selector kind and, if
  * declared, `lifecycleStates` are supported.
+ * A selector is reported as unsupported when its kind is not in
+ * {@link DERIVABLE_SELECTOR_KINDS} or not in `supported`.
  * Undefined or empty rules yield `{ ok: true, rules: [] }`.
  * @param rules - Declared uniqueness rules from the kind registration.
  * @param supported - Capability set the calling store can enforce.
@@ -35,17 +54,17 @@ export interface UniquenessSupportIssue {
 export function assessUniquenessSupport(
   rules: readonly ArtifactUniquenessRule[] | undefined,
   supported: readonly UniquenessSelectorCapability[],
-): { ok: true; rules: ArtifactUniquenessRule[] } | { ok: false; issues: UniquenessSupportIssue[] } {
+): { ok: true; rules: readonly ArtifactUniquenessRule[] } | { ok: false; issues: UniquenessSupportIssue[] } {
   if (!rules || rules.length === 0) return { ok: true, rules: [] };
 
   const issues: UniquenessSupportIssue[] = [];
 
-  for (let ruleIndex = 0; ruleIndex < rules.length; ruleIndex++) {
-    const rule = rules[ruleIndex];
-
-    for (let selectorIndex = 0; selectorIndex < rule.by.length; selectorIndex++) {
-      const selector = rule.by[selectorIndex];
-      if (!supported.includes(selector.kind)) {
+  for (const [ruleIndex, rule] of rules.entries()) {
+    for (const [selectorIndex, selector] of rule.by.entries()) {
+      if (
+        !DERIVABLE_SELECTOR_KINDS.includes(selector.kind) ||
+        !(supported as readonly string[]).includes(selector.kind)
+      ) {
         issues.push({
           ruleIndex,
           selectorIndex,
@@ -67,16 +86,18 @@ export function assessUniquenessSupport(
   }
 
   if (issues.length > 0) return { ok: false, issues };
-  return { ok: true, rules: [...rules] };
+  return { ok: true, rules };
 }
 
 /**
- * One selector's contribution: the relation type and the pin-less identity it
- * points at.
+ * One selector's contribution to a uniqueness key.
+ * A part is structurally a `Partial<ArtifactRelation>` and can be used
+ * directly as a jsonb containment probe against the `relations_json` column:
+ * `relations_json @> '[{"type":"...","target":{...}}]'::jsonb`.
  */
 export interface UniquenessKeyPart {
   /** Relation type matching the selector's `relationType`. */
-  relationType: string;
+  type: string;
   /** Pin-less comparable identity of the resolved target. */
   target: ArtifactRelationTargetIdentity;
 }
@@ -85,9 +106,11 @@ export interface UniquenessKeyPart {
 export interface UniquenessKey {
   /** The rule this key was derived from, in its original declared form. */
   rule: ArtifactUniquenessRule;
+  /** Zero-based index of the rule in the declared uniqueness array. */
+  ruleIndex: number;
   /**
    * One part per selector, in declaration order; the containment probe a store
-   * can run.
+   * can run against a stored relations array.
    */
   parts: UniquenessKeyPart[];
   /** Injective string form for equality and logging (stable key order). */
@@ -129,55 +152,87 @@ export interface BuildUniquenessKeysResult {
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 /**
- * Injective serialization of an identity for deduplication within a selector.
- * Uses a JSON array to avoid `a:b`/`c` vs `a`/`b:c`-style collisions.
- * @param identity - The pin-less identity to serialize.
- * @returns A JSON string that uniquely identifies this target.
+ * Attempt to derive a single key part from a selector and the artifact's
+ * relations. Returns the part on success, or an issue on failure.
+ * @param selector - One entry from `rule.by` to evaluate.
+ * @param relations - Full relation list of the artifact being written.
+ * @param ruleIndex - Zero-based index of the enclosing rule.
+ * @param selectorIndex - Zero-based index of this selector within `rule.by`.
+ * @returns A resolved {@link UniquenessKeyPart} or a {@link UniquenessKeyIssue}.
  */
-function serializeIdentityForDedup(identity: ArtifactRelationTargetIdentity): string {
-  if (identity.refClass === 'artifact') {
-    return JSON.stringify(['artifact', identity.kind, identity.id]);
+function deriveSelectorPart(
+  selector: ArtifactUniquenessRule['by'][number],
+  relations: readonly ArtifactRelation[],
+  ruleIndex: number,
+  selectorIndex: number,
+): UniquenessKeyPart | UniquenessKeyIssue {
+  if (selector.kind === 'data') {
+    return {
+      ruleIndex,
+      selectorIndex,
+      reason: 'unsupported-selector',
+      message:
+        `rule #${ruleIndex}, selector #${selectorIndex}:` + ` data-path selectors cannot be derived from relations`,
+    };
   }
-  return JSON.stringify(['entity', identity.entityType, identity.id]);
-}
-
-/**
- * Stable serialization of a single key part. Object keys are inserted in
- * alphabetical order so JSON.stringify produces a deterministic result
- * regardless of target field insertion order.
- * @param part - The key part to serialize.
- * @returns A plain object suitable for JSON.stringify with stable key order.
- */
-function stableSerializePart(part: UniquenessKeyPart): unknown {
-  const { relationType, target } = part;
-  // Keys in alphabetical order for deterministic output.
-  const serializedTarget: Record<string, string> =
-    target.refClass === 'artifact'
-      ? { id: target.id, kind: target.kind, refClass: 'artifact' }
-      : { entityType: target.entityType, id: target.id, refClass: 'entity' };
-  // 'relationType' < 'target' alphabetically.
-  return { relationType, target: serializedTarget };
-}
-
-/**
- * Produce the `serialized` field for a fully built set of parts.
- * @param parts - The parts to serialize.
- * @returns A stable JSON string representing all parts.
- */
-function stableSerializeParts(parts: readonly UniquenessKeyPart[]): string {
-  return JSON.stringify(parts.map(stableSerializePart));
-}
-
-/**
- * Human-readable identity description used in {@link describeUniquenessKey}.
- * @param target - The pin-less identity to describe.
- * @returns A short string in `refClass:discriminant/id` form.
- */
-function describeTargetIdentity(target: ArtifactRelationTargetIdentity): string {
-  if (target.refClass === 'artifact') {
-    return `artifact:${target.kind}/${target.id}`;
+  const { relationType } = selector;
+  const matching = relations.filter((r) => r.type === relationType);
+  const seen = new Map<string, ArtifactRelationTargetIdentity>();
+  let unsupportedRefClass: string | undefined;
+  for (const rel of matching) {
+    const identity = artifactRelationTargetIdentity(rel.target);
+    if (identity === undefined) {
+      unsupportedRefClass = rel.target.refClass;
+      break;
+    }
+    seen.set(serializeArtifactRelationTargetIdentity(identity), identity);
   }
-  return `entity:${target.entityType}/${target.id}`;
+  if (unsupportedRefClass !== undefined) {
+    return {
+      ruleIndex,
+      selectorIndex,
+      reason: 'unsupported-target',
+      relationType,
+      message:
+        `rule #${ruleIndex}, selector #${selectorIndex},` +
+        ` relation '${relationType}': found a relation with` +
+        ` refClass '${unsupportedRefClass}'; only artifact and entity targets are supported`,
+    };
+  }
+  if (seen.size === 0) {
+    return {
+      ruleIndex,
+      selectorIndex,
+      reason: 'missing-target',
+      relationType,
+      message:
+        `rule #${ruleIndex}, selector #${selectorIndex},` +
+        ` relation '${relationType}': no relations of this type found`,
+    };
+  }
+  if (seen.size > 1) {
+    return {
+      ruleIndex,
+      selectorIndex,
+      reason: 'ambiguous-target',
+      relationType,
+      message:
+        `rule #${ruleIndex}, selector #${selectorIndex},` +
+        ` relation '${relationType}': ${seen.size} distinct targets; expected exactly one`,
+    };
+  }
+  const [target] = [...seen.values()];
+  if (target === undefined) {
+    // Unreachable: seen.size === 1 guarantees a value. Guard satisfies TypeScript.
+    return {
+      ruleIndex,
+      selectorIndex,
+      reason: 'missing-target',
+      relationType,
+      message: `rule #${ruleIndex}, selector #${selectorIndex}: internal error (map unexpectedly empty)`,
+    };
+  }
+  return { type: relationType, target };
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -196,96 +251,18 @@ export function buildUniquenessKeys(
   const keys: UniquenessKey[] = [];
   const issues: UniquenessKeyIssue[] = [];
 
-  for (let ruleIndex = 0; ruleIndex < rules.length; ruleIndex++) {
-    const rule = rules[ruleIndex];
-    const parts: UniquenessKeyPart[] = [];
-    let ruleHasIssue = false;
-
-    for (let selectorIndex = 0; selectorIndex < rule.by.length; selectorIndex++) {
-      const selector = rule.by[selectorIndex];
-
-      if (selector.kind === 'data') {
-        issues.push({
-          ruleIndex,
-          selectorIndex,
-          reason: 'unsupported-selector',
-          message:
-            `rule #${ruleIndex}, selector #${selectorIndex}:` + ` data-path selectors cannot be derived from relations`,
-        });
-        ruleHasIssue = true;
-        break;
-      }
-
-      const { relationType } = selector;
-      const matching = relations.filter((rel) => rel.type === relationType);
-
-      // Single pass: detect unsupported ref-classes, collect distinct identities.
-      const seen = new Map<string, ArtifactRelationTargetIdentity>();
-      let unsupportedRefClass: string | undefined;
-
-      for (const rel of matching) {
-        const identity = artifactRelationTargetIdentity(rel.target);
-        if (identity === undefined) {
-          unsupportedRefClass = rel.target.refClass;
-          break;
-        }
-        seen.set(serializeIdentityForDedup(identity), identity);
-      }
-
-      if (unsupportedRefClass !== undefined) {
-        issues.push({
-          ruleIndex,
-          selectorIndex,
-          reason: 'unsupported-target',
-          relationType,
-          message:
-            `rule #${ruleIndex}, selector #${selectorIndex},` +
-            ` relation '${relationType}': found a relation with` +
-            ` refClass '${unsupportedRefClass}';` +
-            ` only artifact and entity targets are supported`,
-        });
-        ruleHasIssue = true;
-        break;
-      }
-
-      if (seen.size === 0) {
-        issues.push({
-          ruleIndex,
-          selectorIndex,
-          reason: 'missing-target',
-          relationType,
-          message:
-            `rule #${ruleIndex}, selector #${selectorIndex},` +
-            ` relation '${relationType}': no relations of this type found`,
-        });
-        ruleHasIssue = true;
-        break;
-      }
-
-      if (seen.size > 1) {
-        issues.push({
-          ruleIndex,
-          selectorIndex,
-          reason: 'ambiguous-target',
-          relationType,
-          message:
-            `rule #${ruleIndex}, selector #${selectorIndex},` +
-            ` relation '${relationType}': ${seen.size} distinct targets;` +
-            ` expected exactly one`,
-        });
-        ruleHasIssue = true;
-        break;
-      }
-
-      // seen.size === 1 guaranteed here; iterate to extract the single value.
-      for (const identity of seen.values()) {
-        parts.push({ relationType, target: identity });
-      }
+  for (const [ruleIndex, rule] of rules.entries()) {
+    const derivations = rule.by.map((selector, selectorIndex) =>
+      deriveSelectorPart(selector, relations, ruleIndex, selectorIndex),
+    );
+    const firstIssue = derivations.find((d): d is UniquenessKeyIssue => 'reason' in d);
+    if (firstIssue !== undefined) {
+      issues.push(firstIssue);
+      continue;
     }
-
-    if (!ruleHasIssue) {
-      keys.push({ rule, parts, serialized: stableSerializeParts(parts) });
-    }
+    const parts = derivations.filter((d): d is UniquenessKeyPart => !('reason' in d));
+    const serialized = JSON.stringify(parts.map((p) => [p.type, serializeArtifactRelationTargetIdentity(p.target)]));
+    keys.push({ rule, ruleIndex, parts, serialized });
   }
 
   return { keys, issues };
@@ -296,11 +273,8 @@ export function buildUniquenessKeys(
  * @example `about → artifact:concept/abc`
  * @example `owned-by → entity:workpiece/W-1; about → artifact:concept/abc`
  * @param key - A fully resolved uniqueness key.
- * @returns A string describing each part in `relationType → identity` form.
+ * @returns A string describing each part in `type → identity` form, joined by `'; '`.
  */
 export function describeUniquenessKey(key: UniquenessKey): string {
-  if (key.parts.length === 0) {
-    return `(empty key for rule with ${key.rule.by.length} selector(s))`;
-  }
-  return key.parts.map((part) => `${part.relationType} → ${describeTargetIdentity(part.target)}`).join('; ');
+  return key.parts.map((part) => `${part.type} → ${describeArtifactRelationTargetIdentity(part.target)}`).join('; ');
 }
