@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ArtifactPatchErrorSchema, ArtifactPatchResponseSchema } from '../patch.js';
+import { ArtifactPatchErrorSchema, ArtifactPatchRequestSchema, ArtifactPatchResponseSchema } from '../patch.js';
 
 describe('patch rejection contract', () => {
   it('accepts a base revision conflict that names the current revision', () => {
@@ -50,5 +50,50 @@ describe('patch rejection contract', () => {
     });
 
     expect(result.success).toBe(true);
+  });
+});
+
+describe('patch request rendering hints', () => {
+  const base = {
+    ref: { kind: 'plan', id: 'plan-1' },
+    baseRevision: 'rev-1',
+    patch: { $set: { summary: 'x' } },
+  };
+
+  it('accepts replacement hints', () => {
+    const result = ArtifactPatchRequestSchema.safeParse({
+      ...base,
+      representations: { summary: 'Fresh summary.', markdown: '# Fresh' },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts null to clear the hints', () => {
+    const result = ArtifactPatchRequestSchema.safeParse({ ...base, representations: null });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.representations).toBeNull();
+  });
+
+  it('leaves the hints undefined when the request omits them', () => {
+    const result = ArtifactPatchRequestSchema.safeParse(base);
+
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty('representations');
+  });
+
+  it('rejects a misspelled hint key instead of stripping it into a wholesale clear', () => {
+    const result = ArtifactPatchRequestSchema.safeParse({ ...base, representations: { plainText: 'x' } });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toStrictEqual(['representations']);
+  });
+
+  it('rejects hints outside the shared representations shape', () => {
+    const result = ArtifactPatchRequestSchema.safeParse({ ...base, representations: { summary: 42 } });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toStrictEqual(['representations', 'summary']);
   });
 });
