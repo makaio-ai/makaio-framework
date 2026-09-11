@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { JsonObjectContractSchema } from '../shared/json-value.js';
 import { validateKindDataPaths } from './kind-paths.js';
+import { validateArtifactPartAreas } from './artifact-parts.js';
 
 /** Positive schema generation; Zod 4 int() enforces safe integers. Revision identifiers remain strings. */
 export const ArtifactSchemaVersionSchema = z.number().int().positive();
@@ -52,6 +53,14 @@ export const ArtifactUniquenessSelectorSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('relation-target'), relationType: z.string().trim().min(1) }),
 ]);
 
+/** One data area whose array elements are stably addressable parts of the artifact. */
+export const ArtifactPartAreaSchema = z.strictObject({
+  /** Data-relative object-property path to the array that holds the parts. */
+  path: ArtifactDataPathSchema,
+  /** Element-relative object-property path to a part's stable local identifier. */
+  idPath: ArtifactDataPathSchema,
+});
+
 /** A complete uniqueness key with optional category-compatible lifecycle conditions. */
 export const ArtifactUniquenessRuleSchema = z.strictObject({
   by: z.array(ArtifactUniquenessSelectorSchema).min(1),
@@ -82,6 +91,8 @@ export const ArtifactKindRegistrationSchema = z
     evidenceRequirements: ArtifactEvidenceRequirementsSchema.optional(),
     indexedFields: z.array(ArtifactDataPathSchema).optional(),
     searchableFields: z.array(ArtifactDataPathSchema).optional(),
+    /** Declared areas whose elements are addressable through a local ref; local identifiers are unique across all declared areas of one revision. */
+    addressableParts: z.array(ArtifactPartAreaSchema).min(1).optional(),
     views: z.record(z.string().trim().min(1), ArtifactKindViewSchema).optional(),
   })
   .superRefine((value, ctx) => {
@@ -113,6 +124,7 @@ export const ArtifactKindRegistrationSchema = z
       }
     });
     validateKindDataPaths(value, ctx);
+    validateArtifactPartAreas(value, ctx);
   });
 
 /** Semantic category of an artifact kind. */
@@ -127,5 +139,7 @@ export type ArtifactUniquenessRule = z.infer<typeof ArtifactUniquenessRuleSchema
 export type ArtifactEvidenceRequirements = z.infer<typeof ArtifactEvidenceRequirementsSchema>;
 /** Named lossless field selection declared by an artifact kind. */
 export type ArtifactKindView = z.infer<typeof ArtifactKindViewSchema>;
+/** One declared data area whose array elements are stably addressable parts. */
+export type ArtifactPartArea = z.infer<typeof ArtifactPartAreaSchema>;
 /** Serializable artifact kind definition. */
 export type ArtifactKindRegistration = z.infer<typeof ArtifactKindRegistrationSchema>;

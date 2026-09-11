@@ -18,6 +18,25 @@ function isSchemaObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+/**
+ * Determine whether a schema node unconditionally declares exactly one type.
+ *
+ * Accepts both the shorthand string form (`type: 'array'`) and the singleton
+ * array form (`type: ['array']`). A multi-member type array
+ * (`type: ['array','null']`) is rejected — a possibly-null value is not guaranteed
+ * to carry the expected type, and turning that false rejection into a false
+ * acceptance would weaken registration-time safety.
+ * @param node - Schema node to inspect.
+ * @param expected - JSON Schema primitive type name to match.
+ * @returns Whether the node unconditionally declares exactly this type.
+ */
+export function declaresType(node: unknown, expected: string): boolean {
+  if (!isSchemaObject(node)) return false;
+  const t = node.type;
+  if (t === expected) return true;
+  return Array.isArray(t) && t.length === 1 && t[0] === expected;
+}
+
 /** One schema declaration reachable at an inspected location. */
 export type ArtifactSchemaFragment = boolean | Record<string, unknown>;
 
@@ -181,6 +200,8 @@ function combineConjuncts(
  * @param required - Whether each path segment must be required.
  * @param refs - References already traversed at this position.
  * @param objectGuaranteed - Whether the artifact envelope guarantees an object at this location.
+ * @param requiredAfterElement - Whether property segments must be required once an element
+ *   boundary has been crossed. Consumed at the boundary; does not reactivate for nested elements.
  * @returns All matching schema fragments, or undefined when the reference cannot satisfy the path.
  */
 function fieldSchemasForReference(
@@ -191,11 +212,14 @@ function fieldSchemasForReference(
   required: boolean,
   refs: Set<string>,
   objectGuaranteed: boolean,
+  requiredAfterElement: boolean,
 ): ArtifactSchemaFragment[] | undefined {
   if (refs.has(ref)) return undefined;
   const target = resolveRef(root, node);
   if (typeof target === 'boolean') return parts.length === 0 ? [target] : undefined;
-  return target ? fieldSchemas(root, target, parts, required, new Set([...refs, ref]), objectGuaranteed) : undefined;
+  return target
+    ? fieldSchemas(root, target, parts, required, new Set([...refs, ref]), objectGuaranteed, requiredAfterElement)
+    : undefined;
 }
 
 /**
@@ -214,18 +238,50 @@ function fieldSchemasForReference(
  * @param root - Root schema for resolving local references.
  * @param node - Schema declared at the collection itself.
  * @param parts - Remaining segments below the element.
+ * @param required - Whether each property segment below the element must be required.
  * @returns Matching schemas below one element, or undefined when the location is not declared.
  */
 function elementSchemas(
   root: Record<string, unknown>,
   node: Record<string, unknown>,
   parts: string[],
+  required: boolean,
 ): ArtifactSchemaFragment[] | undefined {
-  if (node.type !== 'array') return undefined;
+  if (!declaresType(node, 'array')) return undefined;
   const items = node.items;
   if (typeof items === 'boolean') return parts.length === 0 ? [items] : undefined;
   const item = schemaObject(items);
-  return item ? fieldSchemas(root, item, parts, false) : undefined;
+  return item ? fieldSchemas(root, item, parts, required) : undefined;
+}
+
+/** Result of combining one union alternative with its union node's base keywords. */
+type UnionBranchCombination = { node: Record<string, unknown>; ref?: string };
+
+/**
+ * Combine one union alternative with the union node's base keywords.
+ *
+ * A `$ref` alternative is resolved before wrapping so that a union-valued
+ * target is distributed by the union path instead of reaching
+ * {@link combineConjuncts}, which rejects anyOf/oneOf branches.
+ * @param root - Root schema for reference resolution.
+ * @param base - Union node keywords without the alternatives list.
+ * @param object - One union alternative as a schema object.
+ * @returns Combined node, plus the resolved reference to add to the cycle set.
+ */
+function combineUnionBranchNode(
+  root: Record<string, unknown>,
+  base: Record<string, unknown>,
+  object: Record<string, unknown>,
+): UnionBranchCombination {
+  if (typeof object.$ref !== 'string') {
+    return { node: { ...object, allOf: [base, ...(Array.isArray(object.allOf) ? object.allOf : [])] } };
+  }
+  const refTarget = resolveRef(root, object);
+  if (!isSchemaObject(refTarget)) return { node: { allOf: [base, object] } };
+  return {
+    node: { ...refTarget, allOf: [base, ...(Array.isArray(refTarget.allOf) ? refTarget.allOf : [])] },
+    ref: object.$ref,
+  };
 }
 
 /**
@@ -236,6 +292,9 @@ function elementSchemas(
  * @param required - Whether all properties must be required.
  * @param refs - References already traversed at this position, preventing cycles.
  * @param objectGuaranteed - Whether the Artifact data envelope guarantees an object at this location.
+ * @param requiredAfterElement - When `true`, switches `required` to `true` the first time an
+ *   element boundary (`[]`) is crossed. Used by idPath validation to enforce requiredness only
+ *   inside elements without also requiring the area property itself.
  * @returns All matching variant schemas, or undefined for an unsupported path.
  */
 function fieldSchemas(
@@ -245,9 +304,11 @@ function fieldSchemas(
   required: boolean,
   refs = new Set<string>(),
   objectGuaranteed = false,
+  requiredAfterElement = false,
 ): ArtifactSchemaFragment[] | undefined {
   if (typeof node.$ref === 'string') {
-    return fieldSchemasForReference(root, node, node.$ref, parts, required, refs, objectGuaranteed);
+    const ref = node.$ref;
+    return fieldSchemasForReference(root, node, ref, parts, required, refs, objectGuaranteed, requiredAfterElement);
   }
   const unionKey = Array.isArray(node.anyOf) ? 'anyOf' : 'oneOf';
   const alternatives = node[unionKey];
@@ -256,27 +317,49 @@ function fieldSchemas(
     const results = alternatives.map((branch) => {
       const object = schemaObject(branch);
       if (!object) return undefined;
-      const combined =
-        typeof object.$ref === 'string'
-          ? { allOf: [base, object] }
-          : { ...object, allOf: [base, ...(Array.isArray(object.allOf) ? object.allOf : [])] };
-      return fieldSchemas(root, combined, parts, required, refs, objectGuaranteed);
+      const { node: combined, ref } = combineUnionBranchNode(root, base, object);
+      const branchRefs = ref === undefined ? refs : new Set([...refs, ref]);
+      return fieldSchemas(root, combined, parts, required, branchRefs, objectGuaranteed, requiredAfterElement);
     });
     return results.every((result) => result !== undefined) ? results.flatMap((result) => result ?? []) : undefined;
   }
   if (Array.isArray(node.allOf)) {
     const combined = combineConjuncts(root, node, refs);
-    return combined ? fieldSchemas(root, combined, parts, required, refs, objectGuaranteed) : undefined;
+    return combined
+      ? fieldSchemas(root, combined, parts, required, refs, objectGuaranteed, requiredAfterElement)
+      : undefined;
   }
   if (parts.length === 0) return [node];
   const [key, ...rest] = parts;
-  if (key === ARTIFACT_COLLECTION_ELEMENT_SEGMENT) return elementSchemas(root, node, rest);
-  if (node.type !== 'object' && !(node.type === undefined && objectGuaranteed)) return undefined;
+  if (key === ARTIFACT_COLLECTION_ELEMENT_SEGMENT) {
+    // Activate requiredAfterElement at the boundary; clear it so nested element
+    // crossings don't re-activate it (the flag is consumed here).
+    return elementSchemas(root, node, rest, required || requiredAfterElement);
+  }
+  if (!declaresType(node, 'object') && !(node.type === undefined && objectGuaranteed)) return undefined;
   if (!key || (required && !requiredProperties(node).includes(key))) return undefined;
-  const child = declaredPropertySchema(node, key);
+  return childStepSchemas(root, declaredPropertySchema(node, key), rest, required, requiredAfterElement);
+}
+
+/**
+ * Descend into one declared property's schema for the remaining segments.
+ * @param root - Root schema for resolving local references.
+ * @param child - Declared property schema, or undefined when the property is not declared.
+ * @param rest - Remaining location segments below the property.
+ * @param required - Whether all further properties must be required.
+ * @param requiredAfterElement - Requiredness activation flag for the next element boundary.
+ * @returns Matching fragments, or undefined when the property is not declared.
+ */
+function childStepSchemas(
+  root: Record<string, unknown>,
+  child: ArtifactSchemaFragment | undefined,
+  rest: string[],
+  required: boolean,
+  requiredAfterElement: boolean,
+): ArtifactSchemaFragment[] | undefined {
   // The root envelope does not constrain the type of a nested property.
   if (typeof child === 'boolean') return rest.length === 0 ? [child] : undefined;
-  return child ? fieldSchemas(root, child, rest, required) : undefined;
+  return child ? fieldSchemas(root, child, rest, required, new Set(), false, requiredAfterElement) : undefined;
 }
 
 /**
@@ -287,13 +370,28 @@ function fieldSchemas(
  * represent the location's coverage across all schema variants.
  * @param dataSchema - Serialized artifact data schema.
  * @param segments - Data-relative location segments.
+ * @param options - Optional inspection modifiers. `required` (default `false`)
+ *   requires every property segment from the root to appear in its enclosing
+ *   object's `required` array. `requiredAfterElement` (default `false`) applies
+ *   that check only to segments below the first element boundary (`[]`),
+ *   leaving segments above it exempt — necessary when the area array itself may
+ *   be optional.
  * @returns Covered schema fragments, or undefined when the location is not declared in every variant.
  */
 export function inspectArtifactDataLocation(
   dataSchema: Record<string, unknown>,
   segments: readonly string[],
+  options?: { readonly required?: boolean; readonly requiredAfterElement?: boolean },
 ): readonly ArtifactSchemaFragment[] | undefined {
-  return fieldSchemas(dataSchema, dataSchema, [...segments], false, new Set(), true);
+  return fieldSchemas(
+    dataSchema,
+    dataSchema,
+    [...segments],
+    options?.required ?? false,
+    new Set(),
+    true,
+    options?.requiredAfterElement ?? false,
+  );
 }
 
 /**
@@ -491,9 +589,7 @@ function validateSchemaCompositions(
       message: 'Unsupported intersection: use open compatible conjuncts or a single closed object schema',
     });
   }
-  for (const child of childSchemas(node)) {
-    validateSchemaCompositions(root, child.node, ctx, [...path, ...child.path]);
-  }
+  for (const child of childSchemas(node)) validateSchemaCompositions(root, child.node, ctx, [...path, ...child.path]);
 }
 
 /**
@@ -514,7 +610,7 @@ export function validateKindDataPaths(
 ): void {
   validateSchemaCompositions(value.dataSchema, value.dataSchema, ctx);
   const title = fieldSchemas(value.dataSchema, value.dataSchema, value.titlePath.split('.'), true, new Set(), true);
-  if (!title?.length || title.some((field) => !isSchemaObject(field) || field.type !== 'string')) {
+  if (!title?.length || title.some((field) => !declaresType(field, 'string'))) {
     ctx.addIssue({
       code: 'custom',
       path: ['titlePath'],
@@ -524,11 +620,9 @@ export function validateKindDataPaths(
   const paths = [
     ...(value.indexedFields ?? []).map((path, index) => ({ path, location: ['indexedFields', index] })),
     ...(value.searchableFields ?? []).map((path, index) => ({ path, location: ['searchableFields', index] })),
-    ...(value.uniqueness ?? []).flatMap((rule, ruleIndex) =>
-      rule.by.flatMap((selector, index) =>
-        selector.kind === 'data'
-          ? [{ path: selector.path, location: ['uniqueness', ruleIndex, 'by', index, 'path'] }]
-          : [],
+    ...(value.uniqueness ?? []).flatMap((rule, ri) =>
+      rule.by.flatMap((selector, si) =>
+        selector.kind === 'data' ? [{ path: selector.path, location: ['uniqueness', ri, 'by', si, 'path'] }] : [],
       ),
     ),
     ...Object.entries(value.views ?? {}).flatMap(([name, view]) =>

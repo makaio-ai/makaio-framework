@@ -26,6 +26,7 @@ describe('Artifact namespace', () => {
         'relation-type.register',
         'resolve',
         'resolveContext',
+        'resolvePart',
         'revise',
         'revised',
         'status.changed',
