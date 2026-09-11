@@ -400,6 +400,12 @@ export const ARTIFACT_PATCH_ERROR_CODES = [
    */
   'NO_CHANGE',
   /**
+   * The host refused to persist the patched result before writing anything.
+   * Unlike `HOST_FAILED`, nothing was persisted: the caller corrects what the
+   * message and issues name and resends against the same base revision.
+   */
+  'STORE_REJECTED',
+  /**
    * The host could not resolve or persist the artifact. When it failed while
    * persisting, the outcome is unknown rather than known to be absent: the
    * caller must re-read before retrying.
@@ -552,8 +558,9 @@ export const ArtifactPatchSuccessSchema = z.discriminatedUnion('dryRun', [
  * A rejected patch.
  *
  * A rejection by the engine — an undeclared path, an unmatched filter, a result
- * the kind schema refuses — and a `BASE_REVISION_CONFLICT`, whether the stale
- * base revision was caught before the write or the store refused it, all
+ * the kind schema refuses — a `BASE_REVISION_CONFLICT`, whether the stale
+ * base revision was caught before the write or the store refused it, and a
+ * `STORE_REJECTED`, the host's own refusal before writing anything, all
  * guarantee that nothing was persisted. `HOST_FAILED` does not: a host that
  * failed while persisting may have committed the write before the failure
  * surfaced, so the outcome is unknown and the caller must re-read before

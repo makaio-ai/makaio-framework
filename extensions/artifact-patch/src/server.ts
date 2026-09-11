@@ -13,6 +13,7 @@ export type {
   ArtifactPatchApplicationResult,
   ArtifactPatchHost,
   ArtifactPatchStoreConflict,
+  ArtifactPatchStoreRejection,
   ArtifactPatchStoreRequest,
   ArtifactPatchStoreResult,
 } from './index.js';

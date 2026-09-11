@@ -57,8 +57,13 @@ through a filter can land somewhere the caller never addressed. Field match stil
 to repeat blindly.
 
 A rejected write is a separate case from a refused one. A `store` that returns a conflict persisted
-nothing. A `store` that throws leaves the outcome unknown — the contract covers the compare-and-swap,
-not what a throw means — so the repair hint asks for a re-read instead of promising a safe retry.
+nothing. A host that refuses before any effect — its own write validator inspecting the payload —
+returns a structured rejection instead of throwing; the tool reports it as `STORE_REJECTED` with the
+host's message and per-path issues, and its repair promises nothing was persisted, so the caller
+corrects the input against the same base revision. A refusal that follows side-effecting steps must
+stay a throw: the safe-resend promise only holds when the whole store attempt left no trace. A `store` that throws leaves the outcome unknown
+— the contract covers the compare-and-swap, not what a throw means — so that repair hint asks for a
+re-read instead of promising a safe retry.
 
 Every rejection names the failing path and a repair hint; schema rejections add the expected type or
 the allowed values per path. `dryRun` applies and validates without persisting.
@@ -97,7 +102,10 @@ the caller named them — an object to replace the rendering hints wholesale, `n
 and must carry the previous revision's hints over when the property is absent, because hints are
 caller-authored and the engine cannot tell whether the change made them stale. `store` also receives
 the `schemaVersion` the payload was validated against and must persist the revision at that version,
-which differs from `previous.schemaVersion` exactly when the request migrated the artifact. The package never issues raw Artifact bus requests and
+which differs from `previous.schemaVersion` exactly when the request migrated the artifact. `store`
+reports its outcome as the persisted revision, a conflict, or a structured rejection for a refusal
+it makes before writing anything; only a failure whose outcome is genuinely unknown should throw.
+The package never issues raw Artifact bus requests and
 never reaches a store directly, so a service handling `artifact.patch` and the `artifacts_patch` MCP
 tool run the same engine over the same contract. Its default package marker contributes no tools until a host is
 explicitly bound.
