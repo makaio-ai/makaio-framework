@@ -7,7 +7,7 @@ import type {
 } from '../types/index.js';
 import type { BusTransportKeys } from '../registries/transport-registry.js';
 import { NoHandlerError, NO_HANDLER_ERROR_CODE } from '../errors/index.js';
-import { isJsonObject } from '@makaio/contracts';
+import { defineOwnValue, isJsonObject } from '@makaio/contracts';
 
 /**
  * Detects a "no handler" error for a specific request subject.
@@ -114,8 +114,13 @@ export function getReadyTransports(
 /**
  * Top-level Error fields and fields already serialized as dedicated
  * {@link BusTransportError} properties — excluded from the generic `data` bag.
+ *
+ * `__proto__` is additionally dropped at every codec boundary: preserving it as
+ * an own enumerable member would keep `instanceof` intact here but re-arm the
+ * legacy `Object.prototype.__proto__` setter at any downstream copy site that
+ * uses `[[Set]]` semantics (e.g. `Object.assign({}, error)`).
  */
-const SKIP_PROPS = new Set(['message', 'name', 'stack', 'cause', 'subject', 'code']);
+const SKIP_PROPS = new Set(['message', 'name', 'stack', 'cause', 'subject', 'code', '__proto__']);
 
 /**
  * Returns true when a value is safe to include in a serialized error data bag.
@@ -147,7 +152,9 @@ function collectStructuredProps(source: object, skip: ReadonlySet<string>): Reco
     if (skip.has(key)) continue;
     const value = Object.getOwnPropertyDescriptor(source, key)?.value as unknown;
     if (!isSerializableValue(value)) continue;
-    result[key] = value;
+    // Use defineOwnValue so a key named "__proto__" becomes a normal own member
+    // instead of invoking the Object.prototype.__proto__ setter.
+    defineOwnValue(result, key, value);
   }
   return Object.keys(result).length > 0 ? result : undefined;
 }
@@ -252,7 +259,21 @@ export function deserializeTransportError(transportError: BusTransportError): Er
   }
   if (transportError.data) {
     for (const [key, value] of Object.entries(transportError.data)) {
-      (error as Error & Record<string, unknown>)[key] = value;
+      // Identity fields may be filled from the bag when the dedicated top-level
+      // codec field is absent — peers historically carried code/subject inside
+      // data, and isNoHandlerErrorForSubject relies on them being promoted —
+      // but they never overwrite a top-level value.
+      if (key === 'code' || key === 'subject') {
+        if ((error as Error & Record<string, unknown>)[key] === undefined && typeof value === 'string') {
+          defineOwnValue(error as Error & Record<string, unknown>, key, value);
+        }
+        continue;
+      }
+      // Skip the remaining codec-reserved names so a bag entry named "message",
+      // "stack", "__proto__", etc. cannot clobber the real Error fields or
+      // forge the prototype of the returned object.
+      if (SKIP_PROPS.has(key)) continue;
+      defineOwnValue(error as Error & Record<string, unknown>, key, value);
     }
   }
   return error;
@@ -276,10 +297,17 @@ export function deserializeTransportError(transportError: BusTransportError): Er
  *   under its own `data` property.
  *
  * Merge rule: own enumerable props are collected (skipping codec fields), then,
- * if the object has an own `data` that is a plain JSON object, the `data` key is
- * removed from the flat set and the bag members are spread in — bag members win
- * on collision. A non-plain-object `data` (array, primitive) is kept as a
- * verbatim member of the flat set.
+ * if the object has an own `data` whose _value_ (read via descriptor, never via
+ * a getter) is a plain JSON object, the `data` key is removed from the flat set
+ * and the bag members are spread in after filtering codec field names — bag
+ * members win on collision. A non-plain-object `data` value (array, primitive)
+ * is kept as a verbatim member of the flat set. An accessor-backed `data`
+ * property is omitted entirely: its descriptor has no `value`, so both
+ * `collectStructuredProps` and the merge branch ignore it — getters never run.
+ *
+ * Codec field names (`message`, `name`, `stack`, `cause`, `subject`, `code`)
+ * are reserved and never appear in the result, whether they originate from the
+ * flat props or from inside a `data` bag.
  *
  * Standard Error fields and top-level codec fields (`message`, `name`, `stack`,
  * `cause`, `subject`, `code`) are never part of the result. Returns `undefined`
@@ -294,10 +322,21 @@ export function transportErrorData(error: unknown): Record<string, unknown> | un
 
   const flat = collectStructuredProps(error as object, SKIP_PROPS) ?? {};
 
-  if (Object.prototype.hasOwnProperty.call(error, 'data') && isJsonObject((error as Record<string, unknown>)['data'])) {
-    const bag = (error as Record<string, unknown>)['data'] as Record<string, unknown>;
+  // Read the descriptor once — never invokes an accessor-backed getter.
+  // Accessor-backed `data` properties have no `.value` field, so `dataDesc.value`
+  // is `undefined` and isJsonObject returns false, consistent with collectStructuredProps.
+  const dataDesc = Object.getOwnPropertyDescriptor(error, 'data');
+  if (dataDesc !== undefined && isJsonObject(dataDesc.value)) {
+    const bag = dataDesc.value;
     delete flat['data'];
-    const merged = { ...flat, ...bag };
+    // Filter codec-reserved field names from the bag so the raw-wire path and
+    // the deserialized path both agree that those names are excluded. Written
+    // via defineOwnValue so a bag key named "__proto__" stays an own member.
+    const filteredBag: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(bag)) {
+      if (!SKIP_PROPS.has(key)) defineOwnValue(filteredBag, key, value);
+    }
+    const merged = { ...flat, ...filteredBag };
     return Object.keys(merged).length > 0 ? merged : undefined;
   }
 

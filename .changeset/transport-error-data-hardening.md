@@ -1,0 +1,5 @@
+---
+'@makaio/bus-core': patch
+---
+
+Harden transport error codec against prototype-poisoning and field-clobbering: `deserializeTransportError` no longer lets data-bag entries overwrite the rebuilt Error's fields — `message`, `name`, `stack`, and `cause` never come from the bag, while the identity fields `code` and `subject` are filled from the bag only when the dedicated top-level codec field is absent (preserving the historical peer shape that `isNoHandlerErrorForSubject` relies on); remaining entries are written via `defineOwnValue`; `__proto__` is dropped at every codec boundary so it can neither forge the rebuilt Error's prototype nor survive as an own member that re-arms the legacy prototype setter at downstream copy sites; `collectStructuredProps` applies the same treatment; `transportErrorData` reads the `data` descriptor once (never invoking accessor-backed getters) and filters the same reserved names from the bag before merging, so the raw-wire path and the deserialized path agree on what keys are excluded.
