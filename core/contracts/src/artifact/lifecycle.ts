@@ -19,10 +19,11 @@ export const ArtifactLifecycleVersionSchema = z.number().int().positive();
 const version = ArtifactLifecycleVersionSchema;
 const initialStates = { knowledge: 'valid', commitment: 'proposed', interaction: 'open' } as const;
 /**
- * Current administration state; each category admits only its own states. Version 1 is
- * reserved for the category initial state because every transition increments the version.
- * The reverse rule (initial state implies version 1) is deliberately not enforced: it only
- * holds while no transition re-enters an initial state, a property of the current matrix.
+ * Current administration state; each category admits only its own states. Version 1 implies
+ * the category initial state (every transition increments the version, so only the creation
+ * entry can be version 1). The converse does not hold: a `knowledge` artifact retired and
+ * then reinstated re-enters `valid` at a version greater than 1, so the reverse rule is
+ * deliberately not enforced.
  */
 export const ArtifactLifecycleSnapshotSchema = z
   .discriminatedUnion('category', [
@@ -89,10 +90,10 @@ export const ArtifactLifecycleTransitionCommandSchema = z.strictObject({
   actor: ArtifactActorSchema,
 });
 
-/** Pure transition matrix; terminal states have no outgoing transition in this slice. */
+/** Pure transition matrix; retired knowledge may be reinstated, all other end states are terminal in this slice. */
 const transitions: Record<ArtifactLifecycleState, readonly ArtifactLifecycleState[]> = {
   valid: ['retired'],
-  retired: [],
+  retired: ['valid'],
   proposed: ['decided'],
   decided: ['fulfilled', 'revoked'],
   fulfilled: [],
@@ -133,6 +134,16 @@ export const ArtifactLifecycleInitializedEntrySchema = z
       });
     }
   });
+/**
+ * Retiring knowledge and reinstating retired knowledge are the transitions that need a reason.
+ * @param from - Current lifecycle state before the transition.
+ * @param to - Requested lifecycle state after the transition.
+ * @returns True when a non-blank reason is required for the transition.
+ */
+function lifecycleTransitionRequiresReason(from: ArtifactLifecycleState, to: ArtifactLifecycleState): boolean {
+  return to === 'retired' || (from === 'retired' && to === 'valid');
+}
+const LIFECYCLE_TRANSITION_REQUIRES_REASON_MESSAGE = 'Retiring or reinstating knowledge requires a reason';
 /** Attributed, justified transition entry appended after initialization. */
 export const ArtifactLifecycleTransitionedEntrySchema = z
   .strictObject({
@@ -155,8 +166,12 @@ export const ArtifactLifecycleTransitionedEntrySchema = z
         message: 'History requires a category-compatible transition after initialization',
       });
     }
-    if (entry.lifecycle.state === 'retired' && !entry.reason) {
-      ctx.addIssue({ code: 'custom', path: ['reason'], message: 'Retiring knowledge requires a reason' });
+    if (lifecycleTransitionRequiresReason(entry.previousState, entry.lifecycle.state) && !entry.reason) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['reason'],
+        message: LIFECYCLE_TRANSITION_REQUIRES_REASON_MESSAGE,
+      });
     }
     if (entry.situation.kind === 'revision-assessment' && entry.situation.assessedRevision !== entry.observedRevision) {
       ctx.addIssue({
@@ -289,8 +304,8 @@ export function advanceArtifactLifecycle(input: {
       requestedState: command.state,
     });
   }
-  if (command.state === 'retired' && !command.reason) {
-    throw new ArtifactLifecycleError('Retiring knowledge requires a reason', {
+  if (lifecycleTransitionRequiresReason(current.state, command.state) && !command.reason) {
+    throw new ArtifactLifecycleError(LIFECYCLE_TRANSITION_REQUIRES_REASON_MESSAGE, {
       reason: 'precondition-failed',
       current,
       requestedState: command.state,

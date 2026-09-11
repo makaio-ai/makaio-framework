@@ -260,3 +260,24 @@ export type {
   ArtifactLifecycleFailure,
   ArtifactLifecycleRejectedPayload,
 } from './lifecycle-namespace.js';
+export {
+  ArtifactRelationTargetIdentitySchema,
+  artifactRelationTargetIdentity,
+  serializeArtifactRelationTargetIdentity,
+  describeArtifactRelationTargetIdentity,
+} from './relation-target-identity.js';
+export type { ArtifactRelationTargetIdentity } from './relation-target-identity.js';
+export {
+  assessUniquenessSupport,
+  buildUniquenessKeys,
+  describeUniquenessKey,
+} from './uniqueness.js';
+export type {
+  UniquenessSelectorCapability,
+  UniquenessSupportIssue,
+  UniquenessKey,
+  UniquenessKeyPart,
+  UniquenessKeyIssue,
+  UniquenessKeyIssueReason,
+  BuildUniquenessKeysResult,
+} from './uniqueness.js';

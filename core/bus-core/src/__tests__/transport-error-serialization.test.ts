@@ -8,7 +8,8 @@ import {
   type BusRequestMessage,
   type BusEventMessage,
 } from '../index.js';
-import { serializeError, deserializeTransportError } from '../utils/transport.js';
+import { serializeError, deserializeTransportError, transportErrorData, findInErrorChain } from '../utils/transport.js';
+import { serializeTransportError } from '../utils/transport-helpers.js';
 
 /**
  * Mock transport for testing structured transport errors.
@@ -218,5 +219,186 @@ describe('serializeError generic data extraction', () => {
     expect(serialized.data).toMatchObject({ retryable: true });
     expect(serialized.data).not.toHaveProperty('bigField');
     expect(serialized.data).not.toHaveProperty('symField');
+  });
+});
+
+describe('transportErrorData and findInErrorChain', () => {
+  describe('transportErrorData', () => {
+    it('returns the data object for a class-instance shape (error.data is a plain object)', () => {
+      const err = new Error('test') as Error & { data?: unknown };
+      err.data = { issues: [1] };
+      expect(transportErrorData(err)).toEqual({ issues: [1] });
+    });
+
+    it('returns a shallow copy, not the same reference', () => {
+      const data = { issues: [1] };
+      const err = new Error('test') as Error & { data?: unknown };
+      err.data = data;
+      const result = transportErrorData(err);
+      expect(result).toEqual(data);
+      expect(result).not.toBe(data);
+    });
+
+    it('returns bag members after serializeError→deserializeTransportError for an error with a data bag', () => {
+      // serializeError copies original.data as result.data.data (nested bag).
+      // deserializeTransportError then restores .data = { retryable, count } as own prop.
+      // transportErrorData extracts those bag members via the merge rule.
+      const original = new Error('boom') as Error & { data?: Record<string, unknown> };
+      original.data = { retryable: true, count: 3 };
+      const deserialized = deserializeTransportError(serializeError(original));
+      const result = transportErrorData(deserialized);
+      expect(result).toBeDefined();
+      expect(result).toHaveProperty('retryable', true);
+      expect(result).toHaveProperty('count', 3);
+      expect(result).not.toHaveProperty('message');
+      expect(result).not.toHaveProperty('code');
+      expect(result).not.toHaveProperty('subject');
+      expect(result).not.toHaveProperty('stack');
+      expect(result).not.toHaveProperty('name');
+    });
+
+    it('returns undefined for a non-object input', () => {
+      expect(transportErrorData(null)).toBeUndefined();
+      expect(transportErrorData(undefined)).toBeUndefined();
+      expect(transportErrorData('string')).toBeUndefined();
+      expect(transportErrorData(42)).toBeUndefined();
+    });
+
+    it('returns undefined for an Error without structured members', () => {
+      const plain = new Error('no data');
+      expect(transportErrorData(plain)).toBeUndefined();
+    });
+
+    it('returns undefined when data property is not a plain object', () => {
+      const err = new Error('test') as Error & { data?: unknown };
+      err.data = [1, 2, 3];
+      // Array is not a plain object — falls through to flat-shape path
+      // The 'data' key itself is not in SKIP_PROPS, so it appears in flat result
+      const result = transportErrorData(err);
+      expect(result).toBeDefined();
+      expect(result).toHaveProperty('data');
+    });
+
+    it('merges bag + sibling members for a class instance with both, same result after round-trip', () => {
+      // In-process instance: data bag with issues, plus sibling retryable prop.
+      const err = new Error('multi') as Error & { data?: unknown; retryable?: boolean };
+      err.data = { issues: [1] };
+      err.retryable = true;
+
+      const direct = transportErrorData(err);
+      expect(direct).toEqual({ issues: [1], retryable: true });
+
+      // After serializeError→deserializeTransportError the merge rule must yield
+      // the same result: result.data.data = { issues: [1] }, result.data.retryable = true
+      // → deserialized.data = { issues: [1] }, deserialized.retryable = true
+      // → transportErrorData merges to { issues: [1], retryable: true }.
+      const deserialized = deserializeTransportError(serializeError(err)) as Error & Record<string, unknown>;
+      const afterRoundTrip = transportErrorData(deserialized);
+      expect(afterRoundTrip).toEqual({ issues: [1], retryable: true });
+    });
+
+    it('returns flat members for a genuine flat shape from serializeTransportError→deserializeTransportError', () => {
+      // serializeTransportError uses error.data directly as the wire bag, so after
+      // deserialization the members are flat on the Error with no 'data' key.
+      const wire = serializeTransportError({ message: 'flat', code: 'FC', data: { a: 1, b: 'two' } });
+      const rebuilt = deserializeTransportError(wire);
+      const result = transportErrorData(rebuilt);
+      expect(result).toBeDefined();
+      expect(result).toHaveProperty('a', 1);
+      expect(result).toHaveProperty('b', 'two');
+      expect(result).not.toHaveProperty('data');
+    });
+
+    it('extracts bag members from a raw BusTransportError object', () => {
+      // A plain BusTransportError object (not yet deserialized) carries the bag
+      // under its own 'data' property; transportErrorData must unwrap it.
+      const raw = { message: 'raw', code: 'RC', data: { a: 1 } };
+      const result = transportErrorData(raw);
+      expect(result).toEqual({ a: 1 });
+    });
+
+    it('bag member wins on collision with a same-named flat sibling', () => {
+      // When both a flat prop and a bag member share the key 'x', the bag wins.
+      const err = new Error('collision') as Error & { data?: unknown; x?: string };
+      err.data = { x: 'nested' };
+      err.x = 'flat';
+      const result = transportErrorData(err);
+      expect(result).toHaveProperty('x', 'nested');
+    });
+
+    it('keeps a non-plain data value (array) as a verbatim flat member', () => {
+      // When error.data is an array it is not a plain JSON object, so it stays
+      // as the 'data' member of the flat record instead of being unwrapped.
+      const err = new Error('array') as Error & { data?: unknown; retryable?: boolean };
+      err.data = [1];
+      err.retryable = true;
+      const result = transportErrorData(err);
+      expect(result).toEqual({ data: [1], retryable: true });
+    });
+  });
+
+  describe('findInErrorChain', () => {
+    it('finds a member two cause levels deep', () => {
+      const root = new Error('root');
+      const mid = new Error('mid') as Error & { cause?: unknown };
+      const deep = new Error('deep') as Error & { data?: Record<string, unknown>; cause?: unknown };
+      deep.data = { foundIt: true };
+      mid.cause = deep;
+      root.cause = mid;
+      const result = findInErrorChain(root, transportErrorData);
+      expect(result).toEqual({ foundIt: true });
+    });
+
+    it('returns undefined when no link matches the predicate', () => {
+      const err = new Error('plain');
+      expect(findInErrorChain(err, transportErrorData)).toBeUndefined();
+    });
+
+    it('returns undefined and does not hang on a cyclic cause chain', () => {
+      const a = new Error('a') as Error & { cause?: unknown };
+      const b = new Error('b') as Error & { cause?: unknown };
+      a.cause = b;
+      b.cause = a;
+      expect(findInErrorChain(a, transportErrorData)).toBeUndefined();
+    });
+
+    it('continues the walk when predicate returns undefined', () => {
+      const a = new Error('a') as Error & { cause?: unknown };
+      const b = new Error('b') as Error & { data?: Record<string, unknown>; cause?: unknown };
+      b.data = { target: 42 };
+      a.cause = b;
+      let callCount = 0;
+      const result = findInErrorChain(a, (rec) => {
+        callCount++;
+        return transportErrorData(rec);
+      });
+      expect(callCount).toBe(2);
+      expect(result).toEqual({ target: 42 });
+    });
+
+    it('returns undefined for a non-object error', () => {
+      expect(findInErrorChain(null, transportErrorData)).toBeUndefined();
+      expect(findInErrorChain('string', transportErrorData)).toBeUndefined();
+    });
+
+    it('symmetry: findInErrorChain finds cause data before and after a round-trip', () => {
+      // Before round-trip (class instance)
+      const causeErr = new Error('cause') as Error & { data?: Record<string, unknown>; cause?: unknown };
+      causeErr.data = { severity: 'critical' };
+      const wrapperErr = new Error('wrapper') as Error & { cause?: unknown };
+      wrapperErr.cause = causeErr;
+      const beforeResult = findInErrorChain(wrapperErr, transportErrorData);
+      expect(beforeResult).toEqual({ severity: 'critical' });
+
+      // After round-trip (deserialized bag shape): serializeError copies
+      // causeErr.data into result.data.data (nested bag), so deserializeTransportError
+      // restores .data = { severity: 'critical' } as the bag on the rebuilt error.
+      // transportErrorData extracts its members via the merge rule.
+      const serialized = serializeError(wrapperErr);
+      const deserialized = deserializeTransportError(serialized);
+      const afterResult = findInErrorChain(deserialized, transportErrorData);
+      expect(afterResult).toBeDefined();
+      expect(afterResult).toHaveProperty('severity', 'critical');
+    });
   });
 });
