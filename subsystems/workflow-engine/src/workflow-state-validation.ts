@@ -1,5 +1,5 @@
 import Ajv, { type AnySchema, type ErrorObject, type ValidateFunction } from 'ajv';
-import type { JsonValue, WorkflowDefinition } from '@makaio/contracts';
+import { sortJsonValue, type JsonValue, type WorkflowDefinition } from '@makaio/contracts';
 
 /** JSON Schema validator used for workflow state contracts. */
 const ajv = new Ajv({ allErrors: true, strict: false });
@@ -40,31 +40,11 @@ function buildWorkflowStateValidatorCacheKey(
  */
 function stringifyWorkflowStateSchema(workflowId: string, schema: Record<string, JsonValue>): string {
   try {
-    return JSON.stringify(sortJsonValueForSignature(schema));
+    return JSON.stringify(sortJsonValue(schema));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`Workflow '${workflowId}' state schema is invalid: ${message}`);
   }
-}
-
-/**
- * Sort JSON object keys recursively while preserving array order.
- * @param value - JSON value to normalize for signature comparison.
- * @returns JSON value with deterministic object-key ordering.
- */
-function sortJsonValueForSignature(value: JsonValue): JsonValue {
-  if (Array.isArray(value)) {
-    return value.map(sortJsonValueForSignature);
-  }
-  if (typeof value !== 'object' || value === null) {
-    return value;
-  }
-  const objectValue = value as Record<string, JsonValue>;
-  return Object.fromEntries(
-    Object.keys(objectValue)
-      .sort()
-      .map((key) => [key, sortJsonValueForSignature(objectValue[key] as JsonValue)]),
-  );
 }
 
 /**

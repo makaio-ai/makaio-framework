@@ -943,6 +943,7 @@ export {
   StructuredOutputValidationStatusSchema,
   zodSchemaToJsonRecord,
 } from './shared/index.js';
+export { sortJsonValue } from './protocol/export-manifest-json-utils.js';
 export type {
   ContentSource,
   CustomFieldDefinition,
