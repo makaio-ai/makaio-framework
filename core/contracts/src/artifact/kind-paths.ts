@@ -18,7 +18,23 @@ function isSchemaObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-type ArtifactSchemaFragment = boolean | Record<string, unknown>;
+/** One schema declaration reachable at an inspected location. */
+export type ArtifactSchemaFragment = boolean | Record<string, unknown>;
+
+/**
+ * Location segment selecting one element of a declared array.
+ *
+ * Named-property paths cannot express it, so callers that address list entries
+ * — a write addressing one collection entry, for instance — substitute this
+ * token for the concrete position or match that selects the element. Schema
+ * inspection is identical for either, because both resolve to the array's
+ * declared item schema.
+ *
+ * The brackets are what make the token unambiguous: {@link ArtifactDataPathSchema}
+ * admits no bracket in a property name, so no real property can be mistaken for
+ * an element selector when a dotted path is split into segments.
+ */
+export const ARTIFACT_COLLECTION_ELEMENT_SEGMENT = '[]';
 
 /**
  * Apply draft 2020-12 sibling constraints to a boolean reference target.
@@ -143,6 +159,13 @@ function combineConjuncts(
       if (combined.type !== undefined && combined.type !== branch.type) return undefined;
       combined.type = branch.type;
     }
+    // An intersected array keeps its item declaration, so an element location
+    // stays inspectable. Two conjuncts declaring different items would need a
+    // real item intersection, which is outside the supported profile.
+    if (branch.items !== undefined) {
+      if (combined.items !== undefined) return undefined;
+      combined.items = branch.items;
+    }
     mergePropertyDeclarations(properties, schemaObject(branch.properties) ?? {});
     for (const key of requiredProperties(branch)) required.add(key);
   }
@@ -173,6 +196,36 @@ function fieldSchemasForReference(
   const target = resolveRef(root, node);
   if (typeof target === 'boolean') return parts.length === 0 ? [target] : undefined;
   return target ? fieldSchemas(root, target, parts, required, new Set([...refs, ref]), objectGuaranteed) : undefined;
+}
+
+/**
+ * Descend into the declared item schema of an array.
+ *
+ * An element is never a required property, so the required-property rule that
+ * applies to object segments has nothing to check here and is not carried on.
+ *
+ * An element selector resolves to the homogeneous item schema only. Tuple
+ * positions (`prefixItems`, or an array-valued draft-7 `items`) are outside the
+ * inspected profile: the patch engine collapses a position and a filter to the
+ * same element token before the schema is consulted, so no concrete index is
+ * available here. No registered kind is a tuple today; a positional value that
+ * violates a tuple slot is still rejected by schema re-validation of the
+ * patched payload. Tracked in FACT-181.
+ * @param root - Root schema for resolving local references.
+ * @param node - Schema declared at the collection itself.
+ * @param parts - Remaining segments below the element.
+ * @returns Matching schemas below one element, or undefined when the location is not declared.
+ */
+function elementSchemas(
+  root: Record<string, unknown>,
+  node: Record<string, unknown>,
+  parts: string[],
+): ArtifactSchemaFragment[] | undefined {
+  if (node.type !== 'array') return undefined;
+  const items = node.items;
+  if (typeof items === 'boolean') return parts.length === 0 ? [items] : undefined;
+  const item = schemaObject(items);
+  return item ? fieldSchemas(root, item, parts, false) : undefined;
 }
 
 /**
@@ -216,8 +269,9 @@ function fieldSchemas(
     return combined ? fieldSchemas(root, combined, parts, required, refs, objectGuaranteed) : undefined;
   }
   if (parts.length === 0) return [node];
-  if (node.type !== 'object' && !(node.type === undefined && objectGuaranteed)) return undefined;
   const [key, ...rest] = parts;
+  if (key === ARTIFACT_COLLECTION_ELEMENT_SEGMENT) return elementSchemas(root, node, rest);
+  if (node.type !== 'object' && !(node.type === undefined && objectGuaranteed)) return undefined;
   if (!key || (required && !requiredProperties(node).includes(key))) return undefined;
   const child = declaredPropertySchema(node, key);
   // The root envelope does not constrain the type of a nested property.
@@ -226,35 +280,34 @@ function fieldSchemas(
 }
 
 /**
- * Inspect the serialized schema fragments selected by one data-relative path.
+ * Inspect the serialized schema fragments selected by one data-relative location.
  *
- * Paths traverse named object properties only. A terminal array is valid and
- * represents the complete original array; selecting its elements is outside
- * this contract. Multiple fragments represent the path's coverage across all
- * schema variants.
+ * Segments name object properties, or select one element of a declared array
+ * through {@link ARTIFACT_COLLECTION_ELEMENT_SEGMENT}. Multiple fragments
+ * represent the location's coverage across all schema variants.
  * @param dataSchema - Serialized artifact data schema.
- * @param path - Data-relative object-property path.
- * @returns Covered schema fragments, or undefined when the path is not declared in every variant.
+ * @param segments - Data-relative location segments.
+ * @returns Covered schema fragments, or undefined when the location is not declared in every variant.
  */
-function inspectArtifactDataPath(
+export function inspectArtifactDataLocation(
   dataSchema: Record<string, unknown>,
-  path: string,
+  segments: readonly string[],
 ): readonly ArtifactSchemaFragment[] | undefined {
-  return fieldSchemas(dataSchema, dataSchema, path.split('.'), false, new Set(), true);
+  return fieldSchemas(dataSchema, dataSchema, [...segments], false, new Set(), true);
 }
 
 /**
  * Determine whether a data-relative path is declared in every schema variant.
  *
  * Paths traverse named object properties only. A terminal array is valid and
- * represents the complete original array; selecting its elements is outside
- * this contract.
+ * represents the complete original array; selecting its elements uses
+ * {@link inspectArtifactDataLocation} with {@link ARTIFACT_COLLECTION_ELEMENT_SEGMENT}.
  * @param dataSchema - Serialized artifact data schema.
  * @param path - Data-relative object-property path.
  * @returns Whether the path is declared in every schema variant.
  */
 export function isArtifactDataPathDeclared(dataSchema: Record<string, unknown>, path: string): boolean {
-  return inspectArtifactDataPath(dataSchema, path) !== undefined;
+  return inspectArtifactDataLocation(dataSchema, path.split('.')) !== undefined;
 }
 
 /**

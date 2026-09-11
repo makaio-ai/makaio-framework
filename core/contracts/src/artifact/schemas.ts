@@ -28,6 +28,21 @@ export type {
 } from './kind-registration.js';
 
 /**
+ * A caller-owned status observation pointer, relative to a revision's `data`.
+ *
+ * Every write request that offers an explicit status observation uses this one
+ * schema, so `revise` and `patch` cannot drift apart on what a caller is
+ * allowed to name. The pointer is JSON Pointer syntax (`/state`,
+ * `/review/status`) with the standard `~0` and `~1` escapes; a dot path or an
+ * empty pointer is rejected. Writers derive the change from the persisted
+ * values around the write, so a caller never asserts old or new values, and
+ * the pointer itself is never stored in the revision.
+ */
+export const ArtifactStatusPathSchema = z
+  .string()
+  .regex(/^(?:\/(?:[^~/]|~[01])*)+$/, 'Expected a data-relative JSON Pointer');
+
+/**
  * Identifies the actor (agent, user, system) that produced or asserted
  * an artifact revision or confidence basis.
  */

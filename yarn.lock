@@ -4959,6 +4959,26 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@makaio/extension-artifact-patch@workspace:extensions/artifact-patch":
+  version: 0.0.0-use.local
+  resolution: "@makaio/extension-artifact-patch@workspace:extensions/artifact-patch"
+  dependencies:
+    "@makaio/build-tooling": "workspace:*"
+    "@makaio/bus-core": "workspace:*"
+    "@makaio/contracts": "workspace:*"
+    "@makaio/core": "workspace:*"
+    "@makaio/framework": "workspace:*"
+    "@makaio/tools-core": "workspace:*"
+    "@types/node": "npm:^24.3.0"
+    tsdown: "npm:0.22.0"
+    typescript: "npm:^6.0.3"
+    vitest: "npm:4.1.10"
+    zod: "npm:4.4.3"
+  peerDependencies:
+    "@makaio/framework": "workspace:*"
+  languageName: unknown
+  linkType: soft
+
 "@makaio/extension-artifact-query@workspace:*, @makaio/extension-artifact-query@workspace:extensions/artifact-query":
   version: 0.0.0-use.local
   resolution: "@makaio/extension-artifact-query@workspace:extensions/artifact-query"

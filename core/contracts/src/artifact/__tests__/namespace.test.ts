@@ -19,6 +19,7 @@ describe('Artifact namespace', () => {
         'lifecycle.transition',
         'lifecycle.committed',
         'lifecycle.rejected',
+        'patch',
         'query',
         'relation.added',
         'relation-type.list',
@@ -86,6 +87,9 @@ describe('Artifact namespace', () => {
   });
 
   describe('status contract', () => {
+    const acceptedStatusPaths = ['/phase', '/review/status', '/review~1result/status~0code'];
+    const rejectedStatusPaths = ['', 'phase', 'review.status', '/phase~', '/phase~2'];
+
     it('accepts only data-relative JSON Pointers as explicit revise observation metadata', () => {
       const request = {
         previous: { refClass: 'artifact', kind: 'review', id: 'review-1', revision: 'rev-1' },
@@ -99,11 +103,29 @@ describe('Artifact namespace', () => {
         },
       };
       expect(ArtifactSchemas.revise.request.parse(request)).not.toHaveProperty('statusPath');
-      for (const statusPath of ['/phase', '/review/status', '/review~1result/status~0code']) {
+      for (const statusPath of acceptedStatusPaths) {
         expect(ArtifactSchemas.revise.request.parse({ ...request, statusPath }).statusPath).toBe(statusPath);
       }
-      for (const statusPath of ['', 'phase', 'review.status', '/phase~', '/phase~2']) {
+      for (const statusPath of rejectedStatusPaths) {
         expect(ArtifactSchemas.revise.request.safeParse({ ...request, statusPath }).success).toBe(false);
+      }
+    });
+
+    it('accepts the same observation metadata on a patch request as on a revise', () => {
+      // A patch is a revision like any other, so a host bound over the lifecycle
+      // writer can emit the same status event. The two requests share one pointer
+      // schema and must not drift apart on what a caller may name.
+      const request = {
+        ref: { kind: 'review', id: 'review-1' },
+        baseRevision: 'rev-1',
+        patch: { $set: { phase: 'approved' } },
+      };
+      expect(ArtifactSchemas.patch.request.parse(request)).not.toHaveProperty('statusPath');
+      for (const statusPath of acceptedStatusPaths) {
+        expect(ArtifactSchemas.patch.request.parse({ ...request, statusPath }).statusPath).toBe(statusPath);
+      }
+      for (const statusPath of rejectedStatusPaths) {
+        expect(ArtifactSchemas.patch.request.safeParse({ ...request, statusPath }).success).toBe(false);
       }
     });
 

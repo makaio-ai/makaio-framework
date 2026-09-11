@@ -1,6 +1,8 @@
 import {
   compileArtifactDataSchema,
+  defineOwnValue,
   isArtifactDataPathDeclared,
+  ownValue,
   readArtifactTitle,
   type ArtifactDataValidator,
   type ArtifactKindRegistration,
@@ -74,26 +76,6 @@ function lookupKind(
  */
 function kindSchemaKey(kind: string, schemaVersion: number): string {
   return `${kind}@${schemaVersion}`;
-}
-
-/**
- * Read an own JSON property without following the prototype chain.
- * @param object - JSON object to inspect.
- * @param key - Property name to read.
- * @returns Own property value, if present.
- */
-function ownValue(object: Record<string, unknown>, key: string): unknown | undefined {
-  return Object.hasOwn(object, key) ? Reflect.get(object, key) : undefined;
-}
-
-/**
- * Define an own output property without invoking special prototype setters.
- * @param target - Output object receiving the property.
- * @param key - Property name to define.
- * @param value - JSON value to store.
- */
-function defineOwnValue(target: Record<string, unknown>, key: string, value: unknown): void {
-  Object.defineProperty(target, key, { value, enumerable: true, configurable: true, writable: true });
 }
 
 /**
