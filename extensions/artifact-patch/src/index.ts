@@ -31,6 +31,7 @@ export { executePatchArtifact, patchArtifact } from './patch-artifact.js';
 export type {
   ArtifactPatchHost,
   ArtifactPatchStoreConflict,
+  ArtifactPatchStoreRejection,
   ArtifactPatchStoreRequest,
   ArtifactPatchStoreResult,
 } from './patch-artifact.js';

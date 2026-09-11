@@ -1,4 +1,5 @@
 import {
+  ArtifactPatchIssueSchema,
   artifactPatchInstructions,
   artifactPatchSegments,
   compileArtifactDataChecker,
@@ -63,8 +64,28 @@ export interface ArtifactPatchStoreConflict {
   readonly conflictingRevision: string;
 }
 
-/** Either the persisted revision, or the conflict that stopped it. */
-export type ArtifactPatchStoreResult = ArtifactRevision | ArtifactPatchStoreConflict;
+/**
+ * The host refused the write before writing anything; nothing was persisted.
+ *
+ * This is the return shape for a refusal the host makes before any effect — a
+ * write validator that inspects the payload and touches nothing. A refusal
+ * that surfaces after side-effecting steps ran (a later lifecycle hook
+ * rejecting after earlier hooks acted) must stay a throw, because "resend the
+ * corrected patch" is only safe when the whole store attempt left no trace.
+ * One message plus optional per-path issues, no error taxonomy: the caller's
+ * next step is the same for every side-effect-free refusal.
+ */
+export interface ArtifactPatchStoreRejection {
+  readonly rejection: {
+    /** Why the host refused the write. */
+    readonly message: string;
+    /** Per-path rejections, when the refusal names locations in `data`. */
+    readonly issues?: readonly ArtifactPatchIssue[];
+  };
+}
+
+/** The persisted revision, the conflict that stopped it, or the host's refusal. */
+export type ArtifactPatchStoreResult = ArtifactRevision | ArtifactPatchStoreConflict | ArtifactPatchStoreRejection;
 
 /**
  * Recognize a store outcome that refused to overwrite a concurrent revision.
@@ -73,6 +94,47 @@ export type ArtifactPatchStoreResult = ArtifactRevision | ArtifactPatchStoreConf
  */
 function isStoreConflict(result: ArtifactPatchStoreResult): result is ArtifactPatchStoreConflict {
   return 'conflictingRevision' in result;
+}
+
+/**
+ * Recognize a store outcome that refused the write before writing anything.
+ * @param result - Outcome reported by the host.
+ * @returns Whether the host refused deterministically rather than persisting.
+ */
+function isStoreRejection(result: ArtifactPatchStoreResult): result is ArtifactPatchStoreRejection {
+  return 'rejection' in result;
+}
+
+/**
+ * Report the host's deterministic refusal as a structured rejection.
+ *
+ * The host refused before writing anything, so unlike a thrown failure the
+ * outcome is known: the base revision still stands and the caller corrects the
+ * input instead of re-reading.
+ * @param refused - The host's refusal.
+ * @returns The rejection to report.
+ */
+function storeRejection(refused: ArtifactPatchStoreRejection): ArtifactPatchError {
+  // The response contract is strict and requires non-empty issue fields, and
+  // the tool registry does not re-validate successful output, so host-provided
+  // issues are normalized here — the same boundary check `checkStoredRevision`
+  // applies to the host's revision. An invalid entry is dropped rather than
+  // failing the rejection: the refusal stays actionable through its message.
+  const issues = (refused.rejection.issues ?? [])
+    .map((issue) => ArtifactPatchIssueSchema.safeParse(issue))
+    .flatMap((parsed) => (parsed.success ? [parsed.data] : []));
+  // Same boundary rule for the message: a blank one would manufacture a
+  // schema-valid error that names nothing, so it is replaced with a fallback
+  // that tells the caller the host itself is what needs the report.
+  const reason = refused.rejection.message.trim();
+  return {
+    code: 'STORE_REJECTED',
+    message:
+      reason === '' ? 'The host refused the write without naming a reason.' : `The host refused the write: ${reason}`,
+    ...(issues.length === 0 ? {} : { issues }),
+    repair:
+      'Nothing was persisted. Correct what the rejection names and resend the patch against the same baseRevision.',
+  };
 }
 
 /**
@@ -112,8 +174,14 @@ export interface ArtifactPatchHost {
    *
    * A thrown rejection is reported to the caller as an unknown outcome, because
    * this contract cannot tell a write that never ran from one that committed
-   * before the failure surfaced. Refusing a write by returning
-   * `ArtifactPatchStoreConflict` is the only outcome that promises nothing was
+   * before the failure surfaced. A refusal the host makes before any effect —
+   * its own write validator inspecting the payload — is returned as
+   * `ArtifactPatchStoreRejection` instead of thrown, so the caller learns that
+   * nothing was persisted and what to correct. Return it only when the whole
+   * store attempt is known to be side-effect-free: a rejection that follows
+   * side-effecting steps (a later lifecycle hook refusing after earlier hooks
+   * acted) must stay a throw. `ArtifactPatchStoreConflict` remains the refusal
+   * for a concurrent revision; both returned refusals promise nothing was
    * persisted.
    *
    * The new revision is stored at `request.schemaVersion`, which is the version
@@ -468,6 +536,7 @@ export async function patchArtifact(
     });
   }
   if (isStoreConflict(stored)) return failed(baseRevisionConflict(input, stored.conflictingRevision));
+  if (isStoreRejection(stored)) return failed(storeRejection(stored));
   const mislabelled = checkStoredRevision(stored, base, registration.schemaVersion);
   if (mislabelled) return failed(mislabelled);
   return {

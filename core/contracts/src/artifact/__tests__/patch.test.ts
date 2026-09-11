@@ -43,6 +43,19 @@ describe('patch rejection contract', () => {
     expect(result.success).toBe(true);
   });
 
+  it('accepts a store rejection with per-path issues', () => {
+    // STORE_REJECTED is the host's deterministic refusal: nothing persisted,
+    // so unlike HOST_FAILED the repair can promise a corrected resend.
+    const result = ArtifactPatchErrorSchema.safeParse({
+      code: 'STORE_REJECTED',
+      message: "The host refused the write: 'origin.url' is immutable.",
+      issues: [{ path: 'origin.url', reason: 'immutable path changed' }],
+      repair: "Drop the change to 'origin.url' and resend the patch.",
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it('carries the rejection through the response envelope unchanged', () => {
     const result = ArtifactPatchResponseSchema.safeParse({
       ok: false,

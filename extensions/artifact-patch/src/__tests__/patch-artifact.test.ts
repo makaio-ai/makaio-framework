@@ -116,6 +116,7 @@ function host(
     /** Version the host labels the stored revision with, when it ignores the request. */
     readonly storedSchemaVersion?: number;
     readonly storeConflictsWith?: string;
+    readonly rejectStore?: { message: string; issues?: { path: string; reason: string }[] };
   } = {},
 ): RecordingHost {
   const current = options.current === undefined ? planRevision('rev-1') : options.current;
@@ -137,6 +138,8 @@ function host(
       // A compliant host compares `previous.revision` while writing; this one
       // reports the refusal the same way a real compare-and-swap store would.
       if (options.storeConflictsWith) return { conflictingRevision: options.storeConflictsWith };
+      // A deterministic refusal is returned, not thrown: nothing was written.
+      if (options.rejectStore) return { rejection: options.rejectStore };
       writes.push(request);
       stored.push(request.data);
       // A compliant host stores at the version the payload was validated against.
@@ -807,6 +810,66 @@ describe('host boundary', () => {
     const repair = response.ok ? '' : response.error.repair;
     expect(repair).toContain('Re-read the artifact');
     expect(repair).not.toMatch(/nothing was persisted|Retry the same patch/);
+  });
+
+  it('reports a deterministic store refusal as rejected with nothing persisted', async () => {
+    const recording = host({
+      rejectStore: {
+        message: "'origin.url' is immutable for kind 'external-document'.",
+        issues: [{ path: 'origin.url', reason: 'immutable path changed' }],
+      },
+    });
+
+    const response = await patch(request({ $set: { summary: 'x' } }), recording);
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: {
+        code: 'STORE_REJECTED',
+        issues: [{ path: 'origin.url', reason: 'immutable path changed' }],
+      },
+    });
+    const error = response.ok ? undefined : response.error;
+    expect(error?.message).toContain("'origin.url' is immutable");
+    expect(error?.repair).toContain('Nothing was persisted');
+    expect(recording.persisted).toHaveLength(0);
+  });
+
+  it('drops malformed host issues instead of violating the response contract', async () => {
+    // The response schema is strict and requires a non-empty reason; the tool
+    // registry does not re-validate successful output, so the boundary must.
+    const recording = host({
+      rejectStore: {
+        message: 'refused',
+        issues: [
+          { path: 'origin.url', reason: '' },
+          { path: 'origin.url', reason: 'immutable path changed' },
+        ],
+      },
+    });
+
+    const response = await patch(request({ $set: { summary: 'x' } }), recording);
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: 'STORE_REJECTED', issues: [{ path: 'origin.url', reason: 'immutable path changed' }] },
+    });
+  });
+
+  it('replaces a blank refusal message instead of manufacturing an empty reason', async () => {
+    const response = await patch(request({ $set: { summary: 'x' } }), host({ rejectStore: { message: '  ' } }));
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: { code: 'STORE_REJECTED', message: 'The host refused the write without naming a reason.' },
+    });
+  });
+
+  it('omits issues from a store refusal that names none', async () => {
+    const response = await patch(request({ $set: { summary: 'x' } }), host({ rejectStore: { message: 'refused' } }));
+
+    expect(response).toMatchObject({ ok: false, error: { code: 'STORE_REJECTED' } });
+    expect(response.ok ? undefined : response.error.issues).toBeUndefined();
   });
 
   it('hands the host the previous revision and the requested status observation', async () => {
