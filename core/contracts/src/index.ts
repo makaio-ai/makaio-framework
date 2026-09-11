@@ -224,6 +224,25 @@ export type {
   BeforeArtifactHookContext,
   BeforeArtifactHookRegistration,
 } from './artifact/index.js';
+export {
+  ArtifactRelationTargetIdentitySchema,
+  artifactRelationTargetIdentity,
+  serializeArtifactRelationTargetIdentity,
+  describeArtifactRelationTargetIdentity,
+  assessUniquenessSupport,
+  buildUniquenessKeys,
+  describeUniquenessKey,
+} from './artifact/index.js';
+export type {
+  ArtifactRelationTargetIdentity,
+  UniquenessSelectorCapability,
+  UniquenessSupportIssue,
+  UniquenessKey,
+  UniquenessKeyPart,
+  UniquenessKeyIssue,
+  UniquenessKeyIssueReason,
+  BuildUniquenessKeysResult,
+} from './artifact/index.js';
 export { AIModelSchema, AIReasoningLevelSchema, ProviderAIModelSchema } from './model/index.js';
 export type {
   AIModel,
