@@ -19,10 +19,11 @@ export const ArtifactLifecycleVersionSchema = z.number().int().positive();
 const version = ArtifactLifecycleVersionSchema;
 const initialStates = { knowledge: 'valid', commitment: 'proposed', interaction: 'open' } as const;
 /**
- * Current administration state; each category admits only its own states. Version 1 is
- * reserved for the category initial state because every transition increments the version.
- * The reverse rule (initial state implies version 1) is deliberately not enforced: it only
- * holds while no transition re-enters an initial state, a property of the current matrix.
+ * Current administration state; each category admits only its own states. Version 1 implies
+ * the category initial state (every transition increments the version, so only the creation
+ * entry can be version 1). The converse does not hold: a `knowledge` artifact retired and
+ * then reinstated re-enters `valid` at a version greater than 1, so the reverse rule is
+ * deliberately not enforced.
  */
 export const ArtifactLifecycleSnapshotSchema = z
   .discriminatedUnion('category', [
@@ -142,6 +143,7 @@ export const ArtifactLifecycleInitializedEntrySchema = z
 function lifecycleTransitionRequiresReason(from: ArtifactLifecycleState, to: ArtifactLifecycleState): boolean {
   return to === 'retired' || (from === 'retired' && to === 'valid');
 }
+const LIFECYCLE_TRANSITION_REQUIRES_REASON_MESSAGE = 'Retiring or reinstating knowledge requires a reason';
 /** Attributed, justified transition entry appended after initialization. */
 export const ArtifactLifecycleTransitionedEntrySchema = z
   .strictObject({
@@ -168,7 +170,7 @@ export const ArtifactLifecycleTransitionedEntrySchema = z
       ctx.addIssue({
         code: 'custom',
         path: ['reason'],
-        message: 'Retiring or reinstating knowledge requires a reason',
+        message: LIFECYCLE_TRANSITION_REQUIRES_REASON_MESSAGE,
       });
     }
     if (entry.situation.kind === 'revision-assessment' && entry.situation.assessedRevision !== entry.observedRevision) {
@@ -303,7 +305,7 @@ export function advanceArtifactLifecycle(input: {
     });
   }
   if (lifecycleTransitionRequiresReason(current.state, command.state) && !command.reason) {
-    throw new ArtifactLifecycleError('Retiring or reinstating knowledge requires a reason', {
+    throw new ArtifactLifecycleError(LIFECYCLE_TRANSITION_REQUIRES_REASON_MESSAGE, {
       reason: 'precondition-failed',
       current,
       requestedState: command.state,

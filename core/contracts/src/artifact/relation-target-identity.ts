@@ -1,35 +1,24 @@
 import { z } from 'zod';
 
+import { ArtifactRefSchema } from './artifact-reference.js';
 import type { ArtifactRelationTarget } from './schemas.js';
+import { EntityRefSchema } from './schemas.js';
 
 /**
  * Pin-less identity of a relation target.
  *
- * The schema is the authoritative definition of what uniqueness comparisons
- * operate on: an `artifact` target is identified by its kind and stable id
- * only (the mutable revision pin is excluded), and an `entity` target is
+ * The schema is derived from the canonical ref schemas so validation cannot
+ * drift from the definitions of what constitutes a valid artifact or entity
+ * reference: an `artifact` target is identified by its kind and stable id
+ * only (the mutable revision pin is omitted), and an `entity` target is
  * identified by its entity type and id.
  *
  * Local and evidence targets carry no comparable stable identity and are
  * therefore excluded from this union.
  */
 export const ArtifactRelationTargetIdentitySchema = z.discriminatedUnion('refClass', [
-  z.strictObject({
-    /** Literal reference class. Always `'artifact'`. */
-    refClass: z.literal('artifact'),
-    /** Kind discriminator, matching the registered artifact kind. */
-    kind: z.string().min(1),
-    /** Stable artifact identity (does not change across revisions). */
-    id: z.string().min(1),
-  }),
-  z.strictObject({
-    /** Literal reference class. Always `'entity'`. */
-    refClass: z.literal('entity'),
-    /** Entity type understood by the owning service. */
-    entityType: z.string().min(1),
-    /** Stable identity within that entity type. */
-    id: z.string().min(1),
-  }),
+  ArtifactRefSchema.omit({ revision: true }),
+  EntityRefSchema,
 ]);
 
 /**
@@ -56,4 +45,34 @@ export function artifactRelationTargetIdentity(
     return { refClass: 'entity', entityType: target.entityType, id: target.id };
   }
   return undefined;
+}
+
+/**
+ * Injective string form of an identity; equal identities serialize equally,
+ * distinct ones never collide.
+ *
+ * The serialization is a JSON-stringified fixed-order tuple:
+ * `['artifact', kind, id]` for artifact targets or
+ * `['entity', entityType, id]` for entity targets.
+ * @param identity - A validated {@link ArtifactRelationTargetIdentity}.
+ * @returns A stable, unique string for the identity.
+ */
+export function serializeArtifactRelationTargetIdentity(identity: ArtifactRelationTargetIdentity): string {
+  if (identity.refClass === 'artifact') {
+    return JSON.stringify(['artifact', identity.kind, identity.id]);
+  }
+  return JSON.stringify(['entity', identity.entityType, identity.id]);
+}
+
+/**
+ * Human-readable form of an identity.
+ * @param identity - A validated {@link ArtifactRelationTargetIdentity}.
+ * @returns `artifact:<kind>/<id>` for artifact targets or
+ *   `entity:<entityType>/<id>` for entity targets.
+ */
+export function describeArtifactRelationTargetIdentity(identity: ArtifactRelationTargetIdentity): string {
+  if (identity.refClass === 'artifact') {
+    return `artifact:${identity.kind}/${identity.id}`;
+  }
+  return `entity:${identity.entityType}/${identity.id}`;
 }

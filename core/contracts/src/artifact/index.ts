@@ -263,6 +263,8 @@ export type {
 export {
   ArtifactRelationTargetIdentitySchema,
   artifactRelationTargetIdentity,
+  serializeArtifactRelationTargetIdentity,
+  describeArtifactRelationTargetIdentity,
 } from './relation-target-identity.js';
 export type { ArtifactRelationTargetIdentity } from './relation-target-identity.js';
 export {
