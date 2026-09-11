@@ -171,13 +171,13 @@ function deriveSelectorPart(
       ruleIndex,
       selectorIndex,
       reason: 'unsupported-selector',
-      message:
-        `rule #${ruleIndex}, selector #${selectorIndex}:` + ` data-path selectors cannot be derived from relations`,
+      message: `rule #${ruleIndex}, selector #${selectorIndex}: data-path selectors cannot be derived from relations`,
     };
   }
   const { relationType } = selector;
   const matching = relations.filter((r) => r.type === relationType);
-  const seen = new Map<string, ArtifactRelationTargetIdentity>();
+  const seen = new Set<string>();
+  let single: ArtifactRelationTargetIdentity | undefined;
   let unsupportedRefClass: string | undefined;
   for (const rel of matching) {
     const identity = artifactRelationTargetIdentity(rel.target);
@@ -185,7 +185,8 @@ function deriveSelectorPart(
       unsupportedRefClass = rel.target.refClass;
       break;
     }
-    seen.set(serializeArtifactRelationTargetIdentity(identity), identity);
+    seen.add(serializeArtifactRelationTargetIdentity(identity));
+    single = identity;
   }
   if (unsupportedRefClass !== undefined) {
     return {
@@ -199,7 +200,7 @@ function deriveSelectorPart(
         ` refClass '${unsupportedRefClass}'; only artifact and entity targets are supported`,
     };
   }
-  if (seen.size === 0) {
+  if (single === undefined) {
     return {
       ruleIndex,
       selectorIndex,
@@ -221,18 +222,7 @@ function deriveSelectorPart(
         ` relation '${relationType}': ${seen.size} distinct targets; expected exactly one`,
     };
   }
-  const [target] = [...seen.values()];
-  if (target === undefined) {
-    // Unreachable: seen.size === 1 guarantees a value. Guard satisfies TypeScript.
-    return {
-      ruleIndex,
-      selectorIndex,
-      reason: 'missing-target',
-      relationType,
-      message: `rule #${ruleIndex}, selector #${selectorIndex}: internal error (map unexpectedly empty)`,
-    };
-  }
-  return { type: relationType, target };
+  return { type: relationType, target: single };
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
