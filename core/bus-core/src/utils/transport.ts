@@ -117,6 +117,21 @@ export function getReadyTransports(
 const SKIP_PROPS = new Set(['message', 'name', 'stack', 'cause', 'subject', 'code']);
 
 /**
+ * Returns true when a value is safe to include in a serialized error data bag.
+ * Excludes function, undefined, bigint, and symbol values.
+ * @param value - Value to check
+ * @returns True when the value may be serialized
+ */
+function isSerializableValue(value: unknown): boolean {
+  return (
+    typeof value !== 'function' &&
+    typeof value !== 'undefined' &&
+    typeof value !== 'bigint' &&
+    typeof value !== 'symbol'
+  );
+}
+
+/**
  * Serialize an unknown error into a structured {@link BusTransportError} for wire transmission.
  *
  * Extracts `code`, `subject`, and all own enumerable properties from the
@@ -168,13 +183,7 @@ export function serializeError(error: unknown): BusTransportError {
   for (const key of Object.keys(structuredSource)) {
     if (SKIP_PROPS.has(key)) continue;
     const value = Object.getOwnPropertyDescriptor(structuredSource, key)?.value as unknown;
-    if (
-      typeof value === 'function' ||
-      typeof value === 'undefined' ||
-      typeof value === 'bigint' ||
-      typeof value === 'symbol'
-    )
-      continue;
+    if (!isSerializableValue(value)) continue;
     result.data ??= {};
     result.data[key] = value;
   }
@@ -223,4 +232,60 @@ export function deserializeTransportError(transportError: BusTransportError): Er
     }
   }
   return error;
+}
+
+/**
+ * Read the structured members of an error regardless of which side of the codec produced it.
+ * A class instance carries them under `error.data`; an error rebuilt by
+ * {@link deserializeTransportError} carries them flat on the Error. Standard Error fields and
+ * the top-level codec fields (`message`, `name`, `stack`, `cause`, `subject`, `code`) are never
+ * part of the result. Returns undefined when the value is not an object or has no members.
+ * @param error - Any error value (class instance or deserialized transport error)
+ * @returns Shallow copy of structured members, or undefined when none are present
+ */
+export function transportErrorData(error: unknown): Record<string, unknown> | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+
+  const obj = error as Record<string, unknown>;
+
+  // Class-instance / pre-serialization shape: own enumerable `data` is a plain object.
+  if (Object.prototype.hasOwnProperty.call(obj, 'data')) {
+    const d = obj['data'];
+    if (typeof d === 'object' && d !== null && !Array.isArray(d)) {
+      return { ...(d as Record<string, unknown>) };
+    }
+  }
+
+  // Deserialized (flat) shape: collect own enumerable properties, skipping codec fields.
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(obj)) {
+    if (SKIP_PROPS.has(key)) continue;
+    const value = Object.getOwnPropertyDescriptor(obj, key)?.value as unknown;
+    if (!isSerializableValue(value)) continue;
+    result[key] = value;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+/**
+ * Walk an error and its `cause` chain (cycle-safe) and return the first non-undefined
+ * result of `predicate`, which receives each link as a plain record view.
+ * @param error - Starting error value
+ * @param predicate - Function called with each chain link as a record; return non-undefined to halt
+ * @returns First non-undefined predicate result, or undefined when the chain is exhausted
+ */
+export function findInErrorChain<T>(
+  error: unknown,
+  predicate: (record: Record<string, unknown>) => T | undefined,
+): T | undefined {
+  const visited = new Set<object>();
+  let current: unknown = error;
+  while (typeof current === 'object' && current !== null) {
+    if (visited.has(current)) break;
+    visited.add(current);
+    const result = predicate(current as Record<string, unknown>);
+    if (result !== undefined) return result;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return undefined;
 }

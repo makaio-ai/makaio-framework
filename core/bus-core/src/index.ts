@@ -64,7 +64,12 @@
 
 export { getFullSubjectForSubjectDefinition } from './utils/subject-transformation.js';
 
-export { getSubjectFromBusMessage, deserializeTransportError } from './utils/index.js';
+export {
+  getSubjectFromBusMessage,
+  deserializeTransportError,
+  transportErrorData,
+  findInErrorChain,
+} from './utils/index.js';
 export { isRequestSchema } from './utils/is-request-schema.js';
 
 export { matchesSubscription, matchesAnySubscription } from './utils/subscription-matching.js';

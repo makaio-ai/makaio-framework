@@ -8,7 +8,7 @@ import {
   type BusRequestMessage,
   type BusEventMessage,
 } from '../index.js';
-import { serializeError, deserializeTransportError } from '../utils/transport.js';
+import { serializeError, deserializeTransportError, transportErrorData, findInErrorChain } from '../utils/transport.js';
 
 /**
  * Mock transport for testing structured transport errors.
@@ -218,5 +218,125 @@ describe('serializeError generic data extraction', () => {
     expect(serialized.data).toMatchObject({ retryable: true });
     expect(serialized.data).not.toHaveProperty('bigField');
     expect(serialized.data).not.toHaveProperty('symField');
+  });
+});
+
+describe('transportErrorData and findInErrorChain', () => {
+  describe('transportErrorData', () => {
+    it('returns the data object for a class-instance shape (error.data is a plain object)', () => {
+      const err = new Error('test') as Error & { data?: unknown };
+      err.data = { issues: [1] };
+      expect(transportErrorData(err)).toEqual({ issues: [1] });
+    });
+
+    it('returns a shallow copy, not the same reference', () => {
+      const data = { issues: [1] };
+      const err = new Error('test') as Error & { data?: unknown };
+      err.data = data;
+      const result = transportErrorData(err);
+      expect(result).toEqual(data);
+      expect(result).not.toBe(data);
+    });
+
+    it('returns structured members for a deserialized (flat) shape', () => {
+      const original = new Error('boom') as Error & { data?: Record<string, unknown> };
+      original.data = { retryable: true, count: 3 };
+      const deserialized = deserializeTransportError(serializeError(original));
+      const result = transportErrorData(deserialized);
+      expect(result).toBeDefined();
+      expect(result).toHaveProperty('retryable', true);
+      expect(result).toHaveProperty('count', 3);
+      expect(result).not.toHaveProperty('message');
+      expect(result).not.toHaveProperty('code');
+      expect(result).not.toHaveProperty('subject');
+      expect(result).not.toHaveProperty('stack');
+      expect(result).not.toHaveProperty('name');
+    });
+
+    it('returns undefined for a non-object input', () => {
+      expect(transportErrorData(null)).toBeUndefined();
+      expect(transportErrorData(undefined)).toBeUndefined();
+      expect(transportErrorData('string')).toBeUndefined();
+      expect(transportErrorData(42)).toBeUndefined();
+    });
+
+    it('returns undefined for an Error without structured members', () => {
+      const plain = new Error('no data');
+      expect(transportErrorData(plain)).toBeUndefined();
+    });
+
+    it('returns undefined when data property is not a plain object', () => {
+      const err = new Error('test') as Error & { data?: unknown };
+      err.data = [1, 2, 3];
+      // Array is not a plain object — falls through to flat-shape path
+      // The 'data' key itself is not in SKIP_PROPS, so it appears in flat result
+      const result = transportErrorData(err);
+      expect(result).toBeDefined();
+      expect(result).toHaveProperty('data');
+    });
+  });
+
+  describe('findInErrorChain', () => {
+    it('finds a member two cause levels deep', () => {
+      const root = new Error('root');
+      const mid = new Error('mid') as Error & { cause?: unknown };
+      const deep = new Error('deep') as Error & { data?: Record<string, unknown>; cause?: unknown };
+      deep.data = { foundIt: true };
+      mid.cause = deep;
+      root.cause = mid;
+      const result = findInErrorChain(root, transportErrorData);
+      expect(result).toEqual({ foundIt: true });
+    });
+
+    it('returns undefined when no link matches the predicate', () => {
+      const err = new Error('plain');
+      expect(findInErrorChain(err, transportErrorData)).toBeUndefined();
+    });
+
+    it('returns undefined and does not hang on a cyclic cause chain', () => {
+      const a = new Error('a') as Error & { cause?: unknown };
+      const b = new Error('b') as Error & { cause?: unknown };
+      a.cause = b;
+      b.cause = a;
+      expect(findInErrorChain(a, transportErrorData)).toBeUndefined();
+    });
+
+    it('continues the walk when predicate returns undefined', () => {
+      const a = new Error('a') as Error & { cause?: unknown };
+      const b = new Error('b') as Error & { data?: Record<string, unknown>; cause?: unknown };
+      b.data = { target: 42 };
+      a.cause = b;
+      let callCount = 0;
+      const result = findInErrorChain(a, (rec) => {
+        callCount++;
+        return transportErrorData(rec);
+      });
+      expect(callCount).toBe(2);
+      expect(result).toEqual({ target: 42 });
+    });
+
+    it('returns undefined for a non-object error', () => {
+      expect(findInErrorChain(null, transportErrorData)).toBeUndefined();
+      expect(findInErrorChain('string', transportErrorData)).toBeUndefined();
+    });
+
+    it('symmetry: findInErrorChain finds cause data before and after a round-trip', () => {
+      // Before round-trip (class instance)
+      const causeErr = new Error('cause') as Error & { data?: Record<string, unknown>; cause?: unknown };
+      causeErr.data = { severity: 'critical' };
+      const wrapperErr = new Error('wrapper') as Error & { cause?: unknown };
+      wrapperErr.cause = causeErr;
+      const beforeResult = findInErrorChain(wrapperErr, transportErrorData);
+      expect(beforeResult).toEqual({ severity: 'critical' });
+
+      // After round-trip (deserialized flat shape)
+      const serialized = serializeError(wrapperErr);
+      const deserialized = deserializeTransportError(serialized);
+      const afterResult = findInErrorChain(deserialized, transportErrorData);
+      // serializeError promotes cause's data to the top-level — so the
+      // deserialized error itself carries the structured members flat.
+      expect(afterResult).toBeDefined();
+      expect(afterResult).toHaveProperty('severity', 'critical');
+    });
   });
 });
