@@ -10,8 +10,10 @@ import {
   ArtifactRelationSchema,
   ArtifactRevisionSchema,
   ArtifactSchemaVersionSchema,
+  ArtifactStatusPathSchema,
   RelationTypeRegistrationSchema,
 } from './schemas.js';
+import { ArtifactPatchRequestSchema, ArtifactPatchResponseSchema } from './patch.js';
 import { ArtifactContextSelectorSchema } from './context-selectors.js';
 import { ResolvedArtifactContextWireSchema } from './context-resolution.js';
 import { EvidenceResolveRequestSchema, EvidenceResolveResponseSchema } from './evidence-resolution.js';
@@ -25,7 +27,7 @@ import { ArtifactLifecycleSchemas } from './lifecycle-namespace.js';
  *
  * - Shared lifecycle get / history / transition RPCs and committed / rejected events
  * - Kind and relation-type registration RPCs
- * - Revision create / revise / resolve / query / compare RPCs
+ * - Revision create / revise / patch / resolve / query / compare RPCs
  * - `created`, `revised`, `relation.added`, `observation.added`,
  *   `status.changed`, and `kind.changed` revision and registry events
  *
@@ -83,13 +85,24 @@ export const ArtifactSchemas = {
        * The writer derives changes from persisted values; callers cannot assert
        * old/new values. This metadata is never stored in the artifact revision.
        */
-      statusPath: z
-        .string()
-        .regex(/^(?:\/(?:[^~/]|~[01])*)+$/, 'Expected a data-relative JSON Pointer')
-        .optional(),
+      statusPath: ArtifactStatusPathSchema.optional(),
       revision: ArtifactRevisionSchema.omit({ id: true, revision: true, timestamp: true }),
     }),
     response: z.object({ artifact: ArtifactRevisionSchema }),
+  },
+
+  /**
+   * Revise an existing artifact by patching the revision named by `baseRevision` (RPC).
+   *
+   * The request carries the change rather than the payload, so its cost follows
+   * the size of the change. Rejections are returned in band with the failing
+   * path and a repair hint; a stale `baseRevision` reports the current revision
+   * along with the repair the caller must follow — only an append at a fixed
+   * path can be resent without re-reading the payload.
+   */
+  patch: {
+    request: ArtifactPatchRequestSchema,
+    response: ArtifactPatchResponseSchema,
   },
 
   /** Resolve a specific artifact revision by reference (RPC). */
@@ -191,6 +204,7 @@ export const ArtifactNamespace = createBusNamespace('artifact', ArtifactSchemas)
  * - `ArtifactSubjects.lifecycle.rejected` — supplemental rejected transition event
  * - `ArtifactSubjects.create` — create artifact (RPC)
  * - `ArtifactSubjects.revise` — revise artifact (RPC)
+ * - `ArtifactSubjects.patch` — revise artifact by patch (RPC)
  * - `ArtifactSubjects.resolve` — resolve artifact by ref (RPC)
  * - `ArtifactSubjects.query` — query artifacts (RPC)
  * - `ArtifactSubjects.compare` — compare two revisions (RPC)
@@ -248,6 +262,12 @@ export type ArtifactReviseRequest = z.infer<(typeof ArtifactSchemas)['revise']['
 
 /** Response payload for creating a new artifact revision. */
 export type ArtifactReviseResponse = z.infer<(typeof ArtifactSchemas)['revise']['response']>;
+
+/** Request payload for revising an artifact by patch. */
+export type ArtifactPatchSubjectRequest = z.infer<(typeof ArtifactSchemas)['patch']['request']>;
+
+/** Response payload for revising an artifact by patch. */
+export type ArtifactPatchSubjectResponse = z.infer<(typeof ArtifactSchemas)['patch']['response']>;
 
 /** Request payload for resolving an artifact by reference. */
 export type ArtifactResolveRequest = z.infer<(typeof ArtifactSchemas)['resolve']['request']>;

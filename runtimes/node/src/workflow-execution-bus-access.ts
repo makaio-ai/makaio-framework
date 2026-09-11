@@ -119,6 +119,7 @@ const STATIC_EXECUTION_SUBJECTS = [
   ArtifactSubjects.resolve,
   ArtifactSubjects.create,
   ArtifactSubjects.revise,
+  ArtifactSubjects.patch,
   WorkflowSubjects.artifact.updated,
   SubagentSubjects.spawn,
   SubagentSubjects.await,

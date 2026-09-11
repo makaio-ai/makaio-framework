@@ -15,6 +15,7 @@ export {
   type LossyJsonValueMessages,
 } from './json-value.js';
 export { zodSchemaToJsonRecord } from './zod-json-schema.js';
+export { defineOwnValue, isJsonObject, jsonEquals, ownValue, readPropertyPath } from './json-tree.js';
 
 /**
  * Content source for binary data or external resources.

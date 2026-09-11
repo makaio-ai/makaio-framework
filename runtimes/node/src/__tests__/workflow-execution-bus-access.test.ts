@@ -381,6 +381,7 @@ describe('workflow execution bus access', () => {
       expect([...allowed!].filter((subject) => subject.startsWith('artifact.')).sort()).toStrictEqual([
         'artifact.create',
         'artifact.kind.list',
+        'artifact.patch',
         'artifact.query',
         'artifact.resolve',
         'artifact.revise',
@@ -493,6 +494,7 @@ describe('workflow execution bus access', () => {
       expect(subjects).toContain('artifact.resolve');
       expect(subjects).toContain('artifact.create');
       expect(subjects).toContain('artifact.revise');
+      expect(subjects).toContain('artifact.patch');
       expect(subjects).toContain('workflow.artifact.updated');
 
       // Subagent subjects

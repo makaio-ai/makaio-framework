@@ -12,6 +12,7 @@ export {
   ArtifactRepresentationsSchema,
   ArtifactRevisionSchema,
   ArtifactScopeSchema,
+  ArtifactStatusPathSchema,
   ConfidenceBasisSchema,
   ConfidenceLevelSchema,
   ConfidenceMetadataSchema,
@@ -55,8 +56,13 @@ export type {
   ArtifactKindDefinition,
   ArtifactOf,
 } from './kind-definition.js';
-export { compileArtifactDataSchema } from './data-schema-validator.js';
-export type { ArtifactDataValidator } from './data-schema-validator.js';
+export { compileArtifactDataChecker, compileArtifactDataSchema } from './data-schema-validator.js';
+export type {
+  ArtifactDataCheck,
+  ArtifactDataChecker,
+  ArtifactDataIssue,
+  ArtifactDataValidator,
+} from './data-schema-validator.js';
 export { defineArtifactLifecycleHooks } from './lifecycle-hooks.js';
 export type {
   AfterArtifactHookContext,
@@ -122,6 +128,8 @@ export type {
   ArtifactRelationTypeRegisterResponse,
   ArtifactResolveContextRequest,
   ArtifactResolveContextResponse,
+  ArtifactPatchSubjectRequest,
+  ArtifactPatchSubjectResponse,
   ArtifactResolveRequest,
   ArtifactResolveResponse,
   ArtifactRevisedPayload,
@@ -152,7 +160,51 @@ export type {
   ArtifactKindView,
   ArtifactKindRegistration,
 } from './kind-registration.js';
-export { isArtifactDataPathDeclared, readArtifactTitle } from './kind-paths.js';
+export {
+  ARTIFACT_COLLECTION_ELEMENT_SEGMENT,
+  inspectArtifactDataLocation,
+  isArtifactDataPathDeclared,
+  readArtifactTitle,
+} from './kind-paths.js';
+export type { ArtifactSchemaFragment } from './kind-paths.js';
+
+export {
+  ARTIFACT_PATCH_ERROR_CODES,
+  ARTIFACT_PATCH_OPERATORS,
+  ArtifactPatchArrayFilterSchema,
+  ArtifactPatchDocumentSchema,
+  ArtifactPatchDryRunSchema,
+  ArtifactPatchErrorSchema,
+  ArtifactPatchFailureSchema,
+  ArtifactPatchIssueSchema,
+  ArtifactPatchOperationResultSchema,
+  ArtifactPatchPathSchema,
+  ArtifactPatchPersistedSchema,
+  ArtifactPatchRequestSchema,
+  ArtifactPatchResponseSchema,
+  ArtifactPatchSuccessSchema,
+  ArtifactPatchTargetSchema,
+  artifactPatchFilterName,
+  artifactPatchInstructions,
+  artifactPatchPathFilterNames,
+  artifactPatchSegment,
+  artifactPatchSegments,
+} from './patch.js';
+export type {
+  ArtifactPatchArrayFilter,
+  ArtifactPatchDocument,
+  ArtifactPatchError,
+  ArtifactPatchErrorCode,
+  ArtifactPatchInstruction,
+  ArtifactPatchIssue,
+  ArtifactPatchOperationResult,
+  ArtifactPatchOperator,
+  ArtifactPatchRequest,
+  ArtifactPatchResponse,
+  ArtifactPatchSegment,
+  ArtifactPatchSuccess,
+  ArtifactPatchTarget,
+} from './patch.js';
 
 export {
   ARTIFACT_LIFECYCLE_REJECTED_CODE,
