@@ -3,7 +3,7 @@ import {
   artifactPatchSegments,
   compileArtifactDataChecker,
   readArtifactTitle,
-  type ArtifactDataCheck,
+  type ArtifactDataChecker,
   type ArtifactDataIssue,
   type ArtifactKindRegistration,
   type ArtifactPatchError,
@@ -30,6 +30,16 @@ export interface ArtifactPatchStoreRequest {
   readonly previous: ArtifactRevision;
   /** Patched payload, already validated against the effective kind schema. */
   readonly data: Record<string, unknown>;
+  /**
+   * Schema version the new revision is stored at.
+   *
+   * This is the version of the registration `data` was validated against: the
+   * request's target when it named one, else `previous.schemaVersion`. A host
+   * must persist the revision at this version rather than copying the previous
+   * one, or a migration would be validated against the new shape and stored
+   * under the old label.
+   */
+  readonly schemaVersion: number;
   /**
    * Caller-owned status observation for this write, as a `data`-relative JSON
    * Pointer. Present exactly when the request named one; a host that emits
@@ -105,6 +115,10 @@ export interface ArtifactPatchHost {
    * before the failure surfaced. Refusing a write by returning
    * `ArtifactPatchStoreConflict` is the only outcome that promises nothing was
    * persisted.
+   *
+   * The new revision is stored at `request.schemaVersion`, which is the version
+   * the payload was validated against. It equals `previous.schemaVersion`
+   * unless the request migrated the artifact.
    */
   store(request: ArtifactPatchStoreRequest, context: ToolExecutionContext): Promise<ArtifactPatchStoreResult>;
 }
@@ -167,12 +181,16 @@ function toResponseIssue(issue: ArtifactDataIssue): ArtifactPatchIssue {
  * re-read, which the concurrent revision may have written for a reason. A
  * request that names `representations` is never rebasable either: the hints
  * were authored against the base the caller read, and resending them would
- * overwrite whatever hints the concurrent revision wrote.
+ * overwrite whatever hints the concurrent revision wrote. Nor is a request
+ * that names a target `schemaVersion`, even one equal to the base's: the
+ * concurrent revision may itself have migrated the artifact, and resending the
+ * version chosen against the old base would validate and store the result
+ * under a version the artifact has already left.
  * @param input - The rejected patch request.
  * @returns Whether every instruction still means the same thing on a newer revision.
  */
 function isRebasable(input: ArtifactPatchRequest): boolean {
-  if (input.representations !== undefined) return false;
+  if (input.representations !== undefined || input.schemaVersion !== undefined) return false;
   return artifactPatchInstructions(input.patch).every(
     ({ operator, path }) =>
       operator === '$push' && artifactPatchSegments(path).every((segment) => segment.kind === 'property'),
@@ -192,7 +210,7 @@ function baseRevisionConflict(input: ArtifactPatchRequest, currentRevision: stri
     currentRevision,
     repair: isRebasable(input)
       ? `Resend the same patch with baseRevision '${currentRevision}'; it only appends at a fixed path, with no position and no filter, so it does not depend on the payload you read.`
-      : `Re-read the artifact at revision '${currentRevision}' and rewrite the patch: only an append at a fixed path survives a concurrent write, with no position and no filter. Replacing, removing, addressing an entry by position, appending through a $[filter] placeholder, and replacing or clearing representations all depend on the payload you read, which the concurrent revision may have changed.`,
+      : `Re-read the artifact at revision '${currentRevision}' and rewrite the patch: only an append at a fixed path survives a concurrent write, with no position and no filter. Replacing, removing, addressing an entry by position, appending through a $[filter] placeholder, replacing or clearing representations, and naming a target schemaVersion all depend on the payload you read, which the concurrent revision may have changed.`,
   };
 }
 
@@ -243,14 +261,39 @@ function checkTitle(
 }
 
 /**
- * Resolve the registration matching the stored revision's schema version.
+ * Compile the checker for the registration the patched result is held to.
+ * @param registration - Registration whose data schema is compiled.
+ * @returns The checker, or the rejection when the declared schema does not compile.
+ */
+function compileChecker(registration: ArtifactKindRegistration): ArtifactDataChecker | ArtifactPatchError {
+  try {
+    return compileArtifactDataChecker(registration);
+  } catch (error) {
+    return {
+      code: 'HOST_FAILED',
+      message: `Artifact kind '${registration.kind}' could not compile its data schema: ${failureMessage(error)}`,
+      repair: 'Correct the registered data schema before patching artifacts of this kind.',
+    };
+  }
+}
+
+/**
+ * Resolve the registration the patched result must satisfy.
+ *
+ * The target is the request's `schemaVersion` when it names one, else the
+ * stored revision's. A revision left at an older version by a kind bump has
+ * no registration at its own version any more; naming the newer version is
+ * how a caller migrates it, and the whole patched result — declared paths and
+ * schema alike — is then held to that registration.
  * @param registrations - Effective registrations reported by the host.
  * @param artifact - Revision the patch applies to.
+ * @param target - Schema version the patched result is validated against.
  * @returns The matching registration, or the rejection explaining its absence.
  */
 function resolveRegistration(
   registrations: readonly ArtifactKindRegistration[],
   artifact: ArtifactRevision,
+  target: number,
 ): ArtifactKindRegistration | ArtifactPatchError {
   const candidates = registrations.filter((candidate) => candidate.kind === artifact.kind);
   if (candidates.length === 0) {
@@ -260,12 +303,25 @@ function resolveRegistration(
       repair: 'Register the kind, or address an artifact of a registered kind.',
     };
   }
-  const registration = candidates.find((candidate) => candidate.schemaVersion === artifact.schemaVersion);
+  const registration = candidates.find((candidate) => candidate.schemaVersion === target);
   if (!registration) {
+    const registered = [...new Set(candidates.map((candidate) => candidate.schemaVersion))].sort((a, b) => a - b);
+    const versions = registered.join(', ');
+    const origin =
+      target === artifact.schemaVersion
+        ? `Revision '${artifact.revision}' uses schema version ${target}`
+        : `The request targets schema version ${target} for revision '${artifact.revision}' (schema version ${artifact.schemaVersion})`;
+    // Only a newer registration is a target the caller can reach: a migration
+    // never moves an artifact back, so an older registered version is named
+    // as registered but not recommended.
+    const reachable = registered.filter((version) => version > artifact.schemaVersion).join(', ');
     return {
       code: 'SCHEMA_VERSION_MISMATCH',
-      message: `Revision '${artifact.revision}' uses schema version ${artifact.schemaVersion}, for which '${artifact.kind}' has no registration.`,
-      repair: `Register '${artifact.kind}' at schema version ${artifact.schemaVersion}, or migrate the artifact before patching it.`,
+      message: `${origin}, for which '${artifact.kind}' has no registration; registered: ${versions}.`,
+      repair:
+        reachable === ''
+          ? `Register '${artifact.kind}' at schema version ${target}${target > artifact.schemaVersion ? '' : ' or newer'}; no registered version is newer than the revision's.`
+          : `Set schemaVersion to one of ${reachable} and add the instructions that make the payload fit that version, or register '${artifact.kind}' at schema version ${target}.`,
     };
   }
   return registration;
@@ -345,22 +401,25 @@ export async function patchArtifact(
       repair: 'Retry once the kind catalog is reachable.',
     });
   }
-  const registration = resolveRegistration(registrations, artifact);
+  const registration = resolveTargetRegistration(input, artifact, registrations);
   if ('code' in registration) return failed(registration);
+  const migrating = registration.schemaVersion !== artifact.schemaVersion;
+  const checker = compileChecker(registration);
+  if (typeof checker !== 'function') return failed(checker);
 
-  const applied = applyArtifactPatch(artifact.data, input.patch, registration.dataSchema);
+  // A migration may `$unset` a property the target no longer declares; nothing
+  // else about the removal is policed here. Whether the completed payload is
+  // acceptable is the target schema's decision alone, made by the validation
+  // below, and an explicit `$unset` is the caller's decision: the package
+  // carries no migration logic, so it does not judge which properties the
+  // target "really" refuses through patterns, open containers or composition
+  // branches.
+  const applied = applyArtifactPatch(artifact.data, input.patch, registration.dataSchema, {
+    allowUndeclaredRemovals: migrating,
+  });
   if (!applied.ok) return failed(applied.error);
 
-  let check: ArtifactDataCheck;
-  try {
-    check = compileArtifactDataChecker(registration)(applied.application.data);
-  } catch (error) {
-    return failed({
-      code: 'HOST_FAILED',
-      message: `Artifact kind '${registration.kind}' could not compile its data schema: ${failureMessage(error)}`,
-      repair: 'Correct the registered data schema before patching artifacts of this kind.',
-    });
-  }
+  const check = checker(applied.application.data);
   if (!check.valid) {
     return failed({
       code: 'SCHEMA_VALIDATION_FAILED',
@@ -373,8 +432,15 @@ export async function patchArtifact(
   const blankTitle = checkTitle(applied.application.data, registration);
   if (blankTitle) return failed(blankTitle);
 
+  // The patch checks `data` and the title, nothing beside them. Evidence is
+  // carried over unchanged and a patch cannot add any, so a target
+  // registration with a higher `evidenceRequirements.minItems` is a case the
+  // host's lifecycle writer rejects at store time, as it does for every other
+  // revision-level rule; the patch does not duplicate that writer's checks,
+  // and a dry run promises no more than the data-level checks it ran.
   const operations = [...applied.application.operations];
-  if (input.dryRun === true) return { ok: true, base, dryRun: true, operations };
+  const migration = migrating ? { migration: { from: artifact.schemaVersion, to: registration.schemaVersion } } : {};
+  if (input.dryRun === true) return { ok: true, base, dryRun: true, operations, ...migration };
 
   let stored: ArtifactPatchStoreResult;
   try {
@@ -382,6 +448,7 @@ export async function patchArtifact(
       {
         previous: artifact,
         data: applied.application.data,
+        schemaVersion: registration.schemaVersion,
         ...(input.statusPath === undefined ? {} : { statusPath: input.statusPath }),
         ...(input.representations === undefined ? {} : { representations: input.representations }),
       },
@@ -401,20 +468,90 @@ export async function patchArtifact(
     });
   }
   if (isStoreConflict(stored)) return failed(baseRevisionConflict(input, stored.conflictingRevision));
-  if (stored.kind !== base.kind || stored.id !== base.id || stored.revision === base.revision) {
-    return failed({
-      code: 'HOST_FAILED',
-      message: 'The store returned an artifact that is not a new revision of the patched one.',
-      repair: 'Re-read the artifact before patching it again; the write outcome is unclear.',
-    });
-  }
+  const mislabelled = checkStoredRevision(stored, base, registration.schemaVersion);
+  if (mislabelled) return failed(mislabelled);
   return {
     ok: true,
     base,
     dryRun: false,
     artifact: artifactRef(stored.kind, stored.id, stored.revision),
     operations,
+    ...migration,
   };
+}
+
+/**
+ * Pick the registration the patched payload is held to, and refuse a request
+ * that would produce a revision identical to its base.
+ *
+ * The target is the requested `schemaVersion` or, absent that, the base
+ * revision's own. A patch without instructions is only meaningful as a
+ * migration: at the base's own version it changes nothing.
+ * @param input - The patch request.
+ * @param artifact - Revision the patch was written against.
+ * @param registrations - Registrations the host reports for the kind.
+ * @returns The target registration, or the rejection to report.
+ */
+function resolveTargetRegistration(
+  input: ArtifactPatchRequest,
+  artifact: ArtifactRevision,
+  registrations: readonly ArtifactKindRegistration[],
+): ArtifactKindRegistration | ArtifactPatchError {
+  if (input.schemaVersion !== undefined && input.schemaVersion < artifact.schemaVersion) {
+    // Several generations may be registered at once. A migration only moves
+    // forward: storing the revision under an older generation would let a
+    // caller regress the artifact's history and drop what newer schemas added.
+    return {
+      code: 'SCHEMA_VERSION_MISMATCH',
+      message: `The request targets schema version ${input.schemaVersion}, older than revision '${artifact.revision}' (schema version ${artifact.schemaVersion}); a migration never moves an artifact back.`,
+      repair: `Omit schemaVersion to patch at version ${artifact.schemaVersion}, or name a newer registered version to migrate the artifact forward.`,
+    };
+  }
+  const registration = resolveRegistration(registrations, artifact, input.schemaVersion ?? artifact.schemaVersion);
+  if ('code' in registration) return registration;
+  if (registration.schemaVersion === artifact.schemaVersion && artifactPatchInstructions(input.patch).length === 0) {
+    return {
+      code: 'NO_CHANGE',
+      message: `The patch carries no instruction and targets schema version ${registration.schemaVersion}, which revision '${artifact.revision}' already has.`,
+      repair: 'Add at least one instruction, or name a different schemaVersion to migrate the artifact.',
+    };
+  }
+  return registration;
+}
+
+/**
+ * Check that the host persisted a new revision of the patched artifact at the
+ * schema version the payload was validated against.
+ *
+ * A host that stored the payload under another version has labelled the
+ * revision wrongly, and a migration that silently kept the old label is not a
+ * migration.
+ * @param stored - Revision the host reported as persisted.
+ * @param base - Revision the patch was applied to.
+ * @param schemaVersion - Version the patched payload was validated against.
+ * @returns The rejection to report, or undefined when the stored revision is sound.
+ */
+function checkStoredRevision(
+  stored: ArtifactRevision,
+  base: ArtifactRef,
+  schemaVersion: number,
+): ArtifactPatchError | undefined {
+  if (stored.kind !== base.kind || stored.id !== base.id || stored.revision === base.revision) {
+    return {
+      code: 'HOST_FAILED',
+      message: 'The store returned an artifact that is not a new revision of the patched one.',
+      repair: 'Re-read the artifact before patching it again; the write outcome is unclear.',
+    };
+  }
+  if (stored.schemaVersion !== schemaVersion) {
+    return {
+      code: 'HOST_FAILED',
+      message: `The store persisted revision '${stored.revision}' at schema version ${stored.schemaVersion} instead of ${schemaVersion}.`,
+      repair:
+        'Re-read the artifact; the host did not store the revision at the schema version the patch was validated against.',
+    };
+  }
+  return undefined;
 }
 
 /**

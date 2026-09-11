@@ -22,7 +22,11 @@ export function createPatchArtifactTool(host: ArtifactPatchHost) {
       'without writing. A stale baseRevision reports the current revision; follow the repair field of that error: ' +
       'only an append at a fixed path (no position, no filter) may be resent with the new baseRevision, anything ' +
       'else needs a fresh read and a rewritten patch. Rendering hints are separate from data: omit ' +
-      'representations to keep them, send an object to replace all of them (no merge), or null to clear them.',
+      'representations to keep them, send an object to replace all of them (no merge), or null to clear them. ' +
+      'Name schemaVersion to migrate an artifact left at an older version by a kind bump: the patched result is ' +
+      "validated against that version's registration and stored at it; omit it to keep the base revision's version. " +
+      'A migration may $unset a property the target no longer declares, and may carry no instruction when the ' +
+      'payload already fits.',
     annotations: { readOnly: false, idempotent: false },
     inputSchema: ArtifactPatchRequestSchema,
     outputSchema: ArtifactPatchResponseSchema,

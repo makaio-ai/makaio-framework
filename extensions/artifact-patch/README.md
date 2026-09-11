@@ -25,7 +25,9 @@ of what was asked — is worse than a rejected one:
   addressed position, applying the change to the rest would report a partial write as a complete
   one. A missing intermediate is `PATH_NOT_RESOLVABLE`; a missing position is `NO_MATCH`.
 - **An undeclared path is an error.** A misspelled field is never created; the Kind schema decides
-  which paths exist. A declared optional field that this revision does not carry stays valid.
+  which paths exist. A declared optional field that this revision does not carry stays valid. The one
+  relaxation is a migration: `$unset` may address a property the target schema no longer declares,
+  because that is exactly what the migration has to remove (see Schema versions).
 - **`$unset` addresses object properties only.** A collection entry is removed with `$pull`, so an
   element is never replaced by a hole.
 
@@ -44,7 +46,7 @@ A conflict names the current revision and says what to do with it in the error's
 Only an append at a fixed path can be resent as written: a `$push` whose every path segment is a
 plain property adds an entry, and that means the same thing whatever else landed in between — and
 only when the request does not also name `representations`, which were authored against the base
-the caller read.
+the caller read, nor a target `schemaVersion`, which was chosen against it.
 Everything else has to be rebased against a fresh read. `$set` replaces a value the caller has not
 seen since; `$unset` and `$pull` delete state the caller has not re-read, which the concurrent
 revision may have written for a reason; a position addresses a different entry once something is
@@ -61,6 +63,29 @@ not what a throw means — so the repair hint asks for a re-read instead of prom
 Every rejection names the failing path and a repair hint; schema rejections add the expected type or
 the allowed values per path. `dryRun` applies and validates without persisting.
 
+## Schema versions
+
+A patch is validated against the registration at the base revision's schema version, so a plain
+patch never moves an artifact between versions. An artifact left behind by a kind bump has no
+registration at its own version any more and is rejected with `SCHEMA_VERSION_MISMATCH`, which
+names the versions that are registered. Naming a target `schemaVersion` on the request is how the
+caller migrates it: the instructions bring the payload to the newer shape, the whole result — declared
+paths and schema alike — is held to the target registration, and the host stores the new revision at
+that version. There is no migration logic in the package; the caller writes the instructions, and
+the target schema's validation of the completed payload is the only judge of the result.
+A migration only moves forward: a target older than the base revision's version is
+`SCHEMA_VERSION_MISMATCH`, whatever is registered. Two rules bend for a migration and only there:
+`$unset` may address a property the target schema does not declare (it must still address something
+the revision carries; `$pull` gets no such relaxation, because pulling from an undeclared collection
+leaves the collection the target refuses), and the patch may carry no instruction at all when the
+stored payload already satisfies the target, so a registration that changed only metadata is
+migrated without a fabricated write. An instructionless patch that targets the version the base
+already has is `NO_CHANGE`.
+A success that moved the artifact reports `migration: { from, to }`; without it, a success must
+list at least one applied instruction.
+A request that names a `schemaVersion` is never resent after a conflict, because the concurrent
+revision may itself have migrated the artifact.
+
 ## Host boundary
 
 An integrating product supplies an `ArtifactPatchHost` through `createArtifactPatchToolset(host)` or
@@ -70,7 +95,9 @@ the request's optional `statusPath`, so a host layered over a lifecycle writer c
 status observation a full revise produces. It also receives the request's `representations` when
 the caller named them — an object to replace the rendering hints wholesale, `null` to clear them —
 and must carry the previous revision's hints over when the property is absent, because hints are
-caller-authored and the engine cannot tell whether the change made them stale. The package never issues raw Artifact bus requests and
+caller-authored and the engine cannot tell whether the change made them stale. `store` also receives
+the `schemaVersion` the payload was validated against and must persist the revision at that version,
+which differs from `previous.schemaVersion` exactly when the request migrated the artifact. The package never issues raw Artifact bus requests and
 never reaches a store directly, so a service handling `artifact.patch` and the `artifacts_patch` MCP
 tool run the same engine over the same contract. Its default package marker contributes no tools until a host is
 explicitly bound.
