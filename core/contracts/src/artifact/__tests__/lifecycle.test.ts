@@ -65,7 +65,6 @@ describe('shared artifact lifecycle', () => {
 
   it('keeps every terminal state closed against any successor', () => {
     const terminal = [
-      { category: 'knowledge', state: 'retired', version: 2 },
       { category: 'commitment', state: 'fulfilled', version: 3 },
       { category: 'commitment', state: 'revoked', version: 3 },
       { category: 'interaction', state: 'resolved', version: 2 },
@@ -102,6 +101,24 @@ describe('shared artifact lifecycle', () => {
       expect(advance(initialArtifactLifecycle('interaction'), state).state).toBe(state);
     }
     expect(rejection(() => advance(initialArtifactLifecycle('record'), 'valid')).reason).toBe('invalid-transition');
+  });
+
+  it('reinstates retired knowledge only with a reason and as a pure state change', () => {
+    const valid = initialArtifactLifecycle('knowledge');
+    const retired = advance(valid, 'retired', { reason: 'Experiment finished', expectedVersion: 1 });
+    expect(retired).toEqual({ category: 'knowledge', state: 'retired', version: 2 });
+    // reinstating without a reason → precondition-failed
+    expect(rejection(() => advance(retired, 'valid', { expectedVersion: 2 })).reason).toBe('precondition-failed');
+    // reinstating with a reason → valid at version 3, category unchanged
+    const reinstated = advance(retired, 'valid', { reason: 'Research resumed', expectedVersion: 2 });
+    expect(reinstated).toEqual({ category: 'knowledge', state: 'valid', version: 3 });
+    // retiring again with a reason works
+    const reretired = advance(reinstated, 'retired', { reason: 'Finished again', expectedVersion: 3 });
+    expect(reretired.version).toBe(4);
+    // from retired, every state other than valid → invalid-transition
+    for (const state of ArtifactLifecycleStateSchema.options.filter((s) => s !== 'valid')) {
+      expect(rejection(() => advance(retired, state, { expectedVersion: 2 })).reason).toBe('invalid-transition');
+    }
   });
 
   it('rejects stale lifecycle versions independently of content assessment', () => {
@@ -181,6 +198,22 @@ describe('immutable lifecycle history', () => {
       observedRevision: 'r3',
       reason: 'Experiment ended',
       situation: { kind: 'handover' },
+    });
+  });
+
+  it('requires a reason for reinstating retired knowledge as a pure state change', () => {
+    const entry = {
+      ...base,
+      operation: 'transitioned',
+      previousState: 'retired',
+      situation,
+      lifecycle: { category: 'knowledge', state: 'valid', version: 3 },
+    };
+    expect(ArtifactLifecycleHistoryEntrySchema.safeParse(entry).success).toBe(false);
+    expect(ArtifactLifecycleHistoryEntrySchema.parse({ ...entry, reason: 'Research resumed' })).toMatchObject({
+      previousState: 'retired',
+      lifecycle: { state: 'valid', version: 3 },
+      reason: 'Research resumed',
     });
   });
 });
