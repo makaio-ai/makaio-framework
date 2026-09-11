@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { JsonValueSchema, rejectingLossyJsonValues } from '../shared/json-value.js';
 import { ArtifactRefSchema } from './artifact-reference.js';
+import { ArtifactSchemaVersionSchema } from './kind-registration.js';
 import { ArtifactRepresentationsSchema, ArtifactStatusPathSchema } from './schemas.js';
 
 /**
@@ -207,10 +208,6 @@ function validateArtifactPatchBindings(
   ctx: z.RefinementCtx,
 ): void {
   const instructions = artifactPatchInstructions(patch);
-  if (instructions.length === 0) {
-    ctx.addIssue({ code: 'custom', message: `Declare at least one of ${ARTIFACT_PATCH_OPERATORS.join(', ')}` });
-    return;
-  }
   const bound = new Map<string, number>();
   (patch.arrayFilters ?? []).forEach((filter, index) => {
     const name = artifactPatchFilterName(filter);
@@ -265,7 +262,24 @@ function validateArtifactPatchBindings(
  * rules, exactly as for the other refined artifact contracts; the server
  * rejects a document that only the refinements catch.
  */
-export const ArtifactPatchDocumentSchema = ArtifactPatchOperationsSchema.superRefine(validateArtifactPatchBindings);
+export const ArtifactPatchDocumentSchema = ArtifactPatchOperationsSchema.superRefine(
+  validateArtifactPatchBindings,
+).superRefine((patch, ctx) => {
+  if (artifactPatchInstructions(patch).length === 0) {
+    ctx.addIssue({ code: 'custom', message: `Declare at least one of ${ARTIFACT_PATCH_OPERATORS.join(', ')}` });
+  }
+});
+
+/**
+ * Patch document as a revision request carries it.
+ *
+ * Bindings are checked here exactly as in {@link ArtifactPatchDocumentSchema};
+ * the "at least one instruction" rule is not, because a request that names a
+ * target `schemaVersion` may carry no instruction at all when the stored
+ * payload already satisfies the target registration. The request schema
+ * restores the rule for every other request.
+ */
+const ArtifactPatchRequestDocumentSchema = ArtifactPatchOperationsSchema.superRefine(validateArtifactPatchBindings);
 
 /** Identity of the artifact being revised; the revision travels as `baseRevision`. */
 export const ArtifactPatchTargetSchema = z.strictObject({
@@ -280,45 +294,76 @@ export const ArtifactPatchTargetSchema = z.strictObject({
  * rejected, so a caller never overwrites a concurrent revision it never saw.
  * `statusPath` is the same caller-owned observation metadata a full `revise`
  * carries, so patching an artifact does not silently lose the status change a
- * host would otherwise emit.
+ * host would otherwise emit. `schemaVersion` names the registration the
+ * patched result is validated against and stored at; it defaults to the base
+ * revision's, so a patch never changes an artifact's schema version unless the
+ * caller asks for the migration.
  */
-export const ArtifactPatchRequestSchema = z.strictObject({
-  /** Artifact identity to revise. */
-  ref: ArtifactPatchTargetSchema,
-  /** Revision the patch was written against. */
-  baseRevision: ArtifactRefSchema.shape.revision,
-  /** Instructions to apply to that revision's `data`. */
-  patch: ArtifactPatchDocumentSchema,
-  /** Apply and validate without persisting, returning the same diagnostics. */
-  dryRun: z.boolean().optional(),
-  /**
-   * Explicit caller-owned status observation for this write only, as a
-   * `data`-relative JSON Pointer. The host derives the change from the
-   * revisions around the write; this metadata is never stored.
-   */
-  statusPath: ArtifactStatusPathSchema.optional(),
-  /**
-   * Human-readable rendering hints for the new revision.
-   *
-   * Absent, the host carries the previous revision's representations over
-   * unchanged. An object replaces them wholesale — hints are caller-authored
-   * and may describe the fields the patch just changed, so there is no
-   * field-wise merge. `null` clears them, leaving the new revision without
-   * hints so consumers fall back to `data`.
-   *
-   * The shared shape is strict here, unlike on a stored revision: a misspelled
-   * key would otherwise be stripped and the remainder forwarded as a deliberate
-   * replacement, so a typo could silently clear every hint.
-   */
-  representations: ArtifactRepresentationsSchema.strict()
-    .nullable()
-    .optional()
-    .describe(
-      'Rendering hints (markdown, summary, plaintext) for the new revision. Omit to keep the previous ' +
-        "revision's hints. An object replaces all of them, it does not merge: send every hint you want to keep. " +
-        'null clears them.',
+export const ArtifactPatchRequestSchema = z
+  .strictObject({
+    /** Artifact identity to revise. */
+    ref: ArtifactPatchTargetSchema,
+    /** Revision the patch was written against. */
+    baseRevision: ArtifactRefSchema.shape.revision,
+    /**
+     * Instructions to apply to that revision's `data`. May be empty only when
+     * `schemaVersion` names a target: a migration whose payload already fits.
+     */
+    patch: ArtifactPatchRequestDocumentSchema,
+    /** Apply and validate without persisting, returning the same diagnostics. */
+    dryRun: z.boolean().optional(),
+    /**
+     * Schema version of the registration the patched result must satisfy.
+     *
+     * Absent, the base revision's version is used, so a plain patch keeps the
+     * artifact where it is. Naming a version is how an artifact left behind by a
+     * kind bump is migrated: the instructions bring the payload to the newer
+     * shape and the whole result is validated against that version's
+     * registration — declared paths and schema alike — before the host stores
+     * the new revision at that version. The patch carries no migration logic of
+     * its own; the caller writes the instructions that make the payload fit.
+     */
+    schemaVersion: ArtifactSchemaVersionSchema.optional().describe(
+      "Target schema version for the patched revision; defaults to the base revision's. " +
+        'Use it to migrate an artifact left at an older version by a kind bump.',
     ),
-});
+    /**
+     * Explicit caller-owned status observation for this write only, as a
+     * `data`-relative JSON Pointer. The host derives the change from the
+     * revisions around the write; this metadata is never stored.
+     */
+    statusPath: ArtifactStatusPathSchema.optional(),
+    /**
+     * Human-readable rendering hints for the new revision.
+     *
+     * Absent, the host carries the previous revision's representations over
+     * unchanged. An object replaces them wholesale — hints are caller-authored
+     * and may describe the fields the patch just changed, so there is no
+     * field-wise merge. `null` clears them, leaving the new revision without
+     * hints so consumers fall back to `data`.
+     *
+     * The shared shape is strict here, unlike on a stored revision: a misspelled
+     * key would otherwise be stripped and the remainder forwarded as a deliberate
+     * replacement, so a typo could silently clear every hint.
+     */
+    representations: ArtifactRepresentationsSchema.strict()
+      .nullable()
+      .optional()
+      .describe(
+        'Rendering hints (markdown, summary, plaintext) for the new revision. Omit to keep the previous ' +
+          "revision's hints. An object replaces all of them, it does not merge: send every hint you want to keep. " +
+          'null clears them.',
+      ),
+  })
+  .superRefine((request, ctx) => {
+    if (request.schemaVersion === undefined && artifactPatchInstructions(request.patch).length === 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['patch'],
+        message: `Declare at least one of ${ARTIFACT_PATCH_OPERATORS.join(', ')}, or name a schemaVersion to migrate a payload that already fits`,
+      });
+    }
+  });
 
 /** Stable failure classifications for a patch request. */
 export const ARTIFACT_PATCH_ERROR_CODES = [
@@ -332,7 +377,10 @@ export const ARTIFACT_PATCH_ERROR_CODES = [
   'BASE_REVISION_CONFLICT',
   /** The artifact kind has no effective registration. */
   'KIND_NOT_REGISTERED',
-  /** No registration matches the stored revision's schema version. */
+  /**
+   * No registration matches the target schema version: the request's when it
+   * names one, else the stored revision's.
+   */
   'SCHEMA_VERSION_MISMATCH',
   /** The kind schema does not declare the addressed path. */
   'PATH_NOT_DECLARED',
@@ -346,6 +394,11 @@ export const ARTIFACT_PATCH_ERROR_CODES = [
   'NO_MATCH',
   /** The patched result does not satisfy the kind schema. */
   'SCHEMA_VALIDATION_FAILED',
+  /**
+   * The request carries no instruction and targets the base revision's own
+   * schema version, so the new revision would be identical to the base.
+   */
+  'NO_CHANGE',
   /**
    * The host could not resolve or persist the artifact. When it failed while
    * persisting, the outcome is unknown rather than known to be absent: the
@@ -416,25 +469,72 @@ export const ArtifactPatchOperationResultSchema = z.strictObject({
   matched: z.number().int().positive(),
 });
 
+/**
+ * The schema versions a migrating patch moved the artifact between.
+ *
+ * The marker moves forward by construction, as every migration does: equal
+ * versions would describe no transition and let an instructionless ordinary
+ * success pass for a migration, and a lower target is a downgrade the tool
+ * never performs.
+ */
+export const ArtifactPatchMigrationSchema = z
+  .strictObject({
+    /** Version the base revision carried. */
+    from: ArtifactSchemaVersionSchema,
+    /** Version the patched result was validated against and stored at. */
+    to: ArtifactSchemaVersionSchema,
+  })
+  .refine((migration) => migration.to > migration.from, {
+    path: ['to'],
+    message: 'A migration moves the artifact forward to a newer schema version',
+  });
+
 const ArtifactPatchAppliedSchema = z.strictObject({
   ok: z.literal(true),
   /** Revision the patch was applied to. */
   base: ArtifactRefSchema,
-  /** One entry per applied instruction, in application order. */
-  operations: z.array(ArtifactPatchOperationResultSchema).min(1),
+  /**
+   * One entry per applied instruction, in application order. Empty exactly
+   * for an instructionless migration, whose only change is the schema version.
+   */
+  operations: z.array(ArtifactPatchOperationResultSchema),
+  /**
+   * Present exactly when the patch moved the artifact to another schema
+   * version. An ordinary patch, which is held to the base revision's version,
+   * carries no migration.
+   */
+  migration: ArtifactPatchMigrationSchema.optional(),
 });
+
+/**
+ * Hold a success to what it claims: without a migration, at least one
+ * instruction was applied. Instructionless success is only a migration, so a
+ * producer that dropped its operation results cannot validate as an ordinary
+ * success.
+ * @param applied - Success payload under validation.
+ * @param ctx - Refinement context.
+ */
+function requireOperationsOrMigration(applied: z.infer<typeof ArtifactPatchAppliedSchema>, ctx: z.RefinementCtx): void {
+  if (applied.operations.length === 0 && applied.migration === undefined) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['operations'],
+      message: 'A success without a migration must report at least one applied instruction',
+    });
+  }
+}
 
 /** A patch that was applied, validated and discarded without producing history. */
 export const ArtifactPatchDryRunSchema = ArtifactPatchAppliedSchema.extend({
   dryRun: z.literal(true),
-});
+}).superRefine(requireOperationsOrMigration);
 
 /** A patch that was applied, validated and persisted as a new revision. */
 export const ArtifactPatchPersistedSchema = ArtifactPatchAppliedSchema.extend({
   dryRun: z.literal(false),
   /** Reference to the new revision. */
   artifact: ArtifactRefSchema,
-});
+}).superRefine(requireOperationsOrMigration);
 
 /**
  * An applied patch.
@@ -489,6 +589,8 @@ export type ArtifactPatchIssue = z.infer<typeof ArtifactPatchIssueSchema>;
 export type ArtifactPatchError = z.infer<typeof ArtifactPatchErrorSchema>;
 /** What one applied instruction did. */
 export type ArtifactPatchOperationResult = z.infer<typeof ArtifactPatchOperationResultSchema>;
+/** The schema versions a migrating patch moved the artifact between. */
+export type ArtifactPatchMigration = z.infer<typeof ArtifactPatchMigrationSchema>;
 /** An applied patch outcome. */
 export type ArtifactPatchSuccess = z.infer<typeof ArtifactPatchSuccessSchema>;
 /** Outcome of a patch request. */

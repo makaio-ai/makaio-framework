@@ -71,14 +71,19 @@ const BASE_DATA = {
  * Build a stored revision of the plan fixture.
  * @param revision - Revision identifier to report.
  * @param data - Payload the revision carries.
+ * @param schemaVersion - Schema version the revision is labelled with.
  * @returns A validated artifact revision.
  */
-function planRevision(revision: string, data: Record<string, unknown> = structuredClone(BASE_DATA)): ArtifactRevision {
+function planRevision(
+  revision: string,
+  data: Record<string, unknown> = structuredClone(BASE_DATA),
+  schemaVersion = 2,
+): ArtifactRevision {
   return ArtifactRevisionSchema.parse({
     kind: 'implementation-plan',
     id: 'plan-1',
     revision,
-    schemaVersion: 2,
+    schemaVersion,
     scope: { level: 'global' },
     data,
     relations: [],
@@ -92,6 +97,8 @@ interface RecordingHost extends ArtifactPatchHost {
   readonly stored: Record<string, unknown>[];
   /** Complete store requests the host received, in order. */
   readonly writes: ArtifactPatchStoreRequest[];
+  /** Revisions the host reported as persisted, in order. */
+  readonly persisted: ArtifactRevision[];
 }
 
 /**
@@ -106,15 +113,19 @@ function host(
     readonly failResolve?: string;
     readonly failStore?: string;
     readonly storedRevision?: string;
+    /** Version the host labels the stored revision with, when it ignores the request. */
+    readonly storedSchemaVersion?: number;
     readonly storeConflictsWith?: string;
   } = {},
 ): RecordingHost {
   const current = options.current === undefined ? planRevision('rev-1') : options.current;
   const stored: Record<string, unknown>[] = [];
   const writes: ArtifactPatchStoreRequest[] = [];
+  const persisted: ArtifactRevision[] = [];
   return {
     stored,
     writes,
+    persisted,
     listKinds: async (requested) =>
       (options.registrations ?? [kind]).filter((candidate) => candidate.kind === requested),
     resolveCurrent: async () => {
@@ -128,7 +139,14 @@ function host(
       if (options.storeConflictsWith) return { conflictingRevision: options.storeConflictsWith };
       writes.push(request);
       stored.push(request.data);
-      return planRevision(options.storedRevision ?? 'rev-2', request.data);
+      // A compliant host stores at the version the payload was validated against.
+      const revision = planRevision(
+        options.storedRevision ?? 'rev-2',
+        request.data,
+        options.storedSchemaVersion ?? request.schemaVersion,
+      );
+      persisted.push(revision);
+      return revision;
     },
   };
 }
@@ -798,6 +816,7 @@ describe('host boundary', () => {
 
     expect(target.writes[0]?.previous).toMatchObject({ revision: 'rev-1', data: BASE_DATA });
     expect(target.writes[0]?.statusPath).toBe('/summary');
+    expect(target.writes[0]?.schemaVersion).toBe(2);
   });
 
   it('omits the status observation the request did not name', async () => {
@@ -1041,6 +1060,200 @@ describe('intersected kind schemas', () => {
     );
 
     expect(response).toMatchObject({ ok: true, operations: [{ matched: 1 }] });
+  });
+});
+
+describe('migrating between schema versions', () => {
+  /** The kind after a bump: version 3 requires an owner the version 2 payload lacks. */
+  const bumped = ArtifactKindRegistrationSchema.parse({
+    ...kind,
+    schemaVersion: 3,
+    dataSchema: {
+      ...kind.dataSchema,
+      properties: { ...(kind.dataSchema.properties as Record<string, unknown>), owner: { type: 'string' } },
+      required: ['title', 'tasks', 'owner'],
+    },
+  });
+
+  it('migrates a revision to the target version when the patch makes the payload fit', async () => {
+    const target = host({ registrations: [bumped] });
+
+    const response = await patch(request({ $set: { owner: 'alice' } }, { schemaVersion: 3 }), target);
+
+    expect(response).toMatchObject({ ok: true, dryRun: false, migration: { from: 2, to: 3 } });
+    expect(target.writes[0]?.previous.schemaVersion).toBe(2);
+    expect(target.writes[0]?.schemaVersion).toBe(3);
+    expect(target.persisted[0]?.schemaVersion).toBe(3);
+    expect(target.stored[0]).toMatchObject({ ...BASE_DATA, owner: 'alice' });
+  });
+
+  it('refuses a host that stored the migrated revision under the old version', async () => {
+    const response = await patch(
+      request({ $set: { owner: 'alice' } }, { schemaVersion: 3 }),
+      host({ registrations: [bumped], storedSchemaVersion: 2 }),
+    );
+
+    expect(response).toMatchObject({ ok: false, error: { code: 'HOST_FAILED' } });
+    const message = response.ok ? '' : response.error.message;
+    expect(message).toContain('schema version 2 instead of 3');
+  });
+
+  it('lets a migration remove what the target schema no longer declares', async () => {
+    // Version 3 drops `summary` and renames nothing else; the payload can only
+    // satisfy `additionalProperties: false` once the old property is gone.
+    const dropped = ArtifactKindRegistrationSchema.parse({
+      ...kind,
+      schemaVersion: 3,
+      dataSchema: {
+        ...kind.dataSchema,
+        properties: Object.fromEntries(
+          Object.entries(kind.dataSchema.properties as Record<string, unknown>).filter(([name]) => name !== 'summary'),
+        ),
+      },
+    });
+    const target = host({ registrations: [dropped] });
+
+    const response = await patch(request({ $unset: { summary: true } }, { schemaVersion: 3 }), target);
+
+    expect(response).toMatchObject({ ok: true, operations: [{ operator: '$unset', path: 'summary', matched: 1 }] });
+    expect(target.stored[0]).not.toHaveProperty('summary');
+    expect(target.persisted[0]?.schemaVersion).toBe(3);
+  });
+
+  it('refuses to migrate an artifact back to an older schema version', async () => {
+    const response = await patch(
+      request({ $set: { summary: 'older' } }, { schemaVersion: 1 }),
+      host({ registrations: [ArtifactKindRegistrationSchema.parse({ ...kind, schemaVersion: 1 }), kind] }),
+    );
+
+    expect(response).toMatchObject({ ok: false, error: { code: 'SCHEMA_VERSION_MISMATCH' } });
+    const message = response.ok ? '' : response.error.message;
+    expect(message).toContain('never moves an artifact back');
+  });
+
+  it('still rejects an undeclared removal that the revision does not carry', async () => {
+    const response = await patch(
+      request({ $unset: { legacy: true } }, { schemaVersion: 3 }),
+      host({ registrations: [bumped] }),
+    );
+
+    expect(response).toMatchObject({ ok: false, error: { code: 'NO_MATCH', path: 'legacy' } });
+  });
+
+  it('keeps refusing undeclared removals when the request is not a migration', async () => {
+    const response = await patch(request({ $unset: { legacy: true } }), host());
+
+    expect(response).toMatchObject({ ok: false, error: { code: 'PATH_NOT_DECLARED', path: 'legacy' } });
+  });
+
+  it('migrates without an instruction when the payload already fits the target', async () => {
+    // Version 3 changed nothing the payload has to satisfy.
+    const relabelled = ArtifactKindRegistrationSchema.parse({ ...kind, schemaVersion: 3 });
+    const target = host({ registrations: [relabelled] });
+
+    const response = await patch(request({}, { schemaVersion: 3 }), target);
+
+    expect(response).toStrictEqual({
+      ok: true,
+      base: { refClass: 'artifact', kind: 'implementation-plan', id: 'plan-1', revision: 'rev-1' },
+      dryRun: false,
+      artifact: { refClass: 'artifact', kind: 'implementation-plan', id: 'plan-1', revision: 'rev-2' },
+      operations: [],
+      migration: { from: 2, to: 3 },
+    });
+    expect(target.stored[0]).toStrictEqual(BASE_DATA);
+    expect(target.persisted[0]?.schemaVersion).toBe(3);
+  });
+
+  it('refuses an instructionless patch that targets the version the base already has', async () => {
+    const response = await patch(request({}, { schemaVersion: 2 }), host());
+
+    expect(response).toMatchObject({ ok: false, error: { code: 'NO_CHANGE' } });
+  });
+
+  it('holds the patched result to the target registration', async () => {
+    // Version 3 requires the owner; a patch that names the version without
+    // supplying it fails the target schema, not the base one.
+    const response = await patch(
+      request({ $set: { summary: 'x' } }, { schemaVersion: 3 }),
+      host({ registrations: [bumped] }),
+    );
+
+    expect(response).toMatchObject({ ok: false, error: { code: 'SCHEMA_VALIDATION_FAILED' } });
+  });
+
+  it('checks declared paths against the target registration, not the base one', async () => {
+    // `owner` exists only at version 3: without a target the path is undeclared
+    // even though the same instruction migrates cleanly with one.
+    const both = [kind, bumped];
+
+    const undeclared = await patch(request({ $set: { owner: 'alice' } }), host({ registrations: both }));
+    const migrated = await patch(
+      request({ $set: { owner: 'alice' } }, { schemaVersion: 3 }),
+      host({ registrations: both }),
+    );
+
+    expect(undeclared).toMatchObject({ ok: false, error: { code: 'PATH_NOT_DECLARED', path: 'owner' } });
+    expect(migrated).toMatchObject({ ok: true });
+  });
+
+  it('names the registered versions when the base revision has no registration', async () => {
+    const response = await patch(request({ $set: { summary: 'x' } }), host({ registrations: [bumped] }));
+
+    expect(response).toMatchObject({ ok: false, error: { code: 'SCHEMA_VERSION_MISMATCH' } });
+    const error = response.ok ? undefined : response.error;
+    expect(error?.message).toContain('schema version 2');
+    expect(error?.message).toContain('registered: 3');
+    expect(error?.repair).toContain('schemaVersion');
+  });
+
+  it('recommends only versions newer than the revision in the repair hint', async () => {
+    // The artifact is at version 3 and only version 2 is registered: naming 2
+    // would be rejected as a downgrade, so the hint must not suggest it.
+    const response = await patch(
+      request({ $set: { summary: 'x' } }),
+      host({ current: planRevision('rev-1', structuredClone(BASE_DATA), 3), registrations: [kind] }),
+    );
+
+    expect(response).toMatchObject({ ok: false, error: { code: 'SCHEMA_VERSION_MISMATCH' } });
+    const error = response.ok ? undefined : response.error;
+    expect(error?.message).toContain('registered: 2');
+    expect(error?.repair).not.toContain('Set schemaVersion');
+    expect(error?.repair).toContain('schema version 3 or newer');
+  });
+
+  it('names the target and the registered versions when the target has no registration', async () => {
+    const response = await patch(
+      request({ $set: { summary: 'x' } }, { schemaVersion: 4 }),
+      host({ registrations: [kind, bumped] }),
+    );
+
+    expect(response).toMatchObject({ ok: false, error: { code: 'SCHEMA_VERSION_MISMATCH' } });
+    const error = response.ok ? undefined : response.error;
+    expect(error?.message).toContain('targets schema version 4');
+    expect(error?.message).toContain('registered: 2, 3');
+  });
+
+  it('never resends a patch that names a target version after a conflict', async () => {
+    // Even an append that would otherwise be rebasable: the version was chosen
+    // against the base the caller read, and the concurrent revision may itself
+    // have migrated the artifact.
+    const response = await patch(
+      request({ $push: { blockers: 'x' } }, { schemaVersion: 2 }),
+      host({ storeConflictsWith: 'rev-9' }),
+    );
+
+    expect(response).toMatchObject({ ok: false, error: { code: 'BASE_REVISION_CONFLICT', currentRevision: 'rev-9' } });
+    const repair = response.ok ? '' : response.error.repair;
+    expect(repair).toContain('Re-read the artifact');
+  });
+
+  it('keeps the base version when the request names none', async () => {
+    const target = host({ registrations: [kind, bumped] });
+
+    await patch(request({ $set: { summary: 'x' } }), target);
+
+    expect(target.writes[0]?.schemaVersion).toBe(2);
   });
 });
 

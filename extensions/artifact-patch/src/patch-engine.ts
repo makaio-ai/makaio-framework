@@ -26,6 +26,17 @@ export interface ArtifactPatchApplication {
   readonly operations: readonly ArtifactPatchOperationResult[];
 }
 
+/** Relaxations of the declaration rule that only a migration may ask for. */
+export interface ArtifactPatchApplyOptions {
+  /**
+   * Let `$unset` remove a property the schema does not declare. Set when the
+   * patch migrates to another schema version: a property the target dropped is
+   * exactly what the caller has to remove, and the target schema's validation
+   * of the completed payload decides whether the result is acceptable.
+   */
+  readonly allowUndeclaredRemovals?: boolean;
+}
+
 /** Outcome of applying a patch document to one payload. */
 export type ArtifactPatchApplicationResult =
   | { readonly ok: true; readonly application: ArtifactPatchApplication }
@@ -429,6 +440,7 @@ function checkDeclaration(
  * @param instruction - Operator, path and operand written by the caller.
  * @param filters - Compiled conditions by placeholder name.
  * @param dataSchema - Serialized artifact data schema.
+ * @param options - Relaxations that only a migration may ask for.
  * @returns What the instruction changed, or why it was rejected.
  */
 function applyInstruction(
@@ -436,6 +448,7 @@ function applyInstruction(
   instruction: { readonly operator: ArtifactPatchOperator; readonly path: string; readonly value: unknown },
   filters: ReadonlyMap<string, CompiledFilter>,
   dataSchema: Record<string, unknown>,
+  options: ArtifactPatchApplyOptions,
 ): ArtifactPatchOperationResult | ArtifactPatchError {
   const { operator, path, value } = instruction;
   const segments = artifactPatchSegments(path);
@@ -448,7 +461,16 @@ function applyInstruction(
   const unsupported = unsupportedTarget(operator, terminal, path);
   if (unsupported) return unsupported;
   const declaration = checkDeclaration(dataSchema, operator, path, segments);
-  if (declaration) return declaration;
+  // A migration removes what the target schema no longer declares: the old
+  // property is exactly the location the target cannot name, and refusing it
+  // would make every destructive migration impossible. Only `$unset` qualifies:
+  // pulling entries from an undeclared collection leaves the collection the
+  // target refuses, so the collection itself is what has to go. The removal
+  // still has to address something the revision carries; resolution below is
+  // unchanged, and the target schema judges the completed payload.
+  const removesUndeclared =
+    options.allowUndeclaredRemovals === true && declaration?.code === 'PATH_NOT_DECLARED' && operator === '$unset';
+  if (declaration && !removesUndeclared) return declaration;
 
   const containers = resolveContainers(data, segments.slice(0, -1), filters);
   if (!containers.ok) {
@@ -503,18 +525,20 @@ function applyInstruction(
  * @param data - Payload of the revision the patch was written against.
  * @param patch - Patch document already accepted by its schema.
  * @param dataSchema - Serialized data schema of the effective kind.
+ * @param options - Relaxations that only a migration may ask for.
  * @returns The patched payload, or the first rejected instruction.
  */
 export function applyArtifactPatch(
   data: Record<string, unknown>,
   patch: ArtifactPatchDocument,
   dataSchema: Record<string, unknown>,
+  options: ArtifactPatchApplyOptions = {},
 ): ArtifactPatchApplicationResult {
   const draft = structuredClone(data);
   const filters = compileFilters(patch);
   const operations: ArtifactPatchOperationResult[] = [];
   for (const instruction of artifactPatchInstructions(patch)) {
-    const outcome = applyInstruction(draft, instruction, filters, dataSchema);
+    const outcome = applyInstruction(draft, instruction, filters, dataSchema, options);
     if ('code' in outcome) return { ok: false, error: outcome };
     operations.push(outcome);
   }

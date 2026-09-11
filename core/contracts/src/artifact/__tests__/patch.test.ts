@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ArtifactPatchErrorSchema, ArtifactPatchRequestSchema, ArtifactPatchResponseSchema } from '../patch.js';
+import {
+  ArtifactPatchDocumentSchema,
+  ArtifactPatchErrorSchema,
+  ArtifactPatchRequestSchema,
+  ArtifactPatchResponseSchema,
+} from '../patch.js';
 
 describe('patch rejection contract', () => {
   it('accepts a base revision conflict that names the current revision', () => {
@@ -47,6 +52,117 @@ describe('patch rejection contract', () => {
         currentRevision: 'rev-7',
         repair: "Resend the same patch with baseRevision 'rev-7'.",
       },
+    });
+
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('patch request target schema version', () => {
+  const base = {
+    ref: { kind: 'plan', id: 'plan-1' },
+    baseRevision: 'rev-1',
+    patch: { $set: { summary: 'x' } },
+  };
+
+  it('accepts a positive integer target', () => {
+    const result = ArtifactPatchRequestSchema.safeParse({ ...base, schemaVersion: 3 });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.schemaVersion).toBe(3);
+  });
+
+  it('leaves the target undefined when the request omits it', () => {
+    const result = ArtifactPatchRequestSchema.safeParse(base);
+
+    expect(result.success).toBe(true);
+    expect(result.data).not.toHaveProperty('schemaVersion');
+  });
+
+  it.each([0, -1, 1.5, '2'])('rejects %j as a target', (schemaVersion) => {
+    const result = ArtifactPatchRequestSchema.safeParse({ ...base, schemaVersion });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toStrictEqual(['schemaVersion']);
+  });
+
+  it('accepts an instructionless patch when a target version is named', () => {
+    const result = ArtifactPatchRequestSchema.safeParse({ ...base, patch: {}, schemaVersion: 3 });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects an instructionless patch without a target version', () => {
+    const result = ArtifactPatchRequestSchema.safeParse({ ...base, patch: {} });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toStrictEqual(['patch']);
+  });
+
+  it('keeps requiring an instruction on the standalone document', () => {
+    const result = ArtifactPatchDocumentSchema.safeParse({});
+
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('patch success operations', () => {
+  const ref = { refClass: 'artifact', kind: 'decision', id: 'dec-1', revision: 'rev-1' };
+  const next = { ...ref, revision: 'rev-2' };
+
+  it('rejects an ordinary success that reports no applied instruction', () => {
+    const result = ArtifactPatchResponseSchema.safeParse({
+      ok: true,
+      base: ref,
+      dryRun: false,
+      artifact: next,
+      operations: [],
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toStrictEqual(['operations']);
+  });
+
+  it('rejects an instructionless dry run that is not a migration', () => {
+    const result = ArtifactPatchResponseSchema.safeParse({ ok: true, base: ref, dryRun: true, operations: [] });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a migration marker whose endpoints are equal', () => {
+    const result = ArtifactPatchResponseSchema.safeParse({
+      ok: true,
+      base: ref,
+      dryRun: false,
+      artifact: next,
+      operations: [],
+      migration: { from: 2, to: 2 },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a migration marker that moves backwards', () => {
+    const result = ArtifactPatchResponseSchema.safeParse({
+      ok: true,
+      base: ref,
+      dryRun: false,
+      artifact: next,
+      operations: [],
+      migration: { from: 3, to: 2 },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts an instructionless success that names its migration', () => {
+    const result = ArtifactPatchResponseSchema.safeParse({
+      ok: true,
+      base: ref,
+      dryRun: false,
+      artifact: next,
+      operations: [],
+      migration: { from: 1, to: 2 },
     });
 
     expect(result.success).toBe(true);
