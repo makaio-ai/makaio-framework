@@ -15,6 +15,7 @@
 export { postgresStorageEngine } from './engine.js';
 export { isPostgresDuplicateObjectError, isPostgresUniqueViolationError } from './errors.js';
 export { postgresFtsSearchStrategy } from './fts-strategy.js';
+export { createPostgresExecutionAttemptRepository } from './execution-attempt-repository.js';
 export { buildPostgresLedgerDdl, migrationAdvisoryLockKey, POSTGRES_MIGRATION_BEGIN } from './migrations.js';
 export {
   postgresTransactionLockExpressions,

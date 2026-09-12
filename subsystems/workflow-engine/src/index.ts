@@ -111,6 +111,7 @@ export {
   evaluateRuntimeRegistration,
   evaluateOperationAdmission,
   evaluateOperationCompletion,
+  evaluatePreparationReport,
   evaluateRuntimeReadiness,
   evaluateAttemptCancellation,
   snapshotAttemptOutcomeControl,
@@ -163,6 +164,9 @@ export type {
   ExecutionAttemptOutcomeDecision,
   ExecutionAttemptStatus,
   ExecutionAttemptSettlementKind,
+  GetInstructionInput,
+  ReportOperationInput,
+  OperationReportDecision,
   AllocationRefEvolution,
   AllocationRefEvolutionDecision,
   AllocationRecordingDecision,
@@ -215,6 +219,12 @@ export {
   worklogFrameEntriesDual,
   workflowExecutionStateDual,
   workflowExecutionStateEventsDual,
+  executionAttemptsDual,
+  activeExecutionAttemptsDual,
+  executionAttemptRequestsDual,
+  providerOperationsDual,
+  executionAttemptCancellationsDual,
+  executionAttemptControlEvidenceDual,
 } from './storage/schema.js';
 export { initializeWorkflowState, getWorkflowState, patchWorkflowState } from './storage/state-handler.js';
 export type { BootstrapStartAuthority, BootstrapStartOptions } from './bootstrap-start.js';

@@ -52,7 +52,18 @@ export async function runInstalledPackageSetupStage<T>(
   } catch (error) {
     const reason = error instanceof Error && error.name === 'AbortError' ? 'aborted' : 'child process failed';
     const progress = stage === 'build' ? buildProgress(error) : [];
-    const message = `${label} ${reason} after ${Math.round(performance.now() - startedAt)}ms; started at ${startedAtEpochMs}ms; ended at ${Date.now()}ms; parallelism ${parallelism}.${progress.length ? `\n${progress.join('\n')}` : ''}`;
+    const child =
+      error && typeof error === 'object'
+        ? (error as { code?: unknown; signal?: unknown; killed?: unknown; stderr?: unknown })
+        : {};
+    const stderr = typeof child.stderr === 'string' ? child.stderr : '';
+    const termination = [
+      typeof child.code === 'number' ? `exit ${child.code}` : undefined,
+      typeof child.signal === 'string' && /^[A-Z0-9]+$/.test(child.signal) ? `signal ${child.signal}` : undefined,
+      child.killed === true ? 'killed' : undefined,
+      /(?:heap out of memory|reached heap limit)/i.test(stderr) ? 'v8HeapLimit=true' : undefined,
+    ].filter((value): value is string => value !== undefined);
+    const message = `${label} ${reason}${termination.length ? ` (${termination.join(', ')})` : ''} after ${Math.round(performance.now() - startedAt)}ms; started at ${startedAtEpochMs}ms; ended at ${Date.now()}ms; parallelism ${parallelism}.${progress.length ? `\n${progress.join('\n')}` : ''}`;
     process.stderr.write(`${message}\n`);
     throw new Error(message);
   }
@@ -111,8 +122,10 @@ export async function prepareInstalledPackageConsumer(
   const packRoot = join(options.root, 'pack');
   const consumerRoot = join(options.root, 'consumer');
   await Promise.all([mkdir(packRoot), mkdir(consumerRoot)]);
+  // tsdown and rolldown-plugin-dts support Node; Bun can leave eager DTS builds pending at the bus stage.
+  // The declaration-heavy core stage exceeds Node's default 4 GiB V8 heap.
   await runInstalledPackageSetupStage('build', () =>
-    execFileAsync('bun', ['build.ts'], {
+    execFileAsync(process.execPath, ['--max-old-space-size=8192', '--import', 'tsx', 'build.ts'], {
       cwd: import.meta.dirname,
       env: {
         ...process.env,
