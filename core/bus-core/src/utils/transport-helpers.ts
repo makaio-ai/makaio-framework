@@ -16,7 +16,7 @@ import type {
 } from '../types/index.js';
 import { matchesAnySubscription } from './subscription-matching.js';
 import { matchesFilter } from './payload-filter.js';
-import { deserializeTransportError } from './transport.js';
+import { deserializeTransportError, serializeError } from './transport.js';
 import type { MessageOrigin, PayloadFilter } from '@makaio/core';
 import type { CorrelationTracker } from './correlation-tracker.js';
 
@@ -179,25 +179,12 @@ export function trackMessageCorrelation<TMessage extends BusMessage>(
 }
 
 /**
- * Serialize an error into a transport-safe structure.
- *
- * Preserves `subject` alongside `code` so that `isNoHandlerErrorForSubject`
- * can match deserialized errors without fragile message-string comparisons.
- * @param error - The error to serialize
- * @returns Structured error payload
+ * Same codec as {@link serializeError}; kept under this name for callers that
+ * serialize outside a response path. Structured members are collected into
+ * `wire.data`, and an own `data` bag nests at `wire.data.data`.
+ * @param error - Any thrown value
+ * @returns Structured error payload safe for JSON serialization
  */
 export function serializeTransportError(error: unknown): BusTransportError {
-  const typed =
-    typeof error === 'object' && error !== null
-      ? (error as { message?: unknown; code?: string; subject?: unknown; data?: Record<string, unknown> })
-      : {};
-  const message =
-    error instanceof Error ? error.message : typeof typed.message === 'string' ? typed.message : String(error);
-
-  return {
-    message,
-    code: typed.code,
-    subject: typeof typed.subject === 'string' ? typed.subject : undefined,
-    data: typed.data,
-  };
+  return serializeError(error);
 }

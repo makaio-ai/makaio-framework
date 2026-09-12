@@ -138,6 +138,34 @@ function isSerializableValue(value: unknown): boolean {
 }
 
 /**
+ * Own data property of `source` when it holds a string. Reads the descriptor
+ * instead of the property so an accessor on a thrown plain object cannot run
+ * user code (or throw) while an error response is being built.
+ * @param source - Thrown plain object
+ * @param key - Property name to read
+ * @returns The string value, or `undefined` when absent, non-string, or an accessor
+ */
+function ownStringValue(source: object, key: string): string | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(source, key);
+  return typeof descriptor?.value === 'string' ? descriptor.value : undefined;
+}
+
+/**
+ * Text for a thrown value that is not an `Error` and carries no string `message`.
+ * `String()` throws for objects without a callable `toString` (for example
+ * `Object.create(null)`); an error response must still leave the handler.
+ * @param value - Any thrown value
+ * @returns `String(value)`, or a placeholder when that conversion throws
+ */
+function describeThrownValue(value: unknown): string {
+  try {
+    return String(value);
+  } catch {
+    return 'Unknown error';
+  }
+}
+
+/**
  * Collects own enumerable properties from `source`, skipping keys in `skip`
  * and values that are not serializable. Reads values through
  * `Object.getOwnPropertyDescriptor` so getter-backed properties are handled
@@ -160,29 +188,50 @@ function collectStructuredProps(source: object, skip: ReadonlySet<string>): Reco
 }
 
 /**
- * Serialize an unknown error into a structured {@link BusTransportError} for wire transmission.
+ * The single canonical codec: serialize any thrown value into a
+ * {@link BusTransportError} for wire transmission. Every own structured member
+ * goes into `wire.data`; an own `data` bag on the source lands nested at
+ * `wire.data.data` so that a subsequent {@link deserializeTransportError} call
+ * restores it as an own `.data` property alongside any flat siblings — a
+ * lossless round-trip. {@link serializeTransportError} delegates here.
  *
- * Extracts `code`, `subject`, and all own enumerable properties from the
- * structured source error (i.e. `error.cause` when it is an `Error`, otherwise
- * `error` itself) into `BusTransportError.data`, so the receiving side can
- * reconstruct a rich error via {@link deserializeTransportError} without fragile
- * message-string matching.
+ * **`Error` inputs** — `code` and `subject` are extracted to dedicated
+ * top-level fields; remaining own enumerable props are collected from the
+ * structured source (`error.cause` when it is an `Error`, else `error` itself)
+ * into `data`.
  *
- * Standard `Error` fields (`message`, `name`, `stack`, `cause`), the already
- * top-level `subject` and `code` fields, as well as functions, `undefined`,
- * `bigint`, and `symbol` values are excluded from `data`. An own `data`
- * property on the structured source is copied like any other member, so it
- * round-trips as a nested bag at `result.data.data` and is restored by
- * {@link deserializeTransportError} as an own `data` property on the
- * reconstructed error. Use {@link transportErrorData} to read structured
- * members uniformly regardless of which serializer authored the wire payload.
+ * **Plain-object inputs** — own `message`, `code`, and `subject` string data
+ * properties (accessors are ignored) are lifted to top-level fields; remaining
+ * own enumerable props (including an own `data` bag) are collected the same
+ * way. The `cause` promotion rule
+ * applies to `Error` inputs only.
+ *
+ * **`null` / primitives** — produce `{ message: String(error) }`; a value whose
+ * string conversion throws (e.g. `Object.create(null)`) yields `'Unknown error'`.
+ *
+ * Standard `Error` fields (`message`, `name`, `stack`, `cause`), the
+ * already-top-level `subject` and `code`, and non-JSON-safe values (functions,
+ * `undefined`, `bigint`, `symbol`) are excluded from `data`.
  * @param error - Any thrown value
  * @returns Structured error payload safe for JSON serialization
  * @see transportErrorData
  */
 export function serializeError(error: unknown): BusTransportError {
   if (!(error instanceof Error)) {
-    return { message: typeof error === 'string' ? error : 'Unknown error' };
+    if (typeof error !== 'object' || error === null) {
+      return { message: describeThrownValue(error) };
+    }
+    // Plain-object path: lift message/code/subject, collect remaining members.
+    const result: BusTransportError = {
+      message: ownStringValue(error, 'message') ?? describeThrownValue(error),
+    };
+    const code = ownStringValue(error, 'code');
+    if (code !== undefined) result.code = code;
+    const subject = ownStringValue(error, 'subject');
+    if (subject !== undefined) result.subject = subject;
+    const plainData = collectStructuredProps(error, SKIP_PROPS);
+    if (plainData !== undefined) result.data = plainData;
+    return result;
   }
 
   const result: BusTransportError = { message: error.message };
@@ -283,16 +332,13 @@ export function deserializeTransportError(transportError: BusTransportError): Er
  * Read the structured members of an error regardless of which serializer authored
  * the wire payload.
  *
- * Three producible shapes exist depending on which serializer ran:
+ * Two producible shapes exist:
  *
- * - **`serializeError`** copies every own enumerable prop of the structured
- *   source into `result.data`, including an authored `data` bag (which lands at
- *   `result.data.data`). After {@link deserializeTransportError} the rebuilt
- *   error has `.data` (the nested bag) as an own prop alongside any flat
- *   siblings (e.g. `.retryable`).
- * - **`serializeTransportError`** uses `error.data` as the wire bag directly, so
- *   after deserialization the members are promoted flat onto the Error with no
- *   `data` key present.
+ * - **`serializeError` / `serializeTransportError`** (same codec) copy every own
+ *   enumerable prop of the structured source into `result.data`, including an
+ *   authored `data` bag (which lands at `result.data.data`). After
+ *   {@link deserializeTransportError} the rebuilt error has `.data` (the nested
+ *   bag) as an own prop alongside any flat siblings (e.g. `.retryable`).
  * - A **raw `BusTransportError` object** (not yet deserialized) carries the bag
  *   under its own `data` property.
  *
