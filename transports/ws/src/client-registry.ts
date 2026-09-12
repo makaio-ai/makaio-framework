@@ -17,25 +17,39 @@ import type { PayloadFilter } from '@makaio/core';
 import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   getSubjectFromBusMessage,
+  matchesFilter,
   matchesSubscription,
   shouldReceiveMessage,
 } from '@makaio/bus-core';
 import type { WebSocketLike } from './types.js';
 
 /**
- * Callback that resolves allowed subjects for a client socket.
+ * Callback that resolves subscription subjects allowed for a client socket.
  *
  * Returns the live restriction list when the client's authenticated identity
- * declares `allowedSubjects`, or `null` when the client is unrestricted
- * (either because the identity has no restriction, or the identity is unknown).
+ * declares `allowedSubscriptionSubjects`, or `null` when the client is
+ * unrestricted (either because the identity has no restriction, or the
+ * identity is unknown).
  *
  * Implementations should resolve from the live identity-secret-registry so
  * revocations and rotations are reflected immediately — matching the per-message
- * revalidation freshness on the inbound path.
+ * revalidation freshness for subscription handling on the inbound path.
  * @param client - The WebSocket client to resolve restrictions for.
- * @returns Allowed subjects list, or `null` when unrestricted.
+ * @returns Allowed subscription subjects list, or `null` when unrestricted.
  */
-export type SubjectRestrictionResolver = (client: WebSocketLike) => ReadonlySet<string> | null;
+export type SubscriptionSubjectRestrictionResolver = (client: WebSocketLike) => ReadonlySet<string> | null;
+
+/**
+ * Callback that resolves server-owned payload filters required for a client.
+ *
+ * The resolver is evaluated for every outbound delivery so its filters remain
+ * effective when the client has no active subscription advertisement.
+ * @param client - The WebSocket client.
+ * @returns Required exact-subject filters, or `null` when no policy applies.
+ */
+export type RequiredSubscriptionFilterResolver = (
+  client: WebSocketLike,
+) => Readonly<Record<string, PayloadFilter>> | null;
 
 /**
  * Callback that checks whether a client socket is still authenticated.
@@ -56,13 +70,20 @@ export interface ClientRegistryOptions {
   /** Enable debug logging. */
   debug?: boolean;
   /**
-   * Optional callback that resolves subject restrictions for a client socket.
+   * Optional callback that resolves subscription subject restrictions for a
+   * client socket.
    *
-   * When provided, outbound event and broadcast forwarding skips clients whose
-   * restriction list does not include the message subject. This provides
-   * defense-in-depth for the inbound subscription filter.
+   * When provided, outbound peer delivery skips clients whose subscription
+   * restriction list does not match the message subject. This provides
+   * defense-in-depth for the inbound subscription authorization.
    */
-  subjectRestrictionResolver?: SubjectRestrictionResolver;
+  subscriptionSubjectRestrictionResolver?: SubscriptionSubjectRestrictionResolver;
+  /**
+   * Optional callback that resolves server-owned payload filters required for
+   * a client. These filters are enforced on every outbound delivery,
+   * independently of its advertised subscriptions.
+   */
+  requiredSubscriptionFilterResolver?: RequiredSubscriptionFilterResolver;
   /**
    * Optional callback that checks whether a client socket is still
    * authenticated. When provided, outbound routing skips and closes
@@ -106,7 +127,8 @@ export class ClientRegistry {
   private readonly clientFilters = new Map<WebSocketLike, Map<string, PayloadFilter>>();
   private readonly requestOrigins = new Map<string, RequestOrigin>();
   private readonly debug: boolean;
-  private readonly subjectRestrictionResolver: SubjectRestrictionResolver | undefined;
+  private readonly subscriptionSubjectRestrictionResolver: SubscriptionSubjectRestrictionResolver | undefined;
+  private readonly requiredSubscriptionFilterResolver: RequiredSubscriptionFilterResolver | undefined;
   private readonly socketAuthChecker: SocketAuthChecker | undefined;
 
   /**
@@ -114,7 +136,8 @@ export class ClientRegistry {
    */
   public constructor(options: ClientRegistryOptions = {}) {
     this.debug = options.debug ?? false;
-    this.subjectRestrictionResolver = options.subjectRestrictionResolver;
+    this.subscriptionSubjectRestrictionResolver = options.subscriptionSubjectRestrictionResolver;
+    this.requiredSubscriptionFilterResolver = options.requiredSubscriptionFilterResolver;
     this.socketAuthChecker = options.socketAuthChecker;
   }
 
@@ -375,10 +398,10 @@ export class ClientRegistry {
   /**
    * Collect all connected clients interested in a given subject/payload.
    *
-   * When a `subjectRestrictionResolver` is configured, clients whose
-   * authenticated identity restricts them to a set of allowed subjects are
-   * excluded when the outbound subject is not in that set. This provides
-   * defense-in-depth for the inbound subscription filter.
+   * When a `subscriptionSubjectRestrictionResolver` is configured, clients
+   * whose authenticated identity restricts their advertised subscriptions are
+   * excluded when the outbound subject does not match that set of patterns. This provides
+   * defense-in-depth for the inbound subscription authorization.
    * @param subject - The message subject (if any)
    * @param payload - The message payload (if any)
    * @param exclude - Optional client to exclude (e.g. the sender in cross-client event forwarding)
@@ -390,6 +413,7 @@ export class ClientRegistry {
       if (client === exclude || !this.isReadyAndAuthenticated(client)) continue;
       if (!this.clientWantsMessage(client, subject, payload)) continue;
       if (!this.isSubjectAllowedForClient(client, subject)) continue;
+      if (!this.isPayloadAllowedForClient(client, subject, payload)) continue;
       result.push(client);
     }
     return result;
@@ -503,12 +527,13 @@ export class ClientRegistry {
 
   /**
    * Defense-in-depth: check whether the outgoing subject is allowed for a
-   * client whose authenticated identity may declare subject restrictions.
+   * client whose authenticated identity may declare subscription subject
+   * restrictions.
    *
-   * When no `subjectRestrictionResolver` is configured, or the resolver
-   * returns `null` (unrestricted identity), the check passes. When the
-   * resolver returns a restriction list, the outgoing subject must appear
-   * in that list.
+   * When no `subscriptionSubjectRestrictionResolver` is configured, or the
+   * resolver returns `null` (unrestricted identity), the check passes. When
+   * the resolver returns a restriction list, the outgoing subject must match
+   * one of its subscription patterns.
    *
    * The resolver is called on every outbound check — not cached — so
    * revocations and rotations are reflected immediately.
@@ -517,10 +542,27 @@ export class ClientRegistry {
    * @returns `true` when the subject is allowed (or no restriction applies).
    */
   private isSubjectAllowedForClient(client: WebSocketLike, subject: string | undefined): boolean {
-    if (!this.subjectRestrictionResolver || subject === undefined) return true;
-    const allowed = this.subjectRestrictionResolver(client);
+    if (!this.subscriptionSubjectRestrictionResolver || subject === undefined) return true;
+    const allowed = this.subscriptionSubjectRestrictionResolver(client);
     if (allowed === null) return true;
-    return allowed.has(subject);
+    return [...allowed].some((pattern) => matchesSubscription(subject, pattern));
+  }
+
+  /**
+   * Check server-owned recipient policy after advertised-subscription matching.
+   *
+   * This final check intentionally does not depend on subscription state: the
+   * default empty-subscription fallback must not make an attempt-addressed
+   * event or broadcast visible to a different authenticated identity.
+   * @param client - Candidate outbound recipient.
+   * @param subject - The outgoing full subject, if any.
+   * @param payload - The outgoing payload.
+   * @returns `true` when no required filter applies or the payload matches it.
+   */
+  private isPayloadAllowedForClient(client: WebSocketLike, subject: string | undefined, payload: unknown): boolean {
+    if (!this.requiredSubscriptionFilterResolver || subject === undefined) return true;
+    const requiredFilter = this.requiredSubscriptionFilterResolver(client)?.[subject];
+    return requiredFilter === undefined || matchesFilter(payload, requiredFilter);
   }
 
   /**

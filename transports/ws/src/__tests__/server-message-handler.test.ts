@@ -6,7 +6,8 @@ import { createInboundMessageHandler, routeMessage, type MessageHandlerDeps } fr
 import {
   clearHmacIdentitySecretsForTesting,
   registerHmacIdentitySecret,
-  resolveHmacIdentityAllowedSubjects,
+  resolveHmacIdentityAllowedSubscriptionSubjects,
+  resolveHmacIdentityRequiredSubscriptionFilters,
   rotateHmacIdentitySecret,
 } from '../auth/identity-secret-registry.js';
 import type { TransportAuth } from '../types.js';
@@ -315,7 +316,7 @@ describe('subject restriction enforcement', () => {
   it('allows a request to the permitted subject', async () => {
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: [ALLOWED_SUBJECT],
+      allowedMessageSubjects: [ALLOWED_SUBJECT],
     });
 
     const socket = new MockWebSocket();
@@ -340,10 +341,142 @@ describe('subject restriction enforcement', () => {
     expect(handler).toHaveBeenCalledOnce();
   });
 
+  it('allows a message-capable peer to originate requests, events, and broadcasts', async () => {
+    registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
+      peerKind: 'worker-bootstrap',
+      allowedMessageSubjects: [ALLOWED_SUBJECT],
+    });
+
+    const socket = new MockWebSocket();
+    const handler = vi.fn<BusReceiveHandler>().mockResolvedValue(undefined);
+    const auth = makeRestrictedAuth(BOOTSTRAP_IDENTITY, 'worker-bootstrap');
+    const deps = makeDeps({ auth, handlers: new Set([handler]) });
+
+    await routeMessage(
+      {
+        type: 'request',
+        namespace: 'worker',
+        subject: 'control.bootstrap.claim',
+        correlationId: 'message-grant-request',
+        messageId: 'message-grant-request-id',
+        payload: {},
+      },
+      socket,
+      deps,
+    );
+    await routeMessage(
+      {
+        type: 'event',
+        namespace: 'worker',
+        subject: 'control.bootstrap.claim',
+        messageId: 'message-grant-event-id',
+        payload: {},
+      },
+      socket,
+      deps,
+    );
+    await routeMessage(
+      {
+        type: 'broadcast',
+        namespace: 'worker',
+        subject: 'control.bootstrap.claim',
+        correlationId: 'message-grant-broadcast',
+        messageId: 'message-grant-broadcast-id',
+        payload: {},
+      },
+      socket,
+      deps,
+    );
+
+    expect(handler).toHaveBeenCalledTimes(3);
+    handler.mockClear();
+
+    await routeMessage(
+      {
+        type: 'subscribe',
+        subjects: { [ALLOWED_SUBJECT]: [100] },
+        deliveryClasses: { [ALLOWED_SUBJECT]: 'relayable' },
+      },
+      socket,
+      deps,
+    );
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('lets a subscription-only peer advertise delivery without originating messages', async () => {
+    registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
+      peerKind: 'worker-bootstrap',
+      allowedSubscriptionSubjects: [ALLOWED_SUBJECT],
+    });
+
+    const socket = new MockWebSocket();
+    const handler = vi.fn<BusReceiveHandler>().mockResolvedValue(undefined);
+    const sendSafely = vi.fn();
+    const auth = makeRestrictedAuth(BOOTSTRAP_IDENTITY, 'worker-bootstrap');
+    const deps = makeDeps({ auth, handlers: new Set([handler]), sendSafely });
+
+    await routeMessage(
+      {
+        type: 'subscribe',
+        subjects: { [ALLOWED_SUBJECT]: [100] },
+        deliveryClasses: { [ALLOWED_SUBJECT]: 'relayable' },
+      },
+      socket,
+      deps,
+    );
+    expect(handler).toHaveBeenCalledOnce();
+    handler.mockClear();
+
+    await routeMessage(
+      {
+        type: 'request',
+        namespace: 'worker',
+        subject: 'control.bootstrap.claim',
+        correlationId: 'subscription-grant-request',
+        messageId: 'subscription-grant-request-id',
+        payload: {},
+      },
+      socket,
+      deps,
+    );
+    await routeMessage(
+      {
+        type: 'event',
+        namespace: 'worker',
+        subject: 'control.bootstrap.claim',
+        messageId: 'subscription-grant-event-id',
+        payload: {},
+      },
+      socket,
+      deps,
+    );
+    await routeMessage(
+      {
+        type: 'broadcast',
+        namespace: 'worker',
+        subject: 'control.bootstrap.claim',
+        correlationId: 'subscription-grant-broadcast',
+        messageId: 'subscription-grant-broadcast-id',
+        payload: {},
+      },
+      socket,
+      deps,
+    );
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(sendSafely).toHaveBeenCalledOnce();
+    expect(JSON.parse(sendSafely.mock.calls[0]![1] as string)).toMatchObject({
+      type: 'response',
+      correlationId: 'subscription-grant-request',
+      error: { message: expect.stringContaining('not allowed') },
+    });
+  });
+
   it('rejects a request to a disallowed subject with an error response', async () => {
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: [ALLOWED_SUBJECT],
+      allowedMessageSubjects: [ALLOWED_SUBJECT],
     });
 
     const socket = new MockWebSocket();
@@ -382,7 +515,7 @@ describe('subject restriction enforcement', () => {
   it('drops events to a disallowed subject silently', async () => {
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: [ALLOWED_SUBJECT],
+      allowedMessageSubjects: [ALLOWED_SUBJECT],
     });
 
     const socket = new MockWebSocket();
@@ -411,7 +544,7 @@ describe('subject restriction enforcement', () => {
   it('drops broadcasts to a disallowed subject', async () => {
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: [ALLOWED_SUBJECT],
+      allowedMessageSubjects: [ALLOWED_SUBJECT],
     });
 
     const socket = new MockWebSocket();
@@ -436,7 +569,7 @@ describe('subject restriction enforcement', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it('does not restrict identities without allowedSubjects', async () => {
+  it('does not restrict identities without directional subject grants', async () => {
     registerHmacIdentitySecret('unrestricted-peer', 'unrestricted-secret', {
       peerKind: 'workflow-execution',
     });
@@ -526,7 +659,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
   it('filters disallowed subjects from a subscribe message', async () => {
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: [ALLOWED_SUBJECT],
+      allowedSubscriptionSubjects: [ALLOWED_SUBJECT],
     });
 
     const restrictedSocket = new MockWebSocket();
@@ -572,7 +705,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
   it('drops subscribe message entirely when all subjects are disallowed', async () => {
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: [ALLOWED_SUBJECT],
+      allowedSubscriptionSubjects: [ALLOWED_SUBJECT],
     });
 
     const restrictedSocket = new MockWebSocket();
@@ -601,7 +734,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
   it('filters disallowed subjects from an unsubscribe message', async () => {
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: [ALLOWED_SUBJECT],
+      allowedSubscriptionSubjects: [ALLOWED_SUBJECT],
     });
 
     const restrictedSocket = new MockWebSocket();
@@ -646,7 +779,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
   it('rejects wildcard subscription from a restricted identity', async () => {
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: [ALLOWED_SUBJECT],
+      allowedSubscriptionSubjects: [ALLOWED_SUBJECT],
     });
 
     const restrictedSocket = new MockWebSocket();
@@ -665,14 +798,213 @@ describe('subscribe/unsubscribe subject restriction', () => {
       makeDeps({ auth, handlers: new Set([handler]), registry }),
     );
 
-    // Wildcard not in allowedSubjects verbatim — must be rejected.
+    // Wildcard not in allowedSubscriptionSubjects verbatim — must be rejected.
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it('allows wildcard subscription when it appears verbatim in allowedSubjects', async () => {
+  it('allows a concrete subscription covered by an allowed wildcard pattern', async () => {
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: ['worker.*'],
+      allowedSubscriptionSubjects: ['worker.*'],
+    });
+
+    const restrictedSocket = new MockWebSocket();
+    const socketMap = new Map<MockWebSocket, string>([[restrictedSocket, BOOTSTRAP_IDENTITY]]);
+    const auth = makePerSocketAuth(socketMap);
+    const handler = vi.fn<BusReceiveHandler>().mockResolvedValue(undefined);
+
+    await routeMessage(
+      {
+        type: 'subscribe',
+        subjects: { 'worker.control.bootstrap.claim': [100], 'workflow.gate.respond': [100] },
+        deliveryClasses: {},
+      },
+      restrictedSocket,
+      makeDeps({ auth, handlers: new Set([handler]), registry: new ClientRegistry() }),
+    );
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'subscribe',
+        subjects: { 'worker.control.bootstrap.claim': [100] },
+      }),
+      expect.anything(),
+    );
+  });
+
+  it('enforces an option-only required filter without directional allow-lists', async () => {
+    const identityId = 'filter-only-identity';
+    const protectedSubject = 'execution-attempt.operation.deliver';
+    registerHmacIdentitySecret(identityId, 'filter-only-secret', {
+      peerKind: 'workflow-execution-attempt',
+      requiredSubscriptionFilters: { [protectedSubject]: { executionAttemptId: 'attempt-a' } },
+    });
+
+    const restrictedSocket = new MockWebSocket();
+    const auth = makePerSocketAuth(new Map([[restrictedSocket, identityId]]));
+    const registry = new ClientRegistry({
+      requiredSubscriptionFilterResolver: () => resolveHmacIdentityRequiredSubscriptionFilters(identityId),
+    });
+    registry.addClient(restrictedSocket);
+
+    await routeMessage(
+      {
+        type: 'subscribe',
+        subjects: { [protectedSubject]: [100] },
+        deliveryClasses: { [protectedSubject]: 'relayable' },
+      },
+      restrictedSocket,
+      makeDeps({ auth, registry }),
+    );
+
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-a' })).toEqual([
+      restrictedSocket,
+    ]);
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-b' })).toEqual([]);
+  });
+
+  it('allows a filter-only wildcard advertisement when the policy is enforced at delivery', async () => {
+    const identityId = 'filter-only-wildcard-identity';
+    const protectedSubject = 'execution-attempt.operation.deliver';
+    registerHmacIdentitySecret(identityId, 'filter-only-wildcard-secret', {
+      peerKind: 'workflow-execution-attempt',
+      requiredSubscriptionFilters: { [protectedSubject]: { executionAttemptId: 'attempt-a' } },
+    });
+
+    const restrictedSocket = new MockWebSocket();
+    const auth = makePerSocketAuth(new Map([[restrictedSocket, identityId]]));
+    const handler = vi.fn<BusReceiveHandler>().mockResolvedValue(undefined);
+    const registry = new ClientRegistry({
+      requiredSubscriptionFilterResolver: () => resolveHmacIdentityRequiredSubscriptionFilters(identityId),
+    });
+    registry.addClient(restrictedSocket);
+
+    await routeMessage(
+      {
+        type: 'subscribe',
+        subjects: { 'execution-attempt.*': [100] },
+        deliveryClasses: { 'execution-attempt.*': 'relayable' },
+      },
+      restrictedSocket,
+      makeDeps({ auth, handlers: new Set([handler]), registry }),
+    );
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'subscribe', subjects: { 'execution-attempt.*': [100] } }),
+      expect.anything(),
+    );
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-a' })[0]).toBe(
+      restrictedSocket,
+    );
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-b' })).toEqual([]);
+  });
+
+  it('allows a wildcard advertisement granted to a restricted identity', async () => {
+    const identityId = 'wildcard-filter-identity';
+    const protectedSubject = 'execution-attempt.operation.deliver';
+    registerHmacIdentitySecret(identityId, 'wildcard-filter-secret', {
+      peerKind: 'workflow-execution-attempt',
+      allowedMessageSubjects: [],
+      allowedSubscriptionSubjects: ['execution-attempt.*'],
+      requiredSubscriptionFilters: { [protectedSubject]: { executionAttemptId: 'attempt-a' } },
+    });
+
+    const restrictedSocket = new MockWebSocket();
+    const auth = makePerSocketAuth(new Map([[restrictedSocket, identityId]]));
+    const handler = vi.fn<BusReceiveHandler>().mockResolvedValue(undefined);
+    const registry = new ClientRegistry({
+      requiredSubscriptionFilterResolver: () => resolveHmacIdentityRequiredSubscriptionFilters(identityId),
+    });
+    registry.addClient(restrictedSocket);
+
+    await routeMessage(
+      {
+        type: 'subscribe',
+        subjects: { 'execution-attempt.*': [100] },
+        deliveryClasses: { 'execution-attempt.*': 'relayable' },
+      },
+      restrictedSocket,
+      makeDeps({ auth, handlers: new Set([handler]), registry }),
+    );
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'subscribe', subjects: { 'execution-attempt.*': [100] } }),
+      expect.anything(),
+    );
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-a' })[0]).toBe(
+      restrictedSocket,
+    );
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-b' })).toEqual([]);
+  });
+
+  it('allows a concrete protected advertisement through a wildcard grant with its trusted filter', async () => {
+    const identityId = 'wildcard-concrete-filter-identity';
+    const protectedSubject = 'execution-attempt.operation.deliver';
+    registerHmacIdentitySecret(identityId, 'wildcard-concrete-filter-secret', {
+      peerKind: 'workflow-execution-attempt',
+      allowedMessageSubjects: [],
+      allowedSubscriptionSubjects: ['execution-attempt.*'],
+      requiredSubscriptionFilters: { [protectedSubject]: { executionAttemptId: 'attempt-a' } },
+    });
+
+    const restrictedSocket = new MockWebSocket();
+    const auth = makePerSocketAuth(new Map([[restrictedSocket, identityId]]));
+    const registry = new ClientRegistry({
+      requiredSubscriptionFilterResolver: () => resolveHmacIdentityRequiredSubscriptionFilters(identityId),
+    });
+    registry.addClient(restrictedSocket);
+
+    await routeMessage(
+      {
+        type: 'subscribe',
+        subjects: { [protectedSubject]: [100] },
+        deliveryClasses: { [protectedSubject]: 'relayable' },
+        filters: { [protectedSubject]: { executionAttemptId: 'attempt-a' } },
+      },
+      restrictedSocket,
+      makeDeps({ auth, registry }),
+    );
+
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-a' })).toEqual([
+      restrictedSocket,
+    ]);
+    expect(registry.getInterestedRequestClients(protectedSubject, { executionAttemptId: 'attempt-b' })).toEqual([]);
+  });
+
+  it('allows an unrelated wildcard advertisement alongside required concrete filters', async () => {
+    const identityId = 'safe-wildcard-filter-identity';
+    const protectedSubject = 'execution-attempt.operation.deliver';
+    registerHmacIdentitySecret(identityId, 'safe-wildcard-filter-secret', {
+      peerKind: 'workflow-execution-attempt',
+      allowedMessageSubjects: [],
+      allowedSubscriptionSubjects: ['execution-attempt.*', 'worker.*'],
+      requiredSubscriptionFilters: { [protectedSubject]: { executionAttemptId: 'attempt-a' } },
+    });
+
+    const restrictedSocket = new MockWebSocket();
+    const auth = makePerSocketAuth(new Map([[restrictedSocket, identityId]]));
+    const handler = vi.fn<BusReceiveHandler>().mockResolvedValue(undefined);
+
+    await routeMessage(
+      {
+        type: 'subscribe',
+        subjects: { 'worker.*': [100] },
+        deliveryClasses: { 'worker.*': 'relayable' },
+      },
+      restrictedSocket,
+      makeDeps({ auth, handlers: new Set([handler]) }),
+    );
+
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'subscribe', subjects: { 'worker.*': [100] } }),
+      expect.anything(),
+    );
+  });
+
+  it('allows wildcard subscription when it appears verbatim in allowedSubscriptionSubjects', async () => {
+    registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
+      peerKind: 'worker-bootstrap',
+      allowedSubscriptionSubjects: ['worker.*'],
     });
 
     const restrictedSocket = new MockWebSocket();
@@ -691,7 +1023,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
       makeDeps({ auth, handlers: new Set([handler]), registry }),
     );
 
-    // Wildcard IS in allowedSubjects verbatim — must be accepted.
+    // Wildcard IS in allowedSubscriptionSubjects verbatim — must be accepted.
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'subscribe',
@@ -704,7 +1036,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
   it('does not restrict subscribe messages from unrestricted identities', async () => {
     registerHmacIdentitySecret('unrestricted-sub', 'unrestricted-sub-secret', {
       peerKind: 'workflow-execution',
-      // No allowedSubjects — unrestricted
+      // No directional subject grants — unrestricted
     });
 
     const socket = new MockWebSocket();
@@ -740,7 +1072,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
   it('preserves restriction after secret rotation', async () => {
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: [ALLOWED_SUBJECT],
+      allowedSubscriptionSubjects: [ALLOWED_SUBJECT],
     });
     rotateHmacIdentitySecret(BOOTSTRAP_IDENTITY, 'new-secret');
 
@@ -762,7 +1094,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
       makeDeps({ auth, handlers: new Set([handler]), registry }),
     );
 
-    // After rotation, allowedSubjects must still be enforced.
+    // After rotation, allowedSubscriptionSubjects must still be enforced.
     expect(handler).not.toHaveBeenCalled();
   });
 });
@@ -783,7 +1115,7 @@ describe('outbound subject restriction on forwarding', () => {
   it('does not forward events to a restricted peer on a disallowed subject', async () => {
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: [ALLOWED_SUBJECT],
+      allowedSubscriptionSubjects: [ALLOWED_SUBJECT],
     });
 
     const senderSocket = new MockWebSocket();
@@ -805,11 +1137,11 @@ describe('outbound subject restriction on forwarding', () => {
 
     const registry = new ClientRegistry({
       debug: false,
-      subjectRestrictionResolver: (client) => {
+      subscriptionSubjectRestrictionResolver: (client) => {
         const ctx = auth.getReceiveContext?.(client);
         const peerId = ctx?.peer?.id;
         if (!peerId) return null;
-        return resolveHmacIdentityAllowedSubjects(peerId);
+        return resolveHmacIdentityAllowedSubscriptionSubjects(peerId);
       },
     });
 
@@ -845,7 +1177,7 @@ describe('outbound subject restriction on forwarding', () => {
   it('forwards events to a restricted peer on an allowed subject', async () => {
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: [ALLOWED_SUBJECT],
+      allowedSubscriptionSubjects: [ALLOWED_SUBJECT],
     });
 
     const senderSocket = new MockWebSocket();
@@ -866,11 +1198,11 @@ describe('outbound subject restriction on forwarding', () => {
 
     const registry = new ClientRegistry({
       debug: false,
-      subjectRestrictionResolver: (client) => {
+      subscriptionSubjectRestrictionResolver: (client) => {
         const ctx = auth.getReceiveContext?.(client);
         const peerId = ctx?.peer?.id;
         if (!peerId) return null;
-        return resolveHmacIdentityAllowedSubjects(peerId);
+        return resolveHmacIdentityAllowedSubscriptionSubjects(peerId);
       },
     });
 
@@ -902,10 +1234,135 @@ describe('outbound subject restriction on forwarding', () => {
     expect(sentToRestricted).toHaveLength(1);
   });
 
+  it('delivers an event to a peer whose wildcard subscription grant matches the full subject', async () => {
+    registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
+      peerKind: 'worker-bootstrap',
+      allowedSubscriptionSubjects: ['worker.*'],
+    });
+
+    const senderSocket = new MockWebSocket();
+    const subscriberSocket = new MockWebSocket();
+    const sendSafely = vi.fn();
+    const socketMap = new Map<MockWebSocket, string>([[subscriberSocket, BOOTSTRAP_IDENTITY]]);
+    const auth = makeAuth({
+      getReceiveContext: (socket) => {
+        const identityId = socketMap.get(socket as MockWebSocket);
+        return identityId
+          ? {
+              transportName: 'websocket',
+              peer: { kind: 'worker-bootstrap', id: identityId, authenticated: true },
+            }
+          : undefined;
+      },
+    });
+    const registry = new ClientRegistry({
+      debug: false,
+      subscriptionSubjectRestrictionResolver: (client) => {
+        const peerId = auth.getReceiveContext?.(client)?.peer?.id;
+        return peerId ? resolveHmacIdentityAllowedSubscriptionSubjects(peerId) : null;
+      },
+    });
+    registry.addClient(senderSocket);
+    registry.addClient(subscriberSocket);
+    const deps = makeDeps({ auth, registry, sendSafely });
+
+    await routeMessage(
+      {
+        type: 'subscribe',
+        subjects: { 'worker.*': [100] },
+        deliveryClasses: { 'worker.*': 'relayable' },
+      },
+      subscriberSocket,
+      deps,
+    );
+    await routeMessage(
+      {
+        type: 'event',
+        namespace: 'worker',
+        subject: 'lifecycle.ready',
+        messageId: 'wildcard-delivery',
+        payload: {},
+      },
+      senderSocket,
+      deps,
+    );
+
+    expect(sendSafely).toHaveBeenCalledWith(subscriberSocket, expect.stringContaining('"subject":"lifecycle.ready"'));
+  });
+
+  it('delivers a client-originated broadcast to an authenticated matching subscriber', async () => {
+    const senderIdentity = 'broadcast-sender';
+    const subscriberIdentity = 'broadcast-subscriber';
+    registerHmacIdentitySecret(senderIdentity, 'broadcast-sender-secret', {
+      peerKind: 'worker-bootstrap',
+      allowedMessageSubjects: [ALLOWED_SUBJECT],
+    });
+    registerHmacIdentitySecret(subscriberIdentity, 'broadcast-subscriber-secret', {
+      peerKind: 'worker-bootstrap',
+      allowedSubscriptionSubjects: [ALLOWED_SUBJECT],
+    });
+
+    const senderSocket = new MockWebSocket();
+    const subscriberSocket = new MockWebSocket();
+    const sendSafely = vi.fn();
+    const socketMap = new Map<MockWebSocket, string>([
+      [senderSocket, senderIdentity],
+      [subscriberSocket, subscriberIdentity],
+    ]);
+    const auth = makeAuth({
+      getReceiveContext: (socket) => {
+        const identityId = socketMap.get(socket as MockWebSocket);
+        return identityId
+          ? {
+              transportName: 'websocket',
+              peer: { kind: 'worker-bootstrap', id: identityId, authenticated: true },
+            }
+          : undefined;
+      },
+    });
+    const registry = new ClientRegistry({
+      debug: false,
+      subscriptionSubjectRestrictionResolver: (client) => {
+        const peerId = auth.getReceiveContext?.(client)?.peer?.id;
+        return peerId ? resolveHmacIdentityAllowedSubscriptionSubjects(peerId) : null;
+      },
+    });
+    registry.addClient(senderSocket);
+    registry.addClient(subscriberSocket);
+    const deps = makeDeps({ auth, registry, sendSafely });
+
+    await routeMessage(
+      {
+        type: 'subscribe',
+        subjects: { [ALLOWED_SUBJECT]: [100] },
+        deliveryClasses: { [ALLOWED_SUBJECT]: 'relayable' },
+      },
+      subscriberSocket,
+      deps,
+    );
+    await routeMessage(
+      {
+        type: 'broadcast',
+        namespace: 'worker',
+        subject: 'control.bootstrap.claim',
+        correlationId: 'matching-broadcast',
+        messageId: 'matching-broadcast-id',
+        payload: {},
+      },
+      senderSocket,
+      deps,
+    );
+
+    expect(sendSafely).toHaveBeenCalledWith(
+      subscriberSocket,
+      expect.stringContaining('"correlationId":"matching-broadcast"'),
+    );
+  });
+
   it('does not filter events for unrestricted peers', async () => {
     registerHmacIdentitySecret('unrestricted-fwd', 'unrestricted-fwd-secret', {
       peerKind: 'workflow-execution',
-      // No allowedSubjects — unrestricted
+      // No directional subject grants — unrestricted
     });
 
     const senderSocket = new MockWebSocket();
@@ -914,7 +1371,7 @@ describe('outbound subject restriction on forwarding', () => {
 
     const registry = new ClientRegistry({
       debug: false,
-      subjectRestrictionResolver: () => null,
+      subscriptionSubjectRestrictionResolver: () => null,
     });
 
     registry.addClient(senderSocket);
@@ -946,7 +1403,7 @@ describe('outbound subject restriction on forwarding', () => {
   it('excludes restricted peers from getInterestedClients for broadcast routing', async () => {
     registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: [ALLOWED_SUBJECT],
+      allowedSubscriptionSubjects: [ALLOWED_SUBJECT],
     });
 
     const senderSocket = new MockWebSocket();
@@ -966,11 +1423,11 @@ describe('outbound subject restriction on forwarding', () => {
 
     const registry = new ClientRegistry({
       debug: false,
-      subjectRestrictionResolver: (client) => {
+      subscriptionSubjectRestrictionResolver: (client) => {
         const ctx = auth.getReceiveContext?.(client);
         const peerId = ctx?.peer?.id;
         if (!peerId) return null;
-        return resolveHmacIdentityAllowedSubjects(peerId);
+        return resolveHmacIdentityAllowedSubscriptionSubjects(peerId);
       },
     });
 
@@ -993,7 +1450,7 @@ describe('outbound subject restriction on forwarding', () => {
   it('uses live registry data, not stale snapshot, after revocation', async () => {
     const cleanup = registerHmacIdentitySecret(BOOTSTRAP_IDENTITY, BOOTSTRAP_SECRET, {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: [ALLOWED_SUBJECT],
+      allowedSubscriptionSubjects: [ALLOWED_SUBJECT],
     });
 
     const senderSocket = new MockWebSocket();
@@ -1014,11 +1471,11 @@ describe('outbound subject restriction on forwarding', () => {
 
     const registry = new ClientRegistry({
       debug: false,
-      subjectRestrictionResolver: (client) => {
+      subscriptionSubjectRestrictionResolver: (client) => {
         const ctx = auth.getReceiveContext?.(client);
         const peerId = ctx?.peer?.id;
         if (!peerId) return null;
-        return resolveHmacIdentityAllowedSubjects(peerId);
+        return resolveHmacIdentityAllowedSubscriptionSubjects(peerId);
       },
     });
 
@@ -1035,7 +1492,7 @@ describe('outbound subject restriction on forwarding', () => {
     // Revoke the identity — cleanup removes the registration entirely.
     cleanup();
 
-    // After revocation, resolveHmacIdentityAllowedSubjects returns null
+    // After revocation, resolveHmacIdentityAllowedSubscriptionSubjects returns null
     // (identity unknown), which means unrestricted — but the socket's auth
     // context still references the identity. The resolver returns null for
     // revoked identities, so the outbound filter should treat them as
@@ -1057,6 +1514,176 @@ describe('outbound subject restriction on forwarding', () => {
     // Inbound revalidation closes the socket on next inbound message.
     const sentToRestricted = sendSafely.mock.calls.filter(([client]) => client === restrictedSocket);
     expect(sentToRestricted).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Outbound required recipient filters
+// ---------------------------------------------------------------------------
+
+describe('outbound required recipient filters', () => {
+  const PROTECTED_SUBJECT = 'execution-attempt.operation.deliver';
+
+  afterEach(() => {
+    clearHmacIdentitySecretsForTesting();
+  });
+
+  it('enforces an attempt filter for events without a subscription and after the last unsubscribe', () => {
+    const senderSocket = new MockWebSocket();
+    const attemptASocket = new MockWebSocket();
+    const attemptBSocket = new MockWebSocket();
+    const sendSafely = vi.fn();
+    const identities = new Map<MockWebSocket, string>([
+      [attemptASocket, 'attempt-a'],
+      [attemptBSocket, 'attempt-b'],
+    ]);
+    registerHmacIdentitySecret('attempt-a', 'attempt-a-secret', {
+      peerKind: 'workflow-execution-attempt',
+      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionAttemptId: 'attempt-a' } },
+    });
+    registerHmacIdentitySecret('attempt-b', 'attempt-b-secret', {
+      peerKind: 'workflow-execution-attempt',
+      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionAttemptId: 'attempt-b' } },
+    });
+    const registry = new ClientRegistry({
+      requiredSubscriptionFilterResolver: (client) => {
+        const identityId = identities.get(client as MockWebSocket);
+        return identityId ? resolveHmacIdentityRequiredSubscriptionFilters(identityId) : null;
+      },
+    });
+    registry.addClient(senderSocket);
+    registry.addClient(attemptASocket);
+    registry.addClient(attemptBSocket);
+
+    const event = {
+      type: 'event' as const,
+      namespace: 'execution-attempt',
+      subject: 'operation.deliver',
+      messageId: 'attempt-filtered-event',
+      payload: { executionAttemptId: 'attempt-a' },
+    };
+    registry.forwardEventToClients(senderSocket, event, sendSafely);
+    expect(sendSafely).toHaveBeenCalledWith(attemptASocket, expect.any(String));
+    expect(sendSafely.mock.calls.some(([client]) => client === attemptBSocket)).toBe(false);
+
+    registry.handleSubscribeMessage(attemptBSocket, {
+      type: 'subscribe',
+      subjects: { [PROTECTED_SUBJECT]: [100] },
+      deliveryClasses: {},
+    });
+    registry.handleUnsubscribeMessage(attemptBSocket, { [PROTECTED_SUBJECT]: [] });
+    sendSafely.mockClear();
+
+    registry.forwardEventToClients(senderSocket, event, sendSafely);
+    expect(sendSafely).toHaveBeenCalledWith(attemptASocket, expect.any(String));
+    expect(sendSafely.mock.calls.some(([client]) => client === attemptBSocket)).toBe(false);
+  });
+
+  it('applies replaced live policy without resubscribing and retains peer filters', async () => {
+    const identityId = 'live-policy-identity';
+    const secret = 'live-policy-secret';
+    const socket = new MockWebSocket();
+    const auth = makeAuth({
+      getReceiveContext: () => ({
+        transportName: 'websocket',
+        peer: { kind: 'test-peer', id: identityId, authenticated: true },
+      }),
+    });
+    const registry = new ClientRegistry({
+      requiredSubscriptionFilterResolver: () => resolveHmacIdentityRequiredSubscriptionFilters(identityId),
+    });
+    registry.addClient(socket);
+    registerHmacIdentitySecret(identityId, secret, {
+      peerKind: 'workflow-execution-attempt',
+      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionAttemptId: 'attempt-a' } },
+    });
+    await routeMessage(
+      {
+        type: 'subscribe',
+        subjects: { [PROTECTED_SUBJECT]: [100] },
+        deliveryClasses: {},
+        filters: { [PROTECTED_SUBJECT]: { kind: 'expected' } },
+      },
+      socket,
+      makeDeps({ auth, registry }),
+    );
+    const payload = { executionAttemptId: 'attempt-b', kind: 'expected' };
+    expect(registry.getInterestedClients(PROTECTED_SUBJECT, payload)).toEqual([]);
+    registerHmacIdentitySecret(identityId, secret, {
+      peerKind: 'workflow-execution-attempt',
+      requiredSubscriptionFilters: {
+        [PROTECTED_SUBJECT]: { executionAttemptId: { $in: ['attempt-a', 'attempt-b'] } },
+      },
+    });
+    expect(registry.getInterestedClients(PROTECTED_SUBJECT, payload)).toEqual([socket]);
+    expect(registry.getInterestedRequestClients(PROTECTED_SUBJECT, payload)).toEqual([socket]);
+    expect(registry.getInterestedClients(PROTECTED_SUBJECT, { ...payload, kind: 'unwanted' })).toEqual([]);
+    registerHmacIdentitySecret(identityId, secret, {
+      peerKind: 'workflow-execution-attempt',
+      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionAttemptId: 'attempt-c' } },
+    });
+    expect(registry.getInterestedClients(PROTECTED_SUBJECT, payload)).toEqual([]);
+    expect(registry.getInterestedRequestClients(PROTECTED_SUBJECT, payload)).toEqual([]);
+  });
+
+  it('enforces an attempt filter for client-originated broadcasts without subscriptions', async () => {
+    const senderSocket = new MockWebSocket();
+    const attemptASocket = new MockWebSocket();
+    const attemptBSocket = new MockWebSocket();
+    const sendSafely = vi.fn();
+    const identities = new Map<MockWebSocket, string>([
+      [senderSocket, 'authority'],
+      [attemptASocket, 'attempt-a'],
+      [attemptBSocket, 'attempt-b'],
+    ]);
+    registerHmacIdentitySecret('authority', 'authority-secret', {
+      peerKind: 'workflow-authority',
+      allowedMessageSubjects: [PROTECTED_SUBJECT],
+    });
+    registerHmacIdentitySecret('attempt-a', 'attempt-a-secret', {
+      peerKind: 'workflow-execution-attempt',
+      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionAttemptId: 'attempt-a' } },
+    });
+    registerHmacIdentitySecret('attempt-b', 'attempt-b-secret', {
+      peerKind: 'workflow-execution-attempt',
+      requiredSubscriptionFilters: { [PROTECTED_SUBJECT]: { executionAttemptId: 'attempt-b' } },
+    });
+    const auth = makeAuth({
+      getReceiveContext: (socket) => {
+        const identityId = identities.get(socket as MockWebSocket);
+        return identityId
+          ? { transportName: 'websocket', peer: { kind: 'test-peer', id: identityId, authenticated: true } }
+          : undefined;
+      },
+    });
+    const registry = new ClientRegistry({
+      requiredSubscriptionFilterResolver: (client) => {
+        const identityId = identities.get(client as MockWebSocket);
+        return identityId ? resolveHmacIdentityRequiredSubscriptionFilters(identityId) : null;
+      },
+    });
+    registry.addClient(senderSocket);
+    registry.addClient(attemptASocket);
+    registry.addClient(attemptBSocket);
+
+    await routeMessage(
+      {
+        type: 'broadcast',
+        namespace: 'execution-attempt',
+        subject: 'operation.deliver',
+        correlationId: 'attempt-filtered-broadcast',
+        messageId: 'attempt-filtered-broadcast-id',
+        payload: { executionAttemptId: 'attempt-a' },
+      },
+      senderSocket,
+      makeDeps({ auth, registry, sendSafely }),
+    );
+
+    expect(sendSafely).toHaveBeenCalledWith(
+      attemptASocket,
+      expect.stringContaining('"correlationId":"attempt-filtered-broadcast"'),
+    );
+    expect(sendSafely.mock.calls.some(([client]) => client === attemptBSocket)).toBe(false);
   });
 });
 

@@ -3,7 +3,9 @@ import {
   captureHmacIdentitySecretCleanup,
   clearHmacIdentitySecretsForTesting,
   registerHmacIdentitySecret,
-  resolveHmacIdentityAllowedSubjects,
+  resolveHmacIdentityAllowedMessageSubjects,
+  resolveHmacIdentityAllowedSubscriptionSubjects,
+  resolveHmacIdentityRequiredSubscriptionFilters,
   resolveHmacIdentityPeer,
   resolveHmacIdentitySecret,
   rotateHmacIdentitySecret,
@@ -283,52 +285,110 @@ describe('rotateHmacIdentitySecret', () => {
 });
 
 // ---------------------------------------------------------------------------
-// allowedSubjects — subject restriction for restricted identities
+// Directional subject restrictions
 // ---------------------------------------------------------------------------
 
-describe('allowedSubjects restriction', () => {
-  it('resolves allowed subjects when registered', () => {
-    const identityId = 'bootstrap-identity';
-    registerHmacIdentitySecret(identityId, 'bootstrap-secret', {
-      peerKind: 'worker-bootstrap',
-      allowedSubjects: ['worker.control.bootstrap.claim'],
-    });
-
-    expect(resolveHmacIdentityAllowedSubjects(identityId)).toEqual(new Set(['worker.control.bootstrap.claim']));
-  });
-
-  it('returns null for identities without allowedSubjects', () => {
+describe('directional subject restrictions', () => {
+  it('leaves both directions unrestricted when neither directional field is supplied', () => {
     const identityId = 'unrestricted-identity';
     registerHmacIdentitySecret(identityId, 'secret', { peerKind: 'test-identity' });
 
-    expect(resolveHmacIdentityAllowedSubjects(identityId)).toBeNull();
+    expect(resolveHmacIdentityAllowedMessageSubjects(identityId)).toBeNull();
+    expect(resolveHmacIdentityAllowedSubscriptionSubjects(identityId)).toBeNull();
   });
 
-  it('returns null for unknown identities', () => {
-    expect(resolveHmacIdentityAllowedSubjects('no-such-id')).toBeNull();
+  it.each([
+    {
+      name: 'message subjects',
+      options: { allowedMessageSubjects: ['worker.control.bootstrap.claim'] },
+      expectedConfigured: new Set(['worker.control.bootstrap.claim']),
+      resolveConfigured: resolveHmacIdentityAllowedMessageSubjects,
+      resolveOmitted: resolveHmacIdentityAllowedSubscriptionSubjects,
+    },
+    {
+      name: 'subscription subjects',
+      options: { allowedSubscriptionSubjects: ['workflow.control.cancel'] },
+      expectedConfigured: new Set(['workflow.control.cancel']),
+      resolveConfigured: resolveHmacIdentityAllowedSubscriptionSubjects,
+      resolveOmitted: resolveHmacIdentityAllowedMessageSubjects,
+    },
+  ])('denies the omitted direction when only $name are supplied', ({
+    options,
+    expectedConfigured,
+    resolveConfigured,
+    resolveOmitted,
+  }) => {
+    const identityId = 'directional-identity';
+    registerHmacIdentitySecret(identityId, 'secret', {
+      peerKind: 'test-identity',
+      ...options,
+    });
+
+    expect(resolveConfigured(identityId)).toEqual(expectedConfigured);
+    expect(resolveOmitted(identityId)).toEqual(new Set());
   });
 
-  it('preserves allowedSubjects across rotation', () => {
+  it('preserves both directional grants across rotation', () => {
     const identityId = 'rotate-restricted';
     registerHmacIdentitySecret(identityId, 'old-secret', {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: ['worker.control.bootstrap.claim'],
+      allowedMessageSubjects: ['worker.control.bootstrap.claim'],
+      allowedSubscriptionSubjects: ['workflow.control.cancel'],
     });
 
     rotateHmacIdentitySecret(identityId, 'new-secret');
 
-    expect(resolveHmacIdentityAllowedSubjects(identityId)).toEqual(new Set(['worker.control.bootstrap.claim']));
+    expect(resolveHmacIdentityAllowedMessageSubjects(identityId)).toEqual(new Set(['worker.control.bootstrap.claim']));
+    expect(resolveHmacIdentityAllowedSubscriptionSubjects(identityId)).toEqual(new Set(['workflow.control.cancel']));
   });
 
-  it('cleanup removes allowedSubjects along with registration', () => {
-    const identityId = 'cleanup-restricted';
-    const cleanup = registerHmacIdentitySecret(identityId, 'secret', {
-      peerKind: 'worker-bootstrap',
-      allowedSubjects: ['worker.control.bootstrap.claim'],
+  it('snapshots, freezes, preserves, and revokes required subscription filters', () => {
+    const identityId = 'rotate-filtered';
+    const requiredSubscriptionFilters = {
+      'execution-attempt.operation.deliver': { executionAttemptId: 'attempt-a' },
+    };
+    const cleanup = registerHmacIdentitySecret(identityId, 'old-secret', {
+      peerKind: 'workflow-execution-attempt',
+      allowedMessageSubjects: [],
+      allowedSubscriptionSubjects: ['execution-attempt.operation.deliver'],
+      requiredSubscriptionFilters,
     });
+    requiredSubscriptionFilters['execution-attempt.operation.deliver']!.executionAttemptId = 'attempt-b';
+
+    const registered = resolveHmacIdentityRequiredSubscriptionFilters(identityId);
+    expect(registered).toEqual({
+      'execution-attempt.operation.deliver': { executionAttemptId: 'attempt-a' },
+    });
+    expect(Object.isFrozen(registered)).toBe(true);
+    expect(Object.isFrozen(registered?.['execution-attempt.operation.deliver'])).toBe(true);
+
+    const rotatedCleanup = rotateHmacIdentitySecret(identityId, 'new-secret');
+    expect(resolveHmacIdentityRequiredSubscriptionFilters(identityId)).toEqual(registered);
 
     cleanup();
+    expect(resolveHmacIdentityRequiredSubscriptionFilters(identityId)).toEqual(registered);
+    rotatedCleanup();
+    expect(resolveHmacIdentityRequiredSubscriptionFilters(identityId)).toBeNull();
+  });
 
-    expect(resolveHmacIdentityAllowedSubjects(identityId)).toBeNull();
+  it('rejects wildcard required subscription filter keys', () => {
+    expect(() =>
+      registerHmacIdentitySecret('wildcard-policy', 'secret', {
+        peerKind: 'test-identity',
+        requiredSubscriptionFilters: { 'execution-attempt.*': { executionAttemptId: 'attempt-a' } },
+      }),
+    ).toThrow('registerHmacIdentitySecret requires exact full subjects for requiredSubscriptionFilters');
+  });
+
+  it('rejects obsolete allowedSubjects at runtime', () => {
+    expect(() =>
+      Reflect.apply(registerHmacIdentitySecret, undefined, [
+        'obsolete-subject-grant',
+        'secret',
+        { peerKind: 'test-identity', allowedSubjects: ['worker.control.bootstrap.claim'] },
+      ]),
+    ).toThrow(
+      'registerHmacIdentitySecret no longer accepts allowedSubjects; use allowedMessageSubjects and/or allowedSubscriptionSubjects',
+    );
   });
 });

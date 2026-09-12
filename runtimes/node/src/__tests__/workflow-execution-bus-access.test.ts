@@ -2,11 +2,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   clearHmacIdentitySecretsForTesting,
   registerHmacIdentitySecret,
-  resolveHmacIdentityAllowedSubjects,
+  resolveHmacIdentityAllowedMessageSubjects,
+  resolveHmacIdentityAllowedSubscriptionSubjects,
   resolveHmacIdentityPeer,
 } from '@makaio/bus-transport-websocket';
 import {
-  buildExecutionAttemptAllowedSubjects,
+  buildExecutionAttemptSubjectAccess,
   captureWorkflowExecutionBusSecretCleanup,
   mintOrRotateWorkflowExecutionBusSecret,
   mintWorkflowExecutionBusSecret,
@@ -312,62 +313,69 @@ describe('workflow execution bus access', () => {
     });
   });
 
-  // ── Allowed subjects ───────────────────────────────────────
+  // ── Directional subject access ──────────────────────────────
 
-  describe('allowedSubjects', () => {
-    it('registers execution-attempt identity with allowedSubjects', () => {
+  describe('directional subject access', () => {
+    it('registers execution-attempt identity with operational message and endpoint subscription grants', () => {
       mintWorkflowExecutionBusSecret({
         executionAttemptId: 'attempt-1',
         executionId: 'exec-1',
       });
 
-      const allowed = resolveHmacIdentityAllowedSubjects('attempt-1');
-      expect(allowed).not.toBeNull();
-      // Verify static subjects are present.
-      expect(allowed!.has('execution-attempt.runtime.register')).toBe(true);
-      expect(allowed!.has('execution-attempt.instruction.get')).toBe(true);
-      expect(allowed!.has('execution-attempt.operation.admit')).toBe(true);
-      expect(allowed!.has('execution-attempt.operation.report')).toBe(true);
-      expect(allowed!.has('execution-attempt.operation.deliver')).toBe(true);
-      expect(allowed!.has('execution-attempt.outcome.submit')).toBe(true);
-      expect(allowed!.has('worker.runtime.inputs.get')).toBe(true);
-      expect(allowed!.has('worker.control.outcome.submit')).toBe(true);
-      expect(allowed!.has('workflow.getRunContext')).toBe(true);
-      expect(allowed!.has('storage:workflow.getExecution')).toBe(true);
-      expect(allowed!.has('workflow.frame.started')).toBe(true);
-      expect(allowed!.has('workflow.gate.suspended')).toBe(true);
-      expect(allowed!.has('workflow.state.get')).toBe(true);
-      expect(allowed!.has('artifact.kind.list')).toBe(true);
-      expect(allowed!.has('artifact.query')).toBe(true);
-      expect(allowed!.has('artifact.resolve')).toBe(true);
-      expect(allowed!.has('subagent.spawn')).toBe(true);
-      expect(allowed!.has('subagent.getStatus')).toBe(true);
+      const allowedMessageSubjects = resolveHmacIdentityAllowedMessageSubjects('attempt-1');
+      const allowedSubscriptionSubjects = resolveHmacIdentityAllowedSubscriptionSubjects('attempt-1');
+      expect(allowedMessageSubjects).not.toBeNull();
+      expect(allowedSubscriptionSubjects).toEqual(
+        new Set([
+          'execution-attempt.operation.deliver',
+          'execution-attempt.control.deliver',
+          'workflow.gate.respond',
+          'workflow.exec-1.cancel',
+        ]),
+      );
+      for (const subject of [
+        'execution-attempt.runtime.register',
+        'execution-attempt.instruction.get',
+        'execution-attempt.operation.admit',
+        'execution-attempt.operation.report',
+        'execution-attempt.outcome.submit',
+        'execution-attempt.control.report',
+        'worker.runtime.inputs.get',
+        'worker.control.outcome.submit',
+        'workflow.getRunContext',
+        'storage:workflow.getExecution',
+        'workflow.frame.started',
+        'workflow.gate.suspended',
+        'workflow.state.get',
+        'artifact.kind.list',
+        'artifact.query',
+        'artifact.resolve',
+        'subagent.spawn',
+        'subagent.getStatus',
+      ]) {
+        expect(allowedMessageSubjects!.has(subject)).toBe(true);
+      }
     });
 
-    it('allowedSubjects includes the per-execution cancel subject', () => {
-      const executionId = 'exec-cancel-test';
+    it('denies sending endpoint subjects that the attempt may only subscribe to', () => {
       mintWorkflowExecutionBusSecret({
-        executionAttemptId: 'attempt-cancel',
-        executionId,
+        executionAttemptId: 'attempt-directional-denial',
+        executionId: 'exec-directional-denial',
       });
 
-      const allowed = resolveHmacIdentityAllowedSubjects('attempt-cancel');
-      expect(allowed).not.toBeNull();
-      expect(allowed!.has(`workflow.${executionId}.cancel`)).toBe(true);
-    });
-
-    it('allowedSubjects does NOT include workflow-definition mutation subjects', () => {
-      mintWorkflowExecutionBusSecret({
-        executionAttemptId: 'attempt-no-mutation',
-        executionId: 'exec-1',
-      });
-
-      const allowed = resolveHmacIdentityAllowedSubjects('attempt-no-mutation');
-      expect(allowed).not.toBeNull();
-      // Mutation/admin subjects must never appear.
-      expect(allowed!.has('workflow.define')).toBe(false);
-      expect(allowed!.has('workflow.delete')).toBe(false);
-      expect(allowed!.has('workflow.create')).toBe(false);
+      const allowedMessageSubjects = resolveHmacIdentityAllowedMessageSubjects('attempt-directional-denial');
+      const allowedSubscriptionSubjects = resolveHmacIdentityAllowedSubscriptionSubjects('attempt-directional-denial');
+      expect(allowedMessageSubjects).not.toBeNull();
+      expect(allowedSubscriptionSubjects).not.toBeNull();
+      for (const subject of [
+        'execution-attempt.operation.deliver',
+        'execution-attempt.control.deliver',
+        'workflow.gate.respond',
+        'workflow.exec-directional-denial.cancel',
+      ]) {
+        expect(allowedMessageSubjects!.has(subject)).toBe(false);
+        expect(allowedSubscriptionSubjects!.has(subject)).toBe(true);
+      }
     });
 
     it('keeps selected-artifact reads and existing writes limited to explicit operations', () => {
@@ -376,9 +384,9 @@ describe('workflow execution bus access', () => {
         executionId: 'exec-artifact-read',
       });
 
-      const allowed = resolveHmacIdentityAllowedSubjects('attempt-artifact-read');
-      expect(allowed).not.toBeNull();
-      expect([...allowed!].filter((subject) => subject.startsWith('artifact.')).sort()).toStrictEqual([
+      const allowedMessageSubjects = resolveHmacIdentityAllowedMessageSubjects('attempt-artifact-read');
+      expect(allowedMessageSubjects).not.toBeNull();
+      expect([...allowedMessageSubjects!].filter((subject) => subject.startsWith('artifact.')).sort()).toStrictEqual([
         'artifact.create',
         'artifact.kind.list',
         'artifact.patch',
@@ -389,48 +397,80 @@ describe('workflow execution bus access', () => {
       ]);
     });
 
-    it('preserves allowedSubjects after rotation', () => {
+    it('preserves both directional grants after rotation', () => {
       const executionId = 'exec-rot-allowed';
       mintWorkflowExecutionBusSecret({
         executionAttemptId: 'attempt-rot-allowed',
         executionId,
       });
 
-      const beforeRotation = resolveHmacIdentityAllowedSubjects('attempt-rot-allowed');
-      expect(beforeRotation).not.toBeNull();
+      const messagesBeforeRotation = resolveHmacIdentityAllowedMessageSubjects('attempt-rot-allowed');
+      const subscriptionsBeforeRotation = resolveHmacIdentityAllowedSubscriptionSubjects('attempt-rot-allowed');
+      expect(messagesBeforeRotation).not.toBeNull();
+      expect(subscriptionsBeforeRotation).not.toBeNull();
 
       rotateWorkflowExecutionBusSecret({
         executionAttemptId: 'attempt-rot-allowed',
         executionId,
       });
 
-      const afterRotation = resolveHmacIdentityAllowedSubjects('attempt-rot-allowed');
-      expect(afterRotation).not.toBeNull();
-      expect(afterRotation).toEqual(beforeRotation);
+      expect(resolveHmacIdentityAllowedMessageSubjects('attempt-rot-allowed')).toEqual(messagesBeforeRotation);
+      expect(resolveHmacIdentityAllowedSubscriptionSubjects('attempt-rot-allowed')).toEqual(
+        subscriptionsBeforeRotation,
+      );
     });
   });
 
-  // ── buildExecutionAttemptAllowedSubjects ────────────────────
+  describe('legacy allowedSubjects rejection', () => {
+    it('rejects stale runtime-shaped allowedSubjects through every public registration helper', () => {
+      const staleAccess = {
+        executionAttemptId: 'attempt-stale-allowed-subjects',
+        executionId: 'exec-stale-allowed-subjects',
+        allowedSubjects: ['execution-attempt.operation.deliver'],
+      };
 
-  describe('buildExecutionAttemptAllowedSubjects', () => {
-    it('grants only the exact Worker and Attempt protocol subjects, without authority events or wildcards', () => {
-      const subjects = buildExecutionAttemptAllowedSubjects('exec-protocol');
+      expect(() =>
+        registerWorkflowExecutionBusSecret({
+          ...staleAccess,
+          secret: 'stale-runtime-shaped-secret',
+        }),
+      ).toThrow(/no longer accepts allowedSubjects/);
+      expect(() => mintWorkflowExecutionBusSecret(staleAccess)).toThrow(/no longer accepts allowedSubjects/);
+      expect(() => mintOrRotateWorkflowExecutionBusSecret(staleAccess)).toThrow(/no longer accepts allowedSubjects/);
+      expect(resolveWorkflowExecutionBusSecret(staleAccess.executionAttemptId)).toBeUndefined();
+    });
+  });
+
+  // ── buildExecutionAttemptSubjectAccess ──────────────────────
+
+  describe('buildExecutionAttemptSubjectAccess', () => {
+    it('grants operational message subjects separately from delivery subscriptions', () => {
+      const { allowedMessageSubjects, allowedSubscriptionSubjects } =
+        buildExecutionAttemptSubjectAccess('exec-protocol');
       expect(
-        subjects.filter((subject) => subject.startsWith('execution-attempt.') || subject.startsWith('worker.')),
+        allowedMessageSubjects.filter(
+          (subject) => subject.startsWith('execution-attempt.') || subject.startsWith('worker.'),
+        ),
       ).toStrictEqual([
         'execution-attempt.runtime.register',
         'execution-attempt.bootstrap.awaitStart',
         'execution-attempt.instruction.get',
         'execution-attempt.operation.admit',
         'execution-attempt.operation.report',
-        'execution-attempt.operation.deliver',
         'execution-attempt.outcome.submit',
-        'execution-attempt.control.deliver',
         'execution-attempt.control.report',
         'worker.runtime.inputs.get',
         'worker.control.outcome.submit',
       ]);
-      expect(subjects.some((subject) => subject.includes('*'))).toBe(false);
+      expect(allowedSubscriptionSubjects).toStrictEqual([
+        'execution-attempt.operation.deliver',
+        'execution-attempt.control.deliver',
+        'workflow.gate.respond',
+        'workflow.exec-protocol.cancel',
+      ]);
+      expect([...allowedMessageSubjects, ...allowedSubscriptionSubjects].some((subject) => subject.includes('*'))).toBe(
+        false,
+      );
       for (const subject of [
         'execution-attempt.runtime.ready',
         'execution-attempt.operation.admitted',
@@ -439,79 +479,89 @@ describe('workflow execution bus access', () => {
         'worker.control.bootstrap.claim',
         'worker.lifecycle.ready',
       ]) {
-        expect(subjects).not.toContain(subject);
+        expect(allowedMessageSubjects).not.toContain(subject);
+        expect(allowedSubscriptionSubjects).not.toContain(subject);
       }
     });
 
-    it('returns correct subjects including dynamic cancel subject', () => {
+    it('puts the dynamic cancel subject only in subscription grants', () => {
       const executionId = 'exec-build-test';
-      const subjects = buildExecutionAttemptAllowedSubjects(executionId);
+      const { allowedMessageSubjects, allowedSubscriptionSubjects } = buildExecutionAttemptSubjectAccess(executionId);
 
-      // Must be an array of strings.
-      expect(Array.isArray(subjects)).toBe(true);
-      expect(subjects.length).toBeGreaterThan(0);
+      expect(Array.isArray(allowedMessageSubjects)).toBe(true);
+      expect(Array.isArray(allowedSubscriptionSubjects)).toBe(true);
+      expect(allowedMessageSubjects.length).toBeGreaterThan(0);
 
-      // Check representative subjects from each category.
-      expect(subjects).toContain('execution-attempt.runtime.register');
-      expect(subjects).toContain('execution-attempt.operation.admit');
-      expect(subjects).toContain('execution-attempt.operation.deliver');
-      expect(subjects).toContain('worker.control.outcome.submit');
-      expect(subjects).toContain('workflow.getRunContext');
-      expect(subjects).toContain('adapterSubsystem.listAdapters');
-      expect(subjects).toContain('workflow.bootstrapAuthorityState');
+      expect(allowedMessageSubjects).toContain('execution-attempt.runtime.register');
+      expect(allowedMessageSubjects).toContain('execution-attempt.operation.admit');
+      expect(allowedMessageSubjects).toContain('worker.control.outcome.submit');
+      expect(allowedMessageSubjects).toContain('workflow.getRunContext');
+      expect(allowedMessageSubjects).toContain('adapterSubsystem.listAdapters');
+      expect(allowedMessageSubjects).toContain('workflow.bootstrapAuthorityState');
 
       // Storage subjects
-      expect(subjects).toContain('storage:workflow.getExecution');
-      expect(subjects).toContain('storage:workflow.setFrame');
-      expect(subjects).toContain('storage:workflow.setSpan');
-      expect(subjects).toContain('storage:workflow.listFrames');
-      expect(subjects).toContain('storage:workflow.getGateInstance');
-      expect(subjects).toContain('storage:workflow.setGateInstance');
+      expect(allowedMessageSubjects).toContain('storage:workflow.getExecution');
+      expect(allowedMessageSubjects).toContain('storage:workflow.setFrame');
+      expect(allowedMessageSubjects).toContain('storage:workflow.setSpan');
+      expect(allowedMessageSubjects).toContain('storage:workflow.listFrames');
+      expect(allowedMessageSubjects).toContain('storage:workflow.getGateInstance');
+      expect(allowedMessageSubjects).toContain('storage:workflow.setGateInstance');
 
       // Lifecycle events
-      expect(subjects).toContain('workflow.frame.started');
-      expect(subjects).toContain('workflow.frame.completed');
-      expect(subjects).toContain('workflow.frame.failed');
-      expect(subjects).toContain('workflow.frame.sessionLinked');
-      expect(subjects).toContain('workflow.execution.progress');
+      expect(allowedMessageSubjects).toContain('workflow.frame.started');
+      expect(allowedMessageSubjects).toContain('workflow.frame.completed');
+      expect(allowedMessageSubjects).toContain('workflow.frame.failed');
+      expect(allowedMessageSubjects).toContain('workflow.frame.sessionLinked');
+      expect(allowedMessageSubjects).toContain('workflow.execution.progress');
 
-      // Gate subjects
-      expect(subjects).toContain('workflow.gate.suspended');
-      expect(subjects).toContain('workflow.gate.resumed');
-      expect(subjects).toContain('workflow.gate.resolved');
-      expect(subjects).toContain('workflow.gate.respond');
+      // Gate events may be emitted by the attempt; response handling is an inbound endpoint.
+      expect(allowedMessageSubjects).toContain('workflow.gate.suspended');
+      expect(allowedMessageSubjects).toContain('workflow.gate.resumed');
+      expect(allowedMessageSubjects).toContain('workflow.gate.resolved');
+      expect(allowedMessageSubjects).not.toContain('workflow.gate.respond');
 
       // State RPC
-      expect(subjects).toContain('workflow.state.get');
-      expect(subjects).toContain('workflow.state.patch');
+      expect(allowedMessageSubjects).toContain('workflow.state.get');
+      expect(allowedMessageSubjects).toContain('workflow.state.patch');
 
       // Delegation
-      expect(subjects).toContain('workflow.resolveAgent');
-      expect(subjects).toContain('workflow.resolveRole');
+      expect(allowedMessageSubjects).toContain('workflow.resolveAgent');
+      expect(allowedMessageSubjects).toContain('workflow.resolveRole');
 
       // Artifact subjects
-      expect(subjects).toContain('artifact.kind.list');
-      expect(subjects).toContain('artifact.query');
-      expect(subjects).toContain('artifact.resolve');
-      expect(subjects).toContain('artifact.create');
-      expect(subjects).toContain('artifact.revise');
-      expect(subjects).toContain('artifact.patch');
-      expect(subjects).toContain('workflow.artifact.updated');
+      expect(allowedMessageSubjects).toContain('artifact.kind.list');
+      expect(allowedMessageSubjects).toContain('artifact.query');
+      expect(allowedMessageSubjects).toContain('artifact.resolve');
+      expect(allowedMessageSubjects).toContain('artifact.create');
+      expect(allowedMessageSubjects).toContain('artifact.revise');
+      expect(allowedMessageSubjects).toContain('artifact.patch');
+      expect(allowedMessageSubjects).toContain('workflow.artifact.updated');
 
       // Subagent subjects
-      expect(subjects).toContain('subagent.spawn');
-      expect(subjects).toContain('subagent.await');
-      expect(subjects).toContain('subagent.getStatus');
-      expect(subjects).toContain('subagent.kill');
+      expect(allowedMessageSubjects).toContain('subagent.spawn');
+      expect(allowedMessageSubjects).toContain('subagent.await');
+      expect(allowedMessageSubjects).toContain('subagent.getStatus');
+      expect(allowedMessageSubjects).toContain('subagent.kill');
 
-      // Dynamic cancel subject
-      expect(subjects).toContain(`workflow.${executionId}.cancel`);
+      expect(allowedMessageSubjects).not.toContain('execution-attempt.operation.deliver');
+      expect(allowedMessageSubjects).not.toContain('execution-attempt.control.deliver');
+      expect(allowedMessageSubjects).not.toContain(`workflow.${executionId}.cancel`);
+      expect(allowedSubscriptionSubjects).toStrictEqual([
+        'execution-attempt.operation.deliver',
+        'execution-attempt.control.deliver',
+        'workflow.gate.respond',
+        `workflow.${executionId}.cancel`,
+      ]);
     });
 
     it('does NOT include mutation or admin subjects', () => {
-      const subjects = buildExecutionAttemptAllowedSubjects('exec-1');
-      expect(subjects).not.toContain('workflow.define');
-      expect(subjects).not.toContain('workflow.delete');
+      const { allowedMessageSubjects, allowedSubscriptionSubjects } = buildExecutionAttemptSubjectAccess('exec-1');
+      expect(allowedMessageSubjects).not.toContain('workflow.define');
+      expect(allowedMessageSubjects).not.toContain('workflow.delete');
+      expect(allowedMessageSubjects).not.toContain('workflow.create');
+      expect(allowedSubscriptionSubjects).not.toContain('workflow.define');
+      expect(allowedSubscriptionSubjects).not.toContain('workflow.delete');
+      expect(allowedSubscriptionSubjects).not.toContain('workflow.create');
     });
   });
 });

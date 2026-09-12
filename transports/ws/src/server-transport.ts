@@ -20,7 +20,10 @@ import { BroadcastAggregator } from './broadcast-aggregator.js';
 import { buildSubscribeMessage, buildUnsubscribeMessage, type SubscriptionEntry } from './subscribe-message.js';
 import { ClientRegistry } from './client-registry.js';
 import { setupClientConnection, routeRequestToClients } from './server-client-setup.js';
-import { resolveHmacIdentityAllowedSubjects } from './auth/identity-secret-registry.js';
+import {
+  resolveHmacIdentityAllowedSubscriptionSubjects,
+  resolveHmacIdentityRequiredSubscriptionFilters,
+} from './auth/identity-secret-registry.js';
 
 export interface ServerTransportOptions {
   websocket: WebSocketServerLike;
@@ -79,12 +82,20 @@ export class ServerTransport implements BusTransport {
     this.debug = debug;
     this.registry = new ClientRegistry({
       debug,
-      subjectRestrictionResolver: auth
+      subscriptionSubjectRestrictionResolver: auth
         ? (client) => {
             const ctx = auth.getReceiveContext?.(client);
             const peerId = ctx?.peer?.id;
             if (peerId === undefined) return null;
-            return resolveHmacIdentityAllowedSubjects(peerId);
+            return resolveHmacIdentityAllowedSubscriptionSubjects(peerId);
+          }
+        : undefined,
+      requiredSubscriptionFilterResolver: auth
+        ? (client) => {
+            const ctx = auth.getReceiveContext?.(client);
+            const peerId = ctx?.peer?.id;
+            if (peerId === undefined) return null;
+            return resolveHmacIdentityRequiredSubscriptionFilters(peerId);
           }
         : undefined,
       socketAuthChecker: auth ? (client) => auth.isSocketAuthenticated?.(client) ?? true : undefined,

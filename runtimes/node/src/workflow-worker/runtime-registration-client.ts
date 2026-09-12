@@ -137,18 +137,6 @@ export interface FencedAttemptEndpoint {
  * visible to the authority before the installer resolves, and one cleanup path
  * that also runs on installation abort or failure. This owns exactly that, and
  * leaves answering a delivery to the caller's handler.
- *
- * Trust boundary: the filter is applied by the bus in this process only. The
- * transport does not receive handler filters with the subscription, and the
- * per-identity subject allowlist admits every attempt credential to the same
- * static subjects, so the authority's server sees every live runtime as an
- * unfiltered responder and routes in connection order. A runtime that honours
- * its filter never answers for another attempt; a compromised attempt
- * credential that installs an unfiltered handler could answer another attempt's
- * probe, and on the control subject it could abort another attempt's workload
- * rather than only answering its probe. Enforcing the attempt and incarnation
- * at the authenticated transport boundary is a framework gap, not something a
- * client-side filter can close (TODO FACT-153).
  * @param bus - Connected runtime bus the endpoint is installed on.
  * @param identity - Attempt and incarnation this runtime is; the delivery filter.
  * @param subscribe - Installs the caller's handler on the filtered bus; returns its unsubscribe.
