@@ -138,6 +138,21 @@ function isSerializableValue(value: unknown): boolean {
 }
 
 /**
+ * Text for a thrown value that is not an `Error` and carries no string `message`.
+ * `String()` throws for objects without a callable `toString` (for example
+ * `Object.create(null)`); an error response must still leave the handler.
+ * @param value - Any thrown value
+ * @returns `String(value)`, or a placeholder when that conversion throws
+ */
+function describeThrownValue(value: unknown): string {
+  try {
+    return String(value);
+  } catch {
+    return 'Unknown error';
+  }
+}
+
+/**
  * Collects own enumerable properties from `source`, skipping keys in `skip`
  * and values that are not serializable. Reads values through
  * `Object.getOwnPropertyDescriptor` so getter-backed properties are handled
@@ -177,7 +192,8 @@ function collectStructuredProps(source: object, skip: ReadonlySet<string>): Reco
  * own `data` bag) are collected the same way. The `cause` promotion rule
  * applies to `Error` inputs only.
  *
- * **`null` / primitives** — produce `{ message: String(error) }`.
+ * **`null` / primitives** — produce `{ message: String(error) }`; a value whose
+ * string conversion throws (e.g. `Object.create(null)`) yields `'Unknown error'`.
  *
  * Standard `Error` fields (`message`, `name`, `stack`, `cause`), the
  * already-top-level `subject` and `code`, and non-JSON-safe values (functions,
@@ -189,12 +205,12 @@ function collectStructuredProps(source: object, skip: ReadonlySet<string>): Reco
 export function serializeError(error: unknown): BusTransportError {
   if (!(error instanceof Error)) {
     if (typeof error !== 'object' || error === null) {
-      return { message: String(error) };
+      return { message: describeThrownValue(error) };
     }
     // Plain-object path: lift message/code/subject, collect remaining members.
     const obj = error as Record<string, unknown>;
     const result: BusTransportError = {
-      message: typeof obj['message'] === 'string' ? obj['message'] : String(error),
+      message: typeof obj['message'] === 'string' ? obj['message'] : describeThrownValue(error),
     };
     if (typeof obj['code'] === 'string') result.code = obj['code'];
     if (typeof obj['subject'] === 'string') result.subject = obj['subject'];

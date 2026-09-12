@@ -533,5 +533,14 @@ describe('transportErrorData and findInErrorChain', () => {
       const result = transportErrorData(rebuilt);
       expect(result).toEqual({ retryable: true, extra: 1 });
     });
+
+    it('still produces a payload when the value has no usable string conversion', () => {
+      const nullProto = Object.create(null) as Record<string, unknown>;
+      nullProto['code'] = 'NP';
+      nullProto['retryable'] = false;
+
+      expect(serializeError(nullProto)).toEqual({ message: 'Unknown error', code: 'NP', data: { retryable: false } });
+      expect(serializeError({ toString: 0 })).toEqual({ message: 'Unknown error', data: { toString: 0 } });
+    });
   });
 });
