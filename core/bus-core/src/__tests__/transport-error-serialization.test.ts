@@ -542,5 +542,18 @@ describe('transportErrorData and findInErrorChain', () => {
       expect(serializeError(nullProto)).toEqual({ message: 'Unknown error', code: 'NP', data: { retryable: false } });
       expect(serializeError({ toString: 0 })).toEqual({ message: 'Unknown error', data: { toString: 0 } });
     });
+
+    it('ignores accessor-backed message, code and subject on a thrown plain object', () => {
+      const hostile = { message: 'kept', retryable: true };
+      Object.defineProperty(hostile, 'code', {
+        enumerable: true,
+        get() {
+          throw new Error('getter must not run');
+        },
+      });
+      Object.defineProperty(hostile, 'subject', { enumerable: true, get: () => 'accessor' });
+
+      expect(serializeError(hostile)).toEqual({ message: 'kept', data: { retryable: true } });
+    });
   });
 });

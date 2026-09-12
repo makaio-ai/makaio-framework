@@ -138,6 +138,19 @@ function isSerializableValue(value: unknown): boolean {
 }
 
 /**
+ * Own data property of `source` when it holds a string. Reads the descriptor
+ * instead of the property so an accessor on a thrown plain object cannot run
+ * user code (or throw) while an error response is being built.
+ * @param source - Thrown plain object
+ * @param key - Property name to read
+ * @returns The string value, or `undefined` when absent, non-string, or an accessor
+ */
+function ownStringValue(source: object, key: string): string | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(source, key);
+  return typeof descriptor?.value === 'string' ? descriptor.value : undefined;
+}
+
+/**
  * Text for a thrown value that is not an `Error` and carries no string `message`.
  * `String()` throws for objects without a callable `toString` (for example
  * `Object.create(null)`); an error response must still leave the handler.
@@ -187,9 +200,10 @@ function collectStructuredProps(source: object, skip: ReadonlySet<string>): Reco
  * structured source (`error.cause` when it is an `Error`, else `error` itself)
  * into `data`.
  *
- * **Plain-object inputs** — `message`, `code`, and `subject` string members
- * are lifted to top-level fields; remaining own enumerable props (including an
- * own `data` bag) are collected the same way. The `cause` promotion rule
+ * **Plain-object inputs** — own `message`, `code`, and `subject` string data
+ * properties (accessors are ignored) are lifted to top-level fields; remaining
+ * own enumerable props (including an own `data` bag) are collected the same
+ * way. The `cause` promotion rule
  * applies to `Error` inputs only.
  *
  * **`null` / primitives** — produce `{ message: String(error) }`; a value whose
@@ -208,13 +222,14 @@ export function serializeError(error: unknown): BusTransportError {
       return { message: describeThrownValue(error) };
     }
     // Plain-object path: lift message/code/subject, collect remaining members.
-    const obj = error as Record<string, unknown>;
     const result: BusTransportError = {
-      message: typeof obj['message'] === 'string' ? obj['message'] : describeThrownValue(error),
+      message: ownStringValue(error, 'message') ?? describeThrownValue(error),
     };
-    if (typeof obj['code'] === 'string') result.code = obj['code'];
-    if (typeof obj['subject'] === 'string') result.subject = obj['subject'];
-    const plainData = collectStructuredProps(obj, SKIP_PROPS);
+    const code = ownStringValue(error, 'code');
+    if (code !== undefined) result.code = code;
+    const subject = ownStringValue(error, 'subject');
+    if (subject !== undefined) result.subject = subject;
+    const plainData = collectStructuredProps(error, SKIP_PROPS);
     if (plainData !== undefined) result.data = plainData;
     return result;
   }
