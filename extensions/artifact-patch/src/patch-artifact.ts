@@ -16,6 +16,7 @@ import {
   type ArtifactRepresentations,
   type ArtifactRevision,
 } from '@makaio/contracts';
+import { checkArtifactRelationSourceParts } from '@makaio/contracts/artifact';
 import { ToolErrorCodes, toolError, toolSuccess, type ToolExecutionContext, type ToolResult } from '@makaio/tools-core';
 import { applyArtifactPatch } from './patch-engine.js';
 
@@ -354,6 +355,37 @@ function checkPartIds(
 }
 
 /**
+ * Enforce that locally sourced relations still resolve after a data patch.
+ *
+ * Relations are carried from the base revision because a data-only patch does
+ * not edit them. A removed or duplicated local part must therefore reject both
+ * dry runs and writes before the host receives the patch.
+ * @param data - Patched payload that already satisfies the kind schema.
+ * @param relations - Relations carried by the base revision.
+ * @param registration - Effective registration declaring any addressable-part areas.
+ * @returns A rejection, or undefined when every local relation source resolves uniquely.
+ */
+function checkRelationSources(
+  data: Record<string, unknown>,
+  relations: ArtifactRevision['relations'],
+  registration: ArtifactKindRegistration,
+): ArtifactPatchError | undefined {
+  const issues = checkArtifactRelationSourceParts(registration.addressableParts ?? [], data, relations);
+  if (issues.length === 0) return undefined;
+  const responseIssues = issues.map((issue) => ({
+    path: `relations.${issue.relationIndex}.sourceLocalId`,
+    reason: issue.reason,
+  }));
+  return {
+    code: 'PAYLOAD_INVARIANT_FAILED',
+    message: `The patched result violates the '${registration.kind}' payload invariants.`,
+    issues: responseIssues,
+    repair:
+      'Restore the locally sourced part data, or create a full artifact revision that updates the affected relations; a data-only patch cannot change relations.',
+  };
+}
+
+/**
  * Compile the checker for the registration the patched result is held to.
  * @param registration - Registration whose data schema is compiled.
  * @returns The checker, or the rejection when the declared schema does not compile.
@@ -528,8 +560,11 @@ export async function patchArtifact(
   const invalidPartIds = checkPartIds(applied.application.data, registration);
   if (invalidPartIds) return failed(invalidPartIds);
 
-  // The patch checks `data`, the title, and part-id invariants, nothing beside them. Evidence is
-  // carried over unchanged and a patch cannot add any, so a target
+  const invalidRelationSources = checkRelationSources(applied.application.data, artifact.relations, registration);
+  if (invalidRelationSources) return failed(invalidRelationSources);
+
+  // The patch checks `data`, the title, part identifiers, and carried relation
+  // sources. Evidence is carried over unchanged and a patch cannot add any, so a target
   // registration with a higher `evidenceRequirements.minItems` is a case the
   // host's lifecycle writer rejects at store time, as it does for every other
   // revision-level rule; the patch does not duplicate that writer's checks,

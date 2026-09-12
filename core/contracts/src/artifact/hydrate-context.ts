@@ -81,6 +81,7 @@ function buildRootNode(
  * @param ref - Artifact reference for this node.
  * @param artifact - Full artifact revision data.
  * @param relation - Relation type from parent.
+ * @param sourceLocalId - Optional local identifier of the parent part that owns this relation.
  * @param hint - Render hint for this node.
  * @param refsBySource - Lookup of ref entries by source key.
  * @param artifactByKey - Lookup of resolved artifacts by key.
@@ -91,6 +92,7 @@ function buildResolvedNode(
   ref: ArtifactRef,
   artifact: ArtifactRevision,
   relation: string,
+  sourceLocalId: string | undefined,
   hint: ArtifactContextRenderHint,
   refsBySource: ReadonlyMap<string, readonly ArtifactContextRefEntry[]>,
   artifactByKey: ReadonlyMap<string, ArtifactRevision>,
@@ -101,7 +103,7 @@ function buildResolvedNode(
   nextPath.add(key);
   const children = buildChildren(ref, refsBySource, artifactByKey, nextPath);
 
-  return { status: 'resolved', ref, artifact, relation, hint, children };
+  return { status: 'resolved', ref, artifact, relation, sourceLocalId, hint, children };
 }
 
 /**
@@ -124,6 +126,7 @@ function buildChildren(
         status: 'unresolved',
         target: entry.target,
         relation: entry.relationType,
+        sourceLocalId: entry.sourceLocalId,
         hint: entry.hint,
         reason: entry.reason!,
       } satisfies UnresolvedArtifactContextNode;
@@ -143,6 +146,7 @@ function buildChildren(
         status: 'unresolved',
         target: entry.target,
         relation: entry.relationType,
+        sourceLocalId: entry.sourceLocalId,
         hint: entry.hint,
         reason: 'cycle-detected',
       } satisfies UnresolvedArtifactContextNode;
@@ -152,6 +156,7 @@ function buildChildren(
       entry.target,
       childArtifact,
       entry.relationType,
+      entry.sourceLocalId,
       entry.hint,
       refsBySource,
       artifactByKey,

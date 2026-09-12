@@ -160,6 +160,7 @@ async function resolveRelation(
       sourceRef,
       target: relation.target,
       relationType: relation.type,
+      sourceLocalId: relation.sourceLocalId,
       hint,
       status: 'resolved',
     },
@@ -278,6 +279,7 @@ function unresolved(
     sourceRef,
     target: relation.target,
     relationType: relation.type,
+    sourceLocalId: relation.sourceLocalId,
     hint,
     status: 'unresolved',
     reason,
@@ -489,7 +491,12 @@ function artifactRefKey(ref: ArtifactRef): string {
  * @returns Stable relation identity key.
  */
 function refEntryKey(entry: ArtifactContextRefEntry): string {
-  return JSON.stringify([artifactRefKey(entry.sourceRef), entry.relationType, relationTargetKey(entry.target)]);
+  return JSON.stringify([
+    artifactRefKey(entry.sourceRef),
+    entry.sourceLocalId ?? null,
+    entry.relationType,
+    relationTargetKey(entry.target),
+  ]);
 }
 
 /**

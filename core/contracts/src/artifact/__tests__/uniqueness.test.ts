@@ -64,6 +64,30 @@ const aboutArtifact2 = ArtifactRelationSchema.parse({
   },
 });
 
+const aboutArtifact1FromQ2 = ArtifactRelationSchema.parse({
+  type: 'about',
+  sourceLocalId: 'q2',
+  target: {
+    refClass: 'artifact',
+    kind: 'concept',
+    id: 'artifact-1',
+    revision: 'rev-A',
+  },
+});
+
+const aboutArtifact1FromQ3 = ArtifactRelationSchema.parse({ ...aboutArtifact1FromQ2, sourceLocalId: 'q3' });
+
+const aboutArtifact2FromQ3 = ArtifactRelationSchema.parse({
+  type: 'about',
+  sourceLocalId: 'q3',
+  target: {
+    refClass: 'artifact',
+    kind: 'concept',
+    id: 'artifact-2',
+    revision: 'rev-A',
+  },
+});
+
 const ownedByEntity = ArtifactRelationSchema.parse({
   type: 'owned-by',
   target: { refClass: 'entity', entityType: 'workpiece', id: 'W-1' },
@@ -234,6 +258,37 @@ describe('buildUniquenessKeys', () => {
     expect(issues[0]).toMatchObject({
       ruleIndex: 0,
       selectorIndex: 0,
+      reason: 'missing-target',
+      relationType: 'about',
+    });
+  });
+
+  it('produces a missing-target issue when the only matching relation is sourced from a local part', () => {
+    const { keys, issues } = buildUniquenessKeys([relationTargetRule], [aboutArtifact1FromQ2]);
+    expect(keys).toHaveLength(0);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({
+      reason: 'missing-target',
+      relationType: 'about',
+    });
+  });
+
+  it('derives the whole-artifact relation target when a local-source relation has a different target', () => {
+    const { keys, issues } = buildUniquenessKeys([relationTargetRule], [aboutArtifact1RevA, aboutArtifact2FromQ3]);
+    expect(issues).toHaveLength(0);
+    expect(keys).toHaveLength(1);
+    expect(keys[0].parts[0].target).toEqual({
+      refClass: 'artifact',
+      kind: 'concept',
+      id: 'artifact-1',
+    });
+  });
+
+  it('does not derive a whole-artifact key from local-source relations with the same target', () => {
+    const { keys, issues } = buildUniquenessKeys([relationTargetRule], [aboutArtifact1FromQ2, aboutArtifact1FromQ3]);
+    expect(keys).toHaveLength(0);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({
       reason: 'missing-target',
       relationType: 'about',
     });

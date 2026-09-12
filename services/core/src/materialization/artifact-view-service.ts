@@ -97,6 +97,8 @@ export class ArtifactViewService extends BaseService {
     // Dispatch the explicit builder.
     let finalSections: readonly ArtifactViewSection[] = genericView.sections;
     let finalNavigation: ArtifactViewNavigation = genericView.navigation;
+    // This field identifies the custom builder; materialization checksums also
+    // include the resolved view content and renderer version.
     const builderVersion = customBuilder.version;
 
     const builderResult = await customBuilder.build({

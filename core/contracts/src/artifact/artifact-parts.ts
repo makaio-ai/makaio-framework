@@ -249,6 +249,51 @@ export function checkArtifactPartIds(
   return issues;
 }
 
+/**
+ * One relation source that does not identify exactly one declared part.
+ *
+ * `relationIndex` addresses the relation collection rather than artifact data:
+ * callers own the wire path used to present this issue.
+ */
+export interface ArtifactRelationSourceIssue {
+  /** Zero-based index of the rejected relation. */
+  readonly relationIndex: number;
+  /** Why the local source identifier did not resolve uniquely. */
+  readonly reason: string;
+}
+
+/**
+ * Check that every locally sourced relation resolves uniquely in one revision.
+ *
+ * Relations without `sourceLocalId` belong to the whole artifact and need no
+ * part lookup. The supplied `data` is the containing revision's payload, so
+ * this helper intentionally accepts no independent source revision pin.
+ * @param areas - Declared part areas for the artifact kind.
+ * @param data - Payload of the revision that stores the relations.
+ * @param relations - Relations of that same revision, structurally typed to avoid import cycles.
+ * @returns One issue for each local source that does not resolve uniquely.
+ */
+export function checkArtifactRelationSourceParts(
+  areas: readonly { path: string; idPath: string }[],
+  data: Record<string, unknown>,
+  relations: readonly { readonly sourceLocalId?: string }[],
+): ArtifactRelationSourceIssue[] {
+  const issues: ArtifactRelationSourceIssue[] = [];
+  const partsByLocalId = indexArtifactParts(areas, data);
+
+  for (const [relationIndex, relation] of relations.entries()) {
+    if (relation.sourceLocalId === undefined) continue;
+    const resolution =
+      partsByLocalId?.get(relation.sourceLocalId) ??
+      (areas.length === 0
+        ? { ok: false, reason: 'NO_PARTS_DECLARED' as const }
+        : { ok: false, reason: 'PART_NOT_FOUND' as const });
+    if (!resolution.ok) issues.push({ relationIndex, reason: resolution.reason });
+  }
+
+  return issues;
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Error contract for artifact.resolvePart
 // (request/response schemas live in part-resolution.ts — they embed the local
@@ -324,6 +369,43 @@ export type ArtifactPartResolution =
     };
 
 /**
+ * Index every locally addressable part in one revision.
+ *
+ * A duplicate is retained as a failed resolution rather than choosing either
+ * matching part. Both direct part resolution and relation validation therefore
+ * retain the same ambiguity semantics while relation validation can reuse one
+ * traversal for every carried relation.
+ * @param areas - Declared part areas for the artifact kind.
+ * @param data - Payload of the revision being indexed.
+ * @returns An index by verbatim local identifier, or undefined when no parts are declared.
+ */
+function indexArtifactParts(
+  areas: readonly { path: string; idPath: string }[],
+  data: Record<string, unknown>,
+): Map<string, ArtifactPartResolution> | undefined {
+  if (areas.length === 0) return undefined;
+
+  const partsByLocalId = new Map<string, ArtifactPartResolution>();
+  for (const area of areas) {
+    const areaValue = readPropertyPath(data, area.path.split('.'));
+    if (!Array.isArray(areaValue)) continue;
+    const idParts = area.idPath.split('.');
+    for (const element of areaValue) {
+      if (!isJsonObject(element)) continue;
+      const rawId = readPropertyPath(element, idParts);
+      if (typeof rawId !== 'string') continue;
+      if (partsByLocalId.has(rawId)) {
+        partsByLocalId.set(rawId, { ok: false, reason: 'DUPLICATE_LOCAL_ID' });
+      } else {
+        partsByLocalId.set(rawId, { ok: true, areaPath: area.path, part: element });
+      }
+    }
+  }
+
+  return partsByLocalId;
+}
+
+/**
  * Resolve one addressable artifact part by its local identifier.
  *
  * The function is pure: it processes the data it receives; callers guarantee
@@ -340,24 +422,7 @@ export function resolveArtifactPart(
   data: Record<string, unknown>,
   localId: string,
 ): ArtifactPartResolution {
-  if (areas.length === 0) return { ok: false, reason: 'NO_PARTS_DECLARED' };
-
-  let match: { areaPath: string; part: Record<string, unknown> } | undefined;
-
-  for (const area of areas) {
-    const areaValue = readPropertyPath(data, area.path.split('.'));
-    if (!Array.isArray(areaValue)) continue;
-    const idParts = area.idPath.split('.');
-    for (const element of areaValue) {
-      if (!isJsonObject(element)) continue;
-      const rawId = readPropertyPath(element, idParts);
-      // Verbatim comparison — no normalization.
-      if (rawId !== localId) continue;
-      if (match !== undefined) return { ok: false, reason: 'DUPLICATE_LOCAL_ID' };
-      match = { areaPath: area.path, part: element };
-    }
-  }
-
-  if (match === undefined) return { ok: false, reason: 'PART_NOT_FOUND' };
-  return { ok: true, areaPath: match.areaPath, part: match.part };
+  const partsByLocalId = indexArtifactParts(areas, data);
+  if (partsByLocalId === undefined) return { ok: false, reason: 'NO_PARTS_DECLARED' };
+  return partsByLocalId.get(localId) ?? { ok: false, reason: 'PART_NOT_FOUND' };
 }

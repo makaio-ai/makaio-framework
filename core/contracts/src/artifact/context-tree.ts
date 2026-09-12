@@ -41,6 +41,8 @@ export type ArtifactContextRootNode = ResolvedArtifactContextNodeBase;
 export interface ResolvedArtifactContextNode extends ResolvedArtifactContextNodeBase {
   /** Relation type that led to this node from its parent. */
   readonly relation: string;
+  /** Optional local identifier of the parent part that owns this relation. */
+  readonly sourceLocalId?: string;
 }
 
 /** An unresolved node representing a relation that could not be followed. */
@@ -50,6 +52,8 @@ export interface UnresolvedArtifactContextNode {
   readonly target: ArtifactRelationTarget;
   /** Relation type that led to this node from its parent. */
   readonly relation: string;
+  /** Optional local identifier of the parent part that owns this relation. */
+  readonly sourceLocalId?: string;
   /** Render hint applied to this node. */
   readonly hint: ArtifactContextRenderHint;
   /** Reason the target was not resolved. */

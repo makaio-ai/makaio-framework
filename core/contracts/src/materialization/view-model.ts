@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { ArtifactRelationSchema } from '../artifact/schemas.js';
 import { JsonValueSchema } from '../shared/json-value.js';
 
 /* -------------------------------------------------------------------------- */
@@ -32,6 +33,8 @@ export type ArtifactViewLevel = z.infer<typeof ArtifactViewLevelSchema>;
  * @param artifactId - Stable framework artifact identity (open string).
  * @param url - External deep-link URL.
  * @param label - Human-readable label for the link.
+ * @param sourceLocalId - Optional local identifier of the source artifact part
+ * that owns the relation represented by this link.
  */
 export const ArtifactViewLinkSchema = z.object({
   /** Stable framework artifact identity (open string). */
@@ -40,6 +43,8 @@ export const ArtifactViewLinkSchema = z.object({
   url: z.string().min(1).optional(),
   /** Human-readable label for the link. */
   label: z.string().min(1),
+  /** Optional local identifier of the source artifact part that owns this relation. */
+  sourceLocalId: ArtifactRelationSchema.shape.sourceLocalId,
 });
 
 /** A provider-neutral navigation link. */

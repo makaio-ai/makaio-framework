@@ -173,12 +173,14 @@ export type { ArtifactSchemaFragment } from './kind-paths.js';
 export {
   validateArtifactPartAreas,
   checkArtifactPartIds,
+  checkArtifactRelationSourceParts,
   resolveArtifactPart,
   ARTIFACT_RESOLVE_PART_ERROR_CODES,
   ArtifactResolvePartErrorSchema,
 } from './artifact-parts.js';
 export type {
   ArtifactPartResolution,
+  ArtifactRelationSourceIssue,
   ArtifactResolvePartErrorCode,
   ArtifactResolvePartError,
 } from './artifact-parts.js';
