@@ -395,6 +395,11 @@ export const ARTIFACT_PATCH_ERROR_CODES = [
   /** The patched result does not satisfy the kind schema. */
   'SCHEMA_VALIDATION_FAILED',
   /**
+   * The patched result violates a payload invariant that JSON Schema cannot
+   * express (blank title, missing/blank/duplicate part ids).
+   */
+  'PAYLOAD_INVARIANT_FAILED',
+  /**
    * The request carries no instruction and targets the base revision's own
    * schema version, so the new revision would be identical to the base.
    */

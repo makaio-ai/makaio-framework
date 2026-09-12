@@ -178,12 +178,15 @@ function combineConjuncts(
       if (combined.type !== undefined && combined.type !== branch.type) return undefined;
       combined.type = branch.type;
     }
-    // An intersected array keeps its item declaration, so an element location
-    // stays inspectable. Two conjuncts declaring different items would need a
-    // real item intersection, which is outside the supported profile.
-    if (branch.items !== undefined) {
-      if (combined.items !== undefined) return undefined;
-      combined.items = branch.items;
+    // An intersected array keeps its item declarations (including draft-2020-12
+    // prefixItems, so composed tuples reach validatePartArea's tuple check).
+    // Two conjuncts declaring the same item keyword would need a real item
+    // intersection, which is outside the supported profile.
+    for (const key of ['items', 'prefixItems'] as const) {
+      if (branch[key] !== undefined) {
+        if (combined[key] !== undefined) return undefined;
+        combined[key] = branch[key];
+      }
     }
     mergePropertyDeclarations(properties, schemaObject(branch.properties) ?? {});
     for (const key of requiredProperties(branch)) required.add(key);

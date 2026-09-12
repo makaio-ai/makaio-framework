@@ -2,6 +2,7 @@ import {
   ArtifactPatchIssueSchema,
   artifactPatchInstructions,
   artifactPatchSegments,
+  checkArtifactPartIds,
   compileArtifactDataChecker,
   readArtifactTitle,
   type ArtifactDataChecker,
@@ -320,12 +321,36 @@ function checkTitle(
     return undefined;
   } catch (error) {
     return {
-      code: 'SCHEMA_VALIDATION_FAILED',
-      message: `The patched result does not satisfy the '${registration.kind}' data schema.`,
+      code: 'PAYLOAD_INVARIANT_FAILED',
+      message: `The patched result violates the '${registration.kind}' payload invariants.`,
       issues: [{ path: registration.titlePath, reason: failureMessage(error) }],
       repair: `'${registration.titlePath}' must be a nonblank string.`,
     };
   }
+}
+
+/**
+ * Enforce local-identifier invariants on a patched payload's addressable parts.
+ *
+ * Missing, blank, or duplicate local identifiers are rejected here because the
+ * compiled checker covers the data schema only; identifier uniqueness is an
+ * invariant outside JSON Schema.
+ * @param data - Patched payload that already satisfies the kind schema.
+ * @param registration - Effective registration declaring any addressable-part areas.
+ * @returns A rejection, or undefined when all part identifiers are valid.
+ */
+function checkPartIds(
+  data: Record<string, unknown>,
+  registration: ArtifactKindRegistration,
+): ArtifactPatchError | undefined {
+  const issues = checkArtifactPartIds(registration.addressableParts ?? [], data);
+  if (issues.length === 0) return undefined;
+  return {
+    code: 'PAYLOAD_INVARIANT_FAILED',
+    message: `The patched result violates the '${registration.kind}' payload invariants.`,
+    issues: issues.map(toResponseIssue),
+    repair: repairHint(issues),
+  };
 }
 
 /**
@@ -500,7 +525,10 @@ export async function patchArtifact(
   const blankTitle = checkTitle(applied.application.data, registration);
   if (blankTitle) return failed(blankTitle);
 
-  // The patch checks `data` and the title, nothing beside them. Evidence is
+  const invalidPartIds = checkPartIds(applied.application.data, registration);
+  if (invalidPartIds) return failed(invalidPartIds);
+
+  // The patch checks `data`, the title, and part-id invariants, nothing beside them. Evidence is
   // carried over unchanged and a patch cannot add any, so a target
   // registration with a higher `evidenceRequirements.minItems` is a case the
   // host's lifecycle writer rejects at store time, as it does for every other

@@ -384,6 +384,7 @@ describe('workflow execution bus access', () => {
         'artifact.patch',
         'artifact.query',
         'artifact.resolve',
+        'artifact.resolvePart',
         'artifact.revise',
       ]);
     });

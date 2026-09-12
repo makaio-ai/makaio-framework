@@ -120,7 +120,7 @@ describe('f15b: cross-area duplicate id', () => {
 // f15c — Tuple rejection
 // ──────────────────────────────────────────────────────────────────────────────
 
-describe('f15c: tuple-profile rejection', () => {
+describe('tuple-profile rejection', () => {
   it('rejects an area array schema that carries prefixItems (draft 2020-12 tuple)', () => {
     const dataSchema = {
       type: 'object',
@@ -160,6 +160,114 @@ describe('f15c: tuple-profile rejection', () => {
       baseRegistration({ dataSchema, addressableParts: [{ path: 'items', idPath: 'id' }] }),
     );
     expectAddressablePartsIssue(result);
+  });
+
+  // Tuple area schemas hidden under allOf/anyOf/$ref-with-siblings must also be
+  // rejected: combineConjuncts propagates prefixItems through conjunct combination
+  // the same way items is propagated, so a composed tuple schema is detected as a
+  // tuple and registration is refused.
+
+  it('rejects a part area whose array schema carries prefixItems under allOf with a sibling conjunct', () => {
+    // combineConjuncts must propagate prefixItems from each conjunct; without it the
+    // combined fragment would have no prefixItems and hasTupleShape would return false.
+    const dataSchema = {
+      type: 'object',
+      required: ['title'],
+      properties: {
+        title: { type: 'string' },
+        items: {
+          type: 'array',
+          allOf: [
+            { prefixItems: [{ type: 'object', required: ['id'], properties: { id: { type: 'string' } } }] },
+            { minItems: 1 },
+          ],
+        },
+      },
+    } as const satisfies Record<string, unknown>;
+
+    const result = ArtifactKindRegistrationSchema.safeParse(
+      baseRegistration({ dataSchema, addressableParts: [{ path: 'items', idPath: 'id' }] }),
+    );
+    expectAddressablePartsIssue(result);
+  });
+
+  it('rejects a part area whose array schema carries prefixItems in one anyOf branch', () => {
+    // combineUnionBranchNode injects an allOf wrapper around each branch; prefixItems
+    // must be propagated through that wrapper so the tuple branch is not treated as a
+    // homogeneous array — if it is, registration would incorrectly accept the area.
+    const dataSchema = {
+      type: 'object',
+      required: ['title'],
+      properties: {
+        title: { type: 'string' },
+        items: {
+          anyOf: [
+            {
+              type: 'array',
+              prefixItems: [{ type: 'object', required: ['id'], properties: { id: { type: 'string' } } }],
+            },
+            {
+              type: 'array',
+              items: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } },
+            },
+          ],
+        },
+      },
+    } as const satisfies Record<string, unknown>;
+
+    const result = ArtifactKindRegistrationSchema.safeParse(
+      baseRegistration({ dataSchema, addressableParts: [{ path: 'items', idPath: 'id' }] }),
+    );
+    expectAddressablePartsIssue(result);
+  });
+
+  it('rejects a part area whose $ref carries prefixItems as a draft-2020-12 sibling', () => {
+    // resolveRef merges draft-2020-12 siblings into allOf; prefixItems from that sibling
+    // must survive conjunct combination so the tuple area is detected and rejected.
+    const dataSchema = {
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      type: 'object',
+      required: ['title'],
+      $defs: {
+        base: { type: 'array' },
+      },
+      properties: {
+        title: { type: 'string' },
+        items: {
+          $ref: '#/$defs/base',
+          prefixItems: [{ type: 'object', required: ['id'], properties: { id: { type: 'string' } } }],
+        },
+      },
+    } as const satisfies Record<string, unknown>;
+
+    const result = ArtifactKindRegistrationSchema.safeParse(
+      baseRegistration({ dataSchema, addressableParts: [{ path: 'items', idPath: 'id' }] }),
+    );
+    expectAddressablePartsIssue(result);
+  });
+
+  it('accepts a part area whose array schema uses allOf composition with homogeneous object items', () => {
+    // Composed non-tuple areas must not be over-rejected: a composed array schema
+    // without prefixItems and with a homogeneous items schema satisfies the profile.
+    const dataSchema = {
+      type: 'object',
+      required: ['title'],
+      properties: {
+        title: { type: 'string' },
+        items: {
+          type: 'array',
+          allOf: [
+            { items: { type: 'object', required: ['id'], properties: { id: { type: 'string' } } } },
+            { minItems: 0 },
+          ],
+        },
+      },
+    } as const satisfies Record<string, unknown>;
+
+    const result = ArtifactKindRegistrationSchema.safeParse(
+      baseRegistration({ dataSchema, addressableParts: [{ path: 'items', idPath: 'id' }] }),
+    );
+    expect(result.success).toBe(true);
   });
 });
 

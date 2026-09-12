@@ -117,6 +117,7 @@ const STATIC_EXECUTION_SUBJECTS = [
   ArtifactSubjects.kind.list,
   ArtifactSubjects.query,
   ArtifactSubjects.resolve,
+  ArtifactSubjects.resolvePart,
   ArtifactSubjects.create,
   ArtifactSubjects.revise,
   ArtifactSubjects.patch,
