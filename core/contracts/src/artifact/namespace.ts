@@ -14,6 +14,7 @@ import {
   RelationTypeRegistrationSchema,
 } from './schemas.js';
 import { ArtifactPatchRequestSchema, ArtifactPatchResponseSchema } from './patch.js';
+import { ArtifactResolvePartRequestSchema, ArtifactResolvePartResponseSchema } from './part-resolution.js';
 import { ArtifactContextSelectorSchema } from './context-selectors.js';
 import { ResolvedArtifactContextWireSchema } from './context-resolution.js';
 import { EvidenceResolveRequestSchema, EvidenceResolveResponseSchema } from './evidence-resolution.js';
@@ -111,6 +112,18 @@ export const ArtifactSchemas = {
     response: z.object({ artifact: ArtifactRevisionSchema.nullable() }),
   },
 
+  /**
+   * Resolve one addressable part from exactly the pinned artifact revision (RPC).
+   *
+   * The request names the part through the existing local reference; the handler
+   * reads the pinned revision and the kind declaration effective on its bus
+   * context. Outcomes are returned in band so the repair hint survives facades.
+   */
+  resolvePart: {
+    request: ArtifactResolvePartRequestSchema,
+    response: ArtifactResolvePartResponseSchema,
+  },
+
   /** Query artifact revisions using structured filter criteria (RPC). */
   query: {
     request: ArtifactQueryRequestSchema,
@@ -206,6 +219,7 @@ export const ArtifactNamespace = createBusNamespace('artifact', ArtifactSchemas)
  * - `ArtifactSubjects.revise` — revise artifact (RPC)
  * - `ArtifactSubjects.patch` — revise artifact by patch (RPC)
  * - `ArtifactSubjects.resolve` — resolve artifact by ref (RPC)
+ * - `ArtifactSubjects.resolvePart` — resolve one addressable part from a pinned revision (RPC)
  * - `ArtifactSubjects.query` — query artifacts (RPC)
  * - `ArtifactSubjects.compare` — compare two revisions (RPC)
  * - `ArtifactSubjects.evidence.resolve` — resolve immutable evidence content (RPC)
@@ -311,3 +325,8 @@ export type ArtifactStatusChangedPayload = z.infer<(typeof ArtifactSchemas)['sta
 
 /** Payload for the kind registration changed event. */
 export type ArtifactKindChangedPayload = z.infer<(typeof ArtifactSchemas)['kind.changed']>;
+
+// Re-exported from part-resolution.ts: deriving from the schema record would
+// produce duplicate exported names since part-resolution.ts already exports them.
+// The barrel (artifact/index.ts) re-exports these from part-resolution.js only.
+export type { ArtifactResolvePartRequest, ArtifactResolvePartResponse } from './part-resolution.js';

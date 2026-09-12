@@ -150,6 +150,7 @@ export {
   ArtifactEvidenceRequirementsSchema,
   ArtifactKindViewSchema,
   ArtifactKindRegistrationSchema,
+  ArtifactPartAreaSchema,
 } from './kind-registration.js';
 export type {
   ArtifactCategory,
@@ -159,6 +160,7 @@ export type {
   ArtifactEvidenceRequirements,
   ArtifactKindView,
   ArtifactKindRegistration,
+  ArtifactPartArea,
 } from './kind-registration.js';
 export {
   ARTIFACT_COLLECTION_ELEMENT_SEGMENT,
@@ -167,6 +169,21 @@ export {
   readArtifactTitle,
 } from './kind-paths.js';
 export type { ArtifactSchemaFragment } from './kind-paths.js';
+
+export {
+  validateArtifactPartAreas,
+  checkArtifactPartIds,
+  resolveArtifactPart,
+  ARTIFACT_RESOLVE_PART_ERROR_CODES,
+  ArtifactResolvePartErrorSchema,
+} from './artifact-parts.js';
+export type {
+  ArtifactPartResolution,
+  ArtifactResolvePartErrorCode,
+  ArtifactResolvePartError,
+} from './artifact-parts.js';
+export { ArtifactResolvePartRequestSchema, ArtifactResolvePartResponseSchema } from './part-resolution.js';
+export type { ArtifactResolvePartRequest, ArtifactResolvePartResponse } from './part-resolution.js';
 
 export {
   ARTIFACT_PATCH_ERROR_CODES,
