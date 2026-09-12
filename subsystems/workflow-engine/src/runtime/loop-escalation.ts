@@ -88,6 +88,7 @@ async function emitGateSuspended(
   try {
     await ctx.bus.emit(WorkflowSubjects.gate.suspended, {
       executionId: ctx.executionId,
+      ...(ctx.executionAttemptId !== undefined ? { executionAttemptId: ctx.executionAttemptId } : {}),
       frameId,
       nodeId: node.id,
       schema,
@@ -143,10 +144,19 @@ async function emitGateResolved(
 function registerInProcessEscalationResponder(options: EscalationResponderOptions): () => void {
   const { node, ctx, parentFrameId, validator, pending, deferred } = options;
   return ctx.bus.on(WorkflowSubjects.gate.respond, async (respondCtx) => {
-    const { executionId, gateId, frameId: respondFrameId, action, resumeData, reason } = respondCtx.payload;
+    const {
+      executionId,
+      executionAttemptId,
+      gateId,
+      frameId: respondFrameId,
+      action,
+      resumeData,
+      reason,
+    } = respondCtx.payload;
     if (
       executionId !== ctx.executionId ||
       gateId !== node.id ||
+      executionAttemptId !== ctx.executionAttemptId ||
       (respondFrameId !== undefined && respondFrameId !== parentFrameId)
     ) {
       try {
@@ -358,6 +368,7 @@ export async function openEscalationGate(
 
   const gateInstance: WorkflowGateInstance = {
     executionId: ctx.executionId,
+    ...(ctx.executionAttemptId !== undefined ? { executionAttemptId: ctx.executionAttemptId } : {}),
     nodeId: node.id,
     frameId: parentFrameId,
     schema,

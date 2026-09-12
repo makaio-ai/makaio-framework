@@ -128,6 +128,8 @@ const GateResolvedPayloadSchema = z.discriminatedUnion('source', [
  * `gate.requested` event schema and the `gate.awaitApproval` RPC request.
  */
 const GateRequestedPayloadSchema = GateLifecycleBaseSchema.extend({
+  /** Attempt that opened this gate. Absent for legacy non-Attempt executions. */
+  executionAttemptId: z.string().optional(),
   workflowId: z.string(),
   workflowName: z.string(),
   title: z.string(),
@@ -557,6 +559,8 @@ export const WorkflowSchemas = {
   'gate.respond': {
     request: z.object({
       executionId: z.string(),
+      /** Attempt that opened the target gate, required for Attempt-owned gates. */
+      executionAttemptId: z.string().optional(),
       /**
        * Node ID of the gate within the workflow definition.
        * Maps to `WorkflowGateNode.id` in the definition tree.
@@ -687,6 +691,8 @@ export const WorkflowSchemas = {
   'gate.suspended': z.object({
     /** Execution this gate belongs to. */
     executionId: z.string(),
+    /** Attempt that opened this gate. Absent for legacy non-Attempt executions. */
+    executionAttemptId: z.string().optional(),
     /** Frame ID of the suspended gate frame. */
     frameId: z.string(),
     /** Node ID of the gate in the workflow definition. */

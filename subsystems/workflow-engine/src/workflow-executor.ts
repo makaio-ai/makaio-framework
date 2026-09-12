@@ -593,9 +593,10 @@ export class WorkflowExecutor extends BaseService {
       this.bus.on(
         WorkflowSubjects.gate.respond,
         async (ctx) => {
-          const { executionId, gateId, frameId, action, resumeData, reason } = ctx.payload;
+          const { executionId, executionAttemptId, gateId, frameId, action, resumeData, reason } = ctx.payload;
           const accepted = await this.respondToPausedGate({
             executionId,
+            executionAttemptId,
             gateId,
             frameId,
             action,
@@ -725,18 +726,20 @@ export class WorkflowExecutor extends BaseService {
    */
   private async respondToPausedGate(payload: {
     readonly executionId: string;
+    readonly executionAttemptId?: string;
     readonly gateId: string;
     readonly frameId?: string;
     readonly action: 'approve' | 'reject';
     readonly resumeData: JsonValue;
     readonly reason?: string;
   }): Promise<boolean> {
-    const { executionId, gateId, frameId, resumeData, reason } = payload;
+    const { executionId, executionAttemptId, gateId, frameId, resumeData, reason } = payload;
     const { execution } = await this.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
     if (!isPausedWorkflowExecution(execution)) return false;
 
     const gate = await loadUniqueWaitingGateInstance(this.bus, { executionId, nodeId: gateId, frameId });
     if (gate === null) return false;
+    if (executionAttemptId !== gate.executionAttemptId) return false;
 
     const validation = validateGateResumeDataForSchema(gateId, gate.schema, resumeData);
     if (!validation.valid) return false;

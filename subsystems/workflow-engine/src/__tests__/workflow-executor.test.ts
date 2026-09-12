@@ -1031,6 +1031,43 @@ describe('WorkflowExecutor — paused gate integration', () => {
     expect(stubRunner.run).not.toHaveBeenCalled();
   });
 
+  it.each([
+    undefined,
+    'attempt-b',
+  ])('rejects a paused gate response for a different attempt (%s)', async (executionAttemptId) => {
+    const workflowId = `wf-attempt-gate-${Math.random().toString(36).slice(2)}`;
+    const executionId = `wfx-attempt-gate-${Math.random().toString(36).slice(2)}`;
+    const gateId = 'gate-attempt-bound';
+    const frameId = 'frame-attempt-bound';
+    const stubRunner: IWorkflowRunner = {
+      run: vi.fn(async () => {
+        throw new Error('Unexpected resume of a different attempt');
+      }),
+    };
+    setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
+    const gate = {
+      ...(await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId)),
+      executionAttemptId: 'attempt-a',
+    };
+    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, { gate });
+    const { accepted } = await MakaioBus.request(WorkflowSubjects.gate.respond, {
+      executionId,
+      executionAttemptId,
+      gateId,
+      frameId,
+      action: 'approve',
+      resumeData: {},
+    });
+    expect(accepted).toBe(false);
+    const { gate: persistedGate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+      executionId,
+      nodeId: gateId,
+      frameId,
+    });
+    expect(persistedGate).toEqual(gate);
+    expect(stubRunner.run).not.toHaveBeenCalled();
+  });
+
   it('rejects paused gate resume data that does not match the persisted gate schema', async () => {
     const workflowId = `wf-invalid-resume-${Math.random().toString(36).slice(2)}`;
     const executionId = `wfx-invalid-resume-${Math.random().toString(36).slice(2)}`;

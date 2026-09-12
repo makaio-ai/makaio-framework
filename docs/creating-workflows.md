@@ -257,11 +257,18 @@ workflow.station('post-approval', async (ctx) => {
 ```typescript
 bus.request('workflow.gate.respond', {
   executionId,
+  ...(executionAttemptId !== undefined ? { executionAttemptId } : {}),
   gateId: 'approve',
   action: 'approve',
   resumeData: { decision: 'approved', note: 'LGTM' },
 });
 ```
+
+Gate responses for Attempt-owned workflow runs must preserve the
+`executionAttemptId` from the corresponding `workflow.gate.suspended` event.
+The runtime rejects a missing or different value, preventing a response for one
+Attempt from resuming another Attempt of the same execution. Workflows that do
+not run through an Attempt continue to omit this field.
 
 ### `.iterate(id, handler, options)`
 

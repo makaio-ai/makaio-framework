@@ -79,6 +79,8 @@ export const WorkflowWorkerConfigSchema = z.object({
   definition: WorkflowDefinitionSchema.optional(),
   /** Unique execution identifier for this workflow run. */
   executionId: z.string().min(1),
+  /** Authority attempt that owns this worker run, when dispatched through an Attempt. */
+  executionAttemptId: z.string().min(1).optional(),
   /** Workflow definition identifier. */
   workflowId: z.string().min(1),
   /**

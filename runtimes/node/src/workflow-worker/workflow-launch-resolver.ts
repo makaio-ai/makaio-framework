@@ -56,6 +56,7 @@ export function createWorkflowLaunchResolver(
       source: input.source,
       ...(input.definitionSnapshot !== undefined ? { definition: input.definitionSnapshot } : {}),
       executionId: input.executionId,
+      executionAttemptId: request.executionAttemptId,
       workflowId: input.workflowId,
       triggerPayload: input.triggerPayload,
       ...(input.triggerMode !== undefined ? { triggerMode: input.triggerMode } : {}),

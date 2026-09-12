@@ -1,0 +1,1 @@
+ALTER TABLE "workflow_gate_instances" ADD COLUMN "execution_attempt_id" text;

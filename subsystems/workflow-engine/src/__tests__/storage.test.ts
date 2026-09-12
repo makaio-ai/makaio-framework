@@ -1456,6 +1456,45 @@ describe('workflow storage handlers', () => {
     });
   });
 
+  it('does not let a stale Attempt response resolve a gate reopened by another Attempt', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-gate-attempt-cas' });
+    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-gate-attempt-cas', workflowId: workflow.id });
+    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+
+    const waitingGate: WorkflowGateInstance = {
+      executionId: execution.id,
+      executionAttemptId: 'attempt-original',
+      nodeId: 'gate-attempt-cas',
+      frameId: 'frame-gate-attempt-cas',
+      schema: {},
+      status: 'waiting',
+      autoAction: 'reject',
+      timeoutMs: null,
+      createdAt: 1000,
+    };
+    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, { gate: waitingGate });
+    const reopenedGate = { ...waitingGate, executionAttemptId: 'attempt-reopened' };
+    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, { gate: reopenedGate });
+
+    const staleResponse = await MakaioBus.request(WorkflowStorageSubjects.resolveWaitingGateInstance, {
+      gate: {
+        ...waitingGate,
+        status: 'resumed',
+        resumeData: { decision: 'stale' },
+        resolvedAt: 2000,
+      },
+    });
+    const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+      executionId: execution.id,
+      nodeId: waitingGate.nodeId,
+      frameId: waitingGate.frameId,
+    });
+
+    expect(staleResponse).toEqual({ accepted: false });
+    expect(gate).toEqual(reopenedGate);
+  });
+
   it('restores paused execution and waiting gate state through one storage subject', async () => {
     const workflow = createWorkflowDefinition({ id: 'workflow-gate-restore-state' });
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });

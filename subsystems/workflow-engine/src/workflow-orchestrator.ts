@@ -331,10 +331,11 @@ async function runRuntimeSequence(
   signal: AbortSignal,
   zodSchemas?: WorkflowZodSchemas,
 ): Promise<RuntimeSequenceResult> {
+  const { executionAttemptId, suspensionStrategy } = config;
   // For exit-based strategies, load persisted frames from storage so the
   // sequence executor can skip completed nodes and reuse waiting gate frames.
   const resumeFrames =
-    config.suspensionStrategy !== 'wait-in-process'
+    suspensionStrategy !== 'wait-in-process'
       ? await loadResumeFrames(config.executionId, bus, { required: true })
       : undefined;
 
@@ -364,7 +365,7 @@ async function runRuntimeSequence(
       },
       env: config.env,
     },
-    { suspensionStrategy: config.suspensionStrategy, resumeFrames, runtimeLoopGates },
+    { executionAttemptId, suspensionStrategy, resumeFrames, runtimeLoopGates },
   );
   const expressionCtx = runtimeCtx.buildExpressionContext();
   const outcome = await executeSequence(definition.root, runtimeCtx, expressionCtx);

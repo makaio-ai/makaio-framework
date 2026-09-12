@@ -128,9 +128,6 @@ const STATIC_EXECUTION_MESSAGE_SUBJECTS = [
 const STATIC_EXECUTION_SUBSCRIPTION_SUBJECTS = [
   ExecutionAttemptSubjects.operation.deliver,
   ExecutionAttemptSubjects.control.deliver,
-  // `gate.respond` is execution-addressed today; it does not carry an Attempt
-  // recipient. The operation/control binding below does not claim to isolate
-  // this subject. FACT-252 owns the Attempt-addressed gate protocol.
   WorkflowSubjects.gate.respond,
 ] as const;
 
@@ -207,6 +204,7 @@ export function registerWorkflowExecutionBusSecret(
       requiredSubscriptionFilters: {
         [getFullSubjectForSubjectDefinition(ExecutionAttemptSubjects.operation.deliver)]: { executionAttemptId },
         [getFullSubjectForSubjectDefinition(ExecutionAttemptSubjects.control.deliver)]: { executionAttemptId },
+        [getFullSubjectForSubjectDefinition(WorkflowSubjects.gate.respond)]: { executionAttemptId },
       },
     }),
   };

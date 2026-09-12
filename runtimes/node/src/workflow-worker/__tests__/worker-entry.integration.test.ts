@@ -354,7 +354,12 @@ describe('runWorkflowInWorker integration', () => {
     const identity = mintWorkflowExecutionBusSecret({ executionAttemptId, executionId });
 
     try {
-      const gateEvents: Array<{ executionId: string; nodeId: string; prompt: string | undefined }> = [];
+      const gateEvents: Array<{
+        executionId: string;
+        executionAttemptId: string | undefined;
+        nodeId: string;
+        prompt: string | undefined;
+      }> = [];
       let resolveGateResponse!: (response: { accepted: boolean }) => void;
       let rejectGateResponse!: (error: unknown) => void;
       const gateResponse = new Promise<{ accepted: boolean }>((resolve, reject) => {
@@ -365,6 +370,7 @@ describe('runWorkflowInWorker integration', () => {
       const offGate = host.bus.on(WorkflowSubjects.gate.suspended, (ctx) => {
         gateEvents.push({
           executionId: ctx.payload.executionId,
+          executionAttemptId: ctx.payload.executionAttemptId,
           nodeId: ctx.payload.nodeId,
           prompt: ctx.payload.prompt,
         });
@@ -374,6 +380,7 @@ describe('runWorkflowInWorker integration', () => {
           void host.bus
             .request(WorkflowSubjects.gate.respond, {
               executionId: ctx.payload.executionId,
+              executionAttemptId: ctx.payload.executionAttemptId,
               gateId: ctx.payload.nodeId,
               frameId: ctx.payload.frameId,
               action: 'approve',
@@ -391,6 +398,7 @@ describe('runWorkflowInWorker integration', () => {
           config: {
             ...makeGateConfig(host.busUrl),
             executionId,
+            executionAttemptId: 'untrusted-config-attempt',
             cancelSubject: `workflow.${executionId}.cancel`,
             busAuth: { kind: 'hmac', secret: identity.secret },
             terminalAuthority: 'authority',
@@ -408,6 +416,7 @@ describe('runWorkflowInWorker integration', () => {
         expect(gateEvents).toEqual([
           {
             executionId,
+            executionAttemptId,
             nodeId: 'approval',
             prompt: 'Approve worker execution?',
           },

@@ -158,15 +158,17 @@ An allowed subscription authorizes only an advertisement. It does not advertise
 request-handler interest: a remote attempt receives a server-routed request
 only after it has advertised a matching request subscription.
 
-`execution-attempt.operation.deliver` and `execution-attempt.control.deliver`
-are additionally server-bound to the authenticated Attempt identity. The
-WebSocket server evaluates this required recipient filter for every outbound
-request, event, and broadcast delivery, independently of current subscription
-advertisements. An attempt therefore cannot receive another Attempt's delivery
-by omitting or withdrawing subscriptions. `workflow.gate.respond` is currently
-addressed only by `executionId`, `gateId`, and `frameId`; it has no Attempt
-recipient. Its grant therefore does **not** provide Attempt isolation. FACT-252
-owns the required Attempt-addressed gate protocol change.
+`execution-attempt.operation.deliver`, `execution-attempt.control.deliver`, and
+`workflow.gate.respond` are additionally server-bound to the authenticated
+Attempt identity. The WebSocket server evaluates the current required recipient
+filter for every outbound request, event, and broadcast delivery independently
+of subscription advertisements. An attempt cannot receive another Attempt's
+delivery by omitting or withdrawing subscriptions or forging a peer filter.
+
+Attempt-owned gates persist their `executionAttemptId` and require responses
+with that exact target. Web and GitHub gate producers preserve the ID from the
+suspension or stored binding. Non-Attempt gates retain their legacy path with
+no Attempt ID; an Attempt-addressed response cannot resolve such a gate.
 
 ### MessagePort Transport
 

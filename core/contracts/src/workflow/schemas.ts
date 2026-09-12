@@ -1094,6 +1094,8 @@ export type WorkflowGateStatus = z.infer<typeof WorkflowGateStatusSchema>;
 export const WorkflowGateInstanceSchema = z.object({
   /** Execution this gate belongs to. */
   executionId: z.string(),
+  /** Attempt that opened this gate. Absent for legacy non-Attempt executions. */
+  executionAttemptId: z.string().optional(),
   /** Node ID of the gate in the workflow definition. */
   nodeId: z.string(),
   /** Frame ID of the gate's execution frame. */
