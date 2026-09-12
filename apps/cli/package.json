@@ -16,7 +16,7 @@
     "ink-testing-library": "^3.0.0"
   },
   "dependencies": {
-    "@hono/node-server": "^1.14.1",
+    "@hono/node-server": "^2.0.5",
     "@makaio/app-mcp-server": "workspace:*",
     "@makaio/bus-core": "workspace:*",
     "@makaio/bus-transport-websocket": "workspace:*",
