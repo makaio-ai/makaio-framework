@@ -22,6 +22,9 @@ import { bootstrapWorkerRuntime, type BootstrapRuntimeConnection } from './boots
 import { withWorkerBootstrapDeadline } from './worker-bootstrap-exchange.js';
 import { installAttemptControlEndpoint, type InstalledAttemptControlEndpoint } from './attempt-control-client.js';
 
+/** Fixed host shutdown budget for draining independently retried control reports. */
+const CONTROL_REPORT_DRAIN_DEADLINE_MS = 5_000;
+
 // ─────────────────────────────────────────────────────────────
 // Dependency types
 // ─────────────────────────────────────────────────────────────
@@ -247,6 +250,7 @@ export async function runHeadlessWorkflowWorker(
   });
   const preBus = connection.bus;
   const workflow = createWorkflowWorkloadAdapter({ ...deps, workflowEnv }, credentials, preBus);
+  const controlReportDrain = new AbortController();
   let result: HeadlessWorkflowWorkerResult | undefined;
   let control: InstalledAttemptControlEndpoint | undefined;
   try {
@@ -258,7 +262,11 @@ export async function runHeadlessWorkflowWorker(
     control = await installAttemptControlEndpoint(
       preBus,
       { executionAttemptId: deps.executionAttemptId, runtimeIncarnationId },
-      { reportOptions: { retry: deps.outcomeRetry, reconnect: () => preBus.reconnect() }, signal },
+      {
+        reportOptions: { retry: deps.outcomeRetry, reconnect: () => preBus.reconnect() },
+        reportSignal: controlReportDrain.signal,
+        signal,
+      },
     );
     const runtimeGeneration = await registerWorkerRuntime(preBus, {
       executionAttemptId: deps.executionAttemptId,
@@ -293,13 +301,25 @@ export async function runHeadlessWorkflowWorker(
       // has already stopped waiting for.
       control?.observer.finished();
       control?.cleanup();
-      // The drain is bounded by the report transport's own retry deadline
-      // (120 s by default), not by a shutdown budget of its own. A dedicated
-      // control-report drain deadline is a host shutdown-policy decision,
-      // tracked in FACT-145.
-      await control?.settle();
+      // A receipt remains durable even if shutdown cannot wait for its report.
+      // FACT-163 gives this host a fixed private drain window; its expiry aborts
+      // report requests and retries before the bus is closed, without claiming
+      // that either the report or the workload stop succeeded.
+      let controlReportDrainClose: Promise<void> | undefined;
+      const controlReportDrainTimer = setTimeout(() => {
+        controlReportDrain.abort();
+        controlReportDrainClose = Promise.resolve(connection.close());
+        // The await below reports a close failure through the normal cleanup
+        // path, while this handler prevents an early unhandled rejection.
+        void controlReportDrainClose.catch(() => {});
+      }, CONTROL_REPORT_DRAIN_DEADLINE_MS);
+      try {
+        await control?.settle();
+      } finally {
+        clearTimeout(controlReportDrainTimer);
+      }
       endpoint.cleanup();
-      await connection.close();
+      await (controlReportDrainClose ?? connection.close());
     }
   }
 }

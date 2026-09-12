@@ -169,6 +169,37 @@ describe('submitOutcomeWithAck', () => {
     expect(submissions).toHaveLength(2);
   });
 
+  it('aborts during back-off without retrying or reconnecting', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const reconnect = vi.fn().mockResolvedValue(undefined);
+    const { bus, submissions } = createOutcomeBus({ decisions: ['throw', 'accepted'] });
+
+    try {
+      const submission = submitOutcomeWithAck(
+        bus,
+        {
+          executionAttemptId: 'a-1',
+          executionId: 'exec-1',
+          result: makeResult(),
+        },
+        {
+          retry: { maxRetries: 1, baseDelayMs: 1_000, deadlineMs: 5_000 },
+          reconnect,
+          signal: controller.signal,
+        },
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort();
+
+      await expect(submission).rejects.toMatchObject({ name: 'AbortError' });
+      expect(submissions).toHaveLength(1);
+      expect(reconnect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('exhausts retries and throws last error', async () => {
     const { bus, submissions } = createOutcomeBus({
       decisions: ['throw', 'throw', 'throw', 'throw'],
@@ -298,6 +329,71 @@ describe('submitOutcomeWithAck', () => {
         reason: 'deadline-exceeded',
       });
       await vi.advanceTimersByTimeAsync(100);
+      await rejection;
+      expect(reconnect).toHaveBeenCalledTimes(1);
+      expect(submissions).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops waiting for a never-settling reconnect when its caller shuts down', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const { bus, submissions } = createOutcomeBus({ decisions: ['throw'] });
+    let markReconnectStarted!: () => void;
+    const reconnectStarted = new Promise<void>((resolve) => {
+      markReconnectStarted = resolve;
+    });
+    const reconnect = vi.fn(async () => {
+      markReconnectStarted();
+      await new Promise<never>(() => {});
+    });
+
+    try {
+      const submission = submitOutcomeWithAck(
+        bus,
+        {
+          executionAttemptId: 'a-1',
+          executionId: 'exec-1',
+          result: makeResult(),
+        },
+        { retry: { maxRetries: 1, baseDelayMs: 10, deadlineMs: 120_000 }, reconnect, signal: controller.signal },
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      await reconnectStarted;
+      controller.abort();
+
+      await expect(submission).rejects.toMatchObject({ name: 'AbortError' });
+      expect(reconnect).toHaveBeenCalledTimes(1);
+      expect(submissions).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('observes a signal aborted synchronously by a never-settling reconnect', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const { bus, submissions } = createOutcomeBus({ decisions: ['throw'] });
+    const reconnect = vi.fn(async () => {
+      controller.abort();
+      await new Promise<never>(() => {});
+    });
+
+    try {
+      const submission = submitOutcomeWithAck(
+        bus,
+        {
+          executionAttemptId: 'a-1',
+          executionId: 'exec-1',
+          result: makeResult(),
+        },
+        { retry: { maxRetries: 1, baseDelayMs: 10, deadlineMs: 120_000 }, reconnect, signal: controller.signal },
+      );
+      const rejection = expect(submission).rejects.toMatchObject({ name: 'AbortError' });
+      await vi.advanceTimersByTimeAsync(10);
+
       await rejection;
       expect(reconnect).toHaveBeenCalledTimes(1);
       expect(submissions).toHaveLength(1);
