@@ -268,6 +268,14 @@ export const ArtifactRelationQueryTargetSchema = z.preprocess(
 export const ArtifactRelationSchema = z.object({
   /** Relation type string (must match a registered relation type). */
   type: z.string().min(1),
+  /**
+   * Optional local identifier of the part in this revision that owns the relation.
+   *
+   * The identifier is compared verbatim against declared addressable parts. It
+   * deliberately carries no separate revision pin: the containing relation is
+   * already stored with exactly one artifact revision.
+   */
+  sourceLocalId: z.string().min(1).regex(/\S/).optional(),
   /** The target of this relation. */
   target: ArtifactRelationTargetSchema,
 });

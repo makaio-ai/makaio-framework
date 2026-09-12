@@ -175,7 +175,8 @@ function deriveSelectorPart(
     };
   }
   const { relationType } = selector;
-  const matching = relations.filter((r) => r.type === relationType);
+  // Whole-artifact uniqueness cannot be derived from a relation owned by a local part.
+  const matching = relations.filter((r) => r.type === relationType && r.sourceLocalId === undefined);
   const seen = new Set<string>();
   let single: ArtifactRelationTargetIdentity | undefined;
   let unsupportedRefClass: string | undefined;

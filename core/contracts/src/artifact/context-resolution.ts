@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { ArtifactContextRenderHintSchema } from './context-selectors.js';
-import { ArtifactRefSchema, ArtifactRelationTargetSchema, ArtifactRevisionSchema } from './schemas.js';
+import {
+  ArtifactRefSchema,
+  ArtifactRelationSchema,
+  ArtifactRelationTargetSchema,
+  ArtifactRevisionSchema,
+} from './schemas.js';
 
 interface ArtifactRevisionKeyFields {
   /** Artifact kind discriminator. */
@@ -50,6 +55,8 @@ export const ArtifactContextRefEntrySchema = z
     sourceRef: ArtifactRefSchema,
     /** The relation type string. */
     relationType: z.string().min(1),
+    /** Optional local identifier of the source part within `sourceRef`. */
+    sourceLocalId: ArtifactRelationSchema.shape.sourceLocalId,
     /** The render hint applied to this entry. */
     hint: ArtifactContextRenderHintSchema,
     /** Whether the target was successfully resolved. */

@@ -27,6 +27,7 @@ function projectDirectArtifactLink(relation: ArtifactRelation): DirectArtifactVi
   return {
     artifactId: relation.target.id,
     label: `[${relation.target.kind}] ${relation.target.id}`,
+    ...(relation.sourceLocalId === undefined ? {} : { sourceLocalId: relation.sourceLocalId }),
   };
 }
 
@@ -39,7 +40,7 @@ function projectDirectArtifactLink(relation: ArtifactRelation): DirectArtifactVi
  * @returns A relations section, or `undefined` if there are no artifact relations.
  */
 function buildRelationsSection(relations: readonly ArtifactRelation[]): ArtifactViewRelationsSection | undefined {
-  const groupMap = new Map<string, Array<{ artifactId?: string; url?: string; label: string }>>();
+  const groupMap = new Map<string, ArtifactViewLink[]>();
 
   for (const relation of relations) {
     const link = projectDirectArtifactLink(relation);
@@ -75,14 +76,17 @@ function buildRelationsSection(relations: readonly ArtifactRelation[]): Artifact
  */
 function buildNavigation(relations: readonly ArtifactRelation[]): ArtifactViewNavigation {
   const related: ArtifactViewNavigation['related'] = [];
-  // ArtifactViewLink addresses one globally stable artifactId. Kind and
-  // revision validate and describe exact refs, but do not scope that identity.
-  const seenArtifactIds = new Set<string>();
+  // A source part qualifies the relation owner, so links to the same target
+  // remain distinct when they originate from different parts or the whole artifact.
+  const seenRelationSources = new Set<string>();
 
   for (const relation of relations) {
     const link = projectDirectArtifactLink(relation);
-    if (!link || seenArtifactIds.has(link.artifactId)) continue;
-    seenArtifactIds.add(link.artifactId);
+    if (!link) continue;
+
+    const sourceKey = JSON.stringify([link.artifactId, link.sourceLocalId]);
+    if (seenRelationSources.has(sourceKey)) continue;
+    seenRelationSources.add(sourceKey);
 
     related.push(link);
   }
