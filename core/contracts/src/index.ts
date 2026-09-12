@@ -986,6 +986,7 @@ export type {
   StructuredOutputValidationStatus,
   SystemPrompt,
 } from './shared/index.js';
+export { sortJsonValue } from './protocol/export-manifest-json-utils.js';
 export {
   SkillActivationTriggerSchema,
   SkillDeactivationReasonSchema,

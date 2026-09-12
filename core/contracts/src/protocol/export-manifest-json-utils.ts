@@ -13,6 +13,10 @@ export function isJsonObject(value: unknown): value is JsonObject {
 
 /**
  * Recursively sort JSON object keys while preserving array order.
+ *
+ * Canonical key-order normalisation used before signing or hashing a JSON value
+ * (callers still `JSON.stringify` the result); keys are ordered via
+ * {@link compareStrings} (case-folded primary, code-point tie-break).
  * @param value - JSON-compatible value to sort
  * @returns Value with object keys sorted deterministically
  */
