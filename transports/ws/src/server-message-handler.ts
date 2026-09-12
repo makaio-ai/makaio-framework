@@ -19,13 +19,16 @@ import type {
   BusUnsubscribeMessage,
   CorrelationTracker,
 } from '@makaio/bus-core';
-import { deserializeTransportError } from '@makaio/bus-core';
+import { deserializeTransportError, getSubjectFromBusMessage, matchesSubscription } from '@makaio/bus-core';
 import { isRecord } from '@makaio/utils';
 import type { TransportAuth, WebSocketLike } from './types.js';
 import type { BroadcastAggregator } from './broadcast-aggregator.js';
 import type { ClientRegistry, ClientSubscriptionUpdate } from './client-registry.js';
 import type { TransportReceiveContext } from '@makaio/core';
-import { resolveHmacIdentityAllowedSubjects } from './auth/identity-secret-registry.js';
+import {
+  resolveHmacIdentityAllowedMessageSubjects,
+  resolveHmacIdentityAllowedSubscriptionSubjects,
+} from './auth/identity-secret-registry.js';
 
 /**
  * Bus message types that carry a `namespace` and `subject`.
@@ -39,8 +42,10 @@ type SubjectBearingBusMessage = BusRequestMessage | BusEventMessage | BusBroadca
 interface SubjectRestriction {
   /** Authenticated peer identity. */
   readonly peerId: string;
-  /** Subjects the peer may send or advertise. */
-  readonly allowedSubjects: ReadonlySet<string>;
+  /** Subjects the peer may send in request, event, or broadcast messages. */
+  readonly allowedMessageSubjects: ReadonlySet<string> | null;
+  /** Subjects the peer may advertise in subscribe or unsubscribe messages. */
+  readonly allowedSubscriptionSubjects: ReadonlySet<string> | null;
 }
 
 /**
@@ -107,26 +112,27 @@ function isWildcardPattern(subject: string): boolean {
 }
 
 /**
- * Filter a subscription subjects map against an allowed-subjects list.
+ * Filter a subscription subjects map against its allowed-subscription-subjects list.
  *
  * For restricted identities, each subject key is checked:
- * - Wildcard patterns are allowed only when they appear **verbatim** in the
- *   allowed list (e.g. `adapter.*` is allowed only if `allowedSubjects`
- *   contains `adapter.*` literally). This prevents a wildcard from matching
- *   subjects outside the allow list.
- * - Exact subjects are allowed when they appear in the allowed list.
+ * - When an allow list exists, wildcard patterns are allowed only when they
+ *   appear **verbatim** in that list (e.g. `adapter.*` is allowed only if
+ *   `allowedSubscriptionSubjects` contains `adapter.*` literally). This
+ *   prevents a wildcard from matching subjects outside the allow list.
+ * - Exact subjects are allowed when they appear in the allowed list or match an
+ *   allowed wildcard pattern.
  *
  * Returns a new subjects map with disallowed entries removed, or `null` when
  * the filtered map is empty (indicating the entire message should be dropped).
  * @param subjects - Inbound subscription subjects map.
- * @param allowedSubjects - The peer's allowed subjects list.
+ * @param allowedSubscriptionSubjects - The peer's allowed subscription subjects list.
  * @param debug - Whether to log filtering decisions.
  * @param peerId - Peer identity for log messages.
  * @returns Filtered subjects map, or `null` when all subjects were removed.
  */
 function filterSubscriptionSubjects(
   subjects: Record<string, number[]>,
-  allowedSubjects: ReadonlySet<string>,
+  allowedSubscriptionSubjects: ReadonlySet<string> | null,
   debug: boolean,
   peerId: string,
 ): Record<string, number[]> | null {
@@ -134,16 +140,20 @@ function filterSubscriptionSubjects(
 
   for (const [subject, priorities] of Object.entries(subjects)) {
     if (isWildcardPattern(subject)) {
-      // Wildcards are only allowed when they appear verbatim in the allow set.
-      if (allowedSubjects.has(subject)) {
+      // When restricted, wildcards are only allowed when they appear verbatim
+      // in the allow set.
+      if (allowedSubscriptionSubjects === null || allowedSubscriptionSubjects.has(subject)) {
         filtered[subject] = priorities;
       } else if (debug) {
         console.debug(
           `[ServerTransport] Dropping wildcard subscription ` +
-            `'${subject}': not in allowedSubjects for peer '${peerId}'`,
+            `'${subject}': not in allowedSubscriptionSubjects for peer '${peerId}'`,
         );
       }
-    } else if (allowedSubjects.has(subject)) {
+    } else if (
+      allowedSubscriptionSubjects === null ||
+      [...allowedSubscriptionSubjects].some((pattern) => matchesSubscription(subject, pattern))
+    ) {
       filtered[subject] = priorities;
     } else if (debug) {
       console.debug(
@@ -252,14 +262,22 @@ function handleCorrelationMessage(message: BusMessage, deps: MessageHandlerDeps,
 /**
  * Resolve the current subject restriction for an inbound socket.
  * @param receiveContext - Authentication-derived receive context.
- * @returns The peer restriction, or `null` for an unrestricted peer.
+ * @returns The peer restriction, or `null` when neither subject direction is restricted.
  */
 function resolveSubjectRestriction(receiveContext: TransportReceiveContext | undefined): SubjectRestriction | null {
   const peerId = receiveContext?.peer?.id;
   if (peerId === undefined) return null;
 
-  const allowedSubjects = resolveHmacIdentityAllowedSubjects(peerId);
-  return allowedSubjects === null ? null : { peerId, allowedSubjects };
+  const allowedMessageSubjects = resolveHmacIdentityAllowedMessageSubjects(peerId);
+  const allowedSubscriptionSubjects = resolveHmacIdentityAllowedSubscriptionSubjects(peerId);
+  if (allowedMessageSubjects === null && allowedSubscriptionSubjects === null) {
+    return null;
+  }
+  return {
+    peerId,
+    allowedMessageSubjects,
+    allowedSubscriptionSubjects,
+  };
 }
 
 /**
@@ -279,7 +297,7 @@ function rejectDisallowedSubject(
   if (restriction === null || !isSubjectBearingMessage(message)) return false;
 
   const fullSubject = `${message.namespace}.${message.subject}`;
-  if (restriction.allowedSubjects.has(fullSubject)) return false;
+  if (restriction.allowedMessageSubjects === null || restriction.allowedMessageSubjects.has(fullSubject)) return false;
 
   if (message.type === 'request') {
     deps.sendSafely(
@@ -317,7 +335,12 @@ function resolveSubscriptionSubjects(
   }
   if (restriction === null) return message.subjects;
 
-  const filtered = filterSubscriptionSubjects(message.subjects, restriction.allowedSubjects, debug, restriction.peerId);
+  const filtered = filterSubscriptionSubjects(
+    message.subjects,
+    restriction.allowedSubscriptionSubjects,
+    debug,
+    restriction.peerId,
+  );
   if (filtered === null && debug) {
     console.debug(
       `[ServerTransport] Dropping ${message.type} message: all subjects filtered for peer '${restriction.peerId}'`,
@@ -350,7 +373,10 @@ async function routeSubscriptionMessage(
 
   const updates =
     subscriptionMessage.type === 'subscribe'
-      ? deps.registry.handleSubscribeMessage(socket, { ...subscriptionMessage, subjects })
+      ? deps.registry.handleSubscribeMessage(socket, {
+          ...subscriptionMessage,
+          subjects,
+        })
       : deps.registry.handleUnsubscribeMessage(socket, subjects);
   const handlersApplied = await invokeSubscriptionUpdates(updates, deps.handlers, {
     debug: deps.debug,
@@ -385,7 +411,8 @@ async function routeBroadcastMessage(
     return true;
   }
 
-  const targetClients = deps.registry.getInterestedClients(broadcastMessage.subject, broadcastMessage.payload, socket);
+  const subject = getSubjectFromBusMessage(broadcastMessage) ?? undefined;
+  const targetClients = deps.registry.getInterestedClients(subject, broadcastMessage.payload, socket);
   const timeout = deps.normalizeBroadcastTimeout(broadcastMessage.timeout);
   deps.broadcastAggregator.startClientBroadcast(socket, broadcastMessage, targetClients, deps.sendSafely, timeout);
   await invokeHandlers(message, deps.handlers, { debug: deps.debug, receiveContext });

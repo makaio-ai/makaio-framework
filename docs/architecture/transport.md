@@ -140,10 +140,33 @@ The registration uses peer kind `workflow-execution-attempt`, attaches
 execution-attempt subject set. Call `registration.cleanup()` when the attempt
 ends to revoke that exact secret.
 
-`allowedSubjects` is an authorization boundary: it restricts the messages and
-subscription patterns the peer may send. It does not advertise request-handler
-interest. A remote attempt receives a server-routed request only after it has
-also advertised a matching request subscription.
+`allowedSubjects` has been removed. Use the directional authorization fields
+instead:
+
+| Field | Authorizes | Default for an execution-attempt registration |
+| --- | --- | --- |
+| `allowedMessageSubjects` | Messages the attempt may send to the authority | The canonical attempt-to-authority subject matrix |
+| `allowedSubscriptionSubjects` | Subjects the attempt may advertise as request handlers | `execution-attempt.operation.deliver`, `execution-attempt.control.deliver`, `workflow.gate.respond`, and `workflow.<executionId>.cancel` |
+
+The workflow-attempt helpers apply the corresponding default matrix when either
+field is omitted. Each matrix is deny-by-default: a subject absent from its
+direction is rejected. At the lower-level `registerHmacIdentitySecret` API,
+providing either directional list makes an omitted other direction an empty
+allow-list; omitting both leaves that generic identity unrestricted.
+
+An allowed subscription authorizes only an advertisement. It does not advertise
+request-handler interest: a remote attempt receives a server-routed request
+only after it has advertised a matching request subscription.
+
+`execution-attempt.operation.deliver` and `execution-attempt.control.deliver`
+are additionally server-bound to the authenticated Attempt identity. The
+WebSocket server evaluates this required recipient filter for every outbound
+request, event, and broadcast delivery, independently of current subscription
+advertisements. An attempt therefore cannot receive another Attempt's delivery
+by omitting or withdrawing subscriptions. `workflow.gate.respond` is currently
+addressed only by `executionId`, `gateId`, and `frameId`; it has no Attempt
+recipient. Its grant therefore does **not** provide Attempt isolation. FACT-252
+owns the required Attempt-addressed gate protocol change.
 
 ### MessagePort Transport
 

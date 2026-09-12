@@ -43,14 +43,20 @@ export interface MintWorkflowExecutionBusSecretParams {
    */
   readonly executionId: string;
   /**
-   * Optional subject restriction list for this execution attempt.
+   * Optional outbound message restriction list for this execution attempt.
    *
-   * The transport accepts only matching messages and subscription
-   * advertisements from the peer. Server-to-peer request routing still
-   * requires a matching advertised subscription. When omitted, the default
-   * list from {@link buildExecutionAttemptAllowedSubjects} is used.
+   * When omitted, the default message subjects from
+   * {@link buildExecutionAttemptSubjectAccess} are used.
    */
-  readonly allowedSubjects?: readonly string[];
+  readonly allowedMessageSubjects?: readonly string[];
+  /**
+   * Optional subscription restriction list for this execution attempt.
+   *
+   * When omitted, the default subscription subjects from
+   * {@link buildExecutionAttemptSubjectAccess} are used. Server-to-peer
+   * request routing still requires a matching advertised subscription.
+   */
+  readonly allowedSubscriptionSubjects?: readonly string[];
 }
 
 /** Parameters for registering a caller-provided workflow execution bus secret. */
@@ -71,23 +77,14 @@ export interface RotateWorkflowExecutionBusSecretParams {
 // Static subject lists for execution-attempt identities
 // ---------------------------------------------------------------------------
 
-/** Static execution subjects derived from their canonical definitions. */
-const STATIC_EXECUTION_SUBJECTS = [
+/** Static outbound execution subjects derived from their canonical definitions. */
+const STATIC_EXECUTION_MESSAGE_SUBJECTS = [
   ExecutionAttemptSubjects.runtime.register,
   ExecutionAttemptSubjects.bootstrap.awaitStart,
   ExecutionAttemptSubjects.instruction.get,
   ExecutionAttemptSubjects.operation.admit,
   ExecutionAttemptSubjects.operation.report,
-  ExecutionAttemptSubjects.operation.deliver,
   ExecutionAttemptSubjects.outcome.submit,
-  // Known framework gap (see runtime-registration-client.ts trust-boundary note):
-  // the per-identity allowlist is one flat set, so subscribe and request grants
-  // cannot be separated. Granting control.deliver/control.report here lets any
-  // authenticated attempt identity also *originate* those requests, not only
-  // answer them. Blast radius is fenced by the in-process attempt/incarnation
-  // filter and the runtimeGeneration check in attempt-control-client.ts; closing
-  // it needs direction-aware transport authorization. Tracked in FACT-153.
-  ExecutionAttemptSubjects.control.deliver,
   ExecutionAttemptSubjects.control.report,
   WorkerSubjects.runtime.inputs.get,
   WorkerSubjects.control.outcome.submit,
@@ -109,7 +106,6 @@ const STATIC_EXECUTION_SUBJECTS = [
   WorkflowSubjects.gate.suspended,
   WorkflowSubjects.gate.resumed,
   WorkflowSubjects.gate.resolved,
-  WorkflowSubjects.gate.respond,
   WorkflowSubjects.state.get,
   WorkflowSubjects.state.patch,
   WorkflowSubjects.resolveAgent,
@@ -128,43 +124,90 @@ const STATIC_EXECUTION_SUBJECTS = [
   SubagentSubjects.kill,
 ] as const;
 
+/** Static inbound endpoint subjects execution attempts may advertise. */
+const STATIC_EXECUTION_SUBSCRIPTION_SUBJECTS = [
+  ExecutionAttemptSubjects.operation.deliver,
+  ExecutionAttemptSubjects.control.deliver,
+  // `gate.respond` is execution-addressed today; it does not carry an Attempt
+  // recipient. The operation/control binding below does not claim to isolate
+  // this subject. FACT-252 owns the Attempt-addressed gate protocol.
+  WorkflowSubjects.gate.respond,
+] as const;
+
+/** Directional subject restrictions for an execution-attempt identity. */
+export interface ExecutionAttemptSubjectAccess {
+  /** Subjects the attempt may send to the authority. */
+  readonly allowedMessageSubjects: readonly string[];
+  /** Subjects the attempt may advertise to receive from the authority. */
+  readonly allowedSubscriptionSubjects: readonly string[];
+}
+
 /**
- * Build the complete allowed-subjects list for a workflow execution attempt.
+ * Build the complete directional subject restrictions for a workflow execution
+ * attempt.
  *
- * The returned list includes all static subjects that any execution attempt
- * may need, plus the dynamic per-execution cancel subject. Subjects are
- * statically enumerable even when the workflow content does not use every
- * feature (e.g. state, delegation, artifacts, subagents) because the
- * transport restriction is deny-by-default: listing a subject that the
+ * Message subjects include every static operation an attempt may originate.
+ * Subscription subjects include only the authority-delivered operation,
+ * control, and gate-response endpoints plus the dynamic per-execution
+ * cancellation endpoint.
+ * Subjects are statically enumerable even when the workflow content does not
+ * use every feature (e.g. state, delegation, artifacts, subagents) because
+ * the transport restriction is deny-by-default: listing a subject that the
  * workflow never uses has no security impact. Delegate result finalization is
  * routed through the static Authority gateway; dynamic finalizer subjects are
  * never exposed to remote attempts.
  * @param executionId - Workflow execution identifier for the dynamic cancel subject.
- * @returns Complete allowed-subjects list for the execution attempt.
+ * @returns Complete directional subject restrictions for the execution attempt.
  */
-export function buildExecutionAttemptAllowedSubjects(executionId: string): readonly string[] {
-  return [...STATIC_EXECUTION_SUBJECTS.map(getFullSubjectForSubjectDefinition), `workflow.${executionId}.cancel`];
+export function buildExecutionAttemptSubjectAccess(executionId: string): ExecutionAttemptSubjectAccess {
+  return {
+    allowedMessageSubjects: STATIC_EXECUTION_MESSAGE_SUBJECTS.map(getFullSubjectForSubjectDefinition),
+    allowedSubscriptionSubjects: [
+      ...STATIC_EXECUTION_SUBSCRIPTION_SUBJECTS.map(getFullSubjectForSubjectDefinition),
+      `workflow.${executionId}.cancel`,
+    ],
+  };
+}
+
+/**
+ * Reject the retired flat access property before a public helper applies
+ * directional defaults or rotates an existing identity.
+ * @param params - Runtime-shaped public helper parameters to validate.
+ */
+function assertNoRetiredAllowedSubjects(params: object): void {
+  if ('allowedSubjects' in params) {
+    throw new Error(
+      'Workflow execution bus access no longer accepts allowedSubjects; use allowedMessageSubjects and/or allowedSubscriptionSubjects',
+    );
+  }
 }
 
 /**
  * Register caller-provided bus access for one workflow execution attempt.
  *
  * Use this when a provider already owns secret delivery. The identity still
- * receives the canonical execution peer kind, claim, and subject restriction.
- * @param params - Attempt identity, execution claim, secret, and optional subject restriction.
+ * receives the canonical execution peer kind, claim, and directional subject
+ * restrictions.
+ * @param params - Attempt identity, execution claim, secret, and optional directional restrictions.
  * @returns Registered secret plus cleanup handle.
  */
 export function registerWorkflowExecutionBusSecret(
   params: RegisterWorkflowExecutionBusSecretParams,
 ): WorkflowExecutionBusSecret {
+  assertNoRetiredAllowedSubjects(params);
   const { executionAttemptId, executionId, secret } = params;
-  const allowedSubjects = params.allowedSubjects ?? buildExecutionAttemptAllowedSubjects(executionId);
+  const defaultAccess = buildExecutionAttemptSubjectAccess(executionId);
   return {
     secret,
     cleanup: registerHmacIdentitySecret(executionAttemptId, secret, {
       peerKind: 'workflow-execution-attempt',
       claims: { executionId },
-      allowedSubjects,
+      allowedMessageSubjects: params.allowedMessageSubjects ?? defaultAccess.allowedMessageSubjects,
+      allowedSubscriptionSubjects: params.allowedSubscriptionSubjects ?? defaultAccess.allowedSubscriptionSubjects,
+      requiredSubscriptionFilters: {
+        [getFullSubjectForSubjectDefinition(ExecutionAttemptSubjects.operation.deliver)]: { executionAttemptId },
+        [getFullSubjectForSubjectDefinition(ExecutionAttemptSubjects.control.deliver)]: { executionAttemptId },
+      },
     }),
   };
 }
@@ -177,15 +220,16 @@ export function registerWorkflowExecutionBusSecret(
  * claim so bus handlers can verify execution-bound access via
  * `peer.claims.executionId`.
  *
- * When `params.allowedSubjects` is not provided, the default allowed-subjects
- * list from {@link buildExecutionAttemptAllowedSubjects} is used to restrict
- * the identity to the minimum set of bus subjects a worker needs.
+ * When directional restrictions are not provided, the default matrix from
+ * {@link buildExecutionAttemptSubjectAccess} restricts the identity to the
+ * minimum outbound and subscription subjects a worker needs.
  * @param params - Attempt and execution identifiers.
  * @returns Secret plus cleanup handle.
  */
 export function mintWorkflowExecutionBusSecret(
   params: MintWorkflowExecutionBusSecretParams,
 ): WorkflowExecutionBusSecret {
+  assertNoRetiredAllowedSubjects(params);
   const secret = randomBytes(32).toString('hex');
   return registerWorkflowExecutionBusSecret({ ...params, secret });
 }
@@ -232,6 +276,7 @@ export function rotateWorkflowExecutionBusSecret(
 export function mintOrRotateWorkflowExecutionBusSecret(
   params: MintWorkflowExecutionBusSecretParams,
 ): WorkflowExecutionBusSecret {
+  assertNoRetiredAllowedSubjects(params);
   const existing = resolveHmacIdentitySecret(params.executionAttemptId);
   if (existing !== null) {
     return rotateWorkflowExecutionBusSecret(params);

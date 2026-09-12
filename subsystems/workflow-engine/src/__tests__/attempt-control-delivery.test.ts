@@ -1,4 +1,5 @@
 import { createBusContext, createBusInstance } from '@makaio/bus-core';
+import { ServerTransport } from '@makaio/bus-transport-websocket';
 import {
   ExecutionAttemptNamespace,
   ExecutionAttemptOutcomeSchema,
@@ -11,9 +12,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { reconcileAttemptCancellation } from '../attempt-control-delivery.js';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { registerExecutionAttemptHandlers } from '../execution-attempt-handlers.js';
+import { mintWorkflowExecutionBusSecret } from '../../../../runtimes/node/src/workflow-execution-bus-access.js';
 import { createInMemoryAttemptRepository } from '../testing/in-memory-attempt-repository.js';
 import { driveTestAttemptToAllocated, makeTestInstruction } from '../testing/attempt-fixtures.js';
 import { AttemptGateTransport, attemptPeer } from './execution-attempt-gate-harness.js';
+import { MockWebSocket, MockWebSocketServer } from '../../../../transports/ws/src/__tests__/test-helpers.js';
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -262,5 +265,185 @@ describe('bounded Attempt Cancel delivery', () => {
       attemptPeer(h.ids.executionAttemptId, h.ids.executionId),
     );
     expect(after.error).toBeDefined();
+  });
+
+  it('routes Authority delivery only to the addressed default-matrix Attempt when another Attempt advertises high-priority forged filters', async () => {
+    const h = await fixture();
+    await h.cancel();
+    h.bus.unregisterTransport(h.transport.name);
+
+    const runtimeAIdentity = h.ids.executionAttemptId;
+    const runtimeBIdentity = 'attempt-b';
+    const controlDeliverySubject = 'execution-attempt.control.deliver';
+    const operationDeliverySubject = 'execution-attempt.operation.deliver';
+    const cleanupRuntimeA = mintWorkflowExecutionBusSecret({
+      executionAttemptId: runtimeAIdentity,
+      executionId: h.ids.executionId,
+    }).cleanup;
+    const cleanupRuntimeB = mintWorkflowExecutionBusSecret({
+      executionAttemptId: runtimeBIdentity,
+      executionId: h.ids.executionId,
+    }).cleanup;
+    const websocket = new MockWebSocketServer();
+    const runtimeA = new MockWebSocket();
+    const runtimeB = new MockWebSocket();
+    const server = new ServerTransport({
+      websocket,
+      auth: {
+        authenticateClient: async () => undefined,
+        authenticateServer: async () => undefined,
+        handleAuthMessage: () => false,
+        getReceiveContext: (socket) => {
+          const id = socket === runtimeA ? runtimeAIdentity : socket === runtimeB ? runtimeBIdentity : undefined;
+          return id === undefined
+            ? undefined
+            : {
+                transportName: 'websocket',
+                peer: {
+                  kind: 'workflow-execution-attempt',
+                  id,
+                  authenticated: true,
+                  claims: { executionId: h.ids.executionId },
+                },
+              };
+        },
+        isSocketAuthenticated: () => true,
+        cleanupSocket: () => undefined,
+        cleanup: () => undefined,
+      },
+    });
+    let authorityIngressDeliveries = 0;
+    const unregisterAuthorityIngressProbe = server.onReceive(async (message) => {
+      if (message.type === 'request' && `${message.namespace}.${message.subject}` === controlDeliverySubject) {
+        authorityIngressDeliveries += 1;
+      }
+    });
+
+    try {
+      h.bus.registerTransport(server);
+      await server.connect();
+      websocket.simulateConnection(runtimeA);
+      websocket.simulateConnection(runtimeB);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      runtimeA.receiveMessage(
+        JSON.stringify({
+          type: 'subscribe',
+          subjects: { [operationDeliverySubject]: [0], [controlDeliverySubject]: [0] },
+          deliveryClasses: {
+            [operationDeliverySubject]: 'relayable',
+            [controlDeliverySubject]: 'relayable',
+          },
+          filters: {
+            [operationDeliverySubject]: {
+              executionAttemptId: h.ids.executionAttemptId,
+              runtimeIncarnationId: h.correlation.runtimeIncarnationId,
+            },
+            [controlDeliverySubject]: {
+              executionAttemptId: h.ids.executionAttemptId,
+              runtimeIncarnationId: h.correlation.runtimeIncarnationId,
+            },
+          },
+        }),
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      runtimeA.clearSentMessages();
+      runtimeB.receiveMessage(
+        JSON.stringify({
+          type: 'subscribe',
+          subjects: { [operationDeliverySubject]: [100], [controlDeliverySubject]: [100] },
+          deliveryClasses: {
+            [operationDeliverySubject]: 'relayable',
+            [controlDeliverySubject]: 'relayable',
+          },
+          filters: {
+            [operationDeliverySubject]: { executionAttemptId: h.ids.executionAttemptId },
+            [controlDeliverySubject]: { executionAttemptId: h.ids.executionAttemptId },
+          },
+        }),
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      runtimeB.clearSentMessages();
+
+      const operationDelivered = h.bus.request(
+        ExecutionAttemptSubjects.operation.deliver,
+        {
+          executionAttemptId: h.ids.executionAttemptId,
+          runtimeIncarnationId: h.correlation.runtimeIncarnationId,
+          runtimeGeneration: h.correlation.runtimeGeneration,
+          operationId: 'operation-a',
+          operationKind: 'runtime-probe',
+        },
+        { timeout: 1_000 },
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const authorityOperationDelivery = JSON.parse(runtimeA.sentMessages.at(-1)!);
+      expect(authorityOperationDelivery).toMatchObject({
+        type: 'request',
+        namespace: 'execution-attempt',
+        subject: 'operation.deliver',
+      });
+      expect(runtimeB.sentMessages).toEqual([]);
+      runtimeA.receiveMessage(
+        JSON.stringify({
+          type: 'response',
+          correlationId: authorityOperationDelivery.correlationId,
+          result: { receipt: 'completed' },
+        }),
+      );
+      await expect(operationDelivered).resolves.toEqual({ receipt: 'completed' });
+      runtimeA.clearSentMessages();
+
+      runtimeB.receiveMessage(
+        JSON.stringify({
+          type: 'request',
+          namespace: 'execution-attempt',
+          subject: 'control.deliver',
+          payload: {
+            executionAttemptId: h.ids.executionAttemptId,
+            runtimeIncarnationId: h.correlation.runtimeIncarnationId,
+            runtimeGeneration: h.correlation.runtimeGeneration,
+            cancellation: {
+              requestKey: h.correlation.requestKey,
+              controlRevision: h.correlation.controlRevision,
+              requestedAt: '2026-09-10T10:00:00Z',
+            },
+          },
+          correlationId: 'runtime-b-forged-delivery',
+          messageId: 'runtime-b-forged-delivery-message',
+        }),
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(JSON.parse(runtimeB.sentMessages.at(-1)!)).toMatchObject({
+        type: 'response',
+        correlationId: 'runtime-b-forged-delivery',
+        error: { message: expect.stringContaining(controlDeliverySubject) },
+      });
+      expect(authorityIngressDeliveries).toBe(0);
+      expect(runtimeA.sentMessages).toEqual([]);
+      runtimeB.clearSentMessages();
+
+      const delivered = h.reconcile();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const authorityDelivery = JSON.parse(runtimeA.sentMessages.at(-1)!);
+      expect(authorityDelivery).toMatchObject({
+        type: 'request',
+        namespace: 'execution-attempt',
+        subject: 'control.deliver',
+      });
+      expect(runtimeB.sentMessages).toEqual([]);
+      runtimeA.receiveMessage(
+        JSON.stringify({
+          type: 'response',
+          correlationId: authorityDelivery.correlationId,
+          result: { decision: 'received', receipt: h.receipt },
+        }),
+      );
+      expect(await delivered).toEqual({ kind: 'received', persistence: { kind: 'accepted' } });
+    } finally {
+      unregisterAuthorityIngressProbe();
+      cleanupRuntimeB();
+      cleanupRuntimeA();
+      await server.disconnect();
+    }
   });
 });

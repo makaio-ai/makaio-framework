@@ -84,7 +84,7 @@ describe('Server mode behavior', () => {
     const identityId = 'restricted-request-target';
     registerHmacIdentitySecret(identityId, 'request-target-secret', {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: ['worker.control.bootstrap.claim'],
+      allowedSubscriptionSubjects: ['worker.control.bootstrap.claim'],
     });
 
     const wss = new MockWebSocketServer();
@@ -155,7 +155,7 @@ describe('Server mode behavior', () => {
     const identityId = 'restricted-response-observer';
     registerHmacIdentitySecret(identityId, 'response-observer-secret', {
       peerKind: 'worker-bootstrap',
-      allowedSubjects: ['worker.control.bootstrap.claim'],
+      allowedSubscriptionSubjects: ['worker.control.bootstrap.claim'],
     });
 
     const wss = new MockWebSocketServer();

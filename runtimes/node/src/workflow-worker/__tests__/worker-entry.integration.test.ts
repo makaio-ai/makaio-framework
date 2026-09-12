@@ -347,6 +347,80 @@ describe('runWorkflowInWorker integration', () => {
     }
   });
 
+  it('routes an Authority gate approval to an attempt-authenticated worker over WebSocket', async () => {
+    const executionId = 'exec-entry-attempt-gate';
+    const host = await startHostWorkflowBus(executionId);
+    const { executionAttemptId } = host.attempt;
+    const identity = mintWorkflowExecutionBusSecret({ executionAttemptId, executionId });
+
+    try {
+      const gateEvents: Array<{ executionId: string; nodeId: string; prompt: string | undefined }> = [];
+      let resolveGateResponse!: (response: { accepted: boolean }) => void;
+      let rejectGateResponse!: (error: unknown) => void;
+      const gateResponse = new Promise<{ accepted: boolean }>((resolve, reject) => {
+        resolveGateResponse = resolve;
+        rejectGateResponse = reject;
+      });
+
+      const offGate = host.bus.on(WorkflowSubjects.gate.suspended, (ctx) => {
+        gateEvents.push({
+          executionId: ctx.payload.executionId,
+          nodeId: ctx.payload.nodeId,
+          prompt: ctx.payload.prompt,
+        });
+        // The worker installs its gate endpoint before it emits suspension;
+        // defer the Authority request until the transport has propagated it.
+        setTimeout(() => {
+          void host.bus
+            .request(WorkflowSubjects.gate.respond, {
+              executionId: ctx.payload.executionId,
+              gateId: ctx.payload.nodeId,
+              frameId: ctx.payload.frameId,
+              action: 'approve',
+              resumeData: null as JsonValue,
+            })
+            .then(resolveGateResponse, rejectGateResponse);
+        }, 0);
+      });
+
+      try {
+        const result = await runWorkflowInWorker({
+          kind: 'attempt-bound',
+          executionAttemptId,
+          bootstrapDeadlineAt: host.attempt.bootstrapDeadlineAt,
+          config: {
+            ...makeGateConfig(host.busUrl),
+            executionId,
+            cancelSubject: `workflow.${executionId}.cancel`,
+            busAuth: { kind: 'hmac', secret: identity.secret },
+            terminalAuthority: 'authority',
+          },
+          manifest: { contributionRefs: [] },
+          contributionEntrypoints: [],
+        });
+
+        expect(await gateResponse).toEqual({ accepted: true });
+        expect(result).toEqual({
+          executionId,
+          workflowId: 'wf-entry-gate',
+          status: 'completed',
+        });
+        expect(gateEvents).toEqual([
+          {
+            executionId,
+            nodeId: 'approval',
+            prompt: 'Approve worker execution?',
+          },
+        ]);
+      } finally {
+        offGate();
+      }
+    } finally {
+      identity.cleanup();
+      await host.close();
+    }
+  });
+
   it('terminates a running gate step when a cancel event reaches the worker over WebSocket', async () => {
     const host = await startHostWorkflowBus('exec-entry-gate');
 

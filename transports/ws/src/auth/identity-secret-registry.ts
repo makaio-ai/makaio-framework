@@ -6,7 +6,7 @@
  * claimed identity through this registry during the challenge/response flow.
  */
 
-import type { TransportPeerContext } from '@makaio/core';
+import type { PayloadFilter, TransportPeerContext } from '@makaio/core';
 
 interface RegisteredHmacIdentitySecret {
   /** HMAC secret expected for this identity. */
@@ -16,16 +16,19 @@ interface RegisteredHmacIdentitySecret {
   /** Optional opaque claims attached to the authenticated peer context. */
   readonly claims?: Readonly<Record<string, unknown>>;
   /**
-   * Optional subject restriction set.
-   *
-   * When present, the server message handler rejects any inbound request or
-   * event whose full subject (`namespace.subject`) is not in this set. This
-   * provides a transport-level deny-by-default for restricted identities such
-   * as bootstrap peers.
+   * Optional subjects this identity may use for inbound requests and events.
    *
    * Stored as a `ReadonlySet` for O(1) membership checks on the hot path.
    */
-  readonly allowedSubjects?: ReadonlySet<string>;
+  readonly allowedMessageSubjects?: ReadonlySet<string>;
+  /**
+   * Optional subjects this identity may advertise as subscriptions.
+   *
+   * Stored as a `ReadonlySet` for O(1) membership checks on the hot path.
+   */
+  readonly allowedSubscriptionSubjects?: ReadonlySet<string>;
+  /** Trusted payload filters enforced on every matching outbound delivery. */
+  readonly requiredSubscriptionFilters?: Readonly<Record<string, PayloadFilter>>;
 }
 
 /** Options for registering an HMAC identity secret. */
@@ -42,18 +45,59 @@ export interface HmacIdentitySecretRegistrationOptions {
    */
   readonly claims?: Readonly<Record<string, unknown>>;
   /**
-   * Optional subject restriction list for this identity.
+   * Optional subjects this identity may use for requests and events.
    *
-   * When provided, the server message handler rejects any inbound request,
-   * event, or broadcast whose full subject (`namespace.subject`) is not in
-   * this list. Identities without this field are unrestricted.
-   *
-   * Exact string match only; no wildcard support.
+   * If either directional subject option is provided, an omitted direction is
+   * denied by default. Identities without both fields are unrestricted.
    */
-  readonly allowedSubjects?: readonly string[];
+  readonly allowedMessageSubjects?: readonly string[];
+  /**
+   * Optional subjects this identity may advertise as subscriptions.
+   *
+   * If either directional subject option is provided, an omitted direction is
+   * denied by default. Identities without both fields are unrestricted.
+   */
+  readonly allowedSubscriptionSubjects?: readonly string[];
+  /**
+   * Trusted payload filters imposed on every matching outbound delivery.
+   *
+   * Keys must be exact full subjects, never wildcard patterns. These filters
+   * are live server metadata, never cached in peer subscription state. Both
+   * the current policy and any peer-advertised filter must match.
+   */
+  readonly requiredSubscriptionFilters?: Readonly<Record<string, PayloadFilter>>;
 }
 
 const identitySecrets = new Map<string, RegisteredHmacIdentitySecret>();
+
+/**
+ * Freeze a structured-clone policy value before it becomes registry metadata.
+ * @param value - Clone-owned policy value to freeze recursively.
+ * @returns The immutable policy value.
+ */
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object') {
+    for (const nested of Object.values(value)) {
+      deepFreeze(nested);
+    }
+    Object.freeze(value);
+  }
+  return value;
+}
+
+/**
+ * Snapshot immutable server-owned subscription filters for one registration.
+ * @param filters - Trusted filter policy supplied by the registering host.
+ * @returns A detached, deeply frozen policy map.
+ */
+function snapshotRequiredSubscriptionFilters(
+  filters: Readonly<Record<string, PayloadFilter>>,
+): Readonly<Record<string, PayloadFilter>> {
+  const snapshot = Object.fromEntries(
+    Object.entries(filters).map(([subject, filter]) => [subject, deepFreeze(structuredClone(filter))]),
+  ) as Record<string, PayloadFilter>;
+  return Object.freeze(snapshot);
+}
 
 /**
  * Create an idempotent cleanup handle for one exact registry generation.
@@ -99,15 +143,39 @@ export function registerHmacIdentitySecret(
   if (secret.length === 0) {
     throw new Error('registerHmacIdentitySecret requires a non-empty secret');
   }
+  if ('allowedSubjects' in (options as object)) {
+    throw new Error(
+      'registerHmacIdentitySecret no longer accepts allowedSubjects; use allowedMessageSubjects and/or allowedSubscriptionSubjects',
+    );
+  }
   const peerKind = options.peerKind.trim();
   if (peerKind.length === 0) {
     throw new Error('registerHmacIdentitySecret requires a non-empty peerKind');
+  }
+  const hasDirectionalSubjectRestrictions =
+    options.allowedMessageSubjects !== undefined || options.allowedSubscriptionSubjects !== undefined;
+  if (options.requiredSubscriptionFilters !== undefined) {
+    for (const subject of Object.keys(options.requiredSubscriptionFilters)) {
+      if (subject.includes('*')) {
+        throw new Error('registerHmacIdentitySecret requires exact full subjects for requiredSubscriptionFilters');
+      }
+    }
   }
   const registration: RegisteredHmacIdentitySecret = {
     secret,
     peerKind,
     ...(options.claims !== undefined ? { claims: options.claims } : {}),
-    ...(options.allowedSubjects !== undefined ? { allowedSubjects: new Set(options.allowedSubjects) } : {}),
+    ...(hasDirectionalSubjectRestrictions
+      ? {
+          allowedMessageSubjects: new Set(options.allowedMessageSubjects ?? []),
+          allowedSubscriptionSubjects: new Set(options.allowedSubscriptionSubjects ?? []),
+        }
+      : {}),
+    ...(options.requiredSubscriptionFilters !== undefined
+      ? {
+          requiredSubscriptionFilters: snapshotRequiredSubscriptionFilters(options.requiredSubscriptionFilters),
+        }
+      : {}),
   };
 
   identitySecrets.set(identityId, registration);
@@ -165,7 +233,15 @@ export function rotateHmacIdentitySecret(
       : existing.claims !== undefined
         ? { claims: existing.claims }
         : {}),
-    ...(existing.allowedSubjects !== undefined ? { allowedSubjects: existing.allowedSubjects } : {}),
+    ...(existing.allowedMessageSubjects !== undefined
+      ? { allowedMessageSubjects: existing.allowedMessageSubjects }
+      : {}),
+    ...(existing.allowedSubscriptionSubjects !== undefined
+      ? { allowedSubscriptionSubjects: existing.allowedSubscriptionSubjects }
+      : {}),
+    ...(existing.requiredSubscriptionFilters !== undefined
+      ? { requiredSubscriptionFilters: existing.requiredSubscriptionFilters }
+      : {}),
   };
 
   identitySecrets.set(identityId, registration);
@@ -215,15 +291,40 @@ export function resolveHmacIdentityPeer(identityId: string): TransportPeerContex
 }
 
 /**
- * Resolve the subject restriction set for an identity claim.
+ * Resolve the message subject restriction set for an identity claim.
  *
- * Returns the allowed subjects set when the identity has a subject
+ * Returns the allowed message subjects set when the identity has a subject
  * restriction, or `null` when the identity is unrestricted or unknown.
  * @param identityId - Claimed transport identity.
- * @returns Allowed subjects set, or null when unrestricted/unknown.
+ * @returns Allowed message subjects set, or null when unrestricted/unknown.
  */
-export function resolveHmacIdentityAllowedSubjects(identityId: string): ReadonlySet<string> | null {
-  return identitySecrets.get(identityId)?.allowedSubjects ?? null;
+export function resolveHmacIdentityAllowedMessageSubjects(identityId: string): ReadonlySet<string> | null {
+  return identitySecrets.get(identityId)?.allowedMessageSubjects ?? null;
+}
+
+/**
+ * Resolve the subscription subject restriction set for an identity claim.
+ *
+ * Returns the allowed subscription subjects set when the identity has a
+ * subject restriction, or `null` when the identity is unrestricted or unknown.
+ * @param identityId - Claimed transport identity.
+ * @returns Allowed subscription subjects set, or null when unrestricted/unknown.
+ */
+export function resolveHmacIdentityAllowedSubscriptionSubjects(identityId: string): ReadonlySet<string> | null {
+  return identitySecrets.get(identityId)?.allowedSubscriptionSubjects ?? null;
+}
+
+/**
+ * Resolve server-owned filters enforced for one identity's subscriptions.
+ *
+ * Returns `null` when the identity is unknown or has no enforced filters.
+ * @param identityId - Claimed transport identity.
+ * @returns Immutable filter map, or null when no policy is registered.
+ */
+export function resolveHmacIdentityRequiredSubscriptionFilters(
+  identityId: string,
+): Readonly<Record<string, PayloadFilter>> | null {
+  return identitySecrets.get(identityId)?.requiredSubscriptionFilters ?? null;
 }
 
 /**

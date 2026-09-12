@@ -277,9 +277,7 @@ function createReportTracker(
  * The subject is static and filtered by `{ executionAttemptId, runtimeIncarnationId }`
  * on the runtime bus — the same fenced scaffold the operation delivery endpoint
  * uses. A delivery for another attempt or incarnation is a filter miss, never
- * seen here. See the trust-boundary note on
- * {@link installFencedAttemptEndpoint} for the gap that filter leaves open, and
- * for why it is wider on this subject than on `operation.deliver`.
+ * seen here.
  *
  * The endpoint must exist before the runtime registers so that the authority's
  * `reconcileAttemptCancellation` call can reach it. The scaffold's
