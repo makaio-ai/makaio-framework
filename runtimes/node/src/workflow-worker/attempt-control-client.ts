@@ -19,13 +19,18 @@ import { installFencedAttemptEndpoint, type FencedAttemptEndpointIdentity } from
 // ─────────────────────────────────────────────────────────────
 
 /** Options for the report transport retried independently of the cancel signal. */
-export type AttemptControlReportOptions = OutcomeSubmitOptions;
+export type AttemptControlReportOptions = Omit<OutcomeSubmitOptions, 'signal'>;
 
 /** Dependencies for the attempt control endpoint installer. */
 export interface AttemptControlEndpointDeps {
   /** Retry and reconnect options for the `control.report` retrying transport. */
   readonly reportOptions?: AttemptControlReportOptions;
-  /** Outer cancellation signal for endpoint installation only, not for report delivery. */
+  /**
+   * Shutdown signal for `control.report` delivery, independent from the Cancel
+   * signal that stops the workload.
+   */
+  readonly reportSignal?: AbortSignal;
+  /** Outer cancellation signal for endpoint installation only. */
   readonly signal?: AbortSignal;
   /** Wall-clock supplier; defaults to `() => new Date()`. */
   readonly now?: () => Date;
@@ -151,12 +156,13 @@ function buildReceipt(delivery: ExecutionAttemptControlDelivery, now: Date): Exe
  *
  * `accepted` and `duplicate` are delivery success. `refused` is a terminal
  * correlation fact recorded but not thrown. Transport failure is caught and
- * recorded. The report is NOT tied to the cancel signal so the workload stop
- * does not abort its own evidence submission.
+ * recorded. The report is not tied to the Cancel signal that stops the
+ * workload, but the independent shutdown signal can stop a hanging delivery.
  * @param bus - Runtime bus authenticated as the attempt peer.
  * @param receipt - Accepted receipt that correlates this report.
  * @param derived - Conclusive boundary and conclusion to send.
  * @param options - Retry and reconnect options.
+ * @param signal - Optional shutdown signal for this report delivery.
  * @returns Last delivery outcome.
  */
 async function sendControlReport(
@@ -164,6 +170,7 @@ async function sendControlReport(
   receipt: ExecutionAttemptControlReceipt,
   derived: DerivedBoundaryResult,
   options: AttemptControlReportOptions | undefined,
+  signal: AbortSignal | undefined,
 ): Promise<AttemptControlLastReport> {
   const payload = {
     executionAttemptId: receipt.executionAttemptId,
@@ -176,11 +183,12 @@ async function sendControlReport(
   };
   try {
     const response = await requestAuthorityWithRetry<ExecutionAttemptControlReportResponse>(
-      (timeout) =>
+      (timeout, requestSignal) =>
         bus.request(ExecutionAttemptSubjects.control.report, payload, {
           timeout,
+          signal: requestSignal,
         }) as Promise<ExecutionAttemptControlReportResponse>,
-      options,
+      signal === undefined ? options : { ...options, signal },
     );
     const validResponse = ExecutionAttemptSchemas['control.report'].response.parse(response);
     if (validResponse.decision === 'accepted' || validResponse.decision === 'duplicate') {
@@ -204,7 +212,7 @@ interface ReportTracker {
     receipt: ExecutionAttemptControlReceipt,
     derived: DerivedBoundaryResult,
     onSettled: (result: AttemptControlLastReport) => void,
-  ) => void;
+  ) => boolean;
   /**
    * Await every report still in flight.
    * @returns A promise that resolves once no dispatched report is pending.
@@ -224,19 +232,26 @@ interface ReportTracker {
  * still cannot turn shutdown into a throw.
  * @param bus - Runtime bus authenticated as the attempt peer.
  * @param options - Retry and reconnect options for the report transport.
+ * @param signal - Optional shutdown signal for report delivery.
  * @returns The tracker the endpoint dispatches through.
  */
-function createReportTracker(bus: IMakaioBus, options: AttemptControlReportOptions | undefined): ReportTracker {
+function createReportTracker(
+  bus: IMakaioBus,
+  options: AttemptControlReportOptions | undefined,
+  signal: AbortSignal | undefined,
+): ReportTracker {
   const pending = new Set<Promise<void>>();
   let lastReport: AttemptControlLastReport | undefined;
   return {
-    dispatch(receipt, derived, onSettled): void {
-      const run: Promise<void> = sendControlReport(bus, receipt, derived, options).then((result) => {
+    dispatch(receipt, derived, onSettled): boolean {
+      if (signal?.aborted === true) return false;
+      const run: Promise<void> = sendControlReport(bus, receipt, derived, options, signal).then((result) => {
         lastReport = result;
         pending.delete(run);
         onSettled(result);
       });
       pending.add(run);
+      return true;
     },
     async settle(): Promise<void> {
       // A delivery answered just before the endpoint was cleaned up defers its
@@ -287,7 +302,7 @@ export async function installAttemptControlEndpoint(
   // holds one entry per accepted cancel rather than one per delivery.
   const receipts = new Map<number, StoredReceipt>();
   const cancelController = new AbortController();
-  const reports = createReportTracker(bus, deps.reportOptions);
+  const reports = createReportTracker(bus, deps.reportOptions, deps.reportSignal);
 
   /**
    * Re-run derivation for a stored receipt and dispatch a report if conclusive.
@@ -301,11 +316,11 @@ export async function installAttemptControlEndpoint(
     if (!needsReport(stored)) return;
     const derived = deriveAttemptControlConclusion(observer.snapshot(), now());
     if (derived === 'pending') return;
-    stored.reportPending = true;
-    reports.dispatch(stored.receipt, derived, (result) => {
+    const dispatched = reports.dispatch(stored.receipt, derived, (result) => {
       stored.reportPending = false;
       stored.lastReportStatus = result.status;
     });
+    if (dispatched) stored.reportPending = true;
   }
 
   /**

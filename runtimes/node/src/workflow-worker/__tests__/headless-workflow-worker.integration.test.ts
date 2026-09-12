@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { createWorkflowCancelSubject, ExecutionAttemptSubjects } from '@makaio/contracts';
 import { KernelSubjects } from '@makaio/kernel';
+import { reconcileAttemptCancellation } from '@makaio/subsystem-workflow-engine';
 import { runHeadlessWorkflowWorker, type HeadlessWorkflowWorkerDeps } from '../headless-workflow-worker.js';
 import { createLocalGitWorkspacePreparation } from '../local-git-workspace-preparation.js';
 import { AttemptOutcomeDeliveryError } from '../outcome-submission.js';
@@ -728,6 +729,71 @@ describe('runHeadlessWorkflowWorker integration', () => {
     expect(onPostCommit).toHaveBeenCalledTimes(1);
     expect(authoritySide.attempt.convergedOutcomes).toEqual([workflowResult(result.outcome)]);
   }, 20_000);
+
+  it('bounds shutdown when a control report hangs and leaves the closed bus inactive', async () => {
+    const executionId = 'exec-control-report-shutdown-deadline';
+    authoritySide = await createAuthoritySide(executionId);
+    const { authority, executionAttemptId } = authoritySide.attempt;
+    let markExecutionStarted!: () => void;
+    const executionStarted = new Promise<void>((resolve) => {
+      markExecutionStarted = resolve;
+    });
+    let markReportEntered!: () => void;
+    const reportEntered = new Promise<void>((resolve) => {
+      markReportEntered = resolve;
+    });
+    let releaseReport!: () => void;
+    const reportGate = new Promise<void>((resolve) => {
+      releaseReport = resolve;
+    });
+    const reportAttemptControl = authority.reportAttemptControl.bind(authority);
+    const reportSpy = vi.spyOn(authority, 'reportAttemptControl').mockImplementation(async (...args) => {
+      markReportEntered();
+      await reportGate;
+      return await reportAttemptControl(...args);
+    });
+
+    try {
+      const worker = runHeadlessWorkflowWorker(
+        createTestDeps(authoritySide, {
+          cwd,
+          executionId,
+          execute: async (_bus, _runContext, _runtimeContext, executionSignal) => {
+            markExecutionStarted();
+            await new Promise<void>((_resolve, reject) => {
+              executionSignal.addEventListener('abort', () => reject(executionSignal.reason), { once: true });
+            });
+            throw new Error('The execution cancellation signal must abort the workload');
+          },
+        }),
+        new AbortController().signal,
+      );
+      await executionStarted;
+      await authority.requestAttemptCancellation({
+        executionId,
+        executionAttemptId,
+        requestKey: 'shutdown-deadline-report',
+      });
+      await expect(
+        reconcileAttemptCancellation(
+          { bus: authoritySide.bus, authority },
+          { executionId, executionAttemptId, timeoutMs: 5_000 },
+        ),
+      ).resolves.toMatchObject({ kind: 'received' });
+      await reportEntered;
+
+      const shutdownStartedAt = Date.now();
+      const result = await worker;
+
+      expect(result).toMatchObject({ outcome: { kind: 'cancelled' }, decision: 'accepted' });
+      expect(Date.now() - shutdownStartedAt).toBeLessThan(8_000);
+      expect(reportSpy).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(authoritySide.getPeerCount()).toBe(0));
+    } finally {
+      releaseReport();
+      reportSpy.mockRestore();
+    }
+  }, 15_000);
 
   it('throws on cancellation during bootstrap', async () => {
     const executionId = 'exec-cancel-bootstrap';

@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import {
@@ -52,6 +52,10 @@ async function createHarness(
     readonly withWorkspace?: boolean;
     /** Report transport budget; short values let a case exhaust it deliberately. */
     readonly reportRetry?: AttemptControlReportOptions['retry'];
+    /** Shutdown signal for control reports, separate from Cancel delivery. */
+    readonly reportSignal?: AbortSignal;
+    /** Reconnect hook for proving an aborted report cannot retry. */
+    readonly reportReconnect?: AttemptControlReportOptions['reconnect'];
   } = {},
 ): Promise<IntegrationHarness> {
   const authorityBus = createBusInstance();
@@ -92,7 +96,13 @@ async function createHarness(
   const controlEndpoint = await installAttemptControlEndpoint(
     bus,
     { executionAttemptId, runtimeIncarnationId },
-    { reportOptions: { retry: opts.reportRetry ?? { maxRetries: 2, baseDelayMs: 10, deadlineMs: 5_000 } } },
+    {
+      reportOptions: {
+        retry: opts.reportRetry ?? { maxRetries: 2, baseDelayMs: 10, deadlineMs: 5_000 },
+        ...(opts.reportReconnect === undefined ? {} : { reconnect: opts.reportReconnect }),
+      },
+      reportSignal: opts.reportSignal,
+    },
   );
 
   const runtimeGeneration = await registerWorkerRuntime(bus, {
@@ -562,5 +572,131 @@ describe('attempt control client — integration', () => {
     h.controlEndpoint.observer.finished();
     await h.controlEndpoint.settle();
     expect(reportsStarted).toBe(2);
+  }, 20_000);
+
+  it('(h-retry) reconnects before retrying a transient control-report failure', async () => {
+    const reconnect = vi.fn().mockResolvedValue(undefined);
+    const h = await createHarness({
+      reportRetry: { maxRetries: 1, baseDelayMs: 10, deadlineMs: 5_000 },
+      reportReconnect: reconnect,
+    });
+    cleanups.push(h.cleanup);
+
+    const authority = h.authority;
+    const recordReport = authority.reportAttemptControl.bind(authority);
+    let reportsStarted = 0;
+    authority.reportAttemptControl = async (input) => {
+      reportsStarted += 1;
+      if (reportsStarted === 1) throw new Error('transient control-report ingress failure');
+      return await recordReport(input);
+    };
+
+    await h.cancel();
+    await deliverAndApply(h);
+    h.controlEndpoint.observer.finished();
+    await h.controlEndpoint.settle();
+
+    expect(reportsStarted).toBe(2);
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(h.controlEndpoint.lastReport).toMatchObject({ status: 'accepted' });
+  }, 20_000);
+
+  it('(i) shutdown aborts a hanging report without completing its receipt or retrying', async () => {
+    const shutdown = new AbortController();
+    let reconnects = 0;
+    const h = await createHarness({
+      reportRetry: { maxRetries: 2, baseDelayMs: 10, deadlineMs: 5_000 },
+      reportSignal: shutdown.signal,
+      reportReconnect: async () => {
+        reconnects += 1;
+      },
+    });
+    cleanups.push(h.cleanup);
+
+    const authority = h.authority;
+    const recordReport = authority.reportAttemptControl.bind(authority);
+    const released = deferred();
+    let reportsStarted = 0;
+    authority.reportAttemptControl = async (input) => {
+      reportsStarted += 1;
+      await released.promise;
+      return await recordReport(input);
+    };
+
+    await h.cancel();
+    await deliverAndApply(h);
+    h.controlEndpoint.observer.finished();
+    await expect.poll(() => reportsStarted).toBe(1);
+
+    shutdown.abort();
+    await expect(
+      Promise.race([
+        h.controlEndpoint.settle().then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 250)),
+      ]),
+    ).resolves.toBe(true);
+
+    expect(h.controlEndpoint.lastReport?.status).toBe('error');
+    expect(reconnects).toBe(0);
+    const afterAbort = await h.authority.readAttemptCancellationControl({
+      executionId: h.executionId,
+      executionAttemptId: h.executionAttemptId,
+    });
+    expect(afterAbort?.evidence).toHaveLength(1);
+    expect(afterAbort?.evidence[0]?.report).toBeNull();
+
+    // A later observer transition and same-revision redelivery stay quiet after
+    // shutdown; a fresh runtime may recover the report from this receipt.
+    h.controlEndpoint.observer.finished();
+    await h.deliver();
+    await h.controlEndpoint.settle();
+    expect(reportsStarted).toBe(1);
+    expect(reconnects).toBe(0);
+
+    released.resolve();
+  }, 20_000);
+
+  it('(j) shutdown stops waiting for a report reconnect that connection close cannot settle', async () => {
+    const shutdown = new AbortController();
+    let markReconnectStarted!: () => void;
+    const reconnectStarted = new Promise<void>((resolve) => {
+      markReconnectStarted = resolve;
+    });
+    const reconnect = vi.fn(async () => {
+      markReconnectStarted();
+      await new Promise<never>(() => {});
+    });
+    const h = await createHarness({
+      reportRetry: { maxRetries: 1, baseDelayMs: 10, deadlineMs: 120_000 },
+      reportSignal: shutdown.signal,
+      reportReconnect: reconnect,
+    });
+    cleanups.push(h.cleanup);
+
+    const authority = h.authority;
+    authority.reportAttemptControl = async () => {
+      throw new Error('transient control-report ingress failure');
+    };
+
+    await h.cancel();
+    await deliverAndApply(h);
+    h.controlEndpoint.observer.finished();
+    await reconnectStarted;
+    shutdown.abort();
+
+    await expect(
+      Promise.race([
+        h.controlEndpoint.settle().then(() => true),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 250)),
+      ]),
+    ).resolves.toBe(true);
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    expect(h.controlEndpoint.lastReport?.status).toBe('error');
+    const afterAbort = await h.authority.readAttemptCancellationControl({
+      executionId: h.executionId,
+      executionAttemptId: h.executionAttemptId,
+    });
+    expect(afterAbort?.evidence).toHaveLength(1);
+    expect(afterAbort?.evidence[0]?.report).toBeNull();
   }, 20_000);
 });

@@ -159,8 +159,8 @@ export class AuthorityRequestDeliveryError extends Error {
  * Optional reconnect callback invoked before each retry when the
  * previous attempt failed with a transport-level error.
  *
- * Implementations should trigger a bus reconnect (e.g.
- * `bus.reconnect()`) and return once the attempt has been initiated.
+ * Implementations should trigger a bus reconnect (e.g. `bus.reconnect()`)
+ * and return once the attempt has been initiated.
  * Failures from the reconnect attempt are non-fatal; the next retry
  * will naturally fail again if the transport is still down.
  */
@@ -170,6 +170,11 @@ export type OutcomeReconnect = () => Promise<void>;
 export interface OutcomeSubmitOptions {
   readonly retry?: OutcomeSubmitRetryConfig;
   readonly reconnect?: OutcomeReconnect;
+  /**
+   * Cancels a pending request, retry delay, or reconnect wait.
+   * The reconnect itself remains owned by its host lifecycle.
+   */
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -214,11 +219,83 @@ function resolveRetryConfig(config: OutcomeSubmitRetryConfig | undefined): Resol
 }
 
 /**
+ * Wait for a retry delay that can be cancelled without leaving a timer behind.
+ * @param delay - Retry delay in milliseconds.
+ * @param signal - Optional caller-owned cancellation signal.
+ */
+async function waitForRetryDelay(delay: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal === undefined) {
+    await new Promise<void>((resolve) => setTimeout(resolve, delay));
+    return;
+  }
+  const abortSignal = signal;
+  abortSignal.throwIfAborted();
+
+  await new Promise<void>((resolve, reject) => {
+    const timeoutId = setTimeout(finish, delay);
+    const onAbort = (): void => finish(abortSignal.reason);
+
+    /** @param reason - Abort reason when cancellation ends the wait. */
+    function finish(reason?: unknown): void {
+      clearTimeout(timeoutId);
+      abortSignal.removeEventListener('abort', onAbort);
+      if (reason === undefined) resolve();
+      else reject(reason);
+    }
+
+    abortSignal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/**
+ * Wait for a reconnect without taking ownership of the reconnect operation.
+ * @param reconnect - Host-owned reconnect operation.
+ * @param timeout - Maximum time the delivery loop may wait.
+ * @param signal - Optional caller-owned cancellation signal.
+ */
+async function waitForReconnect(
+  reconnect: OutcomeReconnect,
+  timeout: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  signal?.throwIfAborted();
+  let reconnecting: Promise<void>;
+  try {
+    reconnecting = reconnect();
+  } catch {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const timeoutId = setTimeout(finish, timeout);
+    const onAbort = (): void => finish(signal?.reason);
+
+    /** @param reason - Abort reason when cancellation ends only this wait. */
+    function finish(reason?: unknown): void {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener('abort', onAbort);
+      if (reason === undefined) resolve();
+      else reject(reason);
+    }
+
+    // The handler consumes a late reconnect rejection after shutdown has
+    // stopped waiting; connection shutdown remains the host's responsibility.
+    void reconnecting.then(
+      () => finish(),
+      () => finish(),
+    );
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
+}
+
+/**
  * Wait with exponential back-off and attempt reconnect before a retry.
  * @param attempt - Current retry attempt number (1-based).
  * @param config - Validated retry timing and limit configuration.
  * @param deadline - Absolute time when delivery must stop.
  * @param reconnect - Optional reconnect callback.
+ * @param signal - Optional caller-owned cancellation signal.
  * @returns Whether time remains for the retry request.
  */
 async function waitAndReconnect(
@@ -226,11 +303,12 @@ async function waitAndReconnect(
   config: ResolvedRetryConfig,
   deadline: number,
   reconnect: OutcomeReconnect | undefined,
+  signal: AbortSignal | undefined,
 ): Promise<boolean> {
   const rawDelay = config.baseDelayMs * Math.pow(2, attempt - 1);
   const remainingBeforeSleep = deadline - Date.now();
   const delay = Math.min(rawDelay, config.maxDelayMs, remainingBeforeSleep);
-  await new Promise<void>((resolve) => setTimeout(resolve, delay));
+  await waitForRetryDelay(delay, signal);
 
   const remainingBeforeReconnect = deadline - Date.now();
   if (remainingBeforeReconnect <= 0) {
@@ -238,21 +316,12 @@ async function waitAndReconnect(
   }
 
   if (reconnect !== undefined) {
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      await Promise.race([
-        reconnect(),
-        new Promise<void>((resolve) => {
-          timeoutId = setTimeout(resolve, remainingBeforeReconnect);
-        }),
-      ]);
+      await waitForReconnect(reconnect, remainingBeforeReconnect, signal);
     } catch {
-      // Reconnect failure is non-fatal; the retry will fail
-      // again if the transport is still down.
-    } finally {
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-      }
+      signal?.throwIfAborted();
+      // Reconnect failure is non-fatal; the retry will fail again if the
+      // transport is still down.
     }
   }
 
@@ -267,33 +336,36 @@ async function waitAndReconnect(
  * second delivery policy merely because the outcome became generic.
  * @param request - One bounded bus request using the remaining deadline.
  * @param createDeadlineError - Builds the caller-specific deadline failure.
- * @param options - Retry and reconnect behavior.
+ * @param options - Retry, reconnect, and cancellation behavior.
  * @param isTerminalError - Identifies a received, non-retryable failure.
  * @returns The first response that completes before the deadline.
  */
 async function retryAuthorityRequest<TResponse>(
-  request: (timeout: number) => Promise<TResponse>,
+  request: (timeout: number, signal: AbortSignal | undefined) => Promise<TResponse>,
   createDeadlineError: () => Error,
   options: OutcomeSubmitOptions | undefined,
   isTerminalError: (error: unknown) => boolean,
 ): Promise<TResponse> {
   const config = resolveRetryConfig(options?.retry);
   const reconnect = options?.reconnect;
+  const signal = options?.signal;
   const deadline = Date.now() + config.deadlineMs;
   let lastError: unknown;
 
   for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
+    signal?.throwIfAborted();
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw createDeadlineError();
     if (attempt > 0) {
-      const canRetry = await waitAndReconnect(attempt, config, deadline, reconnect);
+      const canRetry = await waitAndReconnect(attempt, config, deadline, reconnect, signal);
       if (!canRetry) throw createDeadlineError();
     }
     try {
       const requestTimeout = deadline - Date.now();
       if (requestTimeout <= 0) throw createDeadlineError();
-      return await request(requestTimeout);
+      return await request(requestTimeout, signal);
     } catch (error) {
+      signal?.throwIfAborted();
       if (isTerminalError(error)) throw error;
       lastError = error;
       if (Date.now() >= deadline) throw createDeadlineError();
@@ -307,12 +379,12 @@ async function retryAuthorityRequest<TResponse>(
  *
  * The request payload must be replay-safe. It does not turn an Authority
  * refusal into a retry: callers receive and interpret ordinary responses.
- * @param request - Authority request using the remaining deadline.
- * @param options - Retry and reconnect behavior.
+ * @param request - Authority request using the remaining deadline and cancellation signal.
+ * @param options - Retry, reconnect, and cancellation behavior.
  * @returns The first received Authority response.
  */
 export async function requestAuthorityWithRetry<TResponse>(
-  request: (timeout: number) => Promise<TResponse>,
+  request: (timeout: number, signal: AbortSignal | undefined) => Promise<TResponse>,
   options?: OutcomeSubmitOptions,
 ): Promise<TResponse> {
   return await retryAuthorityRequest(
@@ -325,19 +397,19 @@ export async function requestAuthorityWithRetry<TResponse>(
 
 /**
  * Submit an outcome through the common retry loop and reject non-ACK decisions.
- * @param request - Bounded terminal-outcome request.
+ * @param request - Bounded terminal-outcome request and cancellation signal.
  * @param createError - Builds the outcome-specific terminal delivery error.
- * @param options - Retry and reconnect behavior.
+ * @param options - Retry, reconnect, and cancellation behavior.
  * @returns Durable acknowledgement decision.
  */
 async function submitWithAck(
-  request: (timeout: number) => Promise<OutcomeAckDecision>,
+  request: (timeout: number, signal: AbortSignal | undefined) => Promise<OutcomeAckDecision>,
   createError: (decision: OutcomeAckDecision | 'deadline-exceeded', reason?: OutcomeDeliveryFailureReason) => Error,
   options: OutcomeSubmitOptions | undefined,
 ): Promise<OutcomeAckDecision> {
   return await retryAuthorityRequest(
-    async (timeout) => {
-      const decision = await request(timeout);
+    async (timeout, signal) => {
+      const decision = await request(timeout, signal);
       if (DELIVERED_DECISIONS.has(decision)) return decision;
       throw createError(decision);
     },
@@ -367,7 +439,7 @@ async function submitWithAck(
  * bus request; expiry throws a deterministic {@link OutcomeDeliveryError}.
  * @param bus - Worker-local bus connected to the Authority.
  * @param payload - Attempt identity and terminal result.
- * @param options - Optional retry configuration and reconnect callback.
+ * @param options - Optional retry configuration, reconnect callback, and cancellation signal.
  * @returns Durable ACK decision (`accepted` or `duplicate`).
  * @throws {@link OutcomeDeliveryError} On non-transient rejection or deadline expiry.
  */
@@ -377,7 +449,7 @@ export async function submitOutcomeWithAck(
   options?: OutcomeSubmitOptions,
 ): Promise<OutcomeAckDecision> {
   return await submitWithAck(
-    async (timeout) => {
+    async (timeout, signal) => {
       const response = await bus.request(
         WorkerSubjects.control.outcome.submit,
         {
@@ -385,7 +457,7 @@ export async function submitOutcomeWithAck(
           executionId: payload.executionId,
           result: payload.result,
         },
-        { timeout },
+        signal === undefined ? { timeout } : { timeout, signal },
       );
       return response.decision;
     },
@@ -402,7 +474,7 @@ export async function submitOutcomeWithAck(
  * as legacy workflow results.
  * @param bus - Runtime bus authenticated as the Attempt peer.
  * @param payload - Fenced Attempt result and optional admitted operation.
- * @param options - Retry and reconnect behavior.
+ * @param options - Retry, reconnect, and cancellation behavior.
  * @returns Durable Authority acknowledgement.
  */
 export async function submitAttemptOutcomeWithAck(
@@ -411,8 +483,12 @@ export async function submitAttemptOutcomeWithAck(
   options?: OutcomeSubmitOptions,
 ): Promise<OutcomeAckDecision> {
   return await submitWithAck(
-    async (timeout) => {
-      const response = await bus.request(ExecutionAttemptSubjects.outcome.submit, payload, { timeout });
+    async (timeout, signal) => {
+      const response = await bus.request(
+        ExecutionAttemptSubjects.outcome.submit,
+        payload,
+        signal === undefined ? { timeout } : { timeout, signal },
+      );
       return response.decision;
     },
     (decision, reason) =>
