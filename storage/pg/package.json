@@ -35,10 +35,11 @@
     "@makaio/build-tooling": "workspace:*",
     "@makaio/framework": "workspace:*",
     "@makaio/storage-drizzle": "workspace:*",
+    "@makaio/subsystem-workflow-engine": "workspace:*",
     "@types/node": "^24.3.0",
     "drizzle-kit": "^0.31.8",
     "tsdown": "0.22.0",
-    "tsx": "^4.23.1",
+    "tsx": "^4.22.4",
     "typescript": "^6.0.3"
   },
   "publishConfig": {

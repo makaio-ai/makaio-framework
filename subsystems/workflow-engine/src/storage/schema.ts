@@ -868,3 +868,17 @@ export type SelectWorkflowExecutionStateEvent = typeof workflowExecutionStateEve
 // Kept as a separate module so finalization persistence remains an explicit
 // lifecycle seam while the central schema discovery entrypoint still sees it.
 export { workflowFinalizationsDual, workflowFinalizations } from './finalization-schema.js';
+export {
+  executionAttemptsDual,
+  activeExecutionAttemptsDual,
+  executionAttemptRequestsDual,
+  providerOperationsDual,
+  executionAttemptCancellationsDual,
+  executionAttemptControlEvidenceDual,
+  executionAttempts,
+  activeExecutionAttempts,
+  executionAttemptRequests,
+  providerOperations,
+  executionAttemptCancellations,
+  executionAttemptControlEvidence,
+} from './execution-attempt-schema.js';

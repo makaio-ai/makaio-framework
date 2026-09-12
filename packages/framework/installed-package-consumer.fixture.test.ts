@@ -67,7 +67,7 @@ describe('installed package setup diagnostics', () => {
           `process.stdout.write(${JSON.stringify(childOutput)}); throw Error('untrusted-error-sentinel');`,
         ]),
       ),
-    ).rejects.toThrow(/stage "install" child process failed after [0-9]+ms/);
+    ).rejects.toThrow(/stage "install" child process failed \(exit 1\) after [0-9]+ms/);
     const diagnostic = output.mock.calls.map(([chunk]) => String(chunk)).join('');
     expect(diagnostic).not.toContain('[build]');
     expect(diagnostic).not.toContain('untrusted-');

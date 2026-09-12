@@ -16,6 +16,14 @@ import {
 } from './schema.js';
 import { workflowFinalizations } from './finalization-schema.js';
 import {
+  executionAttempts,
+  activeExecutionAttempts,
+  executionAttemptRequests,
+  providerOperations,
+  executionAttemptCancellations,
+  executionAttemptControlEvidence,
+} from './execution-attempt-schema.js';
+import {
   workflowDefinitions as workflowDefinitionsPg,
   workflowExecutions as workflowExecutionsPg,
   workflowExecutionFrames as workflowExecutionFramesPg,
@@ -30,6 +38,12 @@ import {
   workflowExecutionState as workflowExecutionStatePg,
   workflowExecutionStateEvents as workflowExecutionStateEventsPg,
   workflowFinalizations as workflowFinalizationsPg,
+  executionAttempts as executionAttemptsPg,
+  activeExecutionAttempts as activeExecutionAttemptsPg,
+  executionAttemptRequests as executionAttemptRequestsPg,
+  providerOperations as providerOperationsPg,
+  executionAttemptCancellations as executionAttemptCancellationsPg,
+  executionAttemptControlEvidence as executionAttemptControlEvidencePg,
 } from './schema.postgres.js';
 
 /** Dialect variants for the workflow engine storage tables. */
@@ -49,6 +63,12 @@ export const workflowEngineSchema = defineDialectSchema(
     workflowExecutionState,
     workflowExecutionStateEvents,
     workflowFinalizations,
+    executionAttempts,
+    activeExecutionAttempts,
+    executionAttemptRequests,
+    providerOperations,
+    executionAttemptCancellations,
+    executionAttemptControlEvidence,
   },
   {
     workflowDefinitions: workflowDefinitionsPg,
@@ -65,5 +85,11 @@ export const workflowEngineSchema = defineDialectSchema(
     workflowExecutionState: workflowExecutionStatePg,
     workflowExecutionStateEvents: workflowExecutionStateEventsPg,
     workflowFinalizations: workflowFinalizationsPg,
+    executionAttempts: executionAttemptsPg,
+    activeExecutionAttempts: activeExecutionAttemptsPg,
+    executionAttemptRequests: executionAttemptRequestsPg,
+    providerOperations: providerOperationsPg,
+    executionAttemptCancellations: executionAttemptCancellationsPg,
+    executionAttemptControlEvidence: executionAttemptControlEvidencePg,
   },
 );

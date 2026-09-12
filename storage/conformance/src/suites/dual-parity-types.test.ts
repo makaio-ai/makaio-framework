@@ -464,6 +464,13 @@ const STRUCTURAL_ONLY_DUAL_TABLES: ReadonlySet<string> = new Set([
   'worklog_gate_events',
   'workflow_execution_state',
   'workflow_execution_state_events',
+  // Attempt persistence columns are un-narrowed text and integer facts.
+  'execution_attempt',
+  'active_execution_attempt',
+  'execution_attempt_request',
+  'provider_operation',
+  'execution_attempt_cancellation',
+  'execution_attempt_control_evidence',
 ]);
 
 /**

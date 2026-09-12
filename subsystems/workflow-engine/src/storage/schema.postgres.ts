@@ -14,6 +14,14 @@ import {
   workflowExecutionStateEventsDual,
 } from './schema.js';
 import { workflowFinalizationsDual } from './finalization-schema.js';
+import {
+  executionAttemptsDual,
+  activeExecutionAttemptsDual,
+  executionAttemptRequestsDual,
+  providerOperationsDual,
+  executionAttemptCancellationsDual,
+  executionAttemptControlEvidenceDual,
+} from './execution-attempt-schema.js';
 
 /** Postgres face of the `workflow_definitions` table. */
 export const workflowDefinitions = workflowDefinitionsDual.postgres;
@@ -43,3 +51,15 @@ export const workflowExecutionState = workflowExecutionStateDual.postgres;
 export const workflowExecutionStateEvents = workflowExecutionStateEventsDual.postgres;
 /** Postgres face of the `workflow_finalizations` table. */
 export const workflowFinalizations = workflowFinalizationsDual.postgres;
+/** Postgres face of the `execution_attempt` table. */
+export const executionAttempts = executionAttemptsDual.postgres;
+/** Postgres face of the `active_execution_attempt` table. */
+export const activeExecutionAttempts = activeExecutionAttemptsDual.postgres;
+/** Postgres face of the `execution_attempt_request` table. */
+export const executionAttemptRequests = executionAttemptRequestsDual.postgres;
+/** Postgres face of the `provider_operation` table. */
+export const providerOperations = providerOperationsDual.postgres;
+/** Postgres face of the `execution_attempt_cancellation` table. */
+export const executionAttemptCancellations = executionAttemptCancellationsDual.postgres;
+/** Postgres face of the `execution_attempt_control_evidence` table. */
+export const executionAttemptControlEvidence = executionAttemptControlEvidenceDual.postgres;
