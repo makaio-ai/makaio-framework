@@ -105,7 +105,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `cancelled` | `boolean` | yes |
-| `gates` | `{ executionId: string; nodeId: string; frameId: string; schema: Record<string, JsonValue>; autoAction: "reject" \| "approve"; timeoutMs: number \| null; createdAt: number; status: "cancelled"; prompt?: string \| undefined; resumeData?: JsonValue \| undefined; reason?: string \| undefined; resolvedAt?: number \| undefined; }[]` | yes |
+| `gates` | `{ executionId: string; nodeId: string; frameId: string; schema: Record<string, JsonValue>; autoAction: "reject" \| "approve"; timeoutMs: number \| null; createdAt: number; status: "cancelled"; executionAttemptId?: string \| undefined; prompt?: string \| undefined; resumeData?: JsonValue \| undefined; reason?: string \| undefined; resolvedAt?: number \| undefined; }[]` | yes |
 
 ### <a id="storage:workflow.claimFinalization"></a>`storage:workflow.claimFinalization` (rpc)
 
@@ -238,7 +238,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `gate` | `{ executionId: string; nodeId: string; frameId: string; schema: Record<string, JsonValue>; status: "resumed" \| "cancelled" \| "rejected" \| "waiting" \| "timed-out"; autoAction: "reject" \| "approve"; timeoutMs: number \| null; createdAt: number; prompt?: string \| undefined; resumeData?: JsonValue \| undefined; reason?: string \| undefined; resolvedAt?: number \| undefined; } \| null` | yes |
+| `gate` | `{ executionId: string; nodeId: string; frameId: string; schema: Record<string, JsonValue>; status: "resumed" \| "cancelled" \| "rejected" \| "waiting" \| "timed-out"; autoAction: "reject" \| "approve"; timeoutMs: number \| null; createdAt: number; executionAttemptId?: string \| undefined; prompt?: string \| undefined; resumeData?: JsonValue \| undefined; reason?: string \| undefined; resolvedAt?: number \| undefined; } \| null` | yes |
 
 ### <a id="storage:workflow.getRunContext"></a>`storage:workflow.getRunContext` (rpc)
 
@@ -437,7 +437,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `gates` | `{ executionId: string; nodeId: string; frameId: string; schema: Record<string, JsonValue>; status: "resumed" \| "cancelled" \| "rejected" \| "waiting" \| "timed-out"; autoAction: "reject" \| "approve"; timeoutMs: number \| null; createdAt: number; prompt?: string \| undefined; resumeData?: JsonValue \| undefined; reason?: string \| undefined; resolvedAt?: number \| undefined; }[]` | yes |
+| `gates` | `{ executionId: string; nodeId: string; frameId: string; schema: Record<string, JsonValue>; status: "resumed" \| "cancelled" \| "rejected" \| "waiting" \| "timed-out"; autoAction: "reject" \| "approve"; timeoutMs: number \| null; createdAt: number; executionAttemptId?: string \| undefined; prompt?: string \| undefined; resumeData?: JsonValue \| undefined; reason?: string \| undefined; resolvedAt?: number \| undefined; }[]` | yes |
 
 ### <a id="storage:workflow.listPausedGateTimeouts"></a>`storage:workflow.listPausedGateTimeouts` (rpc)
 
@@ -458,7 +458,7 @@ _Empty object._
 
 | Field | Type | Required |
 |-------|------|----------|
-| `gates` | `{ executionId: string; nodeId: string; frameId: string; schema: Record<string, JsonValue>; status: "resumed" \| "cancelled" \| "rejected" \| "waiting" \| "timed-out"; autoAction: "reject" \| "approve"; timeoutMs: number \| null; createdAt: number; prompt?: string \| undefined; resumeData?: JsonValue \| undefined; reason?: string \| undefined; resolvedAt?: number \| undefined; }[]` | yes |
+| `gates` | `{ executionId: string; nodeId: string; frameId: string; schema: Record<string, JsonValue>; status: "resumed" \| "cancelled" \| "rejected" \| "waiting" \| "timed-out"; autoAction: "reject" \| "approve"; timeoutMs: number \| null; createdAt: number; executionAttemptId?: string \| undefined; prompt?: string \| undefined; resumeData?: JsonValue \| undefined; reason?: string \| undefined; resolvedAt?: number \| undefined; }[]` | yes |
 
 ### <a id="storage:workflow.listSpans"></a>`storage:workflow.listSpans` (rpc)
 
@@ -732,7 +732,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `gate` | `{ executionId: string; nodeId: string; frameId: string; schema: Record<string, JsonValue>; status: "resumed" \| "cancelled" \| "rejected" \| "waiting" \| "timed-out"; autoAction: "reject" \| "approve"; timeoutMs: number \| null; createdAt: number; prompt?: string \| undefined; resumeData?: JsonValue \| undefined; reason?: string \| undefined; resolvedAt?: number \| undefined; }` | yes |
+| `gate` | `{ executionId: string; nodeId: string; frameId: string; schema: Record<string, JsonValue>; status: "resumed" \| "cancelled" \| "rejected" \| "waiting" \| "timed-out"; autoAction: "reject" \| "approve"; timeoutMs: number \| null; createdAt: number; executionAttemptId?: string \| undefined; prompt?: string \| undefined; resumeData?: JsonValue \| undefined; reason?: string \| undefined; resolvedAt?: number \| undefined; }` | yes |
 
 **Response:**
 

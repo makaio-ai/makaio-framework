@@ -284,6 +284,8 @@ export const workflowGateInstancesDual = defineDualTable(
       .text('execution_id')
       .notNull()
       .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
+    /** Attempt that opened this gate; absent for legacy non-Attempt executions. */
+    executionAttemptId: c.text('execution_attempt_id'),
     /** Node ID of the gate in the workflow definition. */
     nodeId: c.text('node_id').notNull(),
     /** Frame ID of the gate's execution frame. */

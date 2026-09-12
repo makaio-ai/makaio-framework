@@ -170,6 +170,8 @@ export interface ResumeFrameIndex {
  * All fields are optional; sensible defaults are applied by {@link RuntimeContext}.
  */
 export interface RuntimeExecutionOptions {
+  /** Authority attempt that owns gates opened during this runtime invocation. */
+  readonly executionAttemptId?: string;
   /**
    * How the runtime should handle workflow suspension points (e.g., gate nodes).
    * Defaults to `'wait-in-process'` when absent.
@@ -385,6 +387,7 @@ export class RuntimeContext {
     this.platformContext = platform.context;
     this.env = platform.env;
     this.suspensionStrategy = options.suspensionStrategy ?? 'wait-in-process';
+    this.executionAttemptId = options.executionAttemptId;
     this.resumeFrames = options.resumeFrames;
     this.runtimeLoopGates = options.runtimeLoopGates ?? new Map();
   }
@@ -400,6 +403,9 @@ export class RuntimeContext {
    * Defaults to `'wait-in-process'`.
    */
   public readonly suspensionStrategy: SuspensionStrategy;
+
+  /** Authority attempt that owns gates opened during this runtime invocation. */
+  public readonly executionAttemptId: string | undefined;
 
   /**
    * Pre-loaded resume frames for re-dispatched executions.
@@ -439,6 +445,7 @@ export class RuntimeContext {
       this.artifactBinding,
       { context: this.platformContext, env: this.env },
       {
+        executionAttemptId: this.executionAttemptId,
         suspensionStrategy: this.suspensionStrategy,
         resumeFrames: this.resumeFrames,
         runtimeLoopGates: this.runtimeLoopGates,

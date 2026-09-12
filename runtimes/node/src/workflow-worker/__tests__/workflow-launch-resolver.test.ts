@@ -56,6 +56,7 @@ describe('createWorkflowLaunchResolver', () => {
     await expect(resolve(request('wfx-1', 'attempt-1'), new AbortController().signal)).resolves.toMatchObject({
       source: config.source,
       executionId: 'wfx-1',
+      executionAttemptId: 'attempt-1',
       workflowId: 'workflow-1',
       triggerPayload: config.triggerPayload,
       triggerMode: 'await-trigger',

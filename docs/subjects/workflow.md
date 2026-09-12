@@ -508,6 +508,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `autoAction` | `"reject" \| "approve"` | yes |
+| `executionAttemptId` | `string \| undefined` | no |
 | `executionId` | `string` | yes |
 | `message` | `string` | yes |
 | `openedAt` | `number` | yes |
@@ -538,6 +539,7 @@ Type: Event
 | Field | Type | Required |
 |-------|------|----------|
 | `autoAction` | `"reject" \| "approve"` | yes |
+| `executionAttemptId` | `string \| undefined` | no |
 | `executionId` | `string` | yes |
 | `message` | `string` | yes |
 | `openedAt` | `number` | yes |
@@ -573,6 +575,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `action` | `"reject" \| "approve"` | yes |
+| `executionAttemptId` | `string \| undefined` | no |
 | `executionId` | `string` | yes |
 | `frameId` | `string \| undefined` | no |
 | `gateId` | `string` | yes |
@@ -614,6 +617,7 @@ Type: Event
 | Field | Type | Required |
 |-------|------|----------|
 | `autoAction` | `"reject" \| "approve"` | yes |
+| `executionAttemptId` | `string \| undefined` | no |
 | `executionId` | `string` | yes |
 | `frameId` | `string` | yes |
 | `nodeId` | `string` | yes |
@@ -844,7 +848,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `gates` | `{ executionId: string; nodeId: string; frameId: string; schema: Record<string, JsonValue>; status: "resumed" \| "cancelled" \| "rejected" \| "waiting" \| "timed-out"; autoAction: "reject" \| "approve"; timeoutMs: number \| null; createdAt: number; prompt?: string \| undefined; resumeData?: JsonValue \| undefined; reason?: string \| undefined; resolvedAt?: number \| undefined; }[]` | yes |
+| `gates` | `{ executionId: string; nodeId: string; frameId: string; schema: Record<string, JsonValue>; status: "resumed" \| "cancelled" \| "rejected" \| "waiting" \| "timed-out"; autoAction: "reject" \| "approve"; timeoutMs: number \| null; createdAt: number; executionAttemptId?: string \| undefined; prompt?: string \| undefined; resumeData?: JsonValue \| undefined; reason?: string \| undefined; resolvedAt?: number \| undefined; }[]` | yes |
 
 ### <a id="workflow.listSpans"></a>`workflow.listSpans` (rpc)
 

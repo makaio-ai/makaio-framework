@@ -332,6 +332,7 @@ async function suspendGateInProcess(
   const prompt = resolveTemplate(node.prompt, buildRuntimeExpressionScope(expressionCtx));
   const gateInstance: WorkflowGateInstance = {
     executionId: ctx.executionId,
+    ...(ctx.executionAttemptId !== undefined ? { executionAttemptId: ctx.executionAttemptId } : {}),
     nodeId: node.id,
     frameId,
     schema,
@@ -359,10 +360,19 @@ async function suspendGateInProcess(
   const deferred = buildDeferred<GateUserResponse>();
 
   const unsubRespond = ctx.bus.on(WorkflowSubjects.gate.respond, async (respondCtx) => {
-    const { executionId, gateId, frameId: respondFrameId, action, resumeData, reason } = respondCtx.payload;
+    const {
+      executionId,
+      executionAttemptId,
+      gateId,
+      frameId: respondFrameId,
+      action,
+      resumeData,
+      reason,
+    } = respondCtx.payload;
     if (
       executionId !== ctx.executionId ||
       gateId !== node.id ||
+      executionAttemptId !== ctx.executionAttemptId ||
       (respondFrameId !== undefined && respondFrameId !== frameId)
     ) {
       try {
@@ -419,6 +429,7 @@ async function emitGateSuspended(
   try {
     await ctx.bus.emit(WorkflowSubjects.gate.suspended, {
       executionId: ctx.executionId,
+      ...(ctx.executionAttemptId !== undefined ? { executionAttemptId: ctx.executionAttemptId } : {}),
       frameId,
       nodeId: node.id,
       schema,

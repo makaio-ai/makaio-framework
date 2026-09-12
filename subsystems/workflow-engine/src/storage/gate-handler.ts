@@ -1,4 +1,4 @@
-import { and, desc, eq, isNotNull } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   EXECUTION_LIST_DEFAULT_LIMIT,
@@ -33,6 +33,7 @@ function gateInstanceId(gate: Pick<WorkflowGateInstance, 'executionId' | 'nodeId
 export function mapGateInstance(row: DbGateRow): WorkflowGateInstance {
   return {
     executionId: row.executionId,
+    ...(row.executionAttemptId !== null ? { executionAttemptId: row.executionAttemptId } : {}),
     nodeId: row.nodeId,
     frameId: row.frameId,
     schema: row.schema as WorkflowGateInstance['schema'],
@@ -56,6 +57,7 @@ export function toGateDbValues(gate: WorkflowGateInstance): InsertWorkflowGateIn
   return {
     id: gateInstanceId(gate),
     executionId: gate.executionId,
+    executionAttemptId: gate.executionAttemptId ?? null,
     nodeId: gate.nodeId,
     frameId: gate.frameId,
     schema: gate.schema,
@@ -108,6 +110,37 @@ function resolveListGatesParams(
 }
 
 /**
+ * Registers the atomic waiting-gate resolution compare-and-set handler.
+ * @param bus - Message bus to subscribe on.
+ * @param db - Drizzle database instance.
+ * @returns Cleanup function that unsubscribes the resolution handler.
+ */
+function registerResolveWaitingGateHandler(bus: IMakaioBus, db: MakaioDatabase): () => void {
+  const { workflowGateInstances } = resolveSchema(db, workflowEngineSchema);
+  return bus.on(WorkflowStorageSubjects.resolveWaitingGateInstance, async (ctx) => {
+    const gate = ctx.payload.gate as WorkflowGateInstance;
+    const dbValues = toGateDbValues(gate);
+    const resolvedRows = await serializeDatabaseOperation(db, () =>
+      db
+        .update(workflowGateInstances)
+        .set(dbValues)
+        .where(
+          and(
+            eq(workflowGateInstances.id, dbValues.id),
+            eq(workflowGateInstances.status, 'waiting'),
+            gate.executionAttemptId === undefined
+              ? isNull(workflowGateInstances.executionAttemptId)
+              : eq(workflowGateInstances.executionAttemptId, gate.executionAttemptId),
+          ),
+        )
+        .returning({ id: workflowGateInstances.id }),
+    );
+
+    ctx.setResult({ accepted: resolvedRows.length === 1 });
+  });
+}
+
+/**
  * Registers all gate instance bus handlers.
  * @param bus - Message bus to subscribe on.
  * @param db - Drizzle database instance.
@@ -131,19 +164,7 @@ export function registerGateInstanceHandlers(bus: IMakaioBus, db: MakaioDatabase
     ctx.setResult({ id: dbValues.id });
   });
 
-  const unsubResolveWaitingGate = bus.on(WorkflowStorageSubjects.resolveWaitingGateInstance, async (ctx) => {
-    const gate = ctx.payload.gate as WorkflowGateInstance;
-    const dbValues = toGateDbValues(gate);
-    const resolvedRows = await serializeDatabaseOperation(db, () =>
-      db
-        .update(workflowGateInstances)
-        .set(dbValues)
-        .where(and(eq(workflowGateInstances.id, dbValues.id), eq(workflowGateInstances.status, 'waiting')))
-        .returning({ id: workflowGateInstances.id }),
-    );
-
-    ctx.setResult({ accepted: resolvedRows.length === 1 });
-  });
+  const unsubResolveWaitingGate = registerResolveWaitingGateHandler(bus, db);
 
   const unsubGetGate = bus.on(WorkflowStorageSubjects.getGateInstance, async (ctx) => {
     const { executionId, nodeId, frameId } = ctx.payload;

@@ -140,7 +140,9 @@ type PiscinaWorkerRunParams = UnboundWorkerParams | (AttemptBoundWorkerParams & 
  */
 export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Promise<WorkflowRunResult> {
   // Step 1: Validate config eagerly so invalid configs never reach bus/runtime setup.
-  const config = WorkflowWorkerConfigSchema.parse(params.config);
+  const parsedConfig = WorkflowWorkerConfigSchema.parse(params.config);
+  const config =
+    params.kind === 'attempt-bound' ? { ...parsedConfig, executionAttemptId: params.executionAttemptId } : parsedConfig;
 
   const abortController = new AbortController();
   const abortFromParent = (): void => abortController.abort();

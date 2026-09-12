@@ -486,6 +486,40 @@ describe('executeGateNode — resume', () => {
     expect(wrongResponses).toEqual([false, false]);
   });
 
+  it('requires the opening Attempt identity and publishes it with the suspended gate', async () => {
+    const { ctx, bus } = makeCtx({ executionAttemptId: 'attempt-gate-owner' });
+    const node = makeGateNode({ id: 'gate-attempt-filter' });
+    const frameId = makeGateFrame(ctx, 'gate-attempt-filter');
+    let suspendedAttemptId: string | undefined;
+    bus.on(WorkflowSubjects.gate.suspended, (suspendedCtx) => {
+      suspendedAttemptId = suspendedCtx.payload.executionAttemptId;
+    });
+
+    setImmediate(async () => {
+      const missingAttempt = await bus.requestOptional(WorkflowSubjects.gate.respond, {
+        executionId: 'exec-gate-test',
+        gateId: 'gate-attempt-filter',
+        action: 'approve',
+        resumeData: 'wrong',
+      });
+      expect(missingAttempt.handled ? missingAttempt.data.accepted : false).toBe(false);
+
+      await bus.request(WorkflowSubjects.gate.respond, {
+        executionId: 'exec-gate-test',
+        executionAttemptId: 'attempt-gate-owner',
+        gateId: 'gate-attempt-filter',
+        frameId,
+        action: 'approve',
+        resumeData: 'correct',
+      });
+    });
+
+    const outcome = await executeGateNode(node, ctx, emptyExpressionCtx, frameId);
+
+    expect(suspendedAttemptId).toBe('attempt-gate-owner');
+    expect(outcome).toMatchObject({ status: 'completed', output: { resumeData: 'correct' } });
+  });
+
   it('filters by frameId when provided in the response', async () => {
     const { ctx, bus } = makeCtx();
     const node = makeGateNode({ id: 'gate-frameid' });

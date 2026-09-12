@@ -374,7 +374,7 @@ function makeLoopNodeWithEscalation(
 }
 
 describe('executeLoopNode — escalation gate', () => {
-  it('opens gate suspension when escalation config is present and gate returns escalate', async () => {
+  it.each([undefined, 'attempt-a'])('opens escalation for its owning attempt (%s)', async (executionAttemptId) => {
     let callCount = 0;
     const stationHandler: StationHandler = async () => {
       callCount++;
@@ -391,7 +391,12 @@ describe('executeLoopNode — escalation gate', () => {
       timeoutMs: null,
     });
 
-    const { ctx, bus } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+    const { ctx, bus } = makeCtx(
+      { 'work-station': stationHandler },
+      { 'check-gate': gateHandler },
+      new AbortController().signal,
+      { executionAttemptId },
+    );
 
     // Create a container frame so updateFrame can find it during escalation.
     const containerFrame = ctx.createFrame({
@@ -412,6 +417,7 @@ describe('executeLoopNode — escalation gate', () => {
       setImmediate(() => {
         void bus.request(WorkflowSubjects.gate.respond, {
           executionId: 'exec-test',
+          executionAttemptId,
           gateId: 'loop-esc',
           action: 'approve',
           resumeData: { decision: 'approved' },
@@ -432,6 +438,7 @@ describe('executeLoopNode — escalation gate', () => {
     expect(outcome.status).toBe('completed');
     expect(callCount).toBe(1);
     expect(suspendedPayloads).toHaveLength(1);
+    expect((suspendedPayloads[0] as { executionAttemptId?: string }).executionAttemptId).toBe(executionAttemptId);
     expect(suspendedPayloads[0]).toMatchObject({
       executionId: 'exec-test',
       nodeId: 'loop-esc',
