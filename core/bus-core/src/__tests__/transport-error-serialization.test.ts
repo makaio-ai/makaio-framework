@@ -298,9 +298,11 @@ describe('transportErrorData and findInErrorChain', () => {
       expect(afterRoundTrip).toEqual({ issues: [1], retryable: true });
     });
 
-    it('returns flat members for a genuine flat shape from serializeTransportError→deserializeTransportError', () => {
-      // serializeTransportError uses error.data directly as the wire bag, so after
-      // deserialization the members are flat on the Error with no 'data' key.
+    it('transportErrorData unwraps the nested bag from serializeTransportError→deserializeTransportError', () => {
+      // serializeTransportError now uses the same codec as serializeError: the
+      // plain-object 'data' bag nests at wire.data.data, so after
+      // deserializeTransportError the rebuilt error carries .data = { a, b } as an
+      // own bag. transportErrorData unwraps that bag — result has no 'data' key.
       const wire = serializeTransportError({ message: 'flat', code: 'FC', data: { a: 1, b: 'two' } });
       const rebuilt = deserializeTransportError(wire);
       const result = transportErrorData(rebuilt);
@@ -507,6 +509,29 @@ describe('transportErrorData and findInErrorChain', () => {
       const afterResult = findInErrorChain(deserialized, transportErrorData);
       expect(afterResult).toBeDefined();
       expect(afterResult).toHaveProperty('severity', 'critical');
+    });
+  });
+
+  describe('codec unification: serializeTransportError and serializeError', () => {
+    it('produce deep-equal wire output for an Error carrying a data bag and a flat member', () => {
+      const err = new Error('structured') as Error & { data?: unknown; retryable?: boolean };
+      err.data = { items: ['x'] };
+      err.retryable = true;
+
+      const wireA = serializeError(err);
+      const wireB = serializeTransportError(err);
+      expect(wireA).toEqual(wireB);
+    });
+
+    it('plain-object input nests data bag at data.data and transportErrorData merges back', () => {
+      const input = { message: 'plain', code: 'PC', data: { retryable: true }, extra: 1 };
+      const wire = serializeError(input);
+
+      expect(wire.data).toEqual({ data: { retryable: true }, extra: 1 });
+
+      const rebuilt = deserializeTransportError(wire);
+      const result = transportErrorData(rebuilt);
+      expect(result).toEqual({ retryable: true, extra: 1 });
     });
   });
 });

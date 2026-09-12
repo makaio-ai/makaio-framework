@@ -5,19 +5,11 @@ import { MockWebSocket } from './test-helpers.js';
 
 describe('serializeTransportError', () => {
   it('handles null and undefined without throwing', () => {
-    expect(serializeTransportError(null)).toEqual({
-      message: 'null',
-      code: undefined,
-      data: undefined,
-    });
-    expect(serializeTransportError(undefined)).toEqual({
-      message: 'undefined',
-      code: undefined,
-      data: undefined,
-    });
+    expect(serializeTransportError(null)).toEqual({ message: 'null' });
+    expect(serializeTransportError(undefined)).toEqual({ message: 'undefined' });
   });
 
-  it('preserves message when error is already transport-error shaped', () => {
+  it('nests own data bag at data.data when error is transport-error shaped', () => {
     const result = serializeTransportError({
       message: 'transport failed',
       code: 'WS_TIMEOUT',
@@ -27,7 +19,7 @@ describe('serializeTransportError', () => {
     expect(result).toEqual({
       message: 'transport failed',
       code: 'WS_TIMEOUT',
-      data: { retryable: true },
+      data: { data: { retryable: true } },
     });
   });
 });
