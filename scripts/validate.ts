@@ -409,14 +409,16 @@ function formatCompactSummary(summary: ValidationSummary): string {
   const errors = allResults.filter((r) => r.severity === 'error' && !r.fixedAutomatically).length;
   const warnings = allResults.filter((r) => r.severity === 'warning' && !r.fixedAutomatically).length;
   const autoFixed = allResults.filter((r) => r.fixedAutomatically).length;
+  const failedTools = summary.toolStatuses.filter((status) => status.status === 'failed').length;
 
   const parts: string[] = [`${summary.totalFiles} files`];
 
-  if (errors === 0 && warnings === 0) {
+  if (errors === 0 && warnings === 0 && failedTools === 0) {
     parts.push('clean');
   } else {
     if (errors > 0) parts.push(`${errors} error${errors !== 1 ? 's' : ''}`);
     if (warnings > 0) parts.push(`${warnings} warning${warnings !== 1 ? 's' : ''}`);
+    if (failedTools > 0) parts.push(`${failedTools} failed tool${failedTools !== 1 ? 's' : ''}`);
   }
 
   const suffix = autoFixed > 0 ? ` (${autoFixed} auto-fixed)` : '';
@@ -430,7 +432,13 @@ function formatCompactSummary(summary: ValidationSummary): string {
  * @returns Formatted string
  */
 function formatNoIssuesOutput(summary: ValidationSummary, isEmpty: boolean): string {
-  const message = isEmpty ? chalk.green('✨ No issues found') : chalk.green('✅ All files passed validation!');
+  const failedTools = summary.toolStatuses.filter((status) => status.status === 'failed').length;
+  const message =
+    failedTools > 0
+      ? chalk.red(`Validation incomplete: ${failedTools} tool${failedTools !== 1 ? 's' : ''} failed`)
+      : isEmpty
+        ? chalk.green('✨ No issues found')
+        : chalk.green('✅ All files passed validation!');
 
   const toolStatus = formatToolStatus(summary.toolStatuses);
   return toolStatus ? `${message}${toolStatus}` : message;
@@ -484,14 +492,15 @@ export async function runValidateCli(args: string[], hooks: ValidateCliHooks = {
     const summary = await validator.validate(options);
     await hooks.afterValidate?.(summary, options);
 
-    if (parsed.flags.json) {
-      console.info(JSON.stringify(summary, null, 2));
-      return 0;
-    }
-
     const isEmpty = Object.keys(summary.fileResults).length === 0;
     const hasIssues = Object.values(summary.fileResults).some((r) => r.length > 0);
-    const anyFailed = summary.toolStatuses?.some((s) => s.status === 'failed');
+    const anyFailed = summary.toolStatuses.some((s) => s.status === 'failed');
+    const exitCode = summary.filesWithErrors > 0 ? 1 : anyFailed ? 2 : 0;
+
+    if (parsed.flags.json) {
+      console.info(JSON.stringify(summary, null, 2));
+      return exitCode;
+    }
 
     if (isEmpty || !hasIssues) {
       let output = formatNoIssuesOutput(summary, isEmpty);
@@ -500,7 +509,7 @@ export async function runValidateCli(args: string[], hooks: ValidateCliHooks = {
       }
       output += `\n${formatCompactSummary(summary)}`;
       console.info(output);
-      return anyFailed ? 2 : 0;
+      return exitCode;
     }
 
     let output = formatIssuesOutput(summary, parsed.flags.showActions);
@@ -510,7 +519,7 @@ export async function runValidateCli(args: string[], hooks: ValidateCliHooks = {
     output += `\n\n${formatCompactSummary(summary)}`;
     console.info(output);
 
-    return summary.filesWithErrors > 0 ? 1 : anyFailed ? 2 : 0;
+    return exitCode;
   } catch (error: unknown) {
     console.error(chalk.red('Validation failed:'), error instanceof Error ? error.message : String(error));
     return 1;

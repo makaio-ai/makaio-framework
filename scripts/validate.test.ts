@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { parseCliArgs } from './validate.js';
+import { fileURLToPath } from 'node:url';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { WorkspaceValidator } from './lib/validate/index.js';
+import type { ValidationResult, ValidationSummary } from './lib/validate/index.js';
+import { parseCliArgs, runValidateCli } from './validate.js';
 
 describe('parseCliArgs', () => {
   it('defaults to fix mode', () => {
@@ -69,5 +72,129 @@ describe('parseCliArgs', () => {
     expect(() => parseCliArgs(['src/**/*.ts', 'framework/**/*.ts'])).toThrow(
       'Cannot pass multiple glob patterns. Use a single glob pattern or multiple literal files.',
     );
+  });
+});
+
+const FILE = '/workspace/example.ts';
+
+function summary(overrides: Partial<ValidationSummary> = {}): ValidationSummary {
+  return {
+    fileResults: {},
+    totalFiles: 1,
+    filesWithErrors: 0,
+    fixableFiles: [],
+    unfixableFiles: [],
+    suggestedActions: [],
+    toolStatuses: [{ tool: 'eslint', status: 'ok' }],
+    ...overrides,
+  };
+}
+
+function sourceError(): ValidationResult {
+  return {
+    tool: 'eslint',
+    message: 'source error',
+    severity: 'error',
+  };
+}
+
+describe('runValidateCli', () => {
+  const validate = vi.spyOn(WorkspaceValidator.prototype, 'validate');
+  const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+  beforeEach(() => {
+    validate.mockReset();
+    info.mockClear();
+  });
+
+  afterEach(() => {
+    validate.mockReset();
+    info.mockClear();
+  });
+
+  afterAll(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns source-error status for JSON output', async () => {
+    validate.mockResolvedValue(summary({ fileResults: { [FILE]: [sourceError()] }, filesWithErrors: 1 }));
+
+    await expect(runValidateCli(['--json', '--tools', 'eslint', 'example.ts'])).resolves.toBe(1);
+  });
+
+  it('returns worker-failure status for JSON output while preserving the payload', async () => {
+    const expected = summary({ toolStatuses: [{ tool: 'eslint', status: 'failed', error: 'worker unavailable' }] });
+    validate.mockResolvedValue(expected);
+
+    await expect(runValidateCli(['--json', '--tools', 'eslint', 'example.ts'])).resolves.toBe(2);
+    expect(JSON.parse(String(info.mock.calls[0]?.[0]))).toEqual(expected);
+  });
+
+  it('gives a source error precedence over a worker failure', async () => {
+    validate.mockResolvedValue(
+      summary({
+        fileResults: { [FILE]: [sourceError()] },
+        filesWithErrors: 1,
+        toolStatuses: [{ tool: 'eslint', status: 'failed', error: 'worker unavailable' }],
+      }),
+    );
+
+    await expect(runValidateCli(['--json', '--tools', 'eslint', 'example.ts'])).resolves.toBe(1);
+  });
+
+  it('returns success for a clean summary', async () => {
+    validate.mockResolvedValue(summary());
+
+    await expect(runValidateCli(['--json', '--tools', 'eslint', 'example.ts'])).resolves.toBe(0);
+  });
+
+  it('keeps automatically fixed errors successful', async () => {
+    validate.mockResolvedValue(
+      summary({
+        fileResults: { [FILE]: [{ ...sourceError(), fixedAutomatically: true }] },
+        fixableFiles: [],
+      }),
+    );
+
+    await expect(runValidateCli(['--json', '--tools', 'eslint', 'example.ts'])).resolves.toBe(0);
+  });
+
+  it('does not report a failed worker as clean in human output', async () => {
+    validate.mockResolvedValue(
+      summary({ toolStatuses: [{ tool: 'eslint', status: 'failed', error: 'worker unavailable' }] }),
+    );
+
+    await expect(runValidateCli(['--tools', 'eslint', 'example.ts'])).resolves.toBe(2);
+
+    const output = info.mock.calls.flat().join('\n');
+    expect(output).toContain('1 failed tool');
+    expect(output).not.toMatch(/clean|all files passed|no issues found/i);
+  });
+});
+
+describe('runValidateCli worker-spawn integration', () => {
+  it('returns worker-failure status from a real failed TypeScript worker spawn', async () => {
+    const previousPath = process.env.PATH;
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    try {
+      process.env.PATH = '/definitely-missing-makaio-validate-worker';
+
+      await expect(
+        runValidateCli(['--json', '--no-fix', '--tools', 'typescript', fileURLToPath(import.meta.url)]),
+      ).resolves.toBe(2);
+
+      const output = JSON.parse(String(info.mock.calls.at(-1)?.[0])) as ValidationSummary;
+      expect(output.toolStatuses).toEqual([
+        expect.objectContaining({ tool: 'typescript', status: 'failed', error: expect.stringContaining('ENOENT') }),
+      ]);
+    } finally {
+      if (previousPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = previousPath;
+      }
+      info.mockRestore();
+    }
   });
 });
