@@ -1,8 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import {
-  FrameworkContractNamespaces,
-  FrameworkStorageNamespaces,
   WorkflowRunResultSchema,
   type ExecutionAttemptOutcome,
   type OutcomeAckDecision,
@@ -12,18 +9,13 @@ import {
   type WorkflowRunResult,
 } from '@makaio/contracts';
 import type { KernelMakaioExtension } from '@makaio/kernel';
+import { WORKFLOW_WORKLOAD_KIND, WORKFLOW_WORKLOAD_VERSION } from '@makaio/subsystem-workflow-engine';
 import type { Toolset } from '@makaio/tools-core';
 import type { PrepareAdapterRuntimeInput } from '../compose-adapter-runtime.js';
+import { runHeadlessWorker } from './headless-worker.js';
 import type { OutcomeSubmitRetryConfig } from './outcome-submission.js';
-import { runWorkloadInvocation, type WorkloadInvocationPreparation } from './workload-invocation.js';
+import type { InstalledWorkloadAdapter, WorkloadInvocationPreparation } from './workload-invocation.js';
 import { createWorkflowWorkloadAdapter } from './workflow-workload-adapter.js';
-import { registerWorkerRuntime } from './runtime-registration-client.js';
-import { bootstrapWorkerRuntime, type BootstrapRuntimeConnection } from './bootstrap-start-client.js';
-import { withWorkerBootstrapDeadline } from './worker-bootstrap-exchange.js';
-import { installAttemptControlEndpoint, type InstalledAttemptControlEndpoint } from './attempt-control-client.js';
-
-/** Fixed host shutdown budget for draining independently retried control reports. */
-const CONTROL_REPORT_DRAIN_DEADLINE_MS = 5_000;
 
 // ─────────────────────────────────────────────────────────────
 // Dependency types
@@ -227,6 +219,10 @@ async function observeCommittedWorkflow(
  * The authenticated control bus stays connected through the canonical outcome
  * acknowledgement. Workflow code acquisition and runtime composition happen
  * only inside the installed workflow adapter's admitted Invocation.
+ *
+ * Internally delegates to the workload-agnostic {@link runHeadlessWorker}
+ * after building the workflow-specific adapter. Callers that do not need
+ * workflow semantics should use `runHeadlessWorker` directly.
  * @param deps - Provider and installed workflow adapter dependencies.
  * @param signal - Cancellation signal from the process or caller.
  * @returns Canonical outcome and durable acknowledgement.
@@ -237,116 +233,64 @@ export async function runHeadlessWorkflowWorker(
 ): Promise<HeadlessWorkflowWorkerResult> {
   signal.throwIfAborted();
   const workflowEnv = { ...deps.workflowEnv };
-  const runtimeIncarnationId = randomUUID();
-  const credentials = await withWorkerBootstrapDeadline(deps.bootstrapDeadlineAt, signal, (bootstrapSignal) =>
-    deps.bootstrap(bootstrapSignal),
-  );
-  const { connection, endpoint } = await bootstrapWorkerRuntime({
-    executionAttemptId: deps.executionAttemptId,
-    runtimeIncarnationId,
-    bootstrapDeadlineAt: deps.bootstrapDeadlineAt,
-    signal,
-    createConnection: () => createHeadlessConnection(deps, credentials),
-  });
-  const preBus = connection.bus;
-  const workflow = createWorkflowWorkloadAdapter({ ...deps, workflowEnv }, credentials, preBus);
-  const controlReportDrain = new AbortController();
+
+  // The workflow adapter needs the connected bus and credentials to subscribe
+  // to the workflow-specific cancel subject. The generic runner owns the bus
+  // lifecycle, so we capture these values through a wrapped connectBus callback
+  // and build the real workflow adapter lazily when bindControl is first called
+  // (the bus is guaranteed to be connected by then).
+  let capturedBus: IMakaioBus | undefined;
+  let capturedCredentials: HeadlessWorkerBootstrapCredentials | undefined;
+  let workflow: ReturnType<typeof createWorkflowWorkloadAdapter> | undefined;
   let result: HeadlessWorkflowWorkerResult | undefined;
-  let control: InstalledAttemptControlEndpoint | undefined;
+
+  const wrappedConnectBus: HeadlessWorkerBusConnector = async (bus, credentials, connectSignal) => {
+    capturedBus = bus;
+    capturedCredentials = credentials;
+    await deps.connectBus(bus, credentials, connectSignal);
+  };
+
+  // Bridge adapter that defers to the real workflow adapter once the bus is
+  // available. `runWorkloadInvocation` calls `bindControl` before `invoke`,
+  // and the bus is connected before either is called.
+  const bridgeAdapter: InstalledWorkloadAdapter = {
+    kind: WORKFLOW_WORKLOAD_KIND,
+    version: WORKFLOW_WORKLOAD_VERSION,
+    async bindControl(input) {
+      if (capturedBus === undefined || capturedCredentials === undefined) {
+        throw new Error('Bus not yet connected when adapter control was bound');
+      }
+      workflow = createWorkflowWorkloadAdapter({ ...deps, workflowEnv }, capturedCredentials, capturedBus);
+      return workflow.adapter.bindControl!(input);
+    },
+    async invoke(input) {
+      if (workflow === undefined) {
+        throw new Error('Workflow adapter was not initialized via bindControl');
+      }
+      return workflow.adapter.invoke(input);
+    },
+  };
+
   try {
-    // Control is installed here rather than inside bootstrapWorkerRuntime
-    // because that bootstrap is shared with worker-entry.ts, which has no
-    // control observer to feed, and because the Authority refuses a control
-    // delivery for an unregistered runtime anyway — installing it before
-    // registration in this harness is early enough.
-    control = await installAttemptControlEndpoint(
-      preBus,
-      { executionAttemptId: deps.executionAttemptId, runtimeIncarnationId },
+    result = await runHeadlessWorker(
       {
-        reportOptions: { retry: deps.outcomeRetry, reconnect: () => preBus.reconnect() },
-        reportSignal: controlReportDrain.signal,
-        signal,
+        executionId: deps.executionId,
+        executionAttemptId: deps.executionAttemptId,
+        bootstrapDeadlineAt: deps.bootstrapDeadlineAt,
+        workflowEnv: deps.workflowEnv,
+        setupEnv: deps.setupEnv,
+        bootstrap: deps.bootstrap,
+        connectBus: wrappedConnectBus,
+        workspaceRoot: deps.workspaceRoot,
+        preparation: deps.preparation,
+        adapters: [bridgeAdapter],
+        outcomeRetry: deps.outcomeRetry,
       },
-    );
-    const runtimeGeneration = await registerWorkerRuntime(preBus, {
-      executionAttemptId: deps.executionAttemptId,
-      runtimeIncarnationId,
       signal,
-    });
-    endpoint.bindGeneration(runtimeGeneration);
-    control.bindGeneration(runtimeGeneration);
-    result = await runWorkloadInvocation(preBus, {
-      executionAttemptId: deps.executionAttemptId,
-      runtimeGeneration,
-      workspaceRoot: deps.workspaceRoot,
-      setupEnv: deps.setupEnv,
-      preparation: deps.preparation,
-      adapters: [workflow.adapter],
-      signal: AbortSignal.any([signal, control.signal]),
-      control: control.observer,
-      retry: deps.outcomeRetry,
-      reconnect: () => preBus.reconnect(),
-    });
+    );
     await observeCommittedWorkflow(deps, result);
     return result;
   } finally {
-    try {
-      await workflow.releaseExecutable(result);
-    } finally {
-      // Order matters: `finished()` may be the transition that makes the
-      // conclusion derivable, so it runs before anything is torn down.
-      // `cleanup()` then removes the subscription, so no further delivery is
-      // answered, and only then is the drain awaited — draining before cleanup
-      // would let a delivery arriving mid-drain dispatch a report the drain
-      // has already stopped waiting for.
-      control?.observer.finished();
-      control?.cleanup();
-      // A receipt remains durable even if shutdown cannot wait for its report.
-      // FACT-163 gives this host a fixed private drain window; its expiry aborts
-      // report requests and retries before the bus is closed, without claiming
-      // that either the report or the workload stop succeeded.
-      let controlReportDrainClose: Promise<void> | undefined;
-      const controlReportDrainTimer = setTimeout(() => {
-        controlReportDrain.abort();
-        controlReportDrainClose = Promise.resolve(connection.close());
-        // The await below reports a close failure through the normal cleanup
-        // path, while this handler prevents an early unhandled rejection.
-        void controlReportDrainClose.catch(() => {});
-      }, CONTROL_REPORT_DRAIN_DEADLINE_MS);
-      try {
-        await control?.settle();
-      } finally {
-        clearTimeout(controlReportDrainTimer);
-      }
-      endpoint.cleanup();
-      await (controlReportDrainClose ?? connection.close());
-    }
+    await workflow?.releaseExecutable(result);
   }
-}
-
-/**
- * Acquire cleanup ownership before a provider starts asynchronous connection work.
- * @param deps - Provider connector and workload dependencies.
- * @param credentials - Attempt-scoped credentials, without private environment data.
- * @returns A fresh connection whose late failure cannot retain a transport.
- */
-function createHeadlessConnection(
-  deps: HeadlessWorkflowWorkerDeps,
-  credentials: HeadlessWorkerBootstrapCredentials,
-): BootstrapRuntimeConnection {
-  const bus = createBusInstance();
-  bus.registerNamespaces([...FrameworkContractNamespaces, ...FrameworkStorageNamespaces]);
-  return {
-    bus,
-    async connect(signal) {
-      try {
-        await deps.connectBus(bus, credentials, signal);
-        signal.throwIfAborted();
-      } catch (error) {
-        bus.disconnect();
-        throw error;
-      }
-    },
-    close: () => bus.disconnect(),
-  };
 }
