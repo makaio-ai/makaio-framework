@@ -52,6 +52,11 @@ export {
   type HeadlessWorkflowWorkerResult,
 } from './headless-workflow-worker.js';
 export {
+  runHeadlessWorker,
+  type HeadlessWorkerDeps,
+  type HeadlessWorkerResult,
+} from './headless-worker.js';
+export {
   AuthorityRequestDeliveryError,
   AttemptOutcomeDeliveryError,
   OutcomeDeliveryError,
