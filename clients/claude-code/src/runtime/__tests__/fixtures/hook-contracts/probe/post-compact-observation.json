@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 4,
+  "provider": "claude-code",
+  "cliVersion": "2.1.219",
+  "scenarioId": "post-compact-observation",
+  "events": [],
+  "oracle": "unobserved",
+  "oraclePassed": true,
+  "exitCode": 0,
+  "terminal": "ok"
+}

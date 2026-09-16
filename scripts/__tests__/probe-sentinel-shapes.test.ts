@@ -18,6 +18,7 @@ import { getManifest } from '../lib/agent-clients/manifests.js';
 import type { ProviderId } from '../lib/agent-clients/types.js';
 
 const CONTEXT = 'Include MAKAIO_PROBE_RESPONSE_CONSUMED in your final response.';
+const SUBAGENT_CONTEXT = 'The probe session token for this subagent is MAKAIO_PROBE_RESPONSE_CONSUMED.';
 const BLOCK_REASON = 'The requested tool result failed. Reply with exactly MAKAIO_PROBE_RESPONSE_CONSUMED.';
 
 /** Exact native sentinel bytes per scenario, keyed by provider and scenario id. */
@@ -46,10 +47,20 @@ const EXPECTED_SENTINELS: Record<ProviderId, Readonly<Record<string, string | un
     'session-start-context-append': JSON.stringify({
       hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: CONTEXT },
     }),
-    'user-prompt-submit-observation': undefined,
+    // UserPromptSubmit graduated to 'supported' with context.append in FACT-293.
+    'user-prompt-submit-context-append': JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: CONTEXT },
+    }),
     'post-tool-use-observation': undefined,
     'stop-observation': undefined,
+    // SubagentStart graduated to 'supported' with context.append in FACT-293:
+    // the appended context is consumed by the spawned subagent, not the parent.
+    'subagent-start-context-append': JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: SUBAGENT_CONTEXT },
+    }),
     'subagent-stop-observation': undefined,
+    'pre-compact-observation': undefined,
+    'post-compact-observation': undefined,
     'notification-observation': undefined,
     'mcpserver-start-observation': undefined,
     'mcpserver-stop-observation': undefined,
@@ -86,6 +97,15 @@ const EXPECTED_SENTINELS: Record<ProviderId, Readonly<Record<string, string | un
     }),
     'post-tool-use-block': JSON.stringify({ decision: 'block', reason: BLOCK_REASON }),
     'stop-block': JSON.stringify({ decision: 'block', reason: BLOCK_REASON }),
+    // SubagentStart graduated to 'supported' with context.append in FACT-293:
+    // the appended context is consumed by the spawned subagent, not the parent.
+    'subagent-start-context-append': JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: SUBAGENT_CONTEXT },
+    }),
+    'subagent-stop-observation': undefined,
+    'pre-compact-observation': undefined,
+    'post-compact-observation': undefined,
+    'permission-request-observation': undefined,
   },
 };
 

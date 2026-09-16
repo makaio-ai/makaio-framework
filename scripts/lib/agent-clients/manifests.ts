@@ -56,7 +56,7 @@ interface EvidenceCandidate {
 const EVIDENCE: Record<ProviderId, Readonly<Record<string, EvidenceCandidate>>> = {
   'claude-code': {
     SessionStart: { status: 'supported', effects: ['context.append'], blocking: false },
-    UserPromptSubmit: { status: 'unobserved', effects: [], blocking: false },
+    UserPromptSubmit: { status: 'supported', effects: ['context.append'], blocking: false },
     PreToolUse: {
       status: 'supported',
       effects: ['claude-code.tool-response.approve', 'claude-code.tool-response.deny', 'context.append'],
@@ -64,7 +64,12 @@ const EVIDENCE: Record<ProviderId, Readonly<Record<string, EvidenceCandidate>>> 
     },
     PostToolUse: { status: 'unobserved', effects: [], blocking: false },
     Stop: { status: 'unobserved', effects: [], blocking: false },
+    SubagentStart: { status: 'supported', effects: ['context.append'], blocking: false },
     SubagentStop: { status: 'unobserved', effects: [], blocking: false },
+    PreCompact: { status: 'unobserved', effects: [], blocking: false },
+    // PostCompact is raw-only; the harness limitation (isolated CLAUDE_CONFIG_DIR silences /compact)
+    // applies here as for PreCompact.
+    PostCompact: { status: 'unobserved', effects: [], blocking: false },
     Notification: { status: 'unobserved', effects: [], blocking: false },
     MCPServerStart: { status: 'unobserved', effects: [], blocking: false },
     MCPServerStop: { status: 'unobserved', effects: [], blocking: false },
@@ -96,6 +101,10 @@ const EVIDENCE: Record<ProviderId, Readonly<Record<string, EvidenceCandidate>>> 
       blocking: true,
     },
     Stop: { status: 'supported', effects: ['openai.codex-hook-response.block'], blocking: true },
+    SubagentStart: { status: 'supported', effects: ['context.append'], blocking: false },
+    SubagentStop: { status: 'unobserved', effects: [], blocking: false },
+    PreCompact: { status: 'unobserved', effects: [], blocking: false },
+    PostCompact: { status: 'unobserved', effects: [], blocking: false },
   },
 };
 
@@ -122,6 +131,7 @@ function buildScenario(
     description: seed.description ?? `Attempts the ${event.name} ${seed.suffix} behavior with stable markers.`,
     prompt: seed.prompt ?? promptFor(event.name),
     allowedTools: seed.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+    ...(seed.cliArgs !== undefined && { cliArgs: seed.cliArgs }),
     expectedEvents: [
       {
         eventName: event.name,
@@ -160,7 +170,8 @@ export function getManifest(provider: ProviderId): ScenarioManifest {
     scenarios: contract.definition.runtimeCapabilities.hookEvents.flatMap<ProbeScenario>((event) => {
       const evidence = EVIDENCE[provider][event.name] ?? { status: 'unobserved', effects: [], blocking: false };
       if (evidence.status !== 'supported') {
-        return [buildScenario(provider, event, evidence, { suffix: 'observation', oracle: 'unobserved' })];
+        const seed = contract.observationScenario?.(event.name) ?? { suffix: 'observation', oracle: 'unobserved' };
+        return [buildScenario(provider, event, evidence, seed)];
       }
       return [
         ...evidence.effects.map((effect) =>

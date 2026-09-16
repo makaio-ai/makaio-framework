@@ -8,7 +8,9 @@
  * observed session semantics subjects
  * (`client.session.started`, `client.session.userPrompt.submitted`,
  * `client.session.turn.started`, `client.session.turn.completed`,
- * `client.session.tool.pre`, `client.session.tool.post`), the global
+ * `client.session.tool.pre`, `client.session.tool.post`,
+ * `client.session.compaction.pre`, `client.session.subagent.started`,
+ * `client.session.subagent.completed`), the global
  * wiring aggregator (`client.wiring.list`), the binary management
  * subjects (`client.list`, `client.install`, `client.uninstall`,
  * `client.update`, `client.setActive`, `client.installJob.progress`,

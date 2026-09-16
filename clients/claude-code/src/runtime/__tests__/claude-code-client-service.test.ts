@@ -19,7 +19,9 @@ import {
   CLAUDE_CODE_HOOK_PRE_TOOL_USE,
   CLAUDE_CODE_HOOK_POST_TOOL_USE,
   CLAUDE_CODE_HOOK_STOP,
+  CLAUDE_CODE_HOOK_SUBAGENT_START,
   CLAUDE_CODE_HOOK_SUBAGENT_STOP,
+  CLAUDE_CODE_HOOK_PRE_COMPACT,
   CLAUDE_CODE_HOOK_NOTIFICATION,
 } from '../schemas.js';
 
@@ -1477,14 +1479,16 @@ describe('ClaudeCodeClientService', () => {
       });
     });
 
-    it('suppresses only session.started for managed sessions — turn and tool events still emit', async () => {
-      // The gate is intentionally asymmetric: only client.session.started has an
-      // adapter-path equivalent.  turn.started, turn.completed, and tool events
-      // must keep flowing for adapter-managed sessions.
+    it('suppresses adapter-emitted subjects for managed sessions — tool events still emit', async () => {
+      // The adapter path emits session.started, turn.started, turn.completed, and
+      // userPrompt.submitted for managed sessions (claude-agent-sdk agent.ts lines
+      // 108, 117, 125, 134).  All four must be suppressed; tool.pre, tool.post,
+      // subagent.*, and compaction.pre must keep flowing.
       await emitRuntimeStarted({ clientRuntimeId: 'rt-007' });
 
       const startedEvents: unknown[] = [];
       const turnStartedEvents: unknown[] = [];
+      const userPromptEvents: unknown[] = [];
       const turnCompletedEvents: unknown[] = [];
       const toolPreEvents: unknown[] = [];
       const cleanups = [
@@ -1493,6 +1497,9 @@ describe('ClaudeCodeClientService', () => {
         }),
         bus.on(ClientSubjects.session.turn.started, ({ payload }) => {
           turnStartedEvents.push(payload);
+        }),
+        bus.on(ClientSubjects.session.userPrompt.submitted, ({ payload }) => {
+          userPromptEvents.push(payload);
         }),
         bus.on(ClientSubjects.session.turn.completed, ({ payload }) => {
           turnCompletedEvents.push(payload);
@@ -1518,11 +1525,58 @@ describe('ClaudeCodeClientService', () => {
 
       for (const cleanup of cleanups) cleanup();
 
+      // All four adapter-emitted subjects suppressed:
       expect(startedEvents).toHaveLength(0);
-      expect(turnStartedEvents).toHaveLength(1);
-      expect(turnStartedEvents[0]).toMatchObject({ adapterSessionId: SESSION_ID });
-      expect(turnCompletedEvents).toHaveLength(1);
+      expect(turnStartedEvents).toHaveLength(0);
+      expect(userPromptEvents).toHaveLength(0);
+      expect(turnCompletedEvents).toHaveLength(0);
+      // tool.pre has no adapter-path equivalent — must still emit:
       expect(toolPreEvents).toHaveLength(1);
+    });
+
+    it('subagent.* and compaction.pre are forwarded unconditionally even for managed sessions', async () => {
+      // subagent.started, subagent.completed, and compaction.pre have no
+      // adapter-path equivalent; they must flow regardless of managed-session state.
+      await emitRuntimeStarted({ clientRuntimeId: 'rt-008' });
+
+      const subagentStartedEvents: unknown[] = [];
+      const subagentCompletedEvents: unknown[] = [];
+      const compactionPreEvents: unknown[] = [];
+      const cleanups = [
+        bus.on(ClientSubjects.session.subagent.started, ({ payload }) => {
+          subagentStartedEvents.push(payload);
+        }),
+        bus.on(ClientSubjects.session.subagent.completed, ({ payload }) => {
+          subagentCompletedEvents.push(payload);
+        }),
+        bus.on(ClientSubjects.session.compaction.pre, ({ payload }) => {
+          compactionPreEvents.push(payload);
+        }),
+      ];
+
+      await bus.emit(ClaudeCodeClientSubjects.hook.received, {
+        eventName: CLAUDE_CODE_HOOK_SUBAGENT_START,
+        receivedAt: RECEIVED_AT,
+        payload: { session_id: SESSION_ID, agent_id: 'subagent-1' },
+      });
+      await bus.emit(ClaudeCodeClientSubjects.hook.received, {
+        eventName: CLAUDE_CODE_HOOK_SUBAGENT_STOP,
+        receivedAt: RECEIVED_AT,
+        payload: { session_id: SESSION_ID, agent_id: 'subagent-1' },
+      });
+      await bus.emit(ClaudeCodeClientSubjects.hook.received, {
+        eventName: CLAUDE_CODE_HOOK_PRE_COMPACT,
+        receivedAt: RECEIVED_AT,
+        payload: { session_id: SESSION_ID, trigger: 'auto' },
+      });
+
+      for (const cleanup of cleanups) cleanup();
+
+      expect(subagentStartedEvents).toHaveLength(1);
+      expect(subagentStartedEvents[0]).toMatchObject({ adapterSessionId: SESSION_ID, agentId: 'subagent-1' });
+      expect(subagentCompletedEvents).toHaveLength(1);
+      expect(compactionPreEvents).toHaveLength(1);
+      expect(compactionPreEvents[0]).toMatchObject({ trigger: 'auto' });
     });
 
     it('tool hook events are forwarded unconditionally even for managed sessions', async () => {

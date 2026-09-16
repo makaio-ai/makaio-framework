@@ -1,0 +1,9 @@
+{
+  "session_id": "fixture-session",
+  "transcript_path": null,
+  "cwd": "/workspace",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "What files are in the repository?",
+  "prompt_id": "fixture-prompt"
+}

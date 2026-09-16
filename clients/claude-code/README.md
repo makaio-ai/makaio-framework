@@ -43,16 +43,19 @@ an `empty` lease for explicit auth, then deliver only the selected method.
 | Hook Name | Framework Subject | Response Capabilities |
 |-----------|------------------|----------------------|
 | `SessionStart` | `client.session.started` | `context.append` |
-| `UserPromptSubmit` | `client.session.userPrompt.submitted` | *(none)* |
+| `UserPromptSubmit` | `client.session.userPrompt.submitted` | `context.append` |
 | `PreToolUse` | `client.session.tool.pre` | `approve`, `deny`, `context.append` |
 | `PostToolUse` | `client.session.tool.post` | *(none)* |
 | `Stop` | `client.session.turn.completed` | *(none)* |
-| `SubagentStop` | _(no framework subject --- not normalized)_ | *(none)* |
+| `SubagentStart` | `client.session.subagent.started` | `context.append` |
+| `SubagentStop` | `client.session.subagent.completed` | *(none)* |
+| `PreCompact` | `client.session.compaction.pre` | *(none)* |
+| `PostCompact` | _(no framework subject --- raw ingress only)_ | *(none)* |
 | `Notification` | _(no framework subject --- not normalized)_ | *(none)* |
 | `MCPServerStart` | _(no framework subject --- not normalized)_ | *(none)* |
 | `MCPServerStop` | _(no framework subject --- not normalized)_ | *(none)* |
 
-`PreToolUse` and `SessionStart` declare response capabilities. Events without capabilities use `makaio hook received` (fire-and-forget); events with them use `makaio hook handle` (request/response) and produce a native `hookSpecificOutput` JSON response. `PreToolUse` renders a permission decision; `SessionStart` renders `additionalContext` alone, since it has no decision to make.
+`PreToolUse`, `SessionStart`, `UserPromptSubmit`, and `SubagentStart` declare response capabilities. Events without capabilities use `makaio hook received` (fire-and-forget); events with them use `makaio hook handle` (request/response) and produce a native `hookSpecificOutput` JSON response. `PreToolUse` renders a permission decision; the other three render `additionalContext` alone, since they have no decision to make. `SubagentStart`'s context lands in the *subagent's* context window rather than the parent session's --- live probe evidence: `src/runtime/__tests__/fixtures/hook-contracts/probe/subagent-start-context-append.json`.
 
 ### Hook Response Contract (`claude-code.tool-response@1`)
 
@@ -61,10 +64,10 @@ The `./runtime` entrypoint registers a `ProviderContractCatalogEntry` that defin
 | Field | Value |
 |-------|-------|
 | `contractId` | `claude-code.tool-response` |
-| `version` | `1.1.0` |
-| `supportedInteractions` | `PreToolUse`, `SessionStart`, `approve`, `deny`, `context.append` |
+| `version` | `1.3.0` |
+| `supportedInteractions` | `PreToolUse`, `SessionStart`, `UserPromptSubmit`, `SubagentStart`, `approve`, `deny`, `context.append` |
 
-**Blockability:** `PreToolUse`, `approve`, and `deny` are blockable; `SessionStart` and `context.append` are not.
+**Blockability:** `PreToolUse`, `approve`, and `deny` are blockable; `SessionStart`, `UserPromptSubmit`, `SubagentStart`, and `context.append` are not.
 
 **Provider effect builders** (exported from `./runtime`):
 

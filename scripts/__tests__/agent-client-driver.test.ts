@@ -558,7 +558,7 @@ describe('native probe driver', () => {
   it('requires observed behavior evidence for every source-expected event/effect pair', () => {
     const providerManifest = getManifest('codex');
     const fixtures: ScenarioFixture[] = providerManifest.scenarios.map((scenario) => ({
-      schemaVersion: 3,
+      schemaVersion: 4,
       provider: 'codex',
       cliVersion: providerManifest.pinnedVersion,
       scenarioId: scenario.id,
@@ -580,6 +580,7 @@ describe('native probe driver', () => {
       oracle: scenario.oracle,
       oraclePassed: true,
       exitCode: 0,
+      terminal: 'ok',
     }));
     expect(findMissingEffectCoverage(providerManifest, fixtures)).toEqual([]);
     expect(findMissingEffectCoverage(providerManifest, fixtures.slice(1))).toContain(
@@ -624,7 +625,7 @@ describe('native probe driver', () => {
             expect(params.fixturesDir).not.toBe(fixturesDir);
             const event = params.scenario.expectedEvents[0]!;
             const fixture: ScenarioFixture = {
-              schemaVersion: 3,
+              schemaVersion: 4,
               provider: 'codex',
               cliVersion: getManifest('codex').pinnedVersion,
               scenarioId: params.scenario.id,
@@ -644,6 +645,7 @@ describe('native probe driver', () => {
               oracle: params.scenario.oracle,
               oraclePassed: true,
               exitCode: 0,
+              terminal: 'ok',
             };
             await writeFixture({ baseDir: params.fixturesDir, fixture });
             return { fixture, fixtureDiffs: [], stdout: '', stderr: '', timedOut: false };
@@ -720,7 +722,7 @@ describe('native probe driver', () => {
           validateBinaryVersion: async ({ pinnedVersion }) => ({ valid: true, pinnedVersion }),
           runScenario: async (params) => ({
             fixture: {
-              schemaVersion: 3,
+              schemaVersion: 4,
               provider: 'codex',
               cliVersion: getManifest('codex').pinnedVersion,
               scenarioId: params.scenario.id,
@@ -728,6 +730,7 @@ describe('native probe driver', () => {
               oracle: params.scenario.oracle,
               oraclePassed: false,
               exitCode: 1,
+              terminal: 'error',
             },
             fixtureDiffs: [],
             stdout: '',

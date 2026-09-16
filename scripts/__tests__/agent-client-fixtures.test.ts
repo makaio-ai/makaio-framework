@@ -15,7 +15,7 @@ import type { ScenarioFixture } from '../lib/agent-clients/types.js';
 
 function createFixture(overrides?: Partial<ScenarioFixture>): ScenarioFixture {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     provider: 'claude-code',
     cliVersion: '2.1.143',
     scenarioId: 'session-lifecycle',
@@ -52,6 +52,7 @@ function createFixture(overrides?: Partial<ScenarioFixture>): ScenarioFixture {
     oraclePassed: true,
     oracle: 'capture-only',
     exitCode: 0,
+    terminal: 'ok',
     ...overrides,
   };
 }

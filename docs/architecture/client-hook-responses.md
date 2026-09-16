@@ -38,34 +38,45 @@ for that event — an existing `observer-only` capture is not counter-evidence.
 | Event             | Source Candidate | Capabilities             | Expected Stdout | Blocking | Framework Subject                          |
 |-------------------|-----------------|--------------------------|-----------------|----------|--------------------------------------------|
 | `SessionStart`    | supported       | `context.append`         | Yes             | No       | `client.session.started`                   |
-| `UserPromptSubmit`| unobserved      | *(none)*                 | No              | No       | `client.session.userPrompt.submitted`      |
+| `UserPromptSubmit`| supported       | `context.append`         | Yes             | No       | `client.session.userPrompt.submitted`      |
 | `PreToolUse`      | supported       | `claude-code.tool-response.approve`, `claude-code.tool-response.deny`, `context.append` | Yes | Yes | `client.session.tool.pre` |
 | `PostToolUse`     | unobserved      | *(none)*                 | No              | No       | `client.session.tool.post`                 |
 | `Stop`            | unobserved      | *(none)*                 | No              | No       | `client.session.turn.completed`            |
-| `SubagentStop`    | unobserved      | *(none)*                 | No              | No       | *(none --- raw space only)*                |
+| `SubagentStart`   | supported       | `context.append`         | Yes             | No       | `client.session.subagent.started`          |
+| `SubagentStop`    | unobserved      | *(none)*                 | No              | No       | `client.session.subagent.completed`        |
+| `PreCompact`      | unobserved      | *(none)*                 | No              | No       | `client.session.compaction.pre`            |
+| `PostCompact`     | unobserved      | *(none)*                 | No              | No       | *(none --- raw space only)*                |
 | `Notification`    | unobserved      | *(none)*                 | No              | No       | *(none --- raw space only)*                |
 | `MCPServerStart`  | unobserved      | *(none)*                 | No              | No       | *(none --- raw space only)*                |
 | `MCPServerStop`   | unobserved      | *(none)*                 | No              | No       | *(none --- raw space only)*                |
 
 #### Claude Code Notes
 
-- `PreToolUse` and `SessionStart` declare `responseCapabilities` in the client
-  definition. The wiring layer installs `makaio hook handle claude-code` for
-  events with capabilities and `makaio hook received claude-code` for events
-  without.
+- `PreToolUse`, `SessionStart`, `UserPromptSubmit`, and `SubagentStart` declare
+  `responseCapabilities` in the client definition. The wiring layer installs
+  `makaio hook handle claude-code` for events with capabilities and
+  `makaio hook received claude-code` for events without.
+- Blockable interactions (`PreToolUse`) use a 5000 ms handle timeout
+  (`DEFAULT_HOOK_HANDLE_TIMEOUT_MS`). Context-only, non-blockable interactions
+  (`SessionStart`, `UserPromptSubmit`, `SubagentStart`) use a 1000 ms timeout
+  (`CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS`) so a down server does not stall every
+  prompt or subagent spawn for the full duration.
 - `SessionStart` carries `context.append` only. It contributes context to a
   session that has already started and can refuse nothing, so it is declared
   non-blockable: a closed-policy contributor that fails on `SessionStart`
   cannot convert its failure into a deny the way it can on `PreToolUse`.
   Native output is `hookSpecificOutput.additionalContext` with no decision
   fields, the same shape Codex renders for this event.
+- `SubagentStart` carries `context.append` only. The appended context lands in
+  the *subagent's* context window, not the parent's. Subagent creation cannot be
+  refused, so the interaction is non-blockable.
 - The remaining events are declared without response capabilities because the
   current source-evidence reading establishes no synchronous contract for them —
   not because a probe showed the binary ignoring a response. Widening one of
   them means re-reading the official hook documentation, flipping the source
   evidence, and capturing a probe — the declaration cannot outrun the evidence,
   which the fixture suite enforces.
-- `SubagentStop`, `Notification`, `MCPServerStart`, and `MCPServerStop` have
+- `PostCompact`, `Notification`, `MCPServerStart`, and `MCPServerStop` have
   no `frameworkSubject` --- they remain in the `client:claude-code` raw namespace
   and are not normalized into `client.session.*` observations.
 - `UserPromptSubmit` is unique in producing two normalized events:
@@ -73,21 +84,41 @@ for that event — an existing `observer-only` capture is not counter-evidence.
 
 ### Codex (CLI v0.144.1)
 
-| Event             | Source Candidate | Capabilities | Expected Stdout | Blocking | Framework Subject                          |
-|-------------------|-----------------|--------------|-----------------|----------|--------------------------------------------|
-| `SessionStart`    | supported       | `context.append`, `openai.codex-hook-response.block` | Yes | Yes | `client.session.started` |
-| `UserPromptSubmit`| supported       | `context.append`, `openai.codex-hook-response.block` | Yes | Yes | `client.session.userPrompt.submitted` |
-| `PreToolUse`      | supported       | `context.append`, `openai.codex-hook-response.block`, `openai.codex-hook-response.permission.deny`, `openai.codex-hook-response.input.update` | Yes | Yes | `client.session.tool.pre` |
-| `PostToolUse`     | supported       | `context.append`, `openai.codex-hook-response.block` | Yes | Yes | `client.session.tool.post` |
-| `Stop`            | supported       | `openai.codex-hook-response.block` | Yes | Yes | `client.session.turn.completed` |
+| Event               | Source Candidate | Capabilities | Expected Stdout | Blocking | Framework Subject                          |
+|---------------------|-----------------|--------------|-----------------|----------|--------------------------------------------|
+| `SessionStart`      | supported       | `context.append`, `openai.codex-hook-response.block` | Yes | Yes | `client.session.started` |
+| `UserPromptSubmit`  | supported       | `context.append`, `openai.codex-hook-response.block` | Yes | Yes | `client.session.userPrompt.submitted` |
+| `PreToolUse`        | supported       | `context.append`, `openai.codex-hook-response.block`, `openai.codex-hook-response.permission.deny`, `openai.codex-hook-response.input.update` | Yes | Yes | `client.session.tool.pre` |
+| `PostToolUse`       | supported       | `context.append`, `openai.codex-hook-response.block` | Yes | Yes | `client.session.tool.post` |
+| `Stop`              | supported       | `openai.codex-hook-response.block` | Yes | Yes | `client.session.turn.completed` |
+| `SubagentStart`     | supported       | `context.append`                   | Yes | No  | `client.session.subagent.started`          |
+| `SubagentStop`      | unobserved      | *(none)*                           | No  | No  | `client.session.subagent.completed`        |
+| `PreCompact`        | unobserved      | *(none)*                           | No  | No  | `client.session.compaction.pre`            |
+| `PostCompact`       | unobserved      | *(none)*                           | No  | No  | *(none --- raw space only)*                |
+| `PermissionRequest` | unobserved      | *(none)*                           | No  | No  | *(none --- raw space only)*                |
 
 #### Codex Notes
 
 - The pinned upstream source tag `rust-v0.144.1` and the captured live binary
-  probes verify synchronous JSON parsing for all five events. The contract
-  intentionally excludes fields the parser rejects,
+  probes verify synchronous JSON parsing for all six response-capable events. The
+  contract intentionally excludes fields the parser rejects,
   including `PostToolUse.updatedMCPToolOutput`, `PreToolUse.permissionDecision: "ask"`,
   and `PreToolUse.permissionDecision: "allow"` without `updatedInput`.
+- `UserPromptSubmit` produces two normalized events: `client.session.turn.started`
+  followed by `client.session.userPrompt.submitted`. The normalizer derives the
+  turn-start observation before the primary subject so sessions have start-of-turn
+  cadence without a separate hook.
+- `SubagentStart` carries `context.append` only. The appended context lands in
+  the *subagent's* context window, not the parent's. The `continue: false` block
+  form is parsed for compatibility but does not stop subagent creation, so no
+  block capability is declared and the interaction is non-blockable.
+- `SessionStart` maps the native `source` field to `startMode`. When Codex fires
+  a post-compaction `SessionStart` with `source: 'compact'`, the normalizer maps
+  it to `startMode: 'compact'`. The `PostCompact` hook fires first (raw ingress
+  only) and does not carry a `frameworkSubject`.
+- `SubagentStop`, `PreCompact`, `PostCompact`, and `PermissionRequest` have no
+  `frameworkSubject` --- they remain in the `client:codex` raw namespace and are
+  not normalized into `client.session.*` observations.
 - Codex `0.144.1` uses `tool_use_id` for pre/post tool correlation and carries
   the native result in `tool_response`. The generic observed event therefore
   leaves `success` unset rather than guessing from a provider-native value.
@@ -390,8 +421,8 @@ defines the interactions it supports and how contributions are validated.
 |-------|-------|
 | `clientId` | `claude-code` |
 | `contractId` | `claude-code.tool-response` |
-| `version` | `1.1.0` |
-| `supportedInteractions` | `PreToolUse`, `SessionStart`, `approve`, `deny`, `context.append` |
+| `version` | `1.3.0` |
+| `supportedInteractions` | `PreToolUse`, `SessionStart`, `UserPromptSubmit`, `SubagentStart`, `approve`, `deny`, `context.append` |
 
 **Blockability:**
 
@@ -401,6 +432,8 @@ defines the interactions it supports and how contributions are validated.
 | `approve` | Yes |
 | `deny` | Yes |
 | `SessionStart` | No |
+| `UserPromptSubmit` | No |
+| `SubagentStart` | No |
 | `context.append` | No |
 
 **Effect builders** (from `@makaio/client-claude-code/runtime`):
@@ -438,13 +471,13 @@ defines the interactions it supports and how contributions are validated.
 |-------|-------|
 | `clientId` | `codex` |
 | `contractId` | `openai.codex-hook-response` |
-| `version` | `1.1.0` |
-| `supportedInteractions` | five events plus `context.append` and the namespaced `block`, `permission.deny`, and `input.update` capabilities |
+| `version` | `1.2.0` |
+| `supportedInteractions` | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStart` plus `context.append` and the namespaced `block`, `permission.deny`, and `input.update` capabilities |
 
-**Blockability:** All five events support a blocking outcome. SessionStart renders it through the native `continue: false` and `stopReason` fields; the other events use their event-specific block form.
+**Blockability:** `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop` support a blocking outcome. `SessionStart` renders it through the native `continue: false` and `stopReason` fields; the other events use their event-specific block form. `SubagentStart` carries `context.append` only and is non-blockable.
 
 **Response capabilities:** The pinned upstream `rust-v0.144.1` source parses
-synchronous JSON responses for all five events. The composer renders context,
+synchronous JSON responses for all six response-capable events. The composer renders context,
 block, permission-deny, and input-update forms while preserving request
 deadlines. Live CLI probes confirm these effects, and parser-rejected fields
 are not advertised.

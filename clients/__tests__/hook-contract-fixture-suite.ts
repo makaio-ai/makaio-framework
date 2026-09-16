@@ -14,13 +14,16 @@ import { deriveHookEventTransportMode } from '@makaio/contracts';
 import type { ClientDefinition } from '@makaio/contracts';
 import type {
   EvidenceStatus,
+  ProbeScenario,
   RecordedHookEvent,
   ScenarioFixture,
   ScenarioManifest,
+  TerminalClassification,
 } from '../../scripts/lib/agent-clients/types.js';
 import { describe, expect, it } from 'vitest';
 
 const VALID_EVIDENCE_STATUSES = ['supported', 'observer-only', 'unobserved'] as const;
+const VALID_TERMINALS = ['ok', 'error_max_turns', 'error', 'killed'] as const;
 const VALID_ORACLES = [
   'capture-only',
   'final-response-must-contain-marker',
@@ -69,6 +72,30 @@ function readJson(filePath: string): unknown {
   return JSON.parse(readFileSync(filePath, 'utf-8'));
 }
 
+/**
+ * Terminal classifications an observation scenario may legitimately record.
+ *
+ * A run that ended on the harness-owned turn bound is a finished run; only a
+ * killed or failed one leaves its capture unexplained.
+ */
+const acceptableObservationTerminals = ['ok', 'error_max_turns'] as const;
+
+/**
+ * Returns whether a scenario is declared to prove one of its event's effects.
+ *
+ * `sentinelEffect` is the manifest's own statement that this scenario injects a
+ * native response in order to claim a declared effect. Read from the
+ * source-derived scenario manifest, so the answer cannot be softened by the
+ * very run whose exit code is under scrutiny: a scenario whose oracle did not
+ * fire records no observed effect, and keying on that would let it excuse
+ * itself from the gate.
+ * @param scenario - Source-derived scenario matching a committed fixture.
+ * @returns Whether the scenario attempts a declared effect.
+ */
+function provesDeclaredEffects(scenario: ProbeScenario): boolean {
+  return scenario.sentinelEffect !== undefined;
+}
+
 /** Parameters for the shared fixture suite. */
 export interface HookContractFixtureSuiteParams {
   /** Provider identifier. */
@@ -102,14 +129,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function isScenarioFixture(value: unknown): value is ScenarioFixture {
   if (!isRecord(value)) return false;
   if (
-    value.schemaVersion !== 3 ||
+    value.schemaVersion !== 4 ||
     (value.provider !== 'claude-code' && value.provider !== 'codex') ||
     typeof value.cliVersion !== 'string' ||
     typeof value.scenarioId !== 'string' ||
     !Array.isArray(value.events) ||
     !(VALID_ORACLES as readonly string[]).includes(value.oracle as string) ||
     typeof value.oraclePassed !== 'boolean' ||
-    !(typeof value.exitCode === 'number' || value.exitCode === null)
+    !(typeof value.exitCode === 'number' || value.exitCode === null) ||
+    !(VALID_TERMINALS as readonly string[]).includes(value.terminal as string)
   ) {
     return false;
   }
@@ -265,10 +293,54 @@ export function runHookContractFixtureSuite(params: HookContractFixtureSuitePara
           expect(new Set(actualScenarioIds).size).toBe(actualScenarioIds.length);
           expect(actualScenarioIds).toEqual(expectedScenarioIds);
           for (const fixture of probeFixtures) {
-            expect(fixture.schemaVersion).toBe(3);
+            expect(fixture.schemaVersion).toBe(4);
             expect(fixture.provider).toBe(clientId);
             expect(fixture.cliVersion).toBe(scenarioManifest.pinnedVersion);
             expect(fixture.oraclePassed).toBe(true);
+          }
+        });
+
+        it('records a clean native exit for every capability-proving scenario', () => {
+          // An exit code of 1 is ambiguous on Claude Code: it is both an
+          // outright failure and the documented bounded-turn outcome
+          // (`error_max_turns`) of a scenario whose model spent its last turn on
+          // a tool call. A scenario belonging to an event whose effects this
+          // evidence set claims may not rest on that ambiguity — its evidence is
+          // only worth as much as the run that produced it, so the native client
+          // has to have run to completion.
+          //
+          // The gate is keyed on what the *scenario* was declared to prove, not
+          // on what its fixture happens to record. Keyed on observed effects, a
+          // scenario whose oracle never fired would publish an empty
+          // `observedEffects` and opt itself out of the gate — the exact
+          // failure this gate exists to catch.
+          //
+          // Scenarios that claim no effect — observations, and the negative
+          // control whose proof is an absent marker — only have to have ended
+          // on their own terms: cleanly, or on the harness-owned turn bound.
+          // The negative control reaches that bound by construction, because
+          // the model keeps re-attempting the tool the native policy keeps
+          // denying, and the persisted classification now says so instead of
+          // leaving a bare exit code 1 to be argued about.
+          //
+          // `null` is never acceptable: it means the probe killed the process on
+          // its wall-clock deadline, so nothing it recorded is a finished run.
+          const scenariosById = new Map(scenarioManifest.scenarios.map((scenario) => [scenario.id, scenario]));
+          for (const fixture of probeFixtures) {
+            expect(fixture.exitCode, `${fixture.scenarioId}: native client was killed, not exited`).not.toBeNull();
+            expect(fixture.terminal, `${fixture.scenarioId}: native client was killed, not exited`).not.toBe('killed');
+            const scenario = scenariosById.get(fixture.scenarioId);
+            expect(scenario, `Unexpected fixture scenario: ${fixture.scenarioId}`).toBeDefined();
+            if (!scenario) continue;
+            if (provesDeclaredEffects(scenario)) {
+              expect(fixture.exitCode, `${fixture.scenarioId}: native client did not exit cleanly`).toBe(0);
+              expect(fixture.terminal, `${fixture.scenarioId}: native client did not exit cleanly`).toBe('ok');
+            } else {
+              expect(
+                acceptableObservationTerminals as readonly TerminalClassification[],
+                `${fixture.scenarioId}: observation run neither completed nor hit the documented turn bound`,
+              ).toContain(fixture.terminal);
+            }
           }
         });
 

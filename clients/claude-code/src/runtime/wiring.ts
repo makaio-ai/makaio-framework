@@ -10,7 +10,8 @@
  * `frameworkSubject`.  The hook command depends on the event's derived transport
  * mode (from `responseCapabilities`):
  * - empty capabilities → `${makaioCommand} hook received claude-code ${eventName}`
- * - non-empty capabilities → `${makaioCommand} --no-launch hook handle claude-code ${eventName} --timeout 5000`
+ * - non-empty capabilities, blockable interaction → `${makaioCommand} --no-launch hook handle claude-code ${eventName} --timeout 5000`
+ * - non-empty capabilities, non-blockable (context-only) interaction → `${makaioCommand} --no-launch hook handle claude-code ${eventName} --timeout 1000`
  *
  * The command sentinels `'hook received claude-code'` and
  * `'hook handle claude-code'` are used for removal and installation detection.
@@ -38,6 +39,7 @@ import {
   HOOK_HANDLE_COMMAND_SENTINEL,
   STATUSLINE_COMMAND_SENTINEL,
 } from './managed-wiring.js';
+import { rendersDecision } from './hook-response-contracts.js';
 
 /**
  * Minimal settings API required by Claude Code wiring helpers.
@@ -65,6 +67,21 @@ export interface ClaudeCodeWiringSettings {
 // ---------------------------------------------------------------------------
 // Derived wiring descriptors (module-scoped, computed once)
 // ---------------------------------------------------------------------------
+
+/**
+ * Timeout for request-mode hooks on context-only (non-blockable) interactions.
+ *
+ * `hook handle` has no `--debounce-failure`, so a down server would stall every
+ * prompt and subagent spawn for the full timeout; context-only hooks fail fast.
+ * Blockable interactions (PreToolUse) retain {@link DEFAULT_HOOK_HANDLE_TIMEOUT_MS}
+ * because those must complete before the native client can proceed.
+ *
+ * Note: this budget is shared with the `hook.received` observation emitted at
+ * the start of each handle call. `runClientHookHandleCommand` bounds that
+ * observation to a sub-budget (quarter of the timeout, at most 250 ms) so the
+ * handle round-trip keeps the remaining time even when the observation is slow.
+ */
+export const CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS = 1000;
 
 /**
  * Descriptors for all hook events derived from the client definition.
@@ -98,18 +115,23 @@ interface HookDescriptor {
  * - `'event'` — fire-and-forget; uses `HOOK_COMMAND_SENTINEL` with
  *   `--debounce-failure` as a root flag and no trailing flags.
  * - `'request'` — request/response; uses `HOOK_HANDLE_COMMAND_SENTINEL` with
- *   `--no-launch` as a root flag and `--timeout 5000` appended after the
- *   event name.
+ *   `--no-launch` as a root flag.  The timeout is derived from the event's
+ *   blockability: blockable interactions get {@link DEFAULT_HOOK_HANDLE_TIMEOUT_MS}
+ *   (5 s); non-blockable, context-only interactions get
+ *   {@link CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS} (1 s) so a down server does not
+ *   stall every prompt or subagent spawn for the full duration.
  * @param mode - Hook interaction mode from the event descriptor.
+ * @param eventName - Native hook event name, used to look up blockability.
  * @returns Sentinel, root flags inserted before the sentinel, and trailing flags
  *   appended after the event name.
  */
-function resolveHookDescriptor(mode: 'event' | 'request'): HookDescriptor {
+function resolveHookDescriptor(mode: 'event' | 'request', eventName: string): HookDescriptor {
   if (mode === 'request') {
+    const timeoutMs = rendersDecision(eventName) ? DEFAULT_HOOK_HANDLE_TIMEOUT_MS : CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS;
     return {
       sentinel: HOOK_HANDLE_COMMAND_SENTINEL,
       rootFlags: ['--no-launch'],
-      trailingFlags: ['--timeout', String(DEFAULT_HOOK_HANDLE_TIMEOUT_MS)],
+      trailingFlags: ['--timeout', String(timeoutMs)],
     };
   }
   return {
@@ -124,10 +146,11 @@ function resolveHookDescriptor(mode: 'event' | 'request'): HookDescriptor {
  * selecting the sentinel and flags based on the event's interaction mode.
  *
  * - `'event'` mode produces: `[envPairs...] makaioCommand --debounce-failure hook received claude-code eventName`
- * - `'request'` mode produces: `[envPairs...] makaioCommand --no-launch hook handle claude-code eventName --timeout 5000`
+ * - `'request'` mode, blockable → `[envPairs...] makaioCommand --no-launch hook handle claude-code eventName --timeout 5000`
+ * - `'request'` mode, non-blockable → `[envPairs...] makaioCommand --no-launch hook handle claude-code eventName --timeout 1000`
  * @param makaioCommand - Makaio CLI binary name or path.
  * @param mode - Hook interaction mode from the event descriptor.
- * @param eventName - Native hook event name.
+ * @param eventName - Native hook event name (used to look up blockability for timeout derivation).
  * @param envPairs - Optional `KEY=value` pairs prepended before the executable.
  * @returns Full hook command string to write into the client's native config.
  */
@@ -137,7 +160,7 @@ function buildModeAwareHookCommand(
   eventName: string,
   envPairs?: readonly string[],
 ): string {
-  const { sentinel, rootFlags, trailingFlags } = resolveHookDescriptor(mode);
+  const { sentinel, rootFlags, trailingFlags } = resolveHookDescriptor(mode, eventName);
   return buildClientCommand(
     makaioCommand,
     [...rootFlags, ...sentinel.split(' '), eventName, ...trailingFlags],
@@ -368,7 +391,7 @@ export async function buildClaudeCodeWiringList(
   ]);
 
   const entries: ClientWiringEntry[] = SESSION_EVENTS_DESCRIPTORS.map(({ eventName, mode }) => {
-    const { sentinel } = resolveHookDescriptor(mode);
+    const { sentinel } = resolveHookDescriptor(mode, eventName);
     const command = buildModeAwareHookCommand(makaioCommand, mode, eventName, envPairs);
     const installed = isHookInstalled(effectiveHooks, eventName, sentinel, command);
     return { group: 'session-events', name: eventName, installed, command };
@@ -437,7 +460,7 @@ export async function applyClaudeCodeWiring(
   // internal mutex would serialize parallel calls anyway. Sequential keeps
   // the applied/skipped bookkeeping straightforward.
   for (const { eventName, mode } of SESSION_EVENTS_DESCRIPTORS) {
-    const { sentinel: baseSentinel } = resolveHookDescriptor(mode);
+    const { sentinel: baseSentinel } = resolveHookDescriptor(mode, eventName);
     const sentinel = `${baseSentinel} ${eventName}`;
     const command = buildModeAwareHookCommand(makaioCommand, mode, eventName, envPairs);
 
@@ -537,7 +560,7 @@ export async function removeClaudeCodeWiring(
   // is now declared as 'hook handle' (or vice versa) must have its old entry
   // cleaned up even though the descriptor now points to the other sentinel.
   for (const { eventName, mode } of SESSION_EVENTS_DESCRIPTORS) {
-    const { sentinel: primarySentinel } = resolveHookDescriptor(mode);
+    const { sentinel: primarySentinel } = resolveHookDescriptor(mode, eventName);
     const alternateSentinel = mode === 'request' ? HOOK_COMMAND_SENTINEL : HOOK_HANDLE_COMMAND_SENTINEL;
 
     const primary = await settings.removeHook({

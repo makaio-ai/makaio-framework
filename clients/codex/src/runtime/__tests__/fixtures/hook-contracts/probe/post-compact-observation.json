@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 4,
+  "provider": "codex",
+  "cliVersion": "0.144.1",
+  "scenarioId": "post-compact-observation",
+  "events": [
+    {
+      "eventName": "PostCompact",
+      "responseCapabilities": [],
+      "mode": "event",
+      "candidateExpectedStatus": "unobserved",
+      "observedStatus": "observer-only",
+      "sourceExpectedEffects": [],
+      "observedEffects": [],
+      "blockingCapable": false,
+      "managedCommand": "hook received codex",
+      "payloadKeys": [
+        "cwd",
+        "hook_event_name",
+        "model",
+        "session_id",
+        "transcript_path",
+        "trigger",
+        "turn_id"
+      ],
+      "sentinelInjected": false
+    }
+  ],
+  "oracle": "capture-only",
+  "oraclePassed": true,
+  "exitCode": 0,
+  "terminal": "ok"
+}

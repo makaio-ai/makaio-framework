@@ -16,6 +16,9 @@ export {
   CLAUDE_CODE_HOOK_NOTIFICATION,
   CLAUDE_CODE_HOOK_MCP_SERVER_START,
   CLAUDE_CODE_HOOK_MCP_SERVER_STOP,
+  CLAUDE_CODE_HOOK_SUBAGENT_START,
+  CLAUDE_CODE_HOOK_PRE_COMPACT,
+  CLAUDE_CODE_HOOK_POST_COMPACT,
 } from './schemas.js';
 export { normalizeClaudeCodeHook } from './hook-normalizer.js';
 export type { ClaudeCodeNormalizedEvent, ClaudeCodeNormalizedSubject } from './hook-normalizer.js';

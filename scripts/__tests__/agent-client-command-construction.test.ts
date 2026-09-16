@@ -149,7 +149,7 @@ describe('buildClaudeCodeCommand', () => {
     expect(cmd.args).toContain('--output-format');
     expect(cmd.args).toContain('json');
     expect(cmd.args).toContain('--max-turns');
-    expect(cmd.args[cmd.args.indexOf('--max-turns') + 1]).toBe('1');
+    expect(cmd.args[cmd.args.indexOf('--max-turns') + 1]).toBe('2');
     expect(cmd.args).toContain('--settings');
     expect(cmd.args).toContain('/tmp/settings.json');
     expect(cmd.args).toContain('--max-budget-usd');
@@ -172,16 +172,37 @@ describe('buildClaudeCodeCommand', () => {
     expect(cmd.args[cmd.args.indexOf('--allowedTools') + 1]).toBe('Bash(test -e MAKAIO_PROBE_TOOL_MARKER)');
   });
 
-  it('allows a second Claude turn only when the final response proves hook consumption', () => {
-    const cmd = buildClaudeCodeCommand({
-      executablePath: '/usr/local/bin/claude',
-      scenario: { ...STUB_SCENARIO, oracle: 'final-response-must-contain-marker' },
-      env: { PATH: '/usr/bin' },
-      projectDir: '/tmp/project',
-      settingsPath: '/tmp/settings.json',
-    });
+  it('refuses a scenario that restates a harness-owned flag', () => {
+    for (const cliArgs of [
+      ['--max-turns', '1'],
+      ['--max-turns=1'],
+      ['--output-format', 'text'],
+      ['--add-dir', '/tmp'],
+    ]) {
+      expect(() =>
+        buildClaudeCodeCommand({
+          executablePath: '/usr/local/bin/claude',
+          scenario: { ...STUB_SCENARIO, cliArgs },
+          env: { PATH: '/usr/bin' },
+          projectDir: '/tmp/project',
+          settingsPath: '/tmp/settings.json',
+        }),
+      ).toThrow(/harness-owned argument/);
+    }
+  });
 
-    expect(cmd.args[cmd.args.indexOf('--max-turns') + 1]).toBe('2');
+  it('bounds every oracle at the same two turns so no run ends mid-turn', () => {
+    for (const oracle of ['unobserved', 'sentinel-must-allow-tool', 'final-response-must-contain-marker'] as const) {
+      const cmd = buildClaudeCodeCommand({
+        executablePath: '/usr/local/bin/claude',
+        scenario: { ...STUB_SCENARIO, oracle },
+        env: { PATH: '/usr/bin' },
+        projectDir: '/tmp/project',
+        settingsPath: '/tmp/settings.json',
+      });
+
+      expect(cmd.args[cmd.args.indexOf('--max-turns') + 1]).toBe('2');
+    }
   });
 });
 
@@ -204,6 +225,38 @@ describe('buildCodexCommand', () => {
     expect(cmd.args).toContain('workspace-write');
     expect(cmd.args).toContain(STUB_SCENARIO.prompt);
     expect(cmd.timeoutMs).toBe(30_000);
+  });
+});
+
+describe('buildCodexCommand cliArgs', () => {
+  /**
+   * Builds a Codex command for a scenario carrying extra CLI arguments.
+   * @param cliArgs - Scenario-owned provider-native arguments.
+   * @returns The constructed Codex command.
+   */
+  function build(cliArgs: readonly string[]): ReturnType<typeof buildCodexCommand> {
+    return buildCodexCommand({
+      executablePath: '/usr/local/bin/codex',
+      scenario: { ...STUB_SCENARIO, cliArgs },
+      env: { PATH: '/usr/bin' },
+      projectDir: '/tmp/project',
+      settingsPath: '/tmp/hooks.json',
+    });
+  }
+
+  it('refuses a scenario that restates a harness-owned argument', () => {
+    for (const cliArgs of [['--json'], ['--sandbox', 'danger-full-access'], ['--cd=/elsewhere'], ['exec']]) {
+      expect(() => build(cliArgs)).toThrow(/harness-owned argument/);
+    }
+  });
+
+  it('keeps repeatable scenario-owned configuration', () => {
+    const cmd = build(['--config', 'model_auto_compact_token_limit=10000']);
+
+    expect(cmd.args).toContain('model_auto_compact_token_limit=10000');
+    expect(cmd.args.indexOf('model_auto_compact_token_limit=10000')).toBeLessThan(
+      cmd.args.indexOf(STUB_SCENARIO.prompt),
+    );
   });
 });
 

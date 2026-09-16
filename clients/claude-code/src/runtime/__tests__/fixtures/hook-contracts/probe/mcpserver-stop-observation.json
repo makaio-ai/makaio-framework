@@ -1,10 +1,11 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "provider": "claude-code",
   "cliVersion": "2.1.219",
   "scenarioId": "mcpserver-stop-observation",
   "events": [],
   "oracle": "unobserved",
   "oraclePassed": true,
-  "exitCode": 1
+  "exitCode": 1,
+  "terminal": "error_max_turns"
 }

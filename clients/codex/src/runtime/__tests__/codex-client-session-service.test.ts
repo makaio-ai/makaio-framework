@@ -11,7 +11,10 @@ type CapturedClientSessionSubject =
   | typeof ClientSubjects.session.turn.started
   | typeof ClientSubjects.session.turn.completed
   | typeof ClientSubjects.session.tool.pre
-  | typeof ClientSubjects.session.tool.post;
+  | typeof ClientSubjects.session.tool.post
+  | typeof ClientSubjects.session.subagent.started
+  | typeof ClientSubjects.session.subagent.completed
+  | typeof ClientSubjects.session.compaction.pre;
 
 /**
  * Capture payloads emitted on one or more client session subjects.
@@ -176,6 +179,125 @@ describe('CodexClientSessionService', () => {
         toolCallId: 'call-2',
       });
     });
+
+    it('emits turn.started before userPrompt.submitted for UserPromptSubmit', async () => {
+      // ORDER is a documented invariant — verified via a shared ordered log so
+      // any future reordering is caught regardless of per-subject array lengths.
+      const orderedLog: Array<{ subject: string; payload: unknown }> = [];
+      const unsubTurnStarted = bus.on(ClientSubjects.session.turn.started, (ctx: { payload: unknown }) => {
+        orderedLog.push({ subject: 'turn.started', payload: ctx.payload });
+      });
+      const unsubPrompt = bus.on(ClientSubjects.session.userPrompt.submitted, (ctx: { payload: unknown }) => {
+        orderedLog.push({ subject: 'userPrompt.submitted', payload: ctx.payload });
+      });
+
+      await emitRawHook(bus, 'UserPromptSubmit', { session_id: 'sess-ups', prompt: 'hello' });
+      unsubTurnStarted();
+      unsubPrompt();
+
+      expect(orderedLog.map((e) => e.subject)).toEqual(['turn.started', 'userPrompt.submitted']);
+      expect(orderedLog[0]?.payload).toMatchObject({ clientId: 'codex', adapterSessionId: 'sess-ups' });
+      expect(orderedLog[1]?.payload).toMatchObject({ clientId: 'codex', prompt: 'hello' });
+    });
+
+    it('emits client.session.subagent.started for SubagentStart with agentId', async () => {
+      const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.subagent.started);
+
+      await emitRawHook(bus, 'SubagentStart', {
+        agent_id: 'sub-agent-77',
+        agent_type: 'coder',
+        session_id: 'parent-sess-1',
+      });
+      cleanup();
+
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatchObject({
+        clientId: 'codex',
+        source: 'native-hook',
+        agentId: 'sub-agent-77',
+        agentType: 'coder',
+        adapterSessionId: 'parent-sess-1',
+      });
+    });
+
+    it('does not emit subagent.started when agent_id is absent', async () => {
+      const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.subagent.started);
+
+      await emitRawHook(bus, 'SubagentStart', { session_id: 'parent-sess-1' });
+      cleanup();
+
+      expect(received).toHaveLength(0);
+    });
+
+    it('does not emit subagent.completed when agent_id is absent', async () => {
+      const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.subagent.completed);
+
+      await emitRawHook(bus, 'SubagentStop', {
+        session_id: 'parent-sess-1',
+        agent_transcript_path: '/home/.codex/sub.jsonl',
+      });
+      cleanup();
+
+      expect(received).toHaveLength(0);
+    });
+
+    it('emits client.session.subagent.completed for SubagentStop with agentId', async () => {
+      const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.subagent.completed);
+
+      await emitRawHook(bus, 'SubagentStop', {
+        agent_id: 'sub-agent-77',
+        session_id: 'parent-sess-1',
+        agent_transcript_path: '/home/.codex/sub.jsonl',
+      });
+      cleanup();
+
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatchObject({
+        clientId: 'codex',
+        agentId: 'sub-agent-77',
+        adapterSessionId: 'parent-sess-1',
+        agentTranscriptPath: '/home/.codex/sub.jsonl',
+      });
+    });
+
+    it('emits client.session.compaction.pre for PreCompact', async () => {
+      const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.compaction.pre);
+
+      await emitRawHook(bus, 'PreCompact', {
+        session_id: 'sess-compact',
+        trigger: 'auto',
+        transcript_path: '/home/.codex/session.jsonl',
+      });
+      cleanup();
+
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatchObject({
+        clientId: 'codex',
+        source: 'native-hook',
+        trigger: 'auto',
+        transcriptPath: '/home/.codex/session.jsonl',
+      });
+    });
+
+    it('does not emit any client.session.* event for PostCompact (raw-only)', async () => {
+      const { received, cleanup } = capturePayloads(
+        bus,
+        ClientSubjects.session.started,
+        ClientSubjects.session.userPrompt.submitted,
+        ClientSubjects.session.turn.started,
+        ClientSubjects.session.turn.completed,
+        ClientSubjects.session.tool.pre,
+        ClientSubjects.session.tool.post,
+        ClientSubjects.session.subagent.started,
+        ClientSubjects.session.subagent.completed,
+        ClientSubjects.session.compaction.pre,
+      );
+
+      await emitRawHook(bus, 'PostCompact', { session_id: 'sess-post-compact' });
+      cleanup();
+
+      expect(received).toHaveLength(0);
+    });
   });
 
   describe('unknown event handling', () => {
@@ -188,6 +310,9 @@ describe('CodexClientSessionService', () => {
         ClientSubjects.session.turn.completed,
         ClientSubjects.session.tool.pre,
         ClientSubjects.session.tool.post,
+        ClientSubjects.session.subagent.started,
+        ClientSubjects.session.subagent.completed,
+        ClientSubjects.session.compaction.pre,
       );
 
       await emitRawHook(bus, 'some_future_codex_event');
@@ -384,6 +509,116 @@ describe('CodexClientSessionService', () => {
 
       expect(received).toHaveLength(1);
       expect(received[0]).toMatchObject({ adapterSessionId: 'managed-session-0' });
+    });
+
+    it('suppresses adapter-emitted subjects for managed sessions but forwards hook-only subjects', async () => {
+      // Adapter emits: started, turn.started, turn.completed, userPrompt.submitted, tool.pre, tool.post
+      // Hook-only (no adapter equivalent): subagent.started, subagent.completed, compaction.pre
+      await emitRuntimeStarted({ clientRuntimeId: 'rt-gate-selective' });
+
+      const { received: suppressedReceived, cleanup: suppressedCleanup } = capturePayloads(
+        bus,
+        ClientSubjects.session.started,
+        ClientSubjects.session.turn.started,
+        ClientSubjects.session.turn.completed,
+        ClientSubjects.session.userPrompt.submitted,
+        ClientSubjects.session.tool.pre,
+        ClientSubjects.session.tool.post,
+      );
+      const { received: forwardedReceived, cleanup: forwardedCleanup } = capturePayloads(
+        bus,
+        ClientSubjects.session.subagent.started,
+        ClientSubjects.session.subagent.completed,
+        ClientSubjects.session.compaction.pre,
+      );
+
+      await emitRawHook(bus, 'SessionStart', { session_id: 'sess-1' });
+      await emitRawHook(bus, 'UserPromptSubmit', { session_id: 'sess-1', prompt: 'hi' });
+      await emitRawHook(bus, 'Stop', { session_id: 'sess-1' });
+      await emitRawHook(bus, 'SubagentStart', {
+        session_id: 'sess-1',
+        agent_id: 'sub-gate-1',
+        agent_type: 'coder',
+      });
+      await emitRawHook(bus, 'SubagentStop', {
+        session_id: 'sess-1',
+        agent_id: 'sub-gate-1',
+        agent_transcript_path: '/home/.codex/sub.jsonl',
+      });
+      await emitRawHook(bus, 'PreCompact', {
+        session_id: 'sess-1',
+        trigger: 'auto',
+        transcript_path: '/home/.codex/session.jsonl',
+      });
+
+      suppressedCleanup();
+      forwardedCleanup();
+
+      // Adapter-emitted subjects suppressed (started + turn.started + userPrompt.submitted + turn.completed)
+      expect(suppressedReceived).toHaveLength(0);
+      // Hook-only subjects forwarded (subagent.started + subagent.completed + compaction.pre)
+      expect(forwardedReceived).toHaveLength(3);
+    });
+
+    it('forwards session.started with startMode compact for a managed session (compaction signal has no adapter counterpart)', async () => {
+      await emitRuntimeStarted({ clientRuntimeId: 'rt-compact' });
+
+      const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
+
+      await emitRawHook(bus, 'SessionStart', { session_id: 'sess-1', source: 'compact' });
+      cleanup();
+
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatchObject({ adapterSessionId: 'sess-1', startMode: 'compact' });
+    });
+
+    it('forwards session.started with startMode clear for a managed session (clear restart has no adapter counterpart)', async () => {
+      await emitRuntimeStarted({ clientRuntimeId: 'rt-clear' });
+
+      const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
+
+      await emitRawHook(bus, 'SessionStart', { session_id: 'sess-1', source: 'clear' });
+      cleanup();
+
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatchObject({ adapterSessionId: 'sess-1', startMode: 'clear' });
+    });
+
+    it('suppresses session.started with source startup for a managed session (adapter owns the initial start)', async () => {
+      await emitRuntimeStarted({ clientRuntimeId: 'rt-startup' });
+
+      const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
+
+      await emitRawHook(bus, 'SessionStart', { session_id: 'sess-1', source: 'startup' });
+      cleanup();
+
+      expect(received).toHaveLength(0);
+    });
+  });
+
+  describe('emission isolation', () => {
+    it('a throwing turn.started subscriber does not prevent userPrompt.submitted', async () => {
+      const promptReceived: unknown[] = [];
+
+      const unsubThrowing = bus.on(ClientSubjects.session.turn.started, () => {
+        throw new Error('intentional turn.started error');
+      });
+      const unsubPrompt = bus.on(ClientSubjects.session.userPrompt.submitted, (ctx: { payload: unknown }) => {
+        promptReceived.push(ctx.payload);
+      });
+
+      // The service must forward userPrompt.submitted even when the turn.started
+      // subscriber throws.  The first error is re-thrown after the loop so callers
+      // still observe the failure.
+      await expect(emitRawHook(bus, 'UserPromptSubmit', { session_id: 'sess-throw', prompt: 'hello' })).rejects.toThrow(
+        'intentional turn.started error',
+      );
+
+      unsubThrowing();
+      unsubPrompt();
+
+      expect(promptReceived).toHaveLength(1);
+      expect(promptReceived[0]).toMatchObject({ clientId: 'codex', prompt: 'hello' });
     });
   });
 });

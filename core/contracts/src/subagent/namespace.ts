@@ -34,6 +34,12 @@ import {
  * - Lifecycle events: spawned, completed, cancelled
  * - Communication: toChild, toParent
  * - Status query: getStatus (RPC)
+ *
+ * Note: this is the framework's control-plane vocabulary for subagent
+ * lifecycle management (`subagentId`, `parentSessionId`); it is distinct from
+ * the client-native observation vocabulary (`ClientSessionSubagentStartedSchema`
+ * / `ClientSessionSubagentCompletedSchema`, using `agentId` and
+ * `adapterSessionId`) exported from `@makaio/contracts`.
  */
 export const SubagentSchemas = {
   // ============================================================================

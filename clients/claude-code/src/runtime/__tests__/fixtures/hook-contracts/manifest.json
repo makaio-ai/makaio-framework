@@ -9,7 +9,7 @@
   },
   "liveProbe": {
     "status": "captured",
-    "capturedAt": "2026-07-24T19:55:33.602Z"
+    "capturedAt": "2026-09-16T20:51:52.140Z"
   },
   "events": {
     "SessionStart": {
@@ -26,15 +26,17 @@
       "outputFixture": "session-start-output.json"
     },
     "UserPromptSubmit": {
-      "candidateEvidenceStatus": "unobserved",
-      "observedEvidenceStatus": "observer-only",
+      "candidateEvidenceStatus": "supported",
+      "observedEvidenceStatus": "supported",
       "hookFired": true,
-      "expectedStdoutConsumed": false,
+      "expectedStdoutConsumed": true,
       "expectedBlockingCapable": false,
-      "managedCommand": "hook received claude-code",
-      "responseCapabilities": [],
-      "inputFixture": null,
-      "outputFixture": null
+      "managedCommand": "hook handle claude-code",
+      "responseCapabilities": [
+        "context.append"
+      ],
+      "inputFixture": "user-prompt-submit-input.json",
+      "outputFixture": "user-prompt-submit-output.json"
     },
     "PreToolUse": {
       "candidateEvidenceStatus": "supported",
@@ -73,10 +75,45 @@
       "inputFixture": null,
       "outputFixture": null
     },
+    "SubagentStart": {
+      "candidateEvidenceStatus": "supported",
+      "observedEvidenceStatus": "supported",
+      "hookFired": true,
+      "expectedStdoutConsumed": true,
+      "expectedBlockingCapable": false,
+      "managedCommand": "hook handle claude-code",
+      "responseCapabilities": [
+        "context.append"
+      ],
+      "inputFixture": "subagent-start-input.json",
+      "outputFixture": "subagent-start-output.json"
+    },
     "SubagentStop": {
       "candidateEvidenceStatus": "unobserved",
       "observedEvidenceStatus": "observer-only",
       "hookFired": true,
+      "expectedStdoutConsumed": false,
+      "expectedBlockingCapable": false,
+      "managedCommand": "hook received claude-code",
+      "responseCapabilities": [],
+      "inputFixture": null,
+      "outputFixture": null
+    },
+    "PreCompact": {
+      "candidateEvidenceStatus": "unobserved",
+      "observedEvidenceStatus": "unobserved",
+      "hookFired": false,
+      "expectedStdoutConsumed": false,
+      "expectedBlockingCapable": false,
+      "managedCommand": "hook received claude-code",
+      "responseCapabilities": [],
+      "inputFixture": null,
+      "outputFixture": null
+    },
+    "PostCompact": {
+      "candidateEvidenceStatus": "unobserved",
+      "observedEvidenceStatus": "unobserved",
+      "hookFired": false,
       "expectedStdoutConsumed": false,
       "expectedBlockingCapable": false,
       "managedCommand": "hook received claude-code",

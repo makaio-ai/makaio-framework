@@ -1,12 +1,12 @@
 {
-  "schemaVersion": 3,
-  "provider": "claude-code",
-  "cliVersion": "2.1.219",
-  "scenarioId": "user-prompt-submit-observation",
+  "schemaVersion": 4,
+  "provider": "codex",
+  "cliVersion": "0.144.1",
+  "scenarioId": "pre-compact-observation",
   "events": [
     {
-      "eventName": "UserPromptSubmit",
-      "frameworkSubject": "client.session.userPrompt.submitted",
+      "eventName": "PreCompact",
+      "frameworkSubject": "client.session.compaction.pre",
       "responseCapabilities": [],
       "mode": "event",
       "candidateExpectedStatus": "unobserved",
@@ -14,20 +14,21 @@
       "sourceExpectedEffects": [],
       "observedEffects": [],
       "blockingCapable": false,
-      "managedCommand": "hook received claude-code",
+      "managedCommand": "hook received codex",
       "payloadKeys": [
         "cwd",
         "hook_event_name",
-        "permission_mode",
-        "prompt",
-        "prompt_id",
+        "model",
         "session_id",
-        "transcript_path"
+        "transcript_path",
+        "trigger",
+        "turn_id"
       ],
       "sentinelInjected": false
     }
   ],
-  "oracle": "unobserved",
+  "oracle": "capture-only",
   "oraclePassed": true,
-  "exitCode": 0
+  "exitCode": 0,
+  "terminal": "ok"
 }

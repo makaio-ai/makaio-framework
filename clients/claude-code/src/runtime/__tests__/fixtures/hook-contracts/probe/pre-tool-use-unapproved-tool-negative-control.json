@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "provider": "claude-code",
   "cliVersion": "2.1.219",
   "scenarioId": "pre-tool-use-unapproved-tool-negative-control",
@@ -40,5 +40,6 @@
   ],
   "oracle": "native-must-deny-unapproved-tool",
   "oraclePassed": true,
-  "exitCode": 1
+  "exitCode": 1,
+  "terminal": "error_max_turns"
 }

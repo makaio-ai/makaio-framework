@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 4,
+  "provider": "claude-code",
+  "cliVersion": "2.1.219",
+  "scenarioId": "subagent-start-context-append",
+  "events": [
+    {
+      "eventName": "SubagentStart",
+      "frameworkSubject": "client.session.subagent.started",
+      "responseCapabilities": [
+        "context.append"
+      ],
+      "mode": "request",
+      "candidateExpectedStatus": "supported",
+      "observedStatus": "supported",
+      "sourceExpectedEffects": [
+        "context.append"
+      ],
+      "observedEffects": [
+        "context.append"
+      ],
+      "blockingCapable": false,
+      "managedCommand": "hook handle claude-code",
+      "payloadKeys": [
+        "agent_id",
+        "agent_type",
+        "cwd",
+        "hook_event_name",
+        "prompt_id",
+        "session_id",
+        "transcript_path"
+      ],
+      "sentinelInjected": true
+    }
+  ],
+  "oracle": "final-response-must-contain-marker",
+  "oraclePassed": true,
+  "exitCode": 0,
+  "terminal": "ok"
+}

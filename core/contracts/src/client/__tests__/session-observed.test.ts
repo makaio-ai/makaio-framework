@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ClientSessionCompactionPreSchema,
   ClientSessionStartedSchema,
+  ClientSessionSubagentStartedSchema,
+  ClientSessionSubagentCompletedSchema,
   ClientSessionTurnCompletedSchema,
   ClientSessionTurnStartedSchema,
 } from '../session-observed.js';
@@ -117,5 +120,75 @@ describe('ClientSessionTurnStartedSchema', () => {
       transcriptPath: '/should/be/stripped.jsonl',
     });
     expect(parsed).toEqual(basePayload);
+  });
+});
+
+describe('ClientSessionCompactionPreSchema', () => {
+  it('accepts a base-only payload without trigger or transcriptPath', () => {
+    expect(ClientSessionCompactionPreSchema.parse(basePayload)).toEqual(basePayload);
+  });
+
+  it('accepts a payload with trigger manual', () => {
+    const payload = { ...basePayload, trigger: 'manual' as const };
+    expect(ClientSessionCompactionPreSchema.parse(payload)).toEqual(payload);
+  });
+
+  it('accepts a payload with trigger auto', () => {
+    const payload = { ...basePayload, trigger: 'auto' as const };
+    expect(ClientSessionCompactionPreSchema.parse(payload)).toEqual(payload);
+  });
+
+  it('accepts a payload with transcriptPath', () => {
+    const payload = { ...basePayload, transcriptPath: '/home/user/.claude/projects/foo/abc.jsonl' };
+    expect(ClientSessionCompactionPreSchema.parse(payload)).toEqual(payload);
+  });
+
+  it('rejects an invalid trigger value', () => {
+    expect(() => ClientSessionCompactionPreSchema.parse({ ...basePayload, trigger: 'scheduled' })).toThrow();
+  });
+});
+
+describe('ClientSessionSubagentStartedSchema', () => {
+  it('accepts a minimal valid payload with only agentId added', () => {
+    const payload = { ...basePayload, agentId: 'subagent-abc-123' };
+    expect(ClientSessionSubagentStartedSchema.parse(payload)).toEqual(payload);
+  });
+
+  it('accepts a payload with all optional fields', () => {
+    const payload = {
+      ...basePayload,
+      agentId: 'subagent-abc-123',
+      agentType: 'fork',
+      turnId: 'turn-789',
+    };
+    expect(ClientSessionSubagentStartedSchema.parse(payload)).toEqual(payload);
+  });
+
+  it('rejects a missing agentId', () => {
+    expect(() => ClientSessionSubagentStartedSchema.parse(basePayload)).toThrow();
+  });
+
+  it('rejects an empty agentId', () => {
+    expect(() => ClientSessionSubagentStartedSchema.parse({ ...basePayload, agentId: '' })).toThrow();
+  });
+});
+
+describe('ClientSessionSubagentCompletedSchema', () => {
+  it('accepts a payload with agentId and agentTranscriptPath', () => {
+    const payload = {
+      ...basePayload,
+      agentId: 'subagent-abc-123',
+      agentTranscriptPath: '/home/user/.claude/projects/foo/subagent.jsonl',
+    };
+    expect(ClientSessionSubagentCompletedSchema.parse(payload)).toEqual(payload);
+  });
+
+  it('accepts a payload without agentTranscriptPath', () => {
+    const payload = { ...basePayload, agentId: 'subagent-abc-123' };
+    expect(ClientSessionSubagentCompletedSchema.parse(payload)).toEqual(payload);
+  });
+
+  it('rejects a missing agentId', () => {
+    expect(() => ClientSessionSubagentCompletedSchema.parse(basePayload)).toThrow();
   });
 });

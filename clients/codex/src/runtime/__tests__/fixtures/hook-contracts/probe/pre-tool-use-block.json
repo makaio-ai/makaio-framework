@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "provider": "codex",
   "cliVersion": "0.144.1",
   "scenarioId": "pre-tool-use-block",
@@ -44,5 +44,6 @@
   ],
   "oracle": "sentinel-must-block-tool",
   "oraclePassed": true,
-  "exitCode": 0
+  "exitCode": 0,
+  "terminal": "ok"
 }

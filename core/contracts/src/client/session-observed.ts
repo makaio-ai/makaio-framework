@@ -4,6 +4,12 @@
  * Covers the shared base payload, all per-event schemas for normalized
  * lifecycle signals emitted by client adapters (`client.session.*`), and
  * the wiring entry schema used by `client.wiring.list`.
+ *
+ * Subjects: `client.session.started`, `client.session.userPrompt.submitted`,
+ * `client.session.turn.started`, `client.session.turn.completed`,
+ * `client.session.tool.pre`, `client.session.tool.post`,
+ * `client.session.compaction.pre`, `client.session.subagent.started`,
+ * `client.session.subagent.completed`.
  * @packageDocumentation
  */
 
@@ -204,6 +210,127 @@ export const ClientSessionToolPostSchema = ClientSessionObservedBaseSchema.exten
 });
 
 export type ClientSessionToolPost = z.infer<typeof ClientSessionToolPostSchema>;
+
+/**
+ * Closed set of compaction trigger types a client runtime can report.
+ *
+ * - `'manual'` — the user explicitly requested context compaction.
+ * - `'auto'`   — the client runtime triggered compaction automatically
+ *   (e.g. approaching the context-window limit).
+ */
+export const CLIENT_SESSION_COMPACTION_TRIGGERS = ['manual', 'auto'] as const;
+
+/** Zod schema for the client-reported compaction trigger. */
+export const ClientSessionCompactionTriggerSchema = z.enum(CLIENT_SESSION_COMPACTION_TRIGGERS);
+
+/** Client-reported compaction trigger discriminator. */
+export type ClientSessionCompactionTrigger = z.infer<typeof ClientSessionCompactionTriggerSchema>;
+
+/**
+ * Payload for `client.session.compaction.pre`.
+ *
+ * Fires BEFORE the client compacts its context window. The post-compaction
+ * framework signal is `client.session.started` with `startMode: 'compact'`,
+ * delivered by the SessionStart hook that fires after compaction on the SAME
+ * session id. Both clients also fire a raw-only `PostCompact` hook carrying a
+ * `trigger` field, but its ordering relative to `SessionStart(compact)` differs
+ * by client: Codex fires `PreCompact → PostCompact → SessionStart(compact)`;
+ * Claude Code fires `PreCompact → SessionStart(compact) → PostCompact`.
+ * Consumers must treat `client.session.started{startMode:'compact'}` as the
+ * authoritative post-compaction signal and must NOT assume it precedes or
+ * follows the raw PostCompact hook.
+ *
+ * Three compaction signals together describe the full compaction lifecycle:
+ * `client.session.compaction.pre` fires before compaction begins (from hooks,
+ * carries `trigger` and `transcriptPath`); `client.session.started` with
+ * `startMode: 'compact'` fires after compaction completes (from hooks, same
+ * payload as a normal session start); and `SessionSubjects.session.compacted` (from `@makaio/contracts`) is emitted
+ * post-hoc during transcript import, after the compacted session has been
+ * ingested.
+ *
+ * Fields:
+ * - `trigger` — how the compaction was initiated (`'manual'` or `'auto'`).
+ *   Absent when the adapter cannot determine the trigger.
+ * - `transcriptPath` — absolute path to the transcript file at the time of
+ *   compaction, if available from the client runtime.
+ */
+export const ClientSessionCompactionPreSchema = ClientSessionObservedBaseSchema.extend({
+  /**
+   * How the compaction was initiated (`'manual'` or `'auto'`).
+   * Absent when the adapter cannot determine the trigger.
+   */
+  trigger: observability
+    .attribute(ClientSessionCompactionTriggerSchema, 'makaio.session.compaction_trigger')
+    .optional(),
+  /**
+   * Absolute path to the transcript file at the time of compaction, if
+   * available from the client runtime.
+   */
+  transcriptPath: z.string().optional(),
+});
+
+export type ClientSessionCompactionPre = z.infer<typeof ClientSessionCompactionPreSchema>;
+
+/**
+ * Payload for `client.session.subagent.started`.
+ *
+ * Emitted when a client-native subagent is observed via hooks. The subagent
+ * event belongs to the parent session: `adapterSessionId` on the base carries
+ * the parent session id (the same as every other `client.session.*` event),
+ * which keeps subagent events joinable on `adapterSessionId`. The subagent
+ * identity is `agentId`.
+ *
+ * Fields:
+ * - `agentId`    — stable identity of the subagent as reported by the client
+ *   runtime.
+ * - `agentType`  — optional type label for the subagent (e.g. the agent type
+ *   string reported by the client).
+ * - `turnId`     — opaque turn correlation id, if available. Codex populates
+ *   this from `turn_id`; Claude Code does not expose it.
+ *
+ * Note: this is the client-native OBSERVATION of a subagent (`agentId` = the
+ * client's agent id, `adapterSessionId` = the owning session); it is distinct
+ * from the framework's control-plane `subagent.*` namespace
+ * (`SubagentSchemas`/`SubagentSubjects`, using `subagentId` and
+ * `parentSessionId`) exported from `@makaio/contracts`. Client-native keys
+ * (`makaio.client.agent_id`, `makaio.client.agent_type`, `makaio.client.turn_id`)
+ * keep telemetry joins from attributing client-observed subagents to framework
+ * agents that share the `makaio.agent.id` / `makaio.turn.id` namespace.
+ */
+export const ClientSessionSubagentStartedSchema = ClientSessionObservedBaseSchema.extend({
+  /** Stable subagent identity as reported by the client runtime. */
+  agentId: observability.attribute(NonEmptyStringSchema, 'makaio.client.agent_id'),
+  /** Optional type label for the subagent (e.g. the agent type string). */
+  agentType: observability.attribute(NonEmptyStringSchema, 'makaio.client.agent_type').optional(),
+  /**
+   * Opaque turn correlation id, if available from the client runtime.
+   * Codex populates this from `turn_id`; Claude Code does not expose it.
+   */
+  turnId: observability.attribute(NonEmptyStringSchema, 'makaio.client.turn_id').optional(),
+});
+
+export type ClientSessionSubagentStarted = z.infer<typeof ClientSessionSubagentStartedSchema>;
+
+/**
+ * Payload for `client.session.subagent.completed`.
+ *
+ * Emitted when a client-native subagent completes. Extends
+ * {@link ClientSessionSubagentStartedSchema} with an optional transcript path
+ * so consumers can trigger targeted log imports for the finished subagent turn.
+ *
+ * Fields (in addition to {@link ClientSessionSubagentStartedSchema}):
+ * - `agentTranscriptPath` — absolute path to the subagent's transcript file,
+ *   if the client runtime exposes it at completion time.
+ */
+export const ClientSessionSubagentCompletedSchema = ClientSessionSubagentStartedSchema.extend({
+  /**
+   * Absolute path to the subagent's transcript file, if the client runtime
+   * exposes it at completion time.
+   */
+  agentTranscriptPath: z.string().optional(),
+});
+
+export type ClientSessionSubagentCompleted = z.infer<typeof ClientSessionSubagentCompletedSchema>;
 
 /**
  * A single wiring entry in a client `wiring.list` response.

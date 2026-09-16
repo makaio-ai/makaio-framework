@@ -9,7 +9,9 @@ import {
   CLAUDE_CODE_HOOK_PRE_TOOL_USE,
   CLAUDE_CODE_HOOK_POST_TOOL_USE,
   CLAUDE_CODE_HOOK_STOP,
+  CLAUDE_CODE_HOOK_SUBAGENT_START,
   CLAUDE_CODE_HOOK_SUBAGENT_STOP,
+  CLAUDE_CODE_HOOK_PRE_COMPACT,
   CLAUDE_CODE_HOOK_NOTIFICATION,
   CLAUDE_CODE_HOOK_MCP_SERVER_START,
 } from '../schemas.js';
@@ -305,11 +307,150 @@ describe('normalizeClaudeCodeHook', () => {
     });
   });
 
+  describe('SubagentStart', () => {
+    it('normalizes to client.session.subagent.started with agentId and adapterSessionId', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(
+          makeRaw(CLAUDE_CODE_HOOK_SUBAGENT_START, {
+            session_id: SESSION_ID,
+            agent_id: 'agent-001',
+            agent_type: 'coding',
+          }),
+        ),
+      );
+
+      expect(result.subject).toBe(ClientSubjects.session.subagent.started);
+      const payload = (
+        result as Extract<ClaudeCodeNormalizedEvent, { subject: typeof ClientSubjects.session.subagent.started }>
+      ).payload;
+      expect(payload.clientId).toBe('claude-code');
+      expect(payload.source).toBe('native-hook');
+      expect(payload.observedAt).toBe(RECEIVED_AT);
+      expect(payload.agentId).toBe('agent-001');
+      expect(payload.agentType).toBe('coding');
+      expect(payload.adapterSessionId).toBe(SESSION_ID);
+    });
+
+    it('carries adapterSessionId as the parent session id', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(
+          makeRaw(CLAUDE_CODE_HOOK_SUBAGENT_START, { session_id: SESSION_ID, agent_id: 'agent-001' }),
+        ),
+      );
+
+      expect(result.payload.adapterSessionId).toBe(SESSION_ID);
+    });
+
+    it('omits agentType when absent from payload', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(
+          makeRaw(CLAUDE_CODE_HOOK_SUBAGENT_START, { session_id: SESSION_ID, agent_id: 'agent-001' }),
+        ),
+      );
+
+      expect(Object.keys(result.payload)).not.toContain('agentType');
+    });
+
+    it('returns an empty array when agent_id is absent', () => {
+      const results = normalizeClaudeCodeHook(makeRaw(CLAUDE_CODE_HOOK_SUBAGENT_START, { session_id: SESSION_ID }));
+
+      expect(results).toEqual([]);
+    });
+  });
+
   describe('SubagentStop', () => {
-    it('returns an empty array for SubagentStop (subagent lifecycle — raw space only)', () => {
+    it('normalizes to client.session.subagent.completed with agentId and agentTranscriptPath', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(
+          makeRaw(CLAUDE_CODE_HOOK_SUBAGENT_STOP, {
+            session_id: SESSION_ID,
+            agent_id: 'agent-001',
+            agent_type: 'coding',
+            agent_transcript_path: '/home/.claude/agents/agent-001.jsonl',
+          }),
+        ),
+      );
+
+      expect(result.subject).toBe(ClientSubjects.session.subagent.completed);
+      const payload = (
+        result as Extract<ClaudeCodeNormalizedEvent, { subject: typeof ClientSubjects.session.subagent.completed }>
+      ).payload;
+      expect(payload.agentId).toBe('agent-001');
+      expect(payload.agentType).toBe('coding');
+      expect(payload.adapterSessionId).toBe(SESSION_ID);
+      expect(payload.agentTranscriptPath).toBe('/home/.claude/agents/agent-001.jsonl');
+    });
+
+    it('omits agentTranscriptPath when agent_transcript_path is absent', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(
+          makeRaw(CLAUDE_CODE_HOOK_SUBAGENT_STOP, { session_id: SESSION_ID, agent_id: 'agent-001' }),
+        ),
+      );
+
+      expect(Object.keys(result.payload)).not.toContain('agentTranscriptPath');
+    });
+
+    it('returns an empty array when agent_id is absent', () => {
       const results = normalizeClaudeCodeHook(makeRaw(CLAUDE_CODE_HOOK_SUBAGENT_STOP, { session_id: SESSION_ID }));
 
       expect(results).toEqual([]);
+    });
+  });
+
+  describe('PreCompact', () => {
+    it('normalizes to client.session.compaction.pre with trigger and transcriptPath', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(
+          makeRaw(CLAUDE_CODE_HOOK_PRE_COMPACT, {
+            session_id: SESSION_ID,
+            trigger: 'manual',
+            transcript_path: TRANSCRIPT_PATH,
+          }),
+        ),
+      );
+
+      expect(result.subject).toBe(ClientSubjects.session.compaction.pre);
+      const payload = (
+        result as Extract<ClaudeCodeNormalizedEvent, { subject: typeof ClientSubjects.session.compaction.pre }>
+      ).payload;
+      expect(payload.clientId).toBe('claude-code');
+      expect(payload.adapterSessionId).toBe(SESSION_ID);
+      expect(payload.trigger).toBe('manual');
+      expect(payload.transcriptPath).toBe(TRANSCRIPT_PATH);
+    });
+
+    it('maps trigger:"auto" correctly', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(makeRaw(CLAUDE_CODE_HOOK_PRE_COMPACT, { session_id: SESSION_ID, trigger: 'auto' })),
+      );
+
+      const payload = (
+        result as Extract<ClaudeCodeNormalizedEvent, { subject: typeof ClientSubjects.session.compaction.pre }>
+      ).payload;
+      expect(payload.trigger).toBe('auto');
+    });
+
+    it('omits trigger when absent from payload', () => {
+      const result = expectSingle(normalizeClaudeCodeHook(makeRaw(CLAUDE_CODE_HOOK_PRE_COMPACT, {})));
+
+      expect(Object.keys(result.payload)).not.toContain('trigger');
+    });
+
+    it('omits trigger for unknown values (forward-compatible)', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(makeRaw(CLAUDE_CODE_HOOK_PRE_COMPACT, { trigger: 'future-value' })),
+      );
+
+      expect(Object.keys(result.payload)).not.toContain('trigger');
+    });
+
+    it('omits transcriptPath when absent from payload', () => {
+      const result = expectSingle(
+        normalizeClaudeCodeHook(makeRaw(CLAUDE_CODE_HOOK_PRE_COMPACT, { session_id: SESSION_ID })),
+      );
+
+      expect(Object.keys(result.payload)).not.toContain('transcriptPath');
     });
   });
 

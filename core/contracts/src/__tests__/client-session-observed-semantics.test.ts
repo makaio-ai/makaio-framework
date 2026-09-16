@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ClientSessionCompactionPreSchema,
   ClientSessionObservedBaseSchema,
   ClientSessionStartedSchema,
+  ClientSessionSubagentStartedSchema,
+  ClientSessionSubagentCompletedSchema,
   ClientSessionToolPostSchema,
   ClientSessionToolPreSchema,
   ClientSessionTurnCompletedSchema,
@@ -61,6 +64,33 @@ describe('ClientSubjects — observed session semantics', () => {
   it('exposes client.session.tool.post with the correct subject and namespace', () => {
     expect(ClientSubjects.session.tool.post.subject).toBe('session.tool.post');
     expect(ClientSubjects.session.tool.post.$meta.namespace).toBe('client');
+  });
+
+  it('exposes client.session.compaction.pre with the correct subject and namespace', () => {
+    expect(ClientSubjects.session.compaction.pre.subject).toBe('session.compaction.pre');
+    expect(ClientSubjects.session.compaction.pre.$meta.namespace).toBe('client');
+  });
+
+  it('registers client.session.compaction.pre as a fire-and-forget event (not a request)', () => {
+    expect(ClientSubjects.session.compaction.pre.$meta.isRequest).toBe(false);
+  });
+
+  it('exposes client.session.subagent.started with the correct subject and namespace', () => {
+    expect(ClientSubjects.session.subagent.started.subject).toBe('session.subagent.started');
+    expect(ClientSubjects.session.subagent.started.$meta.namespace).toBe('client');
+  });
+
+  it('registers client.session.subagent.started as a fire-and-forget event (not a request)', () => {
+    expect(ClientSubjects.session.subagent.started.$meta.isRequest).toBe(false);
+  });
+
+  it('exposes client.session.subagent.completed with the correct subject and namespace', () => {
+    expect(ClientSubjects.session.subagent.completed.subject).toBe('session.subagent.completed');
+    expect(ClientSubjects.session.subagent.completed.$meta.namespace).toBe('client');
+  });
+
+  it('registers client.session.subagent.completed as a fire-and-forget event (not a request)', () => {
+    expect(ClientSubjects.session.subagent.completed.$meta.isRequest).toBe(false);
   });
 
   it('does not collide with the existing session.account.observe subject', () => {
@@ -227,5 +257,76 @@ describe('ClientSessionToolPostSchema', () => {
     );
 
     expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// client.session.compaction.pre
+// ---------------------------------------------------------------------------
+
+describe('ClientSessionCompactionPreSchema', () => {
+  it('accepts a valid compaction-pre payload without optional fields', () => {
+    expect(ClientSessionCompactionPreSchema.safeParse(makeBase()).success).toBe(true);
+  });
+
+  it('accepts a payload with trigger and transcriptPath', () => {
+    const result = ClientSessionCompactionPreSchema.parse(
+      makeBase({ trigger: 'auto', transcriptPath: '/home/user/.claude/projects/foo/abc.jsonl' }),
+    );
+    expect(result.trigger).toBe('auto');
+    expect(result.transcriptPath).toBe('/home/user/.claude/projects/foo/abc.jsonl');
+  });
+
+  it('rejects a payload missing required fields', () => {
+    expect(ClientSessionCompactionPreSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// client.session.subagent.started
+// ---------------------------------------------------------------------------
+
+describe('ClientSessionSubagentStartedSchema', () => {
+  it('accepts a valid subagent-started payload with required agentId', () => {
+    expect(ClientSessionSubagentStartedSchema.safeParse(makeBase({ agentId: 'agent-abc' })).success).toBe(true);
+  });
+
+  it('accepts a payload with all optional fields', () => {
+    const result = ClientSessionSubagentStartedSchema.parse(
+      makeBase({
+        agentId: 'agent-abc',
+        agentType: 'fork',
+        turnId: 'turn-789',
+      }),
+    );
+    expect(result.agentId).toBe('agent-abc');
+    expect(result.agentType).toBe('fork');
+    expect(result.turnId).toBe('turn-789');
+  });
+
+  it('rejects a missing agentId', () => {
+    expect(ClientSessionSubagentStartedSchema.safeParse(makeBase()).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// client.session.subagent.completed
+// ---------------------------------------------------------------------------
+
+describe('ClientSessionSubagentCompletedSchema', () => {
+  it('accepts a valid subagent-stopped payload with agentTranscriptPath', () => {
+    const result = ClientSessionSubagentCompletedSchema.parse(
+      makeBase({ agentId: 'agent-abc', agentTranscriptPath: '/home/user/.claude/projects/foo/subagent.jsonl' }),
+    );
+    expect(result.agentId).toBe('agent-abc');
+    expect(result.agentTranscriptPath).toBe('/home/user/.claude/projects/foo/subagent.jsonl');
+  });
+
+  it('accepts a payload without agentTranscriptPath', () => {
+    expect(ClientSessionSubagentCompletedSchema.safeParse(makeBase({ agentId: 'agent-abc' })).success).toBe(true);
+  });
+
+  it('rejects a missing agentId', () => {
+    expect(ClientSessionSubagentCompletedSchema.safeParse(makeBase()).success).toBe(false);
   });
 });

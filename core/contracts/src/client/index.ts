@@ -129,10 +129,15 @@ export type {
   ClientRuntimeStarted,
 } from './runtime-observation.js';
 export {
+  CLIENT_SESSION_COMPACTION_TRIGGERS,
   CLIENT_SESSION_START_MODES,
+  ClientSessionCompactionPreSchema,
+  ClientSessionCompactionTriggerSchema,
   ClientSessionObservedBaseSchema,
   ClientSessionStartedSchema,
   ClientSessionStartModeSchema,
+  ClientSessionSubagentStartedSchema,
+  ClientSessionSubagentCompletedSchema,
   ClientSessionToolPostSchema,
   ClientSessionToolPreSchema,
   ClientSessionTurnCompletedSchema,
@@ -141,9 +146,13 @@ export {
   ClientWiringEntrySchema,
 } from './session-observed.js';
 export type {
+  ClientSessionCompactionPre,
+  ClientSessionCompactionTrigger,
   ClientSessionObservedBase,
   ClientSessionStarted,
   ClientSessionStartMode,
+  ClientSessionSubagentStarted,
+  ClientSessionSubagentCompleted,
   ClientSessionToolPost,
   ClientSessionToolPre,
   ClientSessionTurnCompleted,

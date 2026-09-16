@@ -1,10 +1,11 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "provider": "claude-code",
   "cliVersion": "2.1.219",
   "scenarioId": "mcpserver-start-observation",
   "events": [],
   "oracle": "unobserved",
   "oraclePassed": true,
-  "exitCode": 1
+  "exitCode": 0,
+  "terminal": "ok"
 }

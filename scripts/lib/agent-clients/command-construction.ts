@@ -69,6 +69,61 @@ export function buildChildEnvironment(params: {
 }
 
 /**
+ * Flags the Claude Code builder sets itself; a scenario may not restate them.
+ */
+const CLAUDE_CODE_RESERVED_FLAGS = [
+  '--print',
+  '--output-format',
+  '--max-turns',
+  '--max-budget-usd',
+  '--no-session-persistence',
+  '--settings',
+  '--setting-sources',
+  '--permission-mode',
+  '--allowedTools',
+  '--add-dir',
+] as const;
+
+/**
+ * Tokens the Codex builder sets itself; a scenario may not restate them.
+ *
+ * `--config` is deliberately absent: Codex takes it repeatedly and scenario-owned
+ * configuration is how an event such as automatic compaction is reached at all.
+ */
+const CODEX_RESERVED_FLAGS = [
+  'exec',
+  '--json',
+  '--ephemeral',
+  '--sandbox',
+  '--cd',
+  '--skip-git-repo-check',
+  '--dangerously-bypass-hook-trust',
+] as const;
+
+/**
+ * Returns the scenario's extra CLI arguments, refusing harness-owned flags.
+ *
+ * Scenario arguments are appended after the builder's own, so a restated flag
+ * would silently win over the bound the harness relies on — `--max-turns 2`
+ * being the one that makes a committed exit code readable. Evidence produced
+ * under a bound the fixture does not describe is worse than no evidence, so
+ * this throws rather than dropping the argument.
+ * @param scenario - Scenario carrying optional provider-native arguments.
+ * @param reserved - Tokens this provider's builder owns.
+ * @returns The scenario-owned arguments, unchanged.
+ */
+function scenarioCliArgs(scenario: ProbeScenario, reserved: readonly string[]): readonly string[] {
+  const args = scenario.cliArgs ?? [];
+  for (const arg of args) {
+    const token = arg.startsWith('--') ? arg.split('=')[0]! : arg;
+    if (reserved.includes(token)) {
+      throw new Error(`Scenario "${scenario.id}" may not pass harness-owned argument "${token}" through cliArgs`);
+    }
+  }
+  return args;
+}
+
+/**
  * Constructs documented Claude Code print-mode invocation arguments.
  * @param params - Isolated executable, project, settings file, scenario, and child environment.
  * @returns Claude Code print-mode command.
@@ -88,8 +143,14 @@ export function buildClaudeCodeCommand(params: {
       scenario.prompt,
       '--output-format',
       'json',
+      // One turn to act, one to answer — uniformly, for every scenario.
+      // A per-oracle bound made the committed exit code ambiguous: a scenario
+      // whose model spent its only turn on a tool call ended in Claude's
+      // documented `error_max_turns` result and exited 1, indistinguishable in
+      // the fixture from a CLI that genuinely failed. Evidence has to be able
+      // to assert a clean exit, so no scenario is cut off mid-turn.
       '--max-turns',
-      scenario.oracle === 'final-response-must-contain-marker' ? '2' : '1',
+      '2',
       '--max-budget-usd',
       '0.25',
       '--no-session-persistence',
@@ -103,6 +164,7 @@ export function buildClaudeCodeCommand(params: {
       scenario.allowedTools.join(','),
       '--add-dir',
       projectDir,
+      ...scenarioCliArgs(scenario, CLAUDE_CODE_RESERVED_FLAGS),
     ],
     env,
     cwd: projectDir,
@@ -137,6 +199,9 @@ export function buildCodexCommand(params: {
       '--cd',
       projectDir,
       '--skip-git-repo-check',
+      // Scenario-owned configuration precedes the positional prompt, which
+      // `codex exec` requires last.
+      ...scenarioCliArgs(scenario, CODEX_RESERVED_FLAGS),
       scenario.prompt,
     ],
     env,

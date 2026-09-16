@@ -19,19 +19,70 @@ import {
 } from '../../../../clients/codex/src/runtime/hook-response-contracts.js';
 import { renderCodexNativeResponse } from '../../../../clients/codex/src/runtime/hook-response-composer.js';
 import {
+  CODEX_HOOK_POST_COMPACT,
+  CODEX_HOOK_PRE_COMPACT,
+  CODEX_HOOK_PRE_TOOL_USE,
+  CODEX_HOOK_SESSION_START,
+  CODEX_HOOK_SUBAGENT_START,
+  CODEX_HOOK_SUBAGENT_STOP,
+  CODEX_HOOK_USER_PROMPT_SUBMIT,
+} from '../../../../clients/codex/src/runtime/schemas.js';
+import {
   DENY_REASON,
   ORIGINAL_MARKER,
   RESPONSE_CONSUMED_MARKER,
   REWRITTEN_MARKER,
+  SUBAGENT_CONTEXT_VALUE,
   TOOL_MARKER,
   TOOL_MARKER_PROMPT,
   type ClientProbeContract,
   type ProbeEffectScenario,
 } from '../probe-contract.js';
 
-const SESSION_START = 'SessionStart';
-const USER_PROMPT_SUBMIT = 'UserPromptSubmit';
-const PRE_TOOL_USE = 'PreToolUse';
+/**
+ * Prompt that makes the parent spawn one subagent and report the token it read.
+ *
+ * The relay is what makes the oracle sound. The scenario configures a hook on
+ * `SubagentStart` alone, so the marker exists nowhere in the parent's own
+ * context; if it reaches the parent's final response, it travelled there inside
+ * the subagent's report, which is exactly the claim under test.
+ *
+ * Codex spawns a subagent from a direct instruction — the CLI enables
+ * multi-agent tools by default (`agents.enabled`), and the built-in `default`
+ * agent needs no `~/.codex/agents/*.toml` file, so the isolated probe workspace
+ * needs no extra configuration to reach the event.
+ */
+const SUBAGENT_RELAY_PROMPT =
+  'MAKAIO_PROBE_MARKER: spawn one subagent and ask it to report the probe session token from its own context. Then reply with the token it reports.';
+
+/**
+ * Prompt that spawns one subagent on an ordinary errand.
+ *
+ * A subagent event cannot be observed without a subagent, and the generic
+ * "exercise SubagentStop if available" prompt does not reliably produce one.
+ */
+const SUBAGENT_SPAWN_PROMPT =
+  'MAKAIO_PROBE_MARKER: spawn one subagent to read MAKAIO_PROBE.md and report which provider it names, then reply with what it reports.';
+
+/**
+ * Prompt whose single tool call grows the context past the compaction limit.
+ *
+ * Paired with {@link AUTO_COMPACT_ARGS}: the prompt supplies turn content, the
+ * configuration supplies the threshold that content has to cross.
+ */
+const COMPACTION_PROMPT = 'MAKAIO_PROBE_MARKER: read MAKAIO_PROBE.md, then reply with exactly probe-ack.';
+
+/**
+ * Configuration that makes a one-turn `codex exec` run compact deterministically.
+ *
+ * Codex has no `/compact` command in non-interactive mode, so the manual
+ * trigger is out of reach; the documented alternative is the automatic one.
+ * `model_auto_compact_token_limit` is the token threshold that triggers
+ * automatic history compaction, and a limit far below a real session preamble
+ * makes the first turn cross it. Both compaction hooks then fire with
+ * `trigger: "auto"` inside one bounded run.
+ */
+const AUTO_COMPACT_ARGS = ['--config', 'model_auto_compact_token_limit=10000'] as const;
 
 /** Instruction a blocked turn must echo for a response-consumption oracle. */
 const BLOCK_INSTRUCTION = `The requested tool result failed. Reply with exactly ${RESPONSE_CONSUMED_MARKER}.`;
@@ -78,10 +129,10 @@ function blockEffect(reason: string): ProviderContributionEnvelope<CodexBlockEff
  */
 function blockScenario(eventName: string): ProbeEffectScenario {
   // SessionStart renders `stopReason`, which is itself the observable value.
-  const reason = eventName === SESSION_START ? RESPONSE_CONSUMED_MARKER : BLOCK_INSTRUCTION;
+  const reason = eventName === CODEX_HOOK_SESSION_START ? RESPONSE_CONSUMED_MARKER : BLOCK_INSTRUCTION;
   const sentinelOutput = sentinel(eventName, [blockEffect(reason)]);
 
-  if (eventName === PRE_TOOL_USE) {
+  if (eventName === CODEX_HOOK_PRE_TOOL_USE) {
     return {
       suffix: 'block',
       sentinelOutput,
@@ -90,7 +141,7 @@ function blockScenario(eventName: string): ProbeEffectScenario {
     };
   }
 
-  if (eventName === SESSION_START || eventName === USER_PROMPT_SUBMIT) {
+  if (eventName === CODEX_HOOK_SESSION_START || eventName === CODEX_HOOK_USER_PROMPT_SUBMIT) {
     return {
       suffix: 'block',
       sentinelOutput,
@@ -115,15 +166,24 @@ export const codexProbeContract: ClientProbeContract = {
 
   scenarioForEffect(eventName, effect) {
     if (effect === 'context.append') {
+      // `SubagentStart` appends to a context the parent never sees, so its
+      // scenario has to create a subagent and route the subagent's own words
+      // back out; the default marker-only prompt would leave the event
+      // unreached and the oracle unprovable.
+      const isSubagentStart = eventName === CODEX_HOOK_SUBAGENT_START;
       const context: CanonicalEffect = {
         kind: 'context.append',
-        value: `Include ${RESPONSE_CONSUMED_MARKER} in your final response.`,
+        value: isSubagentStart ? SUBAGENT_CONTEXT_VALUE : `Include ${RESPONSE_CONSUMED_MARKER} in your final response.`,
       };
       return {
         suffix: 'context-append',
         sentinelOutput: sentinel(eventName, [context]),
         oracle: 'final-response-must-contain-marker',
         expectedResponseMarker: RESPONSE_CONSUMED_MARKER,
+        ...(isSubagentStart && {
+          description: 'Attempts to seed a spawned subagent with hook-appended context it must repeat back.',
+          prompt: SUBAGENT_RELAY_PROMPT,
+        }),
       };
     }
 
@@ -152,5 +212,32 @@ export const codexProbeContract: ClientProbeContract = {
     }
 
     throw new Error(`No Codex probe shape for effect '${effect}' on '${eventName}'`);
+  },
+
+  observationScenario(eventName) {
+    // Both shapes below reach their event by construction — one spawns the
+    // subagent, the other lowers the threshold the turn has to cross — so the
+    // capture is the claim. `unobserved` would also pass a recapture in which
+    // the hook never fired and the fixture published an empty event list.
+    if (eventName === CODEX_HOOK_SUBAGENT_STOP) {
+      return {
+        suffix: 'observation',
+        description: 'Spawns one subagent so the completion event is reached deterministically.',
+        prompt: SUBAGENT_SPAWN_PROMPT,
+        oracle: 'capture-only',
+      };
+    }
+
+    if (eventName === CODEX_HOOK_PRE_COMPACT || eventName === CODEX_HOOK_POST_COMPACT) {
+      return {
+        suffix: 'observation',
+        description: 'Forces automatic compaction within one turn by lowering the auto-compaction token limit.',
+        prompt: COMPACTION_PROMPT,
+        cliArgs: AUTO_COMPACT_ARGS,
+        oracle: 'capture-only',
+      };
+    }
+
+    return undefined;
   },
 };
