@@ -1,0 +1,11 @@
+{
+  "agent_id": "fixture-agent",
+  "agent_type": "default",
+  "cwd": "/workspace",
+  "hook_event_name": "SubagentStart",
+  "model": "gpt-5",
+  "permission_mode": "default",
+  "session_id": "fixture-session",
+  "transcript_path": null,
+  "turn_id": "fixture-turn"
+}

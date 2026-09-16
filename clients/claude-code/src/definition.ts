@@ -48,7 +48,10 @@ export const clientDefinition = createClientDefinition({
     // PreToolUse 2.1.9, Stop/SubagentStop 2.1.163 — and no such entry exists for
     // SessionStart anywhere in 2.x, because injecting startup context is what the
     // hook was introduced to do. So `context.append` on SessionStart predates
-    // this floor across the whole range.
+    // this floor across the whole range. The same holds for SubagentStart: the
+    // event shipped in 2.0.43, below this floor, and no changelog entry ever adds
+    // `additionalContext` to it, because seeding a fresh subagent context is the
+    // hook's purpose.
     //
     // A future capability that is *not* range-wide cannot be declared here as-is:
     // raise this floor to that capability's first supporting version, because
@@ -172,6 +175,7 @@ export const clientDefinition = createClientDefinition({
       {
         name: 'UserPromptSubmit',
         frameworkSubject: 'client.session.userPrompt.submitted',
+        responseCapabilities: ['context.append'],
       },
       {
         name: 'PreToolUse',
@@ -184,7 +188,20 @@ export const clientDefinition = createClientDefinition({
       },
       { name: 'PostToolUse', frameworkSubject: 'client.session.tool.post' },
       { name: 'Stop', frameworkSubject: 'client.session.turn.completed' },
-      { name: 'SubagentStop' },
+      {
+        name: 'SubagentStart',
+        frameworkSubject: 'client.session.subagent.started',
+        responseCapabilities: ['context.append'],
+      },
+      { name: 'SubagentStop', frameworkSubject: 'client.session.subagent.completed' },
+      { name: 'PreCompact', frameworkSubject: 'client.session.compaction.pre' },
+      {
+        // PostCompact exists since 2.1.76, above the ^2.1.0 floor but within the supported range.
+        // Like SubagentStart (no own session), it has no frameworkSubject: the post-compaction
+        // signal arrives via a subsequent SessionStart hook with source 'compact' (startMode: 'compact').
+        // PostCompact is wired for raw ingress only.
+        name: 'PostCompact',
+      },
       { name: 'Notification' },
       { name: 'MCPServerStart' },
       { name: 'MCPServerStop' },

@@ -6,7 +6,13 @@ import * as path from 'node:path';
 import { buildSpawnCommand } from './command-construction.js';
 import { fixtureFilePath, readFixture, writeFixture } from './fixtures.js';
 import { redactDeep } from './redaction.js';
-import type { CapturedHookInvocation, ProbeOptions, ProbeScenario, ScenarioFixture } from './types.js';
+import type {
+  CapturedHookInvocation,
+  ProbeOptions,
+  ProbeScenario,
+  ScenarioFixture,
+  TerminalClassification,
+} from './types.js';
 import type { ProbeWorkspace } from './workspace.js';
 
 /** Result of one spawned scenario. */
@@ -198,6 +204,49 @@ function responseWasConsumed(params: {
 }
 
 /**
+ * Pure oracle evaluation for a completed scenario run.
+ *
+ * The capability-proving branch has two sub-cases keyed on `sentinelEffect`
+ * (mirroring `provesDeclaredEffects` in the fixture suite):
+ *
+ * - **With a declared effect** (`sentinelEffect` defined): the session must
+ *   have ended with `terminal === 'ok'`. A run that consumed the marker but
+ *   ended in `error_max_turns` is not clean evidence — the fixture suite
+ *   rejects such fixtures via `provesDeclaredEffects`.
+ * - **Without a declared effect** (`sentinelEffect` undefined): the same
+ *   bounded-turn rule as the observation branches applies — `error_max_turns`
+ *   is accepted. Negative-control scenarios (e.g. `native-must-deny-unapproved-tool`)
+ *   prove a native refusal that legitimately prevents the model from completing,
+ *   so their committed fixture records `terminal: 'error_max_turns'` with
+ *   `oraclePassed: true`.
+ * @param params - Oracle kind, terminal classification, and derived signal flags.
+ * @returns Whether the oracle condition is met for this run.
+ */
+export function evaluateOracle(params: {
+  scenario: Pick<ProbeScenario, 'oracle' | 'candidateExpectedStatus' | 'sentinelEffect'>;
+  terminal: TerminalClassification;
+  hookFired: boolean;
+  responseConsumed: boolean;
+}): boolean {
+  const { scenario, terminal, hookFired, responseConsumed } = params;
+  // A run that ended on its own turn bound is finished evidence; one that was
+  // killed or failed is not. The distinction is read from the persisted
+  // classification, uniformly for every provider.
+  const terminatedCleanly = terminal === 'ok' || terminal === 'error_max_turns';
+  return scenario.oracle === 'unobserved'
+    ? terminatedCleanly
+    : scenario.oracle === 'capture-only'
+      ? terminatedCleanly && hookFired && scenario.candidateExpectedStatus !== 'supported'
+      : // Capability-proving branch: two sub-cases distinguished by sentinelEffect.
+        // With a declared effect: require responseConsumed AND terminal === 'ok'.
+        // Without a declared effect: require responseConsumed AND terminatedCleanly
+        // (error_max_turns is acceptable — the scenario proves a native refusal).
+        scenario.sentinelEffect !== undefined
+        ? responseConsumed && terminal === 'ok'
+        : responseConsumed && terminatedCleanly;
+}
+
+/**
  * Projects disposable captures into stable, non-sensitive fixture evidence.
  * @param params - Native captures, scenario contract, and process outcome.
  * @returns Normalized evidence suitable for fixture comparison.
@@ -217,6 +266,7 @@ function normalizedFixture(params: {
   const matching = captures.filter((capture) => capture.eventName === event.eventName);
   const hookFired = matching.length > 0;
   const sentinelInjected = matching.some((capture) => capture.sentinelInjected);
+  const terminal = classifyTerminal({ provider, exitCode, timedOut, stdout });
   const responseConsumed = responseWasConsumed({
     provider,
     scenario,
@@ -227,14 +277,9 @@ function normalizedFixture(params: {
     hookFired,
     sentinelInjected,
   });
-  const oraclePassed =
-    scenario.oracle === 'unobserved'
-      ? !timedOut && (exitCode === 0 || isClaudeMaxTurnsResult(provider, stdout))
-      : scenario.oracle === 'capture-only'
-        ? !timedOut && exitCode === 0 && hookFired && scenario.candidateExpectedStatus !== 'supported'
-        : responseConsumed;
+  const oraclePassed = evaluateOracle({ scenario, terminal, hookFired, responseConsumed });
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     provider,
     cliVersion,
     scenarioId: scenario.id,
@@ -259,6 +304,7 @@ function normalizedFixture(params: {
     oracle: scenario.oracle,
     oraclePassed,
     exitCode,
+    terminal,
   };
 }
 
@@ -358,12 +404,34 @@ function noCompletedAgentOrToolOutput(provider: ProbeOptions['provider'], stdout
 }
 
 /**
- * Recognizes Claude's documented bounded-turn terminal result without admitting unrelated failures.
+ * Classifies how one native run terminated, once, for the committed evidence.
+ *
+ * Parsing a provider's machine-readable terminal result belongs here and not in
+ * an oracle: the oracle then reads a persisted classification that every
+ * fixture carries, and a reader of committed evidence can tell a documented
+ * bounded-turn end from a failure without re-running the binary.
+ * @param params - Provider, process outcome, and complete bounded CLI stdout.
+ * @returns The terminal classification persisted with the fixture.
+ */
+function classifyTerminal(params: {
+  provider: ProbeOptions['provider'];
+  exitCode: number | null;
+  timedOut: boolean;
+  stdout: string;
+}): TerminalClassification {
+  const { provider, exitCode, timedOut, stdout } = params;
+  if (timedOut || exitCode === null) return 'killed';
+  if (exitCode === 0) return 'ok';
+  return isMaxTurnsResult(provider, stdout) ? 'error_max_turns' : 'error';
+}
+
+/**
+ * Recognizes a provider's documented bounded-turn terminal result without admitting unrelated failures.
  * @param provider - Provider whose machine-readable output format is parsed.
  * @param stdout - Complete bounded CLI stdout.
- * @returns Whether stdout is exactly a Claude max-turn exhaustion result.
+ * @returns Whether stdout is exactly a max-turn exhaustion result.
  */
-function isClaudeMaxTurnsResult(provider: ProbeOptions['provider'], stdout: string): boolean {
+function isMaxTurnsResult(provider: ProbeOptions['provider'], stdout: string): boolean {
   if (provider !== 'claude-code') return false;
   try {
     const result = JSON.parse(stdout) as Record<string, unknown>;

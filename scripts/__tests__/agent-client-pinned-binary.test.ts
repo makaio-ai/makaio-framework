@@ -67,7 +67,7 @@ describe('pinned agent-client binary preparation', () => {
     const runScenario = vi.fn<typeof runAgentClientScenario>(
       async (_params): Promise<ScenarioRunResult & { readonly fixtureDiffs: readonly string[] }> => ({
         fixture: {
-          schemaVersion: 3 as const,
+          schemaVersion: 4 as const,
           provider: 'codex' as const,
           cliVersion: getPinnedVersion('codex'),
           scenarioId: 'fake',
@@ -75,6 +75,7 @@ describe('pinned agent-client binary preparation', () => {
           oracle: 'unobserved' as const,
           oraclePassed: true,
           exitCode: 0,
+          terminal: 'ok' as const,
         },
         stdout: '',
         stderr: '',

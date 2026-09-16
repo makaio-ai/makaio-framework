@@ -30,6 +30,21 @@ export const REWRITTEN_MARKER = 'MAKAIO_PROBE_REWRITTEN_MARKER';
 /** Reason text injected by permission-denial scenarios. */
 export const DENY_REASON = 'MAKAIO_PROBE_DENY';
 
+/**
+ * Context seeded into a spawned subagent, phrased as an identifying fact.
+ *
+ * A subagent given a real task ignores an appended instruction such as "include
+ * this marker in your final response" — observed live, twice — because the task
+ * outranks it. A token it is later asked about needs no compliance at all: it
+ * only has to be in the context window, which is the whole claim.
+ *
+ * Shared rather than re-spelled per client: both `SubagentStart` scenarios pair
+ * this value with a relay prompt that asks the parent for the token its
+ * subagent reports. If one copy drifted, that client's oracle would look for a
+ * marker its own sentinel never injected.
+ */
+export const SUBAGENT_CONTEXT_VALUE = `The probe session token for this subagent is ${RESPONSE_CONSUMED_MARKER}.`;
+
 const READ_PROBE_FILE_TOOL = 'Bash(cat MAKAIO_PROBE.md)';
 const TOUCH_TOOL_MARKER_TOOL = `Bash(touch ${TOOL_MARKER})`;
 const TEST_TOOL_MARKER_TOOL = `Bash(test -e ${TOOL_MARKER})`;
@@ -78,6 +93,16 @@ export interface ProbeEffectScenario {
   readonly prompt?: string;
   /** Overrides the pre-approved tool set. */
   readonly allowedTools?: readonly string[];
+  /**
+   * Extra provider-native CLI arguments this scenario needs to reach its event.
+   *
+   * Some events are unreachable through a prompt alone: Codex compacts only
+   * when the active context crosses `model_auto_compact_token_limit`, which is
+   * a run-scoped configuration value, not something a model can be asked to
+   * do. Carrying it per scenario keeps the setting off the fourteen scenarios
+   * that must *not* compact.
+   */
+  readonly cliArgs?: readonly string[];
   /** Marker required in the provider's final response. */
   readonly expectedResponseMarker?: string;
   /** Workspace marker required after the run. */
@@ -111,4 +136,16 @@ export interface ClientProbeContract {
    * @returns Extra probe shapes, or an empty array.
    */
   baselineScenarios?(eventName: string): readonly ProbeEffectScenario[];
+  /**
+   * Optional client-owned shape for an event that claims no effect yet.
+   *
+   * An observation scenario still has to make the native client *reach* the
+   * event, and how to provoke one is client knowledge: Claude Code compacts on
+   * the `/compact` command, Codex does not. Without this seam the harness would
+   * have to spell provider-specific prompts into its generic default, and one
+   * client's trigger would silently become another client's prompt.
+   * @param eventName - Native hook event being exercised.
+   * @returns The client-owned observation shape, or `undefined` for the default.
+   */
+  observationScenario?(eventName: string): ProbeEffectScenario | undefined;
 }

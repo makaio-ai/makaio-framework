@@ -41,6 +41,8 @@ export interface ProbeScenario {
   readonly prompt: string;
   /** Provider-native tools pre-approved for this scenario. */
   readonly allowedTools: readonly string[];
+  /** Extra provider-native CLI arguments required to reach this scenario's event. */
+  readonly cliArgs?: readonly string[];
   /** Exactly one declared hook event attempted by this scenario. */
   readonly expectedEvents: readonly CandidateHookEventShape[];
   /** Native response emitted by the capture shim, when the event is request-capable. */
@@ -168,9 +170,20 @@ export interface RecordedHookEvent {
   readonly sentinelInjected: boolean;
 }
 
+/**
+ * Parsed terminal outcome of one native run.
+ *
+ * An exit code alone cannot carry this: Claude Code exits 1 both when the CLI
+ * genuinely failed and when a run ended in its documented bounded-turn result
+ * (`error_max_turns`). Persisting the classification keeps that distinction in
+ * the committed evidence instead of in a provider-specific branch of the
+ * oracle, so every consumer of a fixture can tell the two apart.
+ */
+export type TerminalClassification = 'ok' | 'error_max_turns' | 'error' | 'killed';
+
 /** Committed per-scenario normalized evidence. */
 export interface ScenarioFixture {
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly provider: ProviderId;
   readonly cliVersion: string;
   readonly scenarioId: string;
@@ -178,6 +191,8 @@ export interface ScenarioFixture {
   readonly oracle: ScenarioOracle;
   readonly oraclePassed: boolean;
   readonly exitCode: number | null;
+  /** Parsed terminal classification of the native run that produced this evidence. */
+  readonly terminal: TerminalClassification;
 }
 
 /** One source-preserving entry in a provider hook-contract manifest. */

@@ -52,8 +52,23 @@ export const CLAUDE_CODE_TOOL_RESPONSE_CONTRACT_ID = 'claude-code.tool-response'
  * `1.1.0` adds `SessionStart` as a request-capable, non-blockable interaction
  * carrying canonical `context.append`. Purely additive: every `1.0.0`
  * contributor remains valid.
+ *
+ * `1.2.0` adds `UserPromptSubmit` as a request-capable, non-blockable
+ * interaction carrying canonical `context.append`. `decision: block` for
+ * prompts is not declared: the probe evidence pinned for this contract version
+ * only proves `additionalContext` on `UserPromptSubmit` (see
+ * `probe/user-prompt-submit-context-append.json`); a `decision: block`
+ * declaration would require its own captured proof before the contract may
+ * advertise it. Purely additive: every `1.1.0` contributor remains valid.
+ *
+ * `1.3.0` adds `SubagentStart` as a request-capable, non-blockable interaction
+ * carrying canonical `context.append`. The appended context lands in the
+ * *subagent's* context window, not the parent's — proven live, see
+ * `probe/subagent-start-context-append.json`. Subagent creation cannot be
+ * refused, so the interaction is non-blockable. Purely additive: every `1.2.0`
+ * contributor remains valid.
  */
-export const CLAUDE_CODE_TOOL_RESPONSE_CONTRACT_VERSION = '1.1.0';
+export const CLAUDE_CODE_TOOL_RESPONSE_CONTRACT_VERSION = '1.3.0';
 
 // ---------------------------------------------------------------------------
 // Claude-specific effect types
@@ -140,17 +155,20 @@ export function createDenyEffect(reason?: string): ProviderContributionEnvelope<
  *
  * Only `PreToolUse` is blockable — proven by the manifest.  The namespaced
  * approve and deny capabilities map to the PreToolUse event and inherit its
- * blockability. `SessionStart` contributes context to a session that has
- * already started and can refuse nothing, so it is listed explicitly as
- * non-blockable rather than left absent: a closed-policy contributor must fail
- * its blockability check loudly instead of silently matching no entry.
- * `context.append` is a canonical effect and is not independently blockable.
+ * blockability. `SessionStart`, `UserPromptSubmit`, and `SubagentStart`
+ * contribute context only and can refuse nothing, so they are listed
+ * explicitly as non-blockable:
+ * a closed-policy contributor must fail its blockability check loudly instead
+ * of silently matching no entry.  `context.append` is a canonical effect and
+ * is not independently blockable.
  */
 const BLOCKABILITY: readonly InteractionBlockability[] = Object.freeze([
   Object.freeze({ interaction: 'PreToolUse', blockable: true }),
   Object.freeze({ interaction: CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES.approve, blockable: true }),
   Object.freeze({ interaction: CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES.deny, blockable: true }),
   Object.freeze({ interaction: 'SessionStart', blockable: false }),
+  Object.freeze({ interaction: 'UserPromptSubmit', blockable: false }),
+  Object.freeze({ interaction: 'SubagentStart', blockable: false }),
   Object.freeze({ interaction: 'context.append', blockable: false }),
 ]);
 
@@ -183,6 +201,8 @@ export function rendersDecision(eventName: string): boolean {
 const SUPPORTED_INTERACTIONS: readonly string[] = Object.freeze([
   'PreToolUse',
   'SessionStart',
+  'UserPromptSubmit',
+  'SubagentStart',
   CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES.approve,
   CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES.deny,
   'context.append',

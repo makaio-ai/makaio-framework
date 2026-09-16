@@ -31,6 +31,8 @@ const COMMON_INPUT_SHAPE = {
  *
  * `permission_mode` belongs here too: the probe captured it on `PreToolUse`
  * and not on `SessionStart`, which has no pending permission to describe.
+ * Note: the probe also captured `permission_mode` on `UserPromptSubmit`, but
+ * that field is not required by the transport contract for non-tool events.
  */
 const TOOL_INPUT_SHAPE = {
   permission_mode: expect.any(String),
@@ -51,6 +53,8 @@ const OUTPUT_FIXTURE_EFFECTS: Readonly<Record<string, ReadonlyArray<CanonicalEff
   {
     PreToolUse: [createDenyEffect('Tool use denied by approval handler')],
     SessionStart: [{ kind: 'context.append', value: 'Repository conventions are documented in AGENTS.md.' }],
+    UserPromptSubmit: [{ kind: 'context.append', value: 'Repository conventions are documented in AGENTS.md.' }],
+    SubagentStart: [{ kind: 'context.append', value: 'Repository conventions are documented in AGENTS.md.' }],
   };
 
 runHookContractFixtureSuite({

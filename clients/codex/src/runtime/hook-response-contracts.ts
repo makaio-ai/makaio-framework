@@ -9,13 +9,28 @@ import {
   CODEX_HOOK_PRE_TOOL_USE,
   CODEX_HOOK_SESSION_START,
   CODEX_HOOK_STOP,
+  CODEX_HOOK_SUBAGENT_START,
   CODEX_HOOK_USER_PROMPT_SUBMIT,
 } from './schemas.js';
 import { CODEX_HOOK_RESPONSE_CAPABILITIES } from '../definition.js';
 
 export const CODEX_CLIENT_ID = 'codex';
 export const CODEX_CONTRACT_ID = 'openai.codex-hook-response';
-export const CODEX_CONTRACT_VERSION = '1.1.0';
+/**
+ * Semantic version of the Codex hook-response contract.
+ *
+ * Pinned to the proven capabilities of Codex CLI 0.144.1. Bump this version
+ * when a future CLI release expands the native response surface.
+ *
+ * `1.2.0` adds `SubagentStart` as a request-capable, non-blockable interaction
+ * carrying canonical `context.append`. The appended context lands in the
+ * *subagent's* context window, not the parent's — proven live, see
+ * `runtime/__tests__/fixtures/hook-contracts/probe/subagent-start-context-append.json`.
+ * Subagent creation cannot be refused (`continue: false` is parsed for
+ * compatibility but does not stop the subagent), so the interaction is
+ * non-blockable. Purely additive: every `1.1.0` contributor remains valid.
+ */
+export const CODEX_CONTRACT_VERSION = '1.2.0';
 export type CodexBlockEffects = Readonly<{ decision: 'block'; reason: string }> & Record<string, unknown>;
 export type CodexContextEffects = Readonly<{ additionalContext: string }> & Record<string, unknown>;
 export type CodexPermissionDenyEffects = Readonly<{ permissionDecision: 'deny'; permissionDecisionReason: string }> &
@@ -161,6 +176,7 @@ export const CODEX_SUPPORTED_INTERACTIONS = Object.freeze([
   CODEX_HOOK_PRE_TOOL_USE,
   CODEX_HOOK_POST_TOOL_USE,
   CODEX_HOOK_STOP,
+  CODEX_HOOK_SUBAGENT_START,
   ...CODEX_RESPONSE_CAPABILITIES,
 ]);
 export const CODEX_INTERACTION_BLOCKABILITY: readonly InteractionBlockability[] = Object.freeze(
@@ -206,6 +222,7 @@ const EVENT_EFFECTS: Readonly<Record<string, ReadonlySet<CodexEffectKind>>> = Ob
   [CODEX_HOOK_PRE_TOOL_USE]: new Set<CodexEffectKind>(['context', 'block', 'deny', 'update']),
   [CODEX_HOOK_POST_TOOL_USE]: new Set<CodexEffectKind>(['context', 'block']),
   [CODEX_HOOK_STOP]: new Set<CodexEffectKind>(['block']),
+  [CODEX_HOOK_SUBAGENT_START]: new Set<CodexEffectKind>(['context']),
 });
 
 /**

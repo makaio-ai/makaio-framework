@@ -79,6 +79,13 @@ function validateCodexEventFixtures(eventName: string, input: unknown, output: u
     expect(inputRecord).toHaveProperty('last_assistant_message');
     expect(inputRecord.stop_hook_active).toBe(false);
     expect(outputRecord).toMatchObject({ decision: 'block', reason: expect.any(String) });
+  } else if (eventName === 'SubagentStart') {
+    expect(inputRecord).toMatchObject({ agent_id: expect.any(String), agent_type: expect.any(String) });
+    expect(outputRecord).not.toHaveProperty('decision');
+    expect(fixtureObject(outputRecord.hookSpecificOutput)).toMatchObject({
+      hookEventName: 'SubagentStart',
+      additionalContext: expect.any(String),
+    });
   } else if (eventName === 'UserPromptSubmit') {
     expect(inputRecord.prompt).toEqual(expect.any(String));
     expect(outputRecord).toMatchObject({ decision: 'block', reason: expect.any(String) });

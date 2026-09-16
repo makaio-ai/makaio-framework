@@ -37,7 +37,10 @@ import {
   ClientUsageSnapshotSchema,
 } from './account-identity.js';
 import {
+  ClientSessionCompactionPreSchema,
   ClientSessionStartedSchema,
+  ClientSessionSubagentStartedSchema,
+  ClientSessionSubagentCompletedSchema,
   ClientSessionTurnCompletedSchema,
   ClientSessionTurnStartedSchema,
   ClientSessionToolPostSchema,
@@ -128,6 +131,9 @@ export const ClientSchemas = {
   'session.turn.completed': ClientSessionTurnCompletedSchema,
   'session.tool.pre': ClientSessionToolPreSchema,
   'session.tool.post': ClientSessionToolPostSchema,
+  'session.compaction.pre': ClientSessionCompactionPreSchema,
+  'session.subagent.started': ClientSessionSubagentStartedSchema,
+  'session.subagent.completed': ClientSessionSubagentCompletedSchema,
   'wiring.list': {
     request: z.object({
       /**

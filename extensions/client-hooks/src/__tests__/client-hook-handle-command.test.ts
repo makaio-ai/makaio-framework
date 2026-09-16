@@ -241,27 +241,106 @@ describe('runClientHookHandleCommand — observation invariant', () => {
     expect(writeStdout).toHaveBeenCalledWith('handled after emit failure');
   });
 
-  it('does not exceed the handle timeout waiting for a stalled hook.received emit', async () => {
-    const emit = vi.fn(() => new Promise<void>(() => {}));
+  // Updated from "does not exceed the handle timeout waiting for a stalled
+  // hook.received emit" (which asserted requestOptional was NOT called when
+  // the observation stalled). Under the sub-budget rule an overrunning
+  // observation must NOT abort the handle request — only exhausting the full
+  // deadline does. The test now asserts the handle request IS issued.
+  it('bounds the observation wait to the sub-budget and still issues the handle request when emission stalls', async () => {
+    vi.useFakeTimers();
+    try {
+      const emit = vi.fn(() => new Promise<void>(() => {})); // never resolves
+      const requestOptional = vi.fn(async () => ({ handled: false as const }));
+      const writeStdout = vi.fn();
+      const writeStderr = vi.fn();
+      const setExitCode = vi.fn();
+
+      const runPromise = runClientHookHandleCommand(
+        {
+          args: { client: 'obs-sub-budget', eventName: 'PreToolUse', timeout: 1000, failClose: false },
+          bus: { emit, requestOptional },
+        },
+        makeDeps({ writeStdout, writeStderr }),
+        setExitCode,
+      );
+
+      // Advance past the 250 ms sub-budget (= min(floor(1000/4), 250)).
+      // The emit never resolves, but that must not block the handle request.
+      await vi.advanceTimersByTimeAsync(260);
+
+      expect(emit).toHaveBeenCalledOnce();
+      expect(requestOptional).toHaveBeenCalledOnce();
+      expect(setExitCode).not.toHaveBeenCalled();
+
+      await runPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('slow observation still issues the handle request', async () => {
+    vi.useFakeTimers();
+    try {
+      const order: string[] = [];
+      let resolveEmit!: () => void;
+      const emit = vi.fn(() => {
+        order.push('received');
+        return new Promise<void>((res) => {
+          resolveEmit = res;
+        });
+      });
+      const requestOptional = vi.fn(async () => {
+        order.push('handle');
+        return { handled: false as const };
+      });
+
+      const runPromise = runClientHookHandleCommand(
+        {
+          args: { client: 'obs-slow', eventName: 'UserPromptSubmit', timeout: 1000, failClose: false },
+          bus: { emit, requestOptional },
+        },
+        makeDeps({}),
+      );
+
+      // Advance 600 ms — well past the 250 ms sub-budget; emit still pending.
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(requestOptional).toHaveBeenCalledOnce();
+      expect(order).toEqual(['received', 'handle']);
+      expect(emit.mock.invocationCallOrder[0]).toBeLessThan(requestOptional.mock.invocationCallOrder[0]);
+
+      // The sub-budget fires at 250 ms; fake timers advance to 600 ms but
+      // Date.now() at the point requestOptional is called reflects only the
+      // 250 ms sub-budget expiry.  Remaining = 1000 − 250 = 750 ms > 500 ms.
+      const passedTimeout = (requestOptional.mock.calls[0] as unknown as [unknown, unknown, { timeout: number }])[2]
+        .timeout;
+      expect(passedTimeout).toBeGreaterThan(500);
+
+      resolveEmit();
+      await runPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('observation sub-budget does not consume the handle budget', async () => {
+    // emit resolves instantly; the handle timeout should be nearly the full budget.
+    const emit = vi.fn(async () => {});
     const requestOptional = vi.fn(async () => ({ handled: false as const }));
-    const writeStdout = vi.fn();
-    const writeStderr = vi.fn();
-    const setExitCode = vi.fn();
 
     await runClientHookHandleCommand(
       {
-        args: { client: 'obs-timeout', eventName: 'PreToolUse', timeout: 1, failClose: false },
+        args: { client: 'obs-budget', eventName: 'UserPromptSubmit', timeout: 1000, failClose: false },
         bus: { emit, requestOptional },
       },
-      makeDeps({ writeStdout, writeStderr }),
-      setExitCode,
+      makeDeps({}),
     );
 
-    expect(emit).toHaveBeenCalledOnce();
-    expect(requestOptional).not.toHaveBeenCalled();
-    expect(writeStdout).not.toHaveBeenCalled();
-    expect(writeStderr).not.toHaveBeenCalled();
-    expect(setExitCode).not.toHaveBeenCalled();
+    expect(requestOptional).toHaveBeenCalledOnce();
+    const passedTimeout = (requestOptional.mock.calls[0] as unknown as [unknown, unknown, { timeout: number }])[2]
+      .timeout;
+    // Observation completed instantly, so nearly the full 1000 ms should remain.
+    expect(passedTimeout).toBeGreaterThanOrEqual(900);
   });
 });
 

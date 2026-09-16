@@ -174,6 +174,12 @@ describe('applyCodexWiring', () => {
       { event: 'PreToolUse', command: 'makaio --no-launch hook handle codex PreToolUse --timeout 5000' },
       { event: 'PostToolUse', command: 'makaio --no-launch hook handle codex PostToolUse --timeout 5000' },
       { event: 'Stop', command: 'makaio --no-launch hook handle codex Stop --timeout 5000' },
+      // SubagentStart is non-blockable (context-only) → 1000 ms timeout.
+      { event: 'SubagentStart', command: 'makaio --no-launch hook handle codex SubagentStart --timeout 1000' },
+      { event: 'SubagentStop', command: 'makaio --debounce-failure hook received codex SubagentStop' },
+      { event: 'PreCompact', command: 'makaio --debounce-failure hook received codex PreCompact' },
+      { event: 'PostCompact', command: 'makaio --debounce-failure hook received codex PostCompact' },
+      { event: 'PermissionRequest', command: 'makaio --debounce-failure hook received codex PermissionRequest' },
     ];
     const settings = createMockSettings(allInstalled);
 
@@ -216,6 +222,11 @@ describe('applyCodexWiring', () => {
       { event: 'PreToolUse', command: 'makaio-dev --no-launch hook handle codex PreToolUse --timeout 5000' },
       { event: 'PostToolUse', command: 'makaio-dev --no-launch hook handle codex PostToolUse --timeout 5000' },
       { event: 'Stop', command: 'makaio-dev --no-launch hook handle codex Stop --timeout 5000' },
+      { event: 'SubagentStart', command: 'makaio-dev --no-launch hook handle codex SubagentStart --timeout 5000' },
+      { event: 'SubagentStop', command: 'makaio-dev --debounce-failure hook received codex SubagentStop' },
+      { event: 'PreCompact', command: 'makaio-dev --debounce-failure hook received codex PreCompact' },
+      { event: 'PostCompact', command: 'makaio-dev --debounce-failure hook received codex PostCompact' },
+      { event: 'PermissionRequest', command: 'makaio-dev --debounce-failure hook received codex PermissionRequest' },
     ];
 
     // Shared call log to assert removeHook precedes addHook for each event.

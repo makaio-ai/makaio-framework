@@ -448,6 +448,10 @@ export function compareFixtures(params: { recorded: ScenarioFixture; committed: 
     diffs.push(`Exit code changed: recorded ${String(recorded.exitCode)} vs committed ${String(committed.exitCode)}`);
   }
 
+  if (recorded.terminal !== committed.terminal) {
+    diffs.push(`Terminal result changed: recorded "${recorded.terminal}" vs committed "${committed.terminal}"`);
+  }
+
   if (recorded.oraclePassed !== committed.oraclePassed) {
     diffs.push(
       `Oracle result changed: recorded ${String(recorded.oraclePassed)} vs committed ${String(committed.oraclePassed)}`,

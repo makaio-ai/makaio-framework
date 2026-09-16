@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 4,
+  "provider": "codex",
+  "cliVersion": "0.144.1",
+  "scenarioId": "permission-request-observation",
+  "events": [],
+  "oracle": "unobserved",
+  "oraclePassed": true,
+  "exitCode": 0,
+  "terminal": "ok"
+}

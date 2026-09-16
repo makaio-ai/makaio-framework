@@ -48,6 +48,7 @@ import { BaseService } from '@makaio/service-base';
 import { CodexClientSettings } from './client-settings.js';
 import { handleCodexConfigPrime } from './config-prime-handler.js';
 import { normalizeCodexHook } from './hook-normalizer.js';
+import type { CodexNormalizedEvent } from './hook-normalizer.js';
 import { composeCodexHookResponse } from './hook-response-composer.js';
 import { codexProviderContractCatalog } from './hook-response-contracts.js';
 import { CodexClientSubjects } from './namespace.js';
@@ -67,6 +68,38 @@ const CLIENT_ID = 'codex';
  * one is inserted.
  */
 export const MANAGED_SESSION_CAP = 10_000;
+
+/**
+ * Set of `client.session.*` subjects that the `codex-app-server` adapter
+ * emits for adapter-managed sessions.
+ *
+ * Derived from
+ * `adapters/implementations/codex-app-server/src/agent.ts`
+ * (lines 178, 186, 195, 217, 338, 383, 411, 438, 473, 495).
+ *
+ * When both the native-hook ingress and the adapter path are active for the
+ * same session, only these subjects are suppressed by
+ * {@link CodexClientSessionService.handleHookReceived} — the adapter already
+ * owns their canonical emission.  Hook-only subjects that have no adapter
+ * equivalent (`subagent.started`, `subagent.completed`, `compaction.pre`)
+ * are NOT in this set and must always be forwarded even for managed sessions.
+ *
+ * `client.session.started` is in this set (the adapter emits it once at thread
+ * start), but the gate exempts it when `startMode` is `'compact'` or `'clear'`.
+ * The reason: the adapter emits `session.started` only once — at thread start,
+ * without a `startMode` — and never again for compaction or clear restarts.
+ * Those transitions happen inside the running thread, so the hook-derived
+ * `session.started{startMode:'compact'|'clear'}` is the sole signal for them
+ * and must always be forwarded even for adapter-managed sessions.
+ */
+const ADAPTER_EMITTED_SUBJECTS: ReadonlySet<object> = new Set([
+  ClientSubjects.session.started,
+  ClientSubjects.session.turn.started,
+  ClientSubjects.session.turn.completed,
+  ClientSubjects.session.userPrompt.submitted,
+  ClientSubjects.session.tool.pre,
+  ClientSubjects.session.tool.post,
+]);
 
 /**
  * Service that normalizes raw Codex hook events into global
@@ -391,42 +424,120 @@ export class CodexClientSessionService extends BaseService {
   }
 
   /**
-   * Translate a raw Codex hook event into a normalized `client.session.*` emission.
+   * Translate a raw Codex hook event into normalized `client.session.*` emissions.
    *
    * Unknown / Codex-specific events produce no emission and are silently
    * ignored. The raw event remains observable on `client:codex.*` for
    * consumers that need Codex-native detail.
+   *
+   * One raw hook may produce multiple normalized events (e.g. `UserPromptSubmit`
+   * yields `turn.started` then `userPrompt.submitted`). Events are emitted in
+   * the order returned by the normalizer.
    * @param raw - Raw hook payload delivered on `client:codex.hook.received`
    */
   private async handleHookReceived(raw: Parameters<typeof normalizeCodexHook>[0]): Promise<void> {
-    const normalized = normalizeCodexHook(raw, this.machineId);
-    if (normalized === null) return;
+    const events = normalizeCodexHook(raw, this.machineId);
 
-    if (this.isAdapterManagedSession(normalized.payload.adapterSessionId)) {
-      // The adapter path owns the complete normalized client.session.* surface
-      // for this session. Native hooks remain observable in client:codex.*, but
-      // forwarding them globally would duplicate downstream session semantics.
-      return;
+    // Diagnostic: warn when a SubagentStart/SubagentStop produces no events.
+    // The normalizer silently drops these hooks when agent_id is absent; this
+    // warning makes the drop visible without requiring a change to the normalizer.
+    if (events.length === 0 && (raw.eventName === 'SubagentStart' || raw.eventName === 'SubagentStop')) {
+      console.warn(
+        `[CodexClientSessionService] ${raw.eventName} hook produced no normalized events — agent_id is likely absent. The hook remains raw-only on client:codex.*.`,
+      );
     }
 
-    switch (normalized.subject) {
-      case ClientSubjects.session.started:
-        await this.bus.emit(ClientSubjects.session.started, normalized.payload);
-        break;
-      case ClientSubjects.session.userPrompt.submitted:
-        await this.bus.emit(ClientSubjects.session.userPrompt.submitted, normalized.payload);
-        break;
-      case ClientSubjects.session.turn.completed:
-        await this.bus.emit(ClientSubjects.session.turn.completed, normalized.payload);
-        break;
-      case ClientSubjects.session.tool.pre:
-        await this.bus.emit(ClientSubjects.session.tool.pre, normalized.payload);
-        break;
-      case ClientSubjects.session.tool.post:
-        await this.bus.emit(ClientSubjects.session.tool.post, normalized.payload);
-        break;
-      default:
-        throwUnhandledNormalizedEvent(normalized);
+    // Evaluate the adapter-managed gate ONCE per raw hook: all events produced
+    // by normalizeCodexHook share the same adapterSessionId, and evaluating
+    // inside the loop after awaited emits risks TOCTOU — a client.runtime.started
+    // handler fired between turn.started and userPrompt.submitted would cause
+    // the latter to be suppressed while the former was already forwarded.
+    const sharedAdapterSessionId = events[0]?.payload.adapterSessionId;
+    const isManagedSession = this.isAdapterManagedSession(sharedAdapterSessionId);
+
+    let firstError: unknown;
+
+    for (const normalized of events) {
+      // Adapter-managed gate per subject: suppress only the subjects that the
+      // adapter emits (ADAPTER_EMITTED_SUBJECTS). Hook-only subjects
+      // (subagent.started, subagent.completed, compaction.pre) have no adapter
+      // equivalent and must always be forwarded, even for managed sessions.
+      // session.started with startMode 'compact'/'clear' is also forwarded —
+      // see shouldSuppressForManagedSession for the full rule.
+      if (this.shouldSuppressForManagedSession(normalized, isManagedSession)) {
+        continue;
+      }
+
+      try {
+        switch (normalized.subject) {
+          case ClientSubjects.session.started:
+            await this.bus.emit(ClientSubjects.session.started, normalized.payload);
+            break;
+          case ClientSubjects.session.userPrompt.submitted:
+            await this.bus.emit(ClientSubjects.session.userPrompt.submitted, normalized.payload);
+            break;
+          case ClientSubjects.session.turn.started:
+            await this.bus.emit(ClientSubjects.session.turn.started, normalized.payload);
+            break;
+          case ClientSubjects.session.turn.completed:
+            await this.bus.emit(ClientSubjects.session.turn.completed, normalized.payload);
+            break;
+          case ClientSubjects.session.tool.pre:
+            await this.bus.emit(ClientSubjects.session.tool.pre, normalized.payload);
+            break;
+          case ClientSubjects.session.tool.post:
+            await this.bus.emit(ClientSubjects.session.tool.post, normalized.payload);
+            break;
+          case ClientSubjects.session.subagent.started: {
+            // Switch-case narrowing on SubjectDefinition objects requires an explicit
+            // Extract: the complex object discriminant type is not narrowed by the TS
+            // compiler, but the runtime case guard makes the Extract safe.
+            const { payload: subagentStartedPayload } = normalized as Extract<
+              CodexNormalizedEvent,
+              { subject: typeof ClientSubjects.session.subagent.started }
+            >;
+            await this.bus.emit(ClientSubjects.session.subagent.started, subagentStartedPayload);
+            break;
+          }
+          case ClientSubjects.session.subagent.completed: {
+            const { payload: subagentCompletedPayload } = normalized as Extract<
+              CodexNormalizedEvent,
+              { subject: typeof ClientSubjects.session.subagent.completed }
+            >;
+            await this.bus.emit(ClientSubjects.session.subagent.completed, subagentCompletedPayload);
+            break;
+          }
+          case ClientSubjects.session.compaction.pre: {
+            const { payload: compactionPrePayload } = normalized as Extract<
+              CodexNormalizedEvent,
+              { subject: typeof ClientSubjects.session.compaction.pre }
+            >;
+            await this.bus.emit(ClientSubjects.session.compaction.pre, compactionPrePayload);
+            break;
+          }
+          default:
+            throwUnhandledNormalizedEvent(normalized);
+        }
+      } catch (error: unknown) {
+        // Emission isolation: a throwing subscriber for one event must not prevent
+        // subsequent events from being forwarded. Order is a documented invariant
+        // (turn.started before userPrompt.submitted), so we iterate sequentially.
+        // We keep the first error and rethrow after the loop so the caller knows
+        // the emission batch was partially or fully interrupted.
+        console.warn(
+          '[CodexClientSessionService] Subscriber threw during emission of',
+          normalized.subject.subject,
+          '— continuing with next event.',
+          error,
+        );
+        if (firstError === undefined) {
+          firstError = error;
+        }
+      }
+    }
+
+    if (firstError !== undefined) {
+      throw firstError;
     }
   }
 
@@ -440,6 +551,22 @@ export class CodexClientSessionService extends BaseService {
   private isAdapterManagedSession(adapterSessionId: string | undefined): boolean {
     return adapterSessionId !== undefined && this.managedAdapterSessionIds.has(adapterSessionId);
   }
+
+  /**
+   * Returns true when a normalized event should be suppressed by the
+   * adapter-managed gate — that is, when the session is adapter-managed AND the
+   * subject is one the adapter emits AND the event is not a compaction or clear
+   * restart start (which have no adapter counterpart and must always be forwarded).
+   * @param normalized - Normalized hook event to evaluate
+   * @param isManagedSession - Whether the originating session is adapter-managed
+   * @returns True when the event should be dropped from the native-hook path
+   */
+  private shouldSuppressForManagedSession(normalized: CodexNormalizedEvent, isManagedSession: boolean): boolean {
+    if (!isManagedSession || !ADAPTER_EMITTED_SUBJECTS.has(normalized.subject)) return false;
+    if (normalized.subject !== ClientSubjects.session.started) return true;
+    const { startMode } = normalized.payload as { startMode?: string };
+    return startMode !== 'compact' && startMode !== 'clear';
+  }
 }
 
 /**
@@ -447,11 +574,13 @@ export class CodexClientSessionService extends BaseService {
  * not been updated to preserve the normalized-event contract.
  *
  * The broad parameter type is intentional — the switch operates on
- * `SubjectDefinition` subject strings rather than a discriminated union, so
- * TypeScript cannot narrow `normalized` to `never` in the default branch.
- * Compile-time exhaustiveness is enforced by the normalizer's return type
- * and the matching set of case branches above.
- * @param event - Normalized event whose subject is not emitted above
+ * `SubjectDefinition` object references rather than a discriminated string
+ * literal union, so TypeScript cannot narrow `normalized` to `never` in the
+ * default branch.  Exhaustiveness is therefore enforced at runtime by this
+ * throw, not at compile time.  When adding a new arm to the switch in
+ * {@link CodexClientSessionService.handleHookReceived}, verify that the new
+ * subject is also covered here by running the test suite.
+ * @param event - Normalized event whose subject is not handled above
  */
 function throwUnhandledNormalizedEvent(event: { readonly subject: { readonly subject: string } }): never {
   const subject = event.subject.subject;

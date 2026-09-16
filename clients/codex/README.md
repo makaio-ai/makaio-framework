@@ -48,8 +48,13 @@ is preserved without overwriting a concurrently changed canonical credential.
 | `PreToolUse` | `client.session.tool.pre` | `context.append`, `openai.codex-hook-response.block`, `openai.codex-hook-response.permission.deny`, `openai.codex-hook-response.input.update` |
 | `PostToolUse` | `client.session.tool.post` | `context.append`, `openai.codex-hook-response.block` |
 | `Stop` | `client.session.turn.completed` | `openai.codex-hook-response.block` |
+| `SubagentStart` | `client.session.subagent.started` | `context.append` |
+| `SubagentStop` | `client.session.subagent.completed` | — (observer only) |
+| `PreCompact` | `client.session.compaction.pre` | — (observer only) |
+| `PostCompact` | — (raw ingress only) | — |
+| `PermissionRequest` | — (raw ingress only) | — (response surface not yet proven) |
 
-All five events synchronously consume JSON output in the pinned upstream source tag `rust-v0.144.1`. Live CLI probes remain pending; the contract only exposes source-accepted fields.
+The first five events synchronously consume JSON output in the pinned upstream source tag `rust-v0.144.1`. `SubagentStart` through `PreCompact` are event-mode (observer or context-only). `PostCompact` and `PermissionRequest` are wired for raw ingress only and carry no declared response capabilities.
 
 ### Hook Response Contract (`openai.codex-hook-response@1`)
 

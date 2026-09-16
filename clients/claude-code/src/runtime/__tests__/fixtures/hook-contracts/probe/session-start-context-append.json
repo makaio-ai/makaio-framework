@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "provider": "claude-code",
   "cliVersion": "2.1.219",
   "scenarioId": "session-start-context-append",
@@ -33,5 +33,6 @@
   ],
   "oracle": "final-response-must-contain-marker",
   "oraclePassed": true,
-  "exitCode": 0
+  "exitCode": 0,
+  "terminal": "ok"
 }

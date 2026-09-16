@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "provider": "claude-code",
   "cliVersion": "2.1.219",
   "scenarioId": "pre-tool-use-approve",
@@ -42,5 +42,6 @@
   ],
   "oracle": "sentinel-must-allow-tool",
   "oraclePassed": true,
-  "exitCode": 1
+  "exitCode": 0,
+  "terminal": "ok"
 }

@@ -434,9 +434,17 @@ export async function runClientHookHandleCommand(
   const deadline = Date.now() + timeout;
 
   // Step 1: always attempt hook.received first (fail-open, same payload as the
-  // received command). The wait is bounded by the handle timeout so a slow
-  // observation path cannot block the native request hook indefinitely.
-  const observationCompleted = await emitHookReceivedObservation(ctx.bus, client, hookPayload, timeout);
+  // received command). The observation is given a sub-budget — at most 25 % of
+  // the handle timeout, capped at 250 ms — so a slow observation path cannot
+  // steal most of the budget on context-only hooks (which run at 1000 ms).
+  // Ordering invariant: the emit is dispatched here, before requestOptional is
+  // called below, so hook.received always precedes hook.handle on the bus even
+  // when the observation overruns its sub-budget and the await returns early.
+  // An overrunning observation leaves the emit promise running detached (fail-
+  // open) and must NOT abort the handle request; only exhausting the overall
+  // deadline (`remainingTimeout === 0`) does.
+  const observationSubBudgetMs = Math.min(Math.floor(timeout / 4), 250);
+  await emitHookReceivedObservation(ctx.bus, client, hookPayload, observationSubBudgetMs);
 
   // Step 2: best-effort runtime observation (identical to received command).
   safeEmitRuntimeObserve(ctx.bus, client, metadata);
@@ -451,7 +459,7 @@ export async function runClientHookHandleCommand(
   }
 
   const remainingTimeout = Math.max(0, deadline - Date.now());
-  if (!observationCompleted || remainingTimeout === 0) {
+  if (remainingTimeout === 0) {
     if (failClose) {
       deps.writeStderr(`[hook handle] error: timed out after ${timeout}ms before handle request.\n`);
       setExitCode(1);

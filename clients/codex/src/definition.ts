@@ -101,6 +101,10 @@ export const clientDefinition = createClientDefinition({
       },
       {
         name: 'UserPromptSubmit',
+        // `frameworkSubject` is the primary mapping registered here.
+        // The normalizer additionally derives `client.session.turn.started`
+        // before emitting `client.session.userPrompt.submitted`, giving
+        // observed sessions start-of-turn cadence without a separate hook.
         frameworkSubject: 'client.session.userPrompt.submitted',
         responseCapabilities: ['context.append', CODEX_HOOK_RESPONSE_CAPABILITIES.block],
       },
@@ -123,6 +127,38 @@ export const clientDefinition = createClientDefinition({
         name: 'Stop',
         frameworkSubject: 'client.session.turn.completed',
         responseCapabilities: [CODEX_HOOK_RESPONSE_CAPABILITIES.block],
+      },
+      {
+        name: 'SubagentStart',
+        frameworkSubject: 'client.session.subagent.started',
+        // `context.append` lands in the *subagent's* context window, not the
+        // parent's — proven live against pinned 0.144.1, see
+        // `runtime/__tests__/fixtures/hook-contracts/probe/subagent-start-context-append.json`.
+        // Subagent creation cannot be refused (`continue: false` is parsed but
+        // ignored), so no block capability is declared.
+        responseCapabilities: ['context.append'],
+      },
+      {
+        name: 'SubagentStop',
+        frameworkSubject: 'client.session.subagent.completed',
+        // Observer-only — no response capabilities.
+      },
+      {
+        name: 'PreCompact',
+        frameworkSubject: 'client.session.compaction.pre',
+        // Observer-only — no response capabilities.
+      },
+      {
+        name: 'PostCompact',
+        // No frameworkSubject: the post-compaction signal arrives via a
+        // subsequent SessionStart hook with source 'compact', mapping to
+        // startMode 'compact'. PostCompact is wired for raw ingress only.
+      },
+      {
+        name: 'PermissionRequest',
+        // No frameworkSubject: fires when Codex requests tool-use permission
+        // from the user. Raw ingress only — the response surface is not yet
+        // proven against pinned 0.144.1 source, so no capability is declared.
       },
     ],
   },

@@ -235,6 +235,39 @@ describe('buildClaudeCodeWiringList', () => {
     expect(preToolUse?.command).toContain('--timeout 5000');
     expect(preToolUse?.command).not.toContain('hook received');
   });
+
+  it('UserPromptSubmit entry uses hook handle sentinel with --timeout 1000 (context-only, non-blockable)', async () => {
+    const settings = createMockSettings();
+    const result = await buildClaudeCodeWiringList(settings, 'makaio');
+    const userPromptSubmit = result.entries.find((e) => e.name === 'UserPromptSubmit');
+    expect(userPromptSubmit).toBeDefined();
+    expect(userPromptSubmit?.command).toContain('hook handle claude-code');
+    expect(userPromptSubmit?.command).toContain('UserPromptSubmit');
+    expect(userPromptSubmit?.command).toContain('--timeout 1000');
+    expect(userPromptSubmit?.command).not.toContain('hook received');
+  });
+
+  it('SubagentStart entry uses hook handle sentinel with --timeout 1000 (context-only, non-blockable)', async () => {
+    const settings = createMockSettings();
+    const result = await buildClaudeCodeWiringList(settings, 'makaio');
+    const subagentStart = result.entries.find((e) => e.name === 'SubagentStart');
+    expect(subagentStart).toBeDefined();
+    expect(subagentStart?.command).toContain('hook handle claude-code');
+    expect(subagentStart?.command).toContain('SubagentStart');
+    expect(subagentStart?.command).toContain('--timeout 1000');
+    expect(subagentStart?.command).not.toContain('hook received');
+  });
+
+  it('PreCompact entry uses hook received sentinel with --debounce-failure', async () => {
+    const settings = createMockSettings();
+    const result = await buildClaudeCodeWiringList(settings, 'makaio');
+    const preCompact = result.entries.find((e) => e.name === 'PreCompact');
+    expect(preCompact).toBeDefined();
+    expect(preCompact?.command).toContain('--debounce-failure');
+    expect(preCompact?.command).toContain('hook received claude-code');
+    expect(preCompact?.command).toContain('PreCompact');
+    expect(preCompact?.command).not.toContain('hook handle');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -460,6 +493,19 @@ describe('applyClaudeCodeWiring', () => {
       'makaio --no-launch hook handle claude-code PreToolUse --timeout 5000',
     );
     expect(preToolUseCall![0].hook.command).not.toContain('hook received');
+  });
+
+  it('installs hook handle sentinel with --no-launch and --timeout 1000 for UserPromptSubmit (context-only)', async () => {
+    await applyClaudeCodeWiring(settings, 'user', 'makaio');
+    const calls = (settings.addHook as ReturnType<typeof vi.fn>).mock.calls as [
+      { eventName: string; hook: { command: string } },
+    ][];
+    const userPromptSubmitCall = calls.find((args) => args[0].eventName === 'UserPromptSubmit');
+    expect(userPromptSubmitCall).toBeDefined();
+    expect(userPromptSubmitCall![0].hook.command).toBe(
+      'makaio --no-launch hook handle claude-code UserPromptSubmit --timeout 1000',
+    );
+    expect(userPromptSubmitCall![0].hook.command).not.toContain('hook received');
   });
 
   it('migrates old hook received PreToolUse to hook handle on apply', async () => {
@@ -704,17 +750,18 @@ describe('applyClaudeCodeWiring', () => {
     ]);
 
     // addHook must have been called once per event with the new 'makaio' command.
-    // All 9 events from the client definition are iterated: 5 stale replacements
-    // plus 4 new events (SubagentStop, Notification, MCPServerStart, MCPServerStop).
+    // All 12 events from the client definition are iterated: 5 stale replacements
+    // plus 7 new events (SubagentStart, SubagentStop, PreCompact, PostCompact,
+    // Notification, MCPServerStart, MCPServerStop).
     const addCalls = (staleSettings.addHook as ReturnType<typeof vi.fn>).mock.calls as [
       { scope: string; eventName: string; hook: { type: string; command: string } },
     ][];
-    expect(addCalls).toHaveLength(9);
+    expect(addCalls).toHaveLength(12);
     expect(addCalls.every((args) => args[0].hook.command.startsWith('makaio '))).toBe(true);
     expect(addCalls.every((args) => !args[0].hook.command.startsWith('makaio-dev '))).toBe(true);
 
-    // All 9 hooks applied (addHook returned added=true), plus the statusline = 10.
-    expect(result.applied).toBe(10);
+    // All 12 hooks applied (addHook returned added=true), plus the statusline = 13.
+    expect(result.applied).toBe(13);
     expect(result.skipped).toBe(0);
 
     for (const eventName of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Stop']) {

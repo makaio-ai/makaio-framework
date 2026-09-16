@@ -1,0 +1,6 @@
+{
+  "hookSpecificOutput": {
+    "hookEventName": "SubagentStart",
+    "additionalContext": "fixture subagent context"
+  }
+}

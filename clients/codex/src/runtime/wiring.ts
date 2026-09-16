@@ -29,6 +29,7 @@ import {
 import { clientDefinition } from '../definition.js';
 import type { CodexClientSettings } from './client-settings.js';
 import type { CodexScope } from '../schemas/config.js';
+import { CODEX_INTERACTION_BLOCKABILITY } from './hook-response-contracts.js';
 
 /**
  * Minimal settings API required by Codex wiring helpers.
@@ -62,15 +63,27 @@ export const CODEX_HOOK_COMMAND_SENTINEL = 'hook received codex';
 /** Sentinel for synchronous Codex hook responses. */
 export const CODEX_HOOK_HANDLE_COMMAND_SENTINEL = 'hook handle codex';
 
+/**
+ * Timeout for request-mode hooks on context-only (non-blockable) interactions.
+ *
+ * `hook handle` has no `--debounce-failure`, so a down server would stall every
+ * prompt and subagent spawn for the full timeout; context-only hooks fail fast.
+ * Blockable interactions retain {@link DEFAULT_HOOK_HANDLE_TIMEOUT_MS} because
+ * those must complete before the native client can proceed.
+ */
+export const CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS = 1000;
+
 // ---------------------------------------------------------------------------
 // Derived wiring descriptors (module-scoped, computed once)
 // ---------------------------------------------------------------------------
 
 /**
- * Descriptors for all session-events hooks derived from the client definition.
+ * Descriptors for all hook events derived from the client definition.
  *
- * Only events with a defined `frameworkSubject` are included — events without
- * one are Codex-internal and do not need framework wiring.
+ * Includes every event declared in the definition's `hookEvents` array,
+ * regardless of whether it carries a `frameworkSubject`.  Events without a
+ * framework mapping (e.g. `PostCompact`) are still wired so that the raw
+ * ingress reaches the bus for Codex-specific consumers.
  */
 const SESSION_EVENTS = deriveSessionEventDescriptors(clientDefinition);
 
@@ -213,19 +226,30 @@ export async function removeCodexWiring(
 
 /**
  * Build the managed command for one capability-derived hook mode.
+ *
+ * For request-mode hooks the timeout is derived from the event's blockability:
+ * blockable interactions get {@link DEFAULT_HOOK_HANDLE_TIMEOUT_MS} (5 s);
+ * non-blockable, context-only interactions get
+ * {@link CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS} (1 s) so a down server does not
+ * stall every prompt or subagent spawn for the full duration.
  * @param makaioCommand - Makaio CLI executable.
- * @param eventName - Native Codex event name.
+ * @param eventName - Native Codex event name (used to look up blockability).
  * @param mode - Capability-derived transport mode.
  * @returns Shell-safe managed hook command.
  */
 function buildModeCommand(makaioCommand: string, eventName: string, mode: 'event' | 'request'): string {
-  return mode === 'request'
-    ? buildClientCommand(makaioCommand, [
-        '--no-launch',
-        ...CODEX_HOOK_HANDLE_COMMAND_SENTINEL.split(' '),
-        eventName,
-        '--timeout',
-        String(DEFAULT_HOOK_HANDLE_TIMEOUT_MS),
-      ])
-    : buildHookCommand(makaioCommand, CODEX_HOOK_COMMAND_SENTINEL, eventName, undefined, ['--debounce-failure']);
+  if (mode !== 'request') {
+    return buildHookCommand(makaioCommand, CODEX_HOOK_COMMAND_SENTINEL, eventName, undefined, ['--debounce-failure']);
+  }
+  const isBlockable = CODEX_INTERACTION_BLOCKABILITY.some(
+    (entry) => entry.interaction === eventName && entry.blockable,
+  );
+  const timeoutMs = isBlockable ? DEFAULT_HOOK_HANDLE_TIMEOUT_MS : CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS;
+  return buildClientCommand(makaioCommand, [
+    '--no-launch',
+    ...CODEX_HOOK_HANDLE_COMMAND_SENTINEL.split(' '),
+    eventName,
+    '--timeout',
+    String(timeoutMs),
+  ]);
 }

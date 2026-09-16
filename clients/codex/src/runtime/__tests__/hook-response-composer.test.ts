@@ -8,6 +8,7 @@ import {
   CODEX_INTERACTION_BLOCKABILITY,
   codexProviderContractCatalog,
   createCodexSessionStartBlockEffect,
+  createCodexSessionStartContextEffect,
   createCodexPostToolUseBlockEffect,
   createCodexPreToolUseBlockEffect,
   createCodexPreToolUseContextEffect,
@@ -280,6 +281,27 @@ describe('Codex hook response contract', () => {
         { eventName: 'Stop' },
       ),
     ).toContain("Unsupported Codex response effects for 'Stop'");
+  });
+
+  it('SubagentStart accepts context effects and rejects block or deny effects', () => {
+    expect(
+      codexProviderContractCatalog.validate(
+        { providerEnvelope: createCodexSessionStartContextEffect('boot hint') },
+        { eventName: 'SubagentStart' },
+      ),
+    ).toBe(true);
+    expect(
+      codexProviderContractCatalog.validate(
+        { providerEnvelope: createCodexSessionStartBlockEffect('rejected') },
+        { eventName: 'SubagentStart' },
+      ),
+    ).toContain("Unsupported Codex response effects for 'SubagentStart'");
+    expect(
+      codexProviderContractCatalog.validate(
+        { providerEnvelope: createCodexPreToolUseDenyEffect('denied') },
+        { eventName: 'SubagentStart' },
+      ),
+    ).toContain("Unsupported Codex response effects for 'SubagentStart'");
   });
 
   it.each([

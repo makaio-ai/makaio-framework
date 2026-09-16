@@ -93,6 +93,7 @@ import { clearClaudeCodeNativeCredentialsForSession } from './native-credentials
 import { buildClaudeCodeWiringList, applyClaudeCodeWiring, removeClaudeCodeWiring } from './wiring.js';
 import { claudeCodeToolResponseContract } from './hook-response-contracts.js';
 import { composeHookResponse, type ComposeHookResponseOptions } from './hook-response-composer.js';
+import { shouldSuppressForManagedSession, type NarrowedEvent } from './managed-session-gate.js';
 
 /** Stable client ID for Claude Code — used to filter `client.runtime.started` events. */
 const CLIENT_ID = 'claude-code';
@@ -598,9 +599,7 @@ export class ClaudeCodeClientService extends BaseService {
    * @param payload - `client.runtime.started` payload
    */
   private handleRuntimeStarted(payload: ClientRuntimeStarted): void {
-    if (payload.clientId !== CLIENT_ID) {
-      return;
-    }
+    if (payload.clientId !== CLIENT_ID) return;
     if (payload.source.layer === 'adapter' && payload.adapterSessionId) {
       if (this.managedAdapterSessionIds.has(payload.adapterSessionId)) {
         return;
@@ -743,8 +742,41 @@ export class ClaudeCodeClientService extends BaseService {
    * @param raw - Raw hook payload delivered on `client:claude-code.hook.received`
    */
   private async handleHookReceived(raw: Parameters<typeof normalizeClaudeCodeHook>[0]): Promise<void> {
-    for (const normalized of normalizeClaudeCodeHook(raw, this.machineId)) {
-      await this.emitNormalizedEvent(normalized);
+    const events = normalizeClaudeCodeHook(raw, this.machineId);
+
+    // Evaluate the adapter-managed gate ONCE per raw hook: all events produced
+    // by normalizeClaudeCodeHook share the same adapterSessionId, and evaluating
+    // inside the loop after awaited emits risks TOCTOU — a client.runtime.started
+    // handler fired between turn.started and userPrompt.submitted would cause
+    // the latter to be suppressed while the former was already forwarded.
+    const sharedAdapterSessionId = (events[0]?.payload as { adapterSessionId?: string } | undefined)?.adapterSessionId;
+    const isManaged = sharedAdapterSessionId !== undefined && this.managedAdapterSessionIds.has(sharedAdapterSessionId);
+
+    // Batch isolation: a throwing subscriber for one event must not prevent
+    // subsequent events from being forwarded. The two-event UserPromptSubmit
+    // contract (turn.started → userPrompt.submitted) requires both events to
+    // always be forwarded in order even when the first subscriber throws.
+    // Mirror the Codex service pattern: collect the first error, continue, rethrow.
+    let firstError: unknown;
+
+    for (const normalized of events) {
+      try {
+        await this.emitNormalizedEvent(normalized, isManaged);
+      } catch (error: unknown) {
+        console.warn(
+          '[ClaudeCodeClientService] Subscriber threw during emission of',
+          normalized.subject.subject,
+          '— continuing with next event.',
+          error,
+        );
+        if (firstError === undefined) {
+          firstError = error;
+        }
+      }
+    }
+
+    if (firstError !== undefined) {
+      throw firstError;
     }
   }
 
@@ -752,29 +784,19 @@ export class ClaudeCodeClientService extends BaseService {
    * Emit a single normalized hook event on its global `client.session.*`
    * subject.
    *
-   * `client.session.started` is suppressed when the `adapterSessionId` from
-   * the hook payload is already known to be owned by an adapter-managed runtime
-   * (see {@link handleRuntimeStarted}).  All other events — including
-   * `turn.started` and `turn.completed` — are forwarded unconditionally: tool
-   * and turn events have no adapter-path equivalent.
+   * Adapter-managed sessions suppress duplicate events via
+   * {@link shouldSuppressForManagedSession} — see that function for gate logic.
    * @param normalized - Normalized event produced by {@link normalizeClaudeCodeHook}
+   * @param isManaged - Pre-computed adapter-managed flag for this raw hook batch
    */
-  private async emitNormalizedEvent(normalized: ClaudeCodeNormalizedEvent): Promise<void> {
+  private async emitNormalizedEvent(normalized: ClaudeCodeNormalizedEvent, isManaged: boolean): Promise<void> {
+    if (shouldSuppressForManagedSession(normalized, isManaged)) {
+      return;
+    }
     switch (normalized.subject) {
-      case ClientSubjects.session.started: {
-        if (
-          normalized.payload.adapterSessionId !== undefined &&
-          this.managedAdapterSessionIds.has(normalized.payload.adapterSessionId)
-        ) {
-          // The adapter path already owns this session's client.session.started
-          // emission.  Suppress the native-hook duplicate so downstream
-          // consumers receive exactly one started event per session.
-          break;
-        }
-        const enriched = await this.enrichForkLineage(normalized.payload);
-        await this.bus.emit(ClientSubjects.session.started, enriched);
+      case ClientSubjects.session.started:
+        await this.bus.emit(ClientSubjects.session.started, await this.enrichForkLineage(normalized.payload));
         break;
-      }
       case ClientSubjects.session.userPrompt.submitted:
         await this.bus.emit(ClientSubjects.session.userPrompt.submitted, normalized.payload);
         break;
@@ -790,6 +812,21 @@ export class ClaudeCodeClientService extends BaseService {
       case ClientSubjects.session.tool.post:
         await this.bus.emit(ClientSubjects.session.tool.post, normalized.payload);
         break;
+      case ClientSubjects.session.subagent.started: {
+        const { payload } = normalized as NarrowedEvent<typeof ClientSubjects.session.subagent.started>;
+        await this.bus.emit(ClientSubjects.session.subagent.started, payload);
+        break;
+      }
+      case ClientSubjects.session.subagent.completed: {
+        const { payload } = normalized as NarrowedEvent<typeof ClientSubjects.session.subagent.completed>;
+        await this.bus.emit(ClientSubjects.session.subagent.completed, payload);
+        break;
+      }
+      case ClientSubjects.session.compaction.pre: {
+        const { payload } = normalized as NarrowedEvent<typeof ClientSubjects.session.compaction.pre>;
+        await this.bus.emit(ClientSubjects.session.compaction.pre, payload);
+        break;
+      }
       default:
         throwUnhandledNormalizedEvent(normalized);
     }

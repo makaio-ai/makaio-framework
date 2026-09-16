@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 4,
+  "provider": "claude-code",
+  "cliVersion": "2.1.219",
+  "scenarioId": "user-prompt-submit-context-append",
+  "events": [
+    {
+      "eventName": "UserPromptSubmit",
+      "frameworkSubject": "client.session.userPrompt.submitted",
+      "responseCapabilities": [
+        "context.append"
+      ],
+      "mode": "request",
+      "candidateExpectedStatus": "supported",
+      "observedStatus": "supported",
+      "sourceExpectedEffects": [
+        "context.append"
+      ],
+      "observedEffects": [
+        "context.append"
+      ],
+      "blockingCapable": false,
+      "managedCommand": "hook handle claude-code",
+      "payloadKeys": [
+        "cwd",
+        "hook_event_name",
+        "permission_mode",
+        "prompt",
+        "prompt_id",
+        "session_id",
+        "transcript_path"
+      ],
+      "sentinelInjected": true
+    }
+  ],
+  "oracle": "final-response-must-contain-marker",
+  "oraclePassed": true,
+  "exitCode": 0,
+  "terminal": "ok"
+}

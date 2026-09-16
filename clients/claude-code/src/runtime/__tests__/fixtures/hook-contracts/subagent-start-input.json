@@ -1,0 +1,9 @@
+{
+  "session_id": "fixture-session",
+  "transcript_path": null,
+  "cwd": "/workspace",
+  "hook_event_name": "SubagentStart",
+  "agent_id": "fixture-agent",
+  "agent_type": "general-purpose",
+  "prompt_id": "fixture-prompt"
+}

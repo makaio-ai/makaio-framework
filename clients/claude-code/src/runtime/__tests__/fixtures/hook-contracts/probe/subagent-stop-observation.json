@@ -1,11 +1,12 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "provider": "claude-code",
   "cliVersion": "2.1.219",
   "scenarioId": "subagent-stop-observation",
   "events": [
     {
       "eventName": "SubagentStop",
+      "frameworkSubject": "client.session.subagent.completed",
       "responseCapabilities": [],
       "mode": "event",
       "candidateExpectedStatus": "unobserved",
@@ -33,7 +34,8 @@
       "sentinelInjected": false
     }
   ],
-  "oracle": "unobserved",
+  "oracle": "capture-only",
   "oraclePassed": true,
-  "exitCode": 1
+  "exitCode": 0,
+  "terminal": "ok"
 }
