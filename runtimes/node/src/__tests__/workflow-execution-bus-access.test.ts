@@ -378,6 +378,26 @@ describe('workflow execution bus access', () => {
       }
     });
 
+    it('mintOrRotateWorkflowExecutionBusSecret reflects allowedMessageSubjects on first mint and preserves them through rotation', () => {
+      const executionAttemptId = 'attempt-mint-or-rotate-extended';
+      const executionId = 'exec-mint-or-rotate-extended';
+
+      // First call: mint with an explicit subject list — it REPLACES the default, not merges with it.
+      mintOrRotateWorkflowExecutionBusSecret({
+        executionAttemptId,
+        executionId,
+        allowedMessageSubjects: ['agent.started', 'execution-attempt.runtime.register'],
+      });
+
+      const afterMint = resolveHmacIdentityAllowedMessageSubjects(executionAttemptId);
+      expect(afterMint).toEqual(new Set(['agent.started', 'execution-attempt.runtime.register']));
+
+      // Second call: rotate — peer metadata (including allowedMessageSubjects) is preserved exactly.
+      mintOrRotateWorkflowExecutionBusSecret({ executionAttemptId, executionId });
+      const afterRotate = resolveHmacIdentityAllowedMessageSubjects(executionAttemptId);
+      expect(afterRotate).toEqual(new Set(['agent.started', 'execution-attempt.runtime.register']));
+    });
+
     it('keeps selected-artifact reads and existing writes limited to explicit operations', () => {
       mintWorkflowExecutionBusSecret({
         executionAttemptId: 'attempt-artifact-read',
