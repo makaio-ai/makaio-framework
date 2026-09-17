@@ -11,7 +11,8 @@
  * mode (from `responseCapabilities`):
  * - empty capabilities → `${makaioCommand} hook received claude-code ${eventName}`
  * - non-empty capabilities, blockable interaction → `${makaioCommand} --no-launch hook handle claude-code ${eventName} --timeout 5000`
- * - non-empty capabilities, non-blockable (context-only) interaction → `${makaioCommand} --no-launch hook handle claude-code ${eventName} --timeout 1000`
+ * - non-empty capabilities, non-blockable session-boundary interaction (`SessionStart`) → `${makaioCommand} --no-launch hook handle claude-code ${eventName} --timeout 5000`
+ * - non-empty capabilities, non-blockable per-prompt/per-subagent interaction (`UserPromptSubmit`, `SubagentStart`) → `${makaioCommand} --no-launch hook handle claude-code ${eventName} --timeout 1000`
  *
  * The command sentinels `'hook received claude-code'` and
  * `'hook handle claude-code'` are used for removal and installation detection.
@@ -69,12 +70,16 @@ export interface ClaudeCodeWiringSettings {
 // ---------------------------------------------------------------------------
 
 /**
- * Timeout for request-mode hooks on context-only (non-blockable) interactions.
+ * Timeout for request-mode hooks on per-prompt and per-subagent context-only
+ * (non-blockable) interactions.
  *
  * `hook handle` has no `--debounce-failure`, so a down server would stall every
- * prompt and subagent spawn for the full timeout; context-only hooks fail fast.
- * Blockable interactions (PreToolUse) retain {@link DEFAULT_HOOK_HANDLE_TIMEOUT_MS}
- * because those must complete before the native client can proceed.
+ * prompt and subagent spawn for the full timeout; per-prompt and per-subagent
+ * context-only hooks fail fast.  Blockable interactions (PreToolUse) retain
+ * {@link DEFAULT_HOOK_HANDLE_TIMEOUT_MS} because those must complete before the
+ * native client can proceed.  Session-boundary events (see
+ * {@link SESSION_BOUNDARY_EVENT_NAMES}) keep the default timeout as an explicit
+ * trade-off, not because they are rare enough to be free.
  *
  * Note: this budget is shared with the `hook.received` observation emitted at
  * the start of each handle call. `runClientHookHandleCommand` bounds that
@@ -82,6 +87,23 @@ export interface ClaudeCodeWiringSettings {
  * handle round-trip keeps the remaining time even when the observation is slow.
  */
 export const CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS = 1000;
+
+/**
+ * Hook events that fire at session boundaries rather than per prompt or per
+ * subagent.
+ *
+ * `SessionStart` fires at startup, resume, clear and after every compaction
+ * (compaction produces a subsequent `SessionStart` with `source: 'compact'`, see
+ * `definition.ts`), so it is not a once-per-session event.  It is exempt from
+ * {@link CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS} as a deliberate trade-off: it is the
+ * event through which consumers deliver session context, and their contributors
+ * (repository lookups, knowledge catalogs) routinely need more than one second.
+ * Boundaries are rare relative to prompts and subagent spawns, so the cost of
+ * this choice is a stall of up to {@link DEFAULT_HOOK_HANDLE_TIMEOUT_MS} per
+ * boundary while the server is down, instead of a discarded context on every
+ * healthy boundary.
+ */
+const SESSION_BOUNDARY_EVENT_NAMES: ReadonlySet<string> = new Set(['SessionStart']);
 
 /**
  * Descriptors for all hook events derived from the client definition.
@@ -115,19 +137,26 @@ interface HookDescriptor {
  * - `'event'` — fire-and-forget; uses `HOOK_COMMAND_SENTINEL` with
  *   `--debounce-failure` as a root flag and no trailing flags.
  * - `'request'` — request/response; uses `HOOK_HANDLE_COMMAND_SENTINEL` with
- *   `--no-launch` as a root flag.  The timeout is derived from the event's
- *   blockability: blockable interactions get {@link DEFAULT_HOOK_HANDLE_TIMEOUT_MS}
- *   (5 s); non-blockable, context-only interactions get
+ *   `--no-launch` as a root flag.  The timeout is derived from two criteria:
+ *   blockable interactions get {@link DEFAULT_HOOK_HANDLE_TIMEOUT_MS} (5 s);
+ *   non-blockable session-boundary events (`SessionStart`) also get
+ *   {@link DEFAULT_HOOK_HANDLE_TIMEOUT_MS}, see {@link SESSION_BOUNDARY_EVENT_NAMES}
+ *   for the trade-off; non-blockable per-prompt and per-subagent events
+ *   (`UserPromptSubmit`, `SubagentStart`) get
  *   {@link CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS} (1 s) so a down server does not
  *   stall every prompt or subagent spawn for the full duration.
  * @param mode - Hook interaction mode from the event descriptor.
- * @param eventName - Native hook event name, used to look up blockability.
+ * @param eventName - Native hook event name, used to look up blockability and
+ *   session-boundary membership.
  * @returns Sentinel, root flags inserted before the sentinel, and trailing flags
  *   appended after the event name.
  */
 function resolveHookDescriptor(mode: 'event' | 'request', eventName: string): HookDescriptor {
   if (mode === 'request') {
-    const timeoutMs = rendersDecision(eventName) ? DEFAULT_HOOK_HANDLE_TIMEOUT_MS : CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS;
+    const timeoutMs =
+      rendersDecision(eventName) || SESSION_BOUNDARY_EVENT_NAMES.has(eventName)
+        ? DEFAULT_HOOK_HANDLE_TIMEOUT_MS
+        : CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS;
     return {
       sentinel: HOOK_HANDLE_COMMAND_SENTINEL,
       rootFlags: ['--no-launch'],
@@ -147,7 +176,8 @@ function resolveHookDescriptor(mode: 'event' | 'request', eventName: string): Ho
  *
  * - `'event'` mode produces: `[envPairs...] makaioCommand --debounce-failure hook received claude-code eventName`
  * - `'request'` mode, blockable → `[envPairs...] makaioCommand --no-launch hook handle claude-code eventName --timeout 5000`
- * - `'request'` mode, non-blockable → `[envPairs...] makaioCommand --no-launch hook handle claude-code eventName --timeout 1000`
+ * - `'request'` mode, non-blockable session boundary (`SessionStart`) → `[envPairs...] makaioCommand --no-launch hook handle claude-code eventName --timeout 5000`
+ * - `'request'` mode, non-blockable per-prompt/per-subagent → `[envPairs...] makaioCommand --no-launch hook handle claude-code eventName --timeout 1000`
  * @param makaioCommand - Makaio CLI binary name or path.
  * @param mode - Hook interaction mode from the event descriptor.
  * @param eventName - Native hook event name (used to look up blockability for timeout derivation).

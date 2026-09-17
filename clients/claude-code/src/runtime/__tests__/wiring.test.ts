@@ -236,6 +236,19 @@ describe('buildClaudeCodeWiringList', () => {
     expect(preToolUse?.command).not.toContain('hook received');
   });
 
+  it('SessionStart entry uses hook handle sentinel with --timeout 5000 (session boundary, non-blockable)', async () => {
+    const settings = createMockSettings();
+    const result = await buildClaudeCodeWiringList(settings, 'makaio');
+    const sessionStart = result.entries.find((e) => e.name === 'SessionStart');
+    expect(sessionStart).toBeDefined();
+    expect(sessionStart?.command).toContain('--no-launch');
+    expect(sessionStart?.command).toContain('hook handle claude-code');
+    expect(sessionStart?.command).toContain('SessionStart');
+    expect(sessionStart?.command).toContain('--timeout 5000');
+    expect(sessionStart?.command).not.toContain('hook received');
+    expect(sessionStart?.command).not.toContain('--timeout 1000');
+  });
+
   it('UserPromptSubmit entry uses hook handle sentinel with --timeout 1000 (context-only, non-blockable)', async () => {
     const settings = createMockSettings();
     const result = await buildClaudeCodeWiringList(settings, 'makaio');
@@ -493,6 +506,20 @@ describe('applyClaudeCodeWiring', () => {
       'makaio --no-launch hook handle claude-code PreToolUse --timeout 5000',
     );
     expect(preToolUseCall![0].hook.command).not.toContain('hook received');
+  });
+
+  it('installs hook handle sentinel with --no-launch and --timeout 5000 for SessionStart (session boundary)', async () => {
+    await applyClaudeCodeWiring(settings, 'user', 'makaio');
+    const calls = (settings.addHook as ReturnType<typeof vi.fn>).mock.calls as [
+      { eventName: string; hook: { command: string } },
+    ][];
+    const sessionStartCall = calls.find((args) => args[0].eventName === 'SessionStart');
+    expect(sessionStartCall).toBeDefined();
+    expect(sessionStartCall![0].hook.command).toBe(
+      'makaio --no-launch hook handle claude-code SessionStart --timeout 5000',
+    );
+    expect(sessionStartCall![0].hook.command).not.toContain('hook received');
+    expect(sessionStartCall![0].hook.command).not.toContain('--timeout 1000');
   });
 
   it('installs hook handle sentinel with --no-launch and --timeout 1000 for UserPromptSubmit (context-only)', async () => {

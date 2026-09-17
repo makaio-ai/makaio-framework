@@ -57,8 +57,13 @@ for that event — an existing `observer-only` capture is not counter-evidence.
   `makaio hook handle claude-code` for events with capabilities and
   `makaio hook received claude-code` for events without.
 - Blockable interactions (`PreToolUse`) use a 5000 ms handle timeout
-  (`DEFAULT_HOOK_HANDLE_TIMEOUT_MS`). Context-only, non-blockable interactions
-  (`SessionStart`, `UserPromptSubmit`, `SubagentStart`) use a 1000 ms timeout
+  (`DEFAULT_HOOK_HANDLE_TIMEOUT_MS`). `SessionStart` is non-blockable but also
+  uses 5000 ms as an explicit trade-off: it fires at session boundaries
+  (startup, resume, clear, and after every compaction), it is the event through
+  which consumers deliver session context, and those contributors routinely need
+  more than one second. The cost is a stall of up to 5 s per boundary while the
+  server is down. Per-prompt and per-subagent context-only interactions
+  (`UserPromptSubmit`, `SubagentStart`) use a 1000 ms timeout
   (`CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS`) so a down server does not stall every
   prompt or subagent spawn for the full duration.
 - `SessionStart` carries `context.append` only. It contributes context to a
