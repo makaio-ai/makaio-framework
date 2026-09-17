@@ -1,7 +1,12 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { shouldSuppressWarning, recordWarningShown } from './warning-debounce.js';
+import {
+  shouldSuppressWarning,
+  shouldSuppressHookCoolDown,
+  recordWarningShown,
+  recordHookCoolDown,
+} from './warning-debounce.js';
 
 describe('warning-debounce', () => {
   let tmpHome: string;
@@ -57,6 +62,40 @@ describe('warning-debounce', () => {
       recordWarningShown(tmpHome, '/project/a');
       expect(shouldSuppressWarning(tmpHome, '/project/a')).toBe(true);
       expect(shouldSuppressWarning(tmpHome, '/project/b')).toBe(false);
+    });
+
+    it('returns false when lastWarnedAt is in the future (backwards clock step)', () => {
+      // Write a cache file with a timestamp one minute ahead of now.
+      recordWarningShown(tmpHome, cwd);
+      const cacheDir = path.join(tmpHome, 'cache', 'cli-warnings');
+      const files = fs.readdirSync(cacheDir);
+      const filePath = path.join(cacheDir, files[0]!);
+      fs.writeFileSync(filePath, JSON.stringify({ lastWarnedAt: Date.now() + 60_000 }));
+
+      expect(shouldSuppressWarning(tmpHome, cwd)).toBe(false);
+    });
+  });
+
+  describe('shouldSuppressHookCoolDown', () => {
+    const hookKey = '/some/project/dir\nws://127.0.0.1:6252/bus';
+
+    it('returns false when no cache file exists', () => {
+      expect(shouldSuppressHookCoolDown(tmpHome, hookKey)).toBe(false);
+    });
+
+    it('returns true when cool-down was recorded recently', () => {
+      recordHookCoolDown(tmpHome, hookKey);
+      expect(shouldSuppressHookCoolDown(tmpHome, hookKey)).toBe(true);
+    });
+
+    it('returns false when lastWarnedAt is in the future (backwards clock step)', () => {
+      recordHookCoolDown(tmpHome, hookKey);
+      const cacheDir = path.join(tmpHome, 'cache', 'cli-warnings');
+      const files = fs.readdirSync(cacheDir).filter((f) => f.endsWith('.hook.json'));
+      const filePath = path.join(cacheDir, files[0]!);
+      fs.writeFileSync(filePath, JSON.stringify({ lastWarnedAt: Date.now() + 60_000 }));
+
+      expect(shouldSuppressHookCoolDown(tmpHome, hookKey)).toBe(false);
     });
   });
 

@@ -66,8 +66,10 @@ export const CODEX_HOOK_HANDLE_COMMAND_SENTINEL = 'hook handle codex';
 /**
  * Timeout for request-mode hooks on context-only (non-blockable) interactions.
  *
- * `hook handle` has no `--debounce-failure`, so a down server would stall every
- * prompt and subagent spawn for the full timeout; context-only hooks fail fast.
+ * Request-mode hooks carry `--debounce-failure`, so a down server is detected
+ * quickly and cool-down suppression kicks in for subsequent invocations.
+ * Context-only hooks still fail fast (1 s) to bound the overhead on each prompt
+ * or subagent spawn when the bus is genuinely unreachable.
  * Blockable interactions retain {@link DEFAULT_HOOK_HANDLE_TIMEOUT_MS} because
  * those must complete before the native client can proceed.
  */
@@ -247,6 +249,7 @@ function buildModeCommand(makaioCommand: string, eventName: string, mode: 'event
   const timeoutMs = isBlockable ? DEFAULT_HOOK_HANDLE_TIMEOUT_MS : CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS;
   return buildClientCommand(makaioCommand, [
     '--no-launch',
+    '--debounce-failure',
     ...CODEX_HOOK_HANDLE_COMMAND_SENTINEL.split(' '),
     eventName,
     '--timeout',

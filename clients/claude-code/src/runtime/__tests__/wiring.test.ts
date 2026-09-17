@@ -224,12 +224,13 @@ describe('buildClaudeCodeWiringList', () => {
     expect(hookEntries.every((e) => e.name !== 'statusline')).toBe(true);
   });
 
-  it('PreToolUse entry uses hook handle sentinel with --no-launch and --timeout 5000', async () => {
+  it('PreToolUse entry uses hook handle sentinel with --no-launch, --debounce-failure and --timeout 5000', async () => {
     const settings = createMockSettings();
     const result = await buildClaudeCodeWiringList(settings, 'makaio');
     const preToolUse = result.entries.find((e) => e.name === 'PreToolUse');
     expect(preToolUse).toBeDefined();
     expect(preToolUse?.command).toContain('--no-launch');
+    expect(preToolUse?.command).toContain('--debounce-failure');
     expect(preToolUse?.command).toContain('hook handle claude-code');
     expect(preToolUse?.command).toContain('PreToolUse');
     expect(preToolUse?.command).toContain('--timeout 5000');
@@ -503,7 +504,7 @@ describe('applyClaudeCodeWiring', () => {
     const preToolUseCall = calls.find((args) => args[0].eventName === 'PreToolUse');
     expect(preToolUseCall).toBeDefined();
     expect(preToolUseCall![0].hook.command).toBe(
-      'makaio --no-launch hook handle claude-code PreToolUse --timeout 5000',
+      'makaio --no-launch --debounce-failure hook handle claude-code PreToolUse --timeout 5000',
     );
     expect(preToolUseCall![0].hook.command).not.toContain('hook received');
   });
@@ -516,7 +517,7 @@ describe('applyClaudeCodeWiring', () => {
     const sessionStartCall = calls.find((args) => args[0].eventName === 'SessionStart');
     expect(sessionStartCall).toBeDefined();
     expect(sessionStartCall![0].hook.command).toBe(
-      'makaio --no-launch hook handle claude-code SessionStart --timeout 5000',
+      'makaio --no-launch --debounce-failure hook handle claude-code SessionStart --timeout 5000',
     );
     expect(sessionStartCall![0].hook.command).not.toContain('hook received');
     expect(sessionStartCall![0].hook.command).not.toContain('--timeout 1000');
@@ -530,7 +531,7 @@ describe('applyClaudeCodeWiring', () => {
     const userPromptSubmitCall = calls.find((args) => args[0].eventName === 'UserPromptSubmit');
     expect(userPromptSubmitCall).toBeDefined();
     expect(userPromptSubmitCall![0].hook.command).toBe(
-      'makaio --no-launch hook handle claude-code UserPromptSubmit --timeout 1000',
+      'makaio --no-launch --debounce-failure hook handle claude-code UserPromptSubmit --timeout 1000',
     );
     expect(userPromptSubmitCall![0].hook.command).not.toContain('hook received');
   });
@@ -583,7 +584,9 @@ describe('applyClaudeCodeWiring', () => {
     // Then the new 'hook handle' entry is installed.
     const addEntry = callLog.find((e) => e.op === 'add' && e.eventName === 'PreToolUse');
     expect(addEntry).toBeDefined();
-    expect(addEntry!.detail).toBe('makaio --no-launch hook handle claude-code PreToolUse --timeout 5000');
+    expect(addEntry!.detail).toBe(
+      'makaio --no-launch --debounce-failure hook handle claude-code PreToolUse --timeout 5000',
+    );
     expect(addEntry!.detail).not.toContain('hook received');
 
     // Remove must precede add for PreToolUse.
@@ -643,7 +646,9 @@ describe('applyClaudeCodeWiring', () => {
 
     const addEntry = callLog.find((e) => e.op === 'add' && e.eventName === 'PreToolUse');
     expect(addEntry).toBeDefined();
-    expect(addEntry!.detail).toBe('makaio --no-launch hook handle claude-code PreToolUse --timeout 5000');
+    expect(addEntry!.detail).toBe(
+      'makaio --no-launch --debounce-failure hook handle claude-code PreToolUse --timeout 5000',
+    );
 
     const removeIdx = callLog.indexOf(removeEntries[1]);
     const addIdx = callLog.indexOf(addEntry!);
@@ -651,7 +656,7 @@ describe('applyClaudeCodeWiring', () => {
   });
 
   it('removes stale PreToolUse alternate when the current hook handle entry already exists', async () => {
-    const currentCommand = 'makaio --no-launch hook handle claude-code PreToolUse --timeout 5000';
+    const currentCommand = 'makaio --no-launch --debounce-failure hook handle claude-code PreToolUse --timeout 5000';
     const staleCommand = 'makaio hook received claude-code PreToolUse';
     const configDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-code-wiring-coexist-'));
     try {
@@ -798,6 +803,59 @@ describe('applyClaudeCodeWiring', () => {
       expect(addIdx).toBeGreaterThanOrEqual(0);
       expect(removeIdx).toBeLessThan(addIdx);
     }
+  });
+
+  it('replaces a request-mode entry installed without --debounce-failure (upgrade from previous version)', async () => {
+    // Simulate a PreToolUse entry written by the previous version that lacks the flag.
+    const oldCommand = 'makaio --no-launch hook handle claude-code PreToolUse --timeout 5000';
+    const callLog: Array<{ op: 'remove' | 'add'; eventName: string; detail: string }> = [];
+
+    const upgradeSettings: ClaudeCodeWiringSettings = {
+      listHooks: vi.fn().mockResolvedValue({
+        effective: {},
+        perScope: [
+          {
+            scope: 'user' as const,
+            path: '/home/.claude/settings.json',
+            events: {
+              PreToolUse: [{ hooks: [{ type: 'command' as const, command: oldCommand }] }],
+            },
+          },
+        ],
+      }),
+      addHook: vi.fn().mockImplementation(async (req: { eventName: string; hook: { command: string } }) => {
+        callLog.push({ op: 'add', eventName: req.eventName, detail: req.hook.command });
+        return { added: true };
+      }),
+      removeHook: vi.fn().mockImplementation(async (req: { eventName: string; match: { commandContains: string } }) => {
+        callLog.push({ op: 'remove', eventName: req.eventName, detail: req.match.commandContains });
+        return { removed: 1 };
+      }),
+      listStatusline: vi.fn().mockResolvedValue({ effective: null, perScope: [] }),
+      setStatusline: vi
+        .fn()
+        .mockResolvedValue({ previous: null, applied: { type: 'command', command: 'makaio claude statusline' } }),
+      removeStatusline: vi.fn().mockResolvedValue({ previous: null, removed: false }),
+      setSkipDangerousModePermissionPrompt: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await applyClaudeCodeWiring(upgradeSettings, 'user', 'makaio');
+
+    // The stale entry must be removed — sentinel detection finds it via 'hook handle claude-code'.
+    const removeEntry = callLog.find((e) => e.op === 'remove' && e.eventName === 'PreToolUse');
+    expect(removeEntry).toBeDefined();
+    expect(removeEntry!.detail).toContain('hook handle claude-code');
+
+    // A fresh entry with --debounce-failure must be installed in its place.
+    const addEntry = callLog.find((e) => e.op === 'add' && e.eventName === 'PreToolUse');
+    expect(addEntry).toBeDefined();
+    expect(addEntry!.detail).toContain('--debounce-failure');
+    expect(addEntry!.detail).toContain('hook handle claude-code PreToolUse');
+
+    // Remove must precede add.
+    const removeIdx = callLog.indexOf(removeEntry!);
+    const addIdx = callLog.indexOf(addEntry!);
+    expect(removeIdx).toBeLessThan(addIdx);
   });
 });
 

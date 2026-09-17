@@ -81,28 +81,88 @@ export function deriveHealthUrl(wsUrl: string): string {
 }
 
 /**
+ * Transport error codes that mean the peer explicitly refused the credentials.
+ *
+ * Mirrors the classification the WebSocket server applies to itself: in
+ * `transports/ws/src/server-client-setup.ts` exactly these two codes are the
+ * "explicitly classified rejection" that closes the socket with 1008
+ * ("Authentication failed"); every other code is a lifecycle failure closed
+ * with 1011. Codes such as `WS_CONNECTION_UNAVAILABLE` (socket dropped mid
+ * handshake) and `WS_HANDSHAKE_TIMEOUT` (challenge/response/result timed out)
+ * carry the word "authentication" in their diagnostic text but describe a
+ * transport problem, not a credential problem.
+ */
+const AUTH_TRANSPORT_ERROR_CODES: ReadonlySet<string> = new Set(['WS_AUTHENTICATION_REJECTED', 'WS_POLICY_REJECTED']);
+
+/**
+ * Maximum `cause` links walked while classifying a connection failure.
+ *
+ * The typed transport error is wrapped twice before CLI callers see it — once
+ * by `bus.connect()` and once by {@link connectBusClient} — so a one-level
+ * lookup would miss the code.
+ */
+const MAX_CAUSE_DEPTH = 8;
+
+/** Keyword fallback for untyped failures that carry no machine-readable code. */
+const AUTH_MESSAGE_PATTERN = /\b(401|403|auth|unauthori[sz]ed|forbidden|credential|secret)\b/i;
+
+/** How a connection failure is classified once a machine-readable code is found. */
+type ConnectionFailureClass = 'auth' | 'transport';
+
+/**
+ * Classify a connection failure by its machine-readable code, walking the
+ * `cause` chain until one is found.
+ * @param error - Unknown connection failure, possibly wrapped.
+ * @returns The classification, or `undefined` when no known code is present.
+ */
+function classifyConnectionFailureByCode(error: unknown): ConnectionFailureClass | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth < MAX_CAUSE_DEPTH; depth += 1) {
+    if (!current || typeof current !== 'object') return undefined;
+    const meta = current as { code?: unknown; status?: unknown; cause?: unknown };
+    if (meta.code === 401 || meta.code === 403 || meta.status === 401 || meta.status === 403) {
+      return 'auth';
+    }
+    if (typeof meta.code === 'string') {
+      if (AUTH_TRANSPORT_ERROR_CODES.has(meta.code)) return 'auth';
+      // Any other transport-typed code is a lifecycle failure, never auth.
+      if (meta.code.startsWith('WS_')) return 'transport';
+    }
+    current = meta.cause;
+  }
+  return undefined;
+}
+
+/**
+ * Read the human-readable message of an unknown failure value.
+ * @param error - Unknown connection failure.
+ * @returns The message string, or `undefined` when there is none.
+ */
+function readFailureMessage(error: unknown): string | undefined {
+  if (typeof error === 'string') return error;
+  if (!error || typeof error !== 'object') return undefined;
+  const { message } = error as { message?: unknown };
+  return typeof message === 'string' ? message : undefined;
+}
+
+/**
  * Detect whether a bus connection error indicates authentication failure.
+ *
+ * Typed failures are classified by their code (or the code preserved on a
+ * wrapped `cause`), never by message text: the HMAC handshake's timeout and
+ * disconnect errors describe themselves as "authentication" failures while
+ * being pure transport problems, and misreading them as auth would suppress
+ * the built-in hook failure cool-down for a server that is genuinely down.
+ * The keyword match is only a fallback for untyped failures.
  * @param error - Unknown connection failure.
  * @returns `true` when the failure points to missing or invalid credentials.
  */
 export function isAuthConnectionError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') {
-    if (typeof error === 'string') {
-      return /\b(401|403|auth|unauthori[sz]ed|forbidden|credential|secret)\b/i.test(error);
-    }
-    return false;
-  }
+  const classified = classifyConnectionFailureByCode(error);
+  if (classified !== undefined) return classified === 'auth';
 
-  const withMeta = error as { code?: unknown; status?: unknown; message?: unknown };
-  if (withMeta.code === 401 || withMeta.code === 403 || withMeta.status === 401 || withMeta.status === 403) {
-    return true;
-  }
-
-  if (typeof withMeta.message === 'string') {
-    return /\b(401|403|auth|unauthori[sz]ed|forbidden|credential|secret)\b/i.test(withMeta.message);
-  }
-
-  return false;
+  const message = readFailureMessage(error);
+  return message !== undefined && AUTH_MESSAGE_PATTERN.test(message);
 }
 
 /**
