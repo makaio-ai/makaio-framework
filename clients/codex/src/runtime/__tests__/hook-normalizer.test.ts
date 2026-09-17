@@ -239,6 +239,28 @@ describe('normalizeCodexHook', () => {
     });
   });
 
+  describe('SessionStart — transcriptPath', () => {
+    it('carries transcript_path through as transcriptPath', () => {
+      const result = normalizeCodexHook(
+        makeRaw('SessionStart', { session_id: 'sess-1', transcript_path: '/rollouts/sess-1.jsonl' }),
+      );
+
+      expect(result[0].payload).toMatchObject({ transcriptPath: '/rollouts/sess-1.jsonl' });
+    });
+
+    it('leaves transcriptPath absent when Codex reports null', () => {
+      const result = normalizeCodexHook(makeRaw('SessionStart', { session_id: 'sess-1', transcript_path: null }));
+
+      expect(result[0].payload).not.toHaveProperty('transcriptPath');
+    });
+
+    it('leaves transcriptPath absent when the field is missing', () => {
+      const result = normalizeCodexHook(makeRaw('SessionStart', { session_id: 'sess-1' }));
+
+      expect(result[0].payload).not.toHaveProperty('transcriptPath');
+    });
+  });
+
   describe('UserPromptSubmit — two-event emission', () => {
     it('emits turn.started payload with base fields', () => {
       const result = normalizeCodexHook(makeRaw('UserPromptSubmit', { session_id: 'sess-2' }));
