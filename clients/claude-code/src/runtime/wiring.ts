@@ -21,6 +21,21 @@
  * The command is: `${makaioCommand} claude statusline`
  *
  * The command sentinel `'claude statusline'` is used for detection and removal.
+ *
+ * **Minimum-version skip:** when the detected binary version is known and below
+ * an event's `minimumVersion`, `buildClaudeCodeWiringList` omits that event from
+ * `entries` and `applyClaudeCodeWiring` neither installs nor counts it.  An
+ * unknown version (`null`/`undefined`) wires every event as before.
+ * `removeClaudeCodeWiring` is unchanged and still removes every declared event so
+ * a downgraded binary is unwired cleanly.
+ *
+ * **Stale-hook cleanup on downgrade:** `applyClaudeCodeWiring` also removes any
+ * Makaio-managed hook that is already present in the target scope for an event
+ * that is *not* supported at the given `binaryVersion`.  This handles the case
+ * where a user switches to an older managed binary sharing the same config dir:
+ * the hook installed by the previous (newer) binary is removed rather than left
+ * as a stale entry.  The cleanup runs before the install loop and is not counted
+ * in `applied` or `skipped`.
  * @packageDocumentation
  */
 
@@ -29,6 +44,7 @@ import {
   buildClientCommand,
   DEFAULT_HOOK_HANDLE_TIMEOUT_MS,
   deriveSessionEventDescriptors,
+  isSessionEventSupported,
 } from '@makaio/subsystem-client';
 
 import { clientDefinition } from '../definition.js';
@@ -387,6 +403,78 @@ async function removeStaleHookCommands(
   });
 }
 
+/**
+ * Apply the Makaio statusline entry and report whether it was already in place.
+ *
+ * Reads the existing per-scope statusline command so a non-Makaio value can be
+ * forwarded as an `--upstream` renderer.  Uses replace semantics: if the scope
+ * already contains the identical sentinel command the write is skipped.
+ * @param settings - Settings instance scoped to the target scope.
+ * @param scope - Claude Code settings scope to write into.
+ * @param makaioCommand - Makaio CLI binary name or path.
+ * @param envPairs - Optional `KEY=value` pairs prepended before the executable.
+ * @returns `{ isSkipped: true }` when the entry was already present unchanged.
+ */
+async function applyStatuslineWiring(
+  settings: ClaudeCodeWiringSettings,
+  scope: ClaudeCodeScope,
+  makaioCommand: string,
+  envPairs?: readonly string[],
+): Promise<{ isSkipped: boolean }> {
+  const { perScope: statuslinePerScope } = await settings.listStatusline();
+  const existingScopedStatusline = statuslinePerScope.find((e) => e.scope === scope)?.value ?? null;
+  const existingStatuslineCommand =
+    existingScopedStatusline !== null && !existingScopedStatusline.command.includes(STATUSLINE_COMMAND_SENTINEL)
+      ? existingScopedStatusline.command
+      : null;
+  const statuslineCommand = buildStatuslineCommand(makaioCommand, existingStatuslineCommand ?? undefined, envPairs);
+  const statuslineResult = await settings.setStatusline({
+    scope,
+    value: { ...(existingScopedStatusline ?? {}), type: 'command', command: statuslineCommand },
+  });
+  return {
+    isSkipped: statuslineResult.previous !== null && statuslineResult.previous.command === statuslineCommand,
+  };
+}
+
+/**
+ * Remove Makaio-managed hooks for events that are not supported at the given
+ * binary version.
+ *
+ * When a binary downgrade makes a version-gated event unavailable (e.g. the
+ * user switches to an older managed binary sharing the same config dir), any
+ * previously installed hook for that event must be removed so callbacks are
+ * not triggered against an incompatible binary.  Both the primary-mode and the
+ * alternate-mode sentinels are checked and removed, mirroring the orphan-cleanup
+ * logic in the install loop.  Removals are not counted in `applied`/`skipped`
+ * because {@link ClientWiringApplyResponse} has no third counter field.
+ * @param settings - Settings instance for reading and removing hooks.
+ * @param scope - Claude Code settings scope to clean.
+ * @param scopeEvents - Per-scope events map for the target scope.
+ * @param binaryVersion - Detected binary version, or `null`/`undefined` when
+ *   unknown (unknown version → no unsupported events, no removals).
+ */
+async function removeUnsupportedEventHooks(
+  settings: ClaudeCodeWiringSettings,
+  scope: ClaudeCodeScope,
+  scopeEvents: Record<string, unknown[]>,
+  binaryVersion: string | null | undefined,
+): Promise<void> {
+  const unsupported = SESSION_EVENTS_DESCRIPTORS.filter((d) => !isSessionEventSupported(d, binaryVersion));
+  for (const { eventName, mode } of unsupported) {
+    const { sentinel: primaryBase } = resolveHookDescriptor(mode, eventName);
+    const fullPrimary = `${primaryBase} ${eventName}`;
+    const alternateBase = mode === 'request' ? HOOK_COMMAND_SENTINEL : HOOK_HANDLE_COMMAND_SENTINEL;
+    const fullAlternate = `${alternateBase} ${eventName}`;
+    if (findManagedHookCommand(scopeEvents, eventName, fullPrimary) !== null) {
+      await settings.removeHook({ scope, eventName, match: { commandContains: fullPrimary } });
+    }
+    if (findManagedHookCommand(scopeEvents, eventName, fullAlternate) !== null) {
+      await settings.removeHook({ scope, eventName, match: { commandContains: fullAlternate } });
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -403,24 +491,33 @@ async function removeStaleHookCommands(
  * The `usage-stream` group contains a single `statusline` entry whose
  * `installed` flag is `true` when the effective statusline command contains
  * the Makaio statusline sentinel.
+ *
+ * Events whose `minimumVersion` exceeds `binaryVersion` are omitted from the
+ * result when `binaryVersion` is a known string.  An unknown version
+ * (`null`/`undefined`) includes every event as before.
  * @param settings - Settings instance scoped to the target project directory.
  * @param makaioCommand - Makaio CLI binary name or path used to build the
  *   command string (e.g. `'makaio'`).
  * @param envPairs - Optional `KEY=value` pairs prepended before the executable
  *   in every generated command string.
+ * @param binaryVersion - Detected binary version, or `null`/`undefined` when
+ *   unknown (unknown version → every event is included).
  * @returns Wiring list response containing all known entries and their status.
  */
 export async function buildClaudeCodeWiringList(
   settings: ClaudeCodeWiringSettings,
   makaioCommand: string,
   envPairs?: readonly string[],
+  binaryVersion?: string | null,
 ): Promise<{ entries: ClientWiringEntry[] }> {
   const [{ effective: effectiveHooks }, { effective: effectiveStatusline }] = await Promise.all([
     settings.listHooks(),
     settings.listStatusline(),
   ]);
 
-  const entries: ClientWiringEntry[] = SESSION_EVENTS_DESCRIPTORS.map(({ eventName, mode }) => {
+  const entries: ClientWiringEntry[] = SESSION_EVENTS_DESCRIPTORS.filter((d) =>
+    isSessionEventSupported(d, binaryVersion),
+  ).map(({ eventName, mode }) => {
     const { sentinel } = resolveHookDescriptor(mode, eventName);
     const command = buildModeAwareHookCommand(makaioCommand, mode, eventName, envPairs);
     const installed = isHookInstalled(effectiveHooks, eventName, sentinel, command);
@@ -466,14 +563,19 @@ export async function buildClaudeCodeWiringList(
  * @param envPairs - Optional `KEY=value` pairs prepended before the executable
  *   in every generated command string.
  * @param options - Optional launch-related settings to persist with the wiring.
- * @returns Counts of entries applied and skipped.
+ *   `binaryVersion` skips events whose `minimumVersion` exceeds the detected
+ *   binary version and removes any previously installed Makaio-managed hook for
+ *   those events; omit or pass `null`/`undefined` to wire every event without
+ *   cleanup.
+ * @returns Counts of entries applied and skipped. Stale-hook removals are not
+ *   counted in either field.
  */
 export async function applyClaudeCodeWiring(
   settings: ClaudeCodeWiringSettings,
   scope: ClaudeCodeScope,
   makaioCommand: string,
   envPairs?: readonly string[],
-  options?: { skipDangerousModePermissionPrompt?: boolean },
+  options?: { skipDangerousModePermissionPrompt?: boolean; binaryVersion?: string | null },
 ): Promise<{ applied: number; skipped: number }> {
   let applied = 0;
   let skipped = 0;
@@ -486,10 +588,18 @@ export async function applyClaudeCodeWiring(
   const scopeRecord = perScope.find((s) => s.scope === scope);
   const scopeEvents: Record<string, unknown[]> = scopeRecord?.events ?? {};
 
+  // Remove stale managed hooks for events that the current binary version does
+  // not support. Counts are not affected — see removeUnsupportedEventHooks.
+  await removeUnsupportedEventHooks(settings, scope, scopeEvents, options?.binaryVersion);
+
+  const supportedDescriptors = SESSION_EVENTS_DESCRIPTORS.filter((d) =>
+    isSessionEventSupported(d, options?.binaryVersion),
+  );
+
   // Sequential: addHook writes to the same config file per scope, and the
   // internal mutex would serialize parallel calls anyway. Sequential keeps
   // the applied/skipped bookkeeping straightforward.
-  for (const { eventName, mode } of SESSION_EVENTS_DESCRIPTORS) {
+  for (const { eventName, mode } of supportedDescriptors) {
     const { sentinel: baseSentinel } = resolveHookDescriptor(mode, eventName);
     const sentinel = `${baseSentinel} ${eventName}`;
     const command = buildModeAwareHookCommand(makaioCommand, mode, eventName, envPairs);
@@ -534,26 +644,10 @@ export async function applyClaudeCodeWiring(
     }
   }
 
-  // Read the current per-scope statusline so we can embed an existing non-Makaio
-  // command as --upstream, preserving the previous statusline in pass-through mode.
-  const { perScope: statuslinePerScope } = await settings.listStatusline();
-  const existingScopedStatusline = statuslinePerScope.find((e) => e.scope === scope)?.value ?? null;
-  const existingStatuslineCommand =
-    existingScopedStatusline !== null && !existingScopedStatusline.command.includes(STATUSLINE_COMMAND_SENTINEL)
-      ? existingScopedStatusline.command
-      : null;
-
-  const statuslineCommand = buildStatuslineCommand(makaioCommand, existingStatuslineCommand ?? undefined, envPairs);
-
-  const statuslineResult = await settings.setStatusline({
-    scope,
-    value: { ...(existingScopedStatusline ?? {}), type: 'command', command: statuslineCommand },
-  });
-  // setStatusline is idempotent: when the previous value already contains the
-  // sentinel command the modifier returns `current` unchanged and the file is
-  // not rewritten.  We count it as applied when previous was absent or
-  // different, and as skipped when the identical command was already present.
-  if (statuslineResult.previous !== null && statuslineResult.previous.command === statuslineCommand) {
+  // Apply the statusline entry, delegating pass-through detection and idempotency
+  // to the extracted helper. See applyStatuslineWiring for the full semantics.
+  const { isSkipped: statuslineSkipped } = await applyStatuslineWiring(settings, scope, makaioCommand, envPairs);
+  if (statuslineSkipped) {
     skipped++;
   } else {
     applied++;

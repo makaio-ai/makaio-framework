@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { createClientDefinition } from '@makaio/contracts/client';
-import { buildClientCommand, buildHookCommand, deriveSessionEventDescriptors } from '../wiring-helpers.js';
+import {
+  buildClientCommand,
+  buildHookCommand,
+  deriveSessionEventDescriptors,
+  isSessionEventSupported,
+} from '../wiring-helpers.js';
 
 describe('buildClientCommand', () => {
   it('quotes the executable token when rendering non-hook client commands', () => {
@@ -90,5 +95,89 @@ describe('deriveSessionEventDescriptors', () => {
     const descriptors = deriveSessionEventDescriptors(definition);
 
     expect(descriptors).toHaveLength(0);
+  });
+
+  it('carries minimumVersion through when declared on a hook event', () => {
+    const definition = createClientDefinition({
+      id: 'test-minimum-version',
+      name: 'Test Minimum Version',
+      version: '0.1.0',
+      authMethods: [],
+      defaultApprovalPolicy: 'always-ask',
+      runtimeCapabilities: {
+        supportsHooks: true,
+        hookEvents: [{ name: 'SessionStart' }, { name: 'PostCompact', minimumVersion: '2.1.76' }],
+      },
+    });
+
+    const descriptors = deriveSessionEventDescriptors(definition);
+
+    expect(descriptors).toHaveLength(2);
+    expect(descriptors[0]).toStrictEqual({ eventName: 'SessionStart', mode: 'event' });
+    expect(descriptors[1]).toStrictEqual({
+      eventName: 'PostCompact',
+      mode: 'event',
+      minimumVersion: '2.1.76',
+    });
+  });
+
+  it('omits minimumVersion key entirely when the hook event does not declare one', () => {
+    const definition = createClientDefinition({
+      id: 'test-no-minimum-version',
+      name: 'Test No Minimum Version',
+      version: '0.1.0',
+      authMethods: [],
+      defaultApprovalPolicy: 'always-ask',
+      runtimeCapabilities: {
+        supportsHooks: true,
+        hookEvents: [{ name: 'SessionStart' }],
+      },
+    });
+
+    const [descriptor] = deriveSessionEventDescriptors(definition);
+
+    expect(Object.prototype.hasOwnProperty.call(descriptor, 'minimumVersion')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isSessionEventSupported
+// ---------------------------------------------------------------------------
+
+describe('isSessionEventSupported', () => {
+  it('returns true when minimumVersion is absent (no minimum declared)', () => {
+    expect(isSessionEventSupported({ eventName: 'SessionStart' }, '2.1.50')).toBe(true);
+  });
+
+  it('returns true when binaryVersion is null (version unknown)', () => {
+    expect(isSessionEventSupported({ eventName: 'PostCompact', minimumVersion: '2.1.76' }, null)).toBe(true);
+  });
+
+  it('returns true when binaryVersion is undefined (version unknown)', () => {
+    expect(isSessionEventSupported({ eventName: 'PostCompact', minimumVersion: '2.1.76' }, undefined)).toBe(true);
+  });
+
+  it('returns false when binaryVersion is below minimumVersion', () => {
+    expect(isSessionEventSupported({ eventName: 'PostCompact', minimumVersion: '2.1.76' }, '2.1.75')).toBe(false);
+  });
+
+  it('returns true when binaryVersion exactly equals minimumVersion', () => {
+    expect(isSessionEventSupported({ eventName: 'PostCompact', minimumVersion: '2.1.76' }, '2.1.76')).toBe(true);
+  });
+
+  it('returns true when binaryVersion is above minimumVersion (minor bump)', () => {
+    expect(isSessionEventSupported({ eventName: 'PostCompact', minimumVersion: '2.1.76' }, '2.2.0')).toBe(true);
+  });
+
+  it('returns true when binaryVersion is the literal string "unknown" (non-semver from CLI parse failure)', () => {
+    expect(isSessionEventSupported({ eventName: 'PostCompact', minimumVersion: '2.1.76' }, 'unknown')).toBe(true);
+  });
+
+  it('returns true when binaryVersion is an empty string (non-semver)', () => {
+    expect(isSessionEventSupported({ eventName: 'PostCompact', minimumVersion: '2.1.76' }, '')).toBe(true);
+  });
+
+  it('returns true when binaryVersion is a partial version "2.1" (not an exact semver)', () => {
+    expect(isSessionEventSupported({ eventName: 'PostCompact', minimumVersion: '2.1.76' }, '2.1')).toBe(true);
   });
 });

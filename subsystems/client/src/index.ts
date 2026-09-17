@@ -91,7 +91,12 @@ export { registerDrizzleRuntimeStorage } from './storage/runtime-drizzle-handler
 export { registerDrizzleProfileStorage } from './storage/profile-drizzle-handler.js';
 export { clientRuntimesDual } from './storage/runtime-schema.js';
 export { resolveClientBinary } from './resolve-client-binary.js';
-export { buildClientCommand, buildHookCommand, deriveSessionEventDescriptors } from './wiring-helpers.js';
+export {
+  buildClientCommand,
+  buildHookCommand,
+  deriveSessionEventDescriptors,
+  isSessionEventSupported,
+} from './wiring-helpers.js';
 export type { SessionEventDescriptor } from './wiring-helpers.js';
 export {
   AbsolutePathSchema,

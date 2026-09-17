@@ -36,26 +36,20 @@ export const clientDefinition = createClientDefinition({
     // capabilities but still runs every event this client dispatches, so it is
     // accepted. The next major may change the hook surface and is not.
     //
-    // Widening the range is only safe while every capability declared below is
-    // older than the floor, because wiring is derived statically:
-    // `deriveHookEventTransportMode` reads `responseCapabilities` alone and has
-    // no access to the detected version, so declaring a capability here installs
-    // `hook handle` for *every* accepted binary. The floor is set to keep that
-    // true rather than to match the pin. Per the upstream changelog, SessionStart
-    // shipped in 1.0.62 and `hookSpecificOutput` was already its extension point
-    // by 2.1.152 (`reloadSkills`, `sessionTitle`); `additionalContext` is
-    // announced there per event as each one gained it — UserPromptSubmit 1.0.59,
-    // PreToolUse 2.1.9, Stop/SubagentStop 2.1.163 — and no such entry exists for
-    // SessionStart anywhere in 2.x, because injecting startup context is what the
-    // hook was introduced to do. So `context.append` on SessionStart predates
-    // this floor across the whole range. The same holds for SubagentStart: the
-    // event shipped in 2.0.43, below this floor, and no changelog entry ever adds
-    // `additionalContext` to it, because seeding a fresh subagent context is the
-    // hook's purpose.
+    // The floor gates *capabilities* that are range-wide: a responseCapability
+    // declared here installs `hook handle` for every accepted binary, so every
+    // declared capability must predate the floor. Per the upstream changelog,
+    // SessionStart shipped in 1.0.62; `additionalContext` arrived per event —
+    // UserPromptSubmit 1.0.59, PreToolUse 2.1.9, Stop/SubagentStop 2.1.163 —
+    // and no such entry exists for SessionStart in 2.x because injecting startup
+    // context is the hook's purpose. Likewise SubagentStart (2.0.43).
     //
-    // A future capability that is *not* range-wide cannot be declared here as-is:
-    // raise this floor to that capability's first supporting version, because
-    // there is no per-capability version gate to fall back on.
+    // An *event* first supported above the floor declares `minimumVersion` on
+    // its hook-event entry instead of raising the floor (see PostCompact at
+    // minimumVersion 2.1.76). A responseCapability that is *not* range-wide on
+    // an event still has no per-capability gate — only per-event — so that case
+    // still requires raising this floor or adding a separate event declaration
+    // for the newer capability.
     supportedVersions: '^2.1.0',
   },
   managedInstall: {
@@ -196,11 +190,11 @@ export const clientDefinition = createClientDefinition({
       { name: 'SubagentStop', frameworkSubject: 'client.session.subagent.completed' },
       { name: 'PreCompact', frameworkSubject: 'client.session.compaction.pre' },
       {
-        // PostCompact exists since 2.1.76, above the ^2.1.0 floor but within the supported range.
-        // Like SubagentStart (no own session), it has no frameworkSubject: the post-compaction
-        // signal arrives via a subsequent SessionStart hook with source 'compact' (startMode: 'compact').
+        // No frameworkSubject: like SubagentStart the post-compaction signal arrives via the
+        // subsequent SessionStart hook with source 'compact' (startMode: 'compact').
         // PostCompact is wired for raw ingress only.
         name: 'PostCompact',
+        minimumVersion: '2.1.76',
       },
       { name: 'Notification' },
       { name: 'MCPServerStart' },

@@ -159,3 +159,39 @@ describe('deriveHookEventTransportMode', () => {
     expect(deriveHookEventTransportMode(event)).toBe('event');
   });
 });
+
+// ---------------------------------------------------------------------------
+// minimumVersion schema validation
+// ---------------------------------------------------------------------------
+
+describe('ClientHookEventDeclaration — minimumVersion', () => {
+  it('accepts a valid semver literal as minimumVersion', () => {
+    const event = ClientHookEventDeclarationSchema.parse({
+      name: 'PostCompact',
+      minimumVersion: '2.1.76',
+    });
+    expect(event.minimumVersion).toBe('2.1.76');
+  });
+
+  it('parses without minimumVersion key when the field is absent', () => {
+    const event = ClientHookEventDeclarationSchema.parse({ name: 'SessionStart' });
+    expect(event.minimumVersion).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(event, 'minimumVersion')).toBe(false);
+  });
+
+  it('rejects a semver range (caret) as minimumVersion', () => {
+    const result = ClientHookEventDeclarationSchema.safeParse({
+      name: 'PostCompact',
+      minimumVersion: '^2.1.0',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a non-semver string as minimumVersion', () => {
+    const result = ClientHookEventDeclarationSchema.safeParse({
+      name: 'PostCompact',
+      minimumVersion: 'latest',
+    });
+    expect(result.success).toBe(false);
+  });
+});

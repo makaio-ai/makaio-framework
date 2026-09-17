@@ -105,6 +105,21 @@ export const ClaudeCodeWiringSchemas = {
          * `--dangerously-skip-permissions` in this isolated settings scope.
          */
         skipDangerousModePermissionPrompt: z.boolean().optional(),
+        /**
+         * Detected binary version at the time of wiring. When provided, events
+         * whose `minimumVersion` exceeds this value are skipped and any
+         * previously installed Makaio-managed hooks for those events are removed.
+         *
+         * Callers that know the exact binary version being launched (e.g. managed
+         * session connectors that received it from the execution context) should
+         * pass it here so the version-gating snapshot is consistent with the
+         * binary that will actually run. When absent, the wiring handler resolves
+         * the current binary version via a fresh `client.resolveBinary` request.
+         *
+         * Pass `null` to indicate that the version is unknown: all events are
+         * wired without any minimum-version filtering.
+         */
+        binaryVersion: z.string().nullable().optional(),
       })
       .refine((data) => data.scope === 'user' || data.projectDir !== undefined, {
         message: 'projectDir is required when scope is project or local',

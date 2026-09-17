@@ -20,6 +20,7 @@
  * @packageDocumentation
  */
 
+import { VersionLiteralSchema, versionSatisfies } from '@makaio/contracts';
 import { deriveHookEventTransportMode } from '@makaio/contracts/client';
 import type { ClientDefinition } from '@makaio/contracts/client';
 
@@ -44,6 +45,14 @@ export interface SessionEventDescriptor {
    * - `'request'` — request/response: install `makaio hook handle ...`
    */
   readonly mode: 'event' | 'request';
+  /**
+   * Lowest client binary version that fires this event, as a semver literal.
+   *
+   * Absent when the event is available across the whole `supportedVersions`
+   * range of the client. The wiring layer uses this to skip events whose
+   * minimum lies above the detected binary version.
+   */
+  readonly minimumVersion?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,10 +125,46 @@ export function buildHookCommand(
 export function deriveSessionEventDescriptors(
   clientDefinition: ClientDefinition,
 ): ReadonlyArray<SessionEventDescriptor> {
-  return clientDefinition.runtimeCapabilities.hookEvents.map((e) => ({
-    eventName: e.name,
-    mode: deriveHookEventTransportMode(e),
-  }));
+  return clientDefinition.runtimeCapabilities.hookEvents.map((e) => {
+    const descriptor: SessionEventDescriptor = {
+      eventName: e.name,
+      mode: deriveHookEventTransportMode(e),
+    };
+    if (e.minimumVersion !== undefined) {
+      return { ...descriptor, minimumVersion: e.minimumVersion };
+    }
+    return descriptor;
+  });
+}
+
+/**
+ * Determine whether a session event should be wired given the detected binary
+ * version.
+ *
+ * Enforcement semantics:
+ * - When `descriptor.minimumVersion` is absent the event is supported across
+ *   the whole `supportedVersions` range — always return `true`.
+ * - When `binaryVersion` is `null`, `undefined`, or any non-semver string
+ *   (for example the literal `'unknown'` that the CLI version detector emits
+ *   on parse failure, or a partial version such as `'2.1'`) the installed
+ *   version is unknown; treat the event as supported — return `true`.
+ * - Otherwise return `true` only when `binaryVersion >= minimumVersion`.
+ * @param descriptor - Session-event descriptor to test. Only `eventName` and
+ *   `minimumVersion` are inspected; the full descriptor is accepted for
+ *   convenience so callers need not destructure.
+ * @param binaryVersion - Detected binary version string, or `null`/`undefined`
+ *   when the version could not be determined. Any value that is not a valid
+ *   exact semver (no leading `v`, no range syntax) is treated as unknown.
+ * @returns `true` when the event should be wired, `false` when it should be
+ *   skipped because the binary is too old.
+ */
+export function isSessionEventSupported(
+  descriptor: Pick<SessionEventDescriptor, 'eventName' | 'minimumVersion'>,
+  binaryVersion: string | null | undefined,
+): boolean {
+  if (descriptor.minimumVersion === undefined) return true;
+  if (typeof binaryVersion !== 'string' || !VersionLiteralSchema.safeParse(binaryVersion).success) return true;
+  return versionSatisfies(binaryVersion, `>=${descriptor.minimumVersion}`);
 }
 
 /**
