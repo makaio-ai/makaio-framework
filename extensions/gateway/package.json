@@ -1,0 +1,52 @@
+{
+  "name": "@makaio/extension-gateway",
+  "description": "Anthropic Messages gateway that routes Claude Code traffic per model to Anthropic or a LiteLLM proxy.",
+  "version": "0.1.0",
+  "types": "src/index.ts",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/makaio-ai/makaio-framework.git",
+    "directory": "extensions/gateway"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./contracts": "./src/contracts/index.ts",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "bun build.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@makaio/bus-core": "workspace:*",
+    "@makaio/contracts": "workspace:*",
+    "@makaio/core": "workspace:*",
+    "@makaio/kernel": "workspace:*",
+    "@makaio/service-base": "workspace:*",
+    "hono": "^4.12.23",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@makaio/build-tooling": "workspace:*",
+    "@types/node": "^24.3.0",
+    "tsdown": "0.22.0",
+    "typescript": "^6.0.3",
+    "vitest": "4.1.10"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "./contracts": {
+        "types": "./dist/contracts/index.d.ts",
+        "default": "./dist/contracts/index.mjs"
+      },
+      "./package.json": "./package.json"
+    }
+  },
+  "license": "MIT"
+}

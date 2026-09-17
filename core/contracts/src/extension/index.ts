@@ -69,7 +69,7 @@ export type {
   AdapterProviderRef,
 } from './adapter-definition.js';
 export type { ExtensionIdentity, ExtensionService, ExtensionServiceLifecycle } from './extension-lifecycle.js';
-export type { ExtensionContext, NodeExtensionContext } from './extension-context.js';
+export type { CredentialResolver, ExtensionContext, NodeExtensionContext } from './extension-context.js';
 export type {
   ExtensionCliBeforeRunContext,
   ExtensionCliBeforeRunResult,

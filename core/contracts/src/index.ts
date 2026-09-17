@@ -1532,6 +1532,7 @@ export type {
   BootstrapImportResult,
   BootstrapResult,
   CapabilityToken,
+  CredentialResolver,
   CliArgManifest,
   CliManifest,
   CliSubcommandManifest,

@@ -1,25 +1,22 @@
 import { execFile } from 'node:child_process';
+import fs from 'node:fs/promises';
 import { promisify } from 'node:util';
 import type { IDirectChannel, IMakaioBus } from '@makaio/bus-core';
 import { openChannel, ChannelClosedError } from '@makaio/bus-core';
 import type { CredentialRef } from '@makaio/contracts/config';
 import { parseStoredCredentialRef } from '@makaio/contracts/config';
 import { CredentialSubjects } from '@makaio/contracts';
+import type { CredentialResolver } from '@makaio/contracts/extension';
 import { resolveCredentialRef } from '@makaio/ai-adapters-core/config';
 
 /**
- * Credential provider interface for resolving credential references.
+ * Credential provider for resolving credential references.
  *
- * Implementations are platform-specific (e.g. Node.js keychain, stored refs).
+ * Alias of {@link CredentialResolver} from `@makaio/contracts/extension` — the
+ * contracts interface is the authoritative shape; this alias keeps existing
+ * consumers that import from the runtime package working without duplication.
  */
-export interface CredentialProvider {
-  /**
-   * Resolve a credential reference to its runtime value.
-   * @param ref - Credential reference string
-   * @returns Resolved value, or null if unavailable
-   */
-  resolve(ref: CredentialRef): Promise<string | null>;
-}
+export type CredentialProvider = CredentialResolver;
 
 const execFileAsync = promisify(execFile);
 
@@ -31,12 +28,33 @@ const execFileAsync = promisify(execFile);
 export class NodeCredentialProvider implements CredentialProvider {
   /**
    * Resolve a credential reference to its plaintext value.
+   *
+   * Returns null (never throws) for `stored:` refs — those require a
+   * credential service handler registered on the bus. Returns null (never
+   * throws) for `file:` refs that are missing or unreadable.
    * @param ref - Credential reference (`env:`, `file:`, or `keychain:`)
    * @returns Resolved credential value, or null when unavailable
    */
   public async resolve(ref: CredentialRef): Promise<string | null> {
+    if (ref.startsWith('stored:')) {
+      console.warn(
+        `[NodeCredentialProvider] Cannot resolve "stored:" credential ref "${ref}": ` +
+          `Register a credential service handler on this host to enable stored credential resolution.`,
+      );
+      return null;
+    }
     return resolveCredentialRef(ref, {
       resolveKeychain: this.resolveKeychain,
+      readFile: async (path) => {
+        try {
+          return await fs.readFile(path, 'utf-8');
+        } catch (e) {
+          const code = (e as NodeJS.ErrnoException).code ?? 'unknown error';
+          console.warn(`[NodeCredentialProvider] Cannot read file credential at "${path}" (${code}). Returning null.`);
+          // Return an empty string so resolveCredentialRef's `.trim() || null` yields null.
+          return '';
+        }
+      },
     });
   }
 
@@ -58,12 +76,15 @@ export class NodeCredentialProvider implements CredentialProvider {
  */
 export class StoredCredentialProvider implements CredentialProvider {
   private readonly fallbackProvider = new NodeCredentialProvider();
-  // The cached channel is intentionally long-lived (process lifetime). The
-  // node runtime's destroy lifecycle tears down the bus context, which closes
-  // all channels implicitly. An explicit close() method is not needed because
-  // the provider is a singleton wired once during init and outlives all callers.
-  /** Lazily-opened channel to the credentials endpoint. */
-  private channelPromise?: Promise<IDirectChannel>;
+  /**
+   * Lazily-opened channel to the credentials endpoint.
+   *
+   * Only set when a channel is successfully open. Cleared when the service is
+   * absent (null return), on open failures, and on `ChannelClosedError` so
+   * every subsequent call re-checks the bus via `requestOptional`.
+   * Call {@link close} during host shutdown to release the channel explicitly.
+   */
+  private channelPromise?: Promise<IDirectChannel | null>;
 
   /**
    * Create a new stored credential provider.
@@ -92,13 +113,28 @@ export class StoredCredentialProvider implements CredentialProvider {
       // and the pattern is simple enough that a shared abstraction
       // would add indirection without meaningful DRY benefit.
       for (let attempt = 0; attempt < 2; attempt++) {
+        // Capture the promise used this iteration so we only clear the cache
+        // when it still holds the stale entry — a concurrent caller may have
+        // already replaced it with a fresh channel.
+        const channelPromise = this.getChannel();
         try {
-          const channel = await this.getChannel();
+          const channel = await channelPromise;
+          if (!channel) {
+            // No credential service handler is registered (e.g. headless host
+            // without a product credential service). Degrade gracefully.
+            console.warn(
+              `[StoredCredentialProvider] Cannot resolve "stored:" credential ref "${ref}": ` +
+                `Register a credential service handler on this host to enable stored credential resolution.`,
+            );
+            return null;
+          }
           const result = await channel.request(CredentialSubjects.get, { configId });
           return result.credentials?.[key] ?? null;
         } catch (e) {
           if (e instanceof ChannelClosedError) {
-            this.channelPromise = undefined;
+            if (this.channelPromise === channelPromise) {
+              this.channelPromise = undefined;
+            }
             if (attempt === 0) continue;
           }
           throw e;
@@ -123,27 +159,67 @@ export class StoredCredentialProvider implements CredentialProvider {
   }
 
   /**
+   * Close and discard the cached channel. Safe to call multiple times (idempotent).
+   *
+   * Call during host shutdown before the bus/transport is torn down so the
+   * channel is released cleanly rather than abandoned.
+   */
+  public close(): void {
+    const stale = this.channelPromise;
+    this.channelPromise = undefined;
+    if (stale !== undefined) {
+      void stale
+        .then((ch) => {
+          ch?.close();
+        })
+        .catch(() => {
+          // Channel was never successfully opened or is already closed — nothing to do.
+        });
+    }
+  }
+
+  /**
    * Lazily open (and cache) the encrypted channel to the credentials endpoint.
    *
-   * The promise is cleared on `ChannelClosedError` (post-open channel closure)
-   * and also on open failures so the next call always retries rather than
-   * re-using a permanently-rejected or permanently-closed promise.
-   * @returns The open DirectChannel
+   * Only a successfully opened channel is cached. When the service is absent
+   * (`openCredentialChannel` returns `null`), the promise is cleared so the
+   * next call re-checks via `requestOptional` — the service may have registered
+   * since this call. Open failures are also cleared so the next call retries
+   * rather than re-using a permanently-rejected promise.
+   * @returns The open DirectChannel, or null when no handler is registered
    */
-  private getChannel(): Promise<IDirectChannel> {
-    this.channelPromise ??= this.openCredentialChannel().catch((error) => {
-      this.channelPromise = undefined;
-      throw error;
-    });
+  private getChannel(): Promise<IDirectChannel | null> {
+    this.channelPromise ??= this.openCredentialChannel().then(
+      (ch) => {
+        // The credential service is not yet registered. Clear the cached promise
+        // so the next call re-checks via requestOptional — the service may have
+        // registered since. Only a successfully opened channel is kept in cache.
+        if (ch === null) {
+          this.channelPromise = undefined;
+        }
+        return ch;
+      },
+      (error) => {
+        this.channelPromise = undefined;
+        throw error;
+      },
+    );
     return this.channelPromise;
   }
 
   /**
    * Open a fresh encrypted channel to the credentials endpoint.
-   * @returns Newly opened DirectChannel
+   *
+   * Returns null when no `getChannelToken` handler is registered on the bus
+   * (optional service — the credential service is not always present).
+   * @returns Newly opened DirectChannel, or null when the service is absent
    */
-  private async openCredentialChannel(): Promise<IDirectChannel> {
-    const { token } = await this.bus.request(CredentialSubjects.getChannelToken, {});
+  private async openCredentialChannel(): Promise<IDirectChannel | null> {
+    const result = await this.bus.requestOptional(CredentialSubjects.getChannelToken, {});
+    if (!result.handled) {
+      return null;
+    }
+    const { token } = result.data;
     return openChannel(this.bus.getContext(), 'credentials', { token, transports: [] });
   }
 }
