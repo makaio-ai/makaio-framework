@@ -85,6 +85,17 @@ Tracks external adapter session IDs linked to Makaio sessions. Used for log-impo
 Fork and branch lineage is represented on sessions with `parentSessionId`, `rootSessionId`, `forkPointMessageId`,
 `branchKind`, and optional `forkTransforms`; context assembly traverses that chain instead of copying parent messages.
 
+Compaction is tracked two ways, and they are not interchangeable. The `generation` column counts provider compactions
+(0 until the first one) and is advanced live when a continuation reports `startMode: 'compact'`; a `resume` leaves it
+alone. Two seams write it because one key cannot reach every row: hook-observed sessions advance through
+`storage:session.rebindObserved`, keyed on the `(source, adapterSessionId)` import identity, while adapter-managed
+sessions carry no `source` and advance through `storage:session.update`'s `advanceGeneration` flag, keyed on
+`sessionId`. Both increment in SQL, never from a caller-supplied number, and a whole-record `session.set` cannot rewind
+a stored ordinal. `compress` lineage rows remain import-only — they are identified by
+the compaction boundary record inside the transcript, which no hook payload carries, so only the transcript importer can
+create them. Read `generation` to learn that a new generation started; read the lineage to reach the compacted content.
+Hook delivery is at-least-once, so treat `generation` as an ordinal that may skip but never repeats or regresses.
+
 ## Storage Domains
 
 All storage is bus-decoupled. Register handlers before creating the service. The core CRUD service only needs session

@@ -121,6 +121,8 @@ function createImportedSession(payload: ImportUpsertRequest, sessionId: string, 
     agents: [],
     status: resolveImportCreateStatus(payload),
     branchKind,
+    // Matches the column default: a session starts having been compacted zero times.
+    generation: 0,
     adapterName: payload.source,
     adapterSessionId: payload.externalSessionId,
     adapterId: payload.adapterId,
@@ -362,6 +364,12 @@ function applyRebindObservedLocality(session: IMakaioSession, payload: SessionSt
   if (payload.machineId !== undefined) {
     session.machineId = payload.machineId ?? undefined;
     changedProperties.push('machineId');
+  }
+  // Mirrors the Drizzle handler: only a compaction advances the ordinal, and it
+  // does so as part of the rebind rather than as a second write.
+  if (payload.startMode === 'compact') {
+    session.generation = (session.generation ?? 0) + 1;
+    changedProperties.push('generation');
   }
   return changedProperties;
 }

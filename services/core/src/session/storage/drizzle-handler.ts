@@ -17,6 +17,7 @@ import { buildNextSessionClientAccountState, touchesClientAccountState } from '.
 import { registerGetByAdapterSessionIdHandler } from './drizzle-get-by-adapter-session-id-handler.js';
 import { registerGetChildrenHandler } from './drizzle-get-children-handler.js';
 import { registerDrizzleSessionImportHandlers } from './drizzle-import-handlers.js';
+import { emitSessionGenerationAdvanced } from './session-generation-events.js';
 import { isAdapterSessionReconciliationRefused, isIdentityBackfillRefused } from './session-identity-backfill.js';
 import {
   buildSessionIdentityUpdateFields,
@@ -35,8 +36,12 @@ export interface SessionHandlerDeps {
 /** Canonical column shape of the sessions table, resolved through the dialect seam. */
 type SessionsTable = typeof sessionStorageSchema.sqlite.sessions;
 type SessionInsertValues = SessionsTable['$inferInsert'];
-type SessionUpdateFields = Partial<Omit<SessionInsertValues, 'spawningToolCallId'>> & {
+// `spawningToolCallId` and `generation` widen to `SQL` because both are written
+// relative to the stored value (a `coalesce` fill-once and an increment), which
+// only the database can evaluate.
+type SessionUpdateFields = Partial<Omit<SessionInsertValues, 'spawningToolCallId' | 'generation'>> & {
   spawningToolCallId?: SessionInsertValues['spawningToolCallId'] | SQL;
+  generation?: SessionInsertValues['generation'] | SQL;
 };
 type ClientIdentityObservation = IMakaioSession['lastClientIdentityObservation'];
 
@@ -103,6 +108,15 @@ function toDbValues(session: IMakaioSession) {
     // session object, so routing currency through it would let a concurrent
     // writer holding a stale snapshot resurrect an abandoned provider session.
     // Omitting the columns here leaves them untouched on every `set`.
+    //
+    // `generation` follows the `leadAgentId` shape rather than the currency
+    // pair's: a fresh row takes the caller's value, because there is no stored
+    // ordinal for it to lose and a snapshot import of an already compacted
+    // session must not land at 0. On conflict it is stripped
+    // (see toSessionConflictValues) so a caller holding a pre-compaction
+    // snapshot cannot rewind a live ordinal — going backwards is worse than
+    // skipping.
+    generation: session.generation ?? 0,
   };
 }
 
@@ -117,11 +131,19 @@ function toDbValues(session: IMakaioSession) {
  * observed the value it replaced. On conflict the stored designation therefore
  * wins; the insert path keeps the caller's value, because a fresh row has no
  * designation to lose.
+ *
+ * `generation` is stripped for the same reason and with the same asymmetry: the
+ * compaction ordinal is advanced by `storage:session.rebindObserved`, so a
+ * whole-record write carrying a pre-compaction snapshot would rewind it. A fresh
+ * row still takes the caller's value, which is what lets a snapshot import carry
+ * an already compacted session across databases instead of resetting it to 0.
  * @param values - Full column values produced by {@link toDbValues}
- * @returns The same values without the designation column
+ * @returns The same values without the columns a stored row owns
  */
-function toSessionConflictValues<T extends { leadAgentId: string | null }>(values: T): Omit<T, 'leadAgentId'> {
-  const { leadAgentId: _storedDesignationWins, ...conflictValues } = values;
+function toSessionConflictValues<T extends { leadAgentId: string | null; generation: number }>(
+  values: T,
+): Omit<T, 'leadAgentId' | 'generation'> {
+  const { leadAgentId: _storedDesignationWins, generation: _storedOrdinalWins, ...conflictValues } = values;
   return conflictValues;
 }
 
@@ -210,6 +232,12 @@ function buildSessionUpdateFields(payload: SessionUpdatePayload, sessions: Sessi
     updateFields.lastClientIdentityObservation = serializeClientIdentityObservation(
       payload.lastClientIdentityObservation,
     );
+  }
+  // Incremented in SQL, never read-modify-write: two concurrent advances must
+  // land on two different numbers. Reaches adapter-managed rows, which the
+  // rebind seam cannot see because they carry no `source`.
+  if (payload.advanceGeneration === true) {
+    updateFields.generation = sql`${sessions.generation} + 1`;
   }
 
   return updateFields;
@@ -364,7 +392,9 @@ function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
         .update(sessions)
         .set(updateFields)
         .where(and(eq(sessions.sessionId, sessionId), statusGuard, identityGuard, reconciliationGuard));
-      ctx.setResult({ success: didAffectRows(result), clientAccountChanged: false });
+      const applied = didAffectRows(result);
+      ctx.setResult({ success: applied, clientAccountChanged: false });
+      if (applied && payload.advanceGeneration === true) emitSessionGenerationAdvanced(bus, sessionId);
       return;
     }
     for (let attempt = 0; attempt < CLIENT_ACCOUNT_WRITE_RETRY_LIMIT; attempt++) {
@@ -416,6 +446,7 @@ function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
         clientAccountChanged: (previousSession.clientAccountId ?? null) !== (nextSession.clientAccountId ?? null),
       });
       emitSessionClientAccountChangedIfNeeded(bus, previousSession, nextSession);
+      if (payload.advanceGeneration === true) emitSessionGenerationAdvanced(bus, sessionId);
       return;
     }
     throw new Error(`Failed to update session "${sessionId}" with a stable client-account baseline`);

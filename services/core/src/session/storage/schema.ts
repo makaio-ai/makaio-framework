@@ -99,6 +99,20 @@ export const sessionsDual = defineDualTable(
     }),
 
     /**
+     * Count of provider compactions observed on this conversation.
+     *
+     * Advanced by `storage:session.rebindObserved` when the continuation
+     * reports `startMode: 'compact'`; a `resume` leaves it untouched.
+     *
+     * Defaulted to 0 so pre-existing rows and every other write path read as
+     * "never compacted" without a backfill pass — the same treatment
+     * `current_adapter_session_id_state` gets above. 0 is the honest value for
+     * a row nobody watched compact, and it keeps "generation" counting
+     * compactions rather than being an off-by-one session counter.
+     */
+    generation: c.int4('generation').notNull().default(0),
+
+    /**
      * Adapter type name (e.g., 'claude-code', 'codex-mcp').
      * Identifies the source adapter for native imports.
      */

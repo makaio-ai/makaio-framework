@@ -166,6 +166,44 @@ describe('ObservedSessionIngestionService - continuation reopen', () => {
     expect(child?.adapterSessionId).toBeUndefined();
   });
 
+  it('advances the generation ordinal when a compaction is observed', async () => {
+    // The live half of compaction: the hook is first-hand evidence that the
+    // provider reset the context, so the ordinal moves without waiting for the
+    // transcript import that owns the `compress` lineage row.
+    const sessionId = await importRoot(EXTERNAL_ID);
+    expect((await readSession(sessionId))?.generation).toBe(0);
+
+    await emitSessionStarted({ startMode: 'compact' });
+
+    expect((await readSession(sessionId))?.generation).toBe(1);
+  });
+
+  it('leaves the generation ordinal alone when a resume is observed', async () => {
+    // Resuming continues the same context — no generation boundary happened.
+    const sessionId = await importRoot(EXTERNAL_ID);
+
+    await emitSessionStarted({ startMode: 'resume', cwd: '/worktree' });
+
+    const stored = await readSession(sessionId);
+    expect(stored?.targetWorkingDirectory).toBe('/worktree');
+    expect(stored?.generation).toBe(0);
+  });
+
+  it('creates no compress lineage row for an observed compaction', async () => {
+    // The ordinal is not a substitute for lineage: the compress row is keyed on
+    // a compaction boundary record the hook payload does not carry, so the live
+    // path must not invent one — least of all on the root's own identity.
+    const sessionId = await importRoot(EXTERNAL_ID);
+
+    await emitSessionStarted({ startMode: 'compact' });
+
+    const root = await readSession(sessionId);
+    expect(root?.branchKind).toBeUndefined();
+    expect(root?.parentExternalSessionId).toBeUndefined();
+    const { children } = await bus.request(SessionStorageSubjects.getChildren, { sessionId });
+    expect(children).toEqual([]);
+  });
+
   it('reports nothing to the authority when the rebind finds no row', async () => {
     // A continuation of a session storage has never seen creates nothing, so
     // there is no row for the authority to act on either.

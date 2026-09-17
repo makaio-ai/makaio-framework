@@ -210,6 +210,7 @@ export const postgresFtsSearchStrategy: FtsSearchStrategy = {
         s.root_session_id,
         s.fork_point_message_id,
         s.branch_kind,
+        s.generation,
         s.adapter_name,
         s.adapter_session_id,
         s.adapter_id,

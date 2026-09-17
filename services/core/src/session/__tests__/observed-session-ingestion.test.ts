@@ -28,6 +28,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import {
   ClientSubjects,
+  MessageStorageSubjects,
   type ClientSessionStarted,
   type ClientSessionTurnCompleted,
   type IMakaioSession,
@@ -131,8 +132,13 @@ async function emitTurnCompleted(overrides?: Partial<ClientSessionTurnCompleted>
  * Emit a `client.runtime.started` observation feeding the managed gate.
  * @param adapterSessionId - Adapter session id carried as runtime evidence
  * @param layer - Source layer of the observation
+ * @param sessionId - Framework session id, when the observation resolved one
  */
-async function emitRuntimeStarted(adapterSessionId: string, layer: ClientRuntimeSourceLayer): Promise<void> {
+async function emitRuntimeStarted(
+  adapterSessionId: string,
+  layer: ClientRuntimeSourceLayer,
+  sessionId?: string,
+): Promise<void> {
   await MakaioBus.emit(ClientSubjects.runtime.started, {
     clientRuntimeId: `rt-${adapterSessionId}`,
     clientId: CLIENT_ID,
@@ -140,6 +146,7 @@ async function emitRuntimeStarted(adapterSessionId: string, layer: ClientRuntime
     source: { layer, producer: 'test-producer' },
     observedAt: 500,
     adapterSessionId,
+    ...(sessionId !== undefined ? { sessionId } : {}),
   });
 }
 
@@ -324,6 +331,216 @@ describe('ObservedSessionIngestionService', () => {
     expect(importFileRequests).toEqual([
       { filePath: '/logs/observed-1.jsonl', adapterName: ADAPTER_NAME, ingestionMarker: 'live' },
     ]);
+  });
+
+  it('advances the compaction ordinal of an adapter-managed session without ingesting it (AC8)', async () => {
+    const { importFileRequests } = stubLogImportSeams();
+
+    // A managed row as the orchestration path writes it: a provider session id
+    // mirrored onto the session row, and no `source` — nothing on that path
+    // writes one, which is exactly why the rebind key cannot reach it.
+    const sessionId = 'managed-orchestrated';
+    await MakaioBus.request(SessionStorageSubjects.set, {
+      sessionId,
+      session: {
+        sessionId,
+        createdAt: 400,
+        lastActivityAt: 400,
+        agents: [],
+        status: 'active',
+        adapterSessionId: 'managed-compacted',
+      },
+    });
+    await emitRuntimeStarted('managed-compacted', 'adapter');
+
+    await emitSessionStarted({ adapterSessionId: 'managed-compacted', startMode: 'compact' });
+
+    const { session } = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+      adapterSessionId: 'managed-compacted',
+    });
+    expect(session?.sessionId).toBe(sessionId);
+    expect(session?.generation).toBe(1);
+    // The gate still holds for everything else it protects.
+    expect(await getObservedSession('managed-compacted')).toBeNull();
+    expect(importFileRequests).toEqual([]);
+  });
+
+  it('advances a managed ordinal after a provider session rotation', async () => {
+    // After a confirmed rotation the live provider id is NOT the row's origin
+    // `adapterSessionId`, so a lookup by that column misses. The framework
+    // session id the gate remembered does not move, which is what carries the
+    // advance to the right row.
+    stubLogImportSeams();
+    const sessionId = 'managed-rotated';
+    await MakaioBus.request(SessionStorageSubjects.set, {
+      sessionId,
+      session: {
+        sessionId,
+        createdAt: 400,
+        lastActivityAt: 400,
+        agents: [],
+        status: 'active',
+        adapterSessionId: 'origin-id',
+      },
+    });
+    // The runtime reports the rotated id together with the framework session id.
+    await emitRuntimeStarted('rotated-id', 'adapter', sessionId);
+
+    await emitSessionStarted({ adapterSessionId: 'rotated-id', startMode: 'compact' });
+
+    // A lookup by the rotated id finds nothing — proving the advance did not
+    // depend on one.
+    const { session: byRotatedId } = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+      adapterSessionId: 'rotated-id',
+    });
+    expect(byRotatedId).toBeNull();
+    const { session } = await MakaioBus.request(SessionStorageSubjects.get, { sessionId });
+    expect(session?.generation).toBe(1);
+  });
+
+  it('keeps the compaction when the gate wins the race between the pre-check and the write', async () => {
+    // The pre-check and the storage write are not atomic. When
+    // `client.runtime.started` lands between them, the compaction advances the
+    // hook-created tracking stub — which reconciliation then deletes, taking
+    // the boundary with it while the row the adapter actually owns stays put.
+    stubLogImportSeams();
+    // Reconciliation only deletes a stub it can prove is inert, so the race is
+    // only reproducible with message storage answering.
+    const messageStorage = MakaioBus.on(MessageStorageSubjects.getBySession, (ctx) => {
+      ctx.setResult({ messages: [], nextCursor: null });
+    });
+    const managedSessionId = 'managed-raced';
+    await MakaioBus.request(SessionStorageSubjects.set, {
+      sessionId: managedSessionId,
+      session: {
+        sessionId: managedSessionId,
+        createdAt: 300,
+        lastActivityAt: 300,
+        agents: [],
+        status: 'active',
+      },
+    });
+
+    // A hook-first tracking stub exists for the same provider session, created
+    // while the gate was still empty.
+    await emitSessionStarted({ adapterSessionId: 'raced' });
+    expect(await getObservedSession('raced')).not.toBeNull();
+
+    // The gate fills *during* the rebind, which is the interleaving the
+    // post-write double-check exists for.
+    const racer = MakaioBus.on(
+      SessionStorageSubjects.rebindObserved,
+      async (ctx) => {
+        // After the write lands, before the hook side re-checks the gate: the
+        // exact window the post-write double-check was built for.
+        await ctx.next();
+        await emitRuntimeStarted('raced', 'adapter', managedSessionId);
+      },
+      { priority: 100 },
+    );
+
+    try {
+      await emitSessionStarted({ adapterSessionId: 'raced', startMode: 'compact' });
+    } finally {
+      racer();
+      messageStorage();
+    }
+
+    // The stub was reconciled away, and the compaction survived on the row the
+    // adapter owns rather than dying with the stub.
+    expect(await getObservedSession('raced')).toBeNull();
+    const { session } = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: managedSessionId });
+    expect(session?.generation).toBe(1);
+  });
+
+  it('keeps the compaction when the gate fills while an unwritten rebind is in flight', async () => {
+    // The sibling interleaving: a managed row carries no `source`, so a sourced
+    // rebind reports 'not-found' whenever no tracking stub exists yet — the
+    // ordinary case, not an error. Nothing is written, so nothing advanced; if
+    // the gate fills during that request the compaction is lost unless the
+    // post-write step is reached on the unwritten path too.
+    stubLogImportSeams();
+    const managedSessionId = 'managed-unwritten';
+    await MakaioBus.request(SessionStorageSubjects.set, {
+      sessionId: managedSessionId,
+      session: {
+        sessionId: managedSessionId,
+        createdAt: 300,
+        lastActivityAt: 300,
+        agents: [],
+        status: 'active',
+      },
+    });
+
+    const racer = MakaioBus.on(
+      SessionStorageSubjects.rebindObserved,
+      async (ctx) => {
+        // The answer a source-less managed row really produces, then the gate
+        // fills before the hook side gets to look at it again.
+        ctx.setResult({ outcome: 'not-found' });
+        await emitRuntimeStarted('unwritten', 'adapter', managedSessionId);
+      },
+      { priority: 100 },
+    );
+
+    try {
+      await emitSessionStarted({ adapterSessionId: 'unwritten', startMode: 'compact' });
+    } finally {
+      racer();
+    }
+
+    // No stub was invented for the unknown identity …
+    expect(await getObservedSession('unwritten')).toBeNull();
+    // … and the compaction still reached the row the adapter owns.
+    const { session } = await MakaioBus.request(SessionStorageSubjects.get, { sessionId: managedSessionId });
+    expect(session?.generation).toBe(1);
+  });
+
+  it('does not advance a managed ordinal for a resume', async () => {
+    stubLogImportSeams();
+    const sessionId = 'managed-resumed';
+    await MakaioBus.request(SessionStorageSubjects.set, {
+      sessionId,
+      session: {
+        sessionId,
+        createdAt: 400,
+        lastActivityAt: 400,
+        agents: [],
+        status: 'active',
+        adapterSessionId: 'managed-resume',
+      },
+    });
+    await emitRuntimeStarted('managed-resume', 'adapter');
+
+    await emitSessionStarted({ adapterSessionId: 'managed-resume', startMode: 'resume' });
+
+    const { session } = await MakaioBus.request(SessionStorageSubjects.getByAdapterSessionId, {
+      adapterSessionId: 'managed-resume',
+    });
+    expect(session?.generation).toBe(0);
+  });
+
+  it('counts a compaction that is the first thing ever seen of a metadata-only session', async () => {
+    // The row does not exist yet, so the rebind misses and registration creates
+    // it. Without the advance that follows, the compaction that caused the
+    // registration would be the one compaction nobody ever counts.
+    stubLogImportSeams();
+    await registerObservedSessionIngestionPolicyProvider(MakaioBus, {
+      id: 'discovered-policy',
+      displayName: 'Discovered policy',
+      decideObservedSessionIngestion: () => ({ importStatus: 'discovered' }),
+    });
+
+    await emitSessionStarted({
+      adapterSessionId: 'private-compacted-1',
+      startMode: 'compact',
+      cwd: '/private',
+    });
+
+    const session = await getObservedSession('private-compacted-1');
+    expect(session).not.toBeNull();
+    expect(session?.importStatus).toBe('discovered');
+    expect(session?.generation).toBe(1);
   });
 
   it('skips silently when no log-import service is registered (framework-only mode)', async () => {
