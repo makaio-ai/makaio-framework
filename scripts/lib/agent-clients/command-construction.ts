@@ -2,6 +2,19 @@
 import type { CredentialMode, ProbeScenario, ProviderId } from './types.js';
 import { CHILD_ENV_ALLOWLIST, PROVIDER_CREDENTIAL_VARS } from './types.js';
 
+/**
+ * Which run of a seeded scenario a command is being constructed for.
+ *
+ * Absent for every ordinary scenario: those run once, with no session to
+ * establish and none to resume.
+ */
+export interface ScenarioInvocation {
+  /** Build the seed run that establishes the resumable conversation. */
+  readonly seed?: boolean;
+  /** Session the scenario's own prompt resumes, reported by the seed run. */
+  readonly resumeSessionId?: string;
+}
+
 /** A CLI command with a hard per-scenario deadline. */
 export interface SpawnCommand {
   readonly executable: string;
@@ -69,6 +82,23 @@ export function buildChildEnvironment(params: {
 }
 
 /**
+ * Narrows one command's deadline to the time its scenario has left.
+ *
+ * A scenario's `timeoutSeconds` is the budget for the *scenario*, already
+ * trimmed by the probe's remaining wall clock — not a per-spawn allowance. A
+ * seeded scenario spawns twice, so without this the two runs would each claim
+ * the whole budget and the global cap could be overrun by a scenario timeout.
+ * Both are measured against one absolute deadline instead.
+ * @param command - Command built for one run of the scenario.
+ * @param deadlineMs - Absolute time by which the scenario must have finished.
+ * @param now - Current time.
+ * @returns The command bounded by whichever deadline arrives first.
+ */
+export function boundedByDeadline(command: SpawnCommand, deadlineMs: number, now: number): SpawnCommand {
+  return { ...command, timeoutMs: Math.max(0, Math.min(command.timeoutMs, deadlineMs - now)) };
+}
+
+/**
  * Flags the Claude Code builder sets itself; a scenario may not restate them.
  */
 const CLAUDE_CODE_RESERVED_FLAGS = [
@@ -77,6 +107,7 @@ const CLAUDE_CODE_RESERVED_FLAGS = [
   '--max-turns',
   '--max-budget-usd',
   '--no-session-persistence',
+  '--resume',
   '--settings',
   '--setting-sources',
   '--permission-mode',
@@ -134,13 +165,15 @@ export function buildClaudeCodeCommand(params: {
   env: Record<string, string>;
   projectDir: string;
   settingsPath: string;
+  invocation?: ScenarioInvocation;
 }): SpawnCommand {
-  const { executablePath, scenario, env, projectDir, settingsPath } = params;
+  const { executablePath, scenario, env, projectDir, settingsPath, invocation } = params;
+  const prompt = invocation?.seed === true ? (scenario.seedPrompt ?? scenario.prompt) : scenario.prompt;
   return {
     executable: executablePath,
     args: [
       '--print',
-      scenario.prompt,
+      prompt,
       '--output-format',
       'json',
       // One turn to act, one to answer — uniformly, for every scenario.
@@ -153,7 +186,11 @@ export function buildClaudeCodeCommand(params: {
       '2',
       '--max-budget-usd',
       '0.25',
-      '--no-session-persistence',
+      // A seeded scenario has to leave its conversation behind for its own
+      // second run to resume, so it is the one shape that keeps session
+      // persistence on. Everything else stays stateless.
+      ...(scenario.seedPrompt === undefined ? ['--no-session-persistence'] : []),
+      ...(invocation?.resumeSessionId === undefined ? [] : ['--resume', invocation.resumeSessionId]),
       '--settings',
       settingsPath,
       '--setting-sources',
@@ -222,6 +259,7 @@ export function buildSpawnCommand(params: {
   env: Record<string, string>;
   projectDir: string;
   settingsPath: string;
+  invocation?: ScenarioInvocation;
 }): SpawnCommand {
   return params.provider === 'claude-code' ? buildClaudeCodeCommand(params) : buildCodexCommand(params);
 }

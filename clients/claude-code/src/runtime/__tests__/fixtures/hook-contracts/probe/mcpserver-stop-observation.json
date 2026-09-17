@@ -6,6 +6,6 @@
   "events": [],
   "oracle": "unobserved",
   "oraclePassed": true,
-  "exitCode": 1,
-  "terminal": "error_max_turns"
+  "exitCode": 0,
+  "terminal": "ok"
 }

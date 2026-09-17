@@ -9,7 +9,7 @@
   },
   "liveProbe": {
     "status": "captured",
-    "capturedAt": "2026-09-16T20:51:52.140Z"
+    "capturedAt": "2026-09-17T02:43:05.380Z"
   },
   "events": {
     "SessionStart": {
@@ -101,8 +101,8 @@
     },
     "PreCompact": {
       "candidateEvidenceStatus": "unobserved",
-      "observedEvidenceStatus": "unobserved",
-      "hookFired": false,
+      "observedEvidenceStatus": "observer-only",
+      "hookFired": true,
       "expectedStdoutConsumed": false,
       "expectedBlockingCapable": false,
       "managedCommand": "hook received claude-code",
@@ -112,8 +112,8 @@
     },
     "PostCompact": {
       "candidateEvidenceStatus": "unobserved",
-      "observedEvidenceStatus": "unobserved",
-      "hookFired": false,
+      "observedEvidenceStatus": "observer-only",
+      "hookFired": true,
       "expectedStdoutConsumed": false,
       "expectedBlockingCapable": false,
       "managedCommand": "hook received claude-code",

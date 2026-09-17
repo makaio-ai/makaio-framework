@@ -74,13 +74,21 @@ const nativeLoginLeaseFactory: NativeLoginLeaseFactory = {
     const platform = resolveSupportedNativePlatform(process.platform);
     if (provider === 'claude-code') {
       try {
-        const setup = await handleClaudeCodeSessionConfigSetup({
-          sessionDir: configDir,
-          baseConfigDir: configDir,
-          projectDir,
-          platform,
-          configInheritance: 'auth-only',
-        });
+        const setup = await handleClaudeCodeSessionConfigSetup(
+          {
+            sessionDir: configDir,
+            baseConfigDir: configDir,
+            projectDir,
+            platform,
+            configInheritance: 'auth-only',
+          },
+          // A seeded scenario resumes its own conversation, so the probe now
+          // writes session state. Left at its default the lease would link that
+          // store to the operator's durable one and a paid probe would deposit
+          // synthetic conversations there; keeping it inside the isolated
+          // directory lets the disposable workspace own them.
+          { projectsStoreDir: path.join(configDir, 'probe-transcripts') },
+        );
         return {
           env: requireNativeLoginEnv(provider, setup.env),
           authMaterialized: setup.authMaterialized,

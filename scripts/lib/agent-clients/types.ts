@@ -39,6 +39,14 @@ export interface ProbeScenario {
   readonly description: string;
   /** Marker-only model instruction. */
   readonly prompt: string;
+  /**
+   * Prompt run first, in a persisted session that {@link ProbeScenario.prompt} resumes.
+   *
+   * An event that acts on the conversation itself cannot be reached from a
+   * session that has none. A seeded scenario therefore spends one bounded run
+   * building a conversation, and issues the prompt under test against it.
+   */
+  readonly seedPrompt?: string;
   /** Provider-native tools pre-approved for this scenario. */
   readonly allowedTools: readonly string[];
   /** Extra provider-native CLI arguments required to reach this scenario's event. */

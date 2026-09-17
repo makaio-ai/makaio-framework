@@ -20,6 +20,7 @@ import {
 } from '../../../../clients/claude-code/src/runtime/hook-response-contracts.js';
 import { renderClaudeCodeNativeResponse } from '../../../../clients/claude-code/src/runtime/hook-response-composer.js';
 import {
+  CLAUDE_CODE_HOOK_POST_COMPACT,
   CLAUDE_CODE_HOOK_PRE_COMPACT,
   CLAUDE_CODE_HOOK_PRE_TOOL_USE,
   CLAUDE_CODE_HOOK_SUBAGENT_START,
@@ -68,6 +69,22 @@ const SUBAGENT_RELAY_PROMPT =
  */
 const SUBAGENT_SPAWN_PROMPT =
   'Use the Agent tool to run a general-purpose subagent that reads MAKAIO_PROBE.md and reports which provider it names.';
+
+/**
+ * Conversation the compaction scenarios build before they compact it.
+ *
+ * The seed has to leave more behind than one exchange. Pinned 2.1.219 answers
+ * `/compact` on a two-message session with "Not enough messages to compact.":
+ * `PreCompact` fires, compaction then aborts, and `PostCompact` is never
+ * reached. A seed that runs a tool leaves the tool call and its result in the
+ * transcript as well, and that session compacts for real — `PostCompact`
+ * arrives carrying `compact_summary`.
+ *
+ * It names the exact shell command so the tool call matches the scenario's own
+ * pre-approved read tool instead of depending on how the model phrases one.
+ */
+const COMPACTION_SEED_PROMPT =
+  'MAKAIO_PROBE_MARKER: use the shell tool to run `cat MAKAIO_PROBE.md`, then summarize the file in one sentence.';
 
 /**
  * Render one native Claude Code sentinel from the client's own renderer.
@@ -158,30 +175,33 @@ export const claudeCodeProbeContract: ClientProbeContract = {
       };
     }
 
-    // `/compact` is the only compaction trigger a bounded probe can reach. It
-    // is a local slash command, so print mode runs the manual-trigger path with
-    // no model turn at all; the other trigger, auto-compaction, is gated on
-    // CLAUDE_CODE_AUTO_COMPACT_WINDOW, whose documented minimum is 100k tokens —
-    // out of reach inside a synthetic workspace.
+    // `/compact` is the only compaction trigger a bounded probe can reach: the
+    // other one, auto-compaction, is gated on CLAUDE_CODE_AUTO_COMPACT_WINDOW,
+    // whose documented minimum is 100k tokens — out of reach in a synthetic
+    // workspace.
     //
-    // Driven against the developer's own configuration directory, pinned 2.1.219
-    // fires PreCompact from this prompt (`trigger: "manual"`, payload keys
-    // `cwd`, `custom_instructions`, `hook_event_name`, `prompt_id`, `session_id`,
-    // `transcript_path`, `trigger`) before it reports that there is not yet
-    // enough conversation to summarize. Inside the probe's *isolated*
-    // configuration directory the same binary, flags, and hook file return an
-    // empty result in zero turns and never invoke the hook — the local command
-    // is listed in the session's `slash_commands` but its handler stops short.
-    // Neither authentication (lease materialized), session persistence, user
-    // config, nor the minimal child environment accounts for it; each was ruled
-    // out one at a time. So the committed capture records honestly that the
-    // event did not fire, and this scenario is the record of what was attempted.
-    if (eventName !== CLAUDE_CODE_HOOK_PRE_COMPACT) return undefined;
+    // It also cannot be issued on its own. `/compact` is a local command, so
+    // print mode runs it with no model turn, and pinned 2.1.219 answers an
+    // empty session with an empty result in zero turns: compaction returns
+    // before either hook, because there is nothing to compact. That is what an
+    // earlier capture recorded, and it was misread as isolation silencing the
+    // command. The isolated configuration directory is not involved: the same
+    // binary, flags and hook file behave identically in both. What flips the
+    // outcome is a registered SessionStart hook — its invocation is itself
+    // enough conversation for `/compact` to proceed as far as PreCompact — and
+    // an operator's own directory tends to have one where this harness, which
+    // configures exactly the event under test, never does.
+    //
+    // So the scenario seeds a conversation first and compacts that. Both hooks
+    // then fire on their own terms and neither declares a response capability,
+    // which is exactly what `capture-only` records.
+    if (eventName !== CLAUDE_CODE_HOOK_PRE_COMPACT && eventName !== CLAUDE_CODE_HOOK_POST_COMPACT) return undefined;
     return {
       suffix: 'observation',
-      description: 'Runs the manual compaction command, the only PreCompact trigger reachable without a model turn.',
+      description: 'Compacts a seeded conversation, the only compaction trigger a bounded probe can reach.',
+      seedPrompt: COMPACTION_SEED_PROMPT,
       prompt: '/compact',
-      oracle: 'unobserved',
+      oracle: 'capture-only',
     };
   },
 

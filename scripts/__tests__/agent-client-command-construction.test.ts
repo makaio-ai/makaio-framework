@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  boundedByDeadline,
   buildChildEnvironment,
   buildClaudeCodeCommand,
   buildCodexCommand,
@@ -203,6 +204,70 @@ describe('buildClaudeCodeCommand', () => {
 
       expect(cmd.args[cmd.args.indexOf('--max-turns') + 1]).toBe('2');
     }
+  });
+});
+
+describe('boundedByDeadline', () => {
+  const SEEDED_SCENARIO: ProbeScenario = { ...STUB_SCENARIO, seedPrompt: 'MAKAIO_PROBE_MARKER: seed' };
+
+  /**
+   * Builds the command for one run of the seeded scenario.
+   * @param invocation - Which run of the seeded scenario to construct.
+   * @returns The provider command for that run.
+   */
+  function seededCommand(invocation: {
+    seed?: boolean;
+    resumeSessionId?: string;
+  }): ReturnType<typeof buildSpawnCommand> {
+    return buildSpawnCommand({
+      provider: 'claude-code',
+      executablePath: '/usr/local/bin/claude',
+      scenario: SEEDED_SCENARIO,
+      env: { PATH: '/usr/bin' },
+      projectDir: '/tmp/project',
+      settingsPath: '/tmp/settings.json',
+      invocation,
+    });
+  }
+
+  it('spends one scenario budget across a seeded scenario instead of one per run', () => {
+    // The scenario budget is what the probe's remaining wall clock allowed, so
+    // both runs of a seeded scenario have to fit inside it together.
+    const startedAt = 1_000_000;
+    const deadlineMs = startedAt + SEEDED_SCENARIO.timeoutSeconds * 1000;
+    const resumedStartedAt = startedAt + 22_000;
+    const seed = boundedByDeadline(seededCommand({ seed: true }), deadlineMs, startedAt);
+    const resumed = boundedByDeadline(seededCommand({ resumeSessionId: 'session-1' }), deadlineMs, resumedStartedAt);
+
+    // Unbounded, the resumed run claims the whole scenario budget a second
+    // time and can outlive the deadline by a full scenario timeout.
+    expect(seededCommand({ resumeSessionId: 'session-1' }).timeoutMs).toBe(30_000);
+    expect(seed.timeoutMs).toBe(30_000);
+    expect(resumed.timeoutMs).toBe(8_000);
+    expect(resumedStartedAt + resumed.timeoutMs).toBe(deadlineMs);
+  });
+
+  it('leaves no deadline for a run that starts after the scenario budget is gone', () => {
+    const startedAt = 1_000_000;
+    const deadlineMs = startedAt + SEEDED_SCENARIO.timeoutSeconds * 1000;
+
+    expect(
+      boundedByDeadline(seededCommand({ resumeSessionId: 'session-1' }), deadlineMs, deadlineMs + 5_000).timeoutMs,
+    ).toBe(0);
+  });
+
+  it('keeps an unseeded scenario at its own bound and changes nothing else', () => {
+    const command = buildSpawnCommand({
+      provider: 'claude-code',
+      executablePath: '/usr/local/bin/claude',
+      scenario: STUB_SCENARIO,
+      env: { PATH: '/usr/bin' },
+      projectDir: '/tmp/project',
+      settingsPath: '/tmp/settings.json',
+    });
+    const bounded = boundedByDeadline(command, 1_000_000 + STUB_SCENARIO.timeoutSeconds * 1000, 1_000_000);
+
+    expect(bounded).toEqual(command);
   });
 });
 

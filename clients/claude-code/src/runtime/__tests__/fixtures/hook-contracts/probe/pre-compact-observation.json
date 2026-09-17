@@ -3,8 +3,31 @@
   "provider": "claude-code",
   "cliVersion": "2.1.219",
   "scenarioId": "pre-compact-observation",
-  "events": [],
-  "oracle": "unobserved",
+  "events": [
+    {
+      "eventName": "PreCompact",
+      "frameworkSubject": "client.session.compaction.pre",
+      "responseCapabilities": [],
+      "mode": "event",
+      "candidateExpectedStatus": "unobserved",
+      "observedStatus": "observer-only",
+      "sourceExpectedEffects": [],
+      "observedEffects": [],
+      "blockingCapable": false,
+      "managedCommand": "hook received claude-code",
+      "payloadKeys": [
+        "custom_instructions",
+        "cwd",
+        "hook_event_name",
+        "prompt_id",
+        "session_id",
+        "transcript_path",
+        "trigger"
+      ],
+      "sentinelInjected": false
+    }
+  ],
+  "oracle": "capture-only",
   "oraclePassed": true,
   "exitCode": 0,
   "terminal": "ok"
