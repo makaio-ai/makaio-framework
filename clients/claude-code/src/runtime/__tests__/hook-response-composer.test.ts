@@ -11,7 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import { ClientHookProviderContractRegistry, ClientHookResponseRegistry } from '@makaio/subsystem-client';
 import type { ContributorDefinition } from '@makaio/contracts/client';
-import { createAppendEffect } from '@makaio/contracts/client';
+import { createAppendEffect, createSessionTokenEffect } from '@makaio/contracts/client';
 import { composeHookResponse } from '../hook-response-composer.js';
 import { claudeCodeToolResponseContract, createApproveEffect, createDenyEffect } from '../hook-response-contracts.js';
 import { CLAUDE_CODE_HOOK_PRE_TOOL_USE } from '../schemas.js';
@@ -613,6 +613,181 @@ describe('composeHookResponse', () => {
     it('still accepts an empty response on an event that renders no decision', () => {
       expect(claudeCodeToolResponseContract.validate(undefined, { eventName: 'SessionStart' })).toBe(true);
       expect(claudeCodeToolResponseContract.validate({}, { eventName: 'SessionStart' })).toBe(true);
+    });
+  });
+
+  describe('session.token', () => {
+    /**
+     * Build a raw SessionStart payload with the given session id.
+     * @param sessionId - Value for the `session_id` field.
+     * @returns Raw hook payload shaped like a live SessionStart event.
+     */
+    function makeSessionStartPayload(sessionId = 'sess-token-001') {
+      return {
+        eventName: 'SessionStart',
+        receivedAt: Date.now(),
+        payload: { session_id: sessionId, source: 'startup' },
+      };
+    }
+
+    /**
+     * Build a raw SubagentStart payload with the given session and agent ids.
+     * @param sessionId - Value for the `session_id` field.
+     * @param agentId - Value for the `agent_id` field.
+     * @returns Raw hook payload shaped like a live SubagentStart event.
+     */
+    function makeSubagentStartPayload(sessionId = 'sess-token-001', agentId = 'agent-001') {
+      return {
+        eventName: 'SubagentStart',
+        receivedAt: Date.now(),
+        payload: { session_id: sessionId, agent_id: agentId },
+      };
+    }
+
+    it('calls onSessionToken with scope and token when SessionStart contributes a token', async () => {
+      const { responseRegistry } = createRegistries();
+      const received: Array<{
+        token: string;
+        scope: { clientId: string; adapterSessionId: string; agentId?: string };
+      }> = [];
+
+      installContributor(responseRegistry, {
+        lane: 'canonical',
+        clientIds: ['claude-code'],
+        id: 'token-contributor',
+        priority: 100,
+        timeoutMs: 5000,
+        selectors: [{ kind: 'capability', capability: 'session.token' }],
+        respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-abc-123')] }),
+      });
+
+      const result = await composeHookResponse(responseRegistry, makeSessionStartPayload('sess-abc'), {
+        onSessionToken: (token, scope) => {
+          received.push({ token, scope });
+        },
+      });
+
+      expect(received).toHaveLength(1);
+      expect(received[0]!.token).toBe('tok-abc-123');
+      expect(received[0]!.scope.clientId).toBe('claude-code');
+      expect(received[0]!.scope.adapterSessionId).toBe('sess-abc');
+      expect(received[0]!.scope.agentId).toBeUndefined();
+      // Token must never appear in stdout.
+      expect(result.stdout).not.toContain('tok-abc-123');
+    });
+
+    it('does not write token to stdout on SessionStart', async () => {
+      const { responseRegistry } = createRegistries();
+
+      installContributor(responseRegistry, {
+        lane: 'canonical',
+        clientIds: ['claude-code'],
+        id: 'token-and-context',
+        priority: 100,
+        timeoutMs: 5000,
+        selectors: [{ kind: 'capability', capability: 'session.token' }],
+        respond: () => ({
+          canonicalEffects: [createSessionTokenEffect('tok-secret'), createAppendEffect('visible context')],
+        }),
+      });
+
+      const result = await composeHookResponse(responseRegistry, makeSessionStartPayload(), {
+        onSessionToken: () => undefined,
+      });
+
+      // Context appears in stdout; token does not.
+      expect(result.stdout).toContain('visible context');
+      expect(result.stdout).not.toContain('tok-secret');
+    });
+
+    it('does not call sink on SubagentStart — session.token is not declared for that event', async () => {
+      // SubagentStart no longer declares session.token. Claude Code subagents
+      // share the parent session's stdio MCP servers which receive only
+      // CLAUDE_CODE_SESSION_ID; they have no path to the hook-only agent_id,
+      // so a token stored under (clientId, adapterSessionId, agentId) could
+      // never be retrieved. The capability-selected contributor must not fire
+      // for SubagentStart events.
+      const { responseRegistry } = createRegistries();
+      const received: string[] = [];
+
+      installContributor(responseRegistry, {
+        lane: 'canonical',
+        clientIds: ['claude-code'],
+        id: 'subagent-token',
+        priority: 100,
+        timeoutMs: 5000,
+        selectors: [{ kind: 'capability', capability: 'session.token' }],
+        respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-subagent-xyz')] }),
+      });
+
+      await composeHookResponse(responseRegistry, makeSubagentStartPayload('sess-parent', 'agent-child'), {
+        onSessionToken: (token) => {
+          received.push(token);
+        },
+      });
+
+      expect(received).toHaveLength(0);
+    });
+
+    it('drops session.token effect when event does not declare the capability', async () => {
+      const { responseRegistry } = createRegistries();
+      const received: string[] = [];
+
+      // Canonical contributor matched by PreToolUse event name, returning a
+      // session.token effect. PreToolUse has no session.token capability, so
+      // composeHookResponse must not invoke the sink.
+      installContributor(responseRegistry, {
+        lane: 'canonical',
+        clientIds: ['claude-code'],
+        id: 'token-on-pre-tool-use',
+        priority: 100,
+        timeoutMs: 5000,
+        selectors: [{ kind: 'event-name', name: CLAUDE_CODE_HOOK_PRE_TOOL_USE }],
+        respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-should-drop')] }),
+      });
+
+      await composeHookResponse(responseRegistry, makePreToolUsePayload(), {
+        onSessionToken: (token) => {
+          received.push(token);
+        },
+      });
+
+      expect(received).toHaveLength(0);
+    });
+
+    it('highest-priority contributor token wins when multiple contributors deliver tokens', async () => {
+      const { responseRegistry } = createRegistries();
+      let capturedToken: string | undefined;
+
+      // Priority 200 — highest: this token must win.
+      installContributor(responseRegistry, {
+        lane: 'canonical',
+        clientIds: ['claude-code'],
+        id: 'high-priority-token',
+        priority: 200,
+        timeoutMs: 5000,
+        selectors: [{ kind: 'capability', capability: 'session.token' }],
+        respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-high')] }),
+      });
+
+      // Priority 100 — lower: this token must be discarded.
+      installContributor(responseRegistry, {
+        lane: 'canonical',
+        clientIds: ['claude-code'],
+        id: 'low-priority-token',
+        priority: 100,
+        timeoutMs: 5000,
+        selectors: [{ kind: 'capability', capability: 'session.token' }],
+        respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-low')] }),
+      });
+
+      await composeHookResponse(responseRegistry, makeSessionStartPayload(), {
+        onSessionToken: (token) => {
+          capturedToken = token;
+        },
+      });
+
+      expect(capturedToken).toBe('tok-high');
     });
   });
 });

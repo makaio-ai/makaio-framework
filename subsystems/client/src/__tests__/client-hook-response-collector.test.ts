@@ -560,7 +560,7 @@ describe('collectContributions', () => {
       const result = await collectContributions(snapshot, undefined, undefined, EVENT_NAME, EVENT_PAYLOAD);
 
       expect(result.outcomes[0].outcome).toBe('rejection');
-      expect(result.diagnostics[0].message).toContain('complete context.append effects');
+      expect(result.diagnostics[0].message).toContain('complete context.append or session.token effects');
     });
 
     it('rejects response and canonical-effect keys outside the declared shape', async () => {

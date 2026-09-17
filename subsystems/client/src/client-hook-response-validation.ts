@@ -9,10 +9,14 @@ import type {
   ProviderContractCatalogEntry,
 } from '@makaio/contracts/client';
 
+/** Canonical effect kinds accepted at the untyped extension boundary. */
+const VALID_CANONICAL_EFFECT_KINDS: ReadonlySet<string> = new Set(['context.append', 'session.token']);
+
 /**
  * Validate canonical effects at the untyped extension boundary.
  * @param effects - Runtime effect value returned by a contributor.
- * @returns `true` when every effect is a complete `context.append` effect.
+ * @returns `true` when every effect is a complete `context.append` or
+ *   `session.token` effect.
  */
 function validateCanonicalEffects(effects: ContributorResponse['canonicalEffects']): true | string {
   if (effects === undefined) return true;
@@ -22,13 +26,23 @@ function validateCanonicalEffects(effects: ContributorResponse['canonicalEffects
     if (
       typeof effect !== 'object' ||
       effect === null ||
-      effect.kind !== 'context.append' ||
+      !VALID_CANONICAL_EFFECT_KINDS.has(effect.kind) ||
       typeof effect.value !== 'string'
     ) {
-      return 'canonicalEffects must contain complete context.append effects';
+      return 'canonicalEffects must contain complete context.append or session.token effects';
     }
     if (Object.keys(effect).some((key) => key !== 'kind' && key !== 'value')) {
       return 'canonicalEffects must contain only kind and value';
+    }
+    // session.token records a correlation token into the service; an empty
+    // token would be silently stored and returned as non-null on get, making it
+    // indistinguishable from a legitimately recorded value while
+    // ClientSessionTokenRecordRequestSchema enforces min-length 1 at the
+    // service boundary. Reject here at the hook-response boundary so the
+    // contributor receives a precise error before the record is ever attempted.
+    // context.append allows empty strings: an empty append is harmless.
+    if (effect.kind === 'session.token' && effect.value.length === 0) {
+      return 'session.token effect requires a non-empty string value';
     }
   }
   return true;

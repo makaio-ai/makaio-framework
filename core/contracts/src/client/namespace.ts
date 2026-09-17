@@ -10,7 +10,10 @@
  * `client.session.turn.started`, `client.session.turn.completed`,
  * `client.session.tool.pre`, `client.session.tool.post`,
  * `client.session.compaction.pre`, `client.session.subagent.started`,
- * `client.session.subagent.completed`), the global
+ * `client.session.subagent.completed`), the session correlation-token
+ * subject (`client.session.token.get` as a normal bus request reachable by
+ * remote MCP servers — the token is handed to the runtime in-process via
+ * {@link ClientSessionTokenSink}, never over the bus), the global
  * wiring aggregator (`client.wiring.list`), the binary management
  * subjects (`client.list`, `client.install`, `client.uninstall`,
  * `client.update`, `client.setActive`, `client.installJob.progress`,

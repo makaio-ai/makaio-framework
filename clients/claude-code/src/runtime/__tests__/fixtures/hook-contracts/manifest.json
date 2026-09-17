@@ -20,7 +20,8 @@
       "expectedBlockingCapable": false,
       "managedCommand": "hook handle claude-code",
       "responseCapabilities": [
-        "context.append"
+        "context.append",
+        "session.token"
       ],
       "inputFixture": "session-start-input.json",
       "outputFixture": "session-start-output.json"

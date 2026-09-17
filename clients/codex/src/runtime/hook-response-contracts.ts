@@ -1,4 +1,5 @@
 /** Codex 0.144.1 synchronous hook-response contract. @packageDocumentation */
+import { CANONICAL_HOOK_RESPONSE_CAPABILITIES } from '@makaio/contracts/client';
 import type {
   InteractionBlockability,
   ProviderContractCatalogEntry,
@@ -29,8 +30,15 @@ export const CODEX_CONTRACT_ID = 'openai.codex-hook-response';
  * Subagent creation cannot be refused (`continue: false` is parsed for
  * compatibility but does not stop the subagent), so the interaction is
  * non-blockable. Purely additive: every `1.1.0` contributor remains valid.
+ *
+ * `1.3.0` adds the canonical `session.token` interaction to the catalog. The
+ * definition does not declare it on any Codex event yet (Codex hands its MCP
+ * subprocesses no session id). When declared, the composer collects the token
+ * and hands it to the in-process token sink of the client runtime; it is never
+ * rendered to the client binary's stdout. Purely additive: every `1.2.0`
+ * contributor remains valid.
  */
-export const CODEX_CONTRACT_VERSION = '1.2.0';
+export const CODEX_CONTRACT_VERSION = '1.3.0';
 export type CodexBlockEffects = Readonly<{ decision: 'block'; reason: string }> & Record<string, unknown>;
 export type CodexContextEffects = Readonly<{ additionalContext: string }> & Record<string, unknown>;
 export type CodexPermissionDenyEffects = Readonly<{ permissionDecision: 'deny'; permissionDecisionReason: string }> &
@@ -166,6 +174,7 @@ export function createCodexStopBlockEffect(reason: string): ProviderContribution
 
 export const CODEX_RESPONSE_CAPABILITIES = Object.freeze([
   'context.append',
+  CANONICAL_HOOK_RESPONSE_CAPABILITIES.sessionToken,
   CODEX_HOOK_RESPONSE_CAPABILITIES.block,
   CODEX_HOOK_RESPONSE_CAPABILITIES.permissionDeny,
   CODEX_HOOK_RESPONSE_CAPABILITIES.inputUpdate,

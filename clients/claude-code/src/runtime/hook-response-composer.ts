@@ -49,9 +49,15 @@
  */
 
 import type { CanonicalEffect, ProviderContributionEnvelope } from '@makaio/contracts/client';
+import { CANONICAL_HOOK_RESPONSE_CAPABILITIES } from '@makaio/contracts/client';
 import type { ClientHookHandleResponse, RawClientHookPayload } from '@makaio/subsystem-client';
 import type { ClientHookResponseRegistry } from '@makaio/subsystem-client';
-import { collectContributions, type CollectionDiagnostic, type CollectionResult } from '@makaio/subsystem-client';
+import {
+  collectContributions,
+  type CollectionDiagnostic,
+  type CollectionResult,
+  pickNonEmptyString,
+} from '@makaio/subsystem-client';
 import { NOOP_HOOK_HANDLE_RESPONSE } from '@makaio/subsystem-client';
 import {
   CLAUDE_CODE_TOOL_RESPONSE_CONTRACT_ID,
@@ -61,6 +67,7 @@ import {
   type ClaudeCodeToolDecision,
 } from './hook-response-contracts.js';
 import { clientDefinition } from '../definition.js';
+import { CLAUDE_CODE_HOOK_SUBAGENT_START } from './schemas.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -112,6 +119,21 @@ interface ReducedEffects {
   readonly reason: string | undefined;
   /** Concatenated context.append values. */
   readonly appendedContext: string | undefined;
+  /**
+   * Session correlation token from the highest-priority contributor that
+   * produced a `session.token` canonical effect, if any.
+   *
+   * When multiple contributors deliver a token, the first effect in the
+   * flat effects array wins. Effects are assembled from collection outcomes
+   * in priority order (highest first), so the first `session.token` effect
+   * belongs to the highest-priority contributor — the same ordering strategy
+   * used for `appendedContext` concatenation.
+   *
+   * This bucket is never written to stdout. `buildResponseFromEffects` ignores
+   * it; the composer reads it separately and forwards it to `onSessionToken`
+   * when the hook event declares the `session.token` response capability.
+   */
+  readonly sessionToken: string | undefined;
 }
 
 /**
@@ -129,14 +151,23 @@ function reduceEffects(effects: ReadonlyArray<CanonicalEffect | ProviderContribu
   let decision: ClaudeCodeToolDecision | undefined;
   const reasons: string[] = [];
   const appendParts: string[] = [];
+  let sessionToken: string | undefined;
   let hasAllow = false;
   let hasDeny = false;
 
   for (const effect of effects) {
-    if ('kind' in effect && effect.kind === 'context.append') {
-      // Canonical context.append effect
-      appendParts.push(effect.value);
-      continue;
+    if ('kind' in effect) {
+      if (effect.kind === 'context.append') {
+        // Canonical context.append effect
+        appendParts.push(effect.value);
+        continue;
+      }
+      if (effect.kind === 'session.token') {
+        // Canonical session.token effect — first wins (highest-priority
+        // contributor, since outcomes are ordered highest-priority first).
+        sessionToken ??= effect.value;
+        continue;
+      }
     }
 
     // Provider contribution envelope
@@ -169,6 +200,7 @@ function reduceEffects(effects: ReadonlyArray<CanonicalEffect | ProviderContribu
     decision,
     reason: reasons.length > 0 ? reasons.join('; ') : undefined,
     appendedContext: appendParts.length > 0 ? appendParts.join('\n') : undefined,
+    sessionToken,
   };
 }
 
@@ -281,6 +313,48 @@ export function renderClaudeCodeNativeResponse(
 }
 
 // ---------------------------------------------------------------------------
+// Session-token scope resolution
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive the session-token storage scope for a hook event.
+ *
+ * `SubagentStart` requires a non-empty `agent_id` in the payload.  The hook
+ * normalizers that feed this composer reject subagent events without an id,
+ * so a missing id here signals a malformed event.  Forwarding the token
+ * without an `agentId` would store it under the parent session key and
+ * overwrite the parent token; the sink is skipped instead (returns
+ * `undefined`).
+ *
+ * `SessionStart` and every other event that may later declare the capability
+ * are always session-scoped.  Even when a stray `agent_id` appears in the
+ * payload it is never adopted — doing so would create a spurious
+ * subagent-scoped entry.
+ * @param eventName - Claude Code hook event name.
+ * @param rawPayload - The inner `payload` object from the hook envelope.
+ * @returns Scope to forward to the token sink, or `undefined` to skip it.
+ */
+function resolveSessionTokenScope(
+  eventName: string,
+  rawPayload: Record<string, unknown>,
+): { clientId: string; adapterSessionId: string; agentId?: string } | undefined {
+  const adapterSessionId = pickNonEmptyString(rawPayload, 'session_id');
+  if (adapterSessionId === undefined) return undefined;
+
+  if (eventName === CLAUDE_CODE_HOOK_SUBAGENT_START) {
+    const agentId = pickNonEmptyString(rawPayload, 'agent_id');
+    // SubagentStart without a non-empty agent_id is malformed: skip the sink
+    // rather than storing the token under the parent session key.
+    if (agentId === undefined) return undefined;
+    return { clientId: 'claude-code', adapterSessionId, agentId };
+  }
+
+  // All other events (including SessionStart) are session-scoped only;
+  // agent_id is never adopted from the payload.
+  return { clientId: 'claude-code', adapterSessionId };
+}
+
+// ---------------------------------------------------------------------------
 // Public composer
 // ---------------------------------------------------------------------------
 
@@ -295,6 +369,27 @@ export interface ComposeHookResponseOptions {
   readonly signal?: AbortSignal;
   /** Receives non-fatal contributor diagnostics at the service boundary. */
   readonly onDiagnostics?: (diagnostics: readonly CollectionDiagnostic[]) => void;
+  /**
+   * Receives a `session.token` effect for the runtime to record; never
+   * rendered to the client binary.
+   *
+   * Called when the hook event declares the `session.token` response
+   * capability and a contributor produced a `session.token` canonical effect.
+   * The scope carries the adapter session id (hook payload `session_id`) and,
+   * for SubagentStart events, the agent id (`agent_id`).
+   *
+   * The sink is skipped (not called) when:
+   * - `session_id` is absent — the token cannot be scoped at all.
+   * - The event is `SubagentStart` and `agent_id` is absent or empty —
+   *   forwarding without an agent id would overwrite the parent session entry.
+   *
+   * For `SessionStart` and all other events, `agent_id` is ignored even when
+   * present in the payload.
+   */
+  readonly onSessionToken?: (
+    token: string,
+    scope: { clientId: string; adapterSessionId: string; agentId?: string },
+  ) => void | Promise<void>;
 }
 
 /**
@@ -356,6 +451,38 @@ export async function composeHookResponse(
     return NOOP_RESPONSE;
   }
 
-  // 5. Render collected effects into the native response
-  return renderClaudeCodeNativeResponse(eventName, allEffects);
+  // 5. Reduce all collected effects
+  const reduced = reduceEffects(allEffects);
+
+  // 6. Forward the session token to the sink when the event declares the
+  //    capability.  Scope resolution is event-aware: SubagentStart requires a
+  //    non-empty agent_id (absent → skip); all other events are session-only.
+  //
+  //    Trust boundary (F1): a directly connected bus peer could submit a forged
+  //    `hook.handle` request with another session's `session_id` and, if the
+  //    installed contributor issues a token per invocation, overwrite the
+  //    legitimate token in the store.  No fix is applied here because:
+  //    (a) The bus trust boundary is the bus secret: any authenticated peer that
+  //        can reach `hook.handle` already controls far stronger effects on that
+  //        session — model context via `context.append`, permission decisions on
+  //        `PreToolUse` — so overwriting a correlation token adds no privilege.
+  //    (b) The token correlates; it never authorizes.  The consumer contract is
+  //        correlation-only, so a forged token mis-correlates at worst and
+  //        cannot grant access.
+  //    (c) Caller authentication for hook ingress is a bus-level concern shared
+  //        by every host-local hook subject and is not something this capability
+  //        can address in isolation.
+  if (
+    reduced.sessionToken !== undefined &&
+    capabilities.includes(CANONICAL_HOOK_RESPONSE_CAPABILITIES.sessionToken) &&
+    options?.onSessionToken !== undefined
+  ) {
+    const scope = resolveSessionTokenScope(eventName, payload.payload);
+    if (scope !== undefined) {
+      await options.onSessionToken(reduced.sessionToken, scope);
+    }
+  }
+
+  // 7. Render the native response (sessionToken bucket is never written to stdout)
+  return buildResponseFromEffects(reduced, eventName);
 }

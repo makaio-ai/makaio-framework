@@ -1,9 +1,11 @@
 /** Deterministic Codex 0.144.1 hook-response composition. @packageDocumentation */
 import { isDeepStrictEqual } from 'node:util';
+import { CANONICAL_HOOK_RESPONSE_CAPABILITIES } from '@makaio/contracts/client';
 import type { CanonicalEffect, ProviderContributionEnvelope } from '@makaio/contracts/client';
 import {
   collectContributions,
   NOOP_HOOK_HANDLE_RESPONSE,
+  pickNonEmptyString,
   type ClientHookHandleResponse,
   type ClientHookResponseRegistry,
   type CollectionDiagnostic,
@@ -13,6 +15,7 @@ import { CODEX_CLIENT_ID, CODEX_CONTRACT_ID, codexProviderContractCatalog } from
 import {
   CODEX_HOOK_PRE_TOOL_USE,
   CODEX_HOOK_SESSION_START,
+  CODEX_HOOK_SUBAGENT_START,
   CODEX_HOOK_USER_PROMPT_SUBMIT,
   type RawClientHookPayload,
 } from './schemas.js';
@@ -21,6 +24,28 @@ export interface ComposeCodexHookResponseOptions {
   readonly deadline?: number;
   readonly signal?: AbortSignal;
   readonly onDiagnostics?: (diagnostics: readonly CollectionDiagnostic[]) => void;
+  /**
+   * Receives a `session.token` effect for the runtime to record; never
+   * rendered to the client binary's stdout. When several contributors deliver
+   * a token, the highest-priority contributor wins (first in the
+   * deterministically ordered effects array). Omit when token recording is not
+   * required.
+   *
+   * The sink is skipped (not called) when:
+   * - Both `session_id` and `thread_id` are absent from the payload.
+   * - The event is `SubagentStart` and `agent_id` is absent or empty —
+   *   forwarding without an agent id would overwrite the parent session entry.
+   *
+   * For `SessionStart` and all other events, `agent_id` is ignored even when
+   * present in the payload.
+   * @param token - Opaque correlation token value.
+   * @param scope - Client id, adapter session id, and optional agent id for
+   *   SubagentStart. The client id is always `'codex'` from this composer.
+   */
+  readonly onSessionToken?: (
+    token: string,
+    scope: { clientId: string; adapterSessionId: string; agentId?: string },
+  ) => void | Promise<void>;
 }
 /**
  * Resolve the declared response capabilities for one Codex event.
@@ -32,6 +57,30 @@ function capabilities(eventName: string): readonly string[] {
     clientDefinition.runtimeCapabilities.hookEvents.find((event) => event.name === eventName)?.responseCapabilities ??
     []
   );
+}
+
+/**
+ * Extract the winning `session.token` value from the ordered effects array.
+ *
+ * Effects arrive in priority-descending order (highest-priority contributor
+ * first), so the first matching `session.token` effect is the winner. When the
+ * event does not declare the `session.token` capability the effect is dropped
+ * and `undefined` is returned — this ensures the token is only collected when
+ * the contributor explicitly targeted an event that supports it.
+ * @param eventName - Native Codex hook event name.
+ * @param effects - Deterministically ordered effects (priority-desc).
+ * @returns The winning token value, or `undefined` when absent or not supported.
+ */
+function extractSessionToken(
+  eventName: string,
+  effects: readonly (CanonicalEffect | ProviderContributionEnvelope)[],
+): string | undefined {
+  // Gate: only honour when the event declares the session.token capability.
+  if (!capabilities(eventName).includes(CANONICAL_HOOK_RESPONSE_CAPABILITIES.sessionToken)) return undefined;
+  for (const effect of effects) {
+    if ('kind' in effect && effect.kind === 'session.token') return effect.value;
+  }
+  return undefined;
 }
 
 interface CollectedEffects {
@@ -191,10 +240,48 @@ export function renderCodexNativeResponse(
   return serialize({ hookSpecificOutput });
 }
 /**
+ * Derive the session-token storage scope for a Codex hook event.
+ *
+ * `SubagentStart` requires a non-empty `agent_id` in the payload.  The hook
+ * normalizers that feed this composer reject subagent events without an id,
+ * so a missing id signals a malformed event.  Forwarding without an `agentId`
+ * would store the token under the parent session key and overwrite it; the
+ * sink is skipped instead (returns `undefined`).
+ *
+ * `SessionStart` and every other event are always session-scoped.  Even when
+ * a stray `agent_id` appears in the payload it is never adopted — doing so
+ * would create a spurious subagent-scoped entry.
+ * @param eventName - Codex hook event name.
+ * @param rawPayload - The inner `payload` object from the hook envelope.
+ * @returns Scope to forward to the token sink, or `undefined` to skip it.
+ */
+function resolveSessionTokenScope(
+  eventName: string,
+  rawPayload: Record<string, unknown>,
+): { clientId: string; adapterSessionId: string; agentId?: string } | undefined {
+  // Codex aliases session_id as thread_id on some events.
+  const adapterSessionId = pickNonEmptyString(rawPayload, 'session_id') ?? pickNonEmptyString(rawPayload, 'thread_id');
+  if (adapterSessionId === undefined) return undefined;
+
+  if (eventName === CODEX_HOOK_SUBAGENT_START) {
+    const agentId = pickNonEmptyString(rawPayload, 'agent_id');
+    // SubagentStart without a non-empty agent_id is malformed: skip the sink
+    // rather than storing the token under the parent session key.
+    if (agentId === undefined) return undefined;
+    return { clientId: 'codex', adapterSessionId, agentId };
+  }
+
+  // All other events (including SessionStart) are session-scoped only;
+  // agent_id is never adopted from the payload.
+  return { clientId: 'codex', adapterSessionId };
+}
+
+/**
  * Compose one terminal Codex native hook response.
  * @param registry - Active response contributor registry.
  * @param payload - Normalized native hook payload.
- * @param options - Request deadline, cancellation, and diagnostics hooks.
+ * @param options - Request deadline, cancellation, diagnostics hooks, and
+ *   optional session-token sink.
  * @returns The composed native response envelope.
  */
 export async function composeCodexHookResponse(
@@ -227,8 +314,35 @@ export async function composeCodexHookResponse(
         effects: { decision: 'block', reason: result.closedFailure.detail },
       },
     ]);
-  return renderCodexNativeResponse(
-    payload.eventName,
-    result.outcomes.flatMap((outcome) => outcome.effects ?? []),
-  );
+
+  const effects = result.outcomes.flatMap((outcome) => outcome.effects ?? []);
+
+  // Extract the session token before rendering — the token is a host-side
+  // canonical effect that is never written to the client binary's stdout.
+  //
+  // Trust boundary (F1): a directly connected bus peer could submit a forged
+  // `hook.handle` request with another session's `session_id`/`thread_id` and,
+  // if the installed contributor issues a token per invocation, overwrite the
+  // legitimate token in the store.  No fix is applied here because:
+  // (a) The bus trust boundary is the bus secret: any authenticated peer that
+  //     can reach `hook.handle` already controls far stronger effects on that
+  //     session — model context via `context.append`, permission decisions on
+  //     `PreToolUse` — so overwriting a correlation token adds no privilege.
+  // (b) The token correlates; it never authorizes.  The consumer contract is
+  //     correlation-only, so a forged token mis-correlates at worst and cannot
+  //     grant access.
+  // (c) Caller authentication for hook ingress is a bus-level concern shared
+  //     by every host-local hook subject and is not something this capability
+  //     can address in isolation.
+  const token = extractSessionToken(payload.eventName, effects);
+  if (token !== undefined && options?.onSessionToken !== undefined) {
+    // Scope is event-aware: SubagentStart requires a non-empty agent_id
+    // (absent → skip); all other events are session-only.
+    const scope = resolveSessionTokenScope(payload.eventName, payload.payload);
+    if (scope !== undefined) {
+      await options.onSessionToken(token, scope);
+    }
+  }
+
+  return renderCodexNativeResponse(payload.eventName, effects);
 }

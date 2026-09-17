@@ -37,7 +37,7 @@ for that event — an existing `observer-only` capture is not counter-evidence.
 
 | Event             | Source Candidate | Capabilities             | Expected Stdout | Blocking | Framework Subject                          |
 |-------------------|-----------------|--------------------------|-----------------|----------|--------------------------------------------|
-| `SessionStart`    | supported       | `context.append`         | Yes             | No       | `client.session.started`                   |
+| `SessionStart`    | supported       | `context.append`, `session.token` | Yes             | No       | `client.session.started`                   |
 | `UserPromptSubmit`| supported       | `context.append`         | Yes             | No       | `client.session.userPrompt.submitted`      |
 | `PreToolUse`      | supported       | `claude-code.tool-response.approve`, `claude-code.tool-response.deny`, `context.append` | Yes | Yes | `client.session.tool.pre` |
 | `PostToolUse`     | unobserved      | *(none)*                 | No              | No       | `client.session.tool.post`                 |
@@ -75,6 +75,21 @@ for that event — an existing `observer-only` capture is not counter-evidence.
 - `SubagentStart` carries `context.append` only. The appended context lands in
   the *subagent's* context window, not the parent's. Subagent creation cannot be
   refused, so the interaction is non-blockable.
+- `SessionStart` also declares `session.token`. The token is never rendered to
+  stdout --- the composer hands it to `ClientSessionTokenService` in-process via
+  `ClientSessionTokenSink`, so no bus payload (and no `MAKAIO_DEBUG` bus logger)
+  ever sees the token value. `ClientSessionTokenService` then serves it to MCP
+  servers via `client.session.token.get`. Evidence status for this capability is
+  verified by unit tests of the composer and registry; live probe oracles cannot
+  observe it because the token is deliberately kept out of the model's context
+  window.
+  `SubagentStart` does **not** declare `session.token`: Claude Code subagents
+  share the parent session's stdio MCP servers, which receive only
+  `CLAUDE_CODE_SESSION_ID` and have no path to the hook-only `agent_id`. A
+  token stored under `(clientId, adapterSessionId, agentId)` can therefore
+  never be retrieved by any consumer in this client. The composer scope helper
+  stays agent-aware so the declaration can come back once a consumer can
+  reliably learn the agent id from the MCP environment.
 - The remaining events are declared without response capabilities because the
   current source-evidence reading establishes no synchronous contract for them —
   not because a probe showed the binary ignoring a response. Widening one of
@@ -117,6 +132,14 @@ for that event — an existing `observer-only` capture is not counter-evidence.
   the *subagent's* context window, not the parent's. The `continue: false` block
   form is parsed for compatibility but does not stop subagent creation, so no
   block capability is declared and the interaction is non-blockable.
+- `session.token` is **not** declared for `SessionStart` or `SubagentStart` on
+  Codex. Codex passes no session id to its MCP subprocesses, so no consumer can
+  call `client.session.token.get` (which requires `adapterSessionId`); advertising
+  the capability would make integrations treat it as end-to-end usable when the
+  lookup path does not exist on this client. The composer sink and the catalog
+  `supportedInteractions` entry remain in place. Declaring the capability in the
+  event definition is the only change needed once Codex exposes a suitable lookup
+  key.
 - `SessionStart` maps the native `source` field to `startMode`. When Codex fires
   a post-compaction `SessionStart` with `source: 'compact'`, the normalizer maps
   it to `startMode: 'compact'`. The `PostCompact` hook fires first (raw ingress
@@ -370,6 +393,59 @@ all client providers:
 | Effect | Factory | Description |
 |--------|---------|-------------|
 | `context.append` | `createAppendEffect(value)` | Appends a string to the hook event's context. Multiple appends from different contributors are concatenated with newlines. |
+| `session.token` | `createSessionTokenEffect(value)` | Records an opaque correlation token for the session. Never rendered to stdout --- handed to `ClientSessionTokenService` in-process via `ClientSessionTokenSink`. Declared on `SessionStart` for Claude Code only; not declared for Claude Code `SubagentStart` or any Codex event. |
+
+### Session token capability
+
+The `session.token` capability lets a hook contributor attach an opaque
+correlation token at the moment a session or subagent starts. The token is
+never sent to the model and never appears on stdout.
+
+**Delivery path.** After effect reduction, the composer calls `ClientSessionTokenSink.record`
+directly — the token is handed over in-process, so no bus payload (and no
+`MAKAIO_DEBUG` bus logger) ever sees the token value. The `ClientSessionTokenService`
+stores the token in memory, keyed by `(clientId, adapterSessionId)` — and additionally
+`agentId` for subagents. Including `clientId` prevents two client providers that happen
+to report the same provider-local session id from colliding in the store. MCP servers
+running inside Claude Code can retrieve the token with the normal bus request
+`client.session.token.get { clientId, adapterSessionId, agentId? }`. A consumer that
+runs under Claude Code knows its `clientId` is `'claude-code'` because
+`CLAUDE_CODE_SESSION_ID` is set in the environment of every stdio MCP server subprocess
+and preserved across compaction.
+
+**Subjects.** Only `client.session.token.get` is a bus subject. The token write path
+is entirely in-process via `ClientSessionTokenSink` — no `session.token.record` bus
+subject exists.
+
+**Declaration.** `SessionStart` declares `session.token` for Claude Code. `SubagentStart`
+does **not** declare it (Claude Code subagents share the parent session's stdio MCP
+servers, which receive only `CLAUDE_CODE_SESSION_ID` — no path exists to the
+hook-only `agent_id`). Codex does not declare it either (Codex passes no session id
+to MCP subprocesses).
+
+**Compaction recovery.** When Claude Code fires `SessionStart` with
+`startMode: 'compact'`, the handler re-delivers the token and the in-process write
+overwrites the previous value. The token survives compaction without any additional
+handling on the contributor side.
+
+**Lifetime.** Entries are swept by a periodic TTL pass; entries idle for more than
+`SESSION_TOKEN_TTL_MS` (24 hours) are evicted. There is no subagent-completion
+cleanup handler — no client currently declares `session.token` on `SubagentStart`.
+The `agentId` dimension is retained in the key builder so a client whose MCP
+consumers can learn an agent id may declare `SubagentStart` later without a contract
+change. Session-scoped entries have no dedicated end event (there is no
+`client.session.ended`), so they rely on the TTL sweep. A cap of
+`MAX_SESSION_TOKEN_COUNT` entries is enforced by evicting the least recently active
+entry on insert.
+
+**Trust boundary.** The `hook.handle` subject is a `hostLocalRequest`, so only
+authenticated bus peers within the host process can invoke it. A peer that can
+reach `hook.handle` already controls far stronger effects on the session (model
+context via `context.append`, permission decisions on `PreToolUse`). Overwriting
+a correlation token adds no privilege because the token correlates — it never
+authorizes. Caller authentication for hook ingress is a bus-level concern shared
+by all host-local hook subjects, not something the session token capability
+addresses alone.
 
 ### Provider contribution envelopes
 
@@ -426,8 +502,8 @@ defines the interactions it supports and how contributions are validated.
 |-------|-------|
 | `clientId` | `claude-code` |
 | `contractId` | `claude-code.tool-response` |
-| `version` | `1.3.0` |
-| `supportedInteractions` | `PreToolUse`, `SessionStart`, `UserPromptSubmit`, `SubagentStart`, `approve`, `deny`, `context.append` |
+| `version` | `1.4.0` |
+| `supportedInteractions` | `PreToolUse`, `SessionStart`, `UserPromptSubmit`, `SubagentStart`, `approve`, `deny`, `context.append`, `session.token` |
 
 **Blockability:**
 
@@ -476,7 +552,7 @@ defines the interactions it supports and how contributions are validated.
 |-------|-------|
 | `clientId` | `codex` |
 | `contractId` | `openai.codex-hook-response` |
-| `version` | `1.2.0` |
+| `version` | `1.3.0` |
 | `supportedInteractions` | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStart` plus `context.append` and the namespaced `block`, `permission.deny`, and `input.update` capabilities |
 
 **Blockability:** `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop` support a blocking outcome. `SessionStart` renders it through the native `continue: false` and `stopReason` fields; the other events use their event-specific block form. `SubagentStart` carries `context.append` only and is non-blockable.
@@ -485,7 +561,10 @@ defines the interactions it supports and how contributions are validated.
 synchronous JSON responses for all six response-capable events. The composer renders context,
 block, permission-deny, and input-update forms while preserving request
 deadlines. Live CLI probes confirm these effects, and parser-rejected fields
-are not advertised.
+are not advertised. `session.token` is declared in `responseCapabilities` for
+`SessionStart` and `SubagentStart` but is never serialised to the native
+stdout payload; the effect is handed to the runtime in-process via
+`ClientSessionTokenSink` — no bus payload ever carries the token value.
 
 ---
 
@@ -548,7 +627,7 @@ ANTHROPIC_API_KEY=sk-... yarn test:agent-clients --provider claude-code
 | Package | Role |
 |---------|------|
 | `@makaio/contracts` (`./client`) | Canonical types: `ContributorDefinition`, `CanonicalEffect`, `ProviderContractCatalogEntry`, selectors, failure policies, validation helpers |
-| `@makaio/core` | `hostLocalRequest()` schema wrapper, `HostLocalRequestSubjectSchema` type |
+| `@makaio/core` | `hostLocalRequest()` and `localSubject()` schema wrappers; `HostLocalRequestSubjectSchema`, `LocalSubjectSchema` types |
 | `@makaio/bus-core` | Deadline minting, `hostLocalRequest` enforcement during dispatch, `RequestContext.deadline` exposure |
 | `@makaio/subsystem-client` | `ClientHookResponseRegistry`, `collectContributions` collector, `ClientHookResponseContributionProcessor`, `ClientHookHandleResponseSchema` |
 | `@makaio/extension-client-hooks` | CLI bridge (`makaio hook received`, `makaio hook handle`), deadline-aware timeout budget management |

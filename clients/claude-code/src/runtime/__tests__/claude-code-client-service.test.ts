@@ -12,6 +12,9 @@ import {
 } from '@makaio/contracts/client';
 import { SessionStorageSubjects } from '@makaio/contracts/session';
 import { ClaudeCodeClientService } from '../claude-code-client-service.js';
+import { ClientHookProviderContractRegistry, ClientHookResponseRegistry } from '@makaio/subsystem-client';
+import { createSessionTokenEffect } from '@makaio/contracts/client';
+import type { ContributorDefinition } from '@makaio/contracts/client';
 import { ClaudeCodeClientSubjects } from '../namespace.js';
 import {
   CLAUDE_CODE_HOOK_SESSION_START,
@@ -1679,6 +1682,78 @@ describe('ClaudeCodeClientService', () => {
       });
 
       expect(response).toEqual({ handled: false });
+    });
+  });
+  // ---------------------------------------------------------------------------
+  // sessionTokens sink injection
+  // ---------------------------------------------------------------------------
+
+  describe('sessionTokens sink injection', () => {
+    const TEST_EXTENSION = 'test-extension@1.0.0';
+
+    function createRegistries(): {
+      contractRegistry: ClientHookProviderContractRegistry;
+      responseRegistry: ClientHookResponseRegistry;
+    } {
+      const contractRegistry = new ClientHookProviderContractRegistry();
+      const responseRegistry = new ClientHookResponseRegistry(contractRegistry);
+      // Do NOT pre-register the contract here: ClaudeCodeClientService.onInit
+      // registers it under 'claude-code.runtime' — a second registration for
+      // the same contract would cause a collision error.
+      return { contractRegistry, responseRegistry };
+    }
+
+    function installContributor(responseRegistry: ClientHookResponseRegistry, definition: ContributorDefinition): void {
+      const result = responseRegistry.installContributors(TEST_EXTENSION, [definition]);
+      expect(result.errors).toHaveLength(0);
+    }
+
+    it('calls sink.record when a SessionStart hook.handle yields a session.token effect', async () => {
+      const { contractRegistry, responseRegistry } = createRegistries();
+      const sink = { record: vi.fn() };
+
+      await service.destroy();
+      service = new ClaudeCodeClientService(bus, undefined, contractRegistry, responseRegistry, sink);
+      await service.init();
+
+      installContributor(responseRegistry, {
+        lane: 'canonical',
+        clientIds: ['claude-code'],
+        id: 'token-contributor',
+        priority: 100,
+        timeoutMs: 5000,
+        selectors: [{ kind: 'capability', capability: 'session.token' }],
+        respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-service-test')] }),
+      } satisfies ContributorDefinition);
+
+      await bus.request(ClaudeCodeClientSubjects.hook.handle, {
+        eventName: CLAUDE_CODE_HOOK_SESSION_START,
+        receivedAt: RECEIVED_AT,
+        payload: { session_id: SESSION_ID },
+      });
+
+      expect(sink.record).toHaveBeenCalledOnce();
+      expect(sink.record).toHaveBeenCalledWith(
+        { clientId: 'claude-code', adapterSessionId: SESSION_ID },
+        'tok-service-test',
+      );
+    });
+
+    it('does not call sink.record when no token effect is contributed', async () => {
+      const { contractRegistry, responseRegistry } = createRegistries();
+      const sink = { record: vi.fn() };
+
+      await service.destroy();
+      service = new ClaudeCodeClientService(bus, undefined, contractRegistry, responseRegistry, sink);
+      await service.init();
+
+      await bus.request(ClaudeCodeClientSubjects.hook.handle, {
+        eventName: CLAUDE_CODE_HOOK_SESSION_START,
+        receivedAt: RECEIVED_AT,
+        payload: { session_id: SESSION_ID },
+      });
+
+      expect(sink.record).not.toHaveBeenCalled();
     });
   });
 });

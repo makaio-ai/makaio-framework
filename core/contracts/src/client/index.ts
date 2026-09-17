@@ -160,6 +160,16 @@ export type {
   ClientSessionUserPromptSubmitted,
   ClientWiringEntry,
 } from './session-observed.js';
+export {
+  ClientSessionTokenGetRequestSchema,
+  ClientSessionTokenGetResponseSchema,
+  ClientSessionTokenScopeSchema,
+} from './session-token.js';
+export type {
+  ClientSessionTokenGetRequest,
+  ClientSessionTokenGetResponse,
+  ClientSessionTokenScope,
+} from './session-token.js';
 export { ClientNamespace, ClientSubjects } from './namespace.js';
 export { createClientDefinition } from './create-definition.js';
 export {
@@ -207,7 +217,9 @@ export type {
   SessionConfigTeardownResponse,
 } from './profile.js';
 export {
+  CANONICAL_HOOK_RESPONSE_CAPABILITIES,
   createAppendEffect,
+  createSessionTokenEffect,
   DEFAULT_FAILURE_POLICY,
   isValidContributorId,
   isValidTimeoutMs,
@@ -218,6 +230,7 @@ export type {
   ActivationValidationError,
   CanonicalAppendEffect,
   CanonicalEffect,
+  CanonicalSessionTokenEffect,
   CapabilitySelector,
   ContributorActivationContext,
   ContributorCallbackContext,

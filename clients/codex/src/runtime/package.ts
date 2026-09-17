@@ -87,6 +87,7 @@ export const codexClientRuntimePackage: MakaioNodeExtension<IMakaioBus> = {
       undefined,
       clientsCore.providerContractRegistry,
       clientsCore.hookResponseRegistry,
+      clientsCore.sessionTokens,
     );
   },
 };

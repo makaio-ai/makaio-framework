@@ -9,6 +9,7 @@
  */
 
 import { createClientDefinition } from '@makaio/contracts';
+import { CANONICAL_HOOK_RESPONSE_CAPABILITIES } from '@makaio/contracts/client';
 
 /** Namespaced Claude Code hook-response capabilities exposed to contributors. */
 export const CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES = Object.freeze({
@@ -164,7 +165,7 @@ export const clientDefinition = createClientDefinition({
       {
         name: 'SessionStart',
         frameworkSubject: 'client.session.started',
-        responseCapabilities: ['context.append'],
+        responseCapabilities: ['context.append', CANONICAL_HOOK_RESPONSE_CAPABILITIES.sessionToken],
       },
       {
         name: 'UserPromptSubmit',
@@ -185,6 +186,14 @@ export const clientDefinition = createClientDefinition({
       {
         name: 'SubagentStart',
         frameworkSubject: 'client.session.subagent.started',
+        // session.token is NOT declared here. Claude Code subagents share the
+        // parent session's stdio MCP servers; those processes receive only
+        // CLAUDE_CODE_SESSION_ID and have no path to the hook-only agent_id.
+        // A SubagentStart token stored under (clientId, adapterSessionId,
+        // agentId) can therefore never be retrieved by any consumer in this
+        // client. The composer's resolveSessionTokenScope helper stays
+        // agent-aware so this declaration can come back once a consumer can
+        // reliably learn the agent id from the MCP environment.
         responseCapabilities: ['context.append'],
       },
       { name: 'SubagentStop', frameworkSubject: 'client.session.subagent.completed' },
