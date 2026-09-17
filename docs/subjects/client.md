@@ -42,7 +42,10 @@ next: false
 | `runtime.started` | [`client.runtime.started`](#client.runtime.started) | event | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/runtime-observation.ts) |
 | `scan` | [`client.scan`](#client.scan) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/schemas.ts) |
 | `session.account.observe` | [`client.session.account.observe`](#client.session.account.observe) | rpc | [`account-identity.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/account-identity.ts) |
+| `session.compaction.pre` | [`client.session.compaction.pre`](#client.session.compaction.pre) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
 | `session.started` | [`client.session.started`](#client.session.started) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
+| `session.subagent.completed` | [`client.session.subagent.completed`](#client.session.subagent.completed) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
+| `session.subagent.started` | [`client.session.subagent.started`](#client.session.subagent.started) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
 | `session.tool.post` | [`client.session.tool.post`](#client.session.tool.post) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
 | `session.tool.pre` | [`client.session.tool.pre`](#client.session.tool.pre) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
 | `session.turn.completed` | [`client.session.turn.completed`](#client.session.turn.completed) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
@@ -575,6 +578,49 @@ Type: Request (RPC)
 | `handled` | `boolean` | yes |
 | `sessionId` | `string \| null` | yes |
 
+### <a id="client.session.compaction.pre"></a>`client.session.compaction.pre` (event)
+
+Payload for `client.session.compaction.pre`.
+
+Fires BEFORE the client compacts its context window. The post-compaction
+framework signal is `client.session.started` with `startMode: 'compact'`,
+delivered by the SessionStart hook that fires after compaction on the SAME
+session id. Both clients also fire a raw-only `PostCompact` hook carrying a
+`trigger` field, but its ordering relative to `SessionStart(compact)` differs
+by client: Codex fires `PreCompact → PostCompact → SessionStart(compact)`;
+Claude Code fires `PreCompact → SessionStart(compact) → PostCompact`.
+Consumers must treat `client.session.started{startMode:'compact'}` as the
+authoritative post-compaction signal and must NOT assume it precedes or
+follows the raw PostCompact hook.
+
+Three compaction signals together describe the full compaction lifecycle:
+`client.session.compaction.pre` fires before compaction begins (from hooks,
+carries `trigger` and `transcriptPath`); `client.session.started` with
+`startMode: 'compact'` fires after compaction completes (from hooks, same
+payload as a normal session start); and `SessionSubjects.session.compacted` (from `@makaio/contracts`) is emitted
+post-hoc during transcript import, after the compacted session has been
+ingested.
+
+Fields:
+- `trigger` — how the compaction was initiated (`'manual'` or `'auto'`).
+  Absent when the adapter cannot determine the trigger.
+- `transcriptPath` — absolute path to the transcript file at the time of
+  compaction, if available from the client runtime.
+
+Subject: `client.session.compaction.pre`
+Type: Event
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterSessionId` | `string \| undefined` | no |
+| `clientId` | `string` | yes |
+| `metadata` | `Record<string, unknown> \| undefined` | no |
+| `observedAt` | `number` | yes |
+| `sessionId` | `string \| undefined` | no |
+| `source` | `string` | yes |
+| `transcriptPath` | `string \| undefined` | no |
+| `trigger` | `"auto" \| "manual" \| undefined` | no |
+
 ### <a id="client.session.started"></a>`client.session.started` (event)
 
 Subject: `client.session.started`
@@ -593,6 +639,76 @@ Type: Event
 | `source` | `string` | yes |
 | `startMode` | `"clear" \| "fork" \| "resume" \| "fresh" \| "compact" \| undefined` | no |
 | `transcriptPath` | `string \| undefined` | no |
+
+### <a id="client.session.subagent.completed"></a>`client.session.subagent.completed` (event)
+
+Payload for `client.session.subagent.completed`.
+
+Emitted when a client-native subagent completes. Extends
+`ClientSessionSubagentStartedSchema` with an optional transcript path
+so consumers can trigger targeted log imports for the finished subagent turn.
+
+Fields (in addition to `ClientSessionSubagentStartedSchema`):
+- `agentTranscriptPath` — absolute path to the subagent's transcript file,
+  if the client runtime exposes it at completion time.
+
+Subject: `client.session.subagent.completed`
+Type: Event
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterSessionId` | `string \| undefined` | no |
+| `agentId` | `string` | yes |
+| `agentTranscriptPath` | `string \| undefined` | no |
+| `agentType` | `string \| undefined` | no |
+| `clientId` | `string` | yes |
+| `metadata` | `Record<string, unknown> \| undefined` | no |
+| `observedAt` | `number` | yes |
+| `sessionId` | `string \| undefined` | no |
+| `source` | `string` | yes |
+| `turnId` | `string \| undefined` | no |
+
+### <a id="client.session.subagent.started"></a>`client.session.subagent.started` (event)
+
+Payload for `client.session.subagent.started`.
+
+Emitted when a client-native subagent is observed via hooks. The subagent
+event belongs to the parent session: `adapterSessionId` on the base carries
+the parent session id (the same as every other `client.session.*` event),
+which keeps subagent events joinable on `adapterSessionId`. The subagent
+identity is `agentId`.
+
+Fields:
+- `agentId`    — stable identity of the subagent as reported by the client
+  runtime.
+- `agentType`  — optional type label for the subagent (e.g. the agent type
+  string reported by the client).
+- `turnId`     — opaque turn correlation id, if available. Codex populates
+  this from `turn_id`; Claude Code does not expose it.
+
+Note: this is the client-native OBSERVATION of a subagent (`agentId` = the
+client's agent id, `adapterSessionId` = the owning session); it is distinct
+from the framework's control-plane `subagent.*` namespace
+(`SubagentSchemas`/`SubagentSubjects`, using `subagentId` and
+`parentSessionId`) exported from `@makaio/contracts`. Client-native keys
+(`makaio.client.agent_id`, `makaio.client.agent_type`, `makaio.client.turn_id`)
+keep telemetry joins from attributing client-observed subagents to framework
+agents that share the `makaio.agent.id` / `makaio.turn.id` namespace.
+
+Subject: `client.session.subagent.started`
+Type: Event
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterSessionId` | `string \| undefined` | no |
+| `agentId` | `string` | yes |
+| `agentType` | `string \| undefined` | no |
+| `clientId` | `string` | yes |
+| `metadata` | `Record<string, unknown> \| undefined` | no |
+| `observedAt` | `number` | yes |
+| `sessionId` | `string \| undefined` | no |
+| `source` | `string` | yes |
+| `turnId` | `string \| undefined` | no |
 
 ### <a id="client.session.tool.post"></a>`client.session.tool.post` (event)
 
@@ -790,7 +906,7 @@ Type: Request (RPC)
 |-------|------|----------|
 | `baseConfigDir` | `string \| undefined` | no |
 | `clientId` | `string` | yes |
-| `configInheritance` | `"full" \| "auth-only" \| "empty" \| undefined` | no |
+| `configInheritance` | `"auth-only" \| "full" \| "empty" \| undefined` | no |
 | `leaseId` | `string` | yes |
 | `ownerSessionId` | `string \| undefined` | no |
 | `profileName` | `string \| undefined` | no |

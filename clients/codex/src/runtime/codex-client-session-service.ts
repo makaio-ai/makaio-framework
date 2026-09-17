@@ -43,10 +43,11 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { MakaioBus, RequestError } from '@makaio/bus-core';
 import { BinaryNotFoundError, ClientSubjects, assertAbsoluteProjectDir } from '@makaio/subsystem-client';
 import type { ClientHookProviderContractRegistry, ClientHookResponseRegistry } from '@makaio/subsystem-client';
-import type { ClientRuntimeStarted } from '@makaio/contracts/client';
+import type { ClientRuntimeStarted, ClientSessionStarted } from '@makaio/contracts/client';
 import { BaseService } from '@makaio/service-base';
 import { CodexClientSettings } from './client-settings.js';
 import { handleCodexConfigPrime } from './config-prime-handler.js';
+import { sniffRolloutFork } from './fork-sniff.js';
 import { normalizeCodexHook } from './hook-normalizer.js';
 import type { CodexNormalizedEvent } from './hook-normalizer.js';
 import { composeCodexHookResponse } from './hook-response-composer.js';
@@ -471,7 +472,7 @@ export class CodexClientSessionService extends BaseService {
       try {
         switch (normalized.subject) {
           case ClientSubjects.session.started:
-            await this.bus.emit(ClientSubjects.session.started, normalized.payload);
+            await this.bus.emit(ClientSubjects.session.started, await this.enrichForkLineage(normalized.payload));
             break;
           case ClientSubjects.session.userPrompt.submitted:
             await this.bus.emit(ClientSubjects.session.userPrompt.submitted, normalized.payload);
@@ -566,6 +567,50 @@ export class CodexClientSessionService extends BaseService {
     if (normalized.subject !== ClientSubjects.session.started) return true;
     const { startMode } = normalized.payload as { startMode?: string };
     return startMode !== 'compact' && startMode !== 'clear';
+  }
+
+  /**
+   * Enrich a `client.session.started` payload with fork lineage when the
+   * normalizer reported `startMode: 'fresh'` and a rollout path is available.
+   *
+   * Codex classifies a fork child next to a brand-new thread: both fire
+   * `SessionStart` with `source: 'startup'`, and the payload carries no
+   * lineage field. The child's rollout file, however, opens with its own
+   * `session_meta` record, and that record names `forked_from_id` — the parent
+   * thread id. This method performs a bounded read of the rollout head to
+   * recover it, upgrading `startMode` from `'fresh'` to `'fork'` and
+   * populating `parentAdapterSessionId`.
+   *
+   * Only `'fresh'` is sniffed. A resume appends to the *existing* rollout file,
+   * so a resumed fork child would still show its original `forked_from_id`;
+   * upgrading it to `'fork'` would re-register an already known session instead
+   * of letting ingestion rebind it by adapter session id.
+   *
+   * Runs **after** the managed-session suppression gate (so adapter-managed
+   * sessions are already filtered out) and **before** bus emission.
+   *
+   * On any sniff error the payload is returned unchanged — hook processing must
+   * never be blocked by a sniff failure.
+   * @param payload - Normalized `client.session.started` payload
+   * @returns The payload, potentially enriched with fork lineage fields
+   */
+  private async enrichForkLineage(payload: ClientSessionStarted): Promise<ClientSessionStarted> {
+    if (
+      payload.startMode !== 'fresh' ||
+      payload.transcriptPath === undefined ||
+      payload.adapterSessionId === undefined
+    ) {
+      return payload;
+    }
+
+    const sniffResult = await sniffRolloutFork(payload.transcriptPath, payload.adapterSessionId);
+    if (sniffResult === undefined) return payload;
+
+    return {
+      ...payload,
+      startMode: 'fork',
+      parentAdapterSessionId: sniffResult.parentAdapterSessionId,
+    };
   }
 }
 

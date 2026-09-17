@@ -142,11 +142,21 @@ const COMPACTION_TRIGGERS: ReadonlySet<ClientSessionCompactionTrigger> = new Set
  * Map from the Codex CLI `SessionStart.source` union to the
  * framework-level {@link ClientSessionStartMode}.
  *
- * - `'startup'` → `'fresh'` (brand-new session)
- * - `'resume'`  → `'resume'` (tentative; may be upgraded to `'fork'` after
- *   transcript sniff when foreign session IDs are found)
- * - `'clear'`   → `'clear'` (conversation cleared, same session ID)
- * - `'compact'` → `'compact'` (context compacted, same session ID)
+ * - `'startup'` → `'fresh'` (brand-new thread — **and a fork child**, see
+ *   below; the owning service upgrades the fork case to `'fork'`)
+ * - `'resume'`  → `'resume'` (thread continued from its own rollout file)
+ * - `'clear'`   → `'clear'` (conversation cleared, new thread id)
+ * - `'compact'` → `'compact'` (context compacted, same thread id)
+ *
+ * The vendor union has exactly these four values in the pinned `rust-v0.144.1`
+ * source (`codex-rs/hooks/src/events/session_start.rs`, `SessionStartSource`);
+ * there is no `'fork'` value. In `codex-rs/core/src/session/session.rs` a fork
+ * is classified next to a brand-new thread — the match arm that maps
+ * `InitialHistory::New` to `SessionStartSource::Startup` also covers
+ * `InitialHistory::Forked` — which is why `'startup'`, not `'resume'`, is the
+ * mode that may still turn out to be a fork.
+ * Lineage is recovered from the rollout file instead; see the fork sniff in
+ * `fork-sniff.ts` and its caller in `codex-client-session-service.ts`.
  *
  * Vendor values not in this map yield `undefined`, leaving `startMode`
  * absent from the normalized payload — safe for forward compatibility when
@@ -280,9 +290,11 @@ function extractCompactionTrigger(payload: Record<string, unknown>): ClientSessi
 }
 
 /**
- * Extract the transcript path from a `PreCompact` payload.
+ * Extract the transcript path from a raw Codex hook payload.
  *
- * Codex may include `transcript_path` in compaction hook payloads.
+ * Codex includes `transcript_path` on `SessionStart` and on the compaction
+ * hooks; it is the absolute path of the thread's rollout JSONL file and is
+ * serialized as `null` when no rollout has been materialized.
  * @param payload - Raw hook payload object
  * @returns Transcript path string, or `undefined` when absent or empty
  */
@@ -415,6 +427,11 @@ export function normalizeCodexHook(raw: RawClientHookPayload, machineId?: string
   switch (raw.eventName) {
     case CODEX_HOOK_SESSION_START: {
       const startMode = resolveStartMode(raw.payload);
+      // `transcript_path` is the rollout file Codex materializes for the
+      // starting thread; it is the fork-lineage source the hook payload itself
+      // does not carry. Null when the CLI could not materialize a rollout
+      // (e.g. an ephemeral thread).
+      const transcriptPath = extractTranscriptPath(raw.payload);
       return [
         {
           subject: ClientSubjects.session.started,
@@ -422,6 +439,7 @@ export function normalizeCodexHook(raw: RawClientHookPayload, machineId?: string
             ...base,
             ...(machineId !== undefined && { machineId }),
             ...(startMode !== undefined && { startMode }),
+            ...(transcriptPath !== undefined && { transcriptPath }),
           },
         },
       ];

@@ -54,7 +54,7 @@ is preserved without overwriting a concurrently changed canonical credential.
 | `PostCompact` | — (raw ingress only) | — |
 | `PermissionRequest` | — (raw ingress only) | — (response surface not yet proven) |
 
-The first five events synchronously consume JSON output in the pinned upstream source tag `rust-v0.144.1`. `SubagentStart` through `PreCompact` are event-mode (observer or context-only). `PostCompact` and `PermissionRequest` are wired for raw ingress only and carry no declared response capabilities.
+Every event with a response capability runs in request mode (`hook handle codex <event>`); the wiring derives the timeout from blockability: 5000 ms where a `block`/`permission.deny` capability exists, 1000 ms for the context-only `SubagentStart`. `SubagentStop` and `PreCompact` are observer-only event-mode hooks (`hook received codex <event>`). `PostCompact` and `PermissionRequest` are wired for raw ingress only and carry no declared response capabilities. The runtime contract is version `1.2.0` and lists `SubagentStart` as a supported, non-blockable interaction.
 
 ### Hook Response Contract (`openai.codex-hook-response@1`)
 
@@ -63,10 +63,10 @@ The `./runtime` entrypoint registers a `ProviderContractCatalogEntry` that defin
 | Field | Value |
 |-------|-------|
 | `contractId` | `openai.codex-hook-response` |
-| `version` | `1.1.0` |
-| `supportedInteractions` | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop` |
+| `version` | `1.2.0` |
+| `supportedInteractions` | `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStart`, plus the response-capability ids (`context.append`, `openai.codex-hook-response.block`, `openai.codex-hook-response.permission.deny`, `openai.codex-hook-response.input.update`) |
 
-**Blockability:** All five events support blocking responses. SessionStart uses `continue: false` with `stopReason`; the other events use their event-specific block form.
+**Blockability:** The first five events support blocking responses. SessionStart uses `continue: false` with `stopReason`; the other four use their event-specific block form. `SubagentStart` is declared non-blockable: it accepts `context.append` (the text lands in the subagent's context window), but subagent creation cannot be refused.
 
 **Composition:** Contributions are collected deterministically. Context appends render as `hookSpecificOutput.additionalContext`; blocks use `decision: "block"` with a non-empty reason; PreToolUse additionally supports `permissionDecision: "deny"` and an allowed `updatedInput` rewrite.
 
