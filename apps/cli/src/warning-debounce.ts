@@ -34,6 +34,21 @@ function hashCwd(cwd: string): string {
 }
 
 /**
+ * Return `true` when `lastWarnedAt` falls within the debounce window relative
+ * to now.
+ *
+ * A negative elapsed value (clock stepped backwards) is treated as outside the
+ * window so a future timestamp never keeps the suppression alive indefinitely.
+ * @param lastWarnedAt - Millisecond epoch timestamp of the last recorded event.
+ * @returns `true` when the elapsed time is non-negative and less than
+ *   {@link DEBOUNCE_WINDOW_MS}.
+ */
+function isWithinDebounceWindow(lastWarnedAt: number): boolean {
+  const elapsed = Date.now() - lastWarnedAt;
+  return elapsed >= 0 && elapsed < DEBOUNCE_WINDOW_MS;
+}
+
+/**
  * Check whether a warning for the given CWD was shown recently enough that
  * it should be suppressed.
  * @param makaioHome - Resolved Makaio data home.
@@ -47,7 +62,7 @@ export function shouldSuppressWarning(makaioHome: string, cwd: string = process.
     const data: unknown = JSON.parse(raw);
     if (typeof data === 'object' && data !== null && 'lastWarnedAt' in data) {
       const { lastWarnedAt } = data as { lastWarnedAt: unknown };
-      if (typeof lastWarnedAt === 'number' && Date.now() - lastWarnedAt < DEBOUNCE_WINDOW_MS) {
+      if (typeof lastWarnedAt === 'number' && isWithinDebounceWindow(lastWarnedAt)) {
         return true;
       }
     }
@@ -117,5 +132,59 @@ function evictStaleEntries(cacheDir: string, skip: string): void {
         // Give up on this entry.
       }
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Hook failure cool-down (keyed by composite CWD + busUrl scope)
+// ---------------------------------------------------------------------------
+
+/**
+ * Check whether the hook-failure cool-down for the given composite key is
+ * active.  Uses the same {@link DEBOUNCE_WINDOW_MS} window as
+ * {@link shouldSuppressWarning}, but stores state in a `*.hook.json` file
+ * so the two families never collide.
+ * @param makaioHome - Resolved Makaio data home.
+ * @param hookKey - Composite deduplication key, typically `cwd + '\n' + busUrl`.
+ *   Never logged.
+ * @returns `true` when the cool-down is active and the hook shortcut should
+ *   fire.
+ */
+export function shouldSuppressHookCoolDown(makaioHome: string, hookKey: string): boolean {
+  const cacheFile = path.join(warningCacheDir(makaioHome), `${hashCwd(hookKey)}.hook.json`);
+  try {
+    const raw = fs.readFileSync(cacheFile, 'utf-8');
+    const data: unknown = JSON.parse(raw);
+    if (typeof data === 'object' && data !== null && 'lastWarnedAt' in data) {
+      const { lastWarnedAt } = data as { lastWarnedAt: unknown };
+      if (typeof lastWarnedAt === 'number' && isWithinDebounceWindow(lastWarnedAt)) {
+        return true;
+      }
+    }
+  } catch {
+    // File missing or corrupted — cool-down not active.
+  }
+  return false;
+}
+
+/**
+ * Record a hook-failure event for the given composite key so subsequent
+ * invocations within {@link DEBOUNCE_WINDOW_MS} can be short-circuited.
+ *
+ * Also evicts stale `*.json` and `*.hook.json` files from the same cache
+ * directory (via the shared {@link evictStaleEntries} helper).
+ * @param makaioHome - Resolved Makaio data home.
+ * @param hookKey - Composite deduplication key, typically `cwd + '\n' + busUrl`.
+ *   Never logged.
+ */
+export function recordHookCoolDown(makaioHome: string, hookKey: string): void {
+  const cacheDir = warningCacheDir(makaioHome);
+  try {
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const ownFile = `${hashCwd(hookKey)}.hook.json`;
+    fs.writeFileSync(path.join(cacheDir, ownFile), JSON.stringify({ lastWarnedAt: Date.now() }));
+    evictStaleEntries(cacheDir, ownFile);
+  } catch {
+    // Best-effort — failure to persist is not critical.
   }
 }

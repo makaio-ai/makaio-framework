@@ -65,7 +65,7 @@ describe('buildCodexWiringList', () => {
     const settings = createMockSettings([
       {
         event: 'SessionStart',
-        command: 'makaio --no-launch hook handle codex SessionStart --timeout 5000',
+        command: 'makaio --no-launch --debounce-failure hook handle codex SessionStart --timeout 5000',
       },
     ]);
     const result = await buildCodexWiringList(settings, 'makaio');
@@ -77,7 +77,7 @@ describe('buildCodexWiringList', () => {
     const settings = createMockSettings([
       {
         event: 'SessionStart',
-        command: 'makaio --no-launch hook handle codex SessionStart --timeout 5000',
+        command: 'makaio --no-launch --debounce-failure hook handle codex SessionStart --timeout 5000',
       },
     ]);
     const result = await buildCodexWiringList(settings, 'makaio');
@@ -103,7 +103,10 @@ describe('buildCodexWiringList', () => {
     try {
       await writeHooksJson(hooksPath, [
         { event: 'SessionStart', command: 'makaio hook received codex SessionStart' },
-        { event: 'UserPromptSubmit', command: 'makaio --no-launch hook handle codex UserPromptSubmit --timeout 5000' },
+        {
+          event: 'UserPromptSubmit',
+          command: 'makaio --no-launch --debounce-failure hook handle codex UserPromptSubmit --timeout 5000',
+        },
       ]);
       const settings = new CodexClientSettings({ globalHooks: hooksPath, projectHooks: null });
 
@@ -169,13 +172,28 @@ describe('applyCodexWiring', () => {
   it('skips already-installed entries and reflects the count', async () => {
     // Seed all hooks as installed so addHook returns added: false for each.
     const allInstalled: CodexHookEntry[] = [
-      { event: 'SessionStart', command: 'makaio --no-launch hook handle codex SessionStart --timeout 5000' },
-      { event: 'UserPromptSubmit', command: 'makaio --no-launch hook handle codex UserPromptSubmit --timeout 5000' },
-      { event: 'PreToolUse', command: 'makaio --no-launch hook handle codex PreToolUse --timeout 5000' },
-      { event: 'PostToolUse', command: 'makaio --no-launch hook handle codex PostToolUse --timeout 5000' },
-      { event: 'Stop', command: 'makaio --no-launch hook handle codex Stop --timeout 5000' },
+      {
+        event: 'SessionStart',
+        command: 'makaio --no-launch --debounce-failure hook handle codex SessionStart --timeout 5000',
+      },
+      {
+        event: 'UserPromptSubmit',
+        command: 'makaio --no-launch --debounce-failure hook handle codex UserPromptSubmit --timeout 5000',
+      },
+      {
+        event: 'PreToolUse',
+        command: 'makaio --no-launch --debounce-failure hook handle codex PreToolUse --timeout 5000',
+      },
+      {
+        event: 'PostToolUse',
+        command: 'makaio --no-launch --debounce-failure hook handle codex PostToolUse --timeout 5000',
+      },
+      { event: 'Stop', command: 'makaio --no-launch --debounce-failure hook handle codex Stop --timeout 5000' },
       // SubagentStart is non-blockable (context-only) → 1000 ms timeout.
-      { event: 'SubagentStart', command: 'makaio --no-launch hook handle codex SubagentStart --timeout 1000' },
+      {
+        event: 'SubagentStart',
+        command: 'makaio --no-launch --debounce-failure hook handle codex SubagentStart --timeout 1000',
+      },
       { event: 'SubagentStop', command: 'makaio --debounce-failure hook received codex SubagentStop' },
       { event: 'PreCompact', command: 'makaio --debounce-failure hook received codex PreCompact' },
       { event: 'PostCompact', command: 'makaio --debounce-failure hook received codex PostCompact' },
@@ -214,15 +232,27 @@ describe('applyCodexWiring', () => {
     // left empty so buildCodexWiringList would report them as not-installed —
     // applyCodexWiring reads perScope directly for replace detection.
     const staleHooks: CodexHookEntry[] = [
-      { event: 'SessionStart', command: 'makaio-dev --no-launch hook handle codex SessionStart --timeout 5000' },
+      {
+        event: 'SessionStart',
+        command: 'makaio-dev --no-launch --debounce-failure hook handle codex SessionStart --timeout 5000',
+      },
       {
         event: 'UserPromptSubmit',
-        command: 'makaio-dev --no-launch hook handle codex UserPromptSubmit --timeout 5000',
+        command: 'makaio-dev --no-launch --debounce-failure hook handle codex UserPromptSubmit --timeout 5000',
       },
-      { event: 'PreToolUse', command: 'makaio-dev --no-launch hook handle codex PreToolUse --timeout 5000' },
-      { event: 'PostToolUse', command: 'makaio-dev --no-launch hook handle codex PostToolUse --timeout 5000' },
-      { event: 'Stop', command: 'makaio-dev --no-launch hook handle codex Stop --timeout 5000' },
-      { event: 'SubagentStart', command: 'makaio-dev --no-launch hook handle codex SubagentStart --timeout 5000' },
+      {
+        event: 'PreToolUse',
+        command: 'makaio-dev --no-launch --debounce-failure hook handle codex PreToolUse --timeout 5000',
+      },
+      {
+        event: 'PostToolUse',
+        command: 'makaio-dev --no-launch --debounce-failure hook handle codex PostToolUse --timeout 5000',
+      },
+      { event: 'Stop', command: 'makaio-dev --no-launch --debounce-failure hook handle codex Stop --timeout 5000' },
+      {
+        event: 'SubagentStart',
+        command: 'makaio-dev --no-launch --debounce-failure hook handle codex SubagentStart --timeout 5000',
+      },
       { event: 'SubagentStop', command: 'makaio-dev --debounce-failure hook received codex SubagentStop' },
       { event: 'PreCompact', command: 'makaio-dev --debounce-failure hook received codex PreCompact' },
       { event: 'PostCompact', command: 'makaio-dev --debounce-failure hook received codex PostCompact' },
@@ -266,6 +296,39 @@ describe('applyCodexWiring', () => {
       expect(addIdx, `addHook for ${event} not found in call log`).toBeGreaterThanOrEqual(0);
       expect(removeIdx, `removeHook for ${event} must precede addHook`).toBeLessThan(addIdx);
     }
+  });
+
+  it('replaces a request-mode entry installed without --debounce-failure (upgrade from previous version)', async () => {
+    // Simulate an entry written by the previous version that lacks the flag.
+    const oldCommand = 'makaio --no-launch hook handle codex SessionStart --timeout 5000';
+    const settings: CodexWiringSettings = {
+      listHooks: vi.fn().mockResolvedValue({
+        effective: [],
+        perScope: [
+          {
+            scope: 'global',
+            path: '/fake/hooks.json',
+            writable: true,
+            hooks: [{ event: 'SessionStart', command: oldCommand }],
+          },
+        ],
+      }),
+      addHook: vi.fn().mockResolvedValue({ added: true }),
+      removeHook: vi.fn().mockResolvedValue({ removed: 1 }),
+    };
+
+    await applyCodexWiring(settings, 'global', 'makaio');
+
+    // The stale entry must be removed — sentinel detection still finds it.
+    expect(settings.removeHook).toHaveBeenCalled();
+    const removeCalls = vi.mocked(settings.removeHook).mock.calls;
+    expect(removeCalls.some(([req]) => req.event === 'SessionStart')).toBe(true);
+    // A fresh entry with --debounce-failure must be added in its place.
+    expect(settings.addHook).toHaveBeenCalled();
+    const addCalls = vi.mocked(settings.addHook).mock.calls;
+    const addedCmd = addCalls.find(([req]) => req.event === 'SessionStart')?.[0].command as string | undefined;
+    expect(addedCmd).toContain('--debounce-failure');
+    expect(addedCmd).toContain('hook handle codex SessionStart');
   });
 });
 

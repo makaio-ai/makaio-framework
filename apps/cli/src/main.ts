@@ -18,15 +18,7 @@ import { toCliArgManifests, CliRpcSubjects } from '@makaio/kernel/cli';
 import type { CliContribution } from '@makaio/kernel/cli';
 import { resolveConventionEntrypoint, resolveMakaioHome, type ExtensionDiscovery } from '@makaio/runtime-node';
 import { registerContribution } from './schema-adapter.js';
-import {
-  connectBusClient,
-  isAuthConnectionError,
-  probeHealth,
-  resolveClientAuth,
-  resolveBusUrl,
-} from './bus-client.js';
-import { launchAppAndWaitForBus } from './app-launch.js';
-import type { ServerHealth } from './bus-client.js';
+import { resolveBusUrl } from './bus-client.js';
 import { disconnectBusSafely } from './command-runtime.js';
 import { registerManifestCommand, registerManifestArgs, collectPositionalArgs } from './manifest-commands.js';
 import { registerExtensionCommands } from './extension-commands.js';
@@ -40,6 +32,8 @@ import { registerAutoLaunchCommand } from './auto-launch-command.js';
 import { registerSetupCommand } from './setup-command.js';
 import { registerInstallCommand } from './install-command.js';
 import { handleParseError, applyFallbackOverrides, type FallbackReason } from './parse-error.js';
+import { recordBuiltinHookFailure } from './builtin-hook-debounce.js';
+import { resolveBusForInvocation } from './bus-resolution.js';
 
 export { extractRootConfigArg } from './runtime-config.js';
 
@@ -408,57 +402,6 @@ async function enrichManifestFromLiveSchema(
 }
 
 /**
- * Connect the single bus instance for the CLI invocation.
- *
- * Returns `null` when the server is unreachable — commands still register for
- * `--help` visibility but actions fail with the best available connection
- * context.
- * Always uses `autoReconnect: true` so interactive TUI sessions survive
- * transient disconnections. For one-shot subcommands this is harmless because
- * `disconnect()` aborts the reconnect loop before any retry fires.
- * @param health - Health probe result, or `null` when the server is unreachable.
- * @param options - Connection logging behavior for the current invocation.
- * @returns Connected bus instance (or `null`) and a human-readable error when
- *   the connection failed.
- */
-async function connectCliBus(
-  health: ServerHealth | null,
-  options?: { readonly backgroundLaunchAttempted?: boolean; readonly suppressConnectionWarnings?: boolean },
-): Promise<{ bus: IMakaioBus | null; connectionError?: string }> {
-  if (!health) {
-    const connectionError = options?.backgroundLaunchAttempted
-      ? 'Makaio server did not become reachable after starting the desktop app in background mode.'
-      : 'Makaio server is not reachable.\nStart it with: makaio serve';
-    return { bus: null, connectionError };
-  }
-
-  try {
-    const auth = resolveClientAuth(health);
-    const bus = await connectBusClient(undefined, { auth, autoReconnect: true });
-    return { bus };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (isAuthConnectionError(err)) {
-      if (!options?.suppressConnectionWarnings) {
-        console.warn('[cli] Bus connection failed:', message);
-      }
-      return { bus: null, connectionError: `Bus authentication failed: ${message}` };
-    }
-    if (!options?.suppressConnectionWarnings) {
-      console.warn('[cli] Could not connect to server:', message);
-    }
-    return { bus: null, connectionError: `Could not connect to Makaio server: ${message}` };
-  }
-}
-
-interface CliHealthProbeResult {
-  /** Health probe result after optional background launch. */
-  readonly health: ServerHealth | null;
-  /** Whether the CLI attempted to launch the desktop app before returning. */
-  readonly backgroundLaunchAttempted: boolean;
-}
-
-/**
  * Determine whether the current invocation targets a locally-discovered
  * extension that declares it can provide its own embedded bus.
  *
@@ -498,30 +441,19 @@ function shouldSkipDesktopAutoLaunch(
 }
 
 /**
- * Probe the bus health endpoint and attempt background desktop launch only
- * when the initial probe fails and the targeted command cannot provide its
- * own embedded bus.
- * @param busUrl - Resolved bus URL used for both probing and launch polling.
- * @param skipLaunch - When `true`, skip the desktop auto-launch step even if
- *   the health probe returns `null`. Used when the invocation targets a
- *   command that can embed its own bus.
- * @returns The final health result and whether a launch was attempted.
+ * Build the help-text suffix that explains why extension commands are missing.
+ * @param fallback - Why server-side command discovery is unavailable.
+ * @param connectionError - Connection error detail, when one was captured.
+ * @returns Help text appended after the generated help.
  */
-async function probeCliHealthWithOptionalLaunch(busUrl: string, skipLaunch: boolean): Promise<CliHealthProbeResult> {
-  const health = await probeHealth(busUrl);
-  if (health) {
-    return { health, backgroundLaunchAttempted: false };
+function fallbackHelpSuffix(fallback: FallbackReason, connectionError: string | undefined): string {
+  if (fallback === 'unreachable') {
+    return `\n${connectionError ?? 'Server not running — some extension commands may be unavailable.\nStart with: makaio serve'}`;
   }
-
-  if (skipLaunch) {
-    return { health: null, backgroundLaunchAttempted: false };
+  if (fallback === 'connection-failed') {
+    return `\n${connectionError ?? 'The CLI could not connect to the running server.'}`;
   }
-
-  const launchResult = await launchAppAndWaitForBus(busUrl);
-  return {
-    health: launchResult.health,
-    backgroundLaunchAttempted: launchResult.launched,
-  };
+  return '\nCommand discovery failed — some extension commands may be unavailable.';
 }
 
 /**
@@ -576,24 +508,26 @@ export async function main(
     return;
   }
 
+  // Resolve the bus URL early: needed both for the hook cool-down key and for
+  // the health-probe that runs after local discovery.
+  const busUrl = resolveBusUrl();
+
   // --- Layer 1: Local filesystem discovery (pure data, no bus needed) ---
   // Injected contribution names are skipped before manifest registration, so
   // direct built-ins such as `hook` own their command action once the bus exists.
   const injectedNames = new Set(allContributions.map((c) => c.name));
   const localExtensions = await discoverLocalExtensions(program, effectiveDiscovery, injectedNames);
 
-  // --- Single bus for the entire invocation ---
-  // Resolve the bus URL once — probeHealth is a lightweight HTTP GET that gates
-  // whether to attempt the heavier auto-launch + WebSocket connection path.
+  // --- Single bus for the entire invocation (see bus-resolution.ts) ---
   // Skip the desktop launch when explicitly requested or when the targeted
-  // command can embed its own bus. probeHealth still runs so an already-running
-  // server can win, but timeout-sensitive hooks do not block on a launch cycle.
-  const busUrl = resolveBusUrl();
+  // command can embed its own bus; a built-in hook inside its failure
+  // cool-down skips the probe and the connect entirely.
   const skipLaunch = shouldSkipDesktopAutoLaunch(parsedArgv, localExtensions, noLaunch);
-  const { health, backgroundLaunchAttempted } = await probeCliHealthWithOptionalLaunch(busUrl, skipLaunch);
-
-  const { bus, connectionError } = await connectCliBus(health, {
-    backgroundLaunchAttempted,
+  const { health, bus, connectionError, connectionFailure, probeSkipped } = await resolveBusForInvocation({
+    parsedArgv,
+    debounceFailure,
+    busUrl,
+    skipLaunch,
     suppressConnectionWarnings: isHelpOnlyInvocation(parsedArgv),
   });
 
@@ -642,18 +576,14 @@ export async function main(
   // When server-side discovery did not succeed, replace Commander's generic
   // "unknown command" with a message that explains *why* the command wasn't found.
   if (fallback !== 'none') {
-    const helpSuffix =
-      fallback === 'unreachable'
-        ? `\n${connectionError ?? 'Server not running — some extension commands may be unavailable.\nStart with: makaio serve'}`
-        : fallback === 'connection-failed'
-          ? `\n${connectionError ?? 'The CLI could not connect to the running server.'}`
-          : '\nCommand discovery failed — some extension commands may be unavailable.';
+    const helpSuffix = fallbackHelpSuffix(fallback, connectionError);
     program.addHelpText('afterAll', helpSuffix);
     applyFallbackOverrides(program);
   }
 
   try {
     await program.parseAsync(parsedArgv);
+    recordBuiltinHookFailure(parsedArgv, debounceFailure, { fallback, connectionFailure, probeSkipped }, busUrl);
   } catch (err) {
     handleParseError(err, parsedArgv, fallback, connectionError, { debounceFailure, noFailure });
   } finally {
