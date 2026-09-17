@@ -91,6 +91,14 @@ export interface ProbeEffectScenario {
   readonly description?: string;
   /** Overrides the default marker-only prompt when the oracle needs a different action. */
   readonly prompt?: string;
+  /**
+   * Prompt run first, in a persisted session {@link ProbeEffectScenario.prompt} resumes.
+   *
+   * Some events act on the conversation rather than on a tool call, and cannot
+   * be reached from a session that has no conversation yet. Declaring the seed
+   * here keeps the extra run on the scenarios that need one.
+   */
+  readonly seedPrompt?: string;
   /** Overrides the pre-approved tool set. */
   readonly allowedTools?: readonly string[];
   /**

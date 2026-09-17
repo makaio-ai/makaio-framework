@@ -67,8 +67,8 @@ const EVIDENCE: Record<ProviderId, Readonly<Record<string, EvidenceCandidate>>> 
     SubagentStart: { status: 'supported', effects: ['context.append'], blocking: false },
     SubagentStop: { status: 'unobserved', effects: [], blocking: false },
     PreCompact: { status: 'unobserved', effects: [], blocking: false },
-    // PostCompact is raw-only; the harness limitation (isolated CLAUDE_CONFIG_DIR silences /compact)
-    // applies here as for PreCompact.
+    // PostCompact is raw-only: it carries the summary compaction produced and
+    // declares no response capability, so its scenario observes rather than proves.
     PostCompact: { status: 'unobserved', effects: [], blocking: false },
     Notification: { status: 'unobserved', effects: [], blocking: false },
     MCPServerStart: { status: 'unobserved', effects: [], blocking: false },
@@ -130,6 +130,7 @@ function buildScenario(
     id: `${eventId}-${seed.suffix}`,
     description: seed.description ?? `Attempts the ${event.name} ${seed.suffix} behavior with stable markers.`,
     prompt: seed.prompt ?? promptFor(event.name),
+    ...(seed.seedPrompt !== undefined && { seedPrompt: seed.seedPrompt }),
     allowedTools: seed.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
     ...(seed.cliArgs !== undefined && { cliArgs: seed.cliArgs }),
     expectedEvents: [

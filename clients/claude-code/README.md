@@ -57,6 +57,8 @@ an `empty` lease for explicit auth, then deliver only the selected method.
 
 `PreToolUse`, `SessionStart`, `UserPromptSubmit`, and `SubagentStart` declare response capabilities. Events without capabilities use `makaio hook received` (fire-and-forget); events with them use `makaio hook handle` (request/response) and produce a native `hookSpecificOutput` JSON response. `PreToolUse` renders a permission decision; the other three render `additionalContext` alone, since they have no decision to make. `SubagentStart`'s context lands in the *subagent's* context window rather than the parent session's --- live probe evidence: `src/runtime/__tests__/fixtures/hook-contracts/probe/subagent-start-context-append.json`.
 
+`PreCompact` and `PostCompact` are only reachable once a session has a conversation worth compacting. Issued against an empty non-interactive session, the manual compaction command returns an empty result without running compaction and neither hook fires; a session holding a single exchange reaches `PreCompact` and then aborts with "Not enough messages to compact.", so `PostCompact` is still never reached. The probe therefore seeds a tool-using turn, resumes that session, and compacts it --- live probe evidence: `src/runtime/__tests__/fixtures/hook-contracts/probe/pre-compact-observation.json` and `.../post-compact-observation.json`, where `PostCompact` carries the `compact_summary` compaction produced.
+
 ### Hook Response Contract (`claude-code.tool-response@1`)
 
 The `./runtime` entrypoint registers a `ProviderContractCatalogEntry` that defines how contributions are validated and composed for Claude Code:

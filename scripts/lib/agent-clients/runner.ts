@@ -3,7 +3,8 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { buildSpawnCommand } from './command-construction.js';
+import { boundedByDeadline, buildSpawnCommand } from './command-construction.js';
+import type { ScenarioInvocation } from './command-construction.js';
 import { fixtureFilePath, readFixture, writeFixture } from './fixtures.js';
 import { redactDeep } from './redaction.js';
 import type {
@@ -453,6 +454,52 @@ async function resetScenarioMarkers(projectDir: string, scenario: ProbeScenario)
 }
 
 /**
+ * Reads the session identifier a completed print-mode run reports.
+ * @param stdout - Complete bounded CLI stdout.
+ * @returns The reported session identifier, or nothing when stdout carries none.
+ */
+function reportedSessionId(stdout: string): string | undefined {
+  try {
+    const result = JSON.parse(stdout) as Record<string, unknown>;
+    return typeof result.session_id === 'string' && result.session_id.length > 0 ? result.session_id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Builds the conversation a seeded scenario needs before its own prompt runs.
+ *
+ * Only the run under test may leave captures behind, so the seed's are
+ * discarded: a fixture has to describe one native run, and a reader cannot tell
+ * from committed evidence which of two runs invoked a hook.
+ * @param params - Scenario execution inputs, the scenario's native config path, and its absolute deadline.
+ * @returns The invocation that resumes the seeded session, or nothing when the scenario is not seeded.
+ */
+async function seedResumableSession(params: {
+  provider: ProbeOptions['provider'];
+  scenario: ProbeScenario;
+  executablePath: string;
+  env: Record<string, string>;
+  projectDir: string;
+  settingsPath: string;
+  capturePath: string;
+  deadlineMs: number;
+}): Promise<ScenarioInvocation | undefined> {
+  if (params.scenario.seedPrompt === undefined) return undefined;
+  const command = buildSpawnCommand({ ...params, invocation: { seed: true } });
+  const result = await runCommand(boundedByDeadline(command, params.deadlineMs, Date.now()));
+  const resumeSessionId = reportedSessionId(result.stdout);
+  if (result.timedOut || result.exitCode !== 0 || resumeSessionId === undefined) {
+    throw new Error(
+      `Scenario "${params.scenario.id}" could not seed a resumable session (exit ${String(result.exitCode)})`,
+    );
+  }
+  await fs.rm(params.capturePath, { force: true });
+  return { resumeSessionId };
+}
+
+/**
  * Runs one native scenario and applies its fixture mode.
  * @param params - Scenario execution inputs, including isolated environment and fixture mode.
  * @returns Process output, normalized fixture, and any verification differences.
@@ -469,15 +516,20 @@ export async function runScenario(params: {
 }): Promise<ScenarioRunResult & { fixtureDiffs: readonly string[] }> {
   await resetScenarioMarkers(params.workspace.projectDir, params.scenario);
   const config = await writeScenarioHookConfig(params);
-  const command = buildSpawnCommand({
+  const commandParams = {
     provider: params.provider,
     executablePath: params.executablePath,
     scenario: params.scenario,
     env: params.env,
     projectDir: params.workspace.projectDir,
     settingsPath: config.settingsPath,
-  });
-  const commandResult = await runCommand(command);
+  };
+  // One deadline for the whole scenario, fixed before the first spawn, so a
+  // seeded scenario's two runs share the budget instead of each taking it.
+  const deadlineMs = Date.now() + params.scenario.timeoutSeconds * 1000;
+  const invocation = await seedResumableSession({ ...commandParams, capturePath: config.capturePath, deadlineMs });
+  const command = buildSpawnCommand({ ...commandParams, ...(invocation ? { invocation } : {}) });
+  const commandResult = await runCommand(boundedByDeadline(command, deadlineMs, Date.now()));
   const fixture = normalizedFixture({
     provider: params.provider,
     scenario: params.scenario,

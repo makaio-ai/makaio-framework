@@ -3,8 +3,30 @@
   "provider": "claude-code",
   "cliVersion": "2.1.219",
   "scenarioId": "post-compact-observation",
-  "events": [],
-  "oracle": "unobserved",
+  "events": [
+    {
+      "eventName": "PostCompact",
+      "responseCapabilities": [],
+      "mode": "event",
+      "candidateExpectedStatus": "unobserved",
+      "observedStatus": "observer-only",
+      "sourceExpectedEffects": [],
+      "observedEffects": [],
+      "blockingCapable": false,
+      "managedCommand": "hook received claude-code",
+      "payloadKeys": [
+        "compact_summary",
+        "cwd",
+        "hook_event_name",
+        "prompt_id",
+        "session_id",
+        "transcript_path",
+        "trigger"
+      ],
+      "sentinelInjected": false
+    }
+  ],
+  "oracle": "capture-only",
   "oraclePassed": true,
   "exitCode": 0,
   "terminal": "ok"
