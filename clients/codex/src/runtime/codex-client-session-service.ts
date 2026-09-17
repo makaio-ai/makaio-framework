@@ -42,7 +42,11 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { MakaioBus, RequestError } from '@makaio/bus-core';
 import { BinaryNotFoundError, ClientSubjects, assertAbsoluteProjectDir } from '@makaio/subsystem-client';
-import type { ClientHookProviderContractRegistry, ClientHookResponseRegistry } from '@makaio/subsystem-client';
+import type {
+  ClientHookProviderContractRegistry,
+  ClientHookResponseRegistry,
+  ClientSessionTokenSink,
+} from '@makaio/subsystem-client';
 import type { ClientRuntimeStarted, ClientSessionStarted } from '@makaio/contracts/client';
 import { BaseService } from '@makaio/service-base';
 import { CodexClientSettings } from './client-settings.js';
@@ -163,6 +167,16 @@ export class CodexClientSessionService extends BaseService {
   private readonly hookResponseRegistry: ClientHookResponseRegistry | undefined;
 
   /**
+   * In-process sink for session correlation tokens.
+   *
+   * When non-undefined, the {@link onSessionToken} callback hands the token
+   * directly to this sink so no bus payload (and no `MAKAIO_DEBUG` bus logger)
+   * ever sees the token value. Codex declares no session-token capability, so
+   * this will typically remain `undefined`.
+   */
+  private readonly sessionTokens: ClientSessionTokenSink | undefined;
+
+  /**
    * Creates a new Codex client session service.
    * @param bus - Bus instance used for subscribing and emitting events
    * @param settings - Optional {@link CodexClientSettings} instance for tests
@@ -176,6 +190,11 @@ export class CodexClientSessionService extends BaseService {
    *   from clients-core for registering the Codex hook response contract.
    *   Omit in tests that do not exercise the response pipeline.
    * @param hookResponseRegistry - Optional contributor registry used by the terminal composer.
+   * @param sessionTokens - In-process token sink from clients-core. When
+   *   supplied, the {@link onSessionToken} callback hands the token directly
+   *   to the sink — no bus payload (and no `MAKAIO_DEBUG` bus logger) ever
+   *   sees the token value. Codex declares no session-token capability, so
+   *   this will typically be `undefined`.
    */
   public constructor(
     bus: IMakaioBus = MakaioBus,
@@ -184,6 +203,7 @@ export class CodexClientSessionService extends BaseService {
     sessionConfigHandler: CodexSessionConfigHandler = new CodexSessionConfigHandler(),
     providerContractRegistry?: ClientHookProviderContractRegistry,
     hookResponseRegistry?: ClientHookResponseRegistry,
+    sessionTokens?: ClientSessionTokenSink,
   ) {
     super(bus);
     this.settingsOverride = settings;
@@ -191,6 +211,7 @@ export class CodexClientSessionService extends BaseService {
     this.sessionConfigHandler = sessionConfigHandler;
     this.providerContractRegistry = providerContractRegistry;
     this.hookResponseRegistry = hookResponseRegistry;
+    this.sessionTokens = sessionTokens;
   }
 
   /**
@@ -325,6 +346,11 @@ export class CodexClientSessionService extends BaseService {
               `[CodexClientSessionService] Hook contributor '${diagnostic.contributorId}': ${diagnostic.message}`,
             ),
           ),
+        onSessionToken: (token, scope) => {
+          // Hand the token over in-process so no bus payload (and no
+          // MAKAIO_DEBUG bus logger) ever sees the token value.
+          this.sessionTokens?.record(scope, token);
+        },
       }).then((response) => ctx.setResult(response));
     });
   }

@@ -85,6 +85,7 @@ export const claudeCodeClientRuntimePackage: MakaioNodeExtension<IMakaioBus> = {
       ctx.machineId,
       clientsCore.providerContractRegistry,
       clientsCore.hookResponseRegistry,
+      clientsCore.sessionTokens,
     );
   },
 };

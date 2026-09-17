@@ -8,7 +8,8 @@
       "eventName": "SessionStart",
       "frameworkSubject": "client.session.started",
       "responseCapabilities": [
-        "context.append"
+        "context.append",
+        "session.token"
       ],
       "mode": "request",
       "candidateExpectedStatus": "supported",

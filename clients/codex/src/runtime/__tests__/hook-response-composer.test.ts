@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { ClientHookProviderContractRegistry, ClientHookResponseRegistry } from '@makaio/subsystem-client';
 import type { ContributorDefinition } from '@makaio/contracts/client';
-import { createAppendEffect } from '@makaio/contracts/client';
+import { createAppendEffect, createSessionTokenEffect } from '@makaio/contracts/client';
 import { composeCodexHookResponse } from '../hook-response-composer.js';
 import {
   CODEX_INTERACTION_BLOCKABILITY,
@@ -337,5 +337,183 @@ describe('Codex hook response contract', () => {
     expect(blockability.get(CODEX_HOOK_RESPONSE_CAPABILITIES.permissionDeny)).toBe(true);
     expect(blockability.get(CODEX_HOOK_RESPONSE_CAPABILITIES.inputUpdate)).toBe(true);
     expect(blockability.get('context.append')).toBe(false);
+    expect(blockability.get('session.token')).toBe(false);
+  });
+
+  describe('session.token canonical effect', () => {
+    // Codex does not declare `session.token` on any of its hook events (neither
+    // SessionStart nor SubagentStart): it passes no session id to MCP subprocesses,
+    // so no consumer can key `client.session.token.get`. The composer infrastructure
+    // (resolveSessionTokenScope, the sink callback, CANONICAL_HOOK_RESPONSE_CAPABILITIES
+    // import) remains in place — adding `session.token` to `responseCapabilities` is
+    // the only change needed once such a lookup key exists on Codex.
+    //
+    // All tests below verify that the sink is NOT called for any Codex event.
+
+    it('drops the token on SessionStart — session.token not declared for Codex', async () => {
+      const target = registry();
+      install(target, {
+        lane: 'canonical',
+        clientIds: ['codex'],
+        id: 'token-session-start',
+        priority: 1,
+        timeoutMs: 1000,
+        selectors: [{ kind: 'event-name', name: 'SessionStart' }],
+        respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-abc')] }),
+      });
+
+      const sinkCalls: string[] = [];
+      const rawPayload = { eventName: 'SessionStart', receivedAt: Date.now(), payload: { session_id: 'sid-1' } };
+      const response = await composeCodexHookResponse(target, rawPayload, {
+        onSessionToken: (token) => {
+          sinkCalls.push(token);
+        },
+      });
+
+      // session.token not declared on SessionStart — sink must not be called.
+      expect(sinkCalls).toEqual([]);
+
+      // Token value must not leak to stdout either.
+      expect(response.stdout).not.toContain('tok-abc');
+    });
+
+    it('drops the token when the event does not declare the session.token capability', async () => {
+      const target = registry();
+      install(target, {
+        lane: 'canonical',
+        clientIds: ['codex'],
+        id: 'token-post-tool-use',
+        priority: 1,
+        timeoutMs: 1000,
+        // PostToolUse does not declare session.token — the effect must be dropped.
+        selectors: [{ kind: 'event-name', name: 'PostToolUse' }],
+        respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-dropped')] }),
+      });
+
+      const sinkCalls: string[] = [];
+      const rawPayload = { eventName: 'PostToolUse', receivedAt: Date.now(), payload: { session_id: 'sid-2' } };
+      await composeCodexHookResponse(target, rawPayload, {
+        onSessionToken: (token) => {
+          sinkCalls.push(token);
+        },
+      });
+
+      expect(sinkCalls).toEqual([]);
+    });
+
+    it('drops the token on SubagentStart — session.token not declared for Codex', async () => {
+      const target = registry();
+      install(target, {
+        lane: 'canonical',
+        clientIds: ['codex'],
+        id: 'token-subagent-start',
+        priority: 1,
+        timeoutMs: 1000,
+        selectors: [{ kind: 'event-name', name: 'SubagentStart' }],
+        respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-sub')] }),
+      });
+
+      const sinkCalls: string[] = [];
+      const rawPayload = {
+        eventName: 'SubagentStart',
+        receivedAt: Date.now(),
+        payload: { session_id: 'sid-3', agent_id: 'agent-xyz' },
+      };
+      await composeCodexHookResponse(target, rawPayload, {
+        onSessionToken: (token) => {
+          sinkCalls.push(token);
+        },
+      });
+
+      expect(sinkCalls).toEqual([]);
+    });
+
+    it('does not call the sink even when multiple contributors return tokens', async () => {
+      const target = registry();
+      install(target, {
+        lane: 'canonical',
+        clientIds: ['codex'],
+        id: 'token-low-priority',
+        priority: 1,
+        timeoutMs: 1000,
+        selectors: [{ kind: 'event-name', name: 'SessionStart' }],
+        respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-low')] }),
+      });
+      install(target, {
+        lane: 'canonical',
+        clientIds: ['codex'],
+        id: 'token-high-priority',
+        priority: 10,
+        timeoutMs: 1000,
+        selectors: [{ kind: 'event-name', name: 'SessionStart' }],
+        respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-high')] }),
+      });
+
+      const sinkCalls: string[] = [];
+      const rawPayload = { eventName: 'SessionStart', receivedAt: Date.now(), payload: { session_id: 'sid-4' } };
+      await composeCodexHookResponse(target, rawPayload, {
+        onSessionToken: (token) => {
+          sinkCalls.push(token);
+        },
+      });
+
+      // Capability not declared — sink must not be called regardless of priority.
+      expect(sinkCalls).toEqual([]);
+    });
+
+    it('does not call the sink on SubagentStart without agent_id', async () => {
+      const target = registry();
+      install(target, {
+        lane: 'canonical',
+        clientIds: ['codex'],
+        id: 'token-subagent-no-id',
+        priority: 1,
+        timeoutMs: 1000,
+        selectors: [{ kind: 'event-name', name: 'SubagentStart' }],
+        respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-orphan')] }),
+      });
+
+      const sinkCalls: string[] = [];
+      const rawPayload = {
+        eventName: 'SubagentStart',
+        receivedAt: Date.now(),
+        payload: { session_id: 'sid-parent' },
+      };
+      await composeCodexHookResponse(target, rawPayload, {
+        onSessionToken: (token) => {
+          sinkCalls.push(token);
+        },
+      });
+
+      expect(sinkCalls).toEqual([]);
+    });
+
+    it('does not call the sink on SessionStart with a stray agent_id', async () => {
+      const target = registry();
+      install(target, {
+        lane: 'canonical',
+        clientIds: ['codex'],
+        id: 'token-session-stray-agent',
+        priority: 1,
+        timeoutMs: 1000,
+        selectors: [{ kind: 'event-name', name: 'SessionStart' }],
+        respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-stray')] }),
+      });
+
+      const sinkCalls: string[] = [];
+      const rawPayload = {
+        eventName: 'SessionStart',
+        receivedAt: Date.now(),
+        payload: { session_id: 'sid-5', agent_id: 'stray-id' },
+      };
+      await composeCodexHookResponse(target, rawPayload, {
+        onSessionToken: (token) => {
+          sinkCalls.push(token);
+        },
+      });
+
+      // session.token not declared on SessionStart — sink must not be called.
+      expect(sinkCalls).toEqual([]);
+    });
   });
 });

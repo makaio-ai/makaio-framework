@@ -50,6 +50,7 @@ import {
 } from './session-observed.js';
 import { ClientConfigPrimeSchema, ClientProfileSchemas, ClientSessionConfigSchemas } from './profile.js';
 import { ClientSessionUsageSnapshotSchema } from './session-usage.js';
+import { ClientSessionTokenGetRequestSchema, ClientSessionTokenGetResponseSchema } from './session-token.js';
 
 export { ClientExecutionContextSchema, ClientResolveBinarySchema } from './binary-resolution.js';
 export type {
@@ -134,6 +135,15 @@ export const ClientSchemas = {
   'session.compaction.pre': ClientSessionCompactionPreSchema,
   'session.subagent.started': ClientSessionSubagentStartedSchema,
   'session.subagent.completed': ClientSessionSubagentCompletedSchema,
+  // Session correlation token — normal request (remote MCP servers → runtime).
+  // The token is handed to the runtime in-process via ClientSessionTokenSink so
+  // no bus payload (and no MAKAIO_DEBUG bus logger) ever sees the token value.
+  // Only the get subject is exposed on the bus so that MCP servers can retrieve
+  // the token for the active adapter session.
+  'session.token.get': {
+    request: ClientSessionTokenGetRequestSchema,
+    response: ClientSessionTokenGetResponseSchema,
+  },
   'wiring.list': {
     request: z.object({
       /**

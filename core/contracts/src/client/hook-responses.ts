@@ -41,12 +41,48 @@ export interface CanonicalAppendEffect {
 }
 
 /**
+ * Opaque correlation token delivered at session/subagent start.
+ *
+ * The runtime stores this against the adapter session id (plus agent id for
+ * SubagentStart) and makes it retrievable via `client.session.token.get`.
+ * MCP servers fetch it over the WebSocket bus by adapter session id.
+ *
+ * This effect is never rendered into model context and is never written to the
+ * client binary's stdout — the client binary has no native field for it.
+ */
+export interface CanonicalSessionTokenEffect {
+  /** Discriminant identifying this as a canonical session token effect. */
+  readonly kind: 'session.token';
+  /** The opaque correlation token value. */
+  readonly value: string;
+}
+
+/**
  * Union of all canonical effects.
  *
- * Currently contains only `context.append`. New canonical effects are added
- * to this union as the framework evolves.
+ * - `context.append` — portable string-append contributed to the hook event
+ *   context payload.
+ * - `session.token` — opaque correlation token stored by the runtime against
+ *   the adapter session id (and agent id for SubagentStart); served on
+ *   `client.session.token.get`. Not rendered to the client binary.
+ *
+ * New canonical effects are added to this union as the framework evolves.
  */
-export type CanonicalEffect = CanonicalAppendEffect;
+export type CanonicalEffect = CanonicalAppendEffect | CanonicalSessionTokenEffect;
+
+/**
+ * Canonical capability ids, one per canonical effect kind.
+ *
+ * Used by interaction selectors, routing logic, and validation to identify
+ * which canonical capability a contributor targets without string literals
+ * scattered across the codebase.
+ */
+export const CANONICAL_HOOK_RESPONSE_CAPABILITIES = Object.freeze({
+  /** Capability id for the `context.append` canonical effect. */
+  contextAppend: 'context.append',
+  /** Capability id for the `session.token` canonical effect. */
+  sessionToken: 'session.token',
+} as const);
 
 /**
  * Create a canonical `context.append` effect.
@@ -55,6 +91,15 @@ export type CanonicalEffect = CanonicalAppendEffect;
  */
 export function createAppendEffect(value: string): CanonicalAppendEffect {
   return Object.freeze({ kind: 'context.append', value });
+}
+
+/**
+ * Create a canonical `session.token` effect.
+ * @param value - The opaque correlation token value.
+ * @returns A frozen {@link CanonicalSessionTokenEffect}.
+ */
+export function createSessionTokenEffect(value: string): CanonicalSessionTokenEffect {
+  return Object.freeze({ kind: 'session.token', value });
 }
 
 // ---------------------------------------------------------------------------

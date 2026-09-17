@@ -97,6 +97,11 @@ export const clientDefinition = createClientDefinition({
       {
         name: 'SessionStart',
         frameworkSubject: 'client.session.started',
+        // `session.token` is NOT declared here: Codex passes no session id to
+        // its MCP subprocesses, so no consumer can key `client.session.token.get`.
+        // The composer sink and the catalog `supportedInteractions` entry remain
+        // in place — declaring `session.token` here is the only change needed
+        // once such a lookup key exists.
         responseCapabilities: ['context.append', CODEX_HOOK_RESPONSE_CAPABILITIES.block],
       },
       {
@@ -136,6 +141,8 @@ export const clientDefinition = createClientDefinition({
         // `runtime/__tests__/fixtures/hook-contracts/probe/subagent-start-context-append.json`.
         // Subagent creation cannot be refused (`continue: false` is parsed but
         // ignored), so no block capability is declared.
+        // `session.token` is NOT declared here for the same reason as
+        // `SessionStart`: Codex passes no session id to MCP subprocesses.
         responseCapabilities: ['context.append'],
       },
       {

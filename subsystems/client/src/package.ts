@@ -12,6 +12,7 @@ import { ClientBinaryManager } from './client-binary-manager.js';
 import { ClientConfigPrimeService } from './client-config-prime-service.js';
 import { ClientProfileService } from './client-profile-service.js';
 import { ClientSessionConfigService } from './client-session-config-service.js';
+import { ClientSessionTokenService, type ClientSessionTokenSink } from './client-session-token-service.js';
 import { ClientDefinitionRegistry } from './client-definition-registry.js';
 import { registerDrizzleRuntimeStorage } from './storage/runtime-drizzle-handler.js';
 import { registerDrizzleClientBinaryStorage } from './storage/client-binary-drizzle-handler.js';
@@ -33,16 +34,18 @@ import { createClientHookResponseContributionProcessor } from './client-hook-res
 /**
  * Composite service that initialises and destroys the
  * {@link ClientRuntimeService}, the {@link ClientBinaryManager}, the
- * {@link ClientConfigPrimeService}, the {@link ClientProfileService}, and the
- * {@link ClientSessionConfigService}
+ * {@link ClientConfigPrimeService}, the {@link ClientProfileService}, the
+ * {@link ClientSessionConfigService}, and the {@link ClientSessionTokenService}
  * under a single {@link ExtensionServiceLifecycle} handle.
  *
- * Also exposes the client hook response pipeline registries so other
- * subsystems (provider runtimes, contribution processors) can register
- * and unregister provider contracts and query contributor snapshots.
+ * Also exposes the client hook response pipeline registries and the
+ * {@link ClientSessionTokenSink} so other subsystems (provider runtimes,
+ * contribution processors) can register and unregister provider contracts,
+ * query contributor snapshots, and record session correlation tokens
+ * in-process without the token ever appearing on the bus.
  *
  * The host coordinator calls `init()` once and `destroy()` once; this class
- * ensures all five services participate in the same lifecycle without any
+ * ensures all six services participate in the same lifecycle without any
  * requiring knowledge of the others.
  */
 export class ClientsCoreService implements ExtensionServiceLifecycle {
@@ -53,11 +56,23 @@ export class ClientsCoreService implements ExtensionServiceLifecycle {
   public readonly hookResponseRegistry: ClientHookResponseRegistry;
 
   /**
+   * In-process sink for session correlation tokens.
+   *
+   * Client runtime services receive this and call {@link ClientSessionTokenSink.record}
+   * directly — the token is never placed on the bus so the `MAKAIO_DEBUG`
+   * bus logger never sees it. MCP servers retrieve the stored token via the
+   * normal `client.session.token.get` bus request.
+   */
+  public readonly sessionTokens: ClientSessionTokenSink;
+
+  /**
    * @param runtimeService - Handles `client.*` runtime observation subjects
    * @param binaryManager - Handles `client.*` binary-management subjects
    * @param configPrimeService - Handles generic `client.config.prime` delegation
    * @param profileService - Handles `client.profile.*` CRUD subjects
    * @param sessionConfigService - Handles `client.sessionConfig.*` isolation subjects
+   * @param sessionTokenService - Handles `client.session.token.get` and stores
+   *   tokens written via its {@link ClientSessionTokenSink} interface
    * @param providerContractRegistry - Provider contract catalog for activation-time validation
    * @param hookResponseRegistry - Contributor definition registry for the hook response pipeline
    */
@@ -67,15 +82,17 @@ export class ClientsCoreService implements ExtensionServiceLifecycle {
     private readonly configPrimeService: ClientConfigPrimeService,
     private readonly profileService: ClientProfileService,
     private readonly sessionConfigService: ClientSessionConfigService,
+    private readonly sessionTokenService: ClientSessionTokenService,
     providerContractRegistry: ClientHookProviderContractRegistry,
     hookResponseRegistry: ClientHookResponseRegistry,
   ) {
     this.providerContractRegistry = providerContractRegistry;
     this.hookResponseRegistry = hookResponseRegistry;
+    this.sessionTokens = sessionTokenService;
   }
 
   /**
-   * Initialize all five sub-services in parallel.
+   * Initialize all six sub-services in parallel.
    *
    * Uses {@link Promise.allSettled} so every service always attempts
    * initialisation — matching the resilience pattern used by {@link destroy}.
@@ -89,6 +106,7 @@ export class ClientsCoreService implements ExtensionServiceLifecycle {
       this.configPrimeService.init(),
       this.profileService.init(),
       this.sessionConfigService.init(),
+      this.sessionTokenService.init(),
     ]);
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
     if (failures.length > 0) {
@@ -100,7 +118,7 @@ export class ClientsCoreService implements ExtensionServiceLifecycle {
   }
 
   /**
-   * Destroy all five sub-services in parallel.
+   * Destroy all six sub-services in parallel.
    *
    * Uses {@link Promise.allSettled} to guarantee every cleanup runs even when
    * one rejects, then reports every rejection together. Reporting is not
@@ -115,6 +133,7 @@ export class ClientsCoreService implements ExtensionServiceLifecycle {
       this.configPrimeService.destroy(),
       this.profileService.destroy(),
       this.sessionConfigService.destroy(),
+      this.sessionTokenService.destroy(),
     ]);
     const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
     if (failures.length > 0) {
@@ -306,6 +325,7 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
       );
       const profileService = new ClientProfileService(ctx.bus, clientsBasePath);
       const sessionConfigService = new ClientSessionConfigService(ctx.bus, clientsBasePath);
+      const sessionTokenService = new ClientSessionTokenService(ctx.bus);
 
       return new ClientsCoreService(
         new ClientRuntimeService(ctx.bus),
@@ -313,6 +333,7 @@ export function createClientsCorePackage(options: ClientsCorePackageOptions = {}
         new ClientConfigPrimeService(ctx.bus),
         profileService,
         sessionConfigService,
+        sessionTokenService,
         providerContractRegistry,
         hookResponseRegistry,
       );

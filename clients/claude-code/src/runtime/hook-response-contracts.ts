@@ -26,6 +26,7 @@ import type {
   ProviderContractCatalogEntry,
   ProviderContributionEnvelope,
 } from '@makaio/contracts/client';
+import { CANONICAL_HOOK_RESPONSE_CAPABILITIES } from '@makaio/contracts/client';
 import { CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES } from '../definition.js';
 
 // ---------------------------------------------------------------------------
@@ -67,8 +68,14 @@ export const CLAUDE_CODE_TOOL_RESPONSE_CONTRACT_ID = 'claude-code.tool-response'
  * `probe/subagent-start-context-append.json`. Subagent creation cannot be
  * refused, so the interaction is non-blockable. Purely additive: every `1.2.0`
  * contributor remains valid.
+ *
+ * `1.4.0` adds `session.token` as a non-blockable interaction; the definition
+ * declares it on `SessionStart` only. The token is never written to the client
+ * binary's stdout; the composer collects it and hands it to the in-process
+ * token sink of the client runtime. No native binary feature is required.
+ * Purely additive: every `1.3.0` contributor remains valid.
  */
-export const CLAUDE_CODE_TOOL_RESPONSE_CONTRACT_VERSION = '1.3.0';
+export const CLAUDE_CODE_TOOL_RESPONSE_CONTRACT_VERSION = '1.4.0';
 
 // ---------------------------------------------------------------------------
 // Claude-specific effect types
@@ -159,8 +166,8 @@ export function createDenyEffect(reason?: string): ProviderContributionEnvelope<
  * contribute context only and can refuse nothing, so they are listed
  * explicitly as non-blockable:
  * a closed-policy contributor must fail its blockability check loudly instead
- * of silently matching no entry.  `context.append` is a canonical effect and
- * is not independently blockable.
+ * of silently matching no entry.  `context.append` and `session.token` are
+ * canonical effects and are not independently blockable.
  */
 const BLOCKABILITY: readonly InteractionBlockability[] = Object.freeze([
   Object.freeze({ interaction: 'PreToolUse', blockable: true }),
@@ -170,6 +177,10 @@ const BLOCKABILITY: readonly InteractionBlockability[] = Object.freeze([
   Object.freeze({ interaction: 'UserPromptSubmit', blockable: false }),
   Object.freeze({ interaction: 'SubagentStart', blockable: false }),
   Object.freeze({ interaction: 'context.append', blockable: false }),
+  Object.freeze({
+    interaction: CANONICAL_HOOK_RESPONSE_CAPABILITIES.sessionToken,
+    blockable: false,
+  }),
 ]);
 
 /**
@@ -206,6 +217,7 @@ const SUPPORTED_INTERACTIONS: readonly string[] = Object.freeze([
   CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES.approve,
   CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES.deny,
   'context.append',
+  CANONICAL_HOOK_RESPONSE_CAPABILITIES.sessionToken,
 ]);
 
 // ---------------------------------------------------------------------------

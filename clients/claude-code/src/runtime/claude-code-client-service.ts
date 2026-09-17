@@ -71,6 +71,7 @@ import {
   type ClientHookHandleResponse,
   type ClientHookProviderContractRegistry,
   type ClientHookResponseRegistry,
+  type ClientSessionTokenSink,
   type RawClientHookPayload,
 } from '@makaio/subsystem-client';
 import { type ClientRuntimeStarted, type ClientSessionStarted } from '@makaio/contracts/client';
@@ -236,6 +237,16 @@ export class ClaudeCodeClientService extends BaseService {
   private readonly hookResponseRegistry: ClientHookResponseRegistry | undefined;
 
   /**
+   * In-process sink for session correlation tokens.
+   *
+   * When non-undefined, the {@link onSessionToken} callback hands the token
+   * directly to this sink so no bus payload (and no `MAKAIO_DEBUG` bus logger)
+   * ever sees the token value. When `undefined`, session tokens are silently
+   * dropped (backward-compatible test mode).
+   */
+  private readonly sessionTokens: ClientSessionTokenSink | undefined;
+
+  /**
    * Creates a new Claude Code client service.
    * @param bus - Bus instance used for hook subscription and semantic emission.
    *   Defaults to the global {@link MakaioBus} singleton.
@@ -248,17 +259,24 @@ export class ClaudeCodeClientService extends BaseService {
    * @param hookResponseRegistry - Hook response contributor registry from
    *   clients-core. Omit in tests that do not exercise the hook response
    *   pipeline.
+   * @param sessionTokens - In-process token sink from clients-core. When
+   *   supplied, the {@link onSessionToken} callback hands the token directly
+   *   to the sink — no bus payload (and no `MAKAIO_DEBUG` bus logger) ever
+   *   sees the token value. Omit in tests that do not exercise session-token
+   *   recording.
    */
   public constructor(
     bus: IMakaioBus = MakaioBus,
     machineId?: string,
     providerContractRegistry?: ClientHookProviderContractRegistry,
     hookResponseRegistry?: ClientHookResponseRegistry,
+    sessionTokens?: ClientSessionTokenSink,
   ) {
     super(bus);
     this.machineId = machineId;
     this.providerContractRegistry = providerContractRegistry;
     this.hookResponseRegistry = hookResponseRegistry;
+    this.sessionTokens = sessionTokens;
   }
 
   /**
@@ -544,6 +562,11 @@ export class ClaudeCodeClientService extends BaseService {
                 `[ClaudeCodeClientService] Hook contributor '${diagnostic.contributorId}': ${diagnostic.message}`,
               );
             }
+          },
+          onSessionToken: (token, scope) => {
+            // Hand the token over in-process so no bus payload (and no
+            // MAKAIO_DEBUG bus logger) ever sees the token value.
+            this.sessionTokens?.record(scope, token);
           },
         }),
       );

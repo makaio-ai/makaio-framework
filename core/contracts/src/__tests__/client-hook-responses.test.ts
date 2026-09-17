@@ -1,13 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import {
+  CANONICAL_HOOK_RESPONSE_CAPABILITIES,
   createAppendEffect,
+  createSessionTokenEffect,
   DEFAULT_FAILURE_POLICY,
   isValidContributorId,
   isValidTimeoutMs,
   validateClosedPolicy,
 } from '@makaio/contracts/client';
+import { ClientSessionTokenGetResponseSchema, ClientSessionTokenScopeSchema } from '@makaio/contracts/client';
 import type {
   CanonicalAppendEffect,
+  CanonicalSessionTokenEffect,
   CapabilitySelector,
   ContributorDefinition,
   ContributorResponse,
@@ -439,5 +443,123 @@ describe('ContributorResponse', () => {
     const response: ContributorResponse = {};
     expect(response.canonicalEffects).toBeUndefined();
     expect(response.providerEnvelope).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 11. createSessionTokenEffect — frozen, correct shape
+// ---------------------------------------------------------------------------
+
+describe('Canonical session.token effect', () => {
+  it('createSessionTokenEffect produces a frozen CanonicalSessionTokenEffect', () => {
+    const effect = createSessionTokenEffect('tok-abc-123');
+    expect(effect.kind).toBe('session.token');
+    expect(effect.value).toBe('tok-abc-123');
+    expect(Object.isFrozen(effect)).toBe(true);
+  });
+
+  it('produces a valid CanonicalSessionTokenEffect shape', () => {
+    const effect: CanonicalSessionTokenEffect = createSessionTokenEffect('my-token');
+    expect(effect).toEqual({ kind: 'session.token', value: 'my-token' });
+  });
+
+  it('handles an arbitrary non-empty token value', () => {
+    const effect = createSessionTokenEffect('sess_xyz_0987654321');
+    expect(effect.kind).toBe('session.token');
+    expect(effect.value).toBe('sess_xyz_0987654321');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 12. CANONICAL_HOOK_RESPONSE_CAPABILITIES constant
+// ---------------------------------------------------------------------------
+
+describe('CANONICAL_HOOK_RESPONSE_CAPABILITIES', () => {
+  it('contains both canonical capability ids', () => {
+    expect(CANONICAL_HOOK_RESPONSE_CAPABILITIES.contextAppend).toBe('context.append');
+    expect(CANONICAL_HOOK_RESPONSE_CAPABILITIES.sessionToken).toBe('session.token');
+  });
+
+  it('is frozen', () => {
+    expect(Object.isFrozen(CANONICAL_HOOK_RESPONSE_CAPABILITIES)).toBe(true);
+  });
+
+  it('has exactly two entries', () => {
+    expect(Object.keys(CANONICAL_HOOK_RESPONSE_CAPABILITIES)).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 13. ClientSessionTokenScopeSchema
+// ---------------------------------------------------------------------------
+
+describe('ClientSessionTokenScopeSchema', () => {
+  it('accepts a scope with clientId and adapterSessionId', () => {
+    const result = ClientSessionTokenScopeSchema.safeParse({
+      clientId: 'claude-code',
+      adapterSessionId: 'sess-001',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a scope with clientId, adapterSessionId, and agentId', () => {
+    const result = ClientSessionTokenScopeSchema.safeParse({
+      clientId: 'claude-code',
+      adapterSessionId: 'sess-001',
+      agentId: 'agent-42',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects when clientId is missing', () => {
+    const result = ClientSessionTokenScopeSchema.safeParse({ adapterSessionId: 'sess-001' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects when adapterSessionId is missing', () => {
+    const result = ClientSessionTokenScopeSchema.safeParse({ clientId: 'claude-code', agentId: 'agent-42' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an empty clientId', () => {
+    const result = ClientSessionTokenScopeSchema.safeParse({ clientId: '', adapterSessionId: 'sess-001' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an empty adapterSessionId', () => {
+    const result = ClientSessionTokenScopeSchema.safeParse({ clientId: 'claude-code', adapterSessionId: '' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an empty agentId', () => {
+    const result = ClientSessionTokenScopeSchema.safeParse({
+      clientId: 'claude-code',
+      adapterSessionId: 'sess-001',
+      agentId: '',
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 14. ClientSessionTokenGetResponseSchema
+// ---------------------------------------------------------------------------
+
+describe('ClientSessionTokenGetResponseSchema', () => {
+  it('accepts a response with a non-null token', () => {
+    const result = ClientSessionTokenGetResponseSchema.safeParse({ token: 'tok-abc' });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.token).toBe('tok-abc');
+  });
+
+  it('accepts a response with token: null', () => {
+    const result = ClientSessionTokenGetResponseSchema.safeParse({ token: null });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.token).toBeNull();
+  });
+
+  it('rejects a response without the token field', () => {
+    const result = ClientSessionTokenGetResponseSchema.safeParse({});
+    expect(result.success).toBe(false);
   });
 });

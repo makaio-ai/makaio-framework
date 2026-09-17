@@ -7,6 +7,11 @@ import { ClientSubjects, type RawClientHookPayload } from '@makaio/subsystem-cli
 import type { ClientRuntimeStarted } from '@makaio/contracts/client';
 import { CodexClientSubjects } from '../namespace.js';
 import { CodexClientSessionService, MANAGED_SESSION_CAP } from '../codex-client-session-service.js';
+import { ClientHookProviderContractRegistry, ClientHookResponseRegistry } from '@makaio/subsystem-client';
+import { createSessionTokenEffect } from '@makaio/contracts/client';
+import type { ContributorDefinition } from '@makaio/contracts/client';
+import { vi } from 'vitest';
+import { CODEX_HOOK_SESSION_START } from '../schemas.js';
 
 type CapturedClientSessionSubject =
   | typeof ClientSubjects.session.started
@@ -739,6 +744,59 @@ describe('CodexClientSessionService', () => {
 
       expect(promptReceived).toHaveLength(1);
       expect(promptReceived[0]).toMatchObject({ clientId: 'codex', prompt: 'hello' });
+    });
+  });
+  // ---------------------------------------------------------------------------
+  // sessionTokens sink injection
+  // ---------------------------------------------------------------------------
+
+  describe('sessionTokens sink injection', () => {
+    const TEST_EXTENSION = 'test-extension@1.0.0';
+
+    it('does not call sink.record on SessionStart — Codex declares no session.token capability', async () => {
+      const contractRegistry = new ClientHookProviderContractRegistry();
+      const responseRegistry = new ClientHookResponseRegistry(contractRegistry);
+      // Do NOT pre-register the contract here: CodexClientSessionService.onInit
+      // registers it under 'codex.runtime' — a second registration for the same
+      // contract would cause a collision error.
+
+      const sink = { record: vi.fn() };
+
+      const svc = new CodexClientSessionService(
+        bus,
+        undefined,
+        undefined,
+        undefined,
+        contractRegistry,
+        responseRegistry,
+        sink,
+      );
+      await svc.init();
+
+      // Install a contributor that tries to deliver a session.token effect.
+      // Because Codex's SessionStart does not declare the session.token
+      // capability in its definition, the composer's gate drops the effect and
+      // onSessionToken is never invoked.
+      responseRegistry.installContributors(TEST_EXTENSION, [
+        {
+          lane: 'canonical',
+          clientIds: ['codex'],
+          id: 'token-contributor',
+          priority: 100,
+          timeoutMs: 5000,
+          selectors: [{ kind: 'capability', capability: 'session.token' }],
+          respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-codex-test')] }),
+        } satisfies ContributorDefinition,
+      ]);
+
+      await bus.request(CodexClientSubjects.hook.handle, {
+        eventName: CODEX_HOOK_SESSION_START,
+        receivedAt: Date.now(),
+        payload: { session_id: 'sess-codex-001', model_name: 'o3', model_provider: 'openai' },
+      });
+
+      await svc.destroy();
+      expect(sink.record).not.toHaveBeenCalled();
     });
   });
 });

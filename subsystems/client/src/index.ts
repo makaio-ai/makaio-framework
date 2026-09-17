@@ -37,6 +37,10 @@ export { ClientConfigPrimeService } from './client-config-prime-service.js';
 export { ClientProfileService } from './client-profile-service.js';
 export { ClientSessionConfigService } from './client-session-config-service.js';
 export {
+  ClientSessionTokenService,
+  type ClientSessionTokenSink,
+} from './client-session-token-service.js';
+export {
   buildClientSessionBase,
   canonicalizeClientId,
   ClientHookHandleResponseSchema,
