@@ -122,6 +122,10 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
         makaioCommand,
         envPairs: resolveHookEnvPairs(),
         configDir,
+        // The wiring must gate on the binary this session launches (see
+        // `binaryPath` in the spawn below), not on whatever the binary manager
+        // resolves at wiring time. `undefined` lets the client service resolve.
+        binaryVersion: this.config.clientExecution?.version,
         skipDangerousModePermissionPrompt: this.config.providerConfig?.skipPermissions !== false,
       });
     } catch (error) {

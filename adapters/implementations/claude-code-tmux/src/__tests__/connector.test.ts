@@ -463,6 +463,13 @@ describe('ClaudeCodeTmuxConnector', () => {
       const connector = await makeConnector({
         sessionId: 'makaio-session-1',
         env: { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/tmp/isolated-claude-config' },
+        clientExecution: {
+          binaryPath: '/selected/bin/claude',
+          env: {},
+          configDir: null,
+          source: 'managed',
+          version: '2.1.80',
+        },
       });
       const wiringRequests: unknown[] = [];
 
@@ -479,6 +486,9 @@ describe('ClaudeCodeTmuxConnector', () => {
         scope: 'user',
         projectDir: TEST_CWD,
         configDir: '/tmp/isolated-claude-config',
+        // The launched binary's version travels with its config directory so
+        // version-gated hooks match the binary that actually runs.
+        binaryVersion: '2.1.80',
         skipDangerousModePermissionPrompt: true,
       });
     });

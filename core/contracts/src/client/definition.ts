@@ -114,6 +114,15 @@ export const ClientHookEventDeclarationSchema = z
      * without importing provider packages into contracts.
      */
     responseCapabilities: z.array(z.string().min(1)).readonly().default([]),
+    /**
+     * Lowest client binary version that fires this event, as a semver literal.
+     *
+     * Omit when the event is available across the whole `supportedVersions`
+     * range of the client. The wiring layer skips events whose minimum lies
+     * above the detected binary version; when no version is known the event
+     * is wired as before.
+     */
+    minimumVersion: VersionLiteralSchema.optional(),
   })
   .strict();
 

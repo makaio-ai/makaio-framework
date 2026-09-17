@@ -68,7 +68,6 @@ import { MakaioBus, RequestError, type IMakaioBus } from '@makaio/bus-core';
 import {
   BinaryNotFoundError,
   ClientSubjects,
-  assertAbsoluteProjectDir,
   type ClientHookHandleResponse,
   type ClientHookProviderContractRegistry,
   type ClientHookResponseRegistry,
@@ -90,7 +89,7 @@ import { attachSessionId, resolveIdentityFromSession } from './statusline-identi
 import { ClaudeCodeClientSubjects } from './namespace.js';
 import { handleClaudeCodeSessionConfigSetup } from './session-config-handler.js';
 import { clearClaudeCodeNativeCredentialsForSession } from './native-credentials.js';
-import { buildClaudeCodeWiringList, applyClaudeCodeWiring, removeClaudeCodeWiring } from './wiring.js';
+import { handleWiringApply, handleWiringList, handleWiringRemove, type WiringExecutionCtx } from './wiring-handlers.js';
 import { claudeCodeToolResponseContract } from './hook-response-contracts.js';
 import { composeHookResponse, type ComposeHookResponseOptions } from './hook-response-composer.js';
 import { shouldSuppressForManagedSession, type NarrowedEvent } from './managed-session-gate.js';
@@ -118,6 +117,9 @@ const MANAGED_SESSION_CAP = 10_000;
  * lifecycle.
  */
 const SESSION_IDENTITY_CACHE_CAP = MANAGED_SESSION_CAP;
+
+// WiringExecutionCtx is imported from wiring-handlers.ts and used here for the
+// cached execution context that is shared across config and wiring handlers.
 
 /**
  * Runtime service for the Claude Code client.
@@ -184,19 +186,27 @@ export class ClaudeCodeClientService extends BaseService {
   private sessionIdentityCacheEpoch = 0;
 
   /**
-   * Cached promise for the resolved config directory.
+   * Cached promise for the resolved execution context.
    *
-   * A concrete config directory is stable within a process lifetime — it can
-   * only change when the active binary changes (i.e.
+   * The execution context (config directory and binary version) is stable within
+   * a process lifetime — it can only change when the active binary changes (i.e.
    * `client.version.changed` fires for `clientId === 'claude-code'`).  Caching
    * the promise avoids a bus round-trip on every config handler invocation.
-   * Missing handlers, absent global binaries, and failures are not cached
-   * because the binary subsystem may register later or recover independently.
+   * Missing handlers, absent global binaries, and failures are not cached because
+   * the binary subsystem may register later or recover independently.
    *
-   * Set lazily by the first call to {@link resolveConfigDir} and invalidated
-   * by the `client.version.changed` subscription registered in {@link onInit}.
+   * Set lazily by the first call to {@link resolveExecutionContext} and
+   * invalidated by the `client.version.changed` subscription registered in
+   * {@link onInit}.  Config directory and binary version both derive from this
+   * single cached promise so only one `client.resolveBinary` bus request is
+   * issued per resolved binary lifetime.
+   *
+   * **Wiring handlers bypass this cache** and call {@link doResolveExecutionContext}
+   * directly on every request so that global binaries (found on `PATH`, which can
+   * update without triggering `client.version.changed`) are reflected immediately.
+   * Config and session-config handlers continue to use the stable cached path.
    */
-  private cachedConfigDir: Promise<string | undefined> | undefined;
+  private cachedExecutionContext: Promise<WiringExecutionCtx> | undefined;
 
   /**
    * Stable runtime identity of the machine that owns the client sessions
@@ -266,11 +276,11 @@ export class ClaudeCodeClientService extends BaseService {
       this.handleRuntimeStarted(payload);
     });
 
-    // Invalidate the cached config dir whenever the active binary changes for
-    // this client.  The next handler invocation will re-resolve and re-cache.
+    // Invalidate the cached execution context whenever the active binary changes
+    // for this client.  The next handler invocation will re-resolve and re-cache.
     this.registerHandler(ClientSubjects.version.changed, ({ payload }) => {
       if (payload.clientId === CLIENT_ID) {
-        this.cachedConfigDir = undefined;
+        this.cachedExecutionContext = undefined;
       }
     });
 
@@ -314,7 +324,7 @@ export class ClaudeCodeClientService extends BaseService {
     this.managedAdapterSessionIds.clear();
     this.sessionIdentityCacheEpoch += 1;
     this.sessionIdentityCache.clear();
-    this.cachedConfigDir = undefined;
+    this.cachedExecutionContext = undefined;
   }
 
   /**
@@ -386,34 +396,24 @@ export class ClaudeCodeClientService extends BaseService {
 
   /**
    * Register Claude Code wiring handlers.
+   *
+   * Delegates to {@link handleWiringList}, {@link handleWiringApply}, and
+   * {@link handleWiringRemove} in `wiring-handlers.ts`.  See that module for
+   * the full rationale on fresh-resolution and explicit-binaryVersion semantics.
    */
   private registerWiringHandlers(): void {
+    const deps = {
+      resolveContextFresh: () => this.doResolveExecutionContext(),
+      createSettings: (projectDir?: string) => this.createSettings(projectDir),
+    };
     this.registerHandler(ClaudeCodeClientSubjects.wiring.list, async (ctx) => {
-      assertAbsoluteProjectDir(ctx.payload.projectDir);
-      const settings = await this.createSettings(ctx.payload.projectDir);
-      ctx.setResult(await buildClaudeCodeWiringList(settings, ctx.payload.makaioCommand, ctx.payload.envPairs));
+      ctx.setResult(await handleWiringList(ctx.payload, deps));
     });
-
     this.registerHandler(ClaudeCodeClientSubjects.wiring.apply, async (ctx) => {
-      assertAbsoluteProjectDir(ctx.payload.projectDir);
-      if ((ctx.payload.scope === 'project' || ctx.payload.scope === 'local') && !ctx.payload.projectDir) {
-        throw new Error(`projectDir is required when scope is '${ctx.payload.scope}'`);
-      }
-      const configDir = ctx.payload.configDir ?? (await this.resolveConfigDir());
-      const settings = new ClaudeCodeClientSettings({ projectDir: ctx.payload.projectDir, configDir });
-      ctx.setResult(
-        await applyClaudeCodeWiring(settings, ctx.payload.scope, ctx.payload.makaioCommand, ctx.payload.envPairs, {
-          skipDangerousModePermissionPrompt: ctx.payload.skipDangerousModePermissionPrompt,
-        }),
-      );
+      ctx.setResult(await handleWiringApply(ctx.payload, deps));
     });
-
     this.registerHandler(ClaudeCodeClientSubjects.wiring.remove, async (ctx) => {
-      assertAbsoluteProjectDir(ctx.payload.projectDir);
-      if ((ctx.payload.scope === 'project' || ctx.payload.scope === 'local') && !ctx.payload.projectDir) {
-        throw new Error(`projectDir is required when scope is '${ctx.payload.scope}'`);
-      }
-      ctx.setResult(await removeClaudeCodeWiring(await this.createSettings(ctx.payload.projectDir), ctx.payload.scope));
+      ctx.setResult(await handleWiringRemove(ctx.payload, deps));
     });
   }
 
@@ -423,65 +423,59 @@ export class ClaudeCodeClientService extends BaseService {
    * @returns Settings instance bound to the resolved config directory.
    */
   private async createSettings(projectDir?: string): Promise<ClaudeCodeClientSettings> {
-    return new ClaudeCodeClientSettings({ projectDir, configDir: await this.resolveConfigDir() });
+    return new ClaudeCodeClientSettings({ projectDir, configDir: (await this.resolveExecutionContext())?.configDir });
   }
 
   /**
-   * Return the cached config directory promise, resolving it on first access.
+   * Return the cached execution context promise, resolving it on first access.
    *
-   * Only concrete config directories are cached. Missing resolution is a
-   * graceful fallback, not a stable state: the binary manager may register
-   * later in the same process.
-   * @returns Absolute path to the isolated config directory, or `undefined`
-   *   when no binary resolution handler is registered or the resolved context
-   *   carries no config dir.
+   * The context is not cached when it is `undefined` (no handler registered or
+   * graceful fallback) because the binary subsystem may register later or
+   * recover independently.  Successful resolutions are stable within a binary
+   * lifetime and cached until `client.version.changed` fires.
+   *
+   * Both `configDir` and `binaryVersion` are derived from this single cached
+   * promise so only one `client.resolveBinary` bus request is issued per
+   * resolved binary lifetime.
+   * @returns Resolved execution context, or `undefined` when no binary
+   *   resolution handler is registered.
    */
-  private resolveConfigDir(): Promise<string | undefined> {
-    if (this.cachedConfigDir === undefined) {
-      const pendingConfigDir = this.doResolveConfigDir().then(
-        (configDir) => {
-          if (configDir === undefined && this.cachedConfigDir === pendingConfigDir) {
-            this.cachedConfigDir = undefined;
-          }
-          return configDir;
-        },
-        (error: unknown) => {
-          if (this.cachedConfigDir === pendingConfigDir) {
-            this.cachedConfigDir = undefined;
-          }
-          throw error;
-        },
-      );
-      this.cachedConfigDir = pendingConfigDir;
-    }
-    return this.cachedConfigDir;
+  private resolveExecutionContext(): Promise<WiringExecutionCtx> {
+    if (this.cachedExecutionContext !== undefined) return this.cachedExecutionContext;
+    const pending = this.doResolveExecutionContext().then(
+      (ctx) => {
+        if (ctx === undefined && this.cachedExecutionContext === pending) this.cachedExecutionContext = undefined;
+        return ctx;
+      },
+      (error: unknown) => {
+        if (this.cachedExecutionContext === pending) this.cachedExecutionContext = undefined;
+        throw error;
+      },
+    );
+    this.cachedExecutionContext = pending;
+    return pending;
   }
 
   /**
-   * Execute the `client.resolveBinary` bus request and extract the config dir.
+   * Execute the `client.resolveBinary` bus request and return a minimal
+   * execution context slice.
    *
    * Uses `requestOptional` so that the call is safe in framework-only boot
    * (i.e. when no `resolveBinary` handler is registered) — in that case
-   * `undefined` is returned and settings construction falls back to the default
-   * `~/.claude/settings.json` path.
-   * @returns Absolute path to the isolated config directory, or `undefined`
-   *   when no binary resolution handler is registered or the resolved context
-   *   carries no config dir.
+   * `undefined` is returned and callers fall back to sensible defaults.
+   * @returns Minimal execution context, or `undefined` when no binary
+   *   resolution handler is registered or the binary is not found.
    */
-  private async doResolveConfigDir(): Promise<string | undefined> {
+  private async doResolveExecutionContext(): Promise<WiringExecutionCtx> {
     let result;
     try {
       result = await this.bus.requestOptional(ClientSubjects.resolveBinary, { clientId: CLIENT_ID });
     } catch (error) {
-      if (isResolveBinaryMissingGlobalBinary(error)) {
-        return undefined;
-      }
+      if (isResolveBinaryMissingGlobalBinary(error)) return undefined;
       throw error;
     }
-    if (!result.handled) {
-      return undefined;
-    }
-    return result.data.configDir ?? undefined;
+    if (!result.handled) return undefined;
+    return { configDir: result.data.configDir ?? undefined, version: result.data.version };
   }
 
   /**

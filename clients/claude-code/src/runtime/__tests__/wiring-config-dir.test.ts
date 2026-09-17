@@ -579,3 +579,165 @@ describe('ClaudeCodeClientService — config handlers use resolveBinary for conf
     expect(result.effective['PreToolUse']).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Service-level: wiring.list forwards resolveBinary version for event gating
+// ---------------------------------------------------------------------------
+
+describe('ClaudeCodeClientService — wiring.list forwards resolveBinary version', () => {
+  let bus: IMakaioBus;
+  let service: ClaudeCodeClientService;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-svc-wiring-version-test-'));
+    vi.stubEnv('HOME', path.join(tmpDir, 'home'));
+    bus = createBusInstance();
+    service = new ClaudeCodeClientService(bus);
+    await service.init();
+  });
+
+  afterEach(async () => {
+    await service.destroy();
+    vi.unstubAllEnvs();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('omits PostCompact from wiring.list entries when resolveBinary returns version below 2.1.76', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+
+    const cleanup = bus.on(ClientSubjects.resolveBinary, (ctx) => {
+      ctx.setResult({ binaryPath: null, env: {}, configDir: null, source: 'global', version: '2.1.75' });
+    });
+
+    const result = await bus.request(ClaudeCodeClientSubjects.wiring.list, {
+      projectDir,
+      makaioCommand: MAKAIO_CMD,
+    });
+
+    cleanup();
+
+    const sessionEntries = result.entries.filter((e) => e.group === 'session-events');
+    expect(sessionEntries.map((e) => e.name)).not.toContain('PostCompact');
+  });
+
+  it('includes PostCompact in wiring.list entries when resolveBinary version is null (unknown)', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+
+    const cleanup = bus.on(ClientSubjects.resolveBinary, (ctx) => {
+      ctx.setResult({ binaryPath: null, env: {}, configDir: null, source: 'global', version: null });
+    });
+
+    const result = await bus.request(ClaudeCodeClientSubjects.wiring.list, {
+      projectDir,
+      makaioCommand: MAKAIO_CMD,
+    });
+
+    cleanup();
+
+    const sessionEntries = result.entries.filter((e) => e.group === 'session-events');
+    expect(sessionEntries.map((e) => e.name)).toContain('PostCompact');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Service-level: explicit binaryVersion payload wins over resolveBinary (F3)
+// ---------------------------------------------------------------------------
+
+describe('ClaudeCodeClientService — wiring.apply explicit binaryVersion wins over resolveBinary', () => {
+  let bus: IMakaioBus;
+  let service: ClaudeCodeClientService;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cc-svc-binaryver-payload-test-'));
+    vi.stubEnv('HOME', path.join(tmpDir, 'home'));
+    bus = createBusInstance();
+    service = new ClaudeCodeClientService(bus);
+    await service.init();
+  });
+
+  afterEach(async () => {
+    await service.destroy();
+    vi.unstubAllEnvs();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('skips PostCompact when payload binaryVersion is below minimumVersion even though resolveBinary returns a higher version', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    const configDir = path.join(tmpDir, 'managed-config');
+
+    // resolveBinary returns 2.2.0 (above PostCompact minimum 2.1.76).
+    // The payload carries 2.1.75 (below the minimum) — the payload wins.
+    const cleanup = bus.on(ClientSubjects.resolveBinary, (ctx) => {
+      ctx.setResult({ binaryPath: null, env: {}, configDir, source: 'managed', version: '2.2.0' });
+    });
+
+    await bus.request(ClaudeCodeClientSubjects.wiring.apply, {
+      scope: 'user',
+      projectDir,
+      makaioCommand: MAKAIO_CMD,
+      binaryVersion: '2.1.75',
+    });
+
+    cleanup();
+
+    const written = await readSettings(path.join(configDir, 'settings.json'));
+    const hooks = (written['hooks'] ?? {}) as Record<string, unknown>;
+    // PostCompact must not be installed because the payload version is below the minimum.
+    expect(Object.keys(hooks)).not.toContain('PostCompact');
+  });
+
+  it('installs PostCompact when payload binaryVersion is at minimumVersion even though resolveBinary returns a lower version', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    const configDir = path.join(tmpDir, 'managed-config');
+
+    // resolveBinary returns 2.1.75 (below PostCompact minimum 2.1.76).
+    // The payload carries 2.1.76 (the exact minimum) — the payload wins.
+    const cleanup = bus.on(ClientSubjects.resolveBinary, (ctx) => {
+      ctx.setResult({ binaryPath: null, env: {}, configDir, source: 'managed', version: '2.1.75' });
+    });
+
+    await bus.request(ClaudeCodeClientSubjects.wiring.apply, {
+      scope: 'user',
+      projectDir,
+      makaioCommand: MAKAIO_CMD,
+      binaryVersion: '2.1.76',
+    });
+
+    cleanup();
+
+    const written = await readSettings(path.join(configDir, 'settings.json'));
+    const hooks = (written['hooks'] ?? {}) as Record<string, unknown>;
+    // PostCompact must be installed because the payload version meets the minimum.
+    expect(Object.keys(hooks)).toContain('PostCompact');
+  });
+
+  it('does not call resolveBinary when the payload carries both configDir and binaryVersion', async () => {
+    const projectDir = path.join(tmpDir, 'project');
+    const configDir = path.join(tmpDir, 'launched-config');
+
+    // A caller holding the launched execution context must not depend on the
+    // resolver's current state: a resolver that now throws must not abort it.
+    let resolveCalls = 0;
+    const cleanup = bus.on(ClientSubjects.resolveBinary, () => {
+      resolveCalls += 1;
+      throw new Error('active selection no longer installed');
+    });
+
+    const result = await bus.request(ClaudeCodeClientSubjects.wiring.apply, {
+      scope: 'user',
+      projectDir,
+      makaioCommand: MAKAIO_CMD,
+      configDir,
+      binaryVersion: '2.1.80',
+    });
+
+    cleanup();
+
+    expect(resolveCalls).toBe(0);
+    expect(result.applied).toBeGreaterThan(0);
+    const written = await readSettings(path.join(configDir, 'settings.json'));
+    expect(Object.keys((written['hooks'] ?? {}) as Record<string, unknown>)).toContain('PostCompact');
+  });
+});
