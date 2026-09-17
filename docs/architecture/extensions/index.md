@@ -171,6 +171,22 @@ interface NodeExtensionContext extends ExtensionContext {
   homedir: string;
   makaioHome: string;
   username: string;
+  /** WebSocket URL of the host bus; absent when the host has no WebSocket transport. */
+  busUrl?: string;
+  /**
+   * Host-supplied resolver for `CredentialRef` values.
+   *
+   * - `env:<VAR>` — reads the named environment variable.
+   * - `file:<path>` — reads the file at the given path.
+   * - `keychain:<service>:<account>` — reads macOS Keychain (other platforms return `null`).
+   * - `stored:providerConfig:<configId>:<key>` — fetches through the host's credential
+   *   service; returns `null` with a warning on bare headless hosts where the service is
+   *   not registered.
+   *
+   * Always returns `null` rather than throwing when the credential is unavailable.
+   * **Never log resolved values** — treat them as secrets.
+   */
+  credentials?: CredentialResolver;
 }
 ```
 
