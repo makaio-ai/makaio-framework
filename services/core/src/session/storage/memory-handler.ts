@@ -14,6 +14,7 @@ import {
   emitSessionClientAccountChangedIfNeeded,
 } from './client-account-change-events.js';
 import { registerMemorySessionImportHandlers } from './memory-import-handlers.js';
+import { emitSessionGenerationAdvanced } from './session-generation-events.js';
 import { isAdapterSessionReconciliationRefused, isIdentityBackfillRefused } from './session-identity-backfill.js';
 
 // NOTE: do NOT change the eslint override on the next line without explicit human approval
@@ -105,10 +106,16 @@ function applyListFilters(sessions: IMakaioSession[], filters: SessionListFilter
  * exclusively by the `storage:sessionOwnership` seam, which carries an authority
  * into every write it makes.
  *
- * The two fields differ in what an *insert* does with them, and the difference is
+ * The fields differ in what an *insert* does with them, and the difference is
  * the Drizzle column list read back: the currency pair is not a `set` column at
- * all, so a fresh row takes the column defaults; `leadAgentId` is one, so a fresh
- * row takes the caller's value — there is no stored designation for it to lose.
+ * all, so a fresh row takes the column defaults; `leadAgentId` and `generation`
+ * are, so a fresh row takes the caller's value — there is no stored designation
+ * or ordinal for it to lose, and a snapshot import of an already compacted
+ * session must not land at 0.
+ *
+ * `generation` is advanced by `storage:session.rebindObserved`, never by a
+ * whole-record write, so an existing row keeps its stored ordinal: a snapshot
+ * taken before a compaction must not rewind it.
  * @param next - Incoming session record about to be stored
  * @param previous - Currently stored record, or `null` on first insert
  */
@@ -116,6 +123,7 @@ function preserveCasOwnedFields(next: IMakaioSession, previous: IMakaioSession |
   next.currentAdapterSessionId = previous?.currentAdapterSessionId;
   next.currentAdapterSessionIdState = previous?.currentAdapterSessionIdState ?? 'inherited';
   if (previous !== null) next.leadAgentId = previous.leadAgentId;
+  next.generation = previous?.generation ?? next.generation ?? 0;
 }
 
 /**
@@ -170,6 +178,11 @@ function applySessionUpdate(session: IMakaioSession, update: SessionUpdatePayloa
     session.spawningToolCallId = undefined;
   } else if (update.spawningToolCallId !== undefined && session.spawningToolCallId === undefined) {
     session.spawningToolCallId = update.spawningToolCallId;
+  }
+  // Mirrors the Drizzle projection's SQL increment: an advance is relative to
+  // the stored ordinal, never a value the caller supplies.
+  if (update.advanceGeneration === true) {
+    session.generation = (session.generation ?? 0) + 1;
   }
 }
 
@@ -255,6 +268,7 @@ function registerUpdateHandler(bus: IMakaioBus, store: Map<string, IMakaioSessio
       clientAccountChanged: (previous.clientAccountId ?? null) !== (session.clientAccountId ?? null),
     });
     emitSessionClientAccountChangedIfNeeded(bus, previous, cloneSession(session));
+    if (payload.advanceGeneration === true) emitSessionGenerationAdvanced(bus, payload.sessionId);
   });
 }
 /**

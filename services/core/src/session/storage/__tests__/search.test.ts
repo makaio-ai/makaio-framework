@@ -62,6 +62,20 @@ describe('search', () => {
     });
   });
 
+  it('carries the compaction ordinal through the search projection', async () => {
+    // The search path builds its rows from an explicit column list rather than
+    // the shared row mapper, so a column added to the table is invisible here
+    // until it is added to that list too.
+    await exec(sql`UPDATE sessions SET generation = 3 WHERE session_id = 'session-1'`);
+
+    const result = await MakaioBus.request(SessionStorageSubjects.search, {
+      query: 'JWT authentication',
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].generation).toBe(3);
+  });
+
   it('should return empty for no matches', async () => {
     const result = await MakaioBus.request(SessionStorageSubjects.search, {
       query: 'nonexistent topic',

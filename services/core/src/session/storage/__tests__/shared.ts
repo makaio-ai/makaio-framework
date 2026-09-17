@@ -59,9 +59,11 @@ export function createSession(overrides: Partial<IMakaioSession> = {}): IMakaioS
     status: 'active',
     isOrchestrated: false,
     isImported: false,
-    // Storage defaults the currency state, so fixtures carry it too — otherwise
-    // whole-record round-trip assertions drift by one field.
+    // Storage defaults the currency state and the compaction ordinal, so
+    // fixtures carry them too — otherwise whole-record round-trip assertions
+    // drift by a field.
     currentAdapterSessionIdState: 'inherited',
+    generation: 0,
     ...overrides,
   };
 }

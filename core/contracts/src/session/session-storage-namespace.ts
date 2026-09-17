@@ -227,6 +227,20 @@ const SessionStorageUpdateRequestPayloadSchema = z
     spawningToolCallId: z.string().nullable().optional(),
     /** {@inheritDoc MachineIdFieldSchema} */
     machineId: MachineIdFieldSchema,
+    /**
+     * Advance the row's compaction ordinal by one.
+     *
+     * An action, not a value — hence `true` or absent, never `false`: an ordinal
+     * can be advanced but not un-advanced, and storage increments in SQL so two
+     * concurrent advances cannot land on the same number.
+     *
+     * The hook-observed path advances through `storage:session.rebindObserved`
+     * instead, which keys on the `(source, adapterSessionId)` import identity.
+     * Adapter-managed sessions have no `source` — nothing on that path writes
+     * one — so that key can never match them, and this flag is how a compaction
+     * reported for a managed session reaches its row by `sessionId`.
+     */
+    advanceGeneration: z.literal(true).optional(),
     /** {@inheritDoc SessionAdapterIdentitySchema} */
     identity: SessionAdapterIdentitySchema.optional(),
     /**
@@ -411,6 +425,16 @@ export const SessionStorageRebindObservedRequestSchema = z.object({
    * `null` relinquishes ownership, `undefined` leaves it unchanged.
    */
   machineId: MachineIdFieldSchema,
+  /**
+   * How the provider continued the conversation.
+   *
+   * The one non-locality field a rebind carries, because `'compact'` is a
+   * context reset and must advance the row's `generation` ordinal, while
+   * `'resume'` must not. It is passed rather than decided here so the advance
+   * happens in the same statement as the locality refresh — a separate
+   * increment could be lost between the two writes.
+   */
+  startMode: z.enum(['resume', 'compact']).optional(),
 });
 
 export type SessionStorageRebindObservedRequest = z.infer<typeof SessionStorageRebindObservedRequestSchema>;

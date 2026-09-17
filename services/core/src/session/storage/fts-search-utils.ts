@@ -41,6 +41,8 @@ export type SearchSessionRow = {
   root_session_id: string | null;
   fork_point_message_id: string | null;
   branch_kind: IMakaioSession['branchKind'] | null;
+  /** Compaction ordinal. `NOT NULL` in the schema, so a matched row always carries one. */
+  generation: number;
   adapter_name: string | null;
   adapter_session_id: string | null;
   adapter_id: string | null;
@@ -202,6 +204,7 @@ export function mapRowToSession(
     rootSessionId: row.root_session_id ?? undefined,
     forkPointMessageId: row.fork_point_message_id ?? undefined,
     branchKind: row.branch_kind ?? undefined,
+    generation: row.generation,
     adapterName: row.adapter_name ?? undefined,
     adapterSessionId: row.adapter_session_id ?? undefined,
     adapterId: row.adapter_id ?? undefined,

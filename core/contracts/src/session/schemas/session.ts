@@ -71,6 +71,25 @@ export const MakaioSessionSchema = z.object({
    */
   branchKind: BranchKindSchema.optional(),
   /**
+   * How many times the provider has compacted this conversation.
+   *
+   * A monotonically increasing ordinal, `0` for a session that has never been
+   * compacted. It advances when a continuation reports `startMode: 'compact'`;
+   * a plain `resume` leaves it alone, because resuming is not a context reset.
+   *
+   * This is a *live* fact, observed from the hook path at the moment of
+   * compaction — deliberately independent of the `compress` lineage rows, which
+   * only a transcript import can create (it alone sees the compaction boundary
+   * records that give those rows their identity). Consumers that need a
+   * "generation" boundary as soon as it happens read this; consumers that need
+   * the compacted content read the lineage.
+   *
+   * Compare against the last value observed rather than testing for an exact
+   * successor: hook delivery is at-least-once, so the ordinal may skip. It
+   * never repeats or regresses, which is what change detection actually needs.
+   */
+  generation: z.number().int().nonnegative().optional(),
+  /**
    * Adapter type name (e.g., 'claude-code', 'codex-mcp').
    * Identifies the source adapter for native imports.
    */

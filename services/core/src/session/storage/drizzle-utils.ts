@@ -103,6 +103,7 @@ export function mapToSession(sessionRow: SessionRow, agentRows: AgentRow[]): IMa
     rootSessionId: toOptionalValue(sessionRow.rootSessionId),
     forkPointMessageId: toOptionalValue(sessionRow.forkPointMessageId),
     branchKind: toOptionalValue(sessionRow.branchKind),
+    generation: sessionRow.generation,
     adapterName: toOptionalValue(sessionRow.adapterName),
     adapterSessionId: toOptionalValue(sessionRow.adapterSessionId),
     currentAdapterSessionId: toOptionalValue(sessionRow.currentAdapterSessionId),

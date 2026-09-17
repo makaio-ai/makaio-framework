@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `generation` integer DEFAULT 0 NOT NULL;

@@ -6,7 +6,7 @@
  * exists and touches nothing the import upsert's conflict merge owns.
  * @packageDocumentation
  */
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { resolveSchema } from '@makaio/storage-drizzle';
 import { SessionSubjects, type SessionStorageRebindObservedRequest } from '@makaio/contracts';
 import { SessionStorageSubjects } from './namespace.js';
@@ -44,6 +44,20 @@ function buildRebindObservedSet(payload: SessionStorageRebindObservedRequest): R
 }
 
 /**
+ * Whether this continuation advances the row's compaction ordinal.
+ *
+ * Only `'compact'` does: it is the provider telling us the context was reset.
+ * A `'resume'` continues the same context, and an absent start mode carries no
+ * claim either way — neither may advance a counter consumers read as
+ * "compactions so far".
+ * @param payload - Rebind request payload
+ * @returns True when the row's `generation` must be incremented
+ */
+function advancesGeneration(payload: SessionStorageRebindObservedRequest): boolean {
+  return payload.startMode === 'compact';
+}
+
+/**
  * Register handler for storage:session.rebindObserved.
  *
  * Single-statement UPDATE keyed on the `(source, adapterSessionId)` import
@@ -53,7 +67,17 @@ function buildRebindObservedSet(payload: SessionStorageRebindObservedRequest): R
  * continuation whose origin it never saw.
  *
  * A request that carries no locality evidence degrades to an existence probe
- * so the outcome stays honest without issuing an empty UPDATE.
+ * so the outcome stays honest without issuing an empty UPDATE — unless it
+ * reports `startMode: 'compact'`, which is evidence of its own and advances the
+ * row's `generation` ordinal.
+ *
+ * That advance is **at-least-once**: nothing upstream deduplicates hook
+ * deliveries, so a redelivered compaction signal increments twice. Accepted
+ * deliberately — `generation` is an ordinal, not a tally. Its contract is that
+ * it changes on compaction and never repeats or regresses, which is what
+ * consumers detecting "a new generation began" rely on; a skipped number costs
+ * them nothing, whereas a *missed* increment would silently merge two
+ * generations. Guarding would need a dedupe key the hook payload does not carry.
  * @param deps - Handler dependencies (bus and db)
  * @returns Cleanup function to unsubscribe the handler
  */
@@ -67,10 +91,19 @@ export function registerRebindObservedHandler(deps: SessionHandlerDeps): () => v
     const locality = buildRebindObservedSet(payload);
     const changedProperties = Object.keys(locality);
 
+    // The compaction ordinal rides along in the same UPDATE as the locality
+    // refresh. Incrementing in SQL rather than read-modify-write keeps
+    // concurrent continuations from reading the same value and writing it twice.
+    const generationAdvance = advancesGeneration(payload);
+    if (generationAdvance) {
+      changedProperties.push('generation');
+    }
+    const updates = generationAdvance ? { ...locality, generation: sql`${sessions.generation} + 1` } : { ...locality };
+
     const [row] =
       changedProperties.length === 0
         ? await db.select({ sessionId: sessions.sessionId }).from(sessions).where(identity).limit(1)
-        : await db.update(sessions).set(locality).where(identity).returning({ sessionId: sessions.sessionId });
+        : await db.update(sessions).set(updates).where(identity).returning({ sessionId: sessions.sessionId });
 
     if (!row) {
       ctx.setResult({ outcome: 'not-found' });

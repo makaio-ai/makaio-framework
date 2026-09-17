@@ -26,6 +26,7 @@ import {
   type SessionRecordMetadata,
 } from '@makaio/contracts';
 import { LogImportTriggerSubjects } from './log-import-trigger-subjects.js';
+import { advanceManagedGeneration, advanceObservedGeneration } from './observed-session-generation.js';
 import { SessionStorageSubjects } from './storage/namespace.js';
 import {
   OBSERVED_SESSION_INGESTION_POLICY_CAPABILITY_ID,
@@ -143,12 +144,21 @@ export function isTrackingStub(session: Pick<IMakaioSession, 'isImported' | 'imp
  */
 export class ObservedSessionIngestionService {
   /**
-   * Adapter session IDs owned by the managed orchestration path.
+   * Adapter session IDs owned by the managed orchestration path, mapped to the
+   * framework session id when `client.runtime.started` already resolved one.
+   *
+   * A Map rather than a Set because the provider session id is not a durable
+   * handle on this path: after a confirmed rotation the stored row is found
+   * under `currentAdapterSessionId`, not the origin `adapterSessionId` a
+   * source-less lookup compares. The framework session id does not move, so
+   * remembering it here is what lets a compaction reported under a rotated id
+   * still reach its row. The value stays `undefined` when the observation
+   * carried none, and the lookup fallback covers that case.
    *
    * FIFO-capped at {@link MANAGED_SESSION_CAP}; insertion order is the
    * eviction order (mirrors the client services' gate).
    */
-  private readonly managedAdapterSessionIds = new Set<string>();
+  private readonly managedAdapterSessionIds = new Map<string, string | undefined>();
 
   /**
    * Importer resolutions per client id.
@@ -272,12 +282,17 @@ export class ObservedSessionIngestionService {
     const alreadyKnown = this.managedAdapterSessionIds.has(payload.adapterSessionId);
     if (!alreadyKnown) {
       if (this.managedAdapterSessionIds.size >= MANAGED_SESSION_CAP) {
-        const oldest = this.managedAdapterSessionIds.values().next().value;
+        const oldest = this.managedAdapterSessionIds.keys().next().value;
         if (oldest !== undefined) {
           this.managedAdapterSessionIds.delete(oldest);
         }
       }
-      this.managedAdapterSessionIds.add(payload.adapterSessionId);
+      this.managedAdapterSessionIds.set(payload.adapterSessionId, payload.sessionId);
+    } else if (payload.sessionId !== undefined) {
+      // A later observation may resolve the framework session id the first one
+      // lacked. Filling it in keeps the entry's insertion position, so this
+      // cannot disturb the FIFO eviction order.
+      this.managedAdapterSessionIds.set(payload.adapterSessionId, payload.sessionId);
     }
 
     // ── Stub reconciliation ───────────────────────────────────────────
@@ -451,7 +466,19 @@ export class ObservedSessionIngestionService {
   private async handleSessionStarted(payload: ClientSessionStarted): Promise<void> {
     const adapterSessionId = payload.adapterSessionId;
     if (adapterSessionId === undefined || adapterSessionId.length === 0) return;
-    if (this.managedAdapterSessionIds.has(adapterSessionId)) return;
+    if (this.managedAdapterSessionIds.has(adapterSessionId)) {
+      // The gate protects what the adapter owns for a session the framework
+      // itself started: origin, lineage, and the locality facts a hook must
+      // never write over. A compaction is the one fact on this event the
+      // adapter cannot report at all — neither client exposes a post-compaction
+      // adapter-layer signal, which is why both client gates forward this hook
+      // for managed sessions. So the ordinal alone is let through, addressed by
+      // `sessionId` and touching nothing the gate protects.
+      if (payload.startMode === 'compact') {
+        await advanceManagedGeneration(this.bus, adapterSessionId, this.managedAdapterSessionIds.get(adapterSessionId));
+      }
+      return;
+    }
 
     const importer = await this.resolveImporter(payload.clientId);
     if (importer === null) return;
@@ -462,14 +489,29 @@ export class ObservedSessionIngestionService {
       continuationMode !== undefined
         ? await this.rebindObservedSession(payload, adapterSessionId, importer.adapterName, continuationMode)
         : await this.registerObservedSession(payload, adapterSessionId, importer.adapterName);
-    if (!written) return;
-
     // Post-write double-check: the gate-check above (managedAdapterSessionIds)
     // and the storage write are not atomic — runtime.started may have populated
     // the gate between the two. Both sides now reconcile: the runtime side adds
     // to the gate then checks storage; the hook side writes storage then checks
     // the gate. Every interleaving order is caught by one of the two sides.
-    if (this.managedAdapterSessionIds.has(adapterSessionId)) {
+    //
+    // Deliberately reached whether or not anything was written, because a
+    // compaction loses its boundary either way. Written: the advance landed on
+    // the hook-created stub that reconciliation is about to delete. Unwritten:
+    // the sourced rebind reported `'not-found'` — the normal answer for a
+    // source-less managed row with no stub yet — and nothing advanced at all.
+    // In both the row the adapter owns keeps its old generation unless the
+    // advance is re-applied here, addressed by the `sessionId` the gate
+    // remembered.
+    if (!this.managedAdapterSessionIds.has(adapterSessionId)) return;
+
+    if (payload.startMode === 'compact') {
+      await advanceManagedGeneration(this.bus, adapterSessionId, this.managedAdapterSessionIds.get(adapterSessionId));
+    }
+    // Reconciliation stays tied to a write: with nothing written there is no
+    // stub this call could have created, and the runtime side already
+    // reconciles whatever it finds.
+    if (written) {
       await this.reconcileTrackingStub(payload.clientId, adapterSessionId);
     }
   }
@@ -477,11 +519,19 @@ export class ObservedSessionIngestionService {
   /**
    * Rebind an already known observed session to the runtime continuing it.
    *
-   * Refreshes runtime/locality facts only (working directory, transcript path,
-   * owning machine). A continuation carries no evidence about origin, lineage,
-   * import status or creation time, so it must not be able to write them —
-   * that is precisely what routing resume/compact through the import upsert
-   * used to do.
+   * Refreshes runtime/locality facts (working directory, transcript path,
+   * owning machine) and, for `compact` only, advances the row's `generation`
+   * ordinal — the one thing a continuation *is* first-hand evidence of, since
+   * the provider is reporting its own context reset. A continuation still
+   * carries no evidence about origin, lineage, import status or creation time,
+   * so it must not be able to write those — that is precisely what routing
+   * resume/compact through the import upsert used to do.
+   *
+   * The ordinal is deliberately not a `compress` lineage row: those are keyed
+   * on the compaction boundary record inside the transcript, which no hook
+   * payload carries, so only the importer can create them. The ordinal gives
+   * consumers the generation boundary at the moment it happens; the lineage
+   * gives them the compacted content once the import catches up.
    *
    * A `'not-found'` outcome is resolved by the ingestion policy, because the
    * skip is only correct while a transcript import is still coming:
@@ -520,6 +570,7 @@ export class ObservedSessionIngestionService {
     const result = await this.bus.requestOptional(SessionStorageSubjects.rebindObserved, {
       externalSessionId: adapterSessionId,
       source,
+      startMode,
       ...(payload.cwd !== undefined ? { cwd: payload.cwd } : {}),
       ...(payload.transcriptPath !== undefined ? { logFilePath: payload.transcriptPath } : {}),
       ...(payload.machineId !== undefined ? { machineId: payload.machineId } : {}),
@@ -534,8 +585,26 @@ export class ObservedSessionIngestionService {
         // Metadata-only policy: no transcript import will ever create the row.
         // The decision is handed on so registration does not re-evaluate the
         // policy providers for the same observation.
-        return await this.registerObservedSession(payload, adapterSessionId, source, importStatus);
+        const registered = await this.registerObservedSession(payload, adapterSessionId, source, importStatus);
+        // The registration seam knows no start mode, so it creates the row at
+        // generation 0. Advancing right after the create is what keeps the very
+        // first compaction of a session from being the one nobody counts.
+        // Deliberately a second write rather than an initial value threaded
+        // through the import upsert: a failure here leaves 0, which is exactly
+        // where the row would have been anyway, and the ordinal never regresses.
+        if (registered && startMode === 'compact') {
+          await advanceObservedGeneration(this.bus, adapterSessionId, source);
+        }
+        return registered;
       }
+      // The compaction that arrives before the row exists is NOT counted here:
+      // creating a row would stamp import provenance and a creation time taken
+      // from the compaction moment, which is the fabrication this whole path
+      // exists to avoid. The transcript import owns this row's creation, and it
+      // sees the compaction boundary records the hook cannot — so the history
+      // lands as `compress` lineage instead. The ordinal starts at 0 and counts
+      // from the first compaction observed after the row exists, which keeps it
+      // monotonic and repeat-free even though it is not a complete tally.
       debugLog('Observed continuation of an unknown session; leaving creation to the transcript import', {
         adapterSessionId,
         source,

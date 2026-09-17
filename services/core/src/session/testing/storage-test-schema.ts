@@ -24,6 +24,7 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
         branch_kind IS NULL
         OR branch_kind IN ('fork', 'branch', 'subagent', 'compress', 'rewrite', 'coordinator', 'aside')
       ),
+      generation INTEGER NOT NULL DEFAULT 0,
       adapter_name TEXT,
       adapter_session_id TEXT,
       current_adapter_session_id TEXT,
