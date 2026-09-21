@@ -27,6 +27,7 @@ import {
 } from '../boot-extension-selection.js';
 import type { ShutdownStep } from '../boot-phase.js';
 import { tryImport } from '../optional-package.js';
+import { NodeCredentialProvider } from '../credential-provider.js';
 
 const LOCAL_RUNTIME_SNAPSHOT_PRIORITY = 1;
 const ISOLATED_SESSION_BASE_PACKAGES = [sessionStoragePackage, sessionBridgePackage, sessionPackage] as const;
@@ -156,6 +157,7 @@ export async function createIsolatedWorkflowRuntime(
       username: context.username,
       machineId: context.machineId,
       tryImport,
+      credentials: new NodeCredentialProvider(),
     },
   });
 

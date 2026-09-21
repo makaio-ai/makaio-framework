@@ -1,6 +1,38 @@
 import type { MakaioBusLike } from '@makaio/core';
+import type { CredentialRef } from '../config/credential-ref.js';
 import type { ExtensionToken } from './extension-token.js';
 import type { ExtensionIdentity } from './extension-lifecycle.js';
+
+/**
+ * Host-supplied capability for resolving credential references at extension init time.
+ *
+ * Provided by the Node runtime on {@link NodeExtensionContext.credentials}. Extensions
+ * should call this instead of opening the credential channel directly so that the
+ * framework can degrade gracefully in headless hosts where the product-side credential
+ * service is not running.
+ *
+ * Resolution semantics by scheme:
+ * - `env:<VAR>` — reads the named environment variable from the current process.
+ * - `file:<path>` — reads the file at the given absolute path.
+ * - `keychain:<service>:<account>` — reads macOS Keychain (other platforms return null).
+ * - `stored:providerConfig:<configId>:<key>` — fetches through the host's credential
+ *   service when one is registered; returns `null` with a warning when no handler is
+ *   registered (bare headless hosts without the credential service).
+ *
+ * Extensions **must never log resolved values** — treat them as secrets at all times.
+ */
+export interface CredentialResolver {
+  /**
+   * Resolve a credential reference to its runtime value.
+   *
+   * Returns `null` when the referenced credential is unavailable (environment
+   * variable unset, file missing, keychain entry absent, or `stored:` service
+   * not registered).
+   * @param ref - Branded credential reference string.
+   * @returns Resolved plaintext value, or `null` when unavailable.
+   */
+  resolve(ref: CredentialRef): Promise<string | null>;
+}
 
 /**
  * Generic context provided by a host runtime when creating an extension's service.
@@ -100,4 +132,16 @@ export interface NodeExtensionContext<TBus extends MakaioBusLike = MakaioBusLike
    * Hosts without a WebSocket bus omit it.
    */
   readonly busUrl?: string;
+  /**
+   * Host-supplied credential resolver for resolving `CredentialRef` values.
+   *
+   * Resolves `env:`, `file:`, and `keychain:` references locally; resolves
+   * `stored:providerConfig:<configId>:<key>` through the host's credential
+   * service when one is registered, returning `null` with a warning when none
+   * is available (bare headless hosts).
+   *
+   * Absent when the host does not provide one (e.g., browser-only contexts).
+   * Extensions **must never log resolved values**.
+   */
+  readonly credentials?: CredentialResolver;
 }

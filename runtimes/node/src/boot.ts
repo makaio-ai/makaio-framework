@@ -101,6 +101,7 @@ import { readFrameworkVersion } from './read-framework-version.js';
 import { runBootExtensionMigrations } from './boot-extension-migrations.js';
 import { createBootE2EAuth } from './boot-e2e-auth.js';
 import { attachUpstreamTelemetry } from './upstream-telemetry.js';
+import { StoredCredentialProvider } from './credential-provider.js';
 import {
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
@@ -410,6 +411,8 @@ export async function bootMakaioRuntimeCore(
 
     const busUrl = buildLocalBusUrl(boundHost, boundPort);
 
+    const credentialsProvider = new StoredCredentialProvider(bus);
+
     const coordinator = new ExtensionCoordinator(bus, {
       surface: options.surface ?? 'headless',
       db,
@@ -422,6 +425,7 @@ export async function bootMakaioRuntimeCore(
         machineId: machineIdentity.machineId,
         busUrl,
         tryImport,
+        credentials: credentialsProvider,
       },
       runtimeEnvironment,
       launcherCommand: options.launcherCommand,
@@ -589,6 +593,10 @@ export async function bootMakaioRuntimeCore(
       coordinator.registerContributionProcessor(createHttpContributionProcessor(options.routeGraphBuilder));
     }
     collectHostCleanups(shutdownSteps, registerExtensionBootContributions(packagesToLoad, bus, coordinator));
+    // Close the credential channel before the bus/transport tears down. In
+    // reverse shutdown order this runs after coordinator.shutdown() (which
+    // stops all extension activity) and before transport.disconnect().
+    shutdownSteps.push(() => credentialsProvider.close());
     shutdownSteps.push(() => coordinator.shutdown());
     collectHostCleanups(
       shutdownSteps,

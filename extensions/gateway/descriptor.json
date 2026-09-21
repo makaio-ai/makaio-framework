@@ -1,0 +1,13 @@
+{
+  "name": "gateway",
+  "displayName": "LLM Gateway",
+  "version": "0.1.0",
+  "makaio": {
+    "framework": ">=0.1.0"
+  },
+  "surface": "any",
+  "entrypoints": {
+    "server": "index"
+  },
+  "execution": "embedded"
+}

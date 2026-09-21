@@ -319,6 +319,7 @@ Read [`.agents/policies/extensions.md`](../.agents/policies/extensions.md),
 | `extensions/client-hooks`           | `@makaio/extension-client-hooks`           | Client lifecycle hooks.                         |
 | `extensions/coderabbit`             | `@makaio/extension-coderabbit`             | CodeRabbit code review integration.             |
 | `extensions/filesystem`             | `@makaio/extension-filesystem`             | Filesystem tool extension with path validation. |
+| `extensions/gateway`                | `@makaio/extension-gateway`                | Per-request Anthropic Messages router for Claude Code. See [README](../extensions/gateway/README.md). |
 | `extensions/git-hooks`              | `@makaio/extension-git-hooks`              | Native Git hook integration.                    |
 | `extensions/opencode`               | `@makaio/extension-opencode`               | OpenCode extension.                             |
 | `extensions/pin-message`            | `@makaio/extension-pin-message`            | Pin message extension.                          |
