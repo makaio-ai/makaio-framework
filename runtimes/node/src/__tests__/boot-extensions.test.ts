@@ -35,6 +35,7 @@ import type { CoreBootOptions } from '../boot.js';
 import {
   buildLocalBusUrl,
   filterConfigDefaultsForLoadedPackages,
+  mergePackageConfigDefaults,
   registerExtensionBootContributions,
   selectFrameworkCorePackages,
 } from '../boot.js';
@@ -308,21 +309,79 @@ describe('extension package merge by descriptor-source priority', () => {
 
 describe('filterConfigDefaultsForLoadedPackages', () => {
   it('drops defaults for extension packages excluded from the final load set', () => {
-    const filtered = filterConfigDefaultsForLoadedPackages(
-      new Map([
-        ['workspace-ext', { mode: 'local' }],
-        ['loaded-descriptor-ext', { retries: 3 }],
-        ['skipped-descriptor-ext', { retries: 9 }],
-      ]),
-      new Set(['workspace-ext', 'loaded-descriptor-ext']),
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const filtered = filterConfigDefaultsForLoadedPackages(
+        new Map([
+          ['workspace-ext', { mode: 'local' }],
+          ['loaded-descriptor-ext', { retries: 3 }],
+          ['skipped-descriptor-ext', { retries: 9 }],
+          ['misspelled-ext', { retries: 1 }],
+        ]),
+        new Set(['workspace-ext', 'loaded-descriptor-ext']),
+      );
+
+      expect(filtered).toStrictEqual(
+        new Map([
+          ['workspace-ext', { mode: 'local' }],
+          ['loaded-descriptor-ext', { retries: 3 }],
+        ]),
+      );
+      // One diagnostic for the whole pass, naming every dropped package, so a
+      // default an operator believes is in effect is never discarded silently.
+      expect(warnSpy.mock.calls.map((call) => String(call[0]))).toEqual([
+        '[boot] Package config defaults have no loaded package and were dropped: skipped-descriptor-ext, misspelled-ext',
+      ]);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('flattens control characters in a dropped package name before putting it in a warning', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      filterConfigDefaultsForLoadedPackages(new Map([['rogue\u0007ext\nname', { mode: 'local' }]]), new Set());
+
+      expect(warnSpy.mock.calls.map((call) => String(call[0]))).toEqual([
+        '[boot] Package config defaults have no loaded package and were dropped: rogue ext name',
+      ]);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('stays silent when every default has a loaded package', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      filterConfigDefaultsForLoadedPackages(
+        new Map([['workspace-ext', { mode: 'local' }]]),
+        new Set(['workspace-ext']),
+      );
+
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+describe('mergePackageConfigDefaults', () => {
+  it('merges per-package keys instead of replacing whole records', () => {
+    const merged = mergePackageConfigDefaults(
+      new Map([['gateway', { port: 6299, label: 'descriptor' }]]),
+      new Map([['gateway', { label: 'config-file' }]]),
     );
 
-    expect(filtered).toStrictEqual(
-      new Map([
-        ['workspace-ext', { mode: 'local' }],
-        ['loaded-descriptor-ext', { retries: 3 }],
-      ]),
-    );
+    expect(merged).toStrictEqual(new Map([['gateway', { port: 6299, label: 'config-file' }]]));
+  });
+
+  it('treats an absent layer as contributing nothing', () => {
+    const merged = mergePackageConfigDefaults(undefined, new Map([['gateway', { port: 1 }]]), undefined);
+
+    expect(merged).toStrictEqual(new Map([['gateway', { port: 1 }]]));
   });
 });
 

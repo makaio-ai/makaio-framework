@@ -152,10 +152,20 @@ async function enableExtension(host: ToggleHost, name: string, entry: ExtensionE
   entry.error = undefined;
   transitionPackageEntry(host.bus, entry, 'initializing');
 
-  // Config resolution is non-throwing: loadConfig and schema parse
-  // failures are logged and represented as absent config, so enable
-  // failure state is reserved for storage/create/init errors below.
-  const config = resolveExtensionEntryConfig(host, name, entry);
+  // Config resolution fails only when an operator-supplied layer cannot be
+  // honoured; loadConfig and stored-config parse failures stay non-throwing and
+  // are represented as absent config. Re-enable resolves against the same
+  // operator source as startup, so an extension that started cannot fail here
+  // for a reason that did not already exist at boot.
+  let config: unknown;
+  try {
+    config = resolveExtensionEntryConfig(host, name, entry, 'activate');
+  } catch (err) {
+    entry.error = getErrorString(err);
+    console.error(`[ExtensionCoordinator] Extension "${name}" config resolution failed:`, err);
+    transitionPackageEntry(host.bus, entry, 'failed');
+    return false;
+  }
 
   if (pkg.storage?.registerHandlers && host.db !== undefined) {
     try {
@@ -173,32 +183,7 @@ async function enableExtension(host: ToggleHost, name: string, entry: ExtensionE
     }
   }
 
-  if (pkg.create) {
-    let service: Awaited<ReturnType<NonNullable<typeof pkg.create>>> | undefined;
-    try {
-      const pkgCtx = buildExtensionContext(host, entry, config);
-      service = await pkg.create(pkgCtx);
-      await service.init?.();
-      entry.service = service;
-    } catch (err) {
-      await cleanupFailedEnable(name, service, storageCleanup, entry);
-      if (err instanceof ServiceSkipError) {
-        if (entry.pkg.critical) {
-          entry.error = `Critical extension cannot skip startup: ${err.reason}`;
-          console.error(`[ExtensionCoordinator] Extension "${name}" failed to re-initialize:`, entry.error);
-          transitionPackageEntry(host.bus, entry, 'failed');
-          return false;
-        }
-        entry.error = err.reason;
-        transitionPackageEntry(host.bus, entry, 'skipped');
-        return false;
-      }
-      entry.error = getErrorString(err);
-      console.error(`[ExtensionCoordinator] Extension "${name}" failed to re-initialize:`, err);
-      transitionPackageEntry(host.bus, entry, 'failed');
-      return false;
-    }
-  }
+  if (!(await reinitializeService(host, name, entry, config, storageCleanup))) return false;
 
   // Run contribution processors BEFORE transitioning to active so a hard
   // failure never leaves the extension in the `active` state.
@@ -221,6 +206,58 @@ async function enableExtension(host: ToggleHost, name: string, entry: ExtensionE
   await host.runHealthCheck(name);
   await host.emitWarningsForEntry(name, entry);
   return true;
+}
+
+/**
+ * Re-run the `create` + `init` lifecycle for an extension being re-enabled.
+ *
+ * Mirrors the startup path: a {@link ServiceSkipError} from a non-critical
+ * extension settles as `skipped`, every other failure — including a skip
+ * attempted by a `critical: true` extension — settles as `failed`. Both
+ * outcomes tear down the service and storage handlers first.
+ * @param host - Coordinator surface providing shared state.
+ * @param name - Extension name (used for log messages).
+ * @param entry - Mutable runtime entry for the extension.
+ * @param config - Configuration resolved for this enable.
+ * @param storageCleanup - Cleanup registered by this enable, if any.
+ * @returns `true` when the service is ready or the extension declares no
+ *   factory, `false` when the entry was transitioned away from `initializing`.
+ */
+async function reinitializeService(
+  host: ToggleHost,
+  name: string,
+  entry: ExtensionEntry,
+  config: unknown,
+  storageCleanup: (() => void) | undefined,
+): Promise<boolean> {
+  const { create } = entry.pkg;
+  if (!create) return true;
+
+  let service: Awaited<ReturnType<typeof create>> | undefined;
+  try {
+    const pkgCtx = buildExtensionContext(host, entry, config);
+    service = await create(pkgCtx);
+    await service.init?.();
+    entry.service = service;
+    return true;
+  } catch (err) {
+    await cleanupFailedEnable(name, service, storageCleanup, entry);
+    if (err instanceof ServiceSkipError) {
+      if (!entry.pkg.critical) {
+        entry.error = err.reason;
+        transitionPackageEntry(host.bus, entry, 'skipped');
+        return false;
+      }
+      entry.error = `Critical extension cannot skip startup: ${err.reason}`;
+      console.error(`[ExtensionCoordinator] Extension "${name}" failed to re-initialize:`, entry.error);
+      transitionPackageEntry(host.bus, entry, 'failed');
+      return false;
+    }
+    entry.error = getErrorString(err);
+    console.error(`[ExtensionCoordinator] Extension "${name}" failed to re-initialize:`, err);
+    transitionPackageEntry(host.bus, entry, 'failed');
+    return false;
+  }
 }
 
 /**

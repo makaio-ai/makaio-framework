@@ -7,6 +7,9 @@
  * that already owns an HTTP server and Hono app.
  *
  * Startup sequence:
+ *  0. Makaio home resolution + operator extension config snapshot (read once from
+ *     `<makaioHome>/config/extensions/`; an unlistable directory fails boot here,
+ *     before anything has started)
  *  1. Config + identity resolution (including machineId mismatch guard)
  *  2. Bus creation (MakaioBus singleton) + namespace registration + busCreated phase event
  *  3. Transport — BusServerTransportProvider (WebSocket bus server on provided HTTP server)
@@ -84,6 +87,7 @@ import {
   mergePackageConfigDefaults,
   registerConfigHandlers,
 } from './boot-config.js';
+import { loadExtensionOperatorConfig, warnOnUnappliedExtensionOperatorConfig } from './extension-operator-config.js';
 import { createBootModelRegistryFetcher } from './boot-model-registry.js';
 import { ensureFrameworkPackageLink } from './framework-package-link.js';
 import {
@@ -203,6 +207,11 @@ export async function bootMakaioRuntimeCore(
   options: CoreBootOptions,
 ): Promise<MakaioRuntime> {
   const makaioHome = options.makaioHome ?? resolveMakaioHome();
+
+  // Operator-owned extension config is read here, once, from the home this
+  // core already resolves. Every host reaches this function, so none of them
+  // carries a loader of its own and none of them can drift from the others.
+  const operatorConfig = options.operatorConfig ?? (await loadExtensionOperatorConfig({ makaioHome }));
 
   // Resolve discovery strategies and module-loader overrides once up-front
   // so the boot sequence body is free of repeated `?? new Filesystem*()` guards.
@@ -435,6 +444,7 @@ export async function bootMakaioRuntimeCore(
       loadEnabled: options.extensionConfigProvider
         ? (name) => options.extensionConfigProvider!.loadEnabled(name)
         : undefined,
+      operatorConfig,
       runMigrations: (sources) => runBootExtensionMigrations(db, sources),
     });
 
@@ -551,12 +561,15 @@ export async function bootMakaioRuntimeCore(
     // contributed package names adapters, not framework packages.
     const packagesToLoad = [...frameworkPackages, ...orderAfterAdapterSubsystem(bootEligibleExtensionPackages)];
     const loadedPackageNames = new Set(packagesToLoad.map((pkg) => pkg.name));
+    // The load set is only now known, so this is the first point at which an
+    // operator file that nothing will read can be named.
+    warnOnUnappliedExtensionOperatorConfig(operatorConfig, packagesToLoad);
     const configDefaults = filterConfigDefaultsForLoadedPackages(
       mergePackageConfigDefaults(
         extensionLoadResult.configDefaults,
         browserOnlyResult.configDefaults,
         extensionsWithCli.configDefaults,
-        options.packageConfigDefaults ?? new Map(),
+        options.packageConfigDefaults,
       ),
       loadedPackageNames,
     );

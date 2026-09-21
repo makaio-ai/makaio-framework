@@ -34,6 +34,7 @@ import type { ShutdownStep } from './boot-phase.js';
 import type { HostCapabilityDeclaration } from './boot-extension-selection.js';
 import type { DatabaseBootOptions } from './initialize-node-database.js';
 import type { ExtensionDiscovery } from './extension-discovery.js';
+import type { ExtensionOperatorConfigSnapshot } from './extension-operator-config.js';
 import type { HttpRouteGraphBuilder } from './http-route-graph-builder.js';
 import type { WorkflowWorkerEntryMode } from './workflow-worker/worker-entry-resolver.js';
 import type { WorkspaceRootResolver } from './workflow-worker/local-directory-materializer.js';
@@ -395,11 +396,27 @@ export interface CoreBootOptions {
   /**
    * Host-provided package config defaults keyed by package name.
    *
-   * Merged with descriptor defaults before stored config is loaded. Prefer
+   * Merged with descriptor defaults into the weakest layer of an extension's
+   * configuration chain: stored configuration records override these values,
+   * and an operator-supplied configuration layer overrides both. Prefer
    * `makaio.config.*` for user/workspace runtime defaults; this seam remains
    * for composition roots that need to inject process-local defaults.
    */
   readonly packageConfigDefaults?: ReadonlyMap<string, Readonly<Record<string, unknown>>>;
+
+  /**
+   * Pre-built operator-owned extension configuration layer.
+   *
+   * Omit it — every shipping host does — and the runtime reads
+   * `<makaioHome>/config/extensions/` itself, so a host inherits the layer
+   * without wiring anything. Supply it to embed the runtime on a home that does
+   * not exist on disk, or to drive configuration resolution from a test.
+   *
+   * Typed as the enumerable snapshot rather than the bare kernel contract
+   * because boot also reports entries no loaded extension will read, which
+   * requires walking them.
+   */
+  readonly operatorConfig?: ExtensionOperatorConfigSnapshot;
 
   /**
    * Host-provided handlers for client binary post-install descriptors.

@@ -73,7 +73,7 @@ async function runActivatedProcessors(
   try {
     for (const processor of processors) {
       if (processor.filter && !processor.filter(entry.pkg)) continue;
-      const config = resolveExtensionEntryConfig(contextHost, name, entry);
+      const config = resolveExtensionEntryConfig(contextHost, name, entry, 'activate');
       const pkgCtx = buildExtensionContext(contextHost, entry, config);
       await processor.processActivated(name, entry.pkg, pkgCtx);
       activated.push(processor);

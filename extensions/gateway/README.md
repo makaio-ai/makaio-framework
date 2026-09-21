@@ -47,66 +47,65 @@ For every `POST /v1/messages` and `POST /v1/messages/count_tokens` arriving at
 
 ## Configuration
 
-Gateway configuration is supplied through `packageConfigDefaults` in the runtime
-config file, keyed by the extension descriptor name `"gateway"`. The `rules`
-field is an array of objects that the settings form cannot render, so the config
-file is the primary way to configure the gateway.
+The primary way to configure the gateway is an **operator config file** at
+`~/.makaio/config/extensions/gateway.json` (or
+`$MAKAIO_HOME/config/extensions/gateway.json` when `MAKAIO_HOME` is set). The
+file body is the gateway config object exactly as its schema validates it — no
+envelope, no `$schema`, plain JSON.
 
-**Config file resolution order** (`resolveMakaioConfigPath`,
-`runtimes/node/src/makaio-config.ts`):
+The file is read once at boot. Changes take effect only after the host is
+restarted — disabling and re-enabling the extension resolves against the same
+boot-time snapshot.
 
-1. `--config <path>` flag — must appear before the subcommand:
-   `makaio --config ./makaio.config.json serve`.
-2. `MAKAIO_CONFIG_FILE` environment variable.
-3. `~/.makaio/makaio.config.ts` / `.js` / `.json`.
-
-A `.ts` config uses `defineMakaioConfig` from `@makaio/runtime-node/makaio-config`
-and may read `process.env` at load time. A `.json` config uses plain JSON.
-
-**`makaio.config.json` example:**
+**`~/.makaio/config/extensions/gateway.json` example:**
 
 ```json
 {
-  "packageConfigDefaults": {
-    "gateway": {
-      "upstreams": {
-        "anthropic": {
-          "kind": "anthropic",
-          "url": "https://api.anthropic.com"
-        },
-        "litellm": {
-          "kind": "litellm",
-          "url": "http://127.0.0.1:4000",
-          "masterKey": "env:LITELLM_MASTER_KEY"
-        }
-      },
-      "default": "anthropic",
-      "accessToken": "env:GATEWAY_ACCESS_TOKEN",
-      "maxBodyBytes": 67108864,
-      "rules": [
-        {
-          "match": "DeepSeek-V4-Flash-0731",
-          "to": "litellm",
-          "reasoning": { "mode": "passthrough" }
-        },
-        {
-          "match": "gpt-*",
-          "to": "litellm",
-          "model": "gpt-4o",
-          "reasoning": { "mode": "fixed", "effort": "medium" }
-        },
-        {
-          "match": "claude-haiku-*",
-          "to": "anthropic"
-        }
-      ]
+  "upstreams": {
+    "anthropic": {
+      "kind": "anthropic",
+      "url": "https://api.anthropic.com"
+    },
+    "litellm": {
+      "kind": "litellm",
+      "url": "http://127.0.0.1:4000",
+      "masterKey": "env:LITELLM_MASTER_KEY"
     }
-  }
+  },
+  "default": "anthropic",
+  "accessToken": "env:MAKAIO_GATEWAY_ACCESS_TOKEN",
+  "maxBodyBytes": 67108864,
+  "rules": [
+    {
+      "match": "DeepSeek-*",
+      "to": "litellm",
+      "reasoning": { "mode": "passthrough" }
+    },
+    {
+      "match": "deepseek/*",
+      "to": "litellm",
+      "reasoning": { "mode": "drop" }
+    },
+    {
+      "match": "z-ai/*",
+      "to": "litellm",
+      "reasoning": { "mode": "drop" }
+    }
+  ]
 }
 ```
 
+`DeepSeek-*` matches Azure Foundry chat-completions deployments, which accept
+`reasoning_effort` and work with `passthrough`. `deepseek/*` and `z-ai/*` match
+model identifiers routed through LiteLLM's Responses-API bridge, which returns
+no signed thinking block; `drop` removes the `thinking` parameter before
+forwarding so those models receive a clean request. See
+[Reasoning modes](#reasoning-modes) and the
+[Server-side reasoning models](#limitations) limitation.
+
 To inject a gateway-owned API key for an Anthropic upstream — instead of
-forwarding the client's subscription OAuth token — add an `auth` block:
+forwarding the client's subscription OAuth token — add an `auth` block inside
+the `upstreams` entry:
 
 ```json
 {
@@ -126,26 +125,69 @@ When `masterKey` or `auth.apiKey` uses an `env:` reference, the variable must
 be present in the environment of the `makaio serve` process, not only in Claude
 Code's environment.
 
-**Starting the host with the config:**
+**Starting the host:**
 
 ```sh
-# --config flag must precede the subcommand
-makaio --config ./makaio.config.json serve
-
-# Or via the environment variable
-MAKAIO_CONFIG_FILE=./makaio.config.json makaio serve
+LITELLM_MASTER_KEY=… MAKAIO_GATEWAY_ACCESS_TOKEN=… makaio serve
 ```
+
+Discovery is configured separately — via installed extensions under
+`$MAKAIO_HOME/extensions/` or a `makaio.config.*` file passed with
+`--config` or `MAKAIO_CONFIG_FILE`. The operator file does not replace
+discovery configuration.
 
 **Config precedence at extension start**
 (`packages/kernel/src/extension/resolve-config.ts`):
 
-1. Stored extension-config record, written by the desktop settings UI — highest
+1. `descriptor.json` defaults — lowest priority.
+2. `packageConfigDefaults` in the runtime config file (`makaio.config.*`).
+3. Stored extension-config record — supplied by a host that wires an
+   `ExtensionConfigProvider`; no host ships one today, so this layer is currently
+   inert; the kernel contract is what is specified here.
+4. Operator config file (`~/.makaio/config/extensions/gateway.json`) — highest
    priority.
-2. `packageConfigDefaults` in the runtime config file.
-3. `descriptor.json` defaults — lowest priority.
 
-In the headless `makaio serve` path no stored records are loaded, so
-`packageConfigDefaults` in the config file is authoritative.
+Merging is **shallow, one level**: an operator `upstreams` object replaces the
+entire `upstreams` object from lower layers rather than merging into it.
+Specify the complete set of upstreams you need in the operator file.
+
+**Alternative: `packageConfigDefaults` in `makaio.config.*`**
+
+The gateway can also be configured through `packageConfigDefaults` in a runtime
+config file, keyed by the extension descriptor name `"gateway"`. This sits one
+layer below the operator file in the precedence chain, so a key declared in the
+operator file takes precedence on a per-key basis.
+
+```json
+{
+  "packageConfigDefaults": {
+    "gateway": {
+      "upstreams": { "…": "…" },
+      "default": "anthropic",
+      "rules": []
+    }
+  }
+}
+```
+
+Runtime config file lookup order (`runtimes/node/src/makaio-config.ts`):
+
+1. `--config <path>` flag — must precede the subcommand:
+   `makaio --config ./makaio.config.json serve`.
+2. `MAKAIO_CONFIG_FILE` environment variable.
+3. `$MAKAIO_HOME/makaio.config.ts` / `.js` / `.json`.
+4. `./makaio.config.{ts,js,json}` in the working directory — non-production
+   builds only, when the working directory differs from `$MAKAIO_HOME`.
+
+**Boot diagnostics for the operator file:**
+
+- Absent `~/.makaio/config/extensions/` directory: no warning, nothing created.
+- Unreadable file, invalid JSON, or a top-level value that is not an object: a
+  diagnostic naming the file path is raised when the gateway activates. Because
+  the gateway is not declared `critical`, the gateway extension fails alone while
+  the rest of the host keeps booting.
+- File that names an extension not loaded, or an extension without a
+  `configSchema`: a single boot warning naming the file; never fatal.
 
 ### Upstreams
 
@@ -273,8 +315,8 @@ lists multiple candidates.
 
 Config is read and validated at extension activation, and compiled into the
 routing table on first use. Either way it is read once: changes to the config
-file take effect only after the host is restarted (or the gateway extension is
-disabled and re-enabled).
+file take effect only after the host is restarted — disabling and re-enabling
+resolves against the same boot-time snapshot.
 
 ## Credential resolution and startup
 
@@ -339,7 +381,7 @@ requiring changes to the LiteLLM configuration.
 | Mode | Config shape | Effect on the outgoing body |
 |---|---|---|
 | `passthrough` | `{ mode: "passthrough" }` | Adds `allowed_openai_params: ["reasoning_effort"]`; forwards `thinking` as sent by Claude Code. Use for models that support thinking natively. |
-| `drop` | `{ mode: "drop" }` | Removes `thinking` and `output_config.effort` from the outgoing body (removes `output_config` entirely when only `effort` was present), then sets `drop_params: true`. Use when the upstream model does not support thinking. |
+| `drop` | `{ mode: "drop" }` | Removes `thinking` and `output_config.effort` from the outgoing body (removes `output_config` entirely when only `effort` was present), then sets `drop_params: true`. Use when the upstream model does not support thinking, and also required when the upstream is an OpenAI-compatible backend LiteLLM reaches through its Responses-API bridge, even for models that support thinking (verified 2026-09-17) — chat-completions deployments such as Azure Foundry DeepSeek work with `passthrough` instead. |
 | `fixed` | `{ mode: "fixed", effort: "low" \| "medium" \| "high" }` | Replaces `thinking` with `{ type: "enabled", budget_tokens }` — `low` → 1024, `medium` → 2048, `high` → 4096 — and adds `allowed_openai_params`. Use when Claude Code sends `thinking: { type: "adaptive" }` but the upstream requires an explicit token budget. |
 
 `passthrough` is the default when `reasoning` is omitted from a LiteLLM-targeted rule.
@@ -575,12 +617,26 @@ publishes no event. Those rejections are visible in the console output instead �
 - **Request body size** — `maxBodyBytes` (default 64 MiB) caps the incoming
   request body; requests that exceed this limit receive a `413` response.
 
-- **Config changes require a restart** — The gateway reads its rule list at
-  extension activation and compiles it once. Changes to `packageConfigDefaults`
-  (or the stored extension config record) take effect only after the gateway
-  extension is disabled and re-enabled, or the host is restarted. A credential a
-  reference *points at* can change without a restart — only the reference itself
-  is fixed at activation.
+- **Config changes require a restart** — The gateway reads its config at
+  extension activation and compiles it once. The operator config file
+  (`~/.makaio/config/extensions/gateway.json`) and `packageConfigDefaults` are
+  fixed at boot; changes to either take effect only after the host is restarted.
+  The stored extension-config record is re-read when the extension is disabled
+  and re-enabled, so a UI settings change takes effect without a full restart. A
+  credential a reference *points at* can change without a restart — only the
+  reference itself is fixed at activation.
+
+- **Server-side reasoning models** — Models that reason server-side
+  unconditionally (for example, a `deepseek/deepseek-v4.1-flash:thinking` model
+  variant behind LiteLLM's Responses-API bridge) fail on the tool-call turn
+  after the first with `missing_tool_call_reasoning` (verified 2026-09-17),
+  regardless of the `reasoning` mode configured in the rule. LiteLLM's
+  Responses-API bridge returns no signed thinking block on the assistant turn, so
+  the history the client sends back on the next turn lacks the reasoning item the
+  upstream requires — the gateway forwards bodies and never rewrites them, so no
+  `reasoning` mode can supply it. Use the non-thinking variant of the model, or
+  configure LiteLLM to reach that model through its chat-completions path
+  instead.
 
 - **Electron development mode** — The desktop application in development mode
   does not expose extension HTTP routes. Use `makaio serve` for local testing.

@@ -2,6 +2,7 @@ import { InvalidOptionArgumentError } from 'commander';
 import {
   createMakaioConfigDiscovery,
   loadMakaioConfig,
+  mergePackageConfigDefaults,
   resolveMakaioHome,
   type ExtensionDiscovery,
   type ParsedMakaioConfig,
@@ -181,6 +182,10 @@ export function shouldApplyDevWorkspacePackages(argv: readonly string[]): boolea
 
 /**
  * Apply parsed runtime config to CLI serve boot options.
+ *
+ * Package config defaults compose key-wise, config file over host: a host that
+ * injects one key and a `makaio.config.*` file that sets another for the same
+ * extension both survive, and neither replaces the other's record wholesale.
  * @param serveConfig - Existing host-provided serve config.
  * @param config - Parsed runtime config.
  * @returns Serve config with config-derived runtime options merged in.
@@ -228,18 +233,4 @@ export function applyDevWorkspacePackages(
       frameworkPackagePath: serveConfig?.boot?.frameworkPackagePath ?? devWorkspace.frameworkPackagePath,
     },
   };
-}
-
-/**
- * Merge host-provided package defaults with config-authored defaults.
- * @param left - Existing host-provided defaults.
- * @param right - Config-derived defaults.
- * @returns Merged defaults, or the original defaults when config adds none.
- */
-function mergePackageConfigDefaults(
-  left: ReadonlyMap<string, Readonly<Record<string, unknown>>> | undefined,
-  right: ReadonlyMap<string, Readonly<Record<string, unknown>>>,
-): ReadonlyMap<string, Readonly<Record<string, unknown>>> | undefined {
-  if (right.size === 0) return left;
-  return new Map([...(left ?? new Map<string, Readonly<Record<string, unknown>>>()), ...right]);
 }

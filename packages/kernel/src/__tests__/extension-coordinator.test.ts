@@ -7,6 +7,8 @@ import { createBusNamespace } from '@makaio/core';
 import {
   createClientDefinition,
   type ExtensionDependency,
+  type ExtensionOperatorConfigEntry,
+  type ExtensionOperatorConfigSource,
   type NodeExtensionContext as ExtensionContext,
   type ProviderDefinition,
   type TrayManifest,
@@ -1805,6 +1807,512 @@ describe('ExtensionCoordinator', () => {
     expect(loadConfig).not.toHaveBeenCalledWith('without-schema');
 
     await coordinator.shutdown();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Operator config layer
+  // ---------------------------------------------------------------------------
+
+  describe('operator config layer', () => {
+    const OPERATOR_SOURCE = '/operator/config/gateway.json';
+
+    /**
+     * Build an {@link ExtensionOperatorConfigSource} over a fixed entry map that
+     * records every lookup, so tests can assert the source is consulted again
+     * on a later resolution instead of a cached result being reused.
+     * @param entries - Operator entries keyed by extension name.
+     * @returns A source backed by `entries`, exposing the names it was asked for.
+     */
+    function makeOperatorConfig(
+      entries: Readonly<Record<string, ExtensionOperatorConfigEntry>>,
+    ): ExtensionOperatorConfigSource & { readonly lookups: readonly string[] } {
+      const lookups: string[] = [];
+      return {
+        lookups,
+        get: (extensionName: string): ExtensionOperatorConfigEntry | undefined => {
+          lookups.push(extensionName);
+          return entries[extensionName];
+        },
+      };
+    }
+
+    // AC4: a key present in every layer resolves to the operator's value.
+    it('operator entry wins per top-level key over stored config and defaults', async () => {
+      const ConfigSchema = z.object({ host: z.string(), port: z.number() });
+      let capturedCtx: ExtensionContext | undefined;
+
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        loadConfig: () => ({ host: 'stored-host', port: 9999 }),
+        operatorConfig: makeOperatorConfig({
+          'layered-ext': { kind: 'config', source: OPERATOR_SOURCE, config: { host: 'operator-host', port: 6299 } },
+        }),
+      });
+
+      coordinator.load(
+        [
+          makePackage('layered-ext', {
+            configSchema: ConfigSchema,
+            create: (ctx) => {
+              capturedCtx = ctx;
+              return makeMockService(ctx.bus);
+            },
+          }),
+        ],
+        new Map([['layered-ext', { host: 'default-host', port: 1234 }]]),
+      );
+      await coordinator.startAll();
+
+      expect(capturedCtx?.config).toEqual({ host: 'operator-host', port: 6299 });
+
+      await coordinator.shutdown();
+    });
+
+    // AC5: keys the operator does not declare keep their lower-layer value.
+    it('leaves keys the operator entry does not declare to the lower layers', async () => {
+      const ConfigSchema = z.object({ host: z.string(), port: z.number(), timeout: z.number() });
+      let capturedCtx: ExtensionContext | undefined;
+
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        loadConfig: () => ({ host: 'stored-host' }),
+        operatorConfig: makeOperatorConfig({
+          'partial-operator-ext': { kind: 'config', source: OPERATOR_SOURCE, config: { port: 6299 } },
+        }),
+      });
+
+      coordinator.load(
+        [
+          makePackage('partial-operator-ext', {
+            configSchema: ConfigSchema,
+            create: (ctx) => {
+              capturedCtx = ctx;
+              return makeMockService(ctx.bus);
+            },
+          }),
+        ],
+        new Map([['partial-operator-ext', { host: 'default-host', port: 1234, timeout: 30 }]]),
+      );
+      await coordinator.startAll();
+
+      expect(capturedCtx?.config).toEqual({ host: 'stored-host', port: 6299, timeout: 30 });
+
+      await coordinator.shutdown();
+    });
+
+    // AC6: merging is shallow, so a nested object is replaced rather than merged.
+    it('replaces a nested object wholesale instead of merging into it', async () => {
+      const ConfigSchema = z.object({ upstreams: z.record(z.string(), z.string()) });
+      let capturedCtx: ExtensionContext | undefined;
+
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        operatorConfig: makeOperatorConfig({
+          'nested-ext': {
+            kind: 'config',
+            source: OPERATOR_SOURCE,
+            config: { upstreams: { primary: 'https://operator.example' } },
+          },
+        }),
+      });
+
+      coordinator.load(
+        [
+          makePackage('nested-ext', {
+            configSchema: ConfigSchema,
+            create: (ctx) => {
+              capturedCtx = ctx;
+              return makeMockService(ctx.bus);
+            },
+          }),
+        ],
+        new Map([['nested-ext', { upstreams: { primary: 'https://a.example', backup: 'https://b.example' } }]]),
+      );
+      await coordinator.startAll();
+
+      expect(capturedCtx?.config).toEqual({ upstreams: { primary: 'https://operator.example' } });
+
+      await coordinator.shutdown();
+    });
+
+    // AC7: an unusable entry fails only its own extension; startup continues.
+    it('fails only the affected extension when its operator entry is unusable', async () => {
+      const ConfigSchema = z.object({ retries: z.number().default(3) });
+      let healthyCtx: ExtensionContext | undefined;
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        operatorConfig: makeOperatorConfig({
+          'broken-operator-ext': { kind: 'failure', source: OPERATOR_SOURCE, reason: 'invalid-json' },
+        }),
+      });
+
+      coordinator.load([
+        makePackage('broken-operator-ext', {
+          configSchema: ConfigSchema,
+          create: (ctx) => makeMockService(ctx.bus),
+        }),
+        makePackage('healthy-ext', {
+          configSchema: ConfigSchema,
+          create: (ctx) => {
+            healthyCtx = ctx;
+            return makeMockService(ctx.bus);
+          },
+        }),
+      ]);
+      await expect(coordinator.startAll()).resolves.toBeUndefined();
+      errorSpy.mockRestore();
+
+      const list = coordinator.list();
+      const broken = list.find((e) => e.name === 'broken-operator-ext');
+      expect(broken?.state).toBe('failed');
+      expect(broken?.error).toContain(OPERATOR_SOURCE);
+      expect(broken?.error).toContain('is not valid JSON');
+
+      expect(list.find((e) => e.name === 'healthy-ext')?.state).toBe('active');
+      expect(healthyCtx?.config).toEqual({ retries: 3 });
+
+      const state = await bus.request(BootSubjects.getState, {});
+      expect(state.failedServices).toContain('broken-operator-ext');
+
+      await coordinator.shutdown();
+    });
+
+    // AC8: the same unusable entry on a critical extension aborts startup.
+    it('aborts startup with the source in the error when a critical extension has an unusable entry', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        operatorConfig: makeOperatorConfig({
+          'critical-operator-ext': {
+            kind: 'failure',
+            source: OPERATOR_SOURCE,
+            reason: 'not-an-object',
+            detail: 'top-level value is an array',
+          },
+        }),
+      });
+
+      coordinator.load([
+        makePackage('critical-operator-ext', {
+          critical: true,
+          configSchema: z.object({ retries: z.number().default(3) }),
+          create: (ctx) => makeMockService(ctx.bus),
+        }),
+      ]);
+
+      await expect(coordinator.startAll()).rejects.toThrow(
+        `Operator config for extension "critical-operator-ext" (source: ${OPERATOR_SOURCE}) ` +
+          'is not a JSON object: top-level value is an array',
+      );
+      errorSpy.mockRestore();
+
+      expect(coordinator.list().find((e) => e.name === 'critical-operator-ext')?.state).toBe('failed');
+    });
+
+    // AC9: an operator-caused schema failure fails the extension outright.
+    it('fails the extension instead of falling back to schema defaults on an operator-caused schema failure', async () => {
+      const ConfigSchema = z.object({ retries: z.number().default(3) });
+      let capturedCtx: ExtensionContext | undefined;
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        operatorConfig: makeOperatorConfig({
+          'schema-violating-ext': {
+            kind: 'config',
+            source: OPERATOR_SOURCE,
+            config: { retries: 'not-a-number' },
+          },
+        }),
+      });
+
+      coordinator.load(
+        [
+          makePackage('schema-violating-ext', {
+            configSchema: ConfigSchema,
+            create: (ctx) => {
+              capturedCtx = ctx;
+              return makeMockService(ctx.bus);
+            },
+          }),
+        ],
+        new Map([['schema-violating-ext', { retries: 5 }]]),
+      );
+      await coordinator.startAll();
+      errorSpy.mockRestore();
+
+      const info = coordinator.list().find((e) => e.name === 'schema-violating-ext');
+      expect(info?.state).toBe('failed');
+      expect(info?.error).toContain(OPERATOR_SOURCE);
+      expect(info?.error).toContain("is part of a configuration rejected by the extension's config schema");
+      // No degradation to schema defaults: the extension never started.
+      expect(capturedCtx).toBeUndefined();
+
+      await coordinator.shutdown();
+    });
+
+    // AC9, sole-source case: the operator file is the only layer that supplies
+    // the field, so the layers beneath it cannot parse either. The malformed
+    // file must still fail the extension rather than be discarded.
+    it('fails the extension when its operator entry is the only source of a rejected required field', async () => {
+      const ConfigSchema = z.object({ apiKey: z.string() });
+      let capturedCtx: ExtensionContext | undefined;
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        operatorConfig: makeOperatorConfig({
+          'sole-source-ext': { kind: 'config', source: OPERATOR_SOURCE, config: { apiKey: 123 } },
+        }),
+      });
+
+      coordinator.load([
+        makePackage('sole-source-ext', {
+          configSchema: ConfigSchema,
+          create: (ctx) => {
+            capturedCtx = ctx;
+            return makeMockService(ctx.bus);
+          },
+        }),
+      ]);
+      await coordinator.startAll();
+      errorSpy.mockRestore();
+
+      const info = coordinator.list().find((e) => e.name === 'sole-source-ext');
+      expect(info?.state).toBe('failed');
+      expect(info?.error).toContain(OPERATOR_SOURCE);
+      expect(info?.error).toContain("is part of a configuration rejected by the extension's config schema");
+      expect(capturedCtx).toBeUndefined();
+
+      await coordinator.shutdown();
+    });
+
+    // Regression guard: an extension the operator said nothing about keeps the
+    // pre-existing warn-and-default behaviour for invalid stored config.
+    it('keeps the warn-and-default path for an extension with no operator entry', async () => {
+      const ConfigSchema = z.object({ retries: z.number().default(3) });
+      let capturedCtx: ExtensionContext | undefined;
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        loadConfig: () => ({ retries: 'not-a-number' }),
+        operatorConfig: makeOperatorConfig({
+          'other-ext': { kind: 'failure', source: OPERATOR_SOURCE, reason: 'unreadable' },
+        }),
+      });
+
+      coordinator.load([
+        makePackage('unmentioned-ext', {
+          configSchema: ConfigSchema,
+          create: (ctx) => {
+            capturedCtx = ctx;
+            return makeMockService(ctx.bus);
+          },
+        }),
+      ]);
+      await coordinator.startAll();
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Config parse failed for "unmentioned-ext"'),
+        expect.any(String),
+      );
+      warnSpy.mockRestore();
+
+      expect(coordinator.list().find((e) => e.name === 'unmentioned-ext')?.state).toBe('active');
+      expect(capturedCtx?.config).toEqual({ retries: 3 });
+
+      await coordinator.shutdown();
+    });
+
+    // A stored record that changes after startup must not make the read-only
+    // context builders throw, in either of the two ways it can now conflict.
+    it('does not throw from read-only context builders when stored config later turns invalid', async () => {
+      const ConfigSchema = z.object({ retries: z.number().default(3), label: z.string().default('fallback') });
+      let storedConfig: Record<string, unknown> = { retries: 5 };
+
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        loadConfig: () => storedConfig,
+        operatorConfig: makeOperatorConfig({
+          'drifting-store-ext': { kind: 'config', source: OPERATOR_SOURCE, config: { label: 'operator' } },
+        }),
+      });
+
+      coordinator.load([
+        makePackage('drifting-store-ext', {
+          configSchema: ConfigSchema,
+          create: (ctx) => makeMockService(ctx.bus),
+        }),
+      ]);
+      await coordinator.startAll();
+      expect(coordinator.list().find((e) => e.name === 'drifting-store-ext')?.state).toBe('active');
+
+      // The storage tier now answers with a value the schema rejects outright.
+      storedConfig = { retries: 'not-a-number' };
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const seen: unknown[] = [];
+      expect(() =>
+        coordinator.forExtension('drifting-store-ext', (_n, _p, ctx) => seen.push(ctx.config)),
+      ).not.toThrow();
+      expect(() => coordinator.forEachActiveExtension((_n, _p, ctx) => seen.push(ctx.config))).not.toThrow();
+      warnSpy.mockRestore();
+
+      // Warn-and-default, not an operator-attributed failure.
+      expect(seen).toEqual([
+        { retries: 3, label: 'fallback' },
+        { retries: 3, label: 'fallback' },
+      ]);
+      expect(coordinator.list().find((e) => e.name === 'drifting-store-ext')?.state).toBe('active');
+
+      await coordinator.shutdown();
+    });
+
+    // The harder case: stored config parses on its own, so attribution would
+    // blame the operator, yet the read must still not throw and must not
+    // abandon the extensions after it in the iteration.
+    it('does not throw from read-only context builders when stored config later conflicts with the operator layer', async () => {
+      // A cross-field rule: `primary` and `fallback` must not both be set.
+      const ConfigSchema = z
+        .object({ primary: z.string().optional(), fallback: z.string().optional() })
+        .refine((value) => value.primary === undefined || value.fallback === undefined, {
+          message: 'primary and fallback are mutually exclusive',
+        });
+      let storedConfig: Record<string, unknown> = {};
+
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        loadConfig: (name) => (name === 'conflicting-store-ext' ? storedConfig : undefined),
+        operatorConfig: makeOperatorConfig({
+          'conflicting-store-ext': {
+            kind: 'config',
+            source: OPERATOR_SOURCE,
+            config: { primary: 'https://operator.example' },
+          },
+        }),
+      });
+
+      coordinator.load([
+        makePackage('conflicting-store-ext', {
+          configSchema: ConfigSchema,
+          create: (ctx) => makeMockService(ctx.bus),
+        }),
+        makePackage('later-in-load-order-ext', {
+          create: (ctx) => makeMockService(ctx.bus),
+        }),
+      ]);
+      await coordinator.startAll();
+      expect(coordinator.list().find((e) => e.name === 'conflicting-store-ext')?.state).toBe('active');
+
+      // Stored config alone still parses; only the merge with the operator
+      // layer violates the cross-field rule.
+      storedConfig = { fallback: 'https://stored.example' };
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const visited: string[] = [];
+      let observedConfig: unknown;
+      expect(() =>
+        coordinator.forExtension('conflicting-store-ext', (_n, _p, ctx) => {
+          observedConfig = ctx.config;
+        }),
+      ).not.toThrow();
+      expect(() => coordinator.forEachActiveExtension((name) => visited.push(name))).not.toThrow();
+      warnSpy.mockRestore();
+
+      // Warn-and-default, and the iteration reached every active extension.
+      expect(observedConfig).toEqual({});
+      expect(visited).toEqual(['conflicting-store-ext', 'later-in-load-order-ext']);
+      expect(coordinator.list().find((e) => e.name === 'conflicting-store-ext')?.state).toBe('active');
+
+      await coordinator.shutdown();
+    });
+
+    // Re-enable resolves against the same source, so an extension that failed
+    // at boot on an unusable entry cannot be toggled back into life.
+    it('keeps an extension failed when re-enabling it re-reads the same unusable entry', async () => {
+      let created = 0;
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        operatorConfig: makeOperatorConfig({
+          'stuck-operator-ext': {
+            kind: 'failure',
+            source: OPERATOR_SOURCE,
+            reason: 'unreadable',
+            detail: 'permission denied',
+          },
+        }),
+      });
+
+      coordinator.load([
+        makePackage('stuck-operator-ext', {
+          configSchema: z.object({ retries: z.number().default(3) }),
+          create: (ctx) => {
+            created += 1;
+            return makeMockService(ctx.bus);
+          },
+        }),
+      ]);
+      await coordinator.startAll();
+      expect(coordinator.list().find((e) => e.name === 'stuck-operator-ext')?.state).toBe('failed');
+
+      const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'stuck-operator-ext', enabled: true });
+      errorSpy.mockRestore();
+
+      expect(result.success).toBe(false);
+      const info = coordinator.list().find((e) => e.name === 'stuck-operator-ext');
+      expect(info?.state).toBe('failed');
+      expect(info?.error).toContain(OPERATOR_SOURCE);
+      expect(info?.error).toContain('could not be read: permission denied');
+      expect(created).toBe(0);
+
+      await coordinator.shutdown();
+    });
+
+    // AC14: re-enabling consults the same source again and resolves identically.
+    it('resolves a re-enabled extension against the same operator source', async () => {
+      const ConfigSchema = z.object({ mode: z.string() });
+      const configs: unknown[] = [];
+      const operatorConfig = makeOperatorConfig({
+        'toggle-operator-ext': { kind: 'config', source: OPERATOR_SOURCE, config: { mode: 'operator' } },
+      });
+
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        loadConfig: () => ({ mode: 'stored' }),
+        operatorConfig,
+      });
+
+      coordinator.load([
+        makePackage('toggle-operator-ext', {
+          configSchema: ConfigSchema,
+          create: (ctx) => {
+            configs.push(ctx.config);
+            return makeMockService(ctx.bus);
+          },
+        }),
+      ]);
+      await coordinator.startAll();
+
+      const lookupsAfterStart = operatorConfig.lookups.filter((n) => n === 'toggle-operator-ext').length;
+      expect(lookupsAfterStart).toBeGreaterThan(0);
+
+      await bus.request(ExtensionSubjects.setEnabled, { name: 'toggle-operator-ext', enabled: false });
+      await bus.request(ExtensionSubjects.setEnabled, { name: 'toggle-operator-ext', enabled: true });
+
+      expect(coordinator.list().find((e) => e.name === 'toggle-operator-ext')?.state).toBe('active');
+      expect(configs).toEqual([{ mode: 'operator' }, { mode: 'operator' }]);
+      expect(operatorConfig.lookups.filter((n) => n === 'toggle-operator-ext').length).toBeGreaterThan(
+        lookupsAfterStart,
+      );
+
+      await coordinator.shutdown();
+    });
   });
 
   // ---------------------------------------------------------------------------

@@ -41,6 +41,17 @@ export {
   type TransportReadyInfo,
 } from './boot.js';
 export type { UpstreamTelemetryBootOptions, WorkflowRunnerBootOptions } from './boot-types.js';
+export { filterConfigDefaultsForLoadedPackages, mergePackageConfigDefaults } from './boot-config.js';
+export {
+  MAX_OPERATOR_CONFIG_BYTES,
+  createExtensionOperatorConfigSnapshot,
+  loadExtensionOperatorConfig,
+  resolveExtensionOperatorConfigDir,
+  warnOnUnappliedExtensionOperatorConfig,
+  type ExtensionOperatorConfigConsumer,
+  type ExtensionOperatorConfigSnapshot,
+  type LoadExtensionOperatorConfigOptions,
+} from './extension-operator-config.js';
 export { attachUpstreamTelemetry } from './upstream-telemetry.js';
 export type { AttachedUpstreamTelemetry } from './upstream-telemetry.js';
 export {

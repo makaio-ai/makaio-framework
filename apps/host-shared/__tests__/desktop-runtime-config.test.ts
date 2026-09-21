@@ -29,7 +29,10 @@ describe('desktop-runtime-config', () => {
       launcherCommand: 'runtime-makaio',
       hostCapabilities: ['node'],
       frameworkVersion: '0.1.0',
-      packageConfigDefaults: new Map([['account-manager', { makaioCommand: 'runtime-makaio' }]]),
+      packageConfigDefaults: new Map([
+        ['account-manager', { makaioCommand: 'runtime-makaio', hostOnlyKey: 'from-host' }],
+        ['host-only-extension', { enabled: true }],
+      ]),
     };
 
     const result = applyDesktopRuntimeConfig(runtimeOptions, config);
@@ -39,7 +42,14 @@ describe('desktop-runtime-config', () => {
       hostCapabilities: ['node'],
       frameworkVersion: '0.1.0',
     });
-    expect(result.packageConfigDefaults?.get('account-manager')).toEqual({ makaioCommand: 'config-makaio' });
+    // Key-wise, config file over host: the config file wins the key it sets and
+    // the host's other keys and other packages survive. Both hosts and the
+    // headless CLI compose this layer through the same rule.
+    expect(result.packageConfigDefaults?.get('account-manager')).toEqual({
+      makaioCommand: 'config-makaio',
+      hostOnlyKey: 'from-host',
+    });
+    expect(result.packageConfigDefaults?.get('host-only-extension')).toEqual({ enabled: true });
     await expect(result.discovery?.discover()).resolves.toEqual([]);
   });
 
@@ -57,7 +67,11 @@ describe('desktop-runtime-config', () => {
       );
 
       const result = await applySelectedDesktopRuntimeConfig(
-        { launcherCommand: 'runtime-makaio', hostCapabilities: ['node'] },
+        {
+          launcherCommand: 'runtime-makaio',
+          hostCapabilities: ['node'],
+          packageConfigDefaults: new Map([['account-manager', { hostOnlyKey: 'from-host' }]]),
+        },
         {
           makaioHome: path.join(tmpDir, '.makaio'),
           env: { [MAKAIO_CONFIG_FILE_ENV]: configPath },
@@ -66,7 +80,10 @@ describe('desktop-runtime-config', () => {
 
       expect(result.launcherCommand).toBe('env-makaio');
       expect(result.hostCapabilities).toEqual(['node']);
-      expect(result.packageConfigDefaults?.get('account-manager')).toEqual({ makaioCommand: 'env-makaio' });
+      expect(result.packageConfigDefaults?.get('account-manager')).toEqual({
+        makaioCommand: 'env-makaio',
+        hostOnlyKey: 'from-host',
+      });
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
