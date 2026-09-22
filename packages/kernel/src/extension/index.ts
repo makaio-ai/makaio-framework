@@ -13,3 +13,4 @@ export { ExtensionCoordinator } from './extension-coordinator.js';
 export { ExtensionOperatorConfigError } from './resolve-config.js';
 export type { ExtensionConfigResolution } from './resolve-config.js';
 export { coalesceExtensionOverrides, filterEligibleExtensions } from './extension-selection.js';
+export { resolveInstalledExtensionRecord } from './installed-extension-catalog.js';

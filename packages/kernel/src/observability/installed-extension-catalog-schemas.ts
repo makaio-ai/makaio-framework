@@ -139,6 +139,21 @@ export const InstalledExtensionRecordSchema = z.object({
    * declaration exists yet to exempt it.
    */
   collidesWith: InstalledExtensionOriginSchema.optional(),
+  /**
+   * Set when the contest `collidesWith` reports is one no runtime surface can
+   * exempt: two packages inside a single discovery tier claiming one
+   * descriptor name. Discovery refuses that before any package is loaded, so
+   * no `surface` declaration exists yet to judge it by and every start aborts,
+   * whichever surface it runs.
+   *
+   * Absent for the other contest — a name claimed across tiers by an
+   * executable child package — which only exists on a surface that loads both
+   * claimants at once. A consumer deciding for one concrete surface re-judges
+   * that one against the copies that surface actually loads, and must keep
+   * refusing this one regardless. Omitted (not `false`) whenever
+   * `collidesWith` itself is absent.
+   */
+  collisionIgnoresSurface: z.boolean().optional(),
 });
 
 /** Inferred type for one installed executable extension package. */

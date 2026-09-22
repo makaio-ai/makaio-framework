@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { ExtensionCoordinator, ExtensionSubjects } from '@makaio/kernel';
 import { parseExtensionDescriptor } from '@makaio/contracts';
@@ -226,6 +226,49 @@ describe('scanInstalledExtensions tier merge', () => {
         collidesWith: 'project-local',
       },
       { name: 'beta.child.leaf', version: '2.0.0', origin: 'local', declaresServerEntrypoint: true },
+    ]);
+  });
+
+  it('marks a same-tier descriptor duplicate as a contest no surface can exempt', async () => {
+    // Discovery refuses two packages in one tier claiming one descriptor name
+    // before any package is loaded, so no `surface` declaration exists yet to
+    // judge it by and every start aborts, whichever surface it runs. Consumers
+    // resolving the name for one concrete surface re-judge every *other*
+    // contest against the copies that surface loads, and would drop this one
+    // with them if it were not called out.
+    const entryA = await writeExtensionPackage(path.join(projectRoot, 'node_modules', 'weather-a'), 'weather', '1.0.0');
+    const entryB = await writeExtensionPackage(path.join(projectRoot, 'node_modules', 'weather-b'), 'weather', '2.0.0');
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const records = await scanInstalledExtensions({
+      discovery: defaultDiscovery(),
+      exportedPackages: stubReader(
+        new Map([
+          [entryA, [{ name: 'weather', version: '1.0.0' }]],
+          [entryB, [{ name: 'weather', version: '2.0.0' }]],
+        ]),
+      ),
+    });
+
+    // Sorted before comparing: two packages in one tier have no precedence over
+    // each other, so the order they appear in is the filesystem's.
+    expect([...records].sort((a, b) => a.version.localeCompare(b.version))).toStrictEqual([
+      {
+        name: 'weather',
+        version: '1.0.0',
+        origin: 'project-local',
+        declaresServerEntrypoint: true,
+        collidesWith: 'project-local',
+        collisionIgnoresSurface: true,
+      },
+      {
+        name: 'weather',
+        version: '2.0.0',
+        origin: 'project-local',
+        declaresServerEntrypoint: true,
+        collidesWith: 'project-local',
+        collisionIgnoresSurface: true,
+      },
     ]);
   });
 

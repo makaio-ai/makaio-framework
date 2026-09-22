@@ -201,6 +201,10 @@ export function createProgram(
 
   registerExtensionCommands(program, {
     ...(discovery && { discovery }),
+    // The surface this host's `serve` boots with, so an offline toggle judges a
+    // name two surface-restricted copies claim against the copy that start
+    // would load. Absent leaves the listing on `serve`'s own default.
+    ...(serveConfig?.boot?.surface && { surface: serveConfig.boot.surface }),
     ...(hostConfig?.frameworkModuleResolver && { frameworkModuleResolver: hostConfig.frameworkModuleResolver }),
   });
 

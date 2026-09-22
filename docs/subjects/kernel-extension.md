@@ -63,7 +63,7 @@ _Empty object._
 
 | Field | Type | Required |
 |-------|------|----------|
-| `entries` | `{ name: string; version: string; origin: "local" \| "npm" \| "project-local"; extensionManaged: boolean; critical?: boolean \| undefined; criticalityUnknown?: boolean \| undefined; declaresServerEntrypoint?: boolean \| undefined; npmName?: string \| undefined; surface?: "interactive" \| "headless" \| undefined; shadowedBy?: "local" \| "npm" \| "project-local" \| undefined; collidesWith?: "local" \| "npm" \| "project-local" \| undefined; persistedEnabled?: boolean \| undefined; }[] \| null` | yes |
+| `entries` | `{ name: string; version: string; origin: "local" \| "npm" \| "project-local"; extensionManaged: boolean; critical?: boolean \| undefined; criticalityUnknown?: boolean \| undefined; declaresServerEntrypoint?: boolean \| undefined; npmName?: string \| undefined; surface?: "interactive" \| "headless" \| undefined; shadowedBy?: "local" \| "npm" \| "project-local" \| undefined; collidesWith?: "local" \| "npm" \| "project-local" \| undefined; collisionIgnoresSurface?: boolean \| undefined; persistedEnabled?: boolean \| undefined; }[] \| null` | yes |
 
 ### <a id="kernel:extension.contributions.catalog"></a>`kernel:extension.contributions.catalog` (rpc)
 
@@ -171,7 +171,11 @@ request is validated against that catalog — the name must be installed
 here, and a disable of a `critical` package, or of one whose criticality
 could not be resolved, is refused — before anything is written. This is
 what lets a caller that cannot see this host's filesystem persist a
-preference without having to vouch for the name itself.
+preference without having to vouch for the name itself. A name several
+installed copies claim is resolved against this coordinator's own runtime
+surface first, since two copies restricted to different surfaces both load
+— each on its own — and only one of them is the copy this runtime would
+start; a name that stays unresolvable is refused outright.
 
 **Request:**
 

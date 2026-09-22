@@ -81,3 +81,24 @@ Breaking changes:
   root is one precedence layer, an earlier root wins a name a later one also
   declares (reported), and two packages declaring one name inside a single root
   are refused rather than resolved by filesystem order.
+- `kernel:extension.setEnabled` resolves a name several installed copies claim
+  against the coordinator's own runtime surface before validating it, rather
+  than against whichever copy the catalog listed first. Two copies restricted to
+  different surfaces are deliberately not a collision — the coordinator filters
+  by surface before it resolves names — so the surface is what decides whose
+  `critical` flag the next boot here honours. A shadowed copy never answers for
+  a name a live one claims, and copies that remain indistinguishable are judged
+  by the strictest of them. The contest itself is restated for that surface
+  rather than inherited from the host-wide catalog: a name contested only by a
+  copy this runtime never loads resolves cleanly, several copies it *does* load
+  refuse the toggle even when the catalog source marked none of them, and a
+  marker with no second claimant in view is honoured as the only evidence there
+  is. Catalog records gained `collisionIgnoresSurface` for the one contest no
+  surface can exempt — two packages in a single discovery tier claiming one
+  descriptor name, which discovery refuses before any package is loaded.
+  The rule is exported as `resolveInstalledExtensionRecord` so the CLI's
+  offline toggle applies the same resolution the server would; the CLI resolves
+  it for the surface its host's `serve` boots with
+  (`InstalledExtensionListingOptions.surface`, defaulting to headless like
+  `serve` itself), so a desktop host booting interactive is not judged against
+  the headless copy.
