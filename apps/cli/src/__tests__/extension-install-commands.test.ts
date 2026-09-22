@@ -42,6 +42,8 @@ const packageManagerMockState = vi.hoisted(() => ({
   }>,
   resolverFailure: null as Error | null,
   resolverCalls: [] as Array<{ roots: readonly string[]; force?: boolean }>,
+  /** Number of times the mocked `PackageManager.listPackages()` was invoked. */
+  listPackagesCallCount: 0,
 }));
 
 const enablementMockState = vi.hoisted(() => ({
@@ -49,8 +51,17 @@ const enablementMockState = vi.hoisted(() => ({
   health: null as Record<string, unknown> | null,
   setEnabledResult: { success: true, outcome: 'applied' } as { success: boolean; outcome: TransitionOutcome },
   setEnabledError: null as Error | null,
-  /** Result returned by the `kernel:extension.get` RPC. Defaults to no entry. */
-  getResult: null as { extension: { error?: string; critical?: boolean } | null } | null,
+  /** Number of times the mocked `kernel:extension.setEnabled` RPC was invoked. */
+  setEnabledCallCount: 0,
+  /** Number of times the mocked `loadExtensionEnablementStore` was invoked. */
+  enablementStoreLoadCount: 0,
+  /**
+   * Result returned by the `kernel:extension.get` RPC. Defaults to no entry.
+   * `extensionManaged` defaults to `true` when the entry itself is present —
+   * matching every real descriptor-based extension — so only tests covering
+   * the framework-package-collision path need to set it explicitly to `false`.
+   */
+  getResult: null as { extension: { error?: string; critical?: boolean; extensionManaged?: boolean } | null } | null,
   /** Thrown by the mocked `resolveClientAuth` when set, simulating a missing/rejected credential. */
   resolveAuthError: null as Error | null,
   /** Thrown by the mocked `connectBusClient` when set, simulating a connection-establishment failure. */
@@ -63,6 +74,7 @@ const enablementMockState = vi.hoisted(() => ({
     readonly enabled: boolean;
     readonly critical?: boolean;
     readonly persistedEnabled?: boolean;
+    readonly extensionManaged?: boolean;
   }>,
   /** Thrown by the mocked `kernel:extension.list` RPC when set. */
   listRequestError: null as Error | null,
@@ -79,17 +91,21 @@ vi.mock('@makaio/runtime-node', async (importOriginal) => {
     ...actual,
     readFrameworkVersion: async () => '0.1.0',
     resolveMakaioHome: () => packageManagerMockState.makaioHome,
-    loadExtensionEnablementStore: async (_makaioHome: string) => ({
-      readFailure: enablementMockState.readFailure ?? undefined,
-      loadEnabled: (name: string): boolean | undefined => (enablementMockState.disabled.has(name) ? false : undefined),
-      persistEnabled: async (name: string, enabled: boolean): Promise<void> => {
-        if (enabled) {
-          enablementMockState.disabled.delete(name);
-        } else {
-          enablementMockState.disabled.add(name);
-        }
-      },
-    }),
+    loadExtensionEnablementStore: async (_makaioHome: string) => {
+      enablementMockState.enablementStoreLoadCount += 1;
+      return {
+        readFailure: enablementMockState.readFailure ?? undefined,
+        loadEnabled: (name: string): boolean | undefined =>
+          enablementMockState.disabled.has(name) ? false : undefined,
+        persistEnabled: async (name: string, enabled: boolean): Promise<void> => {
+          if (enabled) {
+            enablementMockState.disabled.delete(name);
+          } else {
+            enablementMockState.disabled.add(name);
+          }
+        },
+      };
+    },
   };
 });
 
@@ -112,12 +128,13 @@ vi.mock('../bus-client.js', async (importOriginal) => {
           payload: Record<string, unknown>,
         ): Promise<
           | { success: boolean; outcome: TransitionOutcome }
-          | { extension?: { error?: string; critical?: boolean } | null }
+          | { extension?: { error?: string; critical?: boolean; extensionManaged: boolean } | null }
           | { extensions: typeof enablementMockState.listExtensions }
         > => {
           // `list`'s request payload is `{}`, distinct from `get`'s `{name}`
           // and `setEnabled`'s `{name, enabled}` — checked in that order.
           if ('enabled' in payload) {
+            enablementMockState.setEnabledCallCount += 1;
             if (enablementMockState.setEnabledError) throw enablementMockState.setEnabledError;
             // A real coordinator's own `persistEnabled` call is the file's sole
             // writer once a server is reachable (the CLI writes nothing itself
@@ -138,7 +155,13 @@ vi.mock('../bus-client.js', async (importOriginal) => {
           }
           if ('name' in payload) {
             // extension.get — return getResult or a bare null-extension response.
-            return enablementMockState.getResult ?? { extension: null };
+            // `extensionManaged` defaults to `true` when the entry is present and
+            // the test did not specify it — see `getResult`'s own doc.
+            if (!enablementMockState.getResult) return { extension: null };
+            const { extension } = enablementMockState.getResult;
+            return {
+              extension: extension && { extensionManaged: true, ...extension },
+            };
           }
           // extension.list
           if (enablementMockState.listRequestError) throw enablementMockState.listRequestError;
@@ -235,6 +258,7 @@ vi.mock('@makaio/services-package-manager', async (importOriginal) => {
     }
 
     public async listPackages(): Promise<PackageInfo[]> {
+      packageManagerMockState.listPackagesCallCount += 1;
       return packageManagerMockState.packages;
     }
 
@@ -449,6 +473,7 @@ describe('extension install CLI commands', () => {
     packageManagerMockState.localUninstallFailures = new Set<string>();
     packageManagerMockState.resolverFailure = null;
     packageManagerMockState.resolverCalls = [];
+    packageManagerMockState.listPackagesCallCount = 0;
     await writePublishedPackage(
       '@makaio/adapter-claude-code-tmux',
       descriptor('@makaio/adapter-claude-code-tmux', '1.0.0'),
@@ -707,6 +732,8 @@ describe('extension enable/disable commands', () => {
     enablementMockState.health = null;
     enablementMockState.setEnabledResult = { success: true, outcome: 'applied' };
     enablementMockState.setEnabledError = null;
+    enablementMockState.setEnabledCallCount = 0;
+    enablementMockState.enablementStoreLoadCount = 0;
     enablementMockState.getResult = null;
     enablementMockState.resolveAuthError = null;
     enablementMockState.connectError = null;
@@ -715,6 +742,7 @@ describe('extension enable/disable commands', () => {
     enablementMockState.readFailure = null;
     packageManagerMockState.packages = [];
     packageManagerMockState.localExtensions = [];
+    packageManagerMockState.listPackagesCallCount = 0;
     packageManagerMockState.makaioHome = mkdtempSync(path.join(tmpdir(), 'makaio-cli-enable-'));
     delete process.env.MAKAIO_BUS_URL;
     process.exitCode = undefined;
@@ -1223,6 +1251,27 @@ describe('extension enable/disable commands', () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it('refuses to fall back to the offline listing when a remote health probe succeeds but the connection then fails for a non-auth reason', async () => {
+    // The same probe/connect race as the loopback case above, but against a
+    // remote `MAKAIO_BUS_URL` — a remote target must refuse identically to
+    // an outright-failed health probe rather than silently reporting this
+    // machine's own installs as the configured server's state.
+    process.env.MAKAIO_BUS_URL = 'ws://build-server.internal:6252/bus';
+    enablementMockState.health = { url: 'ws://build-server.internal:6252/bus' };
+    enablementMockState.connectError = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+    packageManagerMockState.packages = [{ name: 'local-only-ext', version: '1.0.0', hasDescriptor: true }];
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'list'], { from: 'user' });
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('the configured server at ws://build-server.internal:6252/bus is unreachable'),
+    );
+    expect(infoSpy).not.toHaveBeenCalledWith(expect.stringContaining('local-only-ext'));
+    expect(process.exitCode).toBe(1);
+  });
+
   it('surfaces extension entry error and defers to next boot when the outcome is restart-required', async () => {
     enablementMockState.health = { url: 'ws://localhost:1234' };
     enablementMockState.setEnabledResult = { success: false, outcome: 'restart-required' };
@@ -1257,6 +1306,55 @@ describe('extension enable/disable commands', () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it('warns and exits non-zero when the enablement file could not be read for a local live listing', async () => {
+    // The local-live branch (a reachable server on the loopback bus) must
+    // still surface a broken enablement file — only the remote-live branch
+    // below is exempt, since it never reads this machine's file at all.
+    enablementMockState.health = { url: 'ws://localhost:1234' };
+    enablementMockState.listExtensions = [
+      { name: 'loaded-ext', displayName: 'Loaded Ext', state: 'active', enabled: true },
+    ];
+    enablementMockState.readFailure = {
+      reason: 'not-json',
+      diagnostic:
+        'Enablement file at "/fake/config/extensions.json" contains invalid JSON; treating all extensions as enabled.',
+    };
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'list'], { from: 'user' });
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('extension enablement preferences could not be read'));
+    expect(infoSpy).toHaveBeenCalledWith('Loaded Ext (loaded-ext) [active]');
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('never loads or warns about a broken local enablement file when a remote server answers the live listing', async () => {
+    // `printRemoteLiveListing` never uses local enablement preferences, so
+    // the local file's read failure must never even be attempted for a
+    // remote target — no warning, no exit-1 side effect, and the remote
+    // snapshot is shown normally.
+    process.env.MAKAIO_BUS_URL = 'ws://build-server.internal:6252/bus';
+    enablementMockState.health = { url: 'ws://build-server.internal:6252/bus' };
+    enablementMockState.listExtensions = [
+      { name: 'remote-ext', displayName: 'Remote Ext', state: 'active', enabled: true },
+    ];
+    enablementMockState.readFailure = {
+      reason: 'not-json',
+      diagnostic: 'Enablement file at "/fake/config/extensions.json" contains invalid JSON.',
+    };
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'list'], { from: 'user' });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(infoSpy).toHaveBeenCalledWith('Remote Ext (remote-ext) [active]');
+    expect(process.exitCode).toBeUndefined();
+    // The local enablement file is never even opened for a remote target.
+    expect(enablementMockState.enablementStoreLoadCount).toBe(0);
+  });
+
   it('merges an installed-but-not-loaded name into the live listing with its persisted preference', async () => {
     enablementMockState.health = { url: 'ws://localhost:1234' };
     enablementMockState.listExtensions = [
@@ -1274,6 +1372,35 @@ describe('extension enable/disable commands', () => {
 
     expect(infoSpy).toHaveBeenCalledWith('Loaded Ext (loaded-ext) [active]');
     expect(infoSpy).toHaveBeenCalledWith('never-loaded (1.0.0, npm) [not loaded, disabled]');
+  });
+
+  it("surfaces an installed override's presence on a same-named framework package's row instead of silently hiding it", async () => {
+    // The coordinator's live snapshot already contains an entry named
+    // `collided-ext` (the framework package), so the not-loaded merge's
+    // `liveNames` dedup would otherwise make the installed override
+    // completely invisible — neither listed as its own row (the coordinator
+    // never created one for it) nor merged as not-loaded (the name looks
+    // "seen"). The framework package's own row must carry a note instead.
+    enablementMockState.health = { url: 'ws://localhost:1234' };
+    enablementMockState.listExtensions = [
+      {
+        name: 'collided-ext',
+        displayName: 'Collided (framework)',
+        state: 'active',
+        enabled: true,
+        extensionManaged: false,
+      },
+    ];
+    packageManagerMockState.packages = [{ name: 'collided-ext', version: '1.0.0', hasDescriptor: true }];
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'list'], { from: 'user' });
+
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Collided (framework) (collided-ext) [active]'));
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('installed override present'));
+    // No separate "not loaded" row for the same name — the note lives on the
+    // framework package's own row instead of a second listing entry.
+    expect(infoSpy).not.toHaveBeenCalledWith(expect.stringContaining('not loaded'));
   });
 
   it('still merges installed-but-not-loaded names when MAKAIO_BUS_URL is explicitly local', async () => {
@@ -1356,6 +1483,73 @@ describe('extension enable/disable commands', () => {
     expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('not loaded in the running server'));
     expect(enablementMockState.disabled.has('local-ext')).toBe(true);
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it('routes a name retained by a same-named framework package to the unmanaged-name fallback instead of setEnabled', async () => {
+    // `kernel:extension.get` reports an entry for this name, but
+    // `extensionManaged: false` means the coordinator loaded a framework
+    // package under it, not the disabled operator-managed override being
+    // enabled here — forwarding to `setEnabled` would have the server throw
+    // ("framework packages are not toggleable"). The CLI must persist the
+    // preference itself instead, exactly like the `extension: null` case.
+    enablementMockState.health = { url: 'ws://localhost:1234' };
+    enablementMockState.getResult = { extension: { extensionManaged: false } };
+    packageManagerMockState.packages = [{ name: 'collided-ext', version: '1.0.0', hasDescriptor: true }];
+    // Pre-disabled, so the persisted write this test verifies actually
+    // flips the recorded preference rather than trivially matching an
+    // already-absent entry.
+    enablementMockState.disabled.add('collided-ext');
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'enable', 'collided-ext'], { from: 'user' });
+
+    expect(enablementMockState.setEnabledCallCount).toBe(0);
+    expect(enablementMockState.disabled.has('collided-ext')).toBe(false);
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('a framework package currently holds this name'));
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('restart'));
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('refuses the framework-package-collision fallback for a remote server, writing nothing locally', async () => {
+    process.env.MAKAIO_BUS_URL = 'ws://build-server.internal:6252/bus';
+    enablementMockState.health = { url: 'ws://build-server.internal:6252/bus' };
+    enablementMockState.getResult = { extension: { extensionManaged: false } };
+    packageManagerMockState.packages = [{ name: 'collided-ext', version: '1.0.0', hasDescriptor: true }];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'enable', 'collided-ext'], { from: 'user' });
+
+    expect(enablementMockState.setEnabledCallCount).toBe(0);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("run this command on the server's host to persist the preference"),
+    );
+    expect(enablementMockState.disabled.has('collided-ext')).toBe(false);
+    expect(process.exitCode).toBe(1);
+    // The remote guard sits ahead of the installed-package listing fetch —
+    // a remote target must never scan this machine's local packages just to
+    // reach a refusal it was always going to report.
+    expect(packageManagerMockState.listPackagesCallCount).toBe(0);
+  });
+
+  it('refuses the never-loaded unmanaged-name fallback for a remote server without scanning local packages', async () => {
+    // Same guard as the framework-package-collision case above, but for the
+    // other `managedEntry === null` reason: the coordinator never loaded any
+    // entry for this name at all (`kernel:extension.get` returns `null`).
+    process.env.MAKAIO_BUS_URL = 'ws://build-server.internal:6252/bus';
+    enablementMockState.health = { url: 'ws://build-server.internal:6252/bus' };
+    enablementMockState.getResult = { extension: null };
+    packageManagerMockState.packages = [{ name: 'never-loaded-ext', version: '1.0.0', hasDescriptor: true }];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'enable', 'never-loaded-ext'], { from: 'user' });
+
+    expect(enablementMockState.setEnabledCallCount).toBe(0);
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("run this command on the server's host to persist the preference"),
+    );
+    expect(enablementMockState.disabled.has('never-loaded-ext')).toBe(false);
+    expect(process.exitCode).toBe(1);
+    expect(packageManagerMockState.listPackagesCallCount).toBe(0);
   });
 
   it('keys the offline listing and unmanaged toggle by the descriptor name, not the npm dependency identifier', async () => {

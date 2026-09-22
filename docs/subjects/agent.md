@@ -153,7 +153,7 @@ Used by orchestration layer to trigger compression when thresholds are reached.
 | `cachedTokens` | `number \| undefined` | no |
 | `clientId` | `string \| undefined` | no |
 | `currentTokens` | `number` | yes |
-| `level` | `"warn" \| "ok" \| "critical"` | yes |
+| `level` | `"ok" \| "warn" \| "critical"` | yes |
 | `maxTokens` | `number` | yes |
 | `messageId` | `string \| undefined` | no |
 | `occurredAt` | `number \| undefined` | no |

@@ -62,7 +62,7 @@ Type: Request (RPC)
 | `ownerInstance` | `{ instanceId: string; } \| undefined` | no |
 | `providerSessionId` | `string \| null` | yes |
 | `recoveryAttemptId` | `string \| undefined` | no |
-| `recoveryGuard` | `{ expectedStatus: "active" \| "starting" \| "idle" \| "dead" \| "disposed"; expectedPreimage: { status: "active" \| "starting" \| "idle" \| "dead" \| "disposed"; adapterId: string; binding?: { adapterId: string; ownerMachineId: string; ownerInstanceId: string; } \| undefined; recoveryAttemptId?: string \| undefined; }; expectedRevision: number; expectedCurrencyFence: number; expectedCurrency: { adapterSessionId: string \| null; currentAdapterSessionId: string \| null; currentAdapterSessionIdState: "confirmed" \| "inherited" \| "moved"; }; ownerGeneration: { claimId: string; claimToken: string; fence: number; ownerInstanceId: string \| null; status: "held" \| "releasing" \| "abandoned"; } \| null; } \| undefined` | no |
+| `recoveryGuard` | `{ expectedStatus: "starting" \| "idle" \| "active" \| "dead" \| "disposed"; expectedPreimage: { status: "starting" \| "idle" \| "active" \| "dead" \| "disposed"; adapterId: string; binding?: { adapterId: string; ownerMachineId: string; ownerInstanceId: string; } \| undefined; recoveryAttemptId?: string \| undefined; }; expectedRevision: number; expectedCurrencyFence: number; expectedCurrency: { adapterSessionId: string \| null; currentAdapterSessionId: string \| null; currentAdapterSessionIdState: "confirmed" \| "inherited" \| "moved"; }; ownerGeneration: { claimId: string; claimToken: string; fence: number; ownerInstanceId: string \| null; status: "held" \| "releasing" \| "abandoned"; } \| null; } \| undefined` | no |
 | `sessionId` | `string` | yes |
 | `supersedes` | `{ claimToken: string; } \| undefined` | no |
 | `topology` | `"machine-exclusive" \| "shared-machine" \| undefined` | no |
@@ -81,9 +81,9 @@ Type: Request (RPC)
 | `outcome` | `"claimed" \| "idempotent" \| "already-claimed" \| "agent-disposed" \| "session-not-active" \| "lead-conflict" \| "not-found" \| "currency-changed" \| "recovery-conflict"` | yes |
 | `ownerGeneration` | `{ claimId: string; claimToken: string; fence: number; ownerInstanceId: string \| null; status: "held" \| "releasing" \| "abandoned"; } \| null \| undefined` | no |
 | `previousLeadAgentId` | `string \| null \| undefined` | no |
-| `recovery` | `{ attemptId: string; preimage: { status: "active" \| "starting" \| "idle" \| "dead" \| "disposed"; adapterId: string; binding?: { adapterId: string; ownerMachineId: string; ownerInstanceId: string; } \| undefined; recoveryAttemptId?: string \| undefined; }; } \| undefined` | no |
+| `recovery` | `{ attemptId: string; preimage: { status: "starting" \| "idle" \| "active" \| "dead" \| "disposed"; adapterId: string; binding?: { adapterId: string; ownerMachineId: string; ownerInstanceId: string; } \| undefined; recoveryAttemptId?: string \| undefined; }; } \| undefined` | no |
 | `revision` | `number \| undefined` | no |
-| `status` | `"archived" \| "closed" \| "discovered" \| "active" \| "starting" \| "idle" \| "dead" \| "disposed" \| undefined` | no |
+| `status` | `"closed" \| "archived" \| "discovered" \| "starting" \| "idle" \| "active" \| "dead" \| "disposed" \| undefined` | no |
 
 ### <a id="storage:sessionOwnership.finalizeRecovery"></a>`storage:sessionOwnership.finalizeRecovery` (rpc)
 
@@ -96,7 +96,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `action` | `{ kind: "rollback"; preimage: { status: "active" \| "starting" \| "idle" \| "dead" \| "disposed"; adapterId: string; binding?: { adapterId: string; ownerMachineId: string; ownerInstanceId: string; } \| undefined; recoveryAttemptId?: string \| undefined; }; } \| { kind: "succeeded"; } \| { kind: "failed"; }` | yes |
+| `action` | `{ kind: "rollback"; preimage: { status: "starting" \| "idle" \| "active" \| "dead" \| "disposed"; adapterId: string; binding?: { adapterId: string; ownerMachineId: string; ownerInstanceId: string; } \| undefined; recoveryAttemptId?: string \| undefined; }; } \| { kind: "succeeded"; } \| { kind: "failed"; }` | yes |
 | `agentId` | `string` | yes |
 | `attemptId` | `string` | yes |
 | `binding` | `{ adapterId: string; ownerMachineId: string; ownerInstanceId: string; }` | yes |

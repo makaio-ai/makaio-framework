@@ -46,6 +46,7 @@ next: false
 | `session.started` | [`client.session.started`](#client.session.started) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
 | `session.subagent.completed` | [`client.session.subagent.completed`](#client.session.subagent.completed) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
 | `session.subagent.started` | [`client.session.subagent.started`](#client.session.subagent.started) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
+| `session.token.get` | [`client.session.token.get`](#client.session.token.get) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/schemas.ts) |
 | `session.tool.post` | [`client.session.tool.post`](#client.session.tool.post) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
 | `session.tool.pre` | [`client.session.tool.pre`](#client.session.tool.pre) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
 | `session.turn.completed` | [`client.session.turn.completed`](#client.session.turn.completed) | event | [`session-observed.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/session-observed.ts) |
@@ -709,6 +710,25 @@ Type: Event
 | `sessionId` | `string \| undefined` | no |
 | `source` | `string` | yes |
 | `turnId` | `string \| undefined` | no |
+
+### <a id="client.session.token.get"></a>`client.session.token.get` (rpc)
+
+Subject: `client.session.token.get`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterSessionId` | `string` | yes |
+| `agentId` | `string \| undefined` | no |
+| `clientId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `token` | `string \| null` | yes |
 
 ### <a id="client.session.tool.post"></a>`client.session.tool.post` (event)
 

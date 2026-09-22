@@ -46,8 +46,8 @@ Type: Event
 
 | Field | Type | Required |
 |-------|------|----------|
-| `finding` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "inline" \| "agent" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "verified" \| "open" \| "addressed" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }` | yes |
-| `previousStatus` | `"verified" \| "open" \| "addressed" \| "dismissed" \| "deferred"` | yes |
+| `finding` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "open" \| "verified" \| "addressed" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }` | yes |
+| `previousStatus` | `"open" \| "verified" \| "addressed" \| "dismissed" \| "deferred"` | yes |
 
 ### <a id="review.finding.updateStatus"></a>`review.finding.updateStatus` (rpc)
 
@@ -64,14 +64,14 @@ Type: Request (RPC)
 | `addressedBy` | `string \| undefined` | no |
 | `findingId` | `string` | yes |
 | `reason` | `string \| undefined` | no |
-| `status` | `"verified" \| "open" \| "addressed" \| "dismissed" \| "deferred"` | yes |
+| `status` | `"open" \| "verified" \| "addressed" \| "dismissed" \| "deferred"` | yes |
 | `target` | `{ repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }` | yes |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `finding` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "inline" \| "agent" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "verified" \| "open" \| "addressed" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }` | yes |
+| `finding` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "open" \| "verified" \| "addressed" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }` | yes |
 | `success` | `boolean` | yes |
 
 ### <a id="review.findings.arrived"></a>`review.findings.arrived` (event)
@@ -114,7 +114,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `created` | `number` | yes |
-| `findings` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "inline" \| "agent" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "verified" \| "open" \| "addressed" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }[]` | yes |
+| `findings` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "open" \| "verified" \| "addressed" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }[]` | yes |
 | `updated` | `number` | yes |
 
 ### <a id="review.findings.list"></a>`review.findings.list` (rpc)
@@ -129,14 +129,14 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `status` | `"verified" \| "open" \| "addressed" \| "dismissed" \| "deferred" \| undefined` | no |
+| `status` | `"open" \| "verified" \| "addressed" \| "dismissed" \| "deferred" \| undefined` | no |
 | `target` | `{ repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }` | yes |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `findings` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "inline" \| "agent" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "verified" \| "open" \| "addressed" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }[]` | yes |
+| `findings` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "open" \| "verified" \| "addressed" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }[]` | yes |
 
 ### <a id="review.findings.submit"></a>`review.findings.submit` (rpc)
 
@@ -150,13 +150,13 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `finding` | `{ file: string \| null; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; message: string; status: "verified" \| "open" \| "addressed" \| "dismissed" \| "deferred"; origin: "inline" \| "agent" \| "review-body" \| "issue-comment" \| "cli-output"; id: string; severity: "critical" \| "major" \| "minor" \| "nitpick"; sourceId: string; threadId: string \| null; reviewer: string; startLine: number \| null; endLine: number \| null; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; dismissedReason: string \| null; rawCommentId: number \| null; createdAt?: number \| undefined; updatedAt?: number \| undefined; }` | yes |
+| `finding` | `{ file: string \| null; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; message: string; id: string; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; startLine: number \| null; status: "open" \| "verified" \| "addressed" \| "dismissed" \| "deferred"; severity: "critical" \| "major" \| "minor" \| "nitpick"; sourceId: string; threadId: string \| null; reviewer: string; endLine: number \| null; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; dismissedReason: string \| null; rawCommentId: number \| null; createdAt?: number \| undefined; updatedAt?: number \| undefined; }` | yes |
 
 **Response:**
 
 | Field | Type | Required |
 |-------|------|----------|
-| `finding` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "inline" \| "agent" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "verified" \| "open" \| "addressed" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }` | yes |
+| `finding` | `{ id: string; target: { repository: string; prNumber?: number \| undefined; branch?: string \| undefined; headSha?: string \| undefined; }; sourceId: string; reviewer: string; origin: "agent" \| "inline" \| "review-body" \| "issue-comment" \| "cli-output"; threadId: string \| null; severity: "critical" \| "major" \| "minor" \| "nitpick"; file: string \| null; startLine: number \| null; endLine: number \| null; message: string; agentPrompt: string \| null; suggestedChanges: { file: string; oldCode: string; newCode: string; }[]; status: "open" \| "verified" \| "addressed" \| "dismissed" \| "deferred"; addressedBy: string \| null; addressedAt: number \| null; verifiedAt: number \| null; dismissedReason: string \| null; createdAt: number; updatedAt: number; rawCommentId: number \| null; }` | yes |
 
 ### <a id="review.source.list"></a>`review.source.list` (rpc)
 

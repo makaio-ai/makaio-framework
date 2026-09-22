@@ -2637,6 +2637,50 @@ describe('ExtensionCoordinator', () => {
     await coordinator.shutdown();
   });
 
+  it('records a tray unregister failure on entry.error while still reporting applied, mirroring other teardown failures', async () => {
+    // Mirrors "reports an unclean disable through the primitive as applied and
+    // still announces" above, but for the tray-unregister step instead of the
+    // service destroy step: a rejected tray unregister must fold into the same
+    // teardown-failure contract — recorded on `entry.error` before the
+    // `'stopped'` transition fires — rather than being swallowed by a bare
+    // console warning after the extension already reports itself stopped and
+    // leaving a stale, clickable tray entry behind.
+    bus.on(TrayMenuSubjects.register, (ctx) => {
+      ctx.setResult({ entryId: ctx.payload.entry.entryId });
+    });
+    bus.on(TrayMenuSubjects.unregister, () => {
+      throw new Error('tray unregister failed');
+    });
+
+    const enabledChanged = Promise.withResolvers<{ name: string; enabled: boolean }>();
+    bus.on(ExtensionSubjects.enabledChanged, (ctx) => {
+      enabledChanged.resolve({ name: ctx.payload.name, enabled: ctx.payload.enabled });
+    });
+
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+    coordinator.load([
+      makePackage('tray-unregister-failing', {
+        tray: { label: 'Flaky Tool', section: 'tools' },
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const outcome = await coordinator.applyExtensionTransition('tray-unregister-failing', false);
+    consoleSpy.mockRestore();
+
+    expect(outcome).toBe('applied');
+    const info = coordinator.list()[0];
+    expect(info?.state).toBe('stopped');
+    expect(info?.error).toContain('tray unregister failed');
+    await expect(enabledChanged.promise).resolves.toEqual({ name: 'tray-unregister-failing', enabled: false });
+
+    await coordinator.shutdown();
+  });
+
   it('refuses to collect window surfaces for a boot-skipped extension through setEnabled', async () => {
     // A window-owning extension disabled at boot never had its surfaces
     // collected (see `load()`), and `setEnabled` never runs a live

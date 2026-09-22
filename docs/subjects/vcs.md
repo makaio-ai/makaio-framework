@@ -54,7 +54,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `canWrite` | `boolean` | yes |
-| `level` | `"none" \| "read" \| "triage" \| "write" \| "maintain" \| "admin"` | yes |
+| `level` | `"read" \| "none" \| "triage" \| "write" \| "maintain" \| "admin"` | yes |
 
 ### <a id="vcs.checks.get"></a>`vcs.checks.get` (rpc)
 
@@ -182,7 +182,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `pullRequest` | `{ id: string; number: number; title: string; state: "closed" \| "merged" \| "open"; draft: boolean; author: string; branch: string; baseBranch: string; url: string; createdAt: string; updatedAt: string; mergedAt: string \| null; body: string \| null; reviews: { id: number; author: string; state: "APPROVED" \| "CHANGES_REQUESTED" \| "COMMENTED" \| "PENDING" \| "DISMISSED"; body: string \| null; submittedAt: string \| null; }[]; labels: string[]; assignees: string[]; requestedReviewers: string[]; mergeable: boolean \| null; head?: { ref: string; sha: string; } \| null \| undefined; additions?: number \| undefined; deletions?: number \| undefined; changedFiles?: number \| undefined; commentCount?: number \| undefined; reviewCount?: number \| undefined; mergeableState?: string \| undefined; } \| null` | yes |
+| `pullRequest` | `{ id: string; number: number; title: string; state: "open" \| "closed" \| "merged"; draft: boolean; author: string; branch: string; baseBranch: string; url: string; createdAt: string; updatedAt: string; mergedAt: string \| null; body: string \| null; reviews: { id: number; author: string; state: "APPROVED" \| "CHANGES_REQUESTED" \| "COMMENTED" \| "PENDING" \| "DISMISSED"; body: string \| null; submittedAt: string \| null; }[]; labels: string[]; assignees: string[]; requestedReviewers: string[]; mergeable: boolean \| null; head?: { ref: string; sha: string; } \| null \| undefined; additions?: number \| undefined; deletions?: number \| undefined; changedFiles?: number \| undefined; commentCount?: number \| undefined; reviewCount?: number \| undefined; mergeableState?: string \| undefined; } \| null` | yes |
 
 ### <a id="vcs.pr.list"></a>`vcs.pr.list` (rpc)
 
@@ -202,7 +202,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `pullRequests` | `{ id: string; number: number; title: string; state: "closed" \| "merged" \| "open"; draft: boolean; author: string; branch: string; baseBranch: string; url: string; createdAt: string; updatedAt: string; mergedAt: string \| null; head?: { ref: string; sha: string; } \| null \| undefined; additions?: number \| undefined; deletions?: number \| undefined; changedFiles?: number \| undefined; commentCount?: number \| undefined; reviewCount?: number \| undefined; }[]` | yes |
+| `pullRequests` | `{ id: string; number: number; title: string; state: "open" \| "closed" \| "merged"; draft: boolean; author: string; branch: string; baseBranch: string; url: string; createdAt: string; updatedAt: string; mergedAt: string \| null; head?: { ref: string; sha: string; } \| null \| undefined; additions?: number \| undefined; deletions?: number \| undefined; changedFiles?: number \| undefined; commentCount?: number \| undefined; reviewCount?: number \| undefined; }[]` | yes |
 
 ### <a id="vcs.pr.listForFile"></a>`vcs.pr.listForFile` (rpc)
 
@@ -222,7 +222,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `pullRequests` | `{ id: string; number: number; title: string; state: "closed" \| "merged" \| "open"; draft: boolean; author: string; branch: string; baseBranch: string; url: string; createdAt: string; updatedAt: string; mergedAt: string \| null; head?: { ref: string; sha: string; } \| null \| undefined; }[]` | yes |
+| `pullRequests` | `{ id: string; number: number; title: string; state: "open" \| "closed" \| "merged"; draft: boolean; author: string; branch: string; baseBranch: string; url: string; createdAt: string; updatedAt: string; mergedAt: string \| null; head?: { ref: string; sha: string; } \| null \| undefined; }[]` | yes |
 
 ### <a id="vcs.repository.get"></a>`vcs.repository.get` (rpc)
 

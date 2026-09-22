@@ -10,7 +10,7 @@
  * - `kernel:extension.list`              — RPC listing all extensions with current state
  * - `kernel:extension.get`               — RPC fetching a single extension by name
  * - `kernel:extension.setEnabled`        — RPC persisting an operator enable/disable preference
- * - `kernel:extension.enabledChanged`    — fire-and-forget event when enabled flag changes
+ * - `kernel:extension.enabledChanged`    — fire-and-forget event confirming an accepted enable/disable call and the extension's effective state
  * - `kernel:extension.warnings.list`     — RPC listing active health warnings per extension
  * - `kernel:extension.warnings.changed`  — fire-and-forget snapshot after each health-check run
  */
@@ -173,14 +173,24 @@ const ExtensionSchemas = {
   },
 
   /**
-   * Signal that an extension's enabled state has changed.
+   * Confirm an accepted enable/disable call and the extension's effective state.
    *
    * Subject: `kernel:extension.enabledChanged`
    * Type: Event (fire-and-forget)
-   * Purpose: Emitted after a successful `kernel:extension.setEnabled` call so
-   * observers can react to enable/disable changes without polling.
+   * Purpose: Emitted whenever the coordinator-internal
+   * `applyExtensionTransition` restart primitive accepts an enable/disable
+   * request (its outcome is `'applied'`, never `'rejected'`), so observers
+   * can learn the extension's effective runtime state without polling. This
+   * is **not** a promise that a state transition actually occurred: an
+   * idempotent enable-on-`active` or disable-on-`stopped` call is also
+   * `'applied'` and also announced here, with `entry.enabled` unchanged.
+   * `kernel:extension.setEnabled` does **not** emit this event: that RPC is
+   * persist-only and never attempts a live transition (see its own doc
+   * above), so a durable preference change whose `outcome` is `'applied'` or
+   * `'restart-required'` produces no `enabledChanged` event until whatever
+   * coordinator-internal mechanism actually restarts the extension.
    * @param name - Unique extension identifier.
-   * @param enabled - New enabled state.
+   * @param enabled - The extension's effective enabled state after the call.
    */
   enabledChanged: z.object({
     name: z.string(),
@@ -233,7 +243,7 @@ export const ExtensionNamespace = createBusNamespace('kernel:extension', Extensi
  * - `list`                — RPC: retrieve all registered extensions and their current state
  * - `get`                 — RPC: retrieve a single extension's info by name
  * - `setEnabled`          — RPC: persist an operator enable/disable preference
- * - `enabledChanged`      — event: emitted when an extension's enabled flag changes
+ * - `enabledChanged`      — event: confirms an accepted enable/disable call and the extension's effective state
  * - `warnings.list`       — RPC: retrieve active health warnings for all (or one) extension
  * - `warnings.changed`    — event: emitted after every health-check run with the latest warning snapshot
  * @example

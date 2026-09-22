@@ -49,7 +49,7 @@ Type: Request (RPC)
 | `affordance` | `{ kind: "own-view"; } \| { kind: "inline"; hostRelation: string; } \| { kind: "entry"; via?: string \| undefined; collection?: string \| undefined; }` | yes |
 | `level` | `"link" \| "summary" \| "full"` | yes |
 | `params` | `Record<string, unknown> \| undefined` | no |
-| `ref` | `{ kind: string; id: string; revision: string; refClass?: "artifact" \| undefined; }` | yes |
+| `ref` | `{ refClass: "artifact"; kind: string; id: string; revision: string; }` | yes |
 
 **Response:**
 
@@ -58,7 +58,7 @@ Type: Request (RPC)
 | `builderVersion` | `number \| undefined` | no |
 | `sourceRevision` | `string \| undefined` | no |
 | `status` | `"ok" \| "artifact-not-found" \| "not-rendered"` | yes |
-| `view` | `{ title: string; artifact: { id: string; kind: string; revision: string; status?: string \| undefined; }; navigation: { breadcrumbs: { label: string; artifactId?: string \| undefined; url?: string \| undefined; }[]; related: { label: string; artifactId?: string \| undefined; url?: string \| undefined; }[]; }; sections: ({ type: "summary"; title: string; text: string; } \| { type: "properties"; title: string; rows: { label: string; value: string; }[]; } \| { type: "table"; title: string; columns: string[]; rows: { cells: string[]; link?: { label: string; artifactId?: string \| undefined; url?: string \| undefined; } \| undefined; }[]; } \| { type: "relations"; title: string; groups: { type: string; items: { label: string; artifactId?: string \| undefined; url?: string \| undefined; }[]; }[]; } \| { type: "evidence"; title: string; items: { kind: string; id: string; locator?: string \| undefined; }[]; } \| { type: "raw"; title: string; json: JsonValue; } \| { type: "code"; title: string; language: string; content: string; } \| { type: "diagram"; title: string; notation: "mermaid"; source: string; })[]; links: { dashboard?: string \| undefined; materialized?: string \| undefined; }; } \| null` | yes |
+| `view` | `{ title: string; artifact: { id: string; kind: string; revision: string; status?: string \| undefined; }; navigation: { breadcrumbs: { label: string; artifactId?: string \| undefined; url?: string \| undefined; sourceLocalId?: string \| undefined; }[]; related: { label: string; artifactId?: string \| undefined; url?: string \| undefined; sourceLocalId?: string \| undefined; }[]; }; sections: ({ type: "summary"; title: string; text: string; } \| { type: "properties"; title: string; rows: { label: string; value: string; }[]; } \| { type: "table"; title: string; columns: string[]; rows: { cells: string[]; link?: { label: string; artifactId?: string \| undefined; url?: string \| undefined; sourceLocalId?: string \| undefined; } \| undefined; }[]; } \| { type: "relations"; title: string; groups: { type: string; items: { label: string; artifactId?: string \| undefined; url?: string \| undefined; sourceLocalId?: string \| undefined; }[]; }[]; } \| { type: "evidence"; title: string; items: { kind: string; id: string; locator?: string \| undefined; }[]; } \| { type: "raw"; title: string; json: JsonValue; } \| { type: "code"; title: string; language: string; content: string; } \| { type: "diagram"; title: string; notation: "mermaid"; source: string; })[]; links: { dashboard?: string \| undefined; materialized?: string \| undefined; }; } \| null` | yes |
 
 ### <a id="materialization.capability.resolved"></a>`materialization.capability.resolved` (event)
 
@@ -120,7 +120,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `bindings` | `{ id: string; provider: string; namespace: string; target: { kind: "label"; prefix?: string \| undefined; } \| { kind: "field"; name: string; fieldId?: string \| undefined; } \| { kind: "issue-type"; name: string; typeId?: string \| undefined; } \| { kind: "body-fragment"; slot: string; } \| { kind: "comment"; template: string; }; appliesTo: ("surface" \| "workpiece" \| "artifact")[]; valueMapping?: Record<string, string> \| undefined; description?: string \| undefined; params?: Record<string, unknown> \| undefined; }[]` | yes |
+| `bindings` | `{ id: string; provider: string; namespace: string; target: { kind: "label"; prefix?: string \| undefined; } \| { kind: "field"; name: string; fieldId?: string \| undefined; } \| { kind: "issue-type"; name: string; typeId?: string \| undefined; } \| { kind: "body-fragment"; slot: string; } \| { kind: "comment"; template: string; }; appliesTo: ("artifact" \| "workpiece" \| "surface")[]; valueMapping?: Record<string, string> \| undefined; description?: string \| undefined; params?: Record<string, unknown> \| undefined; }[]` | yes |
 
 ### <a id="materialization.surfaceBinding.register"></a>`materialization.surfaceBinding.register` (rpc)
 
@@ -134,7 +134,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `appliesTo` | `("surface" \| "workpiece" \| "artifact")[]` | yes |
+| `appliesTo` | `("artifact" \| "workpiece" \| "surface")[]` | yes |
 | `description` | `string \| undefined` | no |
 | `id` | `string` | yes |
 | `namespace` | `string` | yes |

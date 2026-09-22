@@ -50,17 +50,27 @@ _Empty object._
 
 | Field | Type | Required |
 |-------|------|----------|
-| `clients` | `{ packageName: string; definition: { id: string; name: string; version: string; nativeTools: { name: string; friendlyName: string; capabilities: { tag: string; description?: string \| undefined; }[]; description?: string \| undefined; category?: string \| undefined; }[]; defaultApprovalPolicy: "reject" \| "always-ask" \| "full-access"; authMethods: ({ id: string; mode: "explicit"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; description?: string \| undefined; } \| { id: string; mode: "inferred"; label: string; description?: string \| undefined; } \| { id: string; mode: "none"; label: string; description?: string \| undefined; })[]; runtimeCapabilities: { supportsHooks: boolean; supportsStatusline: boolean; supportsSupervisorLaunch: boolean; supportsManagedBinary: boolean; hookEvents: { name: string; responseCapabilities: readonly string[]; frameworkSubject?: string \| undefined; }[]; }; description?: string \| undefined; binary?: { name: string; supportedVersions: string; } \| undefined; logSources?: { id: string; name: string; description?: string \| undefined; glob?: string \| undefined; }[] \| undefined; defaultAuth?: { providerDefinitionId: string; methodId: string; } \| undefined; managedInstall?: { type: "npm"; package: string; version: string; } \| { type: "signed-binary-bucket"; version: string; config: { baseUrl: string; manifestPathTemplate: string; manifestSignaturePathTemplate: string; publicKeyUrl: string; publicKeyFingerprint: string; binaryPathTemplate: string; platforms: Record<string, string>; }; } \| undefined; versionCommand?: { executable: string \| { default: string; darwin?: string \| undefined; linux?: string \| undefined; win32?: string \| undefined; }; args: string[]; } \| undefined; postInstall?: { kind: string; payload?: Record<string, unknown> \| undefined; } \| undefined; configIsolation?: { envVar: string; defaultPath: string; pathKind: "file" \| "directory"; } \| undefined; }; }[]` | yes |
+| `clients` | `{ packageName: string; definition: { id: string; name: string; version: string; nativeTools: { name: string; friendlyName: string; capabilities: { tag: string; description?: string \| undefined; }[]; description?: string \| undefined; category?: string \| undefined; }[]; defaultApprovalPolicy: "reject" \| "always-ask" \| "full-access"; authMethods: ({ id: string; mode: "explicit"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; description?: string \| undefined; } \| { id: string; mode: "inferred"; label: string; description?: string \| undefined; } \| { id: string; mode: "none"; label: string; description?: string \| undefined; })[]; runtimeCapabilities: { supportsHooks: boolean; supportsStatusline: boolean; supportsSupervisorLaunch: boolean; supportsManagedBinary: boolean; hookEvents: { name: string; responseCapabilities: readonly string[]; frameworkSubject?: string \| undefined; minimumVersion?: string \| undefined; }[]; }; description?: string \| undefined; binary?: { name: string; supportedVersions: string; } \| undefined; logSources?: { id: string; name: string; description?: string \| undefined; glob?: string \| undefined; }[] \| undefined; defaultAuth?: { providerDefinitionId: string; methodId: string; } \| undefined; managedInstall?: { type: "npm"; package: string; version: string; } \| { type: "signed-binary-bucket"; version: string; config: { baseUrl: string; manifestPathTemplate: string; manifestSignaturePathTemplate: string; publicKeyUrl: string; publicKeyFingerprint: string; binaryPathTemplate: string; platforms: Record<string, string>; }; } \| undefined; versionCommand?: { executable: string \| { default: string; darwin?: string \| undefined; linux?: string \| undefined; win32?: string \| undefined; }; args: string[]; } \| undefined; postInstall?: { kind: string; payload?: Record<string, unknown> \| undefined; } \| undefined; configIsolation?: { envVar: string; defaultPath: string; pathKind: "file" \| "directory"; } \| undefined; }; }[]` | yes |
 | `providers` | `{ packageName: string; definition: { id: string; name: string; availableModels: { name: string; contextWindowSize: number; labId: string; friendlyName?: string \| undefined; family?: string \| undefined; supportedReasoningLevels?: { none?: string \| number \| undefined; low?: string \| number \| undefined; medium?: string \| number \| undefined; high?: string \| number \| undefined; 'extra-high'?: string \| number \| undefined; } \| undefined; metadata?: { maxOutputTokens?: number \| undefined; capabilities?: { vision?: boolean \| undefined; toolCalling?: boolean \| undefined; parallelToolCalls?: boolean \| undefined; structuredOutput?: boolean \| undefined; pdfUpload?: boolean \| undefined; speechToText?: { modes: ("batch" \| "streaming")[]; vocabularyBiasing?: boolean \| undefined; } \| undefined; textToSpeech?: { modes: ("streaming" \| "buffered")[]; voiceSelection?: boolean \| undefined; voiceInstructions?: boolean \| undefined; outputFormats?: string[] \| undefined; } \| undefined; } \| undefined; pricing?: { token?: { inputPerMillion: number; outputPerMillion: number; inputCachedPerMillion?: number \| undefined; cacheWritePerMillion?: number \| undefined; } \| undefined; request?: { multiplier: number; } \| undefined; } \| undefined; includedInSubscription?: boolean \| undefined; description?: string \| undefined; } \| undefined; }[]; authMethods: ({ id: string; mode: "explicit"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; description?: string \| undefined; } \| { id: string; mode: "none"; label: string; description?: string \| undefined; })[]; description?: string \| undefined; endpoints?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; defaultModel?: string \| undefined; fastModel?: string \| undefined; primaryTestModel?: string \| undefined; secondaryTestModel?: string \| undefined; defaultModelFilterMode?: "allowlist" \| "show-all" \| undefined; capabilities?: Record<string, unknown> \| undefined; }; }[]` | yes |
 
 ### <a id="kernel:extension.enabledChanged"></a>`kernel:extension.enabledChanged` (event)
 
-Signal that an extension's enabled state has changed.
+Confirm an accepted enable/disable call and the extension's effective state.
 
 Subject: `kernel:extension.enabledChanged`
 Type: Event (fire-and-forget)
-Purpose: Emitted after a successful `kernel:extension.setEnabled` call so
-observers can react to enable/disable changes without polling.
+Purpose: Emitted whenever the coordinator-internal
+`applyExtensionTransition` restart primitive accepts an enable/disable
+request (its outcome is `'applied'`, never `'rejected'`), so observers
+can learn the extension's effective runtime state without polling. This
+is **not** a promise that a state transition actually occurred: an
+idempotent enable-on-`active` or disable-on-`stopped` call is also
+`'applied'` and also announced here, with `entry.enabled` unchanged.
+`kernel:extension.setEnabled` does **not** emit this event: that RPC is
+persist-only and never attempts a live transition (see its own doc
+above), so a durable preference change whose `outcome` is `'applied'` or
+`'restart-required'` produces no `enabledChanged` event until whatever
+coordinator-internal mechanism actually restarts the extension.
 
 | Field | Type | Required |
 |-------|------|----------|
@@ -86,7 +96,7 @@ Returns `{ extension: null }` when no extension with the given name is registere
 
 | Field | Type | Required |
 |-------|------|----------|
-| `extension` | `{ name: string; displayName: string; state: "active" \| "discovered" \| "failed" \| "skipped" \| "stopped" \| "initializing"; enabled: boolean; error?: string \| undefined; surface?: "any" \| "interactive" \| "headless" \| undefined; browser?: { entrypoint: string; } \| undefined; } \| null` | yes |
+| `extension` | `{ name: string; displayName: string; state: "active" \| "discovered" \| "failed" \| "skipped" \| "stopped" \| "initializing"; enabled: boolean; extensionManaged: boolean; critical: boolean; error?: string \| undefined; surface?: "any" \| "interactive" \| "headless" \| undefined; persistedEnabled?: boolean \| undefined; browser?: { entrypoint: string; } \| undefined; } \| null` | yes |
 
 ### <a id="kernel:extension.list"></a>`kernel:extension.list` (rpc)
 
@@ -106,17 +116,22 @@ _Empty object._
 
 | Field | Type | Required |
 |-------|------|----------|
-| `extensions` | `{ name: string; displayName: string; state: "active" \| "discovered" \| "failed" \| "skipped" \| "stopped" \| "initializing"; enabled: boolean; error?: string \| undefined; surface?: "any" \| "interactive" \| "headless" \| undefined; browser?: { entrypoint: string; } \| undefined; }[]` | yes |
+| `extensions` | `{ name: string; displayName: string; state: "active" \| "discovered" \| "failed" \| "skipped" \| "stopped" \| "initializing"; enabled: boolean; extensionManaged: boolean; critical: boolean; error?: string \| undefined; surface?: "any" \| "interactive" \| "headless" \| undefined; persistedEnabled?: boolean \| undefined; browser?: { entrypoint: string; } \| undefined; }[]` | yes |
 
 ### <a id="kernel:extension.setEnabled"></a>`kernel:extension.setEnabled` (rpc)
 
-Enable or disable an extension at runtime.
+Durably record the operator's enablement preference for an extension.
 
 Subject: `kernel:extension.setEnabled`
 Type: RPC (request/response)
-Purpose: Allows the user or platform config to toggle an extension without
-a full restart. The coordinator re-enters the load path on enable, or runs
-cleanup and transitions to `stopped` on disable.
+Purpose: Allows the user or platform config to persist an enable/disable
+preference for an extension. This is persist-only: the coordinator never
+applies the change to the running process, because several package
+contributions are composed exactly once at boot and cannot be replayed
+for one package in isolation. The response's `outcome` reports whether
+the process's current runtime state already matches the request
+(`'applied'`) or a restart is needed for it to take effect
+(`'restart-required'`).
 
 **Request:**
 
@@ -129,6 +144,7 @@ cleanup and transitions to `stopped` on disable.
 
 | Field | Type | Required |
 |-------|------|----------|
+| `outcome` | `"applied" \| "rejected" \| "restart-required"` | yes |
 | `success` | `boolean` | yes |
 
 ### <a id="kernel:extension.stateChanged"></a>`kernel:extension.stateChanged` (event)

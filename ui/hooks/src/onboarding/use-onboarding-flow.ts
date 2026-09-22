@@ -169,18 +169,25 @@ async function resolveHealthCheckProviderContext(adapterName: string): Promise<R
 }
 /**
  * Core orchestrator hook for the onboarding flow.
- * Evaluates step conditions once at mount to build the frozen active step list.
- * Manages navigation and owns all shared flow state. Bus operations are
- * encapsulated behind the returned {@link OnboardingFlowActions}.
- *
- * Health checks use a per-adapter AbortController map and abort all controllers on unmount.
+ * Evaluates step conditions once at mount against the full `context` — a
+ * public registry seam ({@link OnboardingStepDefinition.condition}) any host
+ * or extension step can inspect, so narrowing `context.extensions` here would
+ * silently exclude a step gated on a framework package. Only the built-in
+ * Plugins step narrows to the extension-managed subset (see
+ * {@link seedManagedExtensions}). Manages navigation and shared flow state,
+ * encapsulating bus operations behind {@link OnboardingFlowActions}; health
+ * checks use a per-adapter AbortController map, aborted on unmount.
  * @param options - Context, and completion/skip callbacks
  * @returns Flow state, active steps, navigation helpers, and actions
  */
 function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlowOptions): UseOnboardingFlowResult {
   const { setDefaultSelection } = useAppContext();
   const bus = useBus();
-  // Freeze the active step list on first render — conditions are evaluated exactly once.
+
+  // Feeds the initial extension list and durable-disable seed below.
+  const seededFromContext = useMemo(() => seedManagedExtensions(context.extensions), [context.extensions]);
+
+  // Freeze active steps on first render against the full context.
   const [activeSteps] = useState<ReadonlyArray<OnboardingStepDefinition>>(() => {
     const all = narrowToHooksStepDefinitions(onboardingStepRegistry.getAll());
     return Object.freeze(all.filter((step) => step.condition === undefined || step.condition(context)));
@@ -194,8 +201,11 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
   const [healthCheckResults, setHealthCheckResults] = useState<ReadonlyMap<string, HealthCheckResult>>(() => new Map());
   const [logImportSelections, setLogImportSelections] = useState<ReadonlyMap<string, LogImportMode>>(() => new Map());
   const [defaultAgentSelection, setDefaultAgentSelectionState] = useState<AgentSelection | null>(null);
-  const [extensionList, setExtensionList] = useState<ReadonlyArray<ExtensionInfo>>(() => context.extensions);
-  const [pluginEnabledStates, setPluginEnabledStates] = useState<ReadonlyMap<string, boolean>>(() => new Map());
+  // Seeded like activeSteps, so a raw framework package never flashes or lingers here.
+  const [extensionList, setExtensionList] = useState<ReadonlyArray<ExtensionInfo>>(() => seededFromContext.managed);
+  const [pluginEnabledStates, setPluginEnabledStates] = useState<ReadonlyMap<string, boolean>>(
+    () => seededFromContext.initialDisables,
+  );
   const [scanAdapters, setScanAdapters] = useState<ReadonlyArray<OnboardingAdapter>>([]);
   const [isScanning, setIsScanning] = useState(false);
   const [scanError, setScanError] = useState<Error | null>(null);
@@ -208,6 +218,9 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
   const healthCheckAbortMap = useRef<Map<string, AbortController>>(new Map());
   const pluginToggleGenerationRef = useRef<Map<string, number>>(new Map());
 
+  // Refreshes extensionList/pluginEnabledStates once the bus is ready, since context
+  // may predate boot settling. Same filter as the context-derived seed, so this is a
+  // refresh, not a re-filter; on failure, that already-filtered seed simply stands.
   useEffect(() => {
     const currentRunId = ++pluginFetchRunIdRef.current;
     const isCurrentRun = () => pluginFetchRunIdRef.current === currentRunId;
