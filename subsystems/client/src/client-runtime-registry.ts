@@ -68,6 +68,57 @@ function nextUpdatedAt(existingUpdatedAt: number): number {
 }
 
 /**
+ * Reject a conflicting native session identity for one supervised process.
+ *
+ * A supervisor session identifies one native process. Once that process has
+ * reported its adapter session ID, later child or fork observations must not
+ * replace it with their own native session ID. The explicit Codex root-clear
+ * transition is the only lifecycle exception.
+ * @param record - Existing runtime selected by supervisor session ID
+ * @param input - Incoming runtime observation
+ */
+function assertSupervisorAdapterSessionIdentity(record: ClientRuntimeRecord, input: ClientRuntimeObserveRequest): void {
+  if (
+    input.supervisorSessionId !== undefined &&
+    input.supervisorSessionId === record.supervisorSessionId &&
+    input.adapterSessionId !== undefined &&
+    record.adapterSessionId !== undefined &&
+    input.adapterSessionId !== record.adapterSessionId
+  ) {
+    if (isCodexRootClearTransition(record, input)) {
+      return;
+    }
+    throw new Error(
+      `client.runtime.observe: adapterSessionId '${input.adapterSessionId}' conflicts with the existing adapterSessionId ` +
+        `'${record.adapterSessionId}' for supervisorSessionId '${input.supervisorSessionId}'`,
+    );
+  }
+}
+
+/**
+ * Determine whether an observation reports the Codex root-clear transition.
+ *
+ * The transition comes from the internal Codex hook-service lifecycle path;
+ * it is deliberately not inferred from arbitrary producer metadata. It is
+ * valid only while replacing the adapter root of the same supervised process.
+ * @param record - Existing runtime selected by supervisor identity
+ * @param input - Incoming runtime observation
+ * @returns `true` when the observation may rotate the native root identity
+ */
+function isCodexRootClearTransition(record: ClientRuntimeRecord, input: ClientRuntimeObserveRequest): boolean {
+  return (
+    input.adapterSessionTransition === 'root-clear' &&
+    input.clientId === 'codex' &&
+    input.source.layer === 'client-hook' &&
+    input.source.producer === 'codex-client-session-service' &&
+    input.supervisorSessionId !== undefined &&
+    input.supervisorSessionId === record.supervisorSessionId &&
+    input.adapterSessionId !== undefined &&
+    input.adapterSessionId !== record.adapterSessionId
+  );
+}
+
+/**
  * Enrich a mutable runtime record with non-undefined fields from the observation.
  *
  * Stronger evidence fields always overwrite weaker prior values. Enrichment
@@ -118,6 +169,19 @@ function enrichRecord(record: ClientRuntimeRecord, input: ClientRuntimeObserveRe
 }
 
 /**
+ * Apply the one explicit native-root rotation supported by the registry.
+ *
+ * A cleared Codex conversation has no established framework session yet, so
+ * the prior session correlation must not leak into the new adapter root.
+ * @param record - Existing runtime selected by supervisor identity
+ * @param input - Trusted root-clear observation
+ */
+function rotateCodexRootAfterClear(record: ClientRuntimeRecord, input: ClientRuntimeObserveRequest): void {
+  record.adapterSessionId = input.adapterSessionId;
+  record.sessionId = undefined;
+}
+
+/**
  * In-memory registry that canonicalizes client runtime instances across
  * evidence fields and optionally persists them via a bus-backed handler.
  *
@@ -129,6 +193,7 @@ function enrichRecord(record: ClientRuntimeRecord, input: ClientRuntimeObserveRe
 export class ClientRuntimeRegistry {
   private readonly runtimeMap = new RuntimeMap();
   private readonly bus: IMakaioBus | undefined;
+  private latestCreatedAt = 0;
 
   /**
    * Creates a new runtime registry.
@@ -156,6 +221,7 @@ export class ClientRuntimeRegistry {
     const now = Date.now();
     for (const record of result.data.records) {
       this.runtimeMap.setFromStorage(cloneRuntimeRecord(record), now, STALE_PID_THRESHOLD_MS);
+      this.latestCreatedAt = Math.max(this.latestCreatedAt, record.createdAt);
     }
   }
 
@@ -185,6 +251,14 @@ export class ClientRuntimeRegistry {
     );
 
     if (existing) {
+      const priorRecord = cloneRuntimeRecord(existing);
+      assertSupervisorAdapterSessionIdentity(existing, input);
+
+      const rotatesCodexRoot = isCodexRootClearTransition(existing, input);
+      if (rotatesCodexRoot) {
+        rotateCodexRootAfterClear(existing, input);
+      }
+
       const wasObserved = existing.status === 'observed';
       const willStart = wasObserved && evidenceWarrantsStarted(input);
       const fieldsChanged = enrichRecord(existing, input);
@@ -194,13 +268,13 @@ export class ClientRuntimeRegistry {
         existing.status = 'started';
       }
 
-      if (fieldsChanged || willStart || refreshObserved) {
+      if (rotatesCodexRoot || fieldsChanged || willStart || refreshObserved) {
         existing.updatedAt = nextUpdatedAt(existing.updatedAt);
         if (refreshObserved) {
           existing.observedAt = input.observedAt;
         }
         // Re-register in map to update secondary indexes for any new fields
-        this.runtimeMap.set(existing);
+        this.runtimeMap.set(existing, priorRecord);
         await this.persistRecord(existing);
       }
 
@@ -212,7 +286,7 @@ export class ClientRuntimeRegistry {
       };
     }
 
-    const now = Date.now();
+    const now = this.nextCreatedAt();
     const clientRuntimeId = randomUUID();
     const status = evidenceWarrantsStarted(input) ? 'started' : 'observed';
 
@@ -255,6 +329,37 @@ export class ClientRuntimeRegistry {
   public getRuntime(clientRuntimeId: string): ClientRuntimeRecord | undefined {
     const record = this.runtimeMap.get(clientRuntimeId);
     return record ? cloneRuntimeRecord(record) : undefined;
+  }
+
+  /**
+   * Resolve the recorded client correlation for a supervisor session.
+   *
+   * This is a correlation lookup only. It does not establish that the native
+   * process remains live.
+   * @param clientId - Client identity that must own the resolved runtime
+   * @param supervisorSessionId - Supervisor-assigned process identity
+   * @returns Recorded correlation fields, or `null` when no matching client runtime exists
+   */
+  public resolveBySupervisorSessionId(
+    clientId: string,
+    supervisorSessionId: string,
+  ): {
+    clientId: string;
+    supervisorSessionId: string;
+    adapterSessionId?: string;
+    sessionId?: string;
+  } | null {
+    const record = this.runtimeMap.findByEvidence(supervisorSessionId, undefined, undefined, clientId);
+    if (record === undefined || record.clientId !== clientId || record.supervisorSessionId !== supervisorSessionId) {
+      return null;
+    }
+
+    return {
+      clientId: record.clientId,
+      supervisorSessionId: record.supervisorSessionId,
+      ...(record.adapterSessionId !== undefined && { adapterSessionId: record.adapterSessionId }),
+      ...(record.sessionId !== undefined && { sessionId: record.sessionId }),
+    };
   }
 
   /**
@@ -309,6 +414,20 @@ export class ClientRuntimeRegistry {
    */
   public get size(): number {
     return this.runtimeMap.size;
+  }
+
+  /**
+   * Produce a creation timestamp that preserves local runtime creation order.
+   *
+   * `createdAt` is also the shared-evidence index owner ordering key. Runtime
+   * records created in one registry must therefore not share a millisecond,
+   * while hydrated records retain their persisted timestamps for deterministic
+   * tie handling.
+   * @returns Monotonic creation timestamp for a new runtime record
+   */
+  private nextCreatedAt(): number {
+    this.latestCreatedAt = Math.max(Date.now(), this.latestCreatedAt + 1);
+    return this.latestCreatedAt;
   }
 
   private async persistRecord(record: ClientRuntimeRecord): Promise<void> {

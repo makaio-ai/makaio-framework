@@ -8,7 +8,8 @@
  * Protocol (stdin, Bun → bridge):
  *   { "id": <number>, "cmd": "spawn", "file": <string>, "args": <string[]>,
  *     "options": { "cwd"?: <string>, "name"?: <string>, "cols"?: <number>,
- *                  "rows"?: <number>, "env"?: <Record<string,string>> } }
+ *                  "rows"?: <number>, "env"?: <Record<string,string>>,
+ *                  "inheritEnvironment"?: <boolean> } }
  *   { "id": <number>, "cmd": "input",  "ptyId": <number>, "data": <base64> }
  *   { "id": <number>, "cmd": "resize", "ptyId": <number>, "cols": <number>, "rows": <number> }
  *   { "id": <number>, "cmd": "kill",   "ptyId": <number>, "signal"?: <string> }
@@ -71,6 +72,10 @@ function disposeAll() {
 function handleSpawn(cmd) {
   const ptyId = nextPtyId++;
   const { id, file, args, options } = cmd;
+  const env =
+    options.env !== null && typeof options.env === 'object' && !Array.isArray(options.env)
+      ? /** @type {Record<string, string>} */ (options.env)
+      : undefined;
 
   /** @type {import('node-pty').IWindowsPtyForkOptions | import('node-pty').IPtyForkOptions} */
   const spawnOptions = {
@@ -78,10 +83,7 @@ function handleSpawn(cmd) {
     cols: typeof options.cols === 'number' ? options.cols : 80,
     rows: typeof options.rows === 'number' ? options.rows : 24,
     cwd: typeof options.cwd === 'string' ? options.cwd : undefined,
-    env:
-      options.env !== null && typeof options.env === 'object' && !Array.isArray(options.env)
-        ? /** @type {Record<string, string>} */ (options.env)
-        : undefined,
+    env: options.inheritEnvironment === true && env !== undefined ? { ...process.env, ...env } : env,
   };
 
   let proc;

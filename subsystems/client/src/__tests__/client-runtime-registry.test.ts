@@ -203,6 +203,205 @@ describe('ClientRuntimeRegistry', () => {
       expect(rematch.clientRuntimeId).toBe(supResult.clientRuntimeId);
       expect(rematch.created).toBe(false);
     });
+
+    it('preserves historical supervisor records when a resumed native session has a new supervisor', async () => {
+      const primary = await registry.upsertRuntime(
+        makeObservation({
+          clientId: 'claude-code',
+          supervisorSessionId: 'sup-identity-primary',
+          pid: 4401,
+          adapterSessionId: 'adapter-native-primary',
+        }),
+      );
+      const resumed = await registry.upsertRuntime(
+        makeObservation({
+          clientId: 'claude-code',
+          supervisorSessionId: 'sup-identity-primary',
+          pid: 4401,
+          adapterSessionId: 'adapter-native-primary',
+        }),
+      );
+      const resumedWithNewSupervisor = await registry.upsertRuntime(
+        makeObservation({
+          clientId: 'claude-code',
+          supervisorSessionId: 'sup-identity-resumed',
+          pid: 5501,
+          adapterSessionId: 'adapter-native-primary',
+        }),
+      );
+
+      expect(resumed).toEqual({ ...primary, created: false });
+      expect(resumedWithNewSupervisor.created).toBe(true);
+      expect(resumedWithNewSupervisor.clientRuntimeId).not.toBe(primary.clientRuntimeId);
+      expect(registry.getRuntime(primary.clientRuntimeId)).toEqual(primary.record);
+
+      await expect(
+        registry.upsertRuntime(
+          makeObservation({
+            clientId: 'claude-code',
+            supervisorSessionId: 'sup-identity-primary',
+            pid: 4402,
+            adapterSessionId: 'adapter-native-child',
+          }),
+        ),
+      ).rejects.toThrow(
+        "client.runtime.observe: adapterSessionId 'adapter-native-child' conflicts with the existing adapterSessionId " +
+          "'adapter-native-primary' for supervisorSessionId 'sup-identity-primary'",
+      );
+
+      expect(registry.size).toBe(2);
+      expect(registry.getRuntime(primary.clientRuntimeId)).toEqual(primary.record);
+
+      const originalSupervisorUpdate = await registry.upsertRuntime(
+        makeObservation({
+          clientId: 'claude-code',
+          supervisorSessionId: 'sup-identity-primary',
+          pid: 4402,
+          adapterSessionId: 'adapter-native-primary',
+        }),
+      );
+      expect(originalSupervisorUpdate.clientRuntimeId).toBe(primary.clientRuntimeId);
+
+      const activeAdapterLookup = await registry.upsertRuntime(
+        makeObservation({ clientId: 'claude-code', adapterSessionId: 'adapter-native-primary' }),
+      );
+      expect(activeAdapterLookup.clientRuntimeId).toBe(resumedWithNewSupervisor.clientRuntimeId);
+
+      const resumedSupervisorLookup = await registry.upsertRuntime(
+        makeObservation({ clientId: 'claude-code', supervisorSessionId: 'sup-identity-resumed' }),
+      );
+      expect(resumedSupervisorLookup.clientRuntimeId).toBe(resumedWithNewSupervisor.clientRuntimeId);
+    });
+
+    it('rotates the trusted Codex root after clear and drops its stale framework session correlation', async () => {
+      const initial = await registry.upsertRuntime(
+        makeObservation({
+          clientId: 'codex',
+          source: { layer: 'client-hook', producer: 'codex-client-session-service' },
+          supervisorSessionId: 'sup-codex-clear',
+          adapterSessionId: 'native-before-clear',
+          sessionId: 'framework-before-clear',
+        }),
+      );
+
+      const cleared = await registry.upsertRuntime(
+        makeObservation({
+          clientId: 'codex',
+          source: { layer: 'client-hook', producer: 'codex-client-session-service' },
+          supervisorSessionId: 'sup-codex-clear',
+          adapterSessionId: 'native-after-clear',
+          adapterSessionTransition: 'root-clear',
+        }),
+      );
+
+      expect(cleared.clientRuntimeId).toBe(initial.clientRuntimeId);
+      expect(registry.resolveBySupervisorSessionId('codex', 'sup-codex-clear')).toEqual({
+        clientId: 'codex',
+        supervisorSessionId: 'sup-codex-clear',
+        adapterSessionId: 'native-after-clear',
+      });
+
+      const staleAdapter = await registry.upsertRuntime(
+        makeObservation({ clientId: 'codex', adapterSessionId: 'native-before-clear' }),
+      );
+      expect(staleAdapter.created).toBe(true);
+      expect(staleAdapter.clientRuntimeId).not.toBe(initial.clientRuntimeId);
+    });
+
+    it('does not rotate a native root for ordinary differing IDs or an invalid root-clear producer', async () => {
+      await registry.upsertRuntime(
+        makeObservation({
+          clientId: 'codex',
+          source: { layer: 'client-hook', producer: 'codex-client-session-service' },
+          supervisorSessionId: 'sup-codex-conflict',
+          adapterSessionId: 'native-primary',
+        }),
+      );
+
+      await expect(
+        registry.upsertRuntime(
+          makeObservation({
+            clientId: 'codex',
+            supervisorSessionId: 'sup-codex-conflict',
+            adapterSessionId: 'native-ordinary-conflict',
+          }),
+        ),
+      ).rejects.toThrow("client.runtime.observe: adapterSessionId 'native-ordinary-conflict' conflicts");
+
+      await expect(
+        registry.upsertRuntime(
+          makeObservation({
+            clientId: 'codex',
+            source: { layer: 'client-hook', producer: 'another-hook-producer' },
+            supervisorSessionId: 'sup-codex-conflict',
+            adapterSessionId: 'native-untrusted-clear',
+            adapterSessionTransition: 'root-clear',
+          }),
+        ),
+      ).rejects.toThrow("client.runtime.observe: adapterSessionId 'native-untrusted-clear' conflicts");
+
+      await expect(
+        registry.upsertRuntime(
+          makeObservation({
+            clientId: 'claude-code',
+            source: { layer: 'client-hook', producer: 'codex-client-session-service' },
+            supervisorSessionId: 'sup-codex-conflict',
+            adapterSessionId: 'native-wrong-client-clear',
+            adapterSessionTransition: 'root-clear',
+          }),
+        ),
+      ).rejects.toThrow("client.runtime.observe: adapterSessionId 'native-wrong-client-clear' conflicts");
+    });
+
+    it('does not clear the framework session when root-clear reports the same native ID', async () => {
+      const initial = await registry.upsertRuntime(
+        makeObservation({
+          clientId: 'codex',
+          source: { layer: 'client-hook', producer: 'codex-client-session-service' },
+          supervisorSessionId: 'sup-codex-same-id',
+          adapterSessionId: 'native-same-id',
+          sessionId: 'framework-same-id',
+        }),
+      );
+
+      await registry.upsertRuntime(
+        makeObservation({
+          clientId: 'codex',
+          source: { layer: 'client-hook', producer: 'codex-client-session-service' },
+          supervisorSessionId: 'sup-codex-same-id',
+          adapterSessionId: 'native-same-id',
+          adapterSessionTransition: 'root-clear',
+        }),
+      );
+
+      expect(registry.getRuntime(initial.clientRuntimeId)?.sessionId).toBe('framework-same-id');
+    });
+
+    it('orders same-millisecond supervisor generations by registry-owned creation time', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(BASE_OBSERVED_AT);
+
+      const primary = await registry.upsertRuntime(
+        makeObservation({
+          clientId: 'codex',
+          supervisorSessionId: 'sup-fixed-clock-s1',
+          adapterSessionId: 'native-fixed-clock-a1',
+        }),
+      );
+      const resumed = await registry.upsertRuntime(
+        makeObservation({
+          clientId: 'codex',
+          supervisorSessionId: 'sup-fixed-clock-s2',
+          adapterSessionId: 'native-fixed-clock-a1',
+        }),
+      );
+
+      expect(resumed.record.createdAt).toBeGreaterThan(primary.record.createdAt);
+      const active = await registry.upsertRuntime(
+        makeObservation({ clientId: 'codex', adapterSessionId: 'native-fixed-clock-a1' }),
+      );
+      expect(active.clientRuntimeId).toBe(resumed.clientRuntimeId);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -305,6 +504,27 @@ describe('ClientRuntimeRegistry', () => {
       const record = registry.getRuntime(initial.clientRuntimeId);
       expect(record?.pid).toBe(4242);
       expect(record?.status).toBe('started');
+    });
+
+    it('allows an unmanaged pid runtime to replace its adapter session ID', async () => {
+      const initial = await registry.upsertRuntime(
+        makeObservation({
+          clientId: 'claude-code',
+          pid: 4243,
+          adapterSessionId: 'adapter-unmanaged-old',
+        }),
+      );
+
+      const updated = await registry.upsertRuntime(
+        makeObservation({
+          clientId: 'claude-code',
+          pid: 4243,
+          adapterSessionId: 'adapter-unmanaged-new',
+        }),
+      );
+
+      expect(updated.clientRuntimeId).toBe(initial.clientRuntimeId);
+      expect(registry.getRuntime(initial.clientRuntimeId)?.adapterSessionId).toBe('adapter-unmanaged-new');
     });
 
     it('refreshes observedAt from the latest captured observation when an observed runtime is re-encountered', async () => {
@@ -590,6 +810,76 @@ describe('ClientRuntimeRegistry', () => {
       expect(adapterResult.created).toBe(false);
       expect(adapterResult.clientRuntimeId).toBe('fresh-runtime-1');
     });
+
+    it('keeps the newer supervisor runtime active when a hook joins its native session after hydration', async () => {
+      const now = Date.now();
+      const historical = makeStorageRecord({
+        clientRuntimeId: 'runtime-hydrated-s1',
+        clientId: 'codex',
+        supervisorSessionId: 'sup-hydrated-s1',
+        adapterSessionId: 'native-hydrated-a1',
+        createdAt: now - 1_000,
+        updatedAt: now,
+      });
+      const busRegistry = new ClientRuntimeRegistry(makeMockBus([historical]));
+      await busRegistry.loadFromStorage();
+
+      const resumed = await busRegistry.upsertRuntime(
+        makeObservation({ clientId: 'codex', supervisorSessionId: 'sup-hydrated-s2' }),
+      );
+      await busRegistry.upsertRuntime(
+        makeObservation({
+          clientId: 'codex',
+          supervisorSessionId: 'sup-hydrated-s2',
+          adapterSessionId: 'native-hydrated-a1',
+        }),
+      );
+      await busRegistry.upsertRuntime(
+        makeObservation({
+          clientId: 'codex',
+          supervisorSessionId: 'sup-hydrated-s1',
+          adapterSessionId: 'native-hydrated-a1',
+          pid: 4101,
+        }),
+      );
+
+      const active = await busRegistry.upsertRuntime(
+        makeObservation({ clientId: 'codex', adapterSessionId: 'native-hydrated-a1' }),
+      );
+
+      expect(active.clientRuntimeId).toBe(resumed.clientRuntimeId);
+      expect(busRegistry.resolveBySupervisorSessionId('codex', 'sup-hydrated-s1')).toEqual({
+        clientId: 'codex',
+        supervisorSessionId: 'sup-hydrated-s1',
+        adapterSessionId: 'native-hydrated-a1',
+      });
+      expect(busRegistry.resolveBySupervisorSessionId('codex', 'sup-hydrated-s2')).toEqual({
+        clientId: 'codex',
+        supervisorSessionId: 'sup-hydrated-s2',
+        adapterSessionId: 'native-hydrated-a1',
+      });
+    });
+
+    it('creates a runtime after the newest hydrated creation timestamp when the clock is behind it', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(BASE_OBSERVED_AT);
+      const futureCreatedAt = BASE_OBSERVED_AT + 1_000;
+      const futureRecord = makeStorageRecord({
+        clientRuntimeId: 'runtime-hydrated-future',
+        clientId: 'codex',
+        supervisorSessionId: 'sup-hydrated-future',
+        createdAt: futureCreatedAt,
+        updatedAt: BASE_OBSERVED_AT,
+      });
+      const busRegistry = new ClientRuntimeRegistry(makeMockBus([futureRecord]));
+      await busRegistry.loadFromStorage();
+
+      const created = await busRegistry.upsertRuntime(
+        makeObservation({ clientId: 'codex', supervisorSessionId: 'sup-after-hydration' }),
+      );
+
+      expect(created.record.createdAt).toBeGreaterThan(futureCreatedAt);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -723,6 +1013,101 @@ describe('RuntimeMap.delete — secondary index cleanup (RO-5)', () => {
 
     const found = map.findByEvidence(undefined, undefined, 'adapter-del-sess', 'claude-code');
     expect(found).toBeUndefined();
+  });
+
+  it('preserves a newer record adapter index when an older shared-session record is reindexed or deleted', () => {
+    const historical = makeRecord({
+      clientRuntimeId: 'rt-shared-historical',
+      clientId: 'claude-code',
+      supervisorSessionId: 'sup-shared-historical',
+      pid: 3001,
+      adapterSessionId: 'adapter-shared-session',
+    });
+    const resumed = makeRecord({
+      clientRuntimeId: 'rt-shared-resumed',
+      clientId: 'claude-code',
+      supervisorSessionId: 'sup-shared-resumed',
+      pid: 3002,
+      adapterSessionId: 'adapter-shared-session',
+    });
+    map.set(historical);
+    map.set(resumed);
+
+    map.set({ ...historical, pid: 3003 });
+    expect(map.findByEvidence(undefined, undefined, 'adapter-shared-session', 'claude-code')?.clientRuntimeId).toBe(
+      resumed.clientRuntimeId,
+    );
+
+    map.delete(historical.clientRuntimeId);
+    expect(map.findByEvidence(undefined, undefined, 'adapter-shared-session', 'claude-code')?.clientRuntimeId).toBe(
+      resumed.clientRuntimeId,
+    );
+  });
+
+  it('uses createdAt and then runtime ID to select a hydrated shared adapter session deterministically', () => {
+    const now = Date.now();
+    const older = makeRecord({
+      clientRuntimeId: 'runtime-hydrated-s1',
+      clientId: 'codex',
+      supervisorSessionId: 'sup-hydrated-s1',
+      adapterSessionId: 'native-hydrated-a1',
+      createdAt: now - 2_000,
+      updatedAt: now,
+    });
+    const newer = makeRecord({
+      clientRuntimeId: 'runtime-hydrated-s2',
+      clientId: 'codex',
+      supervisorSessionId: 'sup-hydrated-s2',
+      adapterSessionId: 'native-hydrated-a1',
+      createdAt: now - 1_000,
+      updatedAt: now,
+    });
+
+    for (const records of [
+      [older, newer],
+      [newer, older],
+    ]) {
+      const hydrated = new RuntimeMap();
+      for (const record of records) {
+        hydrated.setFromStorage(record, now, 24 * 60 * 60 * 1_000);
+      }
+
+      expect(hydrated.findByEvidence(undefined, undefined, 'native-hydrated-a1', 'codex')?.clientRuntimeId).toBe(
+        newer.clientRuntimeId,
+      );
+    }
+  });
+
+  it('uses runtime ID as a deterministic tie-breaker for equally created hydrated shared adapter sessions', () => {
+    const now = Date.now();
+    const first = makeRecord({
+      clientRuntimeId: 'runtime-hydrated-tie-a',
+      clientId: 'codex',
+      supervisorSessionId: 'sup-hydrated-tie-a',
+      adapterSessionId: 'native-hydrated-tie',
+      createdAt: now - 1_000,
+      updatedAt: now,
+    });
+    const second = makeRecord({
+      clientRuntimeId: 'runtime-hydrated-tie-b',
+      clientId: 'codex',
+      supervisorSessionId: 'sup-hydrated-tie-b',
+      adapterSessionId: 'native-hydrated-tie',
+      createdAt: now - 1_000,
+      updatedAt: now,
+    });
+    for (const records of [
+      [first, second],
+      [second, first],
+    ]) {
+      const hydrated = new RuntimeMap();
+      for (const record of records) {
+        hydrated.setFromStorage(record, now, 24 * 60 * 60 * 1_000);
+      }
+      expect(hydrated.findByEvidence(undefined, undefined, 'native-hydrated-tie', 'codex')?.clientRuntimeId).toBe(
+        second.clientRuntimeId,
+      );
+    }
   });
 
   it('clears the supervisorSessionId secondary index after deleting the record', () => {

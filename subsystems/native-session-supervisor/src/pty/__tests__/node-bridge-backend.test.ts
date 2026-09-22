@@ -4,8 +4,12 @@
  */
 
 import { PassThrough } from 'node:stream';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NodeBridgeBackend } from '../node-bridge-backend.js';
+
+const actualChildProcess = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+const execFileAsync = promisify(actualChildProcess.execFile);
 
 // ── child_process mock (used by the spawnViaNode code path) ───────────────────
 
@@ -17,13 +21,23 @@ vi.mock('node:child_process', () => ({
 
 // ── Fake Bun bridge process ───────────────────────────────────────────────────
 
+interface FakeBridgeCommand {
+  readonly id: number;
+  readonly cmd: string;
+  readonly options?: { readonly env?: Record<string, string>; readonly inheritEnvironment?: boolean };
+}
+
 interface FakeBunProcess {
-  readonly stdin: WritableStream<Uint8Array>;
+  readonly stdin: {
+    write(chunk: string): number;
+    flush(): number;
+  };
   readonly stdout: ReadableStream<Uint8Array>;
   readonly kill: ReturnType<typeof vi.fn>;
   readonly flushSpawned: () => void;
   readonly emitEvent: (event: Record<string, unknown>) => void;
-  readonly commands: Array<{ id: number; cmd: string }>;
+  readonly emitEvents: (events: readonly Record<string, unknown>[]) => void;
+  readonly commands: FakeBridgeCommand[];
 }
 
 interface FakeBunGlobal {
@@ -33,14 +47,14 @@ interface FakeBunGlobal {
 
 function createBridgeProcess(autoRespondSpawn = true): FakeBunProcess {
   const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
   let stdoutController: ReadableStreamDefaultController<Uint8Array> | null = null;
   let pendingSpawnId: number | null = null;
-  const commands: Array<{ id: number; cmd: string }> = [];
+  const commands: FakeBridgeCommand[] = [];
 
-  const emitEvent = (event: Record<string, unknown>) => {
-    stdoutController?.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+  const emitEvents = (events: readonly Record<string, unknown>[]) => {
+    stdoutController?.enqueue(encoder.encode(events.map((event) => JSON.stringify(event)).join('\n') + '\n'));
   };
+  const emitEvent = (event: Record<string, unknown>) => emitEvents([event]);
 
   const flushSpawned = () => {
     if (pendingSpawnId === null) {
@@ -63,10 +77,9 @@ function createBridgeProcess(autoRespondSpawn = true): FakeBunProcess {
     },
   });
 
-  const stdin = new WritableStream<Uint8Array>({
-    write(chunk) {
-      const text = decoder.decode(chunk);
-      const command = JSON.parse(text.trim()) as { id: number; cmd: string };
+  const stdin = {
+    write(chunk: string): number {
+      const command = JSON.parse(chunk.trim()) as FakeBridgeCommand;
       commands.push(command);
 
       if (command.cmd === 'spawn') {
@@ -75,8 +88,10 @@ function createBridgeProcess(autoRespondSpawn = true): FakeBunProcess {
           flushSpawned();
         }
       }
+      return chunk.length;
     },
-  });
+    flush: vi.fn(() => 0),
+  };
 
   return {
     stdin,
@@ -84,6 +99,7 @@ function createBridgeProcess(autoRespondSpawn = true): FakeBunProcess {
     kill: vi.fn(),
     flushSpawned,
     emitEvent,
+    emitEvents,
     commands,
   };
 }
@@ -99,6 +115,15 @@ function setBunGlobal(bun: FakeBunGlobal): void {
 
 function clearBunGlobal(): void {
   delete (globalThis as Record<string, unknown>)['Bun'];
+}
+
+async function runBunScript(script: string): Promise<string> {
+  const { stdout } = await execFileAsync('bun', ['--eval', script], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    timeout: 5_000,
+  });
+  return stdout;
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +202,41 @@ describe('NodeBridgeBackend', () => {
     await backend.dispose();
   });
 
+  it('replays bridge output and exit that arrive before listeners are registered', async () => {
+    const process = createBridgeProcess(false);
+    const spawn = vi.fn().mockReturnValue(process);
+    setBunGlobal({ spawn });
+
+    const backend = new NodeBridgeBackend();
+    const pendingPty = backend.spawn('/bin/bash', [], {});
+    await vi.waitFor(() => {
+      expect(process.commands).toHaveLength(1);
+    });
+
+    const id = process.commands[0]!.id;
+    process.emitEvents([
+      { id, event: 'spawned', ptyId: 1, pid: 321, process: '/bin/bash' },
+      { ptyId: 1, event: 'data', data: Buffer.from('pre-listener output', 'latin1').toString('base64') },
+      { ptyId: 1, event: 'exit', exitCode: 7, signal: 0 },
+    ]);
+
+    const pty = await pendingPty;
+    const data = vi.fn();
+    const exit = vi.fn();
+    pty.onData(data);
+    pty.onExit(exit);
+
+    expect(data).toHaveBeenCalledExactlyOnceWith('pre-listener output');
+    expect(exit).toHaveBeenCalledExactlyOnceWith({ exitCode: 7 });
+
+    process.emitEvents([{ ptyId: 1, event: 'data', data: Buffer.from('ignored', 'latin1').toString('base64') }]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(data).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledOnce();
+
+    await backend.dispose();
+  });
+
   it('snapshots terminal dimensions before the async spawn result resolves', async () => {
     const process = createBridgeProcess(false);
     const spawn = vi.fn().mockReturnValue(process);
@@ -198,6 +258,40 @@ describe('NodeBridgeBackend', () => {
     expect(pty.cols).toBe(90);
     expect(pty.rows).toBe(30);
 
+    await backend.dispose();
+  });
+
+  it('flushes each command written to the Bun bridge stdin', async () => {
+    const process = createBridgeProcess();
+    const spawn = vi.fn().mockReturnValue(process);
+    setBunGlobal({ spawn });
+
+    const backend = new NodeBridgeBackend();
+    const pty = await backend.spawn('/bin/bash', [], {});
+    pty.write('echo hello');
+
+    expect(process.stdin.flush).toHaveBeenCalledTimes(2);
+    await backend.dispose();
+  });
+
+  it('forwards explicit environment inheritance to the bridge process', async () => {
+    const process = createBridgeProcess();
+    const spawn = vi.fn().mockReturnValue(process);
+    setBunGlobal({ spawn });
+
+    const backend = new NodeBridgeBackend();
+    await backend.spawn('/bin/bash', [], {
+      env: { EXPLICIT_PTY_ENV: 'explicit-value' },
+      inheritEnvironment: true,
+    });
+
+    expect(process.commands[0]).toEqual({
+      id: 1,
+      cmd: 'spawn',
+      file: '/bin/bash',
+      args: [],
+      options: { env: { EXPLICIT_PTY_ENV: 'explicit-value' }, inheritEnvironment: true },
+    });
     await backend.dispose();
   });
 
@@ -231,6 +325,35 @@ describe('NodeBridgeBackend', () => {
     );
     expect(spawn).not.toHaveBeenCalled();
   });
+
+  it('spawns a PTY through a real Bun FileSink bridge', async () => {
+    const bridgeUrl = new URL('../node-bridge-backend.ts', import.meta.url).href;
+    const output = await runBunScript(`
+      import { NodeBridgeBackend } from ${JSON.stringify(bridgeUrl)};
+      const backend = new NodeBridgeBackend();
+      try {
+        const pty = await backend.spawn('/bin/echo', ['bun-bridge-smoke'], {});
+        let received = '';
+        const exitCode = await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('PTY did not exit')), 3_000);
+          pty.onData((data) => { received += data; });
+          pty.onExit(({ exitCode }) => {
+            clearTimeout(timeout);
+            resolve(exitCode);
+          });
+        });
+        if (!received.includes('bun-bridge-smoke') || exitCode !== 0) {
+          throw new Error('Bun bridge PTY output or exit did not match');
+        } else {
+          console.log('bun-bridge-smoke');
+        }
+      } finally {
+        await backend.dispose();
+      }
+    `);
+
+    expect(output).toContain('bun-bridge-smoke');
+  }, 10_000);
 
   // ── spawnViaNode code path (Bun global absent) ──────────────────────────────
 

@@ -6,6 +6,8 @@
  * (`launch`, `attach`, `stop`, `status`) without spawning real processes.
  */
 
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
@@ -18,6 +20,8 @@ import { registerDrizzleSupervisorRuntimeStorage } from '../storage/drizzle-hand
 import { SupervisorRuntimeStorageSubjects } from '../storage/namespace.js';
 import type { IPtyBackend, IPtyProcess, IPtySpawnOptions } from '../pty/types.js';
 import { createTestDb } from './helpers/create-test-db.js';
+
+const execFileAsync = promisify(execFile);
 
 // ---------------------------------------------------------------------------
 // Mock PTY backend
@@ -214,14 +218,21 @@ describe('SupervisorService', () => {
       expect(service.getRegistry().getByAdapterSessionId('adp_xyz')?.supervisorSessionId).toBe(supervisorSessionId);
     });
 
-    it('materializes a client profile into launch env when requested', async () => {
+    it('materializes config, preserves the request/config merge, and stamps the supervisor session identity', async () => {
+      const inheritedEnvKey = 'MAKAIO_SUPERVISOR_TEST_HOST_ONLY';
+      const inheritedEnvValue = process.env[inheritedEnvKey];
       let observedSessionConfigRequest: unknown;
       const cleanups = [
         MakaioBus.on(ClientSubjects.sessionConfig.create, (ctx) => {
           observedSessionConfigRequest = ctx.payload;
           ctx.setResult({
             sessionDir: '/tmp/makaio/clients/claude-code/sessions/sess_profile',
-            env: { CLAUDE_CONFIG_DIR: '/tmp/makaio/clients/claude-code/sessions/sess_profile' },
+            env: {
+              CLAUDE_CONFIG_DIR: '/tmp/makaio/clients/claude-code/sessions/sess_profile',
+              CONFIG_ONLY: 'config',
+              MERGE_PRECEDENCE: 'config',
+              MAKAIO_SUPERVISOR_SESSION_ID: 'config-spoofed-id',
+            },
             authMaterialized: false,
           });
         }),
@@ -231,6 +242,7 @@ describe('SupervisorService', () => {
       ];
 
       let launchedSupervisorSessionId: string;
+      process.env[inheritedEnvKey] = 'host-only';
       try {
         ({ supervisorSessionId: launchedSupervisorSessionId } = await MakaioBus.request(
           NativeSessionSupervisorSubjects.launch,
@@ -239,7 +251,11 @@ describe('SupervisorService', () => {
             cwd: '/home/user',
             command: '/bin/bash',
             args: [],
-            env: { EXISTING: '1' },
+            env: {
+              REQUEST_ONLY: 'request',
+              MERGE_PRECEDENCE: 'request',
+              MAKAIO_SUPERVISOR_SESSION_ID: 'request-spoofed-id',
+            },
             sessionId: 'sess_profile',
             clientProfileName: 'work',
           },
@@ -249,6 +265,11 @@ describe('SupervisorService', () => {
           supervisorSessionId: launchedSupervisorSessionId,
         });
       } finally {
+        if (inheritedEnvValue === undefined) {
+          delete process.env[inheritedEnvKey];
+        } else {
+          process.env[inheritedEnvKey] = inheritedEnvValue;
+        }
         for (const cleanup of cleanups) cleanup();
       }
 
@@ -258,9 +279,23 @@ describe('SupervisorService', () => {
         ownerSessionId: 'sess_profile',
         profileName: 'work',
       });
-      expect(getLastSpawnOptions()?.env).toEqual({
-        EXISTING: '1',
+      expect(getLastSpawnOptions()).toEqual({
+        cwd: '/home/user',
+        inheritEnvironment: true,
+        env: {
+          REQUEST_ONLY: 'request',
+          CONFIG_ONLY: 'config',
+          MERGE_PRECEDENCE: 'config',
+          CLAUDE_CONFIG_DIR: '/tmp/makaio/clients/claude-code/sessions/sess_profile',
+          MAKAIO_SUPERVISOR_SESSION_ID: launchedSupervisorSessionId,
+        },
+      });
+      expect(service.getRegistry().getBySupervisorId(launchedSupervisorSessionId)?.env).toEqual({
+        REQUEST_ONLY: 'request',
+        CONFIG_ONLY: 'config',
+        MERGE_PRECEDENCE: 'config',
         CLAUDE_CONFIG_DIR: '/tmp/makaio/clients/claude-code/sessions/sess_profile',
+        MAKAIO_SUPERVISOR_SESSION_ID: 'config-spoofed-id',
       });
     });
 
@@ -821,6 +856,49 @@ describe('SupervisorService', () => {
 });
 
 describe('LazyNodePtyBackend', () => {
+  it('uses the bridge backend under Bun to stream output, report exit, and dispose', async () => {
+    const sentinel = 'lazy-node-pty-bun-sentinel';
+    const supervisorServiceUrl = new URL('../supervisor-service.ts', import.meta.url).href;
+    const script = `
+      import { LazyNodePtyBackend } from ${JSON.stringify(supervisorServiceUrl)};
+
+      const backend = new LazyNodePtyBackend();
+      const ptyProcess = await backend.spawn('/bin/echo', [${JSON.stringify(sentinel)}], {});
+      let output = '';
+      let disposed = false;
+
+      try {
+        const exitCode = await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('PTY did not exit')), 5_000);
+          ptyProcess.onData((data) => {
+            output += data;
+          });
+          ptyProcess.onExit(({ exitCode }) => {
+            clearTimeout(timeout);
+            resolve(exitCode);
+          });
+        });
+        await backend.dispose();
+        disposed = true;
+        process.stdout.write(JSON.stringify({ output, exitCode, disposed }));
+      } finally {
+        if (!disposed) await backend.dispose();
+      }
+    `;
+
+    const { stdout } = await execFileAsync('bun', ['--eval', script], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      timeout: 10_000,
+    });
+
+    expect(JSON.parse(stdout)).toEqual({
+      output: expect.stringContaining(sentinel),
+      exitCode: 0,
+      disposed: true,
+    });
+  }, 15_000);
+
   it('single-flights concurrent backend initialization', async () => {
     const process = createMockProcess(12345);
     const backend: IPtyBackend = {

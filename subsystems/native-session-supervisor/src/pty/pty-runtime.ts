@@ -222,6 +222,17 @@ export class PtyRuntime {
     }
 
     const now = Date.now();
+    const session: PtySession = {
+      supervisorSessionId,
+      pty: ptyProcess,
+      disposables: [],
+      outputBuffer: new OutputBuffer(),
+      activeSubscriptions: 0,
+      lastSeq: 0,
+      lastActivity: now,
+      disconnectedAt: now,
+    };
+    this.sessions.set(supervisorSessionId, session);
 
     const onDataDisposable = ptyProcess.onData((data) => {
       const session = this.sessions.get(supervisorSessionId);
@@ -235,6 +246,11 @@ export class PtyRuntime {
         this.handlers.onOutput({ supervisorSessionId, seq: session.lastSeq, data });
       }
     });
+    if (this.sessions.get(supervisorSessionId) === session) {
+      session.disposables.push(onDataDisposable);
+    } else {
+      onDataDisposable.dispose();
+    }
 
     const onExitDisposable = ptyProcess.onExit(({ exitCode, signal }) => {
       const session = this.sessions.get(supervisorSessionId);
@@ -243,17 +259,11 @@ export class PtyRuntime {
 
       this.handlers.onExit({ supervisorSessionId, exitCode, signal });
     });
-
-    this.sessions.set(supervisorSessionId, {
-      supervisorSessionId,
-      pty: ptyProcess,
-      disposables: [onDataDisposable, onExitDisposable],
-      outputBuffer: new OutputBuffer(),
-      activeSubscriptions: 0,
-      lastSeq: 0,
-      lastActivity: now,
-      disconnectedAt: now,
-    });
+    if (this.sessions.get(supervisorSessionId) === session) {
+      session.disposables.push(onExitDisposable);
+    } else {
+      onExitDisposable.dispose();
+    }
 
     return { pid: ptyProcess.pid, processName: ptyProcess.process };
   }
