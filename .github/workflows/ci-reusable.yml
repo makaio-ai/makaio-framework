@@ -52,6 +52,9 @@ on:
       docs_only:
         description: 'Whether the PR only changes documentation files.'
         value: ${{ jobs.cache.outputs.docs_only }}
+      requires_validation:
+        description: 'Whether the PR touches generated subject docs or the package overview, which the validation job must check even on a docs-only PR.'
+        value: ${{ jobs.cache.outputs.requires_validation }}
 
 permissions:
   contents: read
@@ -109,6 +112,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       docs_only: ${{ steps.changes.outputs.docs_only }}
+      requires_validation: ${{ steps.changes.outputs.requires_validation }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         if: github.event_name == 'pull_request' || inputs.base_sha != ''
@@ -137,29 +141,41 @@ jobs:
           git fetch --no-tags origin "$base"
           git fetch --no-tags origin "refs/pull/${pr_number}/head"
 
-          mapfile -t files < <(git diff --name-only "$base...FETCH_HEAD")
+          # --no-renames: classification needs both sides of a rename visible as
+          # plain delete+add paths. With rename detection on, a page renamed away
+          # from docs/subjects/ would only ever show its new (non-subject) path,
+          # so its removal from the required subject set would never be seen.
+          mapfile -t files < <(git diff --no-renames --name-only "$base...FETCH_HEAD")
           docs_only=false
+          requires_validation=false
           if ((${#files[@]} > 0)); then
             docs_only=true
             for file in "${files[@]}"; do
-              if [ "$file" = "docs/package-overview.md" ]; then
-                docs_only=false
-                break
-              fi
-
               case "$file" in
+                docs/package-overview.md)
+                  requires_validation=true
+                  ;;
+                docs/subjects/*)
+                  # Generated pages are validated for freshness. Touching them still
+                  # counts as docs-only for the cache/test/e2e skip, but the
+                  # validation job (which runs the freshness check) must run anyway.
+                  requires_validation=true
+                  ;;
                 *.md|docs/*|.changeset/*.md) ;;
                 *)
                   docs_only=false
-                  break
                   ;;
               esac
             done
           fi
 
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
+          echo "requires_validation=$requires_validation" >> "$GITHUB_OUTPUT"
           if [ "$docs_only" = "true" ]; then
             echo "Documentation-only PR; skipping CI."
+          fi
+          if [ "$requires_validation" = "true" ]; then
+            echo "Subject docs or package overview changed; validation job runs even if docs-only."
           fi
 
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -228,7 +244,9 @@ jobs:
   validation:
     name: Validation
     needs: cache
-    if: needs.cache.outputs.docs_only != 'true'
+    if: >-
+      needs.cache.outputs.docs_only != 'true' ||
+      needs.cache.outputs.requires_validation == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -291,6 +309,9 @@ jobs:
 
       - name: Check SDK codegen drift
         run: bun ${{ inputs.framework_root }}/scripts/generate-sdk-bindings.ts --check
+
+      - name: Check subject docs freshness
+        run: bun ${{ inputs.framework_root }}/scripts/validate-subject-docs.ts
 
       - name: Check CI shard coverage
         run: bun ${{ inputs.framework_root }}/scripts/validate-ci-test-shards.ts

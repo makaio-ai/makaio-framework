@@ -9,13 +9,6 @@
  */
 
 import { runGenerateDocsCli } from './lib/namespace-analyzer/cli.js';
+import { SUBJECT_DOCS_CONFIG } from './lib/subject-docs-surface.js';
 
-runGenerateDocsCli({
-  title: 'Bus Subject Namespaces (Framework)',
-  sourceRoot: '',
-  includeTiers: ['framework', 'extension'],
-  includeHostCallsites: false,
-  sourceBaseUrl: 'https://github.com/makaio-ai/makaio-framework/blob/{branch}',
-  frontmatter: true,
-  indexFileName: 'index.md',
-});
+runGenerateDocsCli(SUBJECT_DOCS_CONFIG);
