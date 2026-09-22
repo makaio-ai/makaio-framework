@@ -123,6 +123,91 @@ describe('createHttpMcpHandler', () => {
     expect(capturedSessionIds).toContain(targetSessionId);
   });
 
+  it('awaits asynchronous context resolution before dispatching a tool call', async () => {
+    const bus = createBusInstance();
+    const resolution = Promise.withResolvers<ToolExecutionContextOverrides | undefined>();
+    const resolverEntered = Promise.withResolvers<void>();
+    const capturedContexts: Array<ToolExecutionContextOverrides | undefined> = [];
+    const cleanupList = bus.on(ToolSubjects.list, (ctx) => {
+      ctx.setResult({
+        tools: [{ name: 'ping', description: 'Ping tool', toolsetName: 'test', inputSchema: { type: 'object' } }],
+        toolsets: [],
+      });
+    });
+    const cleanupExecute = bus.on(ToolSubjects.execute, (ctx) => {
+      capturedContexts.push(ctx.payload.contextOverrides);
+      ctx.setResult({ success: true, data: {} });
+    });
+    const handle = await createHttpMcpHandler(bus, {
+      resolveContextOverrides: () => {
+        resolverEntered.resolve();
+        return resolution.promise;
+      },
+    });
+    const { port, stop } = await mountHandler(handle.handler);
+
+    cleanups.push(async () => {
+      resolution.resolve(undefined);
+      await handle.close();
+      await stop();
+      cleanupExecute();
+      cleanupList();
+    });
+
+    const { client, transport } = await createClient(port);
+    try {
+      const toolCall = client.callTool({ name: 'ping', arguments: {} });
+      await resolverEntered.promise;
+      expect(capturedContexts).toEqual([]);
+
+      resolution.resolve({ cwd: '/resolved-context' });
+      await toolCall;
+
+      expect(capturedContexts).toEqual([expect.objectContaining({ cwd: '/resolved-context' })]);
+    } finally {
+      resolution.resolve(undefined);
+      await client.close();
+      await transport.close();
+    }
+  });
+
+  it('does not dispatch a tool call when asynchronous context resolution rejects', async () => {
+    const bus = createBusInstance();
+    const execute = vi.fn();
+    const cleanupList = bus.on(ToolSubjects.list, (ctx) => {
+      ctx.setResult({
+        tools: [{ name: 'ping', description: 'Ping tool', toolsetName: 'test', inputSchema: { type: 'object' } }],
+        toolsets: [],
+      });
+    });
+    const cleanupExecute = bus.on(ToolSubjects.execute, (ctx) => {
+      execute();
+      ctx.setResult({ success: true, data: {} });
+    });
+    const handle = await createHttpMcpHandler(bus, {
+      resolveContextOverrides: async () => {
+        throw new Error('Context resolution failed');
+      },
+    });
+    const { port, stop } = await mountHandler(handle.handler);
+
+    cleanups.push(async () => {
+      await handle.close();
+      await stop();
+      cleanupExecute();
+      cleanupList();
+    });
+
+    const { client, transport } = await createClient(port);
+    try {
+      await expect(client.callTool({ name: 'ping', arguments: {} })).rejects.toThrow();
+      expect(execute).not.toHaveBeenCalled();
+    } finally {
+      await client.close();
+      await transport.close();
+    }
+  });
+
   it('close() is idempotent — two awaited calls do not throw', async () => {
     const bus = createBusInstance();
     const cleanup = registerEmptyToolList(bus);

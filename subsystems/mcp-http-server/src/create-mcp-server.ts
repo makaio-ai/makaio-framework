@@ -209,7 +209,7 @@ export async function createMcpServer(bus: IMakaioBus, sessionId: string, option
     }
 
     // Unknown sessions use process defaults so standalone MCP servers remain usable.
-    const sessionOverrides = resolveContextOverrides?.(adapterSessionId);
+    const sessionOverrides = await resolveContextOverrides?.(adapterSessionId);
     const contextOverrides = buildToolExecutionContextOverrides(sessionOverrides, sessionId);
 
     const executePayload = {
