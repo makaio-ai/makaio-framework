@@ -12,7 +12,7 @@ next: false
 | Metric | Count |
 |--------|-------|
 | Namespaces | 106 |
-| Subjects | 1018 (407 events, 611 RPCs) |
+| Subjects | 1019 (407 events, 612 RPCs) |
 | framework | 101 |
 | extension | 5 |
 | kind: bus | 74 |
