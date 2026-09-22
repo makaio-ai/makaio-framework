@@ -10,13 +10,13 @@
  *     "options": { "cwd"?: <string>, "name"?: <string>, "cols"?: <number>,
  *                  "rows"?: <number>, "env"?: <Record<string,string>>,
  *                  "inheritEnvironment"?: <boolean> } }
- *   { "id": <number>, "cmd": "input",  "ptyId": <number>, "data": <base64> }
+ *   { "id": <number>, "cmd": "input",  "ptyId": <number>, "data": <UTF-8 base64> }
  *   { "id": <number>, "cmd": "resize", "ptyId": <number>, "cols": <number>, "rows": <number> }
  *   { "id": <number>, "cmd": "kill",   "ptyId": <number>, "signal"?: <string> }
  *
  * Protocol (stdout, bridge → Bun):
  *   { "id": <number>, "ptyId": <number>, "event": "spawned", "pid": <number>, "process": <string> }
- *   { "ptyId": <number>, "event": "data",  "data": <base64> }
+ *   { "ptyId": <number>, "event": "data",  "data": <UTF-8 base64> }
  *   { "ptyId": <number>, "event": "exit",  "exitCode": <number>, "signal": <number> }
  *   { "id": <number>,   "event": "error", "message": <string> }
  */
@@ -99,10 +99,9 @@ function handleSpawn(cmd) {
 
   emit({ id, ptyId, event: 'spawned', pid: proc.pid, process: proc.process });
 
-  proc.onData((raw) => {
-    // node-pty exposes terminal bytes as a JS "binary string"; latin1 preserves
-    // the 1:1 byte mapping before we base64-wrap it for the JSON transport.
-    emit({ ptyId, event: 'data', data: Buffer.from(raw, 'latin1').toString('base64') });
+  proc.onData((data) => {
+    // The backend contract carries terminal output as JavaScript text strings.
+    emit({ ptyId, event: 'data', data: Buffer.from(data, 'utf8').toString('base64') });
   });
 
   proc.onExit(({ exitCode, signal }) => {
@@ -123,8 +122,8 @@ function handleInput(cmd) {
     emit({ id: cmd.id, event: 'error', message: `unknown ptyId: ${cmd.ptyId}` });
     return;
   }
-  // Decode back from the byte-preserving latin1 string used on the backend side.
-  const decoded = Buffer.from(cmd.data, 'base64').toString('latin1');
+  // Input originates as a JavaScript string, encoded as UTF-8 before base64 transport.
+  const decoded = Buffer.from(cmd.data, 'base64').toString('utf8');
   proc.write(decoded);
 }
 

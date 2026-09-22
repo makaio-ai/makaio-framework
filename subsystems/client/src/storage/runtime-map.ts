@@ -47,6 +47,9 @@ export class RuntimeMap {
   private readonly bySupervisorSessionId = new Map<string, string>();
   private readonly byPidClientId = new Map<string, string>();
   private readonly byAdapterSessionClientId = new Map<string, string>();
+  private readonly supervisorSessionCandidates = new Map<string, Set<string>>();
+  private readonly pidClientCandidates = new Map<string, Set<string>>();
+  private readonly adapterSessionClientCandidates = new Map<string, Set<string>>();
 
   /**
    * In-memory provenance set tracking `(adapterSessionId, clientId)` pairs
@@ -97,6 +100,10 @@ export class RuntimeMap {
    * @param staleThresholdMs - Maximum age in ms for pid/adapter indexes
    */
   public setFromStorage(record: ClientRuntimeRecord, now: number, staleThresholdMs: number): void {
+    const prior = this.records.get(record.clientRuntimeId);
+    if (prior) {
+      this.removeIndexEntries(prior);
+    }
     this.records.set(record.clientRuntimeId, record);
     const fresh = now - record.updatedAt <= staleThresholdMs;
     this.addIndexEntries(record, fresh);
@@ -191,6 +198,9 @@ export class RuntimeMap {
     this.bySupervisorSessionId.clear();
     this.byPidClientId.clear();
     this.byAdapterSessionClientId.clear();
+    this.supervisorSessionCandidates.clear();
+    this.pidClientCandidates.clear();
+    this.adapterSessionClientCandidates.clear();
     this.adapterOwnedSessions.clear();
   }
 
@@ -241,15 +251,26 @@ export class RuntimeMap {
 
   private addIndexEntries(record: ClientRuntimeRecord, includeProcessEvidence: boolean): void {
     if (record.supervisorSessionId !== undefined) {
-      this.setIndexEntry(this.bySupervisorSessionId, record.supervisorSessionId, record);
+      this.setIndexEntry(
+        this.bySupervisorSessionId,
+        this.supervisorSessionCandidates,
+        record.supervisorSessionId,
+        record,
+      );
     }
     if (includeProcessEvidence) {
       if (record.pid !== undefined) {
-        this.setIndexEntry(this.byPidClientId, pidClientKey(record.pid, record.clientId), record);
+        this.setIndexEntry(
+          this.byPidClientId,
+          this.pidClientCandidates,
+          pidClientKey(record.pid, record.clientId),
+          record,
+        );
       }
       if (record.adapterSessionId !== undefined) {
         this.setIndexEntry(
           this.byAdapterSessionClientId,
+          this.adapterSessionClientCandidates,
           adapterSessionClientKey(record.adapterSessionId, record.clientId),
           record,
         );
@@ -259,14 +280,25 @@ export class RuntimeMap {
 
   private removeIndexEntries(record: ClientRuntimeRecord): void {
     if (record.supervisorSessionId !== undefined) {
-      this.deleteIndexEntry(this.bySupervisorSessionId, record.supervisorSessionId, record.clientRuntimeId);
+      this.deleteIndexEntry(
+        this.bySupervisorSessionId,
+        this.supervisorSessionCandidates,
+        record.supervisorSessionId,
+        record.clientRuntimeId,
+      );
     }
     if (record.pid !== undefined) {
-      this.deleteIndexEntry(this.byPidClientId, pidClientKey(record.pid, record.clientId), record.clientRuntimeId);
+      this.deleteIndexEntry(
+        this.byPidClientId,
+        this.pidClientCandidates,
+        pidClientKey(record.pid, record.clientId),
+        record.clientRuntimeId,
+      );
     }
     if (record.adapterSessionId !== undefined) {
       this.deleteIndexEntry(
         this.byAdapterSessionClientId,
+        this.adapterSessionClientCandidates,
         adapterSessionClientKey(record.adapterSessionId, record.clientId),
         record.clientRuntimeId,
       );
@@ -292,14 +324,32 @@ export class RuntimeMap {
   }
 
   /**
-   * Remove an index entry only when this record currently owns it.
+   * Remove an eligible index candidate and restore the best remaining owner.
    * @param index - Secondary index to update
+   * @param candidates - Eligible runtime IDs for each secondary index key
    * @param key - Composite or direct evidence key
    * @param clientRuntimeId - Runtime that is being removed or reindexed
    */
-  private deleteIndexEntry(index: Map<string, string>, key: string, clientRuntimeId: string): void {
+  private deleteIndexEntry(
+    index: Map<string, string>,
+    candidates: Map<string, Set<string>>,
+    key: string,
+    clientRuntimeId: string,
+  ): void {
+    const keyCandidates = candidates.get(key);
+    if (!keyCandidates?.delete(clientRuntimeId)) {
+      return;
+    }
+    if (keyCandidates.size === 0) {
+      candidates.delete(key);
+    }
     if (index.get(key) === clientRuntimeId) {
-      index.delete(key);
+      const replacement = this.findBestIndexOwner(keyCandidates);
+      if (replacement === undefined) {
+        index.delete(key);
+      } else {
+        index.set(key, replacement.clientRuntimeId);
+      }
     }
   }
 
@@ -310,15 +360,44 @@ export class RuntimeMap {
    * runtime ID only as a deterministic tie-break; they do not establish the
    * actual order in which native processes were created.
    * @param index - Secondary index to update
+   * @param candidates - Eligible runtime IDs for each secondary index key
    * @param key - Composite or direct evidence key
    * @param candidate - Runtime proposed as the index owner
    */
-  private setIndexEntry(index: Map<string, string>, key: string, candidate: ClientRuntimeRecord): void {
+  private setIndexEntry(
+    index: Map<string, string>,
+    candidates: Map<string, Set<string>>,
+    key: string,
+    candidate: ClientRuntimeRecord,
+  ): void {
+    let keyCandidates = candidates.get(key);
+    if (keyCandidates === undefined) {
+      keyCandidates = new Set<string>();
+      candidates.set(key, keyCandidates);
+    }
+    keyCandidates.add(candidate.clientRuntimeId);
     const currentOwnerId = index.get(key);
-    const currentOwner = currentOwnerId === undefined ? undefined : this.records.get(currentOwnerId);
+    const currentOwner =
+      currentOwnerId === undefined || !keyCandidates.has(currentOwnerId) ? undefined : this.records.get(currentOwnerId);
     if (currentOwner === undefined || this.isNewerIndexOwner(candidate, currentOwner)) {
       index.set(key, candidate.clientRuntimeId);
     }
+  }
+
+  /**
+   * Select the deterministic owner among currently eligible runtime IDs.
+   * @param candidates - Eligible runtime IDs for one secondary index key
+   * @returns Best currently stored record, or `undefined` when none remains
+   */
+  private findBestIndexOwner(candidates: ReadonlySet<string>): ClientRuntimeRecord | undefined {
+    let best: ClientRuntimeRecord | undefined;
+    for (const clientRuntimeId of candidates) {
+      const candidate = this.records.get(clientRuntimeId);
+      if (candidate !== undefined && (best === undefined || this.isNewerIndexOwner(candidate, best))) {
+        best = candidate;
+      }
+    }
+    return best;
   }
 
   /**
