@@ -54,7 +54,7 @@ next: false
 | [`bus:lifecycle`](./bus-lifecycle.md) | bus | 2 | 2E / 0R |
 | [`canonicalModel`](./canonicalmodel.md) | bus | 1 | 0E / 1R |
 | [`capability`](./capability.md) | bus | 4 | 2E / 2R |
-| [`client`](./client.md) | bus | 41 | 15E / 26R |
+| [`client`](./client.md) | bus | 42 | 15E / 27R |
 | [`client-binary:storage`](./client-binary-storage.md) | bus | 11 | 0E / 11R |
 | [`client-profile:storage`](./client-profile-storage.md) | bus | 7 | 0E / 7R |
 | [`client-runtime:storage`](./client-runtime-storage.md) | bus | 2 | 0E / 2R |

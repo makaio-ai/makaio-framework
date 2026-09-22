@@ -81,6 +81,14 @@ export class ClientRuntimeService extends BaseService {
       ctx.setResult({ results });
     });
     this.registerHandler(ClientSubjects.runtime.observe, (ctx) => this.handleRuntimeObserve(ctx));
+    this.registerHandler(ClientSubjects.runtime.resolveBySupervisorSessionId, (ctx) => {
+      ctx.setResult({
+        runtime: this.runtimeRegistry.resolveBySupervisorSessionId(
+          ctx.payload.clientId,
+          ctx.payload.supervisorSessionId,
+        ),
+      });
+    });
     this.registerHandler(ClientSubjects.runtime.isAdapterManaged, (ctx) => {
       const { adapterSessionId, clientId } = ctx.payload;
       ctx.setResult({

@@ -105,6 +105,15 @@ export const ClientRuntimeObserveSchema = {
       source: ClientRuntimeSourceSchema,
       /** Unix epoch timestamp in milliseconds when the signal was captured. */
       observedAt: EpochMillisecondsSchema,
+      /**
+       * Explicit lifecycle transition reported by an internal native hook.
+       *
+       * A Codex root `SessionStart` with source `clear` starts a new native
+       * conversation in the already supervised process. This request-only
+       * marker records the hook provenance needed to replace that process's adapter session ID
+       * without allowing ordinary observations to rekey it.
+       */
+      adapterSessionTransition: z.literal('root-clear').optional(),
     })
     .merge(ClientRuntimeEvidenceBaseSchema)
     .refine((v) => v.supervisorSessionId !== undefined || v.pid !== undefined || v.adapterSessionId !== undefined, {
@@ -122,6 +131,44 @@ export const ClientRuntimeObserveSchema = {
 
 export type ClientRuntimeObserveRequest = z.infer<typeof ClientRuntimeObserveSchema.request>;
 export type ClientRuntimeObserveResponse = z.infer<typeof ClientRuntimeObserveSchema.response>;
+
+/**
+ * Request and response schemas for `client.runtime.resolveBySupervisorSessionId`.
+ *
+ * Reads the correlation recorded for a supervisor session ID and client ID.
+ * This is not a current process liveness check and does not authorize access
+ * to the runtime.
+ */
+export const ClientRuntimeResolveBySupervisorSessionIdSchema = {
+  request: z.strictObject({
+    /** Stable client identifier associated with the runtime. */
+    clientId: NonEmptyStringSchema,
+    /** Supervisor-assigned session ID used to resolve recorded correlation. */
+    supervisorSessionId: NonEmptyStringSchema,
+  }),
+  response: z.strictObject({
+    /** Recorded identity correlation, or `null` when no matching runtime exists. */
+    runtime: z
+      .strictObject({
+        /** Stable client identifier associated with the runtime. */
+        clientId: NonEmptyStringSchema,
+        /** Supervisor-assigned session ID for the runtime. */
+        supervisorSessionId: NonEmptyStringSchema,
+        /** Adapter-assigned session ID, when the runtime reported one. */
+        adapterSessionId: NonEmptyStringSchema.optional(),
+        /** Framework session ID, when the runtime was correlated to one. */
+        sessionId: NonEmptyStringSchema.optional(),
+      })
+      .nullable(),
+  }),
+};
+
+export type ClientRuntimeResolveBySupervisorSessionIdRequest = z.infer<
+  typeof ClientRuntimeResolveBySupervisorSessionIdSchema.request
+>;
+export type ClientRuntimeResolveBySupervisorSessionIdResponse = z.infer<
+  typeof ClientRuntimeResolveBySupervisorSessionIdSchema.response
+>;
 
 /**
  * Payload for `client.runtime.started`.

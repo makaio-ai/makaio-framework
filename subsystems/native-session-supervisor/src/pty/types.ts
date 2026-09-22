@@ -22,6 +22,14 @@ export interface IPtySpawnOptions {
   cwd?: string;
   /** Environment variables for the spawned process. */
   env?: Record<string, string>;
+  /**
+   * Whether `env` contains overrides to merge with the host environment.
+   * When omitted, a supplied `env` is the final environment. Backends that
+   * cannot safely merge host values retain their own inherited environment and
+   * apply only explicit values. The tmux backend retains its server environment
+   * because copying host values into tmux `-e` arguments could expose them.
+   */
+  inheritEnvironment?: boolean;
   /** Initial column width. */
   cols?: number;
   /** Initial row height. */

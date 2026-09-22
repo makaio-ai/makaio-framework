@@ -76,18 +76,39 @@ function toSnapshot(runtime: SupervisorRuntime): SupervisorRuntimeSnapshot {
 }
 
 /**
- * Lazy production backend that avoids loading the `node-pty` native addon
- * until a Node.js host actually spawns a PTY.
+ * Build the environment passed to a supervised process.
+ * @param sessionConfigEnv - Request and session-config environment values.
+ * @param supervisorSessionId - Supervisor-assigned runtime identity.
+ * @returns Environment for the supervised process.
+ */
+function createSupervisorLaunchEnv(
+  sessionConfigEnv: Record<string, string> | undefined,
+  supervisorSessionId: string,
+): Record<string, string> {
+  return {
+    ...sessionConfigEnv,
+    // Correlation identifier for the supervised runtime; not an authentication token.
+    MAKAIO_SUPERVISOR_SESSION_ID: supervisorSessionId,
+  };
+}
+
+/**
+ * Lazy production backend that selects the runtime-appropriate PTY backend
+ * without loading the `node-pty` native addon in a Bun host.
  */
 export class LazyNodePtyBackend implements IPtyBackend {
   private backend: IPtyBackend | null = null;
   private backendPromise: Promise<IPtyBackend> | null = null;
 
   /**
-   * @param createBackend - Lazy backend factory. Defaults to importing the native Node PTY backend.
+   * @param createBackend - Lazy backend factory. Defaults to a Node bridge on Bun and native Node PTY elsewhere.
    */
   public constructor(
     private readonly createBackend: () => Promise<IPtyBackend> = async () => {
+      if (typeof (globalThis as Record<string, unknown>)['Bun'] !== 'undefined') {
+        const { NodeBridgeBackend } = await import('./pty/node-bridge-backend.js');
+        return new NodeBridgeBackend();
+      }
       const { NodePtyBackend } = await import('./pty/node-pty-backend.js');
       return new NodePtyBackend();
     },
@@ -288,7 +309,8 @@ export class SupervisorService extends BaseService {
         args,
         options: {
           cwd,
-          ...(sessionConfig.env !== undefined && { env: sessionConfig.env }),
+          env: createSupervisorLaunchEnv(sessionConfig.env, supervisorSessionId),
+          inheritEnvironment: true,
         },
       }));
     } catch (error) {

@@ -112,6 +112,29 @@ const defaultDependencies: ClientHookCommandDependencies = {
   readStdinText: readProcessStdinText,
 };
 
+/** Environment key injected by the native-session supervisor for managed clients. */
+const SUPERVISOR_SESSION_ID_ENV = 'MAKAIO_SUPERVISOR_SESSION_ID';
+
+/**
+ * Attach the supervisor correlation key to hook metadata when the native
+ * supervisor supplied one for this process.
+ *
+ * The environment value is deliberately allowlisted instead of forwarding the
+ * process environment. It wins over caller metadata because the supervisor
+ * minted it for the launched process.
+ * @param metadata - Metadata supplied by the native hook configuration.
+ * @returns Metadata augmented with the supervisor session ID when available.
+ */
+function attachSupervisorSessionMetadata(
+  metadata: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const supervisorSessionId = pickNonEmptyStringValue(process.env[SUPERVISOR_SESSION_ID_ENV]);
+  if (supervisorSessionId === undefined) {
+    return metadata;
+  }
+  return { ...metadata, supervisorSessionId };
+}
+
 // ---------------------------------------------------------------------------
 // Shared payload builder
 // ---------------------------------------------------------------------------
@@ -171,7 +194,7 @@ export async function runClientHookCommand(
 
   const stdinText = await safeReadStdinText(deps.readStdinText);
   const payload = parseJsonPayload(stdinText);
-  const metadata = parseJsonMetadata(metadataJson);
+  const metadata = attachSupervisorSessionMetadata(parseJsonMetadata(metadataJson));
 
   const hookPayload = buildHookPayload(eventName, payload, metadata);
 
@@ -427,7 +450,7 @@ export async function runClientHookHandleCommand(
 
   const stdinText = await safeReadStdinText(deps.readStdinText);
   const payload = parseJsonPayload(stdinText);
-  const metadata = parseJsonMetadata(metadataJson);
+  const metadata = attachSupervisorSessionMetadata(parseJsonMetadata(metadataJson));
 
   const hookPayload = buildHookPayload(eventName, payload, metadata);
 

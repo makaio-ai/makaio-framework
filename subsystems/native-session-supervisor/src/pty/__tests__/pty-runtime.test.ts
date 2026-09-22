@@ -61,11 +61,53 @@ function createFakePty(pid = 42, processName = '/bin/bash'): FakePtyProcess {
   };
 }
 
+interface SynchronouslyReplayingPtyProcess extends IPtyProcess {
+  /** Track cleanup of the listener installed by the runtime. */
+  readonly dataListenerDispose: ReturnType<typeof vi.fn>;
+  /** Track cleanup of the listener installed by the runtime. */
+  readonly exitListenerDispose: ReturnType<typeof vi.fn>;
+}
+
+/**
+ * Models a backend whose process handle replays output or a terminal event from
+ * inside listener registration. The bridge backend can encounter this when its
+ * child emits `data` and `exit` before `spawn()` resumes at the caller.
+ * @param pendingData - Output retained by the process before listener registration.
+ * @param terminalEvent - Optional terminal event retained before listener registration.
+ */
+function createSynchronouslyReplayingPty(
+  pendingData: string,
+  terminalEvent?: { exitCode: number; signal?: number },
+): SynchronouslyReplayingPtyProcess {
+  const dataListenerDispose = vi.fn();
+  const exitListenerDispose = vi.fn();
+
+  return {
+    pid: 43,
+    process: '/bin/echo',
+    cols: 80,
+    rows: 24,
+    write: vi.fn(),
+    resize: vi.fn(),
+    kill: vi.fn(),
+    dataListenerDispose,
+    exitListenerDispose,
+    onData: (listener) => {
+      listener(pendingData);
+      return { dispose: dataListenerDispose };
+    },
+    onExit: (listener) => {
+      if (terminalEvent !== undefined) listener(terminalEvent);
+      return { dispose: exitListenerDispose };
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Fake backend factory
 // ---------------------------------------------------------------------------
 
-function createFakeBackend(fakePty: FakePtyProcess): IPtyBackend {
+function createFakeBackend(fakePty: IPtyProcess): IPtyBackend {
   return {
     spawn: vi.fn().mockResolvedValue(fakePty),
     dispose: vi.fn().mockResolvedValue(undefined),
@@ -162,6 +204,29 @@ describe('PtyRuntime', () => {
   });
 
   describe('output buffering', () => {
+    it('buffers output replayed synchronously while registering the data listener', async () => {
+      const replayingPty = createSynchronouslyReplayingPty('output-before-spawn-returns');
+      const backend = createFakeBackend(replayingPty);
+      const onOutput = vi.fn();
+      const runtime = makeRuntime(backend, onOutput);
+      runtime.init();
+
+      await runtime.spawn({ supervisorSessionId: SESSION_ID, file: '/bin/echo', args: [], options: {} });
+
+      // `connect` is the public replay surface: no subscriber existed while the
+      // backend synchronously delivered the chunk, so it must be retained here.
+      const connection = runtime.connect(SESSION_ID, null);
+      expect(connection).toMatchObject({
+        bufferedOutput: 'output-before-spawn-returns',
+        lastSeq: 1,
+      });
+      expect(onOutput).not.toHaveBeenCalled();
+
+      await runtime.destroy();
+      expect(replayingPty.dataListenerDispose).toHaveBeenCalledOnce();
+      expect(replayingPty.exitListenerDispose).toHaveBeenCalledOnce();
+    });
+
     it('buffers output data and reports it via getSessionStatus', async () => {
       const fakePty = createFakePty();
       const backend = createFakeBackend(fakePty);
@@ -305,6 +370,27 @@ describe('PtyRuntime', () => {
   });
 
   describe('exit events', () => {
+    it('does not revive a session when a terminal event replays synchronously during listener registration', async () => {
+      const replayingPty = createSynchronouslyReplayingPty('final-output', { exitCode: 0 });
+      const backend = createFakeBackend(replayingPty);
+      const onExit = vi.fn();
+      const runtime = makeRuntime(backend, vi.fn(), onExit);
+      runtime.init();
+
+      await runtime.spawn({ supervisorSessionId: SESSION_ID, file: '/bin/echo', args: [], options: {} });
+
+      expect(runtime.getSessionStatus(SESSION_ID)).toBeNull();
+      expect(onExit).toHaveBeenCalledOnce();
+      expect(onExit).toHaveBeenCalledWith({ supervisorSessionId: SESSION_ID, exitCode: 0, signal: undefined });
+      // The data subscription is disposed by the synchronous exit; the exit
+      // subscription itself is disposed when registration sees it no longer owns
+      // the session. Neither listener can outlive the terminal replay.
+      expect(replayingPty.dataListenerDispose).toHaveBeenCalledOnce();
+      expect(replayingPty.exitListenerDispose).toHaveBeenCalledOnce();
+
+      await runtime.destroy();
+    });
+
     it('removes the session from registry on exit and calls onExit handler', async () => {
       const fakePty = createFakePty();
       const backend = createFakeBackend(fakePty);

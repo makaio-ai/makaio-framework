@@ -57,6 +57,8 @@ class BridgePtyProcess implements IPtyProcess {
   private _cols: number;
   private _rows: number;
   private closed = false;
+  private pendingData: string[] | null = [];
+  private exitEvent: { exitCode: number; signal?: number } | undefined;
 
   private readonly dataListeners = new Set<DataListener>();
   private readonly exitListeners = new Set<ExitListener>();
@@ -147,6 +149,13 @@ class BridgePtyProcess implements IPtyProcess {
    */
   public onData(listener: DataListener): { dispose(): void } {
     this.dataListeners.add(listener);
+    const pendingData = this.pendingData;
+    if (pendingData !== null) {
+      this.pendingData = null;
+      for (const data of pendingData) {
+        listener(data);
+      }
+    }
     return { dispose: () => this.dataListeners.delete(listener) };
   }
 
@@ -156,6 +165,10 @@ class BridgePtyProcess implements IPtyProcess {
    * @returns A disposable that removes the listener.
    */
   public onExit(listener: ExitListener): { dispose(): void } {
+    if (this.exitEvent !== undefined) {
+      listener(this.exitEvent);
+      return { dispose: () => {} };
+    }
     this.exitListeners.add(listener);
     return { dispose: () => this.exitListeners.delete(listener) };
   }
@@ -167,6 +180,11 @@ class BridgePtyProcess implements IPtyProcess {
    * @param data - Decoded terminal output string.
    */
   public pushData(data: string): void {
+    if (this.closed) return;
+    if (this.pendingData !== null) {
+      this.pendingData.push(data);
+      return;
+    }
     for (const listener of this.dataListeners) {
       listener(data);
     }
@@ -182,10 +200,11 @@ class BridgePtyProcess implements IPtyProcess {
   public pushExit(exitCode: number, signal: number): void {
     if (this.closed) return;
     this.closed = true;
-    const signalArg = signal !== 0 ? signal : undefined;
+    this.exitEvent = { exitCode, ...(signal !== 0 && { signal }) };
     for (const listener of this.exitListeners) {
-      listener({ exitCode, signal: signalArg });
+      listener(this.exitEvent);
     }
+    this.exitListeners.clear();
   }
 }
 
@@ -222,11 +241,8 @@ interface BridgeProcess {
  * Duck-typed so that `bun-types` is not a required dependency.
  */
 interface BunSubprocess {
-  /**
-   * Writable stream connected to the subprocess's stdin when spawned with
-   * `stdin: 'pipe'`.
-   */
-  readonly stdin: WritableStream<Uint8Array>;
+  /** File sink connected to the subprocess's stdin when spawned with `stdin: 'pipe'`. */
+  readonly stdin: BunFileSink;
   /**
    * Web ReadableStream connected to the subprocess's stdout when spawned with
    * `stdout: 'pipe'`.
@@ -237,6 +253,19 @@ interface BunSubprocess {
    * @param signal - Numeric POSIX signal number.
    */
   kill(signal?: number): void;
+}
+
+/**
+ * Subset of Bun's `FileSink` used for bridge stdin.
+ *
+ * Bun returns this sink, rather than a Web `WritableStream`, for
+ * `Bun.spawn()` calls configured with `stdin: 'pipe'`.
+ */
+interface BunFileSink {
+  /** Write data to the pipe, buffering it when the descriptor is not yet writable. */
+  write(chunk: string): number | Promise<number>;
+  /** Flush buffered data to the pipe. */
+  flush(): number | Promise<number>;
 }
 
 /**
@@ -310,6 +339,9 @@ function adaptBunStdout(webReadable: ReadableStream<Uint8Array>): NodeJS.Readabl
  * @returns Absolute filesystem path to `pty-bridge.cjs`.
  */
 function resolveBridgePath(): string {
+  // This private source-package module resolves its adjacent CJS bridge. A
+  // future bundled distribution must co-deliver that CJS asset alongside the
+  // emitted module rather than introducing a second runtime asset path here.
   // `__dirname` is not available in ESM; derive the directory from `import.meta.url`.
   // `fileURLToPath` is used instead of `.pathname` to handle Windows paths correctly
   // (`.pathname` produces a spurious leading `/` on Windows, e.g. `/C:/Users/...`).
@@ -361,14 +393,20 @@ function spawnViaBun(bun: BunGlobal, bridgePath: string): BridgeProcess {
     stderr: 'inherit',
   });
 
-  const encoder = new TextEncoder();
-  const stdinWriter = proc.stdin.getWriter();
-
   return {
     writeStdin: (text: string) => {
-      stdinWriter.write(encoder.encode(text)).catch(() => {
-        // Ignore write errors — the close handler will surface them.
-      });
+      try {
+        const writeResult = proc.stdin.write(text);
+        const flushResult = proc.stdin.flush();
+        if (writeResult instanceof Promise) {
+          void writeResult.catch(() => undefined);
+        }
+        if (flushResult instanceof Promise) {
+          void flushResult.catch(() => undefined);
+        }
+      } catch {
+        // Preserve the best-effort bridge transport behavior on write errors.
+      }
     },
     stdout: adaptBunStdout(proc.stdout),
     // This kills the bridge subprocess itself. PTY-session signals are forwarded

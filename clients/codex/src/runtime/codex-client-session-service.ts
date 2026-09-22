@@ -41,7 +41,12 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import { MakaioBus, RequestError } from '@makaio/bus-core';
-import { BinaryNotFoundError, ClientSubjects, assertAbsoluteProjectDir } from '@makaio/subsystem-client';
+import {
+  BinaryNotFoundError,
+  ClientSubjects,
+  assertAbsoluteProjectDir,
+  pickNonEmptyStringValue,
+} from '@makaio/subsystem-client';
 import type {
   ClientHookProviderContractRegistry,
   ClientHookResponseRegistry,
@@ -58,6 +63,7 @@ import { composeCodexHookResponse } from './hook-response-composer.js';
 import { codexProviderContractCatalog } from './hook-response-contracts.js';
 import { CodexClientSubjects } from './namespace.js';
 import { CodexSessionConfigHandler } from './session-config-handler.js';
+import { CODEX_HOOK_SESSION_START } from './schemas.js';
 import { applyCodexWiring, buildCodexWiringList, removeCodexWiring } from './wiring.js';
 
 /** Stable client ID for Codex — used to filter `client.runtime.started` events. */
@@ -464,6 +470,7 @@ export class CodexClientSessionService extends BaseService {
    */
   private async handleHookReceived(raw: Parameters<typeof normalizeCodexHook>[0]): Promise<void> {
     const events = normalizeCodexHook(raw, this.machineId);
+    await this.observeRootRuntime(raw, events);
 
     // Diagnostic: warn when a SubagentStart/SubagentStop produces no events.
     // The normalizer silently drops these hooks when agent_id is absent; this
@@ -565,6 +572,51 @@ export class CodexClientSessionService extends BaseService {
 
     if (firstError !== undefined) {
       throw firstError;
+    }
+  }
+
+  /**
+   * Enrich a supervisor-owned Codex runtime with the native session ID observed
+   * on its root `SessionStart` hook.
+   *
+   * Subagent hooks never produce `client.session.started`, so they cannot bind
+   * a root runtime. The supervisor correlation key joins observations; it does
+   * not grant ownership of an arbitrary native session.
+   * @param raw - Raw hook payload delivered on `client:codex.hook.received`.
+   * @param events - Normalized events derived from the raw hook.
+   */
+  private async observeRootRuntime(
+    raw: Parameters<typeof normalizeCodexHook>[0],
+    events: readonly CodexNormalizedEvent[],
+  ): Promise<void> {
+    if (raw.eventName !== CODEX_HOOK_SESSION_START) {
+      return;
+    }
+    const supervisorSessionId = pickNonEmptyStringValue(raw.metadata?.supervisorSessionId);
+    const rootStart = events.find(
+      (event): event is Extract<CodexNormalizedEvent, { subject: typeof ClientSubjects.session.started }> =>
+        event.subject === ClientSubjects.session.started,
+    );
+    const adapterSessionId = rootStart?.payload.adapterSessionId;
+    if (supervisorSessionId === undefined || rootStart === undefined || adapterSessionId === undefined) {
+      return;
+    }
+
+    try {
+      const result = await this.bus.requestOptional(ClientSubjects.runtime.observe, {
+        clientId: CLIENT_ID,
+        source: { layer: 'client-hook', producer: 'codex-client-session-service' },
+        observedAt: raw.receivedAt,
+        supervisorSessionId,
+        adapterSessionId,
+        ...(rootStart.payload.startMode === 'clear' && { adapterSessionTransition: 'root-clear' as const }),
+      });
+      if (!result.handled) {
+        console.warn('[CodexClientSessionService] Runtime identity join is unavailable.');
+      }
+    } catch {
+      // Fail open: registry enrichment must not prevent hook normalization.
+      console.warn('[CodexClientSessionService] Runtime identity join is unavailable.');
     }
   }
 

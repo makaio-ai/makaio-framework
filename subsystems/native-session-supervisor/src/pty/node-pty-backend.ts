@@ -31,7 +31,12 @@ export class NodePtyBackend implements IPtyBackend {
    */
   public spawn(file: string, args: string[], options: IPtySpawnOptions): Promise<IPtyProcess> {
     try {
-      const ptyProcess = pty.spawn(file, args, options);
+      const { inheritEnvironment, ...ptyOptions } = options;
+      const spawnOptions =
+        ptyOptions.env === undefined || !inheritEnvironment
+          ? ptyOptions
+          : { ...ptyOptions, env: { ...process.env, ...ptyOptions.env } };
+      const ptyProcess = pty.spawn(file, args, spawnOptions);
       const wrapped: IPtyProcess = {
         get pid() {
           return ptyProcess.pid;

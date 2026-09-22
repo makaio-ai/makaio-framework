@@ -39,6 +39,7 @@ next: false
 | `resolveBinary` | [`client.resolveBinary`](#client.resolveBinary) | rpc | [`binary-resolution.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/binary-resolution.ts) |
 | `runtime.isAdapterManaged` | [`client.runtime.isAdapterManaged`](#client.runtime.isAdapterManaged) | rpc | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/runtime-observation.ts) |
 | `runtime.observe` | [`client.runtime.observe`](#client.runtime.observe) | rpc | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/runtime-observation.ts) |
+| `runtime.resolveBySupervisorSessionId` | [`client.runtime.resolveBySupervisorSessionId`](#client.runtime.resolveBySupervisorSessionId) | rpc | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/runtime-observation.ts) |
 | `runtime.started` | [`client.runtime.started`](#client.runtime.started) | event | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/runtime-observation.ts) |
 | `scan` | [`client.scan`](#client.scan) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/schemas.ts) |
 | `session.account.observe` | [`client.session.account.observe`](#client.session.account.observe) | rpc | [`account-identity.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/account-identity.ts) |
@@ -486,6 +487,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `adapterSessionId` | `string \| undefined` | no |
+| `adapterSessionTransition` | `"root-clear" \| undefined` | no |
 | `argv` | `string[] \| undefined` | no |
 | `clientId` | `string` | yes |
 | `cwd` | `string \| undefined` | no |
@@ -504,6 +506,30 @@ Type: Request (RPC)
 | `clientRuntimeId` | `string` | yes |
 | `created` | `boolean` | yes |
 | `promoted` | `boolean` | yes |
+
+### <a id="client.runtime.resolveBySupervisorSessionId"></a>`client.runtime.resolveBySupervisorSessionId` (rpc)
+
+Request and response schemas for `client.runtime.resolveBySupervisorSessionId`.
+
+Reads the correlation recorded for a supervisor session ID and client ID.
+This is not a current process liveness check and does not authorize access
+to the runtime.
+
+Subject: `client.runtime.resolveBySupervisorSessionId`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `clientId` | `string` | yes |
+| `supervisorSessionId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `runtime` | `{ clientId: string; supervisorSessionId: string; adapterSessionId?: string \| undefined; sessionId?: string \| undefined; } \| null` | yes |
 
 ### <a id="client.runtime.started"></a>`client.runtime.started` (event)
 
