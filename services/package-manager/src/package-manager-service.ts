@@ -11,6 +11,7 @@ import { PackageSubjects } from './namespace.js';
 import type { PackageUpdateInfo } from './namespace.js';
 import { YarnPackageManager, type FrameworkDependencySpec } from './yarn-integration.js';
 import { LocalPathInstaller } from './local-path-installer.js';
+import { toLocalPackageInfo } from './exported-package-critical.js';
 import { parseInstallSource } from './install-source.js';
 import type { PackageInfo, PackageInstallResult, PackageUninstallResult } from './schemas.js';
 import { DependencyResolver, type ResolutionResult, type DependencyPackageManager } from './dependency-resolver.js';
@@ -96,6 +97,7 @@ export interface LocalInstallClient {
       sourcePath: string;
       source: 'local';
       serverImportPath?: string;
+      declaresServerEntrypoint?: boolean;
       critical?: boolean;
     }>
   >;
@@ -141,6 +143,20 @@ export interface PackageManagerServiceOptions {
    * dependency so extension imports resolve to the app-provided singleton.
    */
   frameworkPackagePath?: string;
+  /**
+   * Absolute path to the assembled `@makaio/framework` dist, when the host
+   * uses `NodeFrameworkModuleResolver` (see
+   * `FrameworkModuleResolver.frameworkDistPath` in `@makaio/runtime-node`).
+   *
+   * Forwarded to every `critical`-flag resolution for a server-backed
+   * descriptor (npm and local installs alike) so the import worker that
+   * inspects the entrypoint's exported package can resolve `@makaio/framework/*`
+   * subpath imports the same way the main thread's `NodeFrameworkModuleResolver`
+   * does — see `resolveCriticalFlag`'s `frameworkDistPath` parameter in
+   * `exported-package-critical.ts`. Omitted for hosts that resolve
+   * `@makaio/framework/*` natively (dev workspace, Bun-based hosts).
+   */
+  frameworkDistPath?: string;
   /**
    * Dev-mode workspace package map used to rewrite install specs to `portal:` ranges.
    *
@@ -189,6 +205,7 @@ export class PackageManagerService extends BaseService {
   private readonly dependencyResolver: DependencyResolverClient;
   private readonly frameworkPeerRange: string;
   private readonly frameworkPackagePath: string | undefined;
+  private readonly frameworkDistPath: string | undefined;
 
   /**
    * Create a new PackageManagerService.
@@ -198,11 +215,12 @@ export class PackageManagerService extends BaseService {
    */
   public constructor(bus: IMakaioBus, makaioHome: string, options: PackageManagerServiceOptions = {}) {
     super(bus);
-    this.yarnManager = options.yarnManager ?? new YarnPackageManager(makaioHome);
+    this.yarnManager = options.yarnManager ?? new YarnPackageManager(makaioHome, options.frameworkDistPath);
     this.registryService = options.registryService ?? new RegistryService();
     this.localInstaller = options.localInstaller ?? new LocalPathInstaller(path.join(makaioHome, 'extensions'));
     this.frameworkPeerRange = options.frameworkPeerRange ?? DEFAULT_FRAMEWORK_PEER_RANGE;
     this.frameworkPackagePath = options.frameworkPackagePath;
+    this.frameworkDistPath = options.frameworkDistPath;
     const resolverPackages = options.devPortalPackages?.size
       ? new DevPortalPackageManager(this.yarnManager, options.devPortalPackages)
       : this.yarnManager;
@@ -325,21 +343,17 @@ export class PackageManagerService extends BaseService {
           this.yarnManager.listPackages(),
           this.localInstaller.list(),
         ]);
-        const packages: PackageInfo[] = [
-          ...npmPackages,
-          ...localExtensions.map((extension) => ({
-            name: extension.name,
-            version: extension.version,
-            hasDescriptor: true,
-            // A local install's identifier is already the descriptor name
-            // (see `LocalPathInstaller.list`, which keys its symlinks and
-            // entries by `descriptor.name`) — unlike an npm install, whose
-            // `name` is the npm dependency identifier.
-            descriptorName: extension.name,
-            ...(extension.serverImportPath !== undefined && { serverImportPath: extension.serverImportPath }),
-            ...(extension.critical !== undefined && { critical: extension.critical }),
-          })),
-        ];
+        // Each local extension's `critical` resolution may import its server
+        // entrypoint (see toLocalPackageInfo -> resolveCriticalFlag), so this
+        // resolves them concurrently rather than one entrypoint import at a
+        // time, mirroring the same order-preserving Promise.all pattern
+        // YarnPackageManager.listPackages applies for npm installs. Unbounded
+        // concurrency is fine here too: the number of installed local
+        // extensions is small.
+        const localPackages = await Promise.all(
+          localExtensions.map((extension) => toLocalPackageInfo(extension, this.frameworkDistPath)),
+        );
+        const packages: PackageInfo[] = [...npmPackages, ...localPackages];
         ctx.setResult({ packages });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

@@ -13,6 +13,7 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { Command } from 'commander';
 import { registerExtensionCommands } from '../extension-commands.js';
+import type { FrameworkModuleResolver } from '@makaio/runtime-node';
 import type { ExtensionDescriptor } from '@makaio/contracts';
 import type { TransitionOutcome } from '@makaio/kernel';
 import type { PackageInfo } from '@makaio/services-package-manager/namespace';
@@ -405,11 +406,21 @@ vi.mock('@makaio/services-package-manager', async (importOriginal) => {
   };
 });
 
+/**
+ * Build a descriptor for a server-entrypoint extension.
+ *
+ * Such a descriptor may not declare `critical` — its exported packages own
+ * that flag — so fixtures needing a critical extension write a real server
+ * entry declaring it there.
+ * @param name - Descriptor package name.
+ * @param version - Descriptor version.
+ * @param dependencies - Extension dependencies to declare, when any.
+ * @returns Descriptor ready to be written to a fixture package.
+ */
 function descriptor(
   name: string,
   version: string,
   dependencies: ExtensionDescriptor['dependencies'] = [],
-  critical?: boolean,
 ): ExtensionDescriptor {
   return {
     name,
@@ -418,7 +429,6 @@ function descriptor(
     makaio: { framework: '>=0.1.0' },
     entrypoints: { server: true },
     ...(dependencies.length > 0 ? { dependencies } : {}),
-    ...(critical !== undefined && { critical }),
   };
 }
 
@@ -724,6 +734,43 @@ describe('extension install CLI commands', () => {
   });
 });
 
+/**
+ * Framework module resolver that records its install window in a file.
+ *
+ * A real {@link FrameworkModuleResolver} implementation, not a stub: the
+ * fixture server entry reads the marker it writes, so the listing's install
+ * ordering is asserted through the resolved export rather than through call
+ * bookkeeping. The native loader hook `NodeFrameworkModuleResolver` installs
+ * cannot be observed from here — Vitest's module runner resolves a fixture's
+ * own imports itself — so that hook keeps its spawned-Node coverage in
+ * `framework-module-resolver.test.ts`, and this asserts the seam the CLI owns:
+ * the host's resolver is installed before, and uninstalled after, the listing's
+ * server-entry imports.
+ */
+class MarkerFrameworkModuleResolver implements FrameworkModuleResolver {
+  /** Whether {@link uninstall} has run, so a leaked install window is visible to assertions. */
+  public uninstalled = false;
+
+  /** Unused by this implementation; the marker file stands in for a resolved dist. */
+  public readonly frameworkDistPath = '';
+
+  /**
+   * @param markerPath - File this resolver records its install state in.
+   */
+  public constructor(private readonly markerPath: string) {}
+
+  /** Record that framework resolution is available. */
+  public async install(): Promise<void> {
+    await writeFile(this.markerPath, 'installed', 'utf-8');
+  }
+
+  /** Record that framework resolution is no longer available. */
+  public async uninstall(): Promise<void> {
+    this.uninstalled = true;
+    await writeFile(this.markerPath, 'uninstalled', 'utf-8');
+  }
+}
+
 describe('extension enable/disable commands', () => {
   let program: InstanceType<typeof Command>;
 
@@ -903,7 +950,10 @@ describe('extension enable/disable commands', () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it('refuses to disable a critical extension offline, reading the flag from the installed descriptor', async () => {
+  it('refuses to disable a critical extension offline, reading the flag from a descriptor with no exported package', async () => {
+    // No `serverImportPath`: a detached, CLI-only, or browser-only descriptor,
+    // whose single package the runtime synthesizes from descriptor metadata —
+    // the one case where the descriptor field *is* the package field.
     packageManagerMockState.packages = [{ name: 'core-ext', version: '1.0.0', hasDescriptor: true, critical: true }];
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await program.parseAsync(['extension', 'disable', 'core-ext'], { from: 'user' });
@@ -913,10 +963,10 @@ describe('extension enable/disable commands', () => {
   });
 
   it('refuses to disable a critical extension installed from a local path, reading the flag exactly as it would for an npm install', async () => {
-    // `LocalPathInstaller.list()` already carries the descriptor's `critical`
-    // flag through `InstalledExtensionEntry` — the offline critical check
-    // must see it identically regardless of whether the extension came from
-    // npm or a local symlink.
+    // `LocalPathInstaller.list()` carries a descriptor-synthesized package's
+    // `critical` flag through `InstalledExtensionEntry` — the offline critical
+    // check must see it identically regardless of whether the extension came
+    // from npm or a local symlink.
     packageManagerMockState.localExtensions = [
       { name: 'core-local-ext', version: '1.0.0', sourcePath: '/tmp/core-local-ext', source: 'local', critical: true },
     ];
@@ -976,7 +1026,7 @@ describe('extension enable/disable commands', () => {
     expect(process.exitCode).toBeUndefined();
   });
 
-  it('refuses to disable a critical extension absent from the coordinator, reading the flag from the installed descriptor', async () => {
+  it('refuses to disable a critical extension absent from the coordinator, reading the flag from the installed listing', async () => {
     enablementMockState.health = { url: 'ws://localhost:1234' };
     packageManagerMockState.packages = [{ name: 'core-ext', version: '1.0.0', hasDescriptor: true, critical: true }];
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -1127,12 +1177,14 @@ describe('extension enable/disable commands', () => {
    * @param descriptorName - Parent descriptor package name.
    * @param childName - Dot-prefixed child package name.
    * @param childCritical - Critical flag the child package declares on itself.
+   * @param parentCritical - Critical flag the descriptor's own package declares on itself.
    * @returns Absolute path to the written `.mjs` module.
    */
   async function writeMultiPackageServerEntry(
     descriptorName: string,
     childName: string,
     childCritical = false,
+    parentCritical = false,
   ): Promise<string> {
     const moduleDir = path.join(packageManagerMockState.makaioHome, 'fixture-packages', descriptorName);
     await mkdir(moduleDir, { recursive: true });
@@ -1140,13 +1192,124 @@ describe('extension enable/disable commands', () => {
     await writeFile(
       modulePath,
       `export default [\n` +
-        `  { name: ${JSON.stringify(descriptorName)}, displayName: 'Parent', version: '0.1.0' },\n` +
+        `  { name: ${JSON.stringify(descriptorName)}, displayName: 'Parent', version: '0.1.0', critical: ${parentCritical} },\n` +
         `  { name: ${JSON.stringify(childName)}, displayName: 'Child', version: '0.1.0', critical: ${childCritical} },\n` +
         `];\n`,
       'utf-8',
     );
     return modulePath;
   }
+
+  /**
+   * Write a server entry that imports `@makaio/framework/*`, as a locally
+   * linked extension's server graph routinely does.
+   *
+   * The entry lives outside this process's module tree, so nothing resolves
+   * that import unless a host supplies the resolver the packaged runtime
+   * installs — which is what makes its export unreadable, and its criticality
+   * unresolved, without one.
+   * @param descriptorName - Descriptor identity the entry exports itself under.
+   * @returns The entry's import path.
+   */
+  async function writeFrameworkImportingServerEntry(descriptorName: string): Promise<string> {
+    const packageRoot = path.join(packageManagerMockState.makaioHome, 'fixture-packages', descriptorName);
+    await mkdir(packageRoot, { recursive: true });
+    const serverImportPath = path.join(packageRoot, 'server.mjs');
+    await writeFile(
+      serverImportPath,
+      "import { FRAMEWORK_IMPORT_RESOLVED } from '@makaio/framework/bus';\n" +
+        `export default { name: ${JSON.stringify(descriptorName)}, displayName: 'Linked', version: '0.1.0', ` +
+        'critical: FRAMEWORK_IMPORT_RESOLVED };\n',
+      'utf-8',
+    );
+    return serverImportPath;
+  }
+
+  it('leaves criticality unresolved offline when an extension imports @makaio/framework and no host resolver is supplied', async () => {
+    // Baseline for the test below: without the host's resolver the framework
+    // subpath is unresolvable from an extension outside this process's module
+    // tree, so the export cannot be read at all and the disable must be
+    // refused as unresolved rather than silently treated as non-critical.
+    const serverImportPath = await writeFrameworkImportingServerEntry('unresolved-framework-ext');
+    packageManagerMockState.packages = [
+      {
+        name: 'unresolved-framework-ext',
+        version: '0.1.0',
+        hasDescriptor: true,
+        serverImportPath,
+        declaresServerEntrypoint: true,
+      },
+    ];
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'disable', 'unresolved-framework-ext'], { from: 'user' });
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('its server entry could not be read, so whether it is critical is unknown'),
+    );
+    expect(enablementMockState.disabled.has('unresolved-framework-ext')).toBe(false);
+  });
+
+  /**
+   * Write a server entry whose exported `critical` flag mirrors the host
+   * resolver's install state at import time.
+   *
+   * The entry reads the marker {@link MarkerFrameworkModuleResolver} writes, so
+   * a resolved `critical: true` can only mean the listing installed the host's
+   * resolver before importing it — the property a packaged CLI depends on for a
+   * locally linked extension whose server graph imports `@makaio/framework/*`.
+   * @param descriptorName - Descriptor identity the entry exports itself under.
+   * @param markerPath - File the resolver records its install state in.
+   * @returns The entry's import path.
+   */
+  async function writeResolverStateServerEntry(descriptorName: string, markerPath: string): Promise<string> {
+    const packageRoot = path.join(packageManagerMockState.makaioHome, 'fixture-packages', descriptorName);
+    await mkdir(packageRoot, { recursive: true });
+    await writeFile(markerPath, 'uninstalled', 'utf-8');
+    const serverImportPath = path.join(packageRoot, 'server.mjs');
+    await writeFile(
+      serverImportPath,
+      "import { readFileSync } from 'node:fs';\n" +
+        `const resolverState = readFileSync(${JSON.stringify(markerPath)}, 'utf-8');\n` +
+        `export default { name: ${JSON.stringify(descriptorName)}, displayName: 'Linked', version: '0.1.0', ` +
+        "critical: resolverState === 'installed' };\n",
+      'utf-8',
+    );
+    return serverImportPath;
+  }
+
+  it("installs the host's framework module resolver around the offline listing's server-entry imports", async () => {
+    // A packaged host installs its resolver before loading extensions at boot,
+    // which is how the runtime can import a locally linked extension whose
+    // server graph imports `@makaio/framework/*`. The offline listing imports
+    // on this process's own registry, so it needs that same capability handed
+    // in — without it the export is unreadable and this disable is refused as
+    // unresolved even though the server package is perfectly valid.
+    const markerPath = path.join(packageManagerMockState.makaioHome, 'resolver-state');
+    const serverImportPath = await writeResolverStateServerEntry('hosted-resolver-ext', markerPath);
+    packageManagerMockState.packages = [
+      {
+        name: 'hosted-resolver-ext',
+        version: '0.1.0',
+        hasDescriptor: true,
+        serverImportPath,
+        declaresServerEntrypoint: true,
+      },
+    ];
+    const resolver = new MarkerFrameworkModuleResolver(markerPath);
+    const hostedProgram = new Command();
+    registerExtensionCommands(hostedProgram, { frameworkModuleResolver: resolver });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await hostedProgram.parseAsync(['extension', 'disable', 'hosted-resolver-ext'], { from: 'user' });
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('it is a critical extension'));
+    expect(enablementMockState.disabled.has('hosted-resolver-ext')).toBe(false);
+    // The hook is process-wide loader state: the listing owns it only while it
+    // is importing extension code.
+    expect(resolver.uninstalled).toBe(true);
+  });
 
   it('lists every executable child package a descriptor exports, each with its own persisted preference', async () => {
     const serverImportPath = await writeMultiPackageServerEntry('makaio-dev', 'makaio-dev.relay-connection');
@@ -1160,6 +1323,184 @@ describe('extension enable/disable commands', () => {
 
     expect(infoSpy).toHaveBeenCalledWith('makaio-dev (0.1.0, npm) [enabled]');
     expect(infoSpy).toHaveBeenCalledWith('makaio-dev.relay-connection (0.1.0, npm) [disabled]');
+  });
+
+  it('reports an indeterminate effective state, not "disabled", for a hand-disabled name whose criticality is unresolved', async () => {
+    // Same unreadable-entrypoint fixture `extension disable` already refuses
+    // to act on (see the test above this describe block) — the descriptor
+    // may be critical, so `extension list` must not print the flat `disabled`
+    // label a merely-non-critical hand-disabled name would get: that would
+    // read as the effective state, when in fact this name force-starts on
+    // the next boot if its export turns out critical.
+    const unreadableImportPath = path.join(
+      packageManagerMockState.makaioHome,
+      'fixture-packages',
+      'broken-ext',
+      'does-not-exist.mjs',
+    );
+    packageManagerMockState.packages = [
+      {
+        name: 'broken-ext',
+        version: '1.0.0',
+        hasDescriptor: true,
+        serverImportPath: unreadableImportPath,
+        declaresServerEntrypoint: true,
+      },
+    ];
+    enablementMockState.disabled.add('broken-ext');
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'list'], { from: 'user' });
+
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.stringContaining('preference: disabled, effective state unknown (criticality unresolved)'),
+    );
+  });
+
+  it('refuses to disable a descriptor whose own exported package declares itself critical, even though the installer listing reports nothing', async () => {
+    // The descriptor declares a server entrypoint, so its `descriptor.json`
+    // may not declare `critical` at all — the exported package owns the flag
+    // (one server entry can export several packages, each with its own).
+    // Reading the installer's descriptor metadata here would let this disable
+    // through for an extension boot force-starts anyway.
+    const serverImportPath = await writeMultiPackageServerEntry('parent-ext', 'parent-ext.child', false, true);
+    packageManagerMockState.packages = [
+      { name: 'parent-ext', version: '0.1.0', hasDescriptor: true, serverImportPath },
+    ];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'disable', 'parent-ext'], { from: 'user' });
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('it is a critical extension'));
+    expect(enablementMockState.disabled.has('parent-ext')).toBe(false);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('refuses to disable a descriptor whose exported package declares a non-boolean critical value, treating it as unresolved rather than non-critical', async () => {
+    // `normalizePackageExport`'s structural check never inspects `critical`,
+    // so a malformed export like `critical: 'yes'` still passes it. The
+    // offline listing must not let that string masquerade as a resolved
+    // `false` — it refuses the disable exactly as an unreadable entrypoint
+    // would.
+    const moduleDir = path.join(packageManagerMockState.makaioHome, 'fixture-packages', 'stringly-critical-ext');
+    await mkdir(moduleDir, { recursive: true });
+    const serverImportPath = path.join(moduleDir, 'server.mjs');
+    await writeFile(
+      serverImportPath,
+      `export default { name: 'stringly-critical-ext', displayName: 'Stringly', version: '0.1.0', critical: 'yes' };\n`,
+      'utf-8',
+    );
+    packageManagerMockState.packages = [
+      { name: 'stringly-critical-ext', version: '0.1.0', hasDescriptor: true, serverImportPath },
+    ];
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'disable', 'stringly-critical-ext'], { from: 'user' });
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('its server entry could not be read, so whether it is critical is unknown'),
+    );
+    expect(enablementMockState.disabled.has('stringly-critical-ext')).toBe(false);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('lets the exported package override stale descriptor metadata claiming the descriptor is critical', async () => {
+    // Inverse drift: an installer listing still carrying `critical: true` for
+    // a descriptor that exports its own packages must not refuse a disable the
+    // coordinator would honour — the coordinator only ever reads the exported
+    // package, which declares itself optional here.
+    const serverImportPath = await writeMultiPackageServerEntry('parent-ext', 'parent-ext.child', false, false);
+    packageManagerMockState.packages = [
+      { name: 'parent-ext', version: '0.1.0', hasDescriptor: true, critical: true, serverImportPath },
+    ];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'disable', 'parent-ext'], { from: 'user' });
+
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(enablementMockState.disabled.has('parent-ext')).toBe(true);
+  });
+
+  it('refuses to disable a server-backed extension offline when its entrypoint cannot be imported, leaving the enablement file untouched', async () => {
+    // A server-backed descriptor may not declare `critical` on itself (the
+    // schema forbids it), so an unreadable entrypoint leaves criticality
+    // genuinely unresolved rather than falling back to any descriptor
+    // metadata. This must refuse the disable exactly as a known-critical
+    // extension would — the next boot, which can read the export, might
+    // force-start it.
+    const unreadableImportPath = path.join(
+      packageManagerMockState.makaioHome,
+      'fixture-packages',
+      'broken-ext',
+      'does-not-exist.mjs',
+    );
+    packageManagerMockState.packages = [
+      {
+        name: 'broken-ext',
+        version: '1.0.0',
+        hasDescriptor: true,
+        serverImportPath: unreadableImportPath,
+        declaresServerEntrypoint: true,
+      },
+    ];
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'disable', 'broken-ext'], { from: 'user' });
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('its server entry could not be read, so whether it is critical is unknown'),
+    );
+    expect(enablementMockState.disabled.has('broken-ext')).toBe(false);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('still allows enabling a server-backed extension offline when its entrypoint cannot be imported', async () => {
+    // Enabling is harmless regardless of criticality, so the same unresolved
+    // entrypoint that refuses a disable must not block an enable.
+    const unreadableImportPath = path.join(
+      packageManagerMockState.makaioHome,
+      'fixture-packages',
+      'broken-ext',
+      'does-not-exist.mjs',
+    );
+    packageManagerMockState.packages = [
+      {
+        name: 'broken-ext',
+        version: '1.0.0',
+        hasDescriptor: true,
+        serverImportPath: unreadableImportPath,
+        declaresServerEntrypoint: true,
+      },
+    ];
+    enablementMockState.disabled.add('broken-ext');
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'enable', 'broken-ext'], { from: 'user' });
+
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Persisted; no running server'));
+    expect(enablementMockState.disabled.has('broken-ext')).toBe(false);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('still allows disabling a descriptor with no server entrypoint that declares no critical flag (legitimately non-critical, not unknown)', async () => {
+    // No `serverImportPath` at all: criticality is legitimately absent, the
+    // exact case the `criticalityUnknown` marker must not apply to — contrast
+    // with the unreadable-entrypoint case above, which does refuse.
+    packageManagerMockState.packages = [{ name: 'plain-ext', version: '1.0.0', hasDescriptor: true }];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'disable', 'plain-ext'], { from: 'user' });
+
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Persisted; no running server'));
+    expect(enablementMockState.disabled.has('plain-ext')).toBe(true);
+    expect(process.exitCode).toBeUndefined();
   });
 
   it("keeps a child package's persisted disabled preference visible in the offline listing after the server stops", async () => {
@@ -1601,7 +1942,10 @@ describe('extension enable/disable commands', () => {
       // `$MAKAIO_HOME` knows nothing about this name — it is a dependency of
       // the project the CLI is invoked from, discoverable only through the
       // runtime's highest-priority `{cwd}/node_modules` tier.
-      await writeProjectLocalDescriptor(projectRoot, descriptor('project-critical-ext', '1.0.0', [], true));
+      await writeProjectLocalDescriptor(projectRoot, descriptor('project-critical-ext', '1.0.0'));
+      await writeProjectLocalServerEntry(projectRoot, 'project-critical-ext', [
+        { name: 'project-critical-ext', critical: true },
+      ]);
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
       await program.parseAsync(['extension', 'disable', 'project-critical-ext'], { from: 'user' });
@@ -1611,12 +1955,48 @@ describe('extension enable/disable commands', () => {
       expect(process.exitCode).toBe(1);
     });
 
+    it('refuses to disable a project-local extension whose declared server entrypoint has no resolvable candidate file, rather than treating the declaration as known non-critical', async () => {
+      // `descriptor()` always declares `entrypoints: { server: true }`, but
+      // this fixture never writes a `dist/server.mjs` or `src/server.ts` for
+      // it — the exact "declared, but unresolvable" case `serverImportPath`
+      // alone cannot distinguish from "no entrypoint declared at all" (see
+      // `InstallerListingEntry.declaresServerEntrypoint`). Both leave
+      // `serverImportPath` undefined; only the descriptor's own
+      // `entrypoints.server` tells them apart, and only the unresolvable case
+      // must refuse the disable.
+      await writeProjectLocalDescriptor(projectRoot, descriptor('unresolvable-entry-ext', '1.0.0'));
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      await program.parseAsync(['extension', 'disable', 'unresolvable-entry-ext'], { from: 'user' });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('its server entry could not be read, so whether it is critical is unknown'),
+      );
+      expect(enablementMockState.disabled.has('unresolvable-entry-ext')).toBe(false);
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('still allows enabling a project-local extension whose declared server entrypoint has no resolvable candidate file', async () => {
+      // Enabling is harmless regardless of criticality — mirrors the
+      // unreadable-entrypoint enable test for the mocked npm tier above.
+      await writeProjectLocalDescriptor(projectRoot, descriptor('unresolvable-entry-enable-ext', '1.0.0'));
+      enablementMockState.disabled.add('unresolvable-entry-enable-ext');
+      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+      await program.parseAsync(['extension', 'enable', 'unresolvable-entry-enable-ext'], { from: 'user' });
+
+      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Persisted; no running server'));
+      expect(enablementMockState.disabled.has('unresolvable-entry-enable-ext')).toBe(false);
+      expect(process.exitCode).toBeUndefined();
+    });
+
     it("lets a project-local override's critical flag win over the $MAKAIO_HOME-installed version of the same name", async () => {
       // `$MAKAIO_HOME/node_modules` reports this name as ordinary, but the
       // project-local tier the runtime prioritizes above it overrides the
       // same name as critical — the higher-priority tier must decide.
       packageManagerMockState.packages = [{ name: 'shared-ext', version: '1.0.0', hasDescriptor: true }];
-      await writeProjectLocalDescriptor(projectRoot, descriptor('shared-ext', '2.0.0', [], true));
+      await writeProjectLocalDescriptor(projectRoot, descriptor('shared-ext', '2.0.0'));
+      await writeProjectLocalServerEntry(projectRoot, 'shared-ext', [{ name: 'shared-ext', critical: true }]);
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
       await program.parseAsync(['extension', 'disable', 'shared-ext'], { from: 'user' });
@@ -1638,32 +2018,33 @@ describe('extension enable/disable commands', () => {
     /**
      * Write a real, dynamically-importable `dist/server.mjs` for a
      * project-local package at the runtime's own convention path (see
-     * `resolveConventionEntrypoint` in `load-extensions.ts`), exporting the
-     * descriptor's own package alongside one dot-prefixed child package —
-     * the project-local counterpart of `writeMultiPackageServerEntry` above,
-     * which instead points a mocked npm listing's `serverImportPath` at an
-     * arbitrary fixture location.
+     * `resolveConventionEntrypoint` in `load-extensions.ts`) — the
+     * project-local counterpart of `writeMultiPackageServerEntry` above, which
+     * instead points a mocked npm listing's `serverImportPath` at an arbitrary
+     * fixture location.
+     *
+     * The exported packages are the only place `critical` may be declared for
+     * a descriptor with a server entrypoint, so every project-local fixture
+     * that needs a critical extension writes one of these.
      * @param root - Project root the project-local `node_modules` tier is scanned from.
-     * @param descriptorName - Parent descriptor package name.
-     * @param childName - Dot-prefixed child package name.
-     * @param childCritical - Critical flag the child package declares on itself.
+     * @param descriptorName - Descriptor package name owning the entrypoint.
+     * @param packages - Packages the entry exports, in export order. One must
+     *   carry `descriptorName`; every other name must be dot-prefixed under it.
      */
-    async function writeProjectLocalMultiPackageServerEntry(
+    async function writeProjectLocalServerEntry(
       root: string,
       descriptorName: string,
-      childName: string,
-      childCritical = false,
+      packages: ReadonlyArray<{ readonly name: string; readonly critical?: boolean }>,
     ): Promise<void> {
       const distDir = path.join(root, 'node_modules', ...descriptorName.split('/'), 'dist');
       await mkdir(distDir, { recursive: true });
-      await writeFile(
-        path.join(distDir, 'server.mjs'),
-        `export default [\n` +
-          `  { name: ${JSON.stringify(descriptorName)}, displayName: 'Parent', version: '0.1.0' },\n` +
-          `  { name: ${JSON.stringify(childName)}, displayName: 'Child', version: '0.1.0', critical: ${childCritical} },\n` +
-          `];\n`,
-        'utf-8',
-      );
+      const entries = packages
+        .map(
+          (pkg) =>
+            `  { name: ${JSON.stringify(pkg.name)}, displayName: ${JSON.stringify(pkg.name)}, version: '0.1.0', critical: ${pkg.critical ?? false} },\n`,
+        )
+        .join('');
+      await writeFile(path.join(distDir, 'server.mjs'), `export default [\n${entries}];\n`, 'utf-8');
     }
 
     it("resolves a higher-priority tier's child package name against a lower-priority tier's own descriptor of the same name to a single entry, keeping the higher-priority tier's precedence", async () => {
@@ -1676,7 +2057,10 @@ describe('extension enable/disable commands', () => {
       // `mergePackagesByDescriptorSourcePriority` never would, since it
       // tracks every emitted package name, not just descriptor names.
       await writeProjectLocalDescriptor(projectRoot, descriptor('parent-ext', '1.0.0'));
-      await writeProjectLocalMultiPackageServerEntry(projectRoot, 'parent-ext', 'parent-ext.child', false);
+      await writeProjectLocalServerEntry(projectRoot, 'parent-ext', [
+        { name: 'parent-ext' },
+        { name: 'parent-ext.child' },
+      ]);
       packageManagerMockState.packages = [
         { name: 'parent-ext.child', version: '9.0.0', hasDescriptor: true, critical: true },
       ];

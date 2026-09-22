@@ -4,6 +4,7 @@ import { createExtensionScaffold, type ExtensionSurface } from './extension-init
 import { verifyExtensionWorkspace } from './extension-verify.js';
 import {
   isExtensionEnabled,
+  isExtensionDisabledInStore,
   resolveMakaioHome,
   loadExtensionEnablementStore,
   type ExtensionEnablementStore,
@@ -23,7 +24,11 @@ import {
   isRemoteBusUrl,
 } from './bus-client.js';
 import { ExtensionSubjects, type ExtensionInfo } from '@makaio/kernel';
-import { listInstalledExtensions, type InstalledExtensionEntry } from './extension-installed-listing.js';
+import {
+  listInstalledExtensions,
+  type InstalledExtensionEntry,
+  type InstalledExtensionListingOptions,
+} from './extension-installed-listing.js';
 import { runSetEnabled, remoteUnreachableRefusalMessage } from './extension-toggle-commands.js';
 
 type CommandInstance = InstanceType<typeof Command>;
@@ -33,8 +38,17 @@ const SUPPORTED_SURFACES = ['server', 'browser', 'cli'] as const satisfies reado
 /**
  * Register local extension authoring commands.
  * @param program - Root Commander program.
+ * @param listingOptions - Host capabilities forwarded to every offline
+ *   installed-extension listing these commands perform. A packaged host
+ *   supplies its framework module resolver here so `list`, `enable`, and
+ *   `disable` read an extension's exported `critical` declaration through the
+ *   same resolution the runtime uses at boot — see
+ *   {@link InstalledExtensionListingOptions}.
  */
-export function registerExtensionCommands(program: CommandInstance): void {
+export function registerExtensionCommands(
+  program: CommandInstance,
+  listingOptions: InstalledExtensionListingOptions = {},
+): void {
   const extension = program.command('extension').description('Local extension authoring commands');
 
   extension
@@ -98,17 +112,17 @@ export function registerExtensionCommands(program: CommandInstance): void {
   extension
     .command('list')
     .description('List installed extensions with runtime state when a server is reachable')
-    .action(async () => runList());
+    .action(async () => runList(listingOptions));
 
   extension
     .command('enable <name>')
     .description('Enable an extension (persists the preference; takes effect on the next server start)')
-    .action(async (name: string) => runSetEnabled(name, true));
+    .action(async (name: string) => runSetEnabled(name, true, listingOptions));
 
   extension
     .command('disable <name>')
     .description('Disable an extension (persists the preference; takes effect on the next server start)')
-    .action(async (name: string) => runSetEnabled(name, false));
+    .action(async (name: string) => runSetEnabled(name, false, listingOptions));
 
   extension
     .command('update [name]')
@@ -217,6 +231,34 @@ function formatInstalledOrigin(ext: InstalledExtensionEntry): string {
 }
 
 /**
+ * Compute the offline enabled/disabled label for an installed extension,
+ * accounting for {@link InstalledExtensionEntry.criticalityUnknown}.
+ *
+ * {@link isExtensionEnabled} treats a missing `critical` flag the same as
+ * `critical: false`. Feeding it an entry whose criticality could not be
+ * determined (its server entry failed to import — see
+ * {@link InstalledExtensionEntry.criticalityUnknown}) would therefore
+ * silently print `disabled` for a name that might in fact be critical and
+ * force-started on the next boot regardless of the enablement file. The
+ * ambiguity only has a visible effect when the store actually disables the
+ * name (see {@link isExtensionDisabledInStore}): a name with no persisted
+ * disable is enabled either way, critical or not, so the compact `enabled`
+ * label still applies unchanged in that case.
+ * @param enablementStore - Enablement store backing the persisted preference.
+ * @param ext - Installed extension entry to label.
+ * @returns `enabled` or `disabled` when the persisted preference resolves
+ *   the effective state unambiguously; otherwise an indeterminate label
+ *   naming the stored preference and flagging the effective state as
+ *   unresolved.
+ */
+function offlineEnabledLabel(enablementStore: ExtensionEnablementStore, ext: InstalledExtensionEntry): string {
+  if (ext.criticalityUnknown && isExtensionDisabledInStore(enablementStore, ext.name)) {
+    return 'preference: disabled, effective state unknown (criticality unresolved)';
+  }
+  return isExtensionEnabled(enablementStore, ext.name, ext) ? 'enabled' : 'disabled';
+}
+
+/**
  * Print installed extensions the reachable server's coordinator never loaded.
  *
  * A name can be installed without being in the coordinator's live snapshot —
@@ -238,9 +280,11 @@ function printNotLoadedInstalledExtensions(
 ): void {
   for (const ext of installed) {
     if (liveNames.has(ext.name)) continue;
-    // `ext` carries the descriptor's `critical` flag, so a hand-disabled
-    // critical extension is reported as enabled here exactly as boot starts it.
-    const enabledLabel = isExtensionEnabled(enablementStore, ext.name, ext) ? 'enabled' : 'disabled';
+    // `ext` carries the executable package's `critical` flag, so a
+    // hand-disabled critical extension is reported as enabled here exactly as
+    // boot starts it — see {@link offlineEnabledLabel} for the
+    // `criticalityUnknown` case this cannot resolve either way.
+    const enabledLabel = offlineEnabledLabel(enablementStore, ext);
     console.info(`${ext.name} (${ext.version}, ${formatInstalledOrigin(ext)}) [not loaded, ${enabledLabel}]`);
   }
 }
@@ -282,14 +326,17 @@ function frameworkPackageOverrideNote(ext: ExtensionInfo, installedNames: Readon
  * @param makaioHome - Resolved Makaio data home.
  * @param enablementStore - Enablement store used to label not-loaded entries.
  * @param extensions - Live extension snapshot from `kernel:extension.list`.
+ * @param listingOptions - Host capabilities forwarded to
+ *   {@link listInstalledExtensions}.
  */
 async function printLocalLiveListing(
   makaioHome: string,
   enablementStore: ExtensionEnablementStore,
   extensions: readonly ExtensionInfo[],
+  listingOptions: InstalledExtensionListingOptions,
 ): Promise<void> {
   const liveNames = new Set(extensions.map((ext) => ext.name));
-  const installed = await listInstalledExtensions(makaioHome, 'shared-home');
+  const installed = await listInstalledExtensions(makaioHome, 'shared-home', listingOptions);
   const installedNames = new Set(installed.map((ext) => ext.name));
   const hasNotLoaded = installed.some((ext) => !liveNames.has(ext.name));
 
@@ -354,6 +401,8 @@ function printRemoteLiveListing(extensions: readonly ExtensionInfo[]): void {
  * @param health - Health payload of the reachable server.
  * @param busUrl - Resolved bus URL the caller connected to, decided once by
  *   {@link runList}.
+ * @param listingOptions - Host capabilities forwarded to
+ *   {@link printLocalLiveListing}'s installed-extension listing.
  * @returns `true` when the live listing was printed (including the empty-list
  *   case); `false` when the caller should fall through to the offline listing.
  */
@@ -361,6 +410,7 @@ async function tryPrintLiveListing(
   makaioHome: string,
   health: NonNullable<Awaited<ReturnType<typeof probeHealth>>>,
   busUrl: string,
+  listingOptions: InstalledExtensionListingOptions,
 ): Promise<boolean> {
   // `resolveClientAuth` throwing is unconditional and deterministic — it
   // means auth is required and no secret is configured, which is a fact
@@ -387,7 +437,7 @@ async function tryPrintLiveListing(
     } else {
       const enablementStore = await loadExtensionEnablementStore(makaioHome);
       warnOnEnablementReadFailure(enablementStore);
-      await printLocalLiveListing(makaioHome, enablementStore, extensions);
+      await printLocalLiveListing(makaioHome, enablementStore, extensions, listingOptions);
     }
     return true;
   } catch (error) {
@@ -438,15 +488,17 @@ async function tryPrintLiveListing(
  * entered through a single guard that refuses a remote target regardless of
  * which of those two paths led here, instead of only the outright-unreachable
  * one.
+ * @param listingOptions - Host capabilities forwarded to every
+ *   {@link listInstalledExtensions} call this listing makes.
  */
-async function runList(): Promise<void> {
+async function runList(listingOptions: InstalledExtensionListingOptions): Promise<void> {
   try {
     const makaioHome = resolveMakaioHome();
 
     // Try to get live state from a running server.
     const busUrl = resolveBusUrl();
     const health = await probeHealth(busUrl);
-    if (health && (await tryPrintLiveListing(makaioHome, health, busUrl))) {
+    if (health && (await tryPrintLiveListing(makaioHome, health, busUrl, listingOptions))) {
       return;
     }
 
@@ -469,7 +521,7 @@ async function runList(): Promise<void> {
     const enablementStore = await loadExtensionEnablementStore(makaioHome);
     warnOnEnablementReadFailure(enablementStore);
 
-    const installed = await listInstalledExtensions(makaioHome, 'all');
+    const installed = await listInstalledExtensions(makaioHome, 'all', listingOptions);
 
     if (installed.length === 0) {
       console.info('No extensions installed.');
@@ -477,9 +529,11 @@ async function runList(): Promise<void> {
     }
 
     for (const ext of installed) {
-      // `ext` carries the descriptor's `critical` flag, so a hand-disabled
-      // critical extension is reported as enabled here exactly as boot starts it.
-      const enabledLabel = isExtensionEnabled(enablementStore, ext.name, ext) ? 'enabled' : 'disabled';
+      // `ext` carries the executable package's `critical` flag, so a
+      // hand-disabled critical extension is reported as enabled here exactly
+      // as boot starts it — see {@link offlineEnabledLabel} for the
+      // `criticalityUnknown` case this cannot resolve either way.
+      const enabledLabel = offlineEnabledLabel(enablementStore, ext);
       console.info(`${ext.name} (${ext.version}, ${formatInstalledOrigin(ext)}) [${enabledLabel}]`);
     }
   } catch (error) {

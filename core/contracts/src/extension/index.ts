@@ -63,6 +63,7 @@ export type {
 export type { BrowserEntrypoint } from './browser-entrypoint.js';
 export { extensionToken } from './extension-token.js';
 export type { ExtensionToken } from './extension-token.js';
+export { isExtensionManifestLike, normalizeExtensionManifestExport } from './normalize-extension-export.js';
 export type {
   AdapterDefinitionContract,
   AdapterProviderDefinitionContract,

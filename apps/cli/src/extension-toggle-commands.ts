@@ -15,7 +15,11 @@ import {
   type ServerHealth,
 } from './bus-client.js';
 import { ExtensionSubjects, type ExtensionInfo, type TransitionOutcome } from '@makaio/kernel';
-import { listInstalledExtensions, type InstalledExtensionEntry } from './extension-installed-listing.js';
+import {
+  listInstalledExtensions,
+  type InstalledExtensionEntry,
+  type InstalledExtensionListingOptions,
+} from './extension-installed-listing.js';
 
 /**
  * Message printed when a disable request targets a critical extension.
@@ -31,11 +35,55 @@ function criticalRefusalMessage(name: string): string {
 }
 
 /**
+ * Message printed when a disable request targets a name whose criticality
+ * could not be determined offline.
+ *
+ * Distinct from {@link criticalRefusalMessage}: this is not a known-critical
+ * refusal, but a fail-closed refusal for a name this process cannot vouch for
+ * either way — see {@link resolveDisableCriticality}. Treating this the same
+ * as "not critical" would let an offline disable persist for an extension
+ * that the next boot (which can read the export) force-starts as critical
+ * anyway.
+ * @param name - Extension package name.
+ * @returns Refusal text explaining why nothing was written.
+ */
+function unknownCriticalityRefusalMessage(name: string): string {
+  return (
+    `Cannot disable "${name}": its server entry could not be read, so whether it is critical is unknown ` +
+    '(see the import warning above). Refusing to disable rather than risk silently persisting a disable for ' +
+    'a critical extension — repair the extension, or disable it on a running server that can read the export instead.'
+  );
+}
+
+/**
+ * Result of resolving whether a disable request targets a critical
+ * extension.
+ *
+ * A plain `boolean` cannot represent this: `false` would be indistinguishable
+ * from "nothing declares criticality for this name", which is the exact
+ * ambiguity {@link InstalledExtensionEntry.criticalityUnknown} exists to
+ * break. `'unknown'` keeps that distinction through this check.
+ */
+type DisableCriticalityResult = 'critical' | 'not-critical' | 'unknown';
+
+/**
  * Decide whether a disable request targets a critical extension.
  *
  * Prefers the running server's view, which reflects the executable package the
- * runtime actually loaded. Falls back to the installed descriptor when no
- * server is running or the server does not know the extension.
+ * runtime actually loaded and is therefore always a resolved `boolean` — the
+ * coordinator never reports an entry it could not import. Falls back to the
+ * installed listing when no server is running or the server does not know the
+ * extension — that listing reads the same executable package declaration
+ * offline (see {@link InstalledExtensionEntry.critical}), so both paths answer
+ * from the one source the coordinator honours. When the offline listing
+ * itself could not resolve criticality for the matched name (see
+ * {@link InstalledExtensionEntry.criticalityUnknown}), this reports
+ * `'unknown'` rather than guessing `'not-critical'` — the caller must refuse
+ * the disable for that case exactly as it would for `'critical'`, since the
+ * next boot that can read the export might force-start it anyway. A name
+ * absent from the listing resolves to `'not-critical'` here; the caller's
+ * separate "is this name installed at all" check is what actually refuses an
+ * unknown name.
  * @param makaioHome - Resolved Makaio data home.
  * @param name - Extension package name.
  * @param liveEntry - Extension entry reported by `kernel:extension.get`, when a server was queried.
@@ -46,18 +94,24 @@ function criticalRefusalMessage(name: string): string {
  *   available. Passing it avoids a second installer round trip when the caller also needs the
  *   listing for another check (e.g. {@link applyUnmanagedNameToggle}); omit it to have this
  *   function fetch the listing itself.
- * @returns `true` when the extension must not be disabled.
+ * @param listingOptions - Host capabilities forwarded to
+ *   {@link listInstalledExtensions} when this function fetches the listing itself.
+ * @returns Whether the matched name is known critical, known not critical, or
+ *   unresolvable — see above.
  */
-async function isCriticalExtension(
+async function resolveDisableCriticality(
   makaioHome: string,
   name: string,
   liveEntry: { readonly critical: boolean } | null | undefined,
   tiers: 'all' | 'shared-home',
-  installedListing?: readonly InstalledExtensionEntry[],
-): Promise<boolean> {
-  if (liveEntry) return liveEntry.critical;
-  const installed = installedListing ?? (await listInstalledExtensions(makaioHome, tiers));
-  return installed.find((ext) => ext.name === name)?.critical ?? false;
+  installedListing: readonly InstalledExtensionEntry[] | undefined,
+  listingOptions: InstalledExtensionListingOptions,
+): Promise<DisableCriticalityResult> {
+  if (liveEntry) return liveEntry.critical ? 'critical' : 'not-critical';
+  const installed = installedListing ?? (await listInstalledExtensions(makaioHome, tiers, listingOptions));
+  const entry = installed.find((ext) => ext.name === name);
+  if (entry?.criticalityUnknown) return 'unknown';
+  return entry?.critical ? 'critical' : 'not-critical';
 }
 
 /**
@@ -129,8 +183,17 @@ function reportUnknownExtensionName(name: string, verb: string): void {
  *   one that host reads
  * @param name - Extension package name to toggle.
  * @param enabled - Desired enabled state.
+ * @param listingOptions - Host capabilities forwarded to every
+ *   {@link listInstalledExtensions} call this toggle makes — the offline
+ *   criticality check reads an extension's exported package by importing its
+ *   server entry, which needs the host's framework module resolver to succeed
+ *   for an extension installed from a local path.
  */
-export async function runSetEnabled(name: string, enabled: boolean): Promise<void> {
+export async function runSetEnabled(
+  name: string,
+  enabled: boolean,
+  listingOptions: InstalledExtensionListingOptions = {},
+): Promise<void> {
   const verb = enabled ? 'enable' : 'disable';
   try {
     const makaioHome = resolveMakaioHome();
@@ -151,12 +214,27 @@ export async function runSetEnabled(name: string, enabled: boolean): Promise<voi
       // This process is the only relevant view with nothing running, so
       // every tier — including its own project-local `{cwd}/node_modules` —
       // is in scope (`'all'`).
-      const installedListing = await listInstalledExtensions(makaioHome, 'all');
+      const installedListing = await listInstalledExtensions(makaioHome, 'all', listingOptions);
 
-      if (!enabled && (await isCriticalExtension(makaioHome, name, undefined, 'all', installedListing))) {
-        console.error(criticalRefusalMessage(name));
-        process.exitCode = 1;
-        return;
+      if (!enabled) {
+        const criticality = await resolveDisableCriticality(
+          makaioHome,
+          name,
+          undefined,
+          'all',
+          installedListing,
+          listingOptions,
+        );
+        if (criticality === 'critical') {
+          console.error(criticalRefusalMessage(name));
+          process.exitCode = 1;
+          return;
+        }
+        if (criticality === 'unknown') {
+          console.error(unknownCriticalityRefusalMessage(name));
+          process.exitCode = 1;
+          return;
+        }
       }
       if (!installedListing.some((ext) => ext.name === name)) {
         reportUnknownExtensionName(name, verb);
@@ -169,7 +247,7 @@ export async function runSetEnabled(name: string, enabled: boolean): Promise<voi
       return;
     }
 
-    await applyLiveToggle({ makaioHome, name, enabled, verb, health, busUrl });
+    await applyLiveToggle({ makaioHome, name, enabled, verb, health, busUrl, listingOptions });
   } catch (error) {
     console.error(`Failed to ${verb} extension "${name}": ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
@@ -190,6 +268,8 @@ interface LiveToggleOptions {
   readonly health: ServerHealth;
   /** Resolved bus URL the caller connected to, decided once by {@link runSetEnabled}. */
   readonly busUrl: string;
+  /** Host capabilities forwarded to {@link listInstalledExtensions} — see {@link runSetEnabled}. */
+  readonly listingOptions: InstalledExtensionListingOptions;
 }
 
 /**
@@ -234,7 +314,7 @@ interface LiveToggleOptions {
  * @param options - Live toggle inputs.
  */
 async function applyLiveToggle(options: LiveToggleOptions): Promise<void> {
-  const { makaioHome, name, enabled, verb, health, busUrl } = options;
+  const { makaioHome, name, enabled, verb, health, busUrl, listingOptions } = options;
   const auth = resolveClientAuth(health);
   const bus = await connectBusClient(busUrl, { auth, autoReconnect: false });
   try {
@@ -276,16 +356,41 @@ async function applyLiveToggle(options: LiveToggleOptions): Promise<void> {
     // different project directory than this CLI invocation, so only the
     // `$MAKAIO_HOME`-shared tiers are trustworthy for it (`'shared-home'`) —
     // see {@link listInstalledExtensions}'s TSDoc.
-    const installedListing = managedEntry ? undefined : await listInstalledExtensions(makaioHome, 'shared-home');
+    const installedListing = managedEntry
+      ? undefined
+      : await listInstalledExtensions(makaioHome, 'shared-home', listingOptions);
 
-    if (!enabled && (await isCriticalExtension(makaioHome, name, managedEntry, 'shared-home', installedListing))) {
-      console.error(criticalRefusalMessage(name));
-      process.exitCode = 1;
-      return;
+    if (!enabled) {
+      const criticality = await resolveDisableCriticality(
+        makaioHome,
+        name,
+        managedEntry,
+        'shared-home',
+        installedListing,
+        listingOptions,
+      );
+      if (criticality === 'critical') {
+        console.error(criticalRefusalMessage(name));
+        process.exitCode = 1;
+        return;
+      }
+      if (criticality === 'unknown') {
+        console.error(unknownCriticalityRefusalMessage(name));
+        process.exitCode = 1;
+        return;
+      }
     }
 
     if (!managedEntry) {
-      await applyUnmanagedNameToggle(makaioHome, name, enabled, verb, installedListing, frameworkPackageCollision);
+      await applyUnmanagedNameToggle(
+        makaioHome,
+        name,
+        enabled,
+        verb,
+        listingOptions,
+        installedListing,
+        frameworkPackageCollision,
+      );
       return;
     }
 
@@ -362,6 +467,8 @@ async function applyLiveToggle(options: LiveToggleOptions): Promise<void> {
  * @param name - Extension package name to toggle.
  * @param enabled - Desired enabled state.
  * @param verb - Verb used in output ("enable" or "disable").
+ * @param listingOptions - Host capabilities forwarded to
+ *   {@link listInstalledExtensions} when this function fetches the listing itself.
  * @param installedListing - Installed-package listing already fetched by the caller, when
  *   available; omit it to have this function fetch the listing itself.
  * @param frameworkPackageCollision - `true` when the reason this name is
@@ -374,6 +481,7 @@ async function applyUnmanagedNameToggle(
   name: string,
   enabled: boolean,
   verb: string,
+  listingOptions: InstalledExtensionListingOptions,
   installedListing?: readonly InstalledExtensionEntry[],
   frameworkPackageCollision = false,
 ): Promise<void> {
@@ -384,7 +492,7 @@ async function applyUnmanagedNameToggle(
   // `$MAKAIO_HOME` is guaranteed shared, so the fallback fetch uses
   // `'shared-home'`, matching the listing `applyLiveToggle` already fetched
   // with the same mode when it had one to pass.
-  const installed = installedListing ?? (await listInstalledExtensions(makaioHome, 'shared-home'));
+  const installed = installedListing ?? (await listInstalledExtensions(makaioHome, 'shared-home', listingOptions));
   if (!installed.some((ext) => ext.name === name)) {
     reportUnknownExtensionName(name, verb);
     return;

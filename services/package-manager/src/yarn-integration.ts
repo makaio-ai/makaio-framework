@@ -11,6 +11,8 @@ import { safeParseExtensionDescriptor } from '@makaio/contracts';
 import type { ExtensionDescriptor } from '@makaio/contracts';
 import type { PackageInfo } from './schemas.js';
 import { resolveExtensionEntrypointImportPath } from './local-path-installer.js';
+import { resolveCriticalFlag } from './exported-package-critical.js';
+import { parseDescriptorJson } from './descriptor-json.js';
 
 const NODE_LINKER_SETTING = 'nodeLinker: node-modules';
 const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
@@ -109,12 +111,24 @@ export class YarnPackageManager {
   private readonly makaioHome: string;
 
   /**
+   * Absolute path to the assembled `@makaio/framework` dist, forwarded to
+   * {@link resolveCriticalFlag} for every installed descriptor's criticality
+   * resolution — see that parameter's TSDoc for why the import worker needs it.
+   */
+  private readonly frameworkDistPath: string | undefined;
+
+  /**
    * @param makaioHome - Absolute path to the `.makaio` home directory (e.g. `~/.makaio`).
    *   Always derived from `os.homedir()` at the composition root (boot.ts) — callers
    *   never pass user input here, so no runtime absoluteness check is needed.
+   * @param frameworkDistPath - Absolute path to the assembled `@makaio/framework`
+   *   dist, when the host uses `NodeFrameworkModuleResolver` (see
+   *   `FrameworkModuleResolver.frameworkDistPath` in `@makaio/runtime-node`).
+   *   Omitted for hosts that resolve `@makaio/framework/*` natively.
    */
-  public constructor(makaioHome: string) {
+  public constructor(makaioHome: string, frameworkDistPath?: string) {
     this.makaioHome = makaioHome;
+    this.frameworkDistPath = frameworkDistPath;
   }
 
   /**
@@ -299,6 +313,17 @@ export class YarnPackageManager {
    * List installed packages.
    *
    * Returns all packages in dependencies.
+   *
+   * Each dependency's descriptor is resolved concurrently — resolution may
+   * import a server entrypoint in an isolated worker (see
+   * {@link resolveCriticalFlag}) to read its `critical` flag, and awaiting
+   * that serially would pay each entrypoint's import cost one after another.
+   * Unbounded concurrency is intentional: an extension host's dependency list
+   * is small (installed extensions, not npm's full transitive graph), so the
+   * simultaneous worker/file-descriptor cost stays low. Results are mapped
+   * back onto the dependency iteration order below, matching `Array.map`'s
+   * order-preserving guarantee for `Promise.all`, so the returned list order
+   * does not depend on which entrypoint import settles first.
    * @returns Array of package info objects
    */
   public async listPackages(): Promise<PackageInfo[]> {
@@ -307,38 +332,39 @@ export class YarnPackageManager {
       const makaioDir = npath.toPortablePath(this.makaioHome);
       const packageJsonPath = ppath.join(makaioDir, 'package.json' as Filename);
 
-      if (!(await xfs.existsPromise(packageJsonPath))) {
-        return [];
-      }
+      if (!(await xfs.existsPromise(packageJsonPath))) return [];
 
       const { project } = await this.loadYarnState();
 
-      const packages: PackageInfo[] = [];
+      const resolvedPackages = await Promise.all(
+        [...project.topLevelWorkspace.manifest.dependencies.values()].map(
+          async (descriptor): Promise<PackageInfo | undefined> => {
+            const name = structUtils.stringifyIdent(descriptor);
+            const resolution = project.storedResolutions.get(descriptor.descriptorHash);
+            const pkg = resolution ? project.storedPackages.get(resolution) : undefined;
+            const version = pkg?.version ?? structUtils.parseRange(descriptor.range).selector;
 
-      for (const [, descriptor] of project.topLevelWorkspace.manifest.dependencies) {
-        const name = structUtils.stringifyIdent(descriptor);
-        const resolution = project.storedResolutions.get(descriptor.descriptorHash);
-        const pkg = resolution ? project.storedPackages.get(resolution) : undefined;
-        const version = pkg?.version ?? structUtils.parseRange(descriptor.range).selector;
+            const descriptorResult = await this.readInstalledDescriptor(name);
+            if (!descriptorResult.hasDescriptor) return undefined;
 
-        const descriptorResult = await this.readInstalledDescriptor(name);
-        if (!descriptorResult.hasDescriptor) {
-          continue;
-        }
+            return {
+              name,
+              version,
+              hasDescriptor: true,
+              descriptorName: descriptorResult.descriptorName,
+              ...(descriptorResult.serverImportPath !== undefined && {
+                serverImportPath: descriptorResult.serverImportPath,
+              }),
+              ...(descriptorResult.declaresServerEntrypoint && {
+                declaresServerEntrypoint: descriptorResult.declaresServerEntrypoint,
+              }),
+              ...(descriptorResult.critical !== undefined && { critical: descriptorResult.critical }),
+            };
+          },
+        ),
+      );
 
-        packages.push({
-          name,
-          version,
-          hasDescriptor: true,
-          descriptorName: descriptorResult.descriptorName,
-          ...(descriptorResult.serverImportPath !== undefined && {
-            serverImportPath: descriptorResult.serverImportPath,
-          }),
-          ...(descriptorResult.critical !== undefined && { critical: descriptorResult.critical }),
-        });
-      }
-
-      return packages;
+      return resolvedPackages.filter((pkg): pkg is PackageInfo => pkg !== undefined);
     } catch (error) {
       throw new Error('Failed to list packages', { cause: error });
     }
@@ -386,27 +412,44 @@ export class YarnPackageManager {
    * Read and validate an installed package descriptor from node_modules.
    *
    * The package manager writes `.yarnrc.yml` with `nodeLinker: node-modules`,
-   * so descriptor discovery mirrors runtime filesystem discovery.
+   * so descriptor discovery mirrors runtime filesystem discovery. Public so
+   * this producer's `critical` resolution — which a descriptor with a server
+   * entrypoint defers to {@link resolveCriticalFlag} reading the exported
+   * package, the same rule `PackageManagerService`'s local-path listing
+   * applies — is directly testable without driving a full Yarn install.
    * @param packageName - Installed package ident.
    * @returns Descriptor metadata derived from the public reader.
    */
-  private async readInstalledDescriptor(
-    packageName: string,
-  ): Promise<
+  public async readInstalledDescriptor(packageName: string): Promise<
     | { hasDescriptor: false }
-    | { hasDescriptor: true; descriptorName: string; serverImportPath?: string; critical?: boolean }
+    | {
+        hasDescriptor: true;
+        descriptorName: string;
+        serverImportPath?: string;
+        declaresServerEntrypoint?: boolean;
+        critical?: boolean;
+      }
   > {
     const descriptor = await this.readInstalledExtensionDescriptor(packageName);
     if (descriptor === null) {
       return { hasDescriptor: false };
     }
 
+    const declaresServerEntrypoint = descriptor.entrypoints?.server !== undefined;
     const serverImportPath = await this.resolveInstalledServerEntrypoint(packageName, descriptor);
+    const critical = await resolveCriticalFlag(
+      descriptor.critical,
+      serverImportPath,
+      descriptor.name,
+      `[YarnPackageManager] ${descriptor.name}`,
+      this.frameworkDistPath,
+    );
     return {
       hasDescriptor: true,
       descriptorName: descriptor.name,
       ...(serverImportPath !== undefined && { serverImportPath }),
-      ...(descriptor.critical !== undefined && { critical: descriptor.critical }),
+      ...(declaresServerEntrypoint && { declaresServerEntrypoint }),
+      ...(critical !== undefined && { critical }),
     };
   }
 
@@ -433,27 +476,35 @@ export class YarnPackageManager {
    * Read and parse the `descriptor.json` for an installed package.
    *
    * Looks for the descriptor at `node_modules/<packageName>/descriptor.json`.
-   * Returns `null` when the file is absent, unreadable, or fails schema
-   * validation.
+   * Returns `null` silently when the file is absent or unreadable — that is
+   * the ordinary "not an extension" case. Returns `null` with a
+   * `console.warn` when the file exists but fails schema validation, or when
+   * it exists but is not valid JSON, so a previously-installed descriptor
+   * that drifts into invalidness (e.g. after a schema tightening, or a
+   * truncated write) doesn't just vanish from listings without a trace.
    * @param packageName - npm package name (e.g., `@acme/weather-tools`).
    * @returns Validated extension descriptor, or `null` if not present/invalid.
    */
   public async readInstalledExtensionDescriptor(packageName: string): Promise<ExtensionDescriptor | null> {
     const descriptorPath = path.join(this.makaioHome, 'node_modules', ...packageName.split('/'), 'descriptor.json');
 
-    let parsed: unknown;
+    let raw: string;
     try {
-      const raw = await fs.readFile(descriptorPath, 'utf-8');
-      parsed = JSON.parse(raw) as unknown;
+      raw = await fs.readFile(descriptorPath, 'utf-8');
     } catch (error) {
-      if (error instanceof SyntaxError || isExpectedDescriptorReadFailure(error)) {
-        return null;
-      }
+      if (isExpectedDescriptorReadFailure(error)) return null;
       throw error;
     }
 
-    const result = safeParseExtensionDescriptor(parsed);
-    return result.success ? result.data : null;
+    const parsed = parseDescriptorJson(raw, descriptorPath, `[YarnPackageManager] ${packageName}`);
+    if (!parsed.ok) return null;
+
+    const result = safeParseExtensionDescriptor(parsed.value);
+    if (!result.success) {
+      console.warn(`[YarnPackageManager] Skipping invalid descriptor.json for ${packageName}:`, result.error.message);
+      return null;
+    }
+    return result.data;
   }
 
   /**
@@ -472,9 +523,7 @@ export class YarnPackageManager {
       const raw = await fs.readFile(packageJsonPath, 'utf-8');
       manifest = JSON.parse(raw) as typeof manifest;
     } catch (error) {
-      if (isExpectedDescriptorReadFailure(error)) {
-        return [];
-      }
+      if (isExpectedDescriptorReadFailure(error)) return [];
       throw error;
     }
 

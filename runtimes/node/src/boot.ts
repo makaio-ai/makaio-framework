@@ -549,6 +549,12 @@ export async function bootMakaioRuntimeCore(
         createPackageManagerPackage({
           frameworkPeerRange: `^${runtimeFrameworkVersion}`,
           frameworkPackagePath: options.frameworkPackagePath,
+          // `frameworkDistPath` is `''` for `NoopFrameworkModuleResolver` (dev
+          // mode, Bun-based hosts) — only forward it when a
+          // `NodeFrameworkModuleResolver` actually installed the main-thread
+          // hook this empowers the package manager's import worker to mirror
+          // (see `resolveCriticalFlag`'s `frameworkDistPath` parameter).
+          frameworkDistPath: frameworkModuleResolver?.frameworkDistPath || undefined,
           devPortalPackages: options.devPortalPackages,
         }),
       );
