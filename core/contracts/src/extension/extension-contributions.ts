@@ -144,7 +144,8 @@ export interface ExtensionUiContribution {
    * Tool call formatter declarations.
    *
    * Formatters customize how specific tool calls are rendered in the chat
-   * UI. Registered with `ToolCallFormatterRegistry` on extension load.
+   * UI. Registered with the host's tool-call formatter registry on extension
+   * load.
    */
   readonly toolFormatters?: readonly ToolCallFormatterDeclaration[];
 
@@ -152,9 +153,9 @@ export interface ExtensionUiContribution {
    * Custom field type loaders for schema-driven forms.
    *
    * Maps field type identifiers to lazy-loaded React components that accept
-   * `FormFieldProps`. Registered with `FormFieldRegistry` on extension load.
-   * Each entry is either a bare loader — for field types that render exactly
-   * one control, the common case — or an
+   * `FormFieldProps`. Registered with the host's field registry on extension
+   * load. Each entry is either a bare loader — for field types that render
+   * exactly one control, the common case — or an
    * {@link ExtensionFieldTypeRegistration} object declaring `composite: true`
    * for field types that render more than one focusable control (see
    * {@link ExtensionFieldTypeEntry}).

@@ -1,7 +1,7 @@
 /**
  * Tool capability picker data contracts.
  *
- * Types used by the CapabilityPicker UI component for three-state
+ * Types used by the host's `capability-picker` widget for three-state
  * capability selection and raw tool override management.
  * @packageDocumentation
  */
@@ -9,7 +9,7 @@
 import type { ToolCapability, ToolMetaTag } from './capabilities.js';
 
 /**
- * Composite value emitted by the CapabilityPicker widget.
+ * Composite value emitted by the host's `capability-picker` widget.
  * Controls four schema fields via a single widget.
  * @param allowedCapabilities - Capabilities explicitly allowed (present = allowed in three-state model)
  * @param disallowedCapabilities - Capabilities explicitly disallowed (present = disallowed in three-state model)
