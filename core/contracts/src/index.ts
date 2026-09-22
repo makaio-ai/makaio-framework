@@ -1565,6 +1565,8 @@ export type {
   ExtensionDescriptorBase,
   ExtensionEntrypoints,
   ExtensionFieldTypeLoader,
+  ExtensionFieldTypeRegistration,
+  ExtensionFieldTypeEntry,
   ExtensionIdentity,
   ExtensionOperatorConfigEntry,
   ExtensionOperatorConfigFailure,

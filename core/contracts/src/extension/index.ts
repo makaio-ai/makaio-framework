@@ -175,6 +175,8 @@ export type {
   ExtensionConfigComponentLoader,
   ExtensionConfigComponentProps,
   ExtensionFieldTypeLoader,
+  ExtensionFieldTypeRegistration,
+  ExtensionFieldTypeEntry,
   ExtensionOperatorConfigProvenance,
   GatheredContext,
   GatheredEntry,
