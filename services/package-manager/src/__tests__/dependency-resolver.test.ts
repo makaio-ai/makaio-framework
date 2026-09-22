@@ -255,6 +255,52 @@ describe('DependencyResolver', () => {
     expect(packages.restored).toBe(true);
   });
 
+  it('refuses a duplicate identity an optional dependency left on disk after its range check failed', async () => {
+    // `@acme/shared` installs cleanly and declares the name `@other/shared`
+    // already holds, but its descriptor version misses the requested range.
+    // Optionality lets the *declared dependency* go unsatisfied; it cannot undo
+    // the install, so the package stays on disk and its claim still contests
+    // the name. Reporting success here would hand a duplicate identity to the
+    // next boot's discovery.
+    const rootDescriptor = descriptor('root', [
+      { type: 'extension', name: 'shared', version: '>=2.0.0', optional: true },
+    ]);
+    const packages = new FakePackages(
+      new Map([
+        ['@makaio/root', rootDescriptor],
+        ['@acme/shared', descriptor('shared')],
+      ]),
+      [{ npmName: '@other/shared', version: '2.0.0', descriptor: descriptor('shared', [], '2.0.0') }],
+    );
+    const names = new FakeNames(new Map([['shared', '@acme/shared']]));
+    const resolver = new DependencyResolver(packages, names);
+
+    await expect(resolver.resolve(['@makaio/root'])).rejects.toThrow(ExtensionNameClaimedError);
+    expect(packages.installed).toContain('@acme/shared@>=2.0.0');
+    expect(packages.restored).toBe(true);
+  });
+
+  it('refuses an optional dependency left on disk at a version its dependent cannot use', async () => {
+    // Same anomaly as above without a name contest: the install succeeded, so
+    // the coordinator will be offered `shared@1.0.0` at every boot while
+    // `@makaio/root` declares it cannot use it. Optionality covers a dependency
+    // that is absent, not one that is present and wrong.
+    const rootDescriptor = descriptor('root', [
+      { type: 'extension', name: 'shared', version: '>=2.0.0', optional: true },
+    ]);
+    const packages = new FakePackages(
+      new Map([
+        ['@makaio/root', rootDescriptor],
+        ['@acme/shared', descriptor('shared')],
+      ]),
+    );
+    const names = new FakeNames(new Map([['shared', '@acme/shared']]));
+    const resolver = new DependencyResolver(packages, names);
+
+    await expect(resolver.resolve(['@makaio/root'])).rejects.toThrow('@makaio/root requires shared >=2.0.0');
+    expect(packages.restored).toBe(true);
+  });
+
   it('releases the extension name an upgraded package no longer declares', async () => {
     // `@acme/renamed` used to declare "old-name" and its new version declares
     // "new-name". A later root in the same batch may then legitimately claim
@@ -275,6 +321,54 @@ describe('DependencyResolver', () => {
       { npmName: '@acme/successor', version: '1.0.0', source: 'new' },
     ]);
     expect(packages.restored).toBe(false);
+  });
+
+  it('accepts a name handover between two roots in either submission order', async () => {
+    // `@acme/owner@2` gives up "shared" and `@acme/successor` takes it over.
+    // Both target graphs are the same, so the order the two roots are
+    // submitted in must not decide whether the batch is legal.
+    const targets = new Map([
+      ['@acme/owner', descriptor('owner-renamed', [], '2.0.0')],
+      ['@acme/successor', descriptor('shared')],
+    ]);
+    const installedBefore = (): InstalledExtensionDescriptor[] => [
+      { npmName: '@acme/owner', version: '1.0.0', descriptor: descriptor('shared') },
+    ];
+
+    for (const roots of [
+      ['@acme/owner', '@acme/successor'],
+      ['@acme/successor', '@acme/owner'],
+    ]) {
+      const packages = new FakePackages(targets, installedBefore());
+      const result = await new DependencyResolver(packages, new FakeNames(new Map())).resolve(roots);
+
+      expect(result.installed.map((pkg) => `${pkg.npmName}@${pkg.version}`).sort()).toEqual([
+        '@acme/owner@2.0.0',
+        '@acme/successor@1.0.0',
+      ]);
+      expect(packages.restored).toBe(false);
+    }
+  });
+
+  it('refuses a same-batch double claim in either submission order', async () => {
+    // Counterpart to the handover above: nothing releases "shared", so both
+    // orders must report the same contest rather than one of them succeeding.
+    const targets = new Map([
+      ['@acme/first', descriptor('shared')],
+      ['@acme/second', descriptor('shared')],
+    ]);
+
+    for (const roots of [
+      ['@acme/first', '@acme/second'],
+      ['@acme/second', '@acme/first'],
+    ]) {
+      const packages = new FakePackages(targets);
+
+      await expect(new DependencyResolver(packages, new FakeNames(new Map())).resolve(roots)).rejects.toThrow(
+        'Package @acme/second declares extension name "shared", which is already installed from @acme/first@1.0.0',
+      );
+      expect(packages.restored).toBe(true);
+    }
   });
 
   it("refuses a rename that strands an installed package's required dependency", async () => {
