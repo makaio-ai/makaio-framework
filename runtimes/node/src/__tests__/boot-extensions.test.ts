@@ -39,6 +39,7 @@ import {
   registerExtensionBootContributions,
   selectFrameworkCorePackages,
 } from '../boot.js';
+import { isExtensionEnabled } from '../extension-enablement-store.js';
 import { createNodeWorkflowRunner } from '../workflow-worker/index.js';
 import { WorkerRunner } from '../workflow-worker/worker-runner.js';
 import { InProcessWorkflowRunner } from '../workflow-worker/in-process-workflow-runner.js';
@@ -47,8 +48,12 @@ import { loadBootExtensions } from '../boot-extension-loading.js';
 import {
   type BootExtensionEligibilityOptions,
   buildRuntimeEnvironment,
+  closeEffectiveEnabledBootPackages,
+  composeBootExtensionSelection,
+  excludeIneffectiveCoreNameOverrides,
   selectBootEligibleExtensionPackages,
   selectEligibleAutomationCronSchedulerHostPackages,
+  selectExtensionManagedEnabledPackages,
 } from '../boot-extension-selection.js';
 import {
   artifactSchemaRegistryPackage,
@@ -67,7 +72,7 @@ import {
   ArtifactViewBuilderRegistryToken,
   createArtifactViewBuilderContributionProcessor,
 } from '@makaio/services-core/materialization';
-import type { ArtifactViewBuilder, ExtensionArtifactViewBuildersContribution } from '@makaio/contracts';
+import { dep, type ArtifactViewBuilder, type ExtensionArtifactViewBuildersContribution } from '@makaio/contracts';
 import { filesystemPackage } from '@makaio/extension-filesystem';
 import { shellPackage } from '@makaio/extension-shell';
 import { subagentPackage } from '@makaio/extension-subagent';
@@ -429,6 +434,436 @@ describe('session orchestrator runtime ownership', () => {
 
     expect(() => selectFrameworkCorePackages([firstOwner, secondOwner])).toThrow();
   });
+
+  it('keeps the framework session orchestrator when a package declares the field as false', () => {
+    // `runtimeOwnership: { sessionOrchestrator: false }` declares the field
+    // but claims no ownership. The boot-time owner selector must treat this
+    // the same as an absent field (only `=== true` is a claim), the same
+    // field-level rule `isRuntimeOwnershipFieldClaimed` encodes in one place.
+    const nonOwner: KernelMakaioExtension = {
+      ...makePackage('non-owner-runtime'),
+      runtimeOwnership: { sessionOrchestrator: false },
+    };
+
+    const selected = selectFrameworkCorePackages([nonOwner]);
+
+    expect(selected.map((pkg) => pkg.name)).toContain(SessionOrchestratorToken.name);
+  });
+});
+
+describe('closeEffectiveEnabledBootPackages', () => {
+  it('excludes a preference-enabled package whose required dependency is disabled', () => {
+    const requiredDep = makePackage('provider-a');
+    const dependent: KernelMakaioExtension = {
+      ...makePackage('feature-b'),
+      dependencies: [dep('provider-a')],
+    };
+    // `provider-a` was disabled by preference, so it never made it into the
+    // preference-enabled set handed to the closure — only `feature-b` did.
+    const preferenceEnabled = [dependent];
+    const bootEligible = [requiredDep, dependent];
+
+    const closed = closeEffectiveEnabledBootPackages(preferenceEnabled, bootEligible);
+
+    expect(closed.map((pkg) => pkg.name)).toStrictEqual([]);
+  });
+
+  it('keeps a preference-enabled package whose required dependency is also enabled', () => {
+    const requiredDep = makePackage('provider-a');
+    const dependent: KernelMakaioExtension = {
+      ...makePackage('feature-b'),
+      dependencies: [dep('provider-a')],
+    };
+    const preferenceEnabled = [requiredDep, dependent];
+    const bootEligible = [requiredDep, dependent];
+
+    const closed = closeEffectiveEnabledBootPackages(preferenceEnabled, bootEligible);
+
+    expect(closed.map((pkg) => pkg.name)).toStrictEqual(['provider-a', 'feature-b']);
+  });
+
+  it('keeps a preference-enabled package whose dependency is only optional and disabled', () => {
+    const dependent: KernelMakaioExtension = {
+      ...makePackage('feature-b'),
+      dependencies: [dep('provider-a', undefined, true)],
+    };
+    // `provider-a` is disabled (absent from the preference-enabled set) but the
+    // dependency is optional, so `feature-b` must still be able to start.
+    const preferenceEnabled = [dependent];
+    const bootEligible = [makePackage('provider-a'), dependent];
+
+    const closed = closeEffectiveEnabledBootPackages(preferenceEnabled, bootEligible);
+
+    expect(closed.map((pkg) => pkg.name)).toStrictEqual(['feature-b']);
+  });
+
+  it('treats a dependency on a framework package name as always satisfied', () => {
+    // `makaio.clients-core` is not part of the descriptor-backed extension
+    // pool (`bootEligibleExtensionPackages`); it is a framework package that
+    // loads unconditionally, so a dependency on it must never exclude the
+    // dependent extension.
+    const dependent: KernelMakaioExtension = {
+      ...makePackage('feature-b'),
+      dependencies: [dep('makaio.clients-core')],
+    };
+    const preferenceEnabled = [dependent];
+    const bootEligible = [dependent];
+
+    const closed = closeEffectiveEnabledBootPackages(preferenceEnabled, bootEligible);
+
+    expect(closed.map((pkg) => pkg.name)).toStrictEqual(['feature-b']);
+  });
+
+  it('transitively excludes an entire dependency chain when its root is disabled', () => {
+    // A (disabled) <- B (enabled) <- C (enabled). Disabling A must also drop
+    // B and C even though B and C were themselves preference-enabled,
+    // because neither will ever reach `active` without A.
+    const pkgA = makePackage('pkg-a');
+    const pkgB: KernelMakaioExtension = { ...makePackage('pkg-b'), dependencies: [dep('pkg-a')] };
+    const pkgC: KernelMakaioExtension = { ...makePackage('pkg-c'), dependencies: [dep('pkg-b')] };
+    const bootEligible = [pkgA, pkgB, pkgC];
+    // pkgA is absent: disabled by preference.
+    const preferenceEnabled = [pkgB, pkgC];
+
+    const closed = closeEffectiveEnabledBootPackages(preferenceEnabled, bootEligible);
+
+    expect(closed.map((pkg) => pkg.name)).toStrictEqual([]);
+  });
+
+  it('excludes a critical package whose required dependency is disabled, matching the coordinator abort path', () => {
+    // The critical override (isExtensionEnabled) already ran before this
+    // function is called, so `criticalDependent` is in the preference-enabled
+    // input despite the store disabling it. Its required dependency
+    // `provider-a` is disabled and absent from the preference-enabled set.
+    // The coordinator's startExtensionEntry() would fail this critical entry
+    // and throw, aborting startAll() entirely (extension-start-runner.ts) —
+    // this function must not contradict that by keeping the package in the
+    // boot composition as if it will run.
+    const criticalDependent: KernelMakaioExtension = {
+      ...makePackage('critical-feature'),
+      critical: true,
+      dependencies: [dep('provider-a')],
+    };
+    const bootEligible = [makePackage('provider-a'), criticalDependent];
+    const preferenceEnabled = [criticalDependent];
+
+    const closed = closeEffectiveEnabledBootPackages(preferenceEnabled, bootEligible);
+
+    expect(closed.map((pkg) => pkg.name)).toStrictEqual([]);
+  });
+
+  it('logs a diagnostic naming the disabled dependency for each excluded package', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const dependent: KernelMakaioExtension = {
+        ...makePackage('feature-b'),
+        dependencies: [dep('provider-a')],
+      };
+      closeEffectiveEnabledBootPackages([dependent], [makePackage('provider-a'), dependent]);
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[boot] Excluding extension "%s" from boot composition: required dependency %s is disabled',
+        'feature-b',
+        'provider-a',
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+describe('excludeIneffectiveCoreNameOverrides', () => {
+  it('excludes a disabled extension package that collides with a core package name and warns', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const disabledOverride = makePackage('makaio.clients-core');
+      const unrelatedExtension = makePackage('unrelated-ext');
+
+      const result = excludeIneffectiveCoreNameOverrides(
+        [disabledOverride, unrelatedExtension],
+        new Set(['makaio.clients-core']),
+        new Set(['unrelated-ext']),
+      );
+
+      expect(result).toStrictEqual([unrelatedExtension]);
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[boot] Excluding extension "%s": a disabled override would replace core package %s; ' +
+          'the core package stays active; the override applies after enabling and restart',
+        'makaio.clients-core',
+        'makaio.clients-core',
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('keeps an enabled extension override that collides with a core package name', () => {
+    const enabledOverride = makePackage('makaio.clients-core');
+
+    const result = excludeIneffectiveCoreNameOverrides(
+      [enabledOverride],
+      new Set(['makaio.clients-core']),
+      new Set(['makaio.clients-core']),
+    );
+
+    expect(result).toStrictEqual([enabledOverride]);
+  });
+
+  it('excludes an enabled override whose required dependency is disabled, since it is absent from effective-enabled', () => {
+    // `effectiveEnabledPackageNames` is the dependency-closed set computed by
+    // closeEffectiveEnabledBootPackages: an enabled override with a disabled
+    // required dependency never reaches `active`, so it is already absent
+    // from that set by the time this function runs — it must not displace
+    // the core package either.
+    const overrideWithDisabledDependency = makePackage('makaio.clients-core');
+
+    const result = excludeIneffectiveCoreNameOverrides(
+      [overrideWithDisabledDependency],
+      new Set(['makaio.clients-core']),
+      new Set(),
+    );
+
+    expect(result).toStrictEqual([]);
+  });
+
+  it('leaves non-colliding extension packages untouched regardless of enablement', () => {
+    const disabledUnrelated = makePackage('disabled-unrelated-ext');
+
+    const result = excludeIneffectiveCoreNameOverrides(
+      [disabledUnrelated],
+      new Set(['makaio.clients-core']),
+      new Set(),
+    );
+
+    expect(result).toStrictEqual([disabledUnrelated]);
+  });
+});
+
+describe('composeBootExtensionSelection', () => {
+  /**
+   * Build an enablement preference source that disables exactly the given names.
+   * @param disabledNames - Package names to treat as disabled by preference.
+   */
+  const disabling = (disabledNames: ReadonlyArray<string>): { loadEnabled: (name: string) => boolean } => ({
+    loadEnabled: (name) => !disabledNames.includes(name),
+  });
+
+  it('keeps a package whose only unmet dependency is a core-name-colliding, disabled extension override (P1)', () => {
+    // Extension A ("makaio.clients-core") collides with a framework/core
+    // package name and is disabled by preference. Extension B requires A by
+    // name and is enabled. Stage 2 lets the retained core package win the
+    // name collision; Stage 3 must then treat B's dependency on "A" as
+    // satisfied by the retained core package, not by the dropped, disabled
+    // override — the P1 finding this composition fixes.
+    const disabledOverride = makePackage('makaio.clients-core');
+    const dependentB: KernelMakaioExtension = {
+      ...makePackage('feature-b'),
+      dependencies: [dep('makaio.clients-core')],
+    };
+    const frameworkPackageNames = new Set(['makaio.clients-core']);
+
+    const result = composeBootExtensionSelection({
+      bootEligibleExtensionPackages: [disabledOverride, dependentB],
+      configProvider: disabling(['makaio.clients-core']),
+      frameworkPackageNames,
+    });
+
+    // Stage 2: the disabled override is dropped so the core package stays active.
+    expect(result.mergeableExtensionPackages.map((pkg) => pkg.name)).toStrictEqual(['feature-b']);
+    expect(result.extensionManagedPackageNames).toStrictEqual(new Set(['feature-b']));
+    // Stage 3: B's clients, ownership claims, scheduler policy, and
+    // runtimeBoot contribution all key off this set being non-empty for B.
+    expect(result.effectiveEnabledBootPackages.map((pkg) => pkg.name)).toStrictEqual(['feature-b']);
+    expect(result.effectiveEnabledPackageNames.has('feature-b')).toBe(true);
+  });
+
+  it('keeps a transitive dependent when the root dependency is a core-name-colliding, disabled override', () => {
+    // A (disabled, collides with core) <- B (enabled, requires A) <- C (enabled, requires B).
+    const disabledOverride = makePackage('makaio.clients-core');
+    const pkgB: KernelMakaioExtension = { ...makePackage('pkg-b'), dependencies: [dep('makaio.clients-core')] };
+    const pkgC: KernelMakaioExtension = { ...makePackage('pkg-c'), dependencies: [dep('pkg-b')] };
+    const frameworkPackageNames = new Set(['makaio.clients-core']);
+
+    const result = composeBootExtensionSelection({
+      bootEligibleExtensionPackages: [disabledOverride, pkgB, pkgC],
+      configProvider: disabling(['makaio.clients-core']),
+      frameworkPackageNames,
+    });
+
+    expect(result.effectiveEnabledPackageNames).toStrictEqual(new Set(['pkg-b', 'pkg-c']));
+  });
+
+  it('still excludes a dependent whose disabled dependency does not collide with any framework package name', () => {
+    // Plain disabled-dependency exclusion (no collision involved) must keep
+    // working exactly as `closeEffectiveEnabledBootPackages` already covers.
+    const requiredDep = makePackage('provider-a');
+    const dependent: KernelMakaioExtension = { ...makePackage('feature-b'), dependencies: [dep('provider-a')] };
+
+    const result = composeBootExtensionSelection({
+      bootEligibleExtensionPackages: [requiredDep, dependent],
+      configProvider: disabling(['provider-a']),
+      frameworkPackageNames: new Set(),
+    });
+
+    expect(result.effectiveEnabledPackageNames).toStrictEqual(new Set());
+  });
+
+  it('holds the fixed stage order as a contract on the composed result object', () => {
+    // Stage 1 (preference) -> Stage 2 (collision) -> Stage 3 (post-collision
+    // closure) -> Stage 4 (derived sets). A package dropped by Stage 2 is
+    // absent from `extensionManagedPackageNames`, and
+    // `effectiveEnabledPackageNames` is always a subset of it by construction.
+    const disabledOverride = makePackage('makaio.clients-core');
+    const dependentB: KernelMakaioExtension = {
+      ...makePackage('feature-b'),
+      dependencies: [dep('makaio.clients-core')],
+    };
+    const unrelatedDisabled = makePackage('unrelated-disabled');
+
+    const result = composeBootExtensionSelection({
+      bootEligibleExtensionPackages: [disabledOverride, dependentB, unrelatedDisabled],
+      configProvider: disabling(['makaio.clients-core', 'unrelated-disabled']),
+      frameworkPackageNames: new Set(['makaio.clients-core']),
+    });
+
+    // Stage 2 output.
+    expect(result.mergeableExtensionPackages.map((pkg) => pkg.name)).not.toContain('makaio.clients-core');
+    // Stage 4 derives extensionManagedPackageNames from Stage 2's survivors.
+    expect(result.extensionManagedPackageNames).toStrictEqual(
+      new Set(result.mergeableExtensionPackages.map((pkg) => pkg.name)),
+    );
+    // Stage 3's output is always a subset of Stage 2's survivor names.
+    for (const name of result.effectiveEnabledPackageNames) {
+      expect(result.extensionManagedPackageNames.has(name)).toBe(true);
+    }
+    // feature-b survives despite its literal dependency name being disabled,
+    // because Stage 3 resolves it against the post-collision composition.
+    expect(result.effectiveEnabledPackageNames.has('feature-b')).toBe(true);
+    expect(result.effectiveEnabledPackageNames.has('unrelated-disabled')).toBe(false);
+  });
+});
+
+describe('selectExtensionManagedEnabledPackages', () => {
+  /**
+   * Build a package that records the moment its boot contribution is
+   * configured, so a test can assert whether `runtimeBoot.configure` ran.
+   * @param name - Package name.
+   * @param label - Distinguishing label pushed onto `configured` (lets a test
+   *   tell the core package's own contribution apart from a same-named
+   *   override's contribution).
+   * @param configured - Shared recorder array the test asserts against.
+   * @returns The package, ready to be handed to the coordinator.
+   */
+  function makeBootContributor(name: string, label: string, configured: string[]): KernelMakaioExtension {
+    return {
+      ...makePackage(name),
+      runtimeBoot: {
+        configure: () => {
+          configured.push(label);
+          return [];
+        },
+      },
+    };
+  }
+
+  it('keeps a retained core package that won a disabled-override name collision, so its runtimeBoot contribution still registers', () => {
+    // Reproduces the P2 finding: a disabled extension shares a core
+    // package's name. `excludeIneffectiveCoreNameOverrides` correctly keeps
+    // the core package active, but classifying `enabledRetainedPackages` by
+    // the shared NAME against the pre-collision extension pool used to treat
+    // the retained core package as "extension-managed and not enabled" —
+    // dropping its runtimeBoot.configure even though the coordinator kept it
+    // active. Classifying by the post-collision extension set fixes that.
+    const bus = createBusInstance();
+    const coordinator = new ExtensionCoordinator(bus, { surface: 'headless' });
+    const configured: string[] = [];
+
+    const corePackage = makeBootContributor('makaio.clients-core', 'core', configured);
+    const disabledOverride = makeBootContributor('makaio.clients-core', 'override', configured);
+
+    const frameworkPackageNames = new Set([corePackage.name]);
+    // The override is disabled, so it is absent from the effective-enabled set.
+    const effectiveEnabledPackageNames = new Set<string>();
+    const mergeableExtensionPackages = excludeIneffectiveCoreNameOverrides(
+      [disabledOverride],
+      frameworkPackageNames,
+      effectiveEnabledPackageNames,
+    );
+    expect(mergeableExtensionPackages).toStrictEqual([]);
+
+    // `extensionManagedPackageNames` is derived from the post-collision
+    // extension set, exactly as boot.ts now computes it.
+    const extensionManagedPackageNames = new Set(mergeableExtensionPackages.map((pkg) => pkg.name));
+
+    const packagesToLoad = [corePackage, ...mergeableExtensionPackages];
+    const retainedPackages = coordinator.load(packagesToLoad);
+    expect(retainedPackages).toStrictEqual([corePackage]);
+
+    const enabledRetainedPackages = selectExtensionManagedEnabledPackages(
+      retainedPackages,
+      extensionManagedPackageNames,
+      effectiveEnabledPackageNames,
+    );
+
+    registerExtensionBootContributions(enabledRetainedPackages, bus, coordinator);
+
+    expect(configured).toStrictEqual(['core']);
+  });
+
+  it('keeps an enabled override that wins a core-name collision effectively enabled', () => {
+    // Symmetric case: an enabled extension override legitimately shadows the
+    // core package. `excludeIneffectiveCoreNameOverrides` keeps it, the
+    // coordinator's own coalescing lets it win over the core package, and it
+    // must remain classified as extension-managed AND effectively enabled so
+    // its own runtimeBoot.configure still runs.
+    const bus = createBusInstance();
+    const coordinator = new ExtensionCoordinator(bus, { surface: 'headless' });
+    const configured: string[] = [];
+
+    const corePackage = makeBootContributor('makaio.clients-core', 'core', configured);
+    const enabledOverride = makeBootContributor('makaio.clients-core', 'override', configured);
+
+    const frameworkPackageNames = new Set([corePackage.name]);
+    const effectiveEnabledPackageNames = new Set([enabledOverride.name]);
+    const mergeableExtensionPackages = excludeIneffectiveCoreNameOverrides(
+      [enabledOverride],
+      frameworkPackageNames,
+      effectiveEnabledPackageNames,
+    );
+    expect(mergeableExtensionPackages).toStrictEqual([enabledOverride]);
+
+    const extensionManagedPackageNames = new Set(mergeableExtensionPackages.map((pkg) => pkg.name));
+
+    const packagesToLoad = [corePackage, ...mergeableExtensionPackages];
+    const retainedPackages = coordinator.load(packagesToLoad);
+    // The coordinator's own name-collision coalescing keeps the last
+    // registration — the override — not the core package.
+    expect(retainedPackages).toStrictEqual([enabledOverride]);
+
+    const enabledRetainedPackages = selectExtensionManagedEnabledPackages(
+      retainedPackages,
+      extensionManagedPackageNames,
+      effectiveEnabledPackageNames,
+    );
+
+    registerExtensionBootContributions(enabledRetainedPackages, bus, coordinator);
+
+    expect(configured).toStrictEqual(['override']);
+  });
+
+  it('excludes a non-colliding extension-managed package that is not effectively enabled', () => {
+    const retainedPackages = [makePackage('disabled-ext'), makePackage('kept-ext')];
+
+    const result = selectExtensionManagedEnabledPackages(
+      retainedPackages,
+      new Set(['disabled-ext', 'kept-ext']),
+      new Set(['kept-ext']),
+    );
+
+    expect(result.map((pkg) => pkg.name)).toStrictEqual(['kept-ext']);
+  });
 });
 
 describe('runtime boot contribution rollback', () => {
@@ -509,6 +944,58 @@ describe('runtime boot contribution rollback', () => {
 
     expect(configured).toStrictEqual(['kept']);
   });
+
+  it('critical extension hand-disabled in the store still contributes runtimeBoot at boot', () => {
+    // Simulate an enablement store where both extensions are in "disabled".
+    // The coordinator's load() applies the critical override (entry.enabled = true),
+    // and the boot-layer must apply the same rule so the critical extension also
+    // reaches registerExtensionBootContributions while optional-ext is correctly
+    // excluded.
+    const disabledNames = new Set(['critical-ext', 'optional-ext']);
+    const store = {
+      loadEnabled: (name: string): boolean | undefined => (disabledNames.has(name) ? false : undefined),
+    };
+
+    const configured: string[] = [];
+
+    const packages: KernelMakaioExtension[] = [
+      {
+        ...makePackage('critical-ext'),
+        critical: true,
+        runtimeBoot: {
+          configure: () => {
+            configured.push('critical-ext');
+            return [];
+          },
+        },
+      },
+      {
+        ...makePackage('optional-ext'),
+        runtimeBoot: {
+          configure: () => {
+            configured.push('optional-ext');
+            return [];
+          },
+        },
+      },
+    ];
+
+    // Mirror the boot-layer filter: include if effectively enabled (store OR critical).
+    const bus = createBusInstance();
+    const coordinator = new ExtensionCoordinator(bus, { surface: 'headless' });
+    const retained = coordinator.load(packages);
+
+    // Verify the predicate: critical-ext passes despite being disabled in the store.
+    const enabledNames = retained.filter((pkg) => isExtensionEnabled(store, pkg.name, pkg)).map((p) => p.name);
+    expect(enabledNames).toStrictEqual(['critical-ext']);
+
+    // registerExtensionBootContributions is called with the filtered retained packages.
+    const retainedEnabled = retained.filter((pkg) => isExtensionEnabled(store, pkg.name, pkg));
+    registerExtensionBootContributions(retainedEnabled, bus, coordinator);
+
+    // Only the critical extension's runtimeBoot.configure was invoked.
+    expect(configured).toStrictEqual(['critical-ext']);
+  });
 });
 
 describe('runtime tool extension contributions', () => {
@@ -578,7 +1065,7 @@ describe('artifact view builder contribution extensibility', () => {
       expect(builder!.version).toBe(1);
 
       // Disable the extension and verify the builder is removed
-      await coordinator.handleSetEnabled('test-builder-ext', false);
+      await coordinator.applyExtensionTransition('test-builder-ext', false);
       expect(registry!.getBuilder('test-review', 1)).toBeUndefined();
     } finally {
       await coordinator.shutdown();
@@ -611,10 +1098,10 @@ describe('artifact view builder contribution extensibility', () => {
 
       // Disable and re-enable the extension with a new version
       builderVersion = 2;
-      await coordinator.handleSetEnabled('test-builder-ext', false);
+      await coordinator.applyExtensionTransition('test-builder-ext', false);
       expect(registry!.getBuilder('test-review', 1)).toBeUndefined();
 
-      await coordinator.handleSetEnabled('test-builder-ext', true);
+      await coordinator.applyExtensionTransition('test-builder-ext', true);
       expect(registry!.getBuilder('test-review', 1)!.version).toBe(2);
     } finally {
       await coordinator.shutdown();
@@ -831,16 +1318,18 @@ describe('owner-anchored automation cron scheduler host policy', () => {
       packages: options.packages,
       configProvider: disabled
         ? {
-            loadConfig: () => undefined,
             loadEnabled: (name) => !disabled.has(name),
           }
         : undefined,
       surface: options.surface ?? 'headless',
       runtimeEnvironment: environment,
     };
+    const enabledLoadedPackages = selectBootEligibleExtensionPackages(eligibility).filter((pkg) =>
+      isExtensionEnabled(eligibility.configProvider ?? {}, pkg.name, pkg),
+    );
     return selectAutomationCronSchedulerPackage({
       hostPackages: [...selectEligibleAutomationCronSchedulerHostPackages(options.policies, eligibility)],
-      loadedPackages: selectBootEligibleExtensionPackages(eligibility),
+      loadedPackages: enabledLoadedPackages,
     });
   }
 
@@ -933,6 +1422,52 @@ describe('owner-anchored automation cron scheduler host policy', () => {
         ],
       }),
     ).toThrow(/Multiple automation cron scheduler providers/);
+  });
+
+  // A disabled extension is still handed to the coordinator (so status and
+  // listing still know about it, and a preference change takes effect on the
+  // next boot) and stays in `loadedPackages`, but the coordinator soft-skips
+  // it at start — it never actually runs. Provider
+  // detection against `loadedPackages` must therefore honour enablement the
+  // same way the owner-anchored host-policy path already does above, or a
+  // disabled provider package would suppress the local fallback while nothing
+  // is actually scheduling cron bindings.
+  it('falls back to the local scheduler when a directly-registered provider package is disabled', () => {
+    const disabledScheduler = scheduler('Disabled Direct Scheduler');
+    expect(
+      selectForBoot({
+        packages: [disabledScheduler],
+        policies: [],
+        disabled: new Set([disabledScheduler.name]),
+      }),
+    ).toBe(localAutomationCronSchedulerPackage);
+  });
+
+  it('does not add a local fallback when a directly-registered provider package is enabled', () => {
+    const enabledScheduler = scheduler('Enabled Direct Scheduler');
+    expect(
+      selectForBoot({
+        packages: [enabledScheduler],
+        policies: [],
+      }),
+    ).toBeUndefined();
+  });
+
+  it('falls back to the local scheduler when the policy owner has a disabled required dependency', () => {
+    // The owner is preference-enabled but its required dependency is not, so
+    // the coordinator's start-time dependency check will never let it reach
+    // `active` (extension-start-runner.ts). The owner-anchored policy must
+    // therefore be treated the same as a disabled owner: fall back to the
+    // local scheduler instead of selecting a policy that will never run.
+    const requiredDep = owner('example.provider');
+    const relayOwner: KernelMakaioExtension = { ...owner('example.relay'), dependencies: [dep('example.provider')] };
+    expect(
+      selectForBoot({
+        packages: [relayOwner, requiredDep],
+        policies: [{ ownerPackage: relayOwner, package: scheduler('Relay Scheduler') }],
+        disabled: new Set([requiredDep.name]),
+      }),
+    ).toBe(localAutomationCronSchedulerPackage);
   });
 });
 
@@ -1409,7 +1944,7 @@ describe('client hook response contribution extensibility', () => {
       ).toHaveLength(1);
 
       // Disable the extension
-      await coordinator.handleSetEnabled('test-disable-ext', false);
+      await coordinator.applyExtensionTransition('test-disable-ext', false);
       expect(
         clientsCore!.hookResponseRegistry.snapshot('claude-code', 'claude-code.tool-response', 'PreToolUse', []),
       ).toHaveLength(0);
@@ -1454,12 +1989,12 @@ describe('client hook response contribution extensibility', () => {
       expect(activationCount).toBe(1);
 
       // Disable and re-enable
-      await coordinator.handleSetEnabled('test-reenable-ext', false);
+      await coordinator.applyExtensionTransition('test-reenable-ext', false);
       expect(
         clientsCore!.hookResponseRegistry.snapshot('claude-code', 'claude-code.tool-response', 'PreToolUse', []),
       ).toHaveLength(0);
 
-      await coordinator.handleSetEnabled('test-reenable-ext', true);
+      await coordinator.applyExtensionTransition('test-reenable-ext', true);
       const snapshot = clientsCore!.hookResponseRegistry.snapshot(
         'claude-code',
         'claude-code.tool-response',

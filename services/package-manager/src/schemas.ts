@@ -154,11 +154,32 @@ export const PackageInfoSchema = z.object({
   hasDescriptor: z.boolean().default(false),
 
   /**
+   * Extension identity declared in the package's `descriptor.json` (its
+   * `name` field), when the package has one.
+   *
+   * This is the identity the runtime loader, the enablement file, and
+   * `normalizePackageExport` all key on — it can differ from `name` above,
+   * which is the npm dependency identifier (e.g. `@makaio/extension-opencode`
+   * installing a descriptor named `opencode`). Present whenever
+   * `hasDescriptor` is `true`; absent otherwise.
+   */
+  descriptorName: z.string().min(1).optional(),
+
+  /**
    * Absolute import path for the package's resolved server entrypoint, when
    * its descriptor declares one and the installed files satisfy the runtime
    * entrypoint convention.
    */
   serverImportPath: z.string().min(1).optional(),
+
+  /**
+   * Whether the package's descriptor declares the extension as critical.
+   *
+   * Surfaces that offer an enable/disable control read this before any
+   * extension code is loaded, so they can refuse a disable the runtime would
+   * refuse anyway. Absent when the descriptor does not declare the flag.
+   */
+  critical: z.boolean().optional(),
 });
 
 export type PackageInfo = z.infer<typeof PackageInfoSchema>;

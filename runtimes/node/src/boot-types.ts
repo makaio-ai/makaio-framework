@@ -524,14 +524,21 @@ export interface CoreBootOptions {
   readonly devPortalPackages?: DevPortalMap;
 
   /**
-   * Optional provider for persisted extension configuration and enablement state.
+   * Optional provider for persisted extension configuration.
    *
-   * When present, the coordinator consults this provider during {@link ExtensionCoordinator.startAll}
-   * and `ExtensionCoordinator.enableExtension` to load stored configuration and
-   * skip packages that were previously disabled. When absent, all extensions
-   * start enabled with default (Zod-schema) configuration only.
+   * When present, the coordinator calls `loadConfig` during
+   * {@link ExtensionCoordinator.startAll} and on re-enable to overlay stored
+   * configuration over schema defaults. When absent, extensions start with
+   * default (Zod-schema) configuration only.
+   *
+   * **Breaking change:** `loadEnabled` has been removed from this seam.
+   * Enablement state is now managed exclusively by the runtime's
+   * {@link ExtensionEnablementStore} backed by
+   * `$MAKAIO_HOME/config/extensions.json`. Hosts that previously forwarded
+   * `loadEnabled` from this provider must remove it; the boot path wires the
+   * store's `loadEnabled` directly and ignores any method by that name here.
    */
-  readonly extensionConfigProvider?: ExtensionConfigProvider;
+  readonly extensionConfigProvider?: Pick<ExtensionConfigProvider, 'loadConfig'>;
 
   /**
    * Host-owned coordinator wiring invoked after framework processors are registered

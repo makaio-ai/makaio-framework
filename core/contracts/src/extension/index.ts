@@ -80,6 +80,7 @@ export type {
   ExtensionCliSubcommandEntry,
 } from './extension-cli.js';
 export type { ExtensionRuntimeOwnership } from './extension-runtime-boot.js';
+export { isRuntimeOwnershipFieldClaimed } from './extension-runtime-boot.js';
 export type {
   AdapterContribution,
   ExtensionClientHookResponsesContribution,

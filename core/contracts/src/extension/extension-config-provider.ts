@@ -24,4 +24,16 @@ export interface ExtensionConfigProvider {
    * @returns `false` to skip the package at boot, `true` or `undefined` to start normally.
    */
   loadEnabled(name: string): boolean | undefined;
+
+  /**
+   * Write a changed enabled state to persistent storage.
+   *
+   * Optional — a provider that has no durable backing store may omit this.
+   * When present the coordinator calls it on every operator `setEnabled`
+   * request to durably record the preference; the seam is persist-only — it
+   * never applies the change to the running process, only on the next boot.
+   * @param name - Extension package name.
+   * @param enabled - Desired enabled state to persist.
+   */
+  persistEnabled?(name: string, enabled: boolean): Promise<void>;
 }

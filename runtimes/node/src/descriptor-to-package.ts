@@ -11,7 +11,10 @@ import type { ExtensionManifest } from '@makaio/contracts/extension';
  */
 export function descriptorToBasePackage(
   descriptor: ExtensionManifest,
-): Pick<MakaioExtension, 'name' | 'displayName' | 'version' | 'surface' | 'dependencies' | 'requires' | 'provides'> {
+): Pick<
+  MakaioExtension,
+  'name' | 'displayName' | 'version' | 'surface' | 'dependencies' | 'requires' | 'provides' | 'critical'
+> {
   return {
     name: descriptor.name,
     displayName: descriptor.displayName,
@@ -20,5 +23,6 @@ export function descriptorToBasePackage(
     ...(descriptor.dependencies !== undefined ? { dependencies: descriptor.dependencies } : {}),
     ...(descriptor.requires !== undefined ? { requires: descriptor.requires } : {}),
     ...(descriptor.provides !== undefined ? { provides: descriptor.provides } : {}),
+    ...(descriptor.critical !== undefined ? { critical: descriptor.critical } : {}),
   };
 }

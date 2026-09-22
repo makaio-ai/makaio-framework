@@ -28,6 +28,8 @@ export type {
   KernelMakaioExtension,
   RuntimeCapability,
   RuntimeEnvironment,
+  SetEnabledResult,
+  TransitionOutcome,
 } from './extension/index.js';
 export {
   ExtensionCoordinator,

@@ -24,6 +24,14 @@ export const automationTriggerRegistryPackage: MakaioNodeExtension<IMakaioBus> =
 /**
  * Package that starts the automation trigger binding runtime.
  *
+ * Both this package and the registry it resolves are `critical: true`, so
+ * neither can be disabled through the operator-preference seam
+ * (`ExtensionCoordinator.handleSetEnabled`). The restart described below is
+ * the coordinator-internal lifecycle primitive
+ * (`ExtensionCoordinator.applyExtensionTransition`), which does not carry the
+ * critical refusal — it is not an operator preference change, just the
+ * runtime mechanics this package is designed to tolerate.
+ *
  * The runtime resolves its registry lazily via a closure around
  * `ctx.getService(AutomationTriggerRegistryToken)` rather than capturing a
  * fixed reference at construction time. This allows the registry to restart

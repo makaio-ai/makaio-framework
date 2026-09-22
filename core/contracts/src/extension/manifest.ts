@@ -598,6 +598,21 @@ export interface ExtensionManifest {
    * whether a capability exists at all before prompting the user to configure it.
    */
   readonly provides?: readonly CapabilityToken[];
+  /**
+   * When `true`, the runtime cannot function without this extension.
+   *
+   * A critical extension aborts startup when it fails to initialize, refuses a
+   * disable request, and starts anyway when the enablement store records it as
+   * disabled. Optional extensions default to isolated failure so one extension
+   * cannot prevent the runtime from booting.
+   *
+   * Declaring the flag in `descriptor.json` makes it readable before any
+   * extension code is loaded, which is what lets pre-load surfaces (the CLI's
+   * offline listing, for example) honour the same rule the runtime applies.
+   * An extension whose executable package sets the flag should declare it in
+   * its descriptor too, otherwise pre-load surfaces treat it as optional.
+   */
+  readonly critical?: boolean;
   /** Windows this extension can open, keyed by {@link WindowManifest.id}. */
   readonly windows?: readonly WindowManifest[];
   /** System tray entry for this extension. */
@@ -645,6 +660,7 @@ export const ExtensionManifestSchema = z.object({
   dependencies: z.array(ExtensionDependencySchema).readonly().optional(),
   requires: z.array(RuntimeRequirementSchema).readonly().optional(),
   provides: z.array(CapabilityTokenSchema).readonly().optional(),
+  critical: z.boolean().optional(),
   windows: z.array(WindowManifestSchema).readonly().optional(),
   tray: TrayManifestSchema.optional(),
   cli: CliManifestSchema.optional(),

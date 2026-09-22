@@ -6,7 +6,7 @@
  * @packageDocumentation
  */
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { useBus } from '../bus/bus-provider.js';
 import { AdapterSubjects } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
@@ -15,14 +15,13 @@ import { LogImportSubjects } from '@makaio/services-log-import/log-import';
 import type { AgentSelection, ResolvedProviderContext } from '@makaio/contracts';
 import type { LogImportMode } from '@makaio/services-log-import/log-import';
 import { SettingsSubjects } from '@makaio/services-core/settings/namespace';
-import { ExtensionConfigStorageSubjects } from '@makaio/services-core/settings/storage/extension-configs/namespace';
 import { ExtensionSubjects } from '@makaio/kernel';
 import type { ExtensionInfo } from '@makaio/kernel';
 import { resolveRuntimeProviderContext } from '@makaio/services-core/provider-context';
 import { onboardingStepRegistry, findCategory, deriveDefaultEnabled } from '@makaio/ui-kernel';
 import type { OnboardingStepDefinition as KernelOnboardingStepDefinition } from '@makaio/ui-kernel';
 import { persistPluginEnabled } from './plugin-persistence.js';
-import type { PersistedExtensionConfigEntry } from './plugin-persistence.js';
+import { seedManagedExtensions } from './seed-managed-extensions.js';
 import { useAppContext } from '../state/app-context-store.js';
 import { useProviderStore } from '../state/provider-store.js';
 import { setOnboardingCompleted } from './skip-flag.js';
@@ -89,6 +88,34 @@ function finalizeOnboardingCompletion(onComplete: () => void): void {
     console.error('[useOnboardingFlow] Failed to persist completion flag:', err);
   } finally {
     onComplete();
+  }
+}
+/**
+ * Persist one plugin's enabled state, isolating both a transport failure and
+ * a `'rejected'` outcome so a caller iterating many plugins never lets one
+ * failure abandon the rest of its batch.
+ * @param pluginName - Registry name of the plugin.
+ * @param enabled - Desired enabled state.
+ * @param bus - Bus instance used to dispatch the request.
+ * @param context - Short label distinguishing an explicit choice from a derived default in logs.
+ */
+async function persistPluginEnabledIsolated(
+  pluginName: string,
+  enabled: boolean,
+  bus: IMakaioBus,
+  context: string,
+): Promise<void> {
+  try {
+    const result = await persistPluginEnabled(pluginName, enabled, bus);
+    // 'rejected' is the only outcome where nothing was persisted; the durable
+    // 'restart-required' still honoured the operator's (or default's) choice.
+    if (result.outcome === 'rejected') {
+      console.error(
+        `[useOnboardingFlow] ${context} for ${pluginName} was rejected; the extension keeps its previous preference.`,
+      );
+    }
+  } catch (err) {
+    console.error(`[useOnboardingFlow] Failed to persist ${context.toLowerCase()} for ${pluginName}:`, err);
   }
 }
 /**
@@ -176,10 +203,10 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
   const [scanClients, setScanClients] = useState<ReadonlyArray<OnboardingClient>>([]);
   const [providerConfigs, setProviderConfigs] = useState<ReadonlyArray<ProviderConfigSummaryView>>([]);
   const [adapterProviderBindings, setAdapterProviderBindings] = useState<ReadonlyArray<BindingRecord>>([]);
-  const persistedPluginConfigs = useRef<Map<string, PersistedExtensionConfigEntry>>(new Map());
   const pluginFetchRunIdRef = useRef(0);
   const scanRunIdRef = useRef(0);
   const healthCheckAbortMap = useRef<Map<string, AbortController>>(new Map());
+  const pluginToggleGenerationRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
     const currentRunId = ++pluginFetchRunIdRef.current;
@@ -187,32 +214,12 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
 
     const doFetch = async () => {
       try {
-        const [extensionsResult, storedConfigsResult] = await Promise.all([
-          MakaioBus.request(ExtensionSubjects.list, {}),
-          MakaioBus.request(ExtensionConfigStorageSubjects.list, {}),
-        ]);
+        const extensionsResult = await MakaioBus.request(ExtensionSubjects.list, {});
         if (!isCurrentRun()) return;
 
-        const storedByName = new Map<string, { id: string; enabled: boolean; config?: Record<string, unknown> }>();
-        for (const row of storedConfigsResult.extensionConfigs) {
-          if (row.scope === 'default' && !storedByName.has(row.extensionName)) {
-            storedByName.set(row.extensionName, { id: row.id, enabled: row.enabled, config: row.config });
-          }
-        }
-
-        const initial = new Map<string, boolean>();
-        const persisted = new Map<string, PersistedExtensionConfigEntry>();
-        for (const ext of extensionsResult.extensions) {
-          const stored = storedByName.get(ext.name);
-          if (stored !== undefined) {
-            initial.set(ext.name, stored.enabled);
-            persisted.set(ext.name, { id: stored.id, config: stored.config });
-          }
-        }
-
-        setExtensionList(extensionsResult.extensions);
-        setPluginEnabledStates(initial);
-        persistedPluginConfigs.current = persisted;
+        const { managed, initialDisables } = seedManagedExtensions(extensionsResult.extensions);
+        setExtensionList(managed);
+        setPluginEnabledStates(initialDisables);
       } catch (err) {
         if (!isCurrentRun()) return;
         console.error('[useOnboardingFlow] Failed to load extension list:', err);
@@ -369,10 +376,47 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
 
   const togglePlugin = useCallback(
     (pluginName: string, enabled: boolean): void => {
-      setPluginEnabledStates((prev) => new Map([...prev, [pluginName, enabled]]));
-      void persistPluginEnabled(pluginName, enabled, persistedPluginConfigs.current, bus).catch((err: unknown) => {
-        console.error(`[useOnboardingFlow] Failed to persist plugin toggle for ${pluginName}:`, err);
+      // Claim this toggle's generation so a stale request can't revert a newer toggle's result.
+      const myGeneration = (pluginToggleGenerationRef.current.get(pluginName) ?? 0) + 1;
+      pluginToggleGenerationRef.current.set(pluginName, myGeneration);
+      const isCurrentToggle = (): boolean => pluginToggleGenerationRef.current.get(pluginName) === myGeneration;
+
+      // Capture the pre-toggle value inside the updater itself rather than reading
+      // `pluginEnabledStates` from the closure: this callback is memoized with `[bus]`
+      // as its only dependency, so a captured map reference would go stale across
+      // renders. The updater runs synchronously, well before the bus RPC resolves.
+      let previousValue: boolean | undefined;
+      setPluginEnabledStates((prev) => {
+        previousValue = prev.get(pluginName);
+        return new Map([...prev, [pluginName, enabled]]);
       });
+
+      // Undo the optimistic update, restoring whatever value (or absence) preceded this toggle.
+      const revertOptimisticToggle = (): void => {
+        setPluginEnabledStates((prev) => {
+          const next = new Map(prev);
+          if (previousValue === undefined) {
+            next.delete(pluginName);
+          } else {
+            next.set(pluginName, previousValue);
+          }
+          return next;
+        });
+      };
+
+      void persistPluginEnabled(pluginName, enabled, bus)
+        .then((result) => {
+          // Only a genuine `'rejected'` outcome reverts (not durable `'restart-required'`), and only if unsuperseded.
+          if (result.outcome === 'rejected' && isCurrentToggle()) {
+            revertOptimisticToggle();
+          }
+        })
+        .catch((err: unknown) => {
+          console.error(`[useOnboardingFlow] Failed to persist plugin toggle for ${pluginName}:`, err);
+          if (isCurrentToggle()) {
+            revertOptimisticToggle();
+          }
+        });
     },
     [bus],
   );
@@ -506,29 +550,36 @@ function useOnboardingFlowImpl({ context, onComplete, onSkip }: UseOnboardingFlo
       if (defaultAgentSelection) {
         setDefaultSelection(defaultAgentSelection);
       }
+      // Per-item catch: one adapter's failed/timed-out `setMode` request must not abandon the rest of this batch.
       const modeEntries = Array.from(logImportSelections.entries());
       await Promise.all(
-        modeEntries.map(([adapterName, mode]) =>
-          MakaioBus.request(LogImportSubjects.setMode, { adapterName, mode }, { timeout: PERSIST_TIMEOUT_MS }),
-        ),
+        modeEntries.map(async ([adapterName, mode]) => {
+          try {
+            await MakaioBus.request(LogImportSubjects.setMode, { adapterName, mode }, { timeout: PERSIST_TIMEOUT_MS });
+          } catch (err) {
+            console.error(`[useOnboardingFlow] Failed to persist log import mode for ${adapterName}:`, err);
+          }
+        }),
       );
+
+      // Same isolation as above: one plugin's enablement write failing must
+      // not discard every other plugin choice made in this flow.
       await Promise.all(
         Array.from(pluginEnabledStates.entries()).map(([pluginName, enabled]) =>
-          persistPluginEnabled(pluginName, enabled, persistedPluginConfigs.current, bus),
+          persistPluginEnabledIsolated(pluginName, enabled, bus, 'Extension state'),
         ),
       );
       if (persistPluginDefaults) {
-        for (const ext of extensionList) {
-          if (!pluginEnabledStates.has(ext.name)) {
-            const category = findCategory(ext.name);
-            const defaultEnabled = deriveDefaultEnabled(category);
-            void persistPluginEnabled(ext.name, defaultEnabled, persistedPluginConfigs.current, bus).catch(
-              (err: unknown) => {
-                console.error(`[useOnboardingFlow] Failed to persist default extension state for ${ext.name}:`, err);
-              },
-            );
-          }
-        }
+        // `setEnabled` is persist-only, so there is no dependency-ordering race for this concurrent batch to hit.
+        // `critical` extensions are excluded — they already default to enabled and a disable attempt would throw.
+        const pendingDefaults = extensionList
+          .filter((ext) => !pluginEnabledStates.has(ext.name) && !ext.critical)
+          .map((ext) => ({ name: ext.name, defaultEnabled: deriveDefaultEnabled(findCategory(ext.name)) }));
+        await Promise.all(
+          pendingDefaults.map(({ name, defaultEnabled }) =>
+            persistPluginEnabledIsolated(name, defaultEnabled, bus, 'Default extension state'),
+          ),
+        );
       }
     },
     [bus, logImportSelections, defaultAgentSelection, setDefaultSelection, extensionList, pluginEnabledStates],

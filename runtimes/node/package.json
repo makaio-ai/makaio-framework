@@ -67,6 +67,7 @@
     "hono": "^4.12.23",
     "minimatch": "^10.0.3",
     "piscina": "^5.1.4",
+    "proper-lockfile": "^4.1.2",
     "tsx": "^4.22.3",
     "ws": "^8.21.0",
     "yaml": "^2.9.0",
@@ -79,6 +80,7 @@
     "@makaio/build-tooling": "workspace:*",
     "@makaio/framework": "workspace:*",
     "@makaio/test-utils": "workspace:*",
+    "@types/proper-lockfile": "^4.1.4",
     "tsdown": "0.22.0",
     "typescript": "^6.0.3",
     "vitest": "4.1.10"

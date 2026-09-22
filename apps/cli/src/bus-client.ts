@@ -47,6 +47,42 @@ export function resolveBusUrl(busUrl?: string): string {
 }
 
 /**
+ * Bus hostnames that resolve to this machine.
+ *
+ * `127.0.0.1` and `::1` are the loopback literals the WebSocket transport
+ * accepts; `localhost` is the conventional alias for the same loopback
+ * address. `[::1]` is also listed because `URL#hostname` serializes an IPv6
+ * host with its brackets (per the URL Standard's host serializer), so
+ * `new URL('ws://[::1]:6252/bus').hostname` is the bracketed form, not the
+ * bare address — omitting it would misclassify an IPv6-loopback bus URL as
+ * remote. This CLI has no unix-domain-socket bus transport, so no additional
+ * local-socket form needs to be recognized here.
+ */
+const LOCAL_BUS_HOSTNAMES: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+/**
+ * Determine whether a bus URL points at a different machine than this CLI
+ * process is running on.
+ *
+ * Used to gate the unmanaged-name enablement fallback (see
+ * `applyUnmanagedNameToggle` in `extension-toggle-commands.ts`): that fallback
+ * writes the enablement file directly, which is only correct when the file it
+ * writes is the same one the reachable server reads — true only when the bus
+ * is local. A URL that fails to parse is treated as remote so a malformed
+ * override never causes a write to the wrong machine's file.
+ * @param busUrl - Resolved bus URL, as returned by {@link resolveBusUrl}.
+ * @returns `true` when the URL's host is not a recognized loopback form.
+ */
+export function isRemoteBusUrl(busUrl: string): boolean {
+  try {
+    const { hostname } = new URL(busUrl);
+    return !LOCAL_BUS_HOSTNAMES.has(hostname);
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Probe the server's `/health` endpoint to determine auth requirements.
  *
  * Returns the server's health status, or `null` if the server is unreachable.

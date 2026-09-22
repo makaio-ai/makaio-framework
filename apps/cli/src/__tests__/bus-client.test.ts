@@ -7,7 +7,14 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HmacAuth } from '@makaio/bus-transport-websocket';
-import { connectBusClient, deriveHealthUrl, probeHealth, resolveBusUrl, resolveClientAuth } from '../bus-client.js';
+import {
+  connectBusClient,
+  deriveHealthUrl,
+  isRemoteBusUrl,
+  probeHealth,
+  resolveBusUrl,
+  resolveClientAuth,
+} from '../bus-client.js';
 
 const busCoreMocks = vi.hoisted(() => ({
   createBusInstance: vi.fn(),
@@ -123,6 +130,28 @@ describe('resolveBusUrl', () => {
     process.env.MAKAIO_BUS_URL = '  ws://env-host:6252/bus  ';
 
     expect(resolveBusUrl()).toBe('ws://env-host:6252/bus');
+  });
+});
+
+describe('isRemoteBusUrl', () => {
+  it.each([
+    'ws://localhost:6252/bus',
+    'ws://127.0.0.1:6252/bus',
+    'ws://[::1]:6252/bus',
+  ])('treats %s as local', (busUrl) => {
+    expect(isRemoteBusUrl(busUrl)).toBe(false);
+  });
+
+  it.each([
+    'ws://build-server.internal:6252/bus',
+    'wss://example.com/bus',
+    'ws://192.168.1.5:6252/bus',
+  ])('treats %s as remote', (busUrl) => {
+    expect(isRemoteBusUrl(busUrl)).toBe(true);
+  });
+
+  it('treats an unparseable URL as remote, never as a local fallback', () => {
+    expect(isRemoteBusUrl('not a url')).toBe(true);
   });
 });
 

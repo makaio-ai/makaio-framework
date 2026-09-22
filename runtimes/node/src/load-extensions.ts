@@ -245,12 +245,22 @@ function isAutomationCronSchedulerHostPolicyLike(value: unknown): value is Autom
  * Array exports must keep every package under the descriptor's namespace
  * by using the descriptor name exactly or a dot-prefixed child name such
  * as `example-extension.settings`.
+ *
+ * Exported so offline surfaces (the CLI's `extension list`/`enable`/`disable`
+ * paths) can enumerate a descriptor's executable child packages by importing
+ * the same server module and reusing this exact identity contract, instead of
+ * re-deriving descriptor namespace rules from scratch. Importing the module
+ * executes its top-level code; the extension server-module contract (see
+ * `docs/architecture/extensions/index.md`) requires that top level to contain
+ * only declarations, with side effects deferred to `create()`/`init()`.
+ * `create()` itself is called exclusively by the coordinator during
+ * activation — so calling this from an offline path never starts a service.
  * @param value - Default export from the server entrypoint.
  * @param descriptorName - Descriptor package name.
  * @param label - Log prefix for warnings.
  * @returns Normalized package list, or `undefined` when invalid.
  */
-function normalizePackageExport(
+export function normalizePackageExport(
   value: unknown,
   descriptorName: string,
   label: string,

@@ -232,14 +232,6 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    */
   readonly runtimeBoot?: ExtensionRuntimeBootContribution<THostContext>;
   /**
-   * When true, startup fails if this extension fails to initialize.
-   *
-   * Optional extensions default to isolated failure so one extension cannot
-   * prevent the runtime from booting. Framework and host core extensions set
-   * this to true when the runtime cannot safely continue without them.
-   */
-  readonly critical?: boolean;
-  /**
    * Executable CLI contribution registered under `makaio <name>`.
    *
    * The runtime exposes the fully typed helper API through

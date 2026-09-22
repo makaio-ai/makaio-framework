@@ -39,8 +39,10 @@ function renderStatusWidget(bus: IMakaioBus, size: WidgetProps['size']) {
  */
 function makeExtensionInfo(overrides: Partial<ExtensionInfo> = {}): ExtensionInfo {
   return {
+    critical: false,
     displayName: 'Example Extension',
     enabled: true,
+    extensionManaged: true,
     name: 'example-extension',
     state: 'active',
     ...overrides,

@@ -9,7 +9,7 @@
  * - `kernel:extension.stateChanged`      — fire-and-forget lifecycle transition event
  * - `kernel:extension.list`              — RPC listing all extensions with current state
  * - `kernel:extension.get`               — RPC fetching a single extension by name
- * - `kernel:extension.setEnabled`        — RPC enabling or disabling an extension at runtime
+ * - `kernel:extension.setEnabled`        — RPC persisting an operator enable/disable preference
  * - `kernel:extension.enabledChanged`    — fire-and-forget event when enabled flag changes
  * - `kernel:extension.warnings.list`     — RPC listing active health warnings per extension
  * - `kernel:extension.warnings.changed`  — fire-and-forget snapshot after each health-check run
@@ -30,6 +30,35 @@ const ExtensionProviderContributionSchema = ExtensionContributionCatalogEntrySch
 const ExtensionClientContributionSchema = ExtensionContributionCatalogEntrySchema.extend({
   definition: ClientDefinitionSchema,
 });
+
+/**
+ * Outcome of one `kernel:extension.setEnabled` request.
+ *
+ * Mirrors the `TransitionOutcome` union the coordinator's toggle helpers
+ * compute internally (see `extension/extension-toggle.ts`) so the bus
+ * response can carry the same fidelity instead of collapsing it to a single
+ * `success` boolean. `kernel:extension.setEnabled` is persist-only — it never
+ * runs a live state-machine transition — so for that RPC this is a
+ * comparison between the durably persisted preference and the process's
+ * actual runtime state, not the result of an attempted transition:
+ * - `'applied'` — the persisted preference already matches the process's
+ *   current runtime state; no restart is needed for it to take effect.
+ * - `'rejected'` — the request was refused outright without persisting
+ *   anything: an unknown extension name, or the coordinator already shutting
+ *   down. A disable of a `critical` extension is refused too, but as a thrown
+ *   error, not this outcome — `'rejected'` here is a *response*, not a
+ *   fault. `TransitionOutcome` is shared with the coordinator-internal
+ *   `applyExtensionTransition` primitive, where `'rejected'` additionally
+ *   covers a state-machine refusal such as retrying a transition on an entry
+ *   the boot phase skipped entirely.
+ * - `'restart-required'` — the preference was persisted, but it diverges
+ *   from the process's current runtime state; only the next process restart
+ *   applies it.
+ */
+export const TransitionOutcomeSchema = z.enum(['applied', 'rejected', 'restart-required']);
+
+/** Inferred union type for {@link TransitionOutcomeSchema}. */
+export type TransitionOutcome = z.infer<typeof TransitionOutcomeSchema>;
 
 /**
  * Schema definitions for the `kernel:extension` bus namespace.
@@ -104,19 +133,27 @@ const ExtensionSchemas = {
   },
 
   /**
-   * Enable or disable an extension at runtime.
+   * Durably record the operator's enablement preference for an extension.
    *
    * Subject: `kernel:extension.setEnabled`
    * Type: RPC (request/response)
-   * Purpose: Allows the user or platform config to toggle an extension without
-   * a full restart. The coordinator re-enters the load path on enable, or runs
-   * cleanup and transitions to `stopped` on disable.
+   * Purpose: Allows the user or platform config to persist an enable/disable
+   * preference for an extension. This is persist-only: the coordinator never
+   * applies the change to the running process, because several package
+   * contributions are composed exactly once at boot and cannot be replayed
+   * for one package in isolation. The response's `outcome` reports whether
+   * the process's current runtime state already matches the request
+   * (`'applied'`) or a restart is needed for it to take effect
+   * (`'restart-required'`).
    * @param name - Unique extension identifier to toggle.
    * @param enabled - Target enabled state.
    */
   setEnabled: {
     request: z.object({ name: z.string(), enabled: z.boolean() }),
-    response: z.object({ success: z.boolean() }),
+    response: z.object({
+      success: z.boolean(),
+      outcome: TransitionOutcomeSchema,
+    }),
   },
 
   /**
@@ -195,7 +232,7 @@ export const ExtensionNamespace = createBusNamespace('kernel:extension', Extensi
  * - `stateChanged`        — event: emitted when an extension transitions between lifecycle states
  * - `list`                — RPC: retrieve all registered extensions and their current state
  * - `get`                 — RPC: retrieve a single extension's info by name
- * - `setEnabled`          — RPC: enable or disable an extension at runtime
+ * - `setEnabled`          — RPC: persist an operator enable/disable preference
  * - `enabledChanged`      — event: emitted when an extension's enabled flag changes
  * - `warnings.list`       — RPC: retrieve active health warnings for all (or one) extension
  * - `warnings.changed`    — event: emitted after every health-check run with the latest warning snapshot

@@ -46,6 +46,17 @@ export interface AutomationCronSchedulerSelection {
  *   fallback is what makes framework-only boot work with no host wiring.
  * - Two providers, or a host package that does not register the service, fail
  *   boot with a message naming the offenders.
+ *
+ * "Exactly one" is decided at boot, from the dependency-closed
+ * effective-enabled set of packages that will actually run — a disabled
+ * package must not count as a provider, or its presence would suppress the
+ * fallback while it never starts. Callers therefore pass the
+ * enablement-filtered set, not the eligibility-filtered one.
+ *
+ * A second provider cannot appear next to the running one at runtime:
+ * enable/disable is persist-only and is never applied live, so this decision
+ * only ever runs again at the next boot, against whatever the enablement
+ * store says at that time.
  * @param selection - The host's explicit choice plus the packages being loaded.
  * @returns The provider package to add, or `undefined` when a loaded package
  *   already provides one.

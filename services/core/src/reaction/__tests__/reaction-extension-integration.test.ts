@@ -142,7 +142,7 @@ describe('Reaction extension acceptance (real coordinator lifecycle)', () => {
   it('stops resolving the kind after the extension is disabled through the coordinator', async () => {
     const harness = await bootHarness();
 
-    await harness.coordinator.handleSetEnabled('demo-notifier', false);
+    await harness.coordinator.applyExtensionTransition('demo-notifier', false);
 
     const outcome = await harness.registry.invoke(
       KIND,
@@ -161,8 +161,8 @@ describe('Reaction extension acceptance (real coordinator lifecycle)', () => {
   it('restores an active contributor exactly once when the registry is re-enabled', async () => {
     const harness = await bootHarness();
 
-    await harness.coordinator.handleSetEnabled(ReactionRegistryToken.name, false);
-    await harness.coordinator.handleSetEnabled(ReactionRegistryToken.name, true);
+    await harness.coordinator.applyExtensionTransition(ReactionRegistryToken.name, false);
+    await harness.coordinator.applyExtensionTransition(ReactionRegistryToken.name, true);
 
     const restoredRegistry = harness.coordinator.getExtensionService(ReactionRegistryToken);
     if (!restoredRegistry) {
@@ -220,20 +220,20 @@ describe('Reaction extension acceptance (real coordinator lifecycle)', () => {
     coordinator.load([reactionRegistryPackage, demoNotifier]);
     await coordinator.startAll();
 
-    await coordinator.handleSetEnabled(ReactionRegistryToken.name, false);
-    const reenabling = coordinator.handleSetEnabled(ReactionRegistryToken.name, true);
+    await coordinator.applyExtensionTransition(ReactionRegistryToken.name, false);
+    const reenabling = coordinator.applyExtensionTransition(ReactionRegistryToken.name, true);
     await replayFactoryEntered.promise;
 
     let disableSettled = false;
-    const disabling = coordinator.handleSetEnabled('demo-notifier', false).finally(() => {
+    const disabling = coordinator.applyExtensionTransition('demo-notifier', false).finally(() => {
       disableSettled = true;
     });
     await Promise.resolve();
     expect(disableSettled).toBe(false);
 
     releaseReplayFactory.resolve();
-    await expect(reenabling).resolves.toBe(true);
-    await expect(disabling).resolves.toBe(true);
+    await expect(reenabling).resolves.toBe('applied');
+    await expect(disabling).resolves.toBe('applied');
 
     const registry = coordinator.getExtensionService(ReactionRegistryToken);
     if (!registry) {

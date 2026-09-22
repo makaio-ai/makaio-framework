@@ -131,10 +131,13 @@ function useExtensionState(enabled: boolean): ExtensionInfo[] {
         const next = current.filter((extension) => extension.name !== ctx.payload.name);
         next.push({
           browser: existing.browser,
+          critical: existing.critical,
           displayName: ctx.payload.displayName,
           enabled: existing.enabled,
           error: ctx.payload.error,
+          extensionManaged: existing.extensionManaged,
           name: ctx.payload.name,
+          persistedEnabled: existing.persistedEnabled,
           state: ctx.payload.to,
           surface: existing.surface,
         });

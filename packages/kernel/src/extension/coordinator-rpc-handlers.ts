@@ -5,7 +5,7 @@ import { CliRpcSubjects } from '../bus/cli/namespace.js';
 import { ExtensionSubjects } from '../observability/extension-namespace.js';
 import type { ExtensionInfo } from '../observability/shared-schemas.js';
 import { handleListContributions, handleExecute } from './cli-rpc-handlers.js';
-import { entryToExtensionInfo } from './extension-info.js';
+import type { SetEnabledResult } from './extension-toggle.js';
 import type { ExtensionEntry } from './types.js';
 
 /**
@@ -16,7 +16,16 @@ export interface RpcHost {
   readonly entries: ReadonlyMap<string, ExtensionEntry>;
   readonly cliContributions: ReadonlyArray<CliContribution>;
   list(): ExtensionInfo[];
-  handleSetEnabled(name: string, enabled: boolean): Promise<boolean>;
+  /**
+   * Return the current {@link ExtensionInfo} snapshot for a single named
+   * package, including `persistedEnabled` — the coordinator implements this
+   * with the same `loadEnabled` reader used by `list()`, so the RPC handler
+   * below does not need its own access to it.
+   * @param name - Extension name to look up.
+   * @returns The snapshot, or `null` when unknown.
+   */
+  getInfo(name: string): ExtensionInfo | null;
+  handleSetEnabled(name: string, enabled: boolean): Promise<SetEnabledResult>;
 }
 
 /**
@@ -38,15 +47,14 @@ export function registerCoordinatorRpcHandlers(host: RpcHost): Array<() => void>
 
   cleanups.push(
     host.bus.on(ExtensionSubjects.get, (ctx) => {
-      const entry = host.entries.get(ctx.payload.name);
-      ctx.setResult({ extension: entry ? entryToExtensionInfo(entry) : null });
+      ctx.setResult({ extension: host.getInfo(ctx.payload.name) });
     }),
   );
 
   cleanups.push(
     host.bus.on(ExtensionSubjects.setEnabled, async (ctx) => {
-      const success = await host.handleSetEnabled(ctx.payload.name, ctx.payload.enabled);
-      ctx.setResult({ success });
+      const { success, outcome } = await host.handleSetEnabled(ctx.payload.name, ctx.payload.enabled);
+      ctx.setResult({ success, outcome });
     }),
   );
 

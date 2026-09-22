@@ -90,7 +90,14 @@ export interface LocalInstallClient {
    * List all locally installed extensions.
    */
   list: () => Promise<
-    Array<{ name: string; version: string; sourcePath: string; source: 'local'; serverImportPath?: string }>
+    Array<{
+      name: string;
+      version: string;
+      sourcePath: string;
+      source: 'local';
+      serverImportPath?: string;
+      critical?: boolean;
+    }>
   >;
 }
 
@@ -324,7 +331,13 @@ export class PackageManagerService extends BaseService {
             name: extension.name,
             version: extension.version,
             hasDescriptor: true,
+            // A local install's identifier is already the descriptor name
+            // (see `LocalPathInstaller.list`, which keys its symlinks and
+            // entries by `descriptor.name`) — unlike an npm install, whose
+            // `name` is the npm dependency identifier.
+            descriptorName: extension.name,
             ...(extension.serverImportPath !== undefined && { serverImportPath: extension.serverImportPath }),
+            ...(extension.critical !== undefined && { critical: extension.critical }),
           })),
         ];
         ctx.setResult({ packages });

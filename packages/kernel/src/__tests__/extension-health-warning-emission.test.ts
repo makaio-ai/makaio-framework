@@ -260,7 +260,7 @@ describe('Extension warning emission', () => {
     await coordinator.shutdown();
   });
 
-  it('emits warnings for a newly enabled package', async () => {
+  it('emits warnings for a re-enabled package', async () => {
     const toasts: ToastPayload[] = [];
 
     const degradedWarning: ExtensionWarning = {
@@ -271,7 +271,6 @@ describe('Extension warning emission', () => {
 
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: TEST_PKG_CTX_BASE,
-      loadEnabled: () => false,
     });
     coordinator.load([
       makePackage('toggle-pkg', {
@@ -280,12 +279,18 @@ describe('Extension warning emission', () => {
     ]);
     await coordinator.startAll();
 
-    // Subscribe AFTER startAll to only observe enable-time emission.
+    // `applyExtensionTransition` only re-runs the create/checkHealth cycle for
+    // an entry this process already started — boot must enable the package
+    // first, then a disable/re-enable pair exercises the same warning-emission
+    // path a hand-triggered restart would.
+    await coordinator.applyExtensionTransition('toggle-pkg', false);
+
+    // Subscribe AFTER the disable so only re-enable-time emission is observed.
     bus.on(ToastSubjects.show, (ctx) => {
       toasts.push(ctx.payload);
     });
 
-    await coordinator.handleSetEnabled('toggle-pkg', true);
+    await coordinator.applyExtensionTransition('toggle-pkg', true);
 
     expect(toasts).toHaveLength(1);
     expect(toasts[0]).toMatchObject({
@@ -647,8 +652,8 @@ describe('Extension warning toast action dispatch', () => {
     ]);
     await coordinator.startAll();
 
-    await coordinator.handleSetEnabled('refresh-pkg', false);
-    await coordinator.handleSetEnabled('refresh-pkg', true);
+    await coordinator.applyExtensionTransition('refresh-pkg', false);
+    await coordinator.applyExtensionTransition('refresh-pkg', true);
 
     await bus.emit(ToastSubjects.interacted, {
       toastId: 'refresh-pkg:Needs wiring:0',

@@ -1,63 +1,31 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
-import { ExtensionConfigStorageSubjects } from '@makaio/services-core/settings/storage/extension-configs/namespace';
-import { persistPluginEnabled, type PersistedExtensionConfigEntry } from './plugin-persistence.js';
-
-interface ExtensionConfigSetEnabledPayload {
-  enabled: boolean;
-  extensionName: string;
-  scope: 'default';
-}
+import { ExtensionSubjects } from '@makaio/kernel';
+import { persistPluginEnabled } from './plugin-persistence.js';
 
 describe('persistPluginEnabled', () => {
-  it('persists enabled state through the dedicated enabled-only RPC', async () => {
+  it('persists enabled state through the kernel setEnabled RPC', async () => {
     const bus = createBusInstance();
-    const request = vi.spyOn(bus, 'request').mockResolvedValue({ id: 'stored-config-id' });
-    const cache = new Map<string, PersistedExtensionConfigEntry>();
+    const request = vi.spyOn(bus, 'request').mockResolvedValue({ success: true, outcome: 'applied' });
 
-    const result = await persistPluginEnabled('github', true, cache, bus);
+    const result = await persistPluginEnabled('github', true, bus);
 
     expect(request).toHaveBeenCalledTimes(1);
-    const [subject, payload] = request.mock.calls[0] as [unknown, ExtensionConfigSetEnabledPayload];
-    expect(subject).toBe(ExtensionConfigStorageSubjects.setEnabled);
-    expect(payload).toEqual({
-      enabled: true,
-      extensionName: 'github',
-      scope: 'default',
-    });
-    expect(result).toEqual({ id: 'stored-config-id' });
-    expect(cache.get('github')).toEqual({
-      id: 'stored-config-id',
-      config: undefined,
-    });
+    const [subject, payload] = request.mock.calls[0] as [unknown, { name: string; enabled: boolean }];
+    expect(subject).toBe(ExtensionSubjects.setEnabled);
+    expect(payload).toEqual({ name: 'github', enabled: true });
+    expect(result).toEqual({ success: true, outcome: 'applied' });
   });
 
-  it('preserves cached config blobs while refreshing the canonical row id', async () => {
+  it('a rejected response does not mutate any external state', async () => {
     const bus = createBusInstance();
-    const request = vi.spyOn(bus, 'request').mockResolvedValue({ id: 'config-row-1' });
-    const cache = new Map<string, PersistedExtensionConfigEntry>([
-      [
-        'github',
-        {
-          id: 'config-row-1',
-          config: { enabled: false, nested: { retries: 3 } },
-        },
-      ],
-    ]);
+    vi.spyOn(bus, 'request').mockResolvedValue({ success: false, outcome: 'rejected' });
 
-    await persistPluginEnabled('github', false, cache, bus);
+    // The function is a pure bus passthrough — no external state to mutate.
+    // Verify it resolves cleanly and surfaces the failure and its outcome
+    // without throwing.
+    const result = await persistPluginEnabled('github', false, bus);
 
-    expect(request).toHaveBeenCalledTimes(1);
-    const [subject, payload] = request.mock.calls[0] as [unknown, ExtensionConfigSetEnabledPayload];
-    expect(subject).toBe(ExtensionConfigStorageSubjects.setEnabled);
-    expect(payload).toEqual({
-      enabled: false,
-      extensionName: 'github',
-      scope: 'default',
-    });
-    expect(cache.get('github')).toEqual({
-      id: 'config-row-1',
-      config: { enabled: false, nested: { retries: 3 } },
-    });
+    expect(result).toEqual({ success: false, outcome: 'rejected' });
   });
 });

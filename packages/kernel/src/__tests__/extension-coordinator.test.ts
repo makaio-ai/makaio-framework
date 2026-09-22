@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
-import { createBusInstance } from '@makaio/bus-core';
+import { createBusInstance, localSubject } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
 import {
@@ -13,11 +13,13 @@ import {
   type ProviderDefinition,
   type TrayManifest,
 } from '@makaio/contracts';
-import type { KernelMakaioExtension as MakaioExtension } from '../extension/types.js';
+import type { KernelMakaioExtension as MakaioExtension, ExtensionEntry } from '../extension/types.js';
 import { TrayMenuEntrySchema, TrayMenuSubjects, TrayMenuEntry } from '@makaio/services-core/tray-menu';
 import { extensionToken } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
+import { handleSetEnabled, type ToggleHost } from '../extension/extension-toggle.js';
+import { createExtensionIdentity } from '../extension/extension-identity-builder.js';
 import { ExtensionSubjects } from '../observability/extension-namespace.js';
 import { BootSubjects } from '../boot-namespace.js';
 import { ServiceSkipError } from '../service-skip-error.js';
@@ -112,6 +114,26 @@ function dep(name: string): ExtensionDependency {
  */
 function optionalDep(name: string): ExtensionDependency {
   return { ...dep(name), optional: true };
+}
+
+/**
+ * Build a minimal CLI contribution for test fixtures.
+ * @param name - Top-level CLI command name.
+ * @returns A minimal contribution with one no-op `run` subcommand.
+ */
+function makeCliContribution(name: string): NonNullable<MakaioExtension['cli']> {
+  return {
+    name,
+    description: `${name} command`,
+    subcommands: [
+      {
+        name: 'run',
+        description: 'Run',
+        schema: z.object({}),
+        handler: async () => undefined,
+      },
+    ],
+  };
 }
 
 /**
@@ -247,6 +269,8 @@ describe('ExtensionCoordinator', () => {
         state: 'active',
         surface: 'headless',
         enabled: true,
+        extensionManaged: true,
+        critical: false,
       },
     ]);
   });
@@ -773,8 +797,7 @@ describe('ExtensionCoordinator', () => {
     expect((rejection as AggregateError).message).toContain('storage-failing');
   });
 
-  it('reports a failed disable as unsuccessful and records the teardown error', async () => {
-    const persisted: Array<{ name: string; enabled: boolean }> = [];
+  it('reports an unclean disable through the primitive as applied and still announces', async () => {
     const enabledChanged = Promise.withResolvers<{ name: string; enabled: boolean }>();
     bus.on(ExtensionSubjects.enabledChanged, (ctx) => {
       enabledChanged.resolve({ name: ctx.payload.name, enabled: ctx.payload.enabled });
@@ -783,47 +806,31 @@ describe('ExtensionCoordinator', () => {
     const coordinator = new ExtensionCoordinator(bus, {
       db: {},
       extensionContextBase: TEST_PKG_CTX_BASE,
-      persistEnabled: async (name, enabled) => {
-        persisted.push({ name, enabled });
-      },
-    });
-    coordinator.registerContributionProcessor({
-      processActivated: async () => undefined,
-      processStopped: async () => {
-        throw new Error('contribution teardown failed');
-      },
     });
     coordinator.load([
-      makePackage('unclean-disable', {
+      makePackage('unclean-disable-primitive', {
         create: (ctx) =>
           makeMockService(ctx.bus, undefined, () => {
             throw new Error('teardown failed');
           }),
-        storage: {
-          registerHandlers: () => () => {
-            throw new Error('storage cleanup failed');
-          },
-        },
       }),
     ]);
     await coordinator.startAll();
 
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'unclean-disable', enabled: false });
+    const outcome = await coordinator.applyExtensionTransition('unclean-disable-primitive', false);
     consoleSpy.mockRestore();
 
-    expect(result.success).toBe(false);
-    // The extension really is stopped, so the requested state is persisted…
-    expect(persisted).toEqual([{ name: 'unclean-disable', enabled: false }]);
+    // The extension really is stopped, but teardown left a failure behind on
+    // `entry.error`. That failure does not change the outcome: the runtime
+    // did reach `stopped`, so this still reports `'applied'` and still
+    // announces `enabledChanged` — 'applied-unclean' no longer exists as a
+    // separate outcome.
+    expect(outcome).toBe('applied');
     const info = coordinator.list()[0];
     expect(info?.state).toBe('stopped');
     expect(info?.error).toContain('teardown failed');
-    expect(info?.error).toContain('contribution teardown failed');
-    expect(info?.error).toContain('storage cleanup failed');
-    // …and the change is announced, because the flag really did change: a
-    // second window that kept showing this extension as enabled would be the
-    // only thing left claiming it is still running.
-    await expect(enabledChanged.promise).resolves.toEqual({ name: 'unclean-disable', enabled: false });
+    await expect(enabledChanged.promise).resolves.toEqual({ name: 'unclean-disable-primitive', enabled: false });
 
     await coordinator.shutdown();
   });
@@ -913,8 +920,417 @@ describe('ExtensionCoordinator', () => {
     });
   });
 
-  // 17. persistEnabled is called when setEnabled toggles state
-  it('calls persistEnabled callback when setEnabled changes state', async () => {
+  // ---------------------------------------------------------------------------
+  // extensionManagedNames: framework packages vs. operator-managed extensions
+  // ---------------------------------------------------------------------------
+
+  it('refuses setEnabled for a non-managed (framework) package before any write', async () => {
+    const persistEnabled = vi.fn(async (_name: string, _enabled: boolean) => undefined);
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      // 'framework-pkg' is absent from this set, so it is not operator-managed.
+      extensionManagedNames: new Set(['managed-ext']),
+      persistEnabled,
+    });
+
+    coordinator.load([
+      makePackage('framework-pkg', { create: (ctx) => makeMockService(ctx.bus) }),
+      makePackage('managed-ext', { create: (ctx) => makeMockService(ctx.bus) }),
+    ]);
+    await coordinator.startAll();
+
+    await expect(bus.request(ExtensionSubjects.setEnabled, { name: 'framework-pkg', enabled: false })).rejects.toThrow(
+      /framework packages are always loaded and have no operator enablement preference/i,
+    );
+    expect(persistEnabled).not.toHaveBeenCalled();
+
+    // A managed name in the same coordinator is unaffected by the refusal.
+    const managedResult = await bus.request(ExtensionSubjects.setEnabled, { name: 'managed-ext', enabled: false });
+    expect(managedResult.outcome).toBe('restart-required');
+    expect(persistEnabled).toHaveBeenCalledWith('managed-ext', false);
+
+    await coordinator.shutdown();
+  });
+
+  it('reports extensionManaged and omits persistedEnabled for a non-managed (framework) package', async () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      extensionManagedNames: new Set(['managed-ext']),
+      // Would report `persistedEnabled: true` for a managed entry; must never
+      // be consulted for the non-managed one.
+      loadEnabled: () => true,
+    });
+
+    coordinator.load([
+      makePackage('framework-pkg', { create: (ctx) => makeMockService(ctx.bus) }),
+      makePackage('managed-ext', { create: (ctx) => makeMockService(ctx.bus) }),
+    ]);
+    await coordinator.startAll();
+
+    const framework = coordinator.list().find((e) => e.name === 'framework-pkg');
+    expect(framework).toMatchObject({ extensionManaged: false, enabled: true });
+    expect(framework?.persistedEnabled).toBeUndefined();
+    expect(coordinator.getInfo('framework-pkg')?.persistedEnabled).toBeUndefined();
+
+    const managed = coordinator.list().find((e) => e.name === 'managed-ext');
+    expect(managed).toMatchObject({ extensionManaged: true, persistedEnabled: true });
+
+    await coordinator.shutdown();
+  });
+
+  it('boots a non-managed (framework) package enabled even when loadEnabled would return false for its name', async () => {
+    const initFn = vi.fn();
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      // Nothing is extension-managed here, so 'framework-pkg' is a framework
+      // package even though `loadEnabled` below would disable everything if
+      // it were ever consulted for it.
+      extensionManagedNames: new Set(),
+      loadEnabled: () => false,
+    });
+
+    coordinator.load([makePackage('framework-pkg', { create: (ctx) => makeMockService(ctx.bus, initFn) })]);
+    await coordinator.startAll();
+
+    expect(initFn).toHaveBeenCalledOnce();
+    expect(coordinator.getInfo('framework-pkg')).toMatchObject({
+      state: 'active',
+      enabled: true,
+      extensionManaged: false,
+    });
+
+    await coordinator.shutdown();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Disabled entries are excluded from fatal dependency-graph validation
+  // ---------------------------------------------------------------------------
+
+  it('does not abort boot for a disabled extension declaring a missing dependency, and records the reason on its entry', async () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (name === 'orphan-disabled' ? false : undefined),
+    });
+
+    expect(() =>
+      coordinator.load([makePackage('orphan-disabled', { dependencies: [dep('missing-thing')] })]),
+    ).not.toThrow();
+
+    await coordinator.startAll();
+
+    const info = coordinator.getInfo('orphan-disabled');
+    expect(info).toMatchObject({ state: 'skipped', enabled: false });
+    expect(info?.error).toMatch(/missing dependencies: missing-thing/i);
+
+    await coordinator.shutdown();
+  });
+
+  it('does not abort boot for a cycle running only through disabled extensions, and records it on both entries', async () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (name === 'cycle-a' || name === 'cycle-b' ? false : undefined),
+    });
+
+    expect(() =>
+      coordinator.load([
+        makePackage('cycle-a', { dependencies: [dep('cycle-b')] }),
+        makePackage('cycle-b', { dependencies: [dep('cycle-a')] }),
+      ]),
+    ).not.toThrow();
+
+    await coordinator.startAll();
+
+    const infoA = coordinator.getInfo('cycle-a');
+    const infoB = coordinator.getInfo('cycle-b');
+    expect(infoA).toMatchObject({ state: 'skipped', enabled: false });
+    expect(infoB).toMatchObject({ state: 'skipped', enabled: false });
+    expect(infoA?.error).toMatch(/circular dependency detected among disabled packages/i);
+    expect(infoB?.error).toMatch(/circular dependency detected among disabled packages/i);
+
+    await coordinator.shutdown();
+  });
+
+  it('still aborts boot for an enabled extension declaring a missing dependency (fatal semantics preserved)', () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      extensionManagedNames: new Set(['broken-ext']),
+      loadEnabled: () => true,
+    });
+
+    expect(() => coordinator.load([makePackage('broken-ext', { dependencies: [dep('missing-thing')] })])).toThrow(
+      /missing dependencies: missing-thing/i,
+    );
+  });
+
+  it('still aborts boot for a cycle involving at least one enabled extension', () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (name === 'mixed-cycle-b' ? false : undefined),
+    });
+
+    expect(() =>
+      coordinator.load([
+        makePackage('mixed-cycle-a', { dependencies: [dep('mixed-cycle-b')] }),
+        makePackage('mixed-cycle-b', { dependencies: [dep('mixed-cycle-a')] }),
+      ]),
+    ).toThrow(/circular dependency detected among: mixed-cycle-a, mixed-cycle-b/i);
+  });
+
+  // ---------------------------------------------------------------------------
+  // handleSetEnabled classification of the discovered state (between load()
+  // and startAll())
+  // ---------------------------------------------------------------------------
+
+  it('classifies a discovered, boot-enabled entry by its own enabled flag rather than "inactive"', async () => {
+    const persisted: Array<{ name: string; enabled: boolean }> = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      persistEnabled: async (name, enabled) => {
+        persisted.push({ name, enabled });
+      },
+    });
+
+    coordinator.load([makePackage('discovered-enabled-ext', { create: (ctx) => makeMockService(ctx.bus) })]);
+
+    // load() ran (the RPC handler exists) but startAll() has not, so the
+    // entry is still 'discovered' with `enabled: true` from the boot-time
+    // preference.
+    expect(coordinator.getInfo('discovered-enabled-ext')).toMatchObject({ state: 'discovered', enabled: true });
+
+    // A disable request here diverges from the direction the entry is
+    // already headed (it is about to start), so it truthfully needs a
+    // restart even though a naive `state === 'active'` check would call it
+    // already 'applied'.
+    const disableResult = await bus.request(ExtensionSubjects.setEnabled, {
+      name: 'discovered-enabled-ext',
+      enabled: false,
+    });
+    expect(disableResult).toEqual({ success: false, outcome: 'restart-required' });
+    expect(persisted).toContainEqual({ name: 'discovered-enabled-ext', enabled: false });
+
+    // Requesting the direction the entry is already headed reports 'applied'
+    // even though it has not started yet.
+    const enableResult = await bus.request(ExtensionSubjects.setEnabled, {
+      name: 'discovered-enabled-ext',
+      enabled: true,
+    });
+    expect(enableResult).toEqual({ success: true, outcome: 'applied' });
+    expect(persisted).toContainEqual({ name: 'discovered-enabled-ext', enabled: true });
+
+    // handleSetEnabled never mutates `entry.enabled`; startAll() reads the
+    // same boot-time preference it always would have.
+    await coordinator.startAll();
+    expect(coordinator.getInfo('discovered-enabled-ext')).toMatchObject({ state: 'active', enabled: true });
+
+    await coordinator.shutdown();
+  });
+
+  it('reports restart-required for an enable request while a boot-disabled entry is still discovered', async () => {
+    const persisted: Array<{ name: string; enabled: boolean }> = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (name === 'discovered-disabled-ext' ? false : undefined),
+      persistEnabled: async (name, enabled) => {
+        persisted.push({ name, enabled });
+      },
+    });
+
+    coordinator.load([makePackage('discovered-disabled-ext', { create: (ctx) => makeMockService(ctx.bus) })]);
+    expect(coordinator.getInfo('discovered-disabled-ext')).toMatchObject({ state: 'discovered', enabled: false });
+
+    // `handleSetEnabled` persists the new preference but never mutates
+    // `entry.enabled`, so the upcoming `startAll()` is still about to skip
+    // this entry regardless — only a process restart picks the new
+    // preference up.
+    const enableResult = await bus.request(ExtensionSubjects.setEnabled, {
+      name: 'discovered-disabled-ext',
+      enabled: true,
+    });
+    expect(enableResult).toEqual({ success: false, outcome: 'restart-required' });
+    expect(persisted).toContainEqual({ name: 'discovered-disabled-ext', enabled: true });
+
+    await coordinator.startAll();
+    expect(coordinator.getInfo('discovered-disabled-ext')).toMatchObject({ state: 'skipped', enabled: false });
+
+    await coordinator.shutdown();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Surface collection dependency closure
+  // ---------------------------------------------------------------------------
+
+  it('excludes an enabled package from static surface collection when a required dependency is disabled', () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (name === 'dep-a' ? false : undefined),
+    });
+
+    coordinator.load([
+      makePackage('dep-a', {}),
+      makePackage('ext-b', {
+        dependencies: [dep('dep-a')],
+        windows: [{ id: 'main', style: 'utility' }],
+        cli: makeCliContribution('ext-b-cmd'),
+      }),
+    ]);
+
+    // `ext-b` is itself preference-enabled, but its required dependency
+    // `dep-a` is disabled, so `startExtensionEntry` will refuse it at
+    // `startAll` time. Its windows and CLI contribution must never have been
+    // registered — they would otherwise remain dispatchable (e.g. through
+    // `cli.execute`) for code that is guaranteed never to become active.
+    expect(coordinator.windowRegistry.size).toBe(0);
+    expect(coordinator.cliContributions.find((c) => c.name === 'ext-b-cmd')).toBeUndefined();
+    expect(coordinator.cliContributions).toHaveLength(0);
+  });
+
+  it('excludes a package from static surface collection when a dependency is transitively blocked', () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (name === 'root-dep' ? false : undefined),
+    });
+
+    coordinator.load([
+      makePackage('root-dep', {}),
+      makePackage('middle', {
+        dependencies: [dep('root-dep')],
+        windows: [{ id: 'middle-window', style: 'utility' }],
+      }),
+      makePackage('leaf', {
+        dependencies: [dep('middle')],
+        windows: [{ id: 'leaf-window', style: 'utility' }],
+        cli: makeCliContribution('leaf-cmd'),
+      }),
+    ]);
+
+    // `middle` is excluded directly (its own dependency `root-dep` is
+    // disabled); `leaf` is excluded transitively because its own dependency
+    // `middle` never joins the closed set. Neither package's surfaces may be
+    // registered.
+    expect(coordinator.windowRegistry.size).toBe(0);
+    expect(coordinator.cliContributions).toHaveLength(0);
+  });
+
+  it('still collects static surfaces when a disabled dependency is optional', () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (name === 'optional-dep' ? false : undefined),
+    });
+
+    coordinator.load([
+      makePackage('optional-dep', {}),
+      makePackage('main-ext', {
+        dependencies: [optionalDep('optional-dep')],
+        windows: [{ id: 'main', style: 'utility' }],
+        cli: makeCliContribution('main-ext-cmd'),
+      }),
+    ]);
+
+    // The disabled dependency is only optional, so `startExtensionEntry`'s
+    // own dependency check never rejects `main-ext` on that basis — its
+    // surfaces must be collected exactly as they were before the closure was
+    // introduced.
+    expect(coordinator.windowRegistry.size).toBe(1);
+    expect(coordinator.windowRegistry.get('main-ext:main')).toBeDefined();
+    expect(coordinator.cliContributions.map((c) => c.name)).toEqual(['main-ext-cmd']);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Namespace registration dependency closure
+  // ---------------------------------------------------------------------------
+
+  it('never attempts to register a disabled extension namespace, so it cannot abort boot on collision', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      // A framework namespace registered outside the coordinator, exactly as
+      // `framework/core/contracts`'s namespace catalog would before extension
+      // boot runs. It wins any later duplicate registration attempt for the
+      // same domain because namespace registration is idempotent.
+      const frameworkNamespace = createBusNamespace('shared:collide', {
+        ping: z.object({ id: z.string() }),
+      });
+      bus.registerNamespace(frameworkNamespace);
+
+      // The active extension declares the same domain with a schema that
+      // drifts from the framework's (an extra required field) — this only
+      // ever warns (`warnOnSchemaCollision`), it does not throw.
+      const activeNamespace = createBusNamespace('shared:collide', {
+        ping: z.object({ id: z.string(), extra: z.string() }),
+      });
+
+      // The disabled extension declares the same domain with routing
+      // metadata that would throw on collision (`failOnRoutingMetadataCollision`)
+      // if it were ever registered: a `localSubject()` cannot silently
+      // disagree with the framework's plain event on the same subject key.
+      const disabledNamespace = createBusNamespace('shared:collide', {
+        ping: localSubject(z.object({ id: z.string() })),
+      });
+
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        loadEnabled: (name) => (name === 'disabled-ext' ? false : undefined),
+      });
+
+      // Registering the disabled extension's namespace would throw and abort
+      // load() entirely under the pre-fix behavior (namespaces registered
+      // for every entry regardless of `enabled`), defeating disabling it as
+      // a recovery path. It must not throw now.
+      expect(() =>
+        coordinator.load([
+          makePackage('active-ext', {
+            namespaces: [activeNamespace],
+            create: (ctx) => makeMockService(ctx.bus),
+          }),
+          makePackage('disabled-ext', {
+            namespaces: [disabledNamespace],
+          }),
+        ]),
+      ).not.toThrow();
+
+      await coordinator.startAll();
+
+      // The framework's registration wins: the schema at the shared subject
+      // still only accepts the framework's shape (no `extra` field required),
+      // proving the active extension's colliding registerNamespaces() call
+      // returned the existing namespace instead of overwriting it.
+      const schema = bus.getSchema('shared:collide.ping') as z.ZodObject<z.ZodRawShape> | undefined;
+      expect(schema?.safeParse({ id: 'x' }).success).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Namespace 'shared:collide' already registered with different schemas"),
+      );
+
+      await coordinator.shutdown();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('does not register a namespace for an enabled extension whose required dependency is disabled', () => {
+    const namespace = createBusNamespace('unreached:ns', {
+      ping: z.object({ id: z.string() }),
+    });
+
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (name === 'dep-a' ? false : undefined),
+    });
+
+    coordinator.load([
+      makePackage('dep-a', {}),
+      makePackage('ext-b', {
+        dependencies: [dep('dep-a')],
+        namespaces: [namespace],
+      }),
+    ]);
+
+    // `ext-b` is preference-enabled but excluded from the dependency closure
+    // (`dep-a` is disabled), so it never starts `create`/`init` this process
+    // and its namespace must never have been registered.
+    expect(bus.getSchema('unreached:ns.ping')).toBeUndefined();
+  });
+
+  // 17. persistEnabled is called on every setEnabled request, regardless of outcome
+  it('calls persistEnabled callback for every setEnabled request', async () => {
     const persisted: Array<{ name: string; enabled: boolean }> = [];
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: TEST_PKG_CTX_BASE,
@@ -926,21 +1342,211 @@ describe('ExtensionCoordinator', () => {
     coordinator.load([makePackage('persist-pkg', { create: (ctx) => makeMockService(ctx.bus) })]);
     await coordinator.startAll();
 
-    // Disable the package
+    // `setEnabled` is persist-only: it never runs a live transition, so
+    // disabling an `active` extension always persists but reports
+    // `restart-required` (the runtime state and the request diverge) rather
+    // than `applied`.
     const disableResult = await bus.request(ExtensionSubjects.setEnabled, {
       name: 'persist-pkg',
       enabled: false,
     });
-    expect(disableResult.success).toBe(true);
+    expect(disableResult).toEqual({ success: false, outcome: 'restart-required' });
     expect(persisted).toContainEqual({ name: 'persist-pkg', enabled: false });
 
-    // Re-enable the package
+    // Requesting `enabled: true` while the process's own runtime state is
+    // still `active` (setEnabled never moved it) matches, so this one
+    // reports `applied`.
     const enableResult = await bus.request(ExtensionSubjects.setEnabled, {
       name: 'persist-pkg',
       enabled: true,
     });
-    expect(enableResult.success).toBe(true);
+    expect(enableResult).toEqual({ success: true, outcome: 'applied' });
     expect(persisted).toContainEqual({ name: 'persist-pkg', enabled: true });
+
+    await coordinator.shutdown();
+  });
+
+  // `'initializing'` classification: the lifecycle lane serializes every
+  // `startAll`/`applyExtensionTransition`/`handleSetEnabled` call against the
+  // same entry, and every lane operation transitions an entry away from
+  // `'initializing'` before it returns or throws (see `disableExtension`'s and
+  // `enableExtension`'s handling of that state in `extension-toggle.ts`), so
+  // the full coordinator/bus surface can never observe `handleSetEnabled`
+  // running while an entry sits at `'initializing'`. `handleSetEnabled` itself
+  // must still classify that state correctly, because a process crash mid
+  // `create`/`init` can leave an entry there across a restart of the seam's
+  // own reasoning, so these two tests call it directly against a hand-built
+  // `ToggleHost` rather than through `bus.request`.
+  describe('handleSetEnabled classification of the initializing state', () => {
+    /**
+     * Build a minimal {@link ToggleHost} that reports a single entry.
+     *
+     * `handleSetEnabled` only ever reads `host.entries` and calls
+     * `host.persistEnabled`; every other {@link ToggleHost} member below exists
+     * solely to satisfy the interface and is never invoked by the code path
+     * these tests exercise.
+     * @param entry - Entry the host's `entries` map reports for its own name.
+     * @returns The host, plus the `persistEnabled` spy for assertions.
+     */
+    function makeToggleHost(entry: ExtensionEntry): { host: ToggleHost; persistEnabled: ReturnType<typeof vi.fn> } {
+      const persistEnabled = vi.fn(async (_name: string, _enabled: boolean) => undefined);
+      const host: ToggleHost = {
+        bus,
+        db: undefined,
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        loadConfig: undefined,
+        operatorConfig: undefined,
+        signal: new AbortController().signal,
+        hasActiveExtension: () => false,
+        getExtensionService: () => undefined,
+        entries: new Map([[entry.pkg.name, entry]]),
+        persistEnabled,
+        contributionProcessors: [],
+        runHealthCheck: async () => undefined,
+        emitWarningsForEntry: async () => undefined,
+      };
+      return { host, persistEnabled };
+    }
+
+    /**
+     * Build an {@link ExtensionEntry} sitting at `'initializing'`.
+     * @param name - Extension name for the entry's package and identity.
+     * @returns An entry whose `state` is `'initializing'`.
+     */
+    function makeInitializingEntry(name: string): ExtensionEntry {
+      return {
+        pkg: makePackage(name),
+        identity: createExtensionIdentity(name),
+        state: 'initializing',
+        enabled: true,
+        extensionManaged: true,
+        warnings: [],
+      };
+    }
+
+    it('reports restart-required for a disable request while the entry is initializing, and still persists it', async () => {
+      const entry = makeInitializingEntry('initializing-disable-ext');
+      const { host, persistEnabled } = makeToggleHost(entry);
+
+      const result = await handleSetEnabled(host, entry.pkg.name, false);
+
+      // 'initializing' resolves through the normal lifecycle to 'active', so a
+      // disable persisted while it is mid-flight needs a restart to take
+      // effect exactly as it would once the extension reached 'active' —
+      // treating it as already-satisfied (as a naive `state === 'active'`
+      // check would) would silently report the wrong outcome.
+      expect(result).toEqual({ success: false, outcome: 'restart-required' });
+      expect(persistEnabled).toHaveBeenCalledWith(entry.pkg.name, false);
+    });
+
+    it('reports applied for an enable request while the entry is initializing, since it is already headed to active', async () => {
+      const entry = makeInitializingEntry('initializing-enable-ext');
+      const { host, persistEnabled } = makeToggleHost(entry);
+
+      const result = await handleSetEnabled(host, entry.pkg.name, true);
+
+      expect(result).toEqual({ success: true, outcome: 'applied' });
+      expect(persistEnabled).toHaveBeenCalledWith(entry.pkg.name, true);
+    });
+  });
+
+  it('never lets a stale boot-time loadEnabled snapshot suppress a setEnabled write', async () => {
+    // `loadEnabled` is an explicit boot snapshot (see its TSDoc on
+    // `ExtensionCoordinatorOptions`): it is read once, at `load()`, to seed
+    // `entry.enabled`, and it must never again decide whether `setEnabled`
+    // persists. This test's `loadEnabled` never reflects the writes below —
+    // it always reports the name as enabled, as if a hand-edit to the
+    // enablement file after boot removed it from the disabled set. If
+    // `handleSetEnabled` consulted this cache to decide "did the preference
+    // actually change" before writing, it would see no change and skip the
+    // write. It must persist unconditionally instead.
+    const persisted: Array<{ name: string; enabled: boolean }> = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: () => true,
+      persistEnabled: async (name, enabled) => {
+        persisted.push({ name, enabled });
+      },
+    });
+
+    coordinator.load([makePackage('stale-cache-pkg', { create: (ctx) => makeMockService(ctx.bus) })]);
+    await coordinator.startAll();
+
+    await bus.request(ExtensionSubjects.setEnabled, { name: 'stale-cache-pkg', enabled: false });
+    await bus.request(ExtensionSubjects.setEnabled, { name: 'stale-cache-pkg', enabled: false });
+    await bus.request(ExtensionSubjects.setEnabled, { name: 'stale-cache-pkg', enabled: true });
+
+    // Every request wrote, including the second, identical disable — an
+    // idempotent write is exactly what proves nothing was skipped as "already
+    // matches the cache".
+    expect(persisted).toEqual([
+      { name: 'stale-cache-pkg', enabled: false },
+      { name: 'stale-cache-pkg', enabled: false },
+      { name: 'stale-cache-pkg', enabled: true },
+    ]);
+
+    await coordinator.shutdown();
+  });
+
+  it('list() reports persistedEnabled from loadEnabled, diverging from enabled after a live setEnabled disable', async () => {
+    // `persistedEnabled` must read the durable preference live (through the
+    // same `loadEnabled` reader `ExtensionEnablementStore` wires in
+    // `@makaio/runtime-node`, whose in-memory disabled set updates on every
+    // committed write), not the boot-time snapshot used to seed
+    // `entry.enabled`. This double models that store: `disabled` starts
+    // empty and is mutated by `persistEnabled`, exactly like the store's own
+    // in-memory set.
+    const disabled = new Set<string>();
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (disabled.has(name) ? false : undefined),
+      persistEnabled: async (name, enabled) => {
+        if (enabled) {
+          disabled.delete(name);
+        } else {
+          disabled.add(name);
+        }
+      },
+    });
+
+    coordinator.load([makePackage('persisted-enabled-pkg', { create: (ctx) => makeMockService(ctx.bus) })]);
+    await coordinator.startAll();
+
+    expect(coordinator.list().find((e) => e.name === 'persisted-enabled-pkg')).toMatchObject({
+      enabled: true,
+      persistedEnabled: true,
+    });
+
+    // The operator disables the still-active extension: the preference is
+    // persisted, but setEnabled is persist-only, so the running process keeps
+    // reporting `enabled: true` until a restart.
+    const result = await bus.request(ExtensionSubjects.setEnabled, {
+      name: 'persisted-enabled-pkg',
+      enabled: false,
+    });
+    expect(result.outcome).toBe('restart-required');
+
+    expect(coordinator.list().find((e) => e.name === 'persisted-enabled-pkg')).toMatchObject({
+      enabled: true,
+      persistedEnabled: false,
+    });
+
+    await coordinator.shutdown();
+  });
+
+  it('omits persistedEnabled from list() and get() when the coordinator has no loadEnabled reader', async () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+
+    coordinator.load([makePackage('no-loadEnabled-pkg', { create: (ctx) => makeMockService(ctx.bus) })]);
+    await coordinator.startAll();
+
+    const listed = coordinator.list().find((e) => e.name === 'no-loadEnabled-pkg');
+    expect(listed).not.toHaveProperty('persistedEnabled');
+
+    const { extension } = await bus.request(ExtensionSubjects.get, { name: 'no-loadEnabled-pkg' });
+    expect(extension).not.toHaveProperty('persistedEnabled');
 
     await coordinator.shutdown();
   });
@@ -1004,13 +1610,16 @@ describe('ExtensionCoordinator', () => {
       enabled: false,
     });
 
-    expect(retryResult.success).toBe(true);
+    // `setEnabled` never mutates runtime state (persist-only), so the retry
+    // persists cleanly but still reports `restart-required`: the package is
+    // still `active` and the request asks for `enabled: false`.
+    expect(retryResult).toEqual({ success: false, outcome: 'restart-required' });
     expect(persisted).toEqual([false, false]);
 
     await coordinator.shutdown();
   });
 
-  it('reports a successful lifecycle recovery when the enabled preference is already true', async () => {
+  it('recovers a failed extension through the coordinator-internal restart primitive', async () => {
     const events: Array<{ name: string; enabled: boolean }> = [];
     let initAttempts = 0;
     const coordinator = new ExtensionCoordinator(bus, {
@@ -1036,12 +1645,12 @@ describe('ExtensionCoordinator', () => {
       events.push({ name: ctx.payload.name, enabled: ctx.payload.enabled });
     });
 
-    const retryResult = await bus.request(ExtensionSubjects.setEnabled, {
-      name: 'lifecycle-recovery',
-      enabled: true,
-    });
+    // `setEnabled` is persist-only and would never re-run `create`/`init` for
+    // a `failed` entry — recovering it is exactly what
+    // `applyExtensionTransition` is for.
+    const retryOutcome = await coordinator.applyExtensionTransition('lifecycle-recovery', true);
 
-    expect(retryResult.success).toBe(true);
+    expect(retryOutcome).toBe('applied');
     expect(coordinator.list().find((entry) => entry.name === 'lifecycle-recovery')).toMatchObject({
       state: 'active',
       enabled: true,
@@ -1071,7 +1680,7 @@ describe('ExtensionCoordinator', () => {
 
     expect(storageCleanup).not.toHaveBeenCalled();
 
-    await bus.request(ExtensionSubjects.setEnabled, { name: 'storage-pkg', enabled: false });
+    await coordinator.applyExtensionTransition('storage-pkg', false);
 
     expect(storageCleanup).toHaveBeenCalledOnce();
 
@@ -1099,8 +1708,8 @@ describe('ExtensionCoordinator', () => {
     await coordinator.startAll();
 
     // Both are now failed or skipped — try to re-enable child (dep is still failed)
-    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'child', enabled: true });
-    expect(result.success).toBe(false);
+    const result = await coordinator.applyExtensionTransition('child', true);
+    expect(result).toBe('rejected');
     const info = coordinator.list().find((e) => e.name === 'child');
     expect(info?.state).toBe('failed');
     expect(info?.error).toMatch(/Required dependencies not active: dep/);
@@ -1127,23 +1736,23 @@ describe('ExtensionCoordinator', () => {
     expect(registerHandlers).toHaveBeenCalledOnce();
 
     // Disable then re-enable
-    await bus.request(ExtensionSubjects.setEnabled, { name: 're-storage-pkg', enabled: false });
-    await bus.request(ExtensionSubjects.setEnabled, { name: 're-storage-pkg', enabled: true });
+    await coordinator.applyExtensionTransition('re-storage-pkg', false);
+    await coordinator.applyExtensionTransition('re-storage-pkg', true);
 
     expect(registerHandlers).toHaveBeenCalledTimes(2);
 
     await coordinator.shutdown();
   });
 
-  it('registers namespaces before enabling a package skipped at boot', async () => {
-    const namespace = createBusNamespace('test-extension:reenable', {
-      ping: z.object({ id: z.string() }),
-    });
-    const observed: string[] = [];
-    const expectNamespaceRegistered = (stage: string): void => {
-      observed.push(stage);
-      expect(bus.getSchema(namespace.subjects.ping)).toBeDefined();
-    };
+  it('refuses to activate a boot-skipped entry through the internal restart primitive', async () => {
+    // A package disabled at boot never runs `create`/`init` this process —
+    // `startExtensionEntry` transitions it straight to `'skipped'` without
+    // collecting its static surfaces. `applyExtensionTransition` must never
+    // activate it: none of its boot-only contribution surfaces (namespaces,
+    // client definitions, runtimeOwnership, runtimeBoot.configure(),
+    // storage.migrations) were ever composed, and there is no seam to replay
+    // them for one package in isolation after boot has moved on.
+    const createFn = vi.fn((ctx: { bus: IMakaioBus }) => makeMockService(ctx.bus));
     const coordinator = new ExtensionCoordinator(bus, {
       db: {},
       extensionContextBase: TEST_PKG_CTX_BASE,
@@ -1151,32 +1760,23 @@ describe('ExtensionCoordinator', () => {
     });
 
     coordinator.load([
-      makePackage('reenable-namespaced-pkg', {
-        namespaces: [namespace],
-        storage: {
-          registerHandlers: () => {
-            expectNamespaceRegistered('storage');
-          },
-        },
-        create: (ctx) => {
-          expectNamespaceRegistered('create');
-          return makeMockService(ctx.bus, () => {
-            expectNamespaceRegistered('init');
-          });
-        },
+      makePackage('boot-skipped-pkg', {
+        create: createFn,
       }),
     ]);
     await coordinator.startAll();
 
-    expect(bus.getSchema(namespace.subjects.ping)).toBeDefined();
+    const bootInfo = coordinator.list().find((e) => e.name === 'boot-skipped-pkg');
+    expect(bootInfo).toMatchObject({ state: 'skipped', enabled: false });
+    expect(createFn).not.toHaveBeenCalled();
 
-    const result = await bus.request(ExtensionSubjects.setEnabled, {
-      name: 'reenable-namespaced-pkg',
-      enabled: true,
-    });
+    const outcome = await coordinator.applyExtensionTransition('boot-skipped-pkg', true);
 
-    expect(result.success).toBe(true);
-    expect(observed).toEqual(['storage', 'create', 'init']);
+    expect(outcome).toBe('rejected');
+    expect(createFn).not.toHaveBeenCalled();
+    const afterInfo = coordinator.list().find((e) => e.name === 'boot-skipped-pkg');
+    expect(afterInfo?.state).toBe('skipped');
+    expect(afterInfo?.error).toMatch(/restart is required/i);
 
     await coordinator.shutdown();
   });
@@ -1230,22 +1830,18 @@ describe('ExtensionCoordinator', () => {
     ]);
     await coordinator.startAll();
 
-    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'failing-reenable-pkg', enabled: true });
-    expect(result.success).toBe(false);
+    const result = await coordinator.applyExtensionTransition('failing-reenable-pkg', true);
+    expect(result).toBe('rejected');
     // Called twice: once during startAll failure (startEntry cleanup)
     // and once during re-enable failure (cleanupFailedEnable).
     expect(storageCleanup).toHaveBeenCalledTimes(2);
   });
 
   it('rejects disable when active dependents still require the package', async () => {
-    const persisted: Array<{ name: string; enabled: boolean }> = [];
     const enabledChanged = vi.fn();
     bus.on(ExtensionSubjects.enabledChanged, enabledChanged);
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: TEST_PKG_CTX_BASE,
-      persistEnabled: async (name, enabled) => {
-        persisted.push({ name, enabled });
-      },
     });
 
     coordinator.load([
@@ -1257,18 +1853,14 @@ describe('ExtensionCoordinator', () => {
     ]);
     await coordinator.startAll();
 
-    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'dep', enabled: false });
+    const result = await coordinator.applyExtensionTransition('dep', false);
 
-    expect(result.success).toBe(false);
+    expect(result).toBe('rejected');
     const depInfo = coordinator.list().find((entry) => entry.name === 'dep');
     expect(depInfo).toMatchObject({
       state: 'active',
       enabled: true,
     });
-    expect(persisted).toEqual([
-      { name: 'dep', enabled: false },
-      { name: 'dep', enabled: true },
-    ]);
     expect(enabledChanged).not.toHaveBeenCalled();
 
     await coordinator.shutdown();
@@ -1288,9 +1880,9 @@ describe('ExtensionCoordinator', () => {
     ]);
     await coordinator.startAll();
 
-    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'dep', enabled: false });
+    const result = await coordinator.applyExtensionTransition('dep', false);
 
-    expect(result.success).toBe(true);
+    expect(result).toBe('applied');
     expect(coordinator.list().find((entry) => entry.name === 'dep')).toMatchObject({
       state: 'stopped',
       enabled: false,
@@ -1317,15 +1909,15 @@ describe('ExtensionCoordinator', () => {
     ]);
     await coordinator.startAll();
 
-    const blocked = await bus.request(ExtensionSubjects.setEnabled, { name: 'dep', enabled: false });
-    expect(blocked.success).toBe(false);
+    const blocked = await coordinator.applyExtensionTransition('dep', false);
+    expect(blocked).toBe('rejected');
     expect(coordinator.list().find((entry) => entry.name === 'dep')?.error).toContain('active dependents remain');
 
-    await bus.request(ExtensionSubjects.setEnabled, { name: 'child', enabled: false });
-    const disabled = await bus.request(ExtensionSubjects.setEnabled, { name: 'dep', enabled: false });
+    await coordinator.applyExtensionTransition('child', false);
+    const disabled = await coordinator.applyExtensionTransition('dep', false);
     const depInfo = coordinator.list().find((entry) => entry.name === 'dep');
 
-    expect(disabled.success).toBe(true);
+    expect(disabled).toBe('applied');
     expect(depInfo).toMatchObject({
       state: 'stopped',
       enabled: false,
@@ -1333,6 +1925,768 @@ describe('ExtensionCoordinator', () => {
     expect(depInfo?.error).toBeUndefined();
 
     await coordinator.shutdown();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Critical guard tests
+  // ---------------------------------------------------------------------------
+
+  // Critical guard: disable rejected for critical packages
+  it('rejects setEnabled(false) for a critical extension with a clear error', async () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      persistEnabled: async () => undefined,
+    });
+    coordinator.load([
+      makePackage('critical-ext', {
+        critical: true,
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+
+    await expect(bus.request(ExtensionSubjects.setEnabled, { name: 'critical-ext', enabled: false })).rejects.toThrow(
+      /Cannot disable critical extension "critical-ext"/,
+    );
+
+    // Extension must remain active after the rejected attempt.
+    const info = coordinator.list().find((e) => e.name === 'critical-ext');
+    expect(info?.state).toBe('active');
+    expect(info?.enabled).toBe(true);
+
+    await coordinator.shutdown();
+  });
+
+  // Critical guard: persistEnabled not called when disable is rejected
+  it('does not call persistEnabled when disabling a critical extension is rejected', async () => {
+    const persisted: Array<{ name: string; enabled: boolean }> = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      persistEnabled: async (name, enabled) => {
+        persisted.push({ name, enabled });
+      },
+    });
+    coordinator.load([
+      makePackage('critical-ext', {
+        critical: true,
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+
+    await expect(bus.request(ExtensionSubjects.setEnabled, { name: 'critical-ext', enabled: false })).rejects.toThrow();
+    expect(persisted).toHaveLength(0);
+
+    await coordinator.shutdown();
+  });
+
+  // No durable enablement store: setEnabled must not silently no-op
+  it('rejects setEnabled with a clear error when the coordinator has no persistEnabled writer', async () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+    coordinator.load([makePackage('no-store-ext', { create: (ctx) => makeMockService(ctx.bus) })]);
+    await coordinator.startAll();
+
+    // A coordinator built without `persistEnabled` (e.g. an isolated,
+    // headless workflow runtime that never wires a durable enablement file)
+    // must refuse the request outright rather than reporting `success`/
+    // `'applied'` for a write that never happened.
+    await expect(bus.request(ExtensionSubjects.setEnabled, { name: 'no-store-ext', enabled: false })).rejects.toThrow(
+      /no durable enablement store/,
+    );
+
+    // The extension's runtime state must be untouched by the rejected request.
+    const info = coordinator.list().find((e) => e.name === 'no-store-ext');
+    expect(info?.state).toBe('active');
+    expect(info?.enabled).toBe(true);
+
+    await coordinator.shutdown();
+  });
+
+  // Boot-time override: critical extension with persisted false starts anyway
+  it('starts a critical extension even when loadEnabled returns false and emits a console warning', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        loadEnabled: (name) => (name === 'critical-disabled' ? false : undefined),
+      });
+      coordinator.load([
+        makePackage('critical-disabled', {
+          critical: true,
+          create: (ctx) => makeMockService(ctx.bus),
+        }),
+      ]);
+      await coordinator.startAll();
+
+      const info = coordinator.list().find((e) => e.name === 'critical-disabled');
+      expect(info?.state).toBe('active');
+      expect(info?.enabled).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Critical extension "critical-disabled" is marked disabled'),
+      );
+
+      await coordinator.shutdown();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('settles an enable of an already-active extension as applied, still persisting idempotently', async () => {
+    // `setEnabled` persists unconditionally on every request — it must never
+    // skip the write because a cached preference looks unchanged (see the
+    // `ToggleHost.persistEnabled` contract). The outcome comparison is what
+    // reports `'applied'` here: the process's runtime state (`active`)
+    // already matches the requested `enabled: true`.
+    const disabled = new Set<string>();
+    const persistCalls: Array<{ name: string; enabled: boolean }> = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (disabled.has(name) ? false : undefined),
+      persistEnabled: async (name, enabled) => {
+        persistCalls.push({ name, enabled });
+        if (enabled) disabled.delete(name);
+        else disabled.add(name);
+        await Promise.resolve();
+      },
+    });
+    coordinator.load([makePackage('already-active-ext', { create: (ctx) => makeMockService(ctx.bus) })]);
+    await coordinator.startAll();
+
+    const beforeInfo = coordinator.list().find((e) => e.name === 'already-active-ext');
+    expect(beforeInfo?.state).toBe('active');
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'already-active-ext', enabled: true });
+
+    expect(result.success).toBe(true);
+    expect(result.outcome).toBe('applied');
+
+    const afterInfo = coordinator.list().find((e) => e.name === 'already-active-ext');
+    expect(afterInfo?.state).toBe('active');
+    expect(afterInfo?.enabled).toBe(true);
+    expect(persistCalls).toEqual([{ name: 'already-active-ext', enabled: true }]);
+    expect(disabled.has('already-active-ext')).toBe(false);
+
+    await coordinator.shutdown();
+  });
+
+  it('clears a hand-written disabled entry for a boot-forced critical extension on enable, with no recurrence', async () => {
+    // The scenario the idempotent-enable fix exists for: a critical extension
+    // that boot force-started despite an operator-written disabled entry in
+    // the durable store (see the boot-time override test above). A live
+    // `extension enable` for it must actually clear that stale entry — and
+    // must not restore it moments later via the rejected-transition rollback
+    // path, which is what reintroduced the documented warning on every
+    // restart before this fix.
+    const disabled = new Set<string>(['critical-disabled']);
+    const persistCalls: Array<{ name: string; enabled: boolean }> = [];
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const coordinator = new ExtensionCoordinator(bus, {
+        extensionContextBase: TEST_PKG_CTX_BASE,
+        loadEnabled: (name) => (disabled.has(name) ? false : undefined),
+        persistEnabled: async (name, enabled) => {
+          persistCalls.push({ name, enabled });
+          if (enabled) disabled.delete(name);
+          else disabled.add(name);
+          await Promise.resolve();
+        },
+      });
+      coordinator.load([
+        makePackage('critical-disabled', {
+          critical: true,
+          create: (ctx) => makeMockService(ctx.bus),
+        }),
+      ]);
+      await coordinator.startAll();
+
+      // Boot force-started it despite the hand-written disabled entry.
+      const bootInfo = coordinator.list().find((e) => e.name === 'critical-disabled');
+      expect(bootInfo?.state).toBe('active');
+      expect(disabled.has('critical-disabled')).toBe(true);
+
+      const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'critical-disabled', enabled: true });
+
+      expect(result.success).toBe(true);
+      expect(result.outcome).toBe('applied');
+
+      // The stale disabled entry is gone — cleared, not restored by a rollback.
+      expect(disabled.has('critical-disabled')).toBe(false);
+      expect(persistCalls).toEqual([{ name: 'critical-disabled', enabled: true }]);
+
+      const afterInfo = coordinator.list().find((e) => e.name === 'critical-disabled');
+      expect(afterInfo?.state).toBe('active');
+      expect(afterInfo?.enabled).toBe(true);
+
+      await coordinator.shutdown();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  // A disabled extension still gets a coordinator entry (observable and
+  // toggleable), but `setEnabled` is persist-only: it never runs a live
+  // transition, so the entry stays `skipped` until the next process restart.
+  it('registers a disabled extension in skipped state and defers its enable to a restart', async () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (name === 'skipped-ext' ? false : undefined),
+      persistEnabled: async () => undefined,
+    });
+    coordinator.load([
+      makePackage('skipped-ext', {
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+
+    // Extension should be registered but skipped.
+    const skippedInfo = coordinator.list().find((e) => e.name === 'skipped-ext');
+    expect(skippedInfo?.state).toBe('skipped');
+    expect(skippedInfo?.enabled).toBe(false);
+
+    // The preference is persisted, but the process's own runtime state stays
+    // `skipped` — only the next restart actually starts the extension.
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'skipped-ext', enabled: true });
+    expect(result).toEqual({ success: false, outcome: 'restart-required' });
+
+    const afterInfo = coordinator.list().find((e) => e.name === 'skipped-ext');
+    expect(afterInfo?.state).toBe('skipped');
+
+    await coordinator.shutdown();
+  });
+
+  it('defers a runtimeOwnership extension disabled at boot to a restart on enable', async () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (name === 'owner-ext' ? false : undefined),
+      persistEnabled: async () => undefined,
+    });
+    coordinator.load([
+      makePackage('owner-ext', {
+        runtimeOwnership: { sessionOrchestrator: true },
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+
+    // Extension is skipped (disabled at boot, never initialized this process).
+    const skippedInfo = coordinator.list().find((e) => e.name === 'owner-ext');
+    expect(skippedInfo?.state).toBe('skipped');
+
+    // `setEnabled` is persist-only, so this can never activate the extension
+    // live regardless of its runtimeOwnership claim — a second ownership
+    // claimant reaching `active` in this process is structurally impossible
+    // now, not merely refused case-by-case.
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'owner-ext', enabled: true });
+    expect(result).toEqual({ success: false, outcome: 'restart-required' });
+
+    const afterInfo = coordinator.list().find((e) => e.name === 'owner-ext');
+    expect(afterInfo?.state).toBe('skipped');
+
+    await coordinator.shutdown();
+  });
+
+  it('keeps the persisted preference when a runtimeOwnership setEnabled reports restart-required', async () => {
+    // A `restart-required` outcome is not an invalid request: the extension is
+    // meant to run, it just needs a restart. Rolling the preference back here
+    // would re-add the name to the disabled set and make the promised restart a no-op.
+    // The store below implements the same disabled-set semantics as the
+    // enablement file on disk, so the assertion is on real persistence.
+    const disabled = new Set<string>(['owner-ext']);
+    const persistCalls: Array<{ name: string; enabled: boolean }> = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (disabled.has(name) ? false : undefined),
+      persistEnabled: async (name, enabled) => {
+        persistCalls.push({ name, enabled });
+        if (enabled) disabled.delete(name);
+        else disabled.add(name);
+        await Promise.resolve();
+      },
+    });
+    coordinator.load([
+      makePackage('owner-ext', {
+        runtimeOwnership: { sessionOrchestrator: true },
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+    expect(disabled.has('owner-ext')).toBe(true);
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'owner-ext', enabled: true });
+
+    // The live transition is refused...
+    expect(result.success).toBe(false);
+    // ...but the preference stands: the next boot must start the extension.
+    expect(disabled.has('owner-ext')).toBe(false);
+    expect(persistCalls).toEqual([{ name: 'owner-ext', enabled: true }]);
+
+    await coordinator.shutdown();
+  });
+
+  it('allows the internal restart primitive to re-activate a runtimeOwnership extension started this boot', async () => {
+    // The boot-skip guard in `enableExtension` only fires for a `'skipped'`
+    // entry that never collected its surfaces. An extension that WAS started
+    // this boot (state: active) and then stopped (state: stopped) must be
+    // restartable through `applyExtensionTransition` — no second ownership
+    // claimant is created, since the same package instance is restarting.
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      persistEnabled: vi.fn().mockResolvedValue(undefined),
+    });
+    coordinator.load([
+      makePackage('owner-ext-started', {
+        runtimeOwnership: { sessionOrchestrator: true },
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+
+    // Extension started normally this boot — it should be active.
+    const activeInfo = coordinator.list().find((e) => e.name === 'owner-ext-started');
+    expect(activeInfo?.state).toBe('active');
+
+    // Restart the extension via the coordinator-internal primitive.
+    const disableResult = await coordinator.applyExtensionTransition('owner-ext-started', false);
+    expect(disableResult).toBe('applied');
+    const stoppedInfo = coordinator.list().find((e) => e.name === 'owner-ext-started');
+    expect(stoppedInfo?.state).toBe('stopped');
+
+    // Re-enable must succeed — the extension was already initialized this boot.
+    const enableResult = await coordinator.applyExtensionTransition('owner-ext-started', true);
+    expect(enableResult).toBe('applied');
+
+    const reenabledInfo = coordinator.list().find((e) => e.name === 'owner-ext-started');
+    expect(reenabledInfo?.state).toBe('active');
+
+    await coordinator.shutdown();
+  });
+
+  it('defers a boot-skipped package to a restart even when it claims no runtime ownership', async () => {
+    // `setEnabled` is persist-only for every boot-skipped extension, whether
+    // or not it declares `runtimeOwnership`, `clients`, `runtimeBoot`, or
+    // `storage.migrations` — there is no per-contribution distinction left to
+    // test, since none of those surfaces are ever replayed live regardless of
+    // which ones a package happens to declare.
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (name === 'non-owner-ext' ? false : undefined),
+      persistEnabled: async () => undefined,
+    });
+    coordinator.load([
+      makePackage('non-owner-ext', {
+        runtimeOwnership: { sessionOrchestrator: false },
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+
+    const skippedInfo = coordinator.list().find((e) => e.name === 'non-owner-ext');
+    expect(skippedInfo?.state).toBe('skipped');
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'non-owner-ext', enabled: true });
+    expect(result).toEqual({ success: false, outcome: 'restart-required' });
+
+    const afterInfo = coordinator.list().find((e) => e.name === 'non-owner-ext');
+    expect(afterInfo?.state).toBe('skipped');
+
+    await coordinator.shutdown();
+  });
+
+  it('defers a package with client definitions disabled at boot to a restart on enable', async () => {
+    // `clients` is seeded into the clients-core service once, at construction
+    // time, before the coordinator ever starts — one of several boot-only
+    // surfaces `setEnabled` can never replay live. This is no longer a
+    // client-definitions-specific refusal; every boot-skipped package defers
+    // to a restart the same way.
+    const disabled = new Set<string>(['client-ext']);
+    const persistCalls: Array<{ name: string; enabled: boolean }> = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (disabled.has(name) ? false : undefined),
+      persistEnabled: async (name, enabled) => {
+        persistCalls.push({ name, enabled });
+        if (enabled) disabled.delete(name);
+        else disabled.add(name);
+        await Promise.resolve();
+      },
+    });
+    coordinator.load([
+      makePackage('client-ext', {
+        clients: [
+          createClientDefinition({
+            id: 'codex',
+            name: 'Codex',
+            version: '0.1.0',
+            authMethods: [],
+            defaultApprovalPolicy: 'full-access',
+          }),
+        ],
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+
+    const skippedInfo = coordinator.list().find((e) => e.name === 'client-ext');
+    expect(skippedInfo?.state).toBe('skipped');
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'client-ext', enabled: true });
+    expect(result.success).toBe(false);
+    expect(result.outcome).toBe('restart-required');
+
+    const afterInfo = coordinator.list().find((e) => e.name === 'client-ext');
+    expect(afterInfo?.state).toBe('skipped');
+
+    // The preference is durable and survives the deferral — it is not rolled
+    // back the way a `'rejected'` outcome would be.
+    expect(disabled.has('client-ext')).toBe(false);
+    expect(persistCalls).toEqual([{ name: 'client-ext', enabled: true }]);
+
+    await coordinator.shutdown();
+  });
+
+  it('defers a package with a runtimeBoot contribution disabled at boot to a restart on enable', async () => {
+    // `runtimeBoot.configure()` runs exactly once, for boot-enabled packages
+    // only, before `startAll()` — another boot-only surface `setEnabled` can
+    // never replay live. This is no longer a runtimeBoot-specific refusal;
+    // every boot-skipped package defers to a restart the same way.
+    const disabled = new Set<string>(['boot-contribution-ext']);
+    const persistCalls: Array<{ name: string; enabled: boolean }> = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (disabled.has(name) ? false : undefined),
+      persistEnabled: async (name, enabled) => {
+        persistCalls.push({ name, enabled });
+        if (enabled) disabled.delete(name);
+        else disabled.add(name);
+        await Promise.resolve();
+      },
+    });
+    coordinator.load([
+      makePackage('boot-contribution-ext', {
+        runtimeBoot: { configure: () => undefined },
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+
+    const skippedInfo = coordinator.list().find((e) => e.name === 'boot-contribution-ext');
+    expect(skippedInfo?.state).toBe('skipped');
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'boot-contribution-ext', enabled: true });
+    expect(result.success).toBe(false);
+    expect(result.outcome).toBe('restart-required');
+
+    const afterInfo = coordinator.list().find((e) => e.name === 'boot-contribution-ext');
+    expect(afterInfo?.state).toBe('skipped');
+
+    expect(disabled.has('boot-contribution-ext')).toBe(false);
+    expect(persistCalls).toEqual([{ name: 'boot-contribution-ext', enabled: true }]);
+
+    await coordinator.shutdown();
+  });
+
+  it('defers a package with storage.migrations disabled at boot to a restart on enable', async () => {
+    // A disabled package's migrations are skipped at boot (the operator's
+    // escape hatch when the migration itself is what is broken) — another
+    // boot-only surface `setEnabled` can never replay live. This is no longer
+    // a migrations-specific refusal; every boot-skipped package defers to a
+    // restart the same way.
+    const disabled = new Set<string>(['migration-ext']);
+    const persistCalls: Array<{ name: string; enabled: boolean }> = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (disabled.has(name) ? false : undefined),
+      persistEnabled: async (name, enabled) => {
+        persistCalls.push({ name, enabled });
+        if (enabled) disabled.delete(name);
+        else disabled.add(name);
+        await Promise.resolve();
+      },
+    });
+    coordinator.load([
+      makePackage('migration-ext', {
+        storage: { migrations: '/migration-ext/drizzle' },
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+
+    const skippedInfo = coordinator.list().find((e) => e.name === 'migration-ext');
+    expect(skippedInfo?.state).toBe('skipped');
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'migration-ext', enabled: true });
+    expect(result.success).toBe(false);
+    expect(result.outcome).toBe('restart-required');
+
+    const afterInfo = coordinator.list().find((e) => e.name === 'migration-ext');
+    expect(afterInfo?.state).toBe('skipped');
+
+    expect(disabled.has('migration-ext')).toBe(false);
+    expect(persistCalls).toEqual([{ name: 'migration-ext', enabled: true }]);
+
+    await coordinator.shutdown();
+  });
+
+  it('persists the operator preference across a setEnabled(true) deferred to restart and a setEnabled(false) that follows', async () => {
+    // Root-cause regression for the seam that infers "what was the prior
+    // preference" from `entry.enabled` instead of the durable store. Step 1
+    // enables a boot-skipped runtimeOwnership extension: `setEnabled` never
+    // runs a live transition ('restart-required') but the preference is
+    // persisted as enabled. Step 2 immediately disables the same
+    // extension before any restart happens. Because the extension was never
+    // started this boot, `entry.enabled` was never flipped to `true` by step
+    // 1 — a seam that reads `entry.enabled` as "the prior preference" sees no
+    // change between steps and skips persistence entirely, leaving the file
+    // enabled against the operator's explicit second request. The persisted
+    // value after step 2 must reflect what the operator asked for last: disabled.
+    const disabled = new Set<string>(['owner-ext']);
+    const persistCalls: Array<{ name: string; enabled: boolean }> = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (disabled.has(name) ? false : undefined),
+      persistEnabled: async (name, enabled) => {
+        persistCalls.push({ name, enabled });
+        if (enabled) disabled.delete(name);
+        else disabled.add(name);
+        await Promise.resolve();
+      },
+    });
+    coordinator.load([
+      makePackage('owner-ext', {
+        runtimeOwnership: { sessionOrchestrator: true },
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+    expect(disabled.has('owner-ext')).toBe(true);
+
+    const enableResult = await bus.request(ExtensionSubjects.setEnabled, { name: 'owner-ext', enabled: true });
+    expect(enableResult.success).toBe(false);
+    expect(enableResult.outcome).toBe('restart-required');
+    // The deferred enable persisted, as before.
+    expect(disabled.has('owner-ext')).toBe(false);
+
+    const disableResult = await bus.request(ExtensionSubjects.setEnabled, { name: 'owner-ext', enabled: false });
+    expect(disableResult.success).toBe(true);
+    expect(disableResult.outcome).toBe('applied');
+
+    // The operator's last request — disable — must be the one on disk, not
+    // the stale enable from before the (never-applied) restart.
+    expect(disabled.has('owner-ext')).toBe(true);
+    expect(persistCalls).toEqual([
+      { name: 'owner-ext', enabled: true },
+      { name: 'owner-ext', enabled: false },
+    ]);
+
+    await coordinator.shutdown();
+  });
+
+  it('durably disables an already-failed non-critical extension without a restart', async () => {
+    // A failed extension carries no running service, and `setEnabled` never
+    // runs a live transition anyway — but the operator's "turn this off for
+    // next boot" wish is still valid and always persists. The runtime state
+    // (`failed`) already matches the requested `enabled: false`, so this
+    // reports `'applied'` even though nothing about the entry's runtime state
+    // changed.
+    const persistCalls: Array<{ name: string; enabled: boolean }> = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      persistEnabled: async (name, enabled) => {
+        persistCalls.push({ name, enabled });
+      },
+    });
+    coordinator.load([
+      makePackage('failing-ext', {
+        create: () => {
+          throw new Error('boom');
+        },
+      }),
+    ]);
+    await coordinator.startAll();
+
+    const failedInfo = coordinator.list().find((e) => e.name === 'failing-ext');
+    expect(failedInfo?.state).toBe('failed');
+    expect(failedInfo?.enabled).toBe(true);
+
+    const disableResult = await bus.request(ExtensionSubjects.setEnabled, { name: 'failing-ext', enabled: false });
+    expect(disableResult.success).toBe(true);
+    expect(disableResult.outcome).toBe('applied');
+
+    // `setEnabled` never touches runtime state — `entry.state` and
+    // `entry.enabled` are exactly as boot left them, even though the
+    // preference was durably persisted as disabled.
+    const afterInfo = coordinator.list().find((e) => e.name === 'failing-ext');
+    expect(afterInfo?.state).toBe('failed');
+    expect(afterInfo?.enabled).toBe(true);
+    expect(persistCalls).toEqual([{ name: 'failing-ext', enabled: false }]);
+
+    await coordinator.shutdown();
+  });
+
+  it('durably disables a non-critical extension that ServiceSkipError skipped at boot', async () => {
+    const persistCalls: Array<{ name: string; enabled: boolean }> = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      persistEnabled: async (name, enabled) => {
+        persistCalls.push({ name, enabled });
+      },
+    });
+    coordinator.load([
+      makePackage('skip-error-ext', {
+        create: () => {
+          throw new ServiceSkipError('not configured');
+        },
+      }),
+    ]);
+    await coordinator.startAll();
+
+    const skippedInfo = coordinator.list().find((e) => e.name === 'skip-error-ext');
+    expect(skippedInfo?.state).toBe('skipped');
+    expect(skippedInfo?.enabled).toBe(true);
+
+    const disableResult = await bus.request(ExtensionSubjects.setEnabled, { name: 'skip-error-ext', enabled: false });
+    expect(disableResult.success).toBe(true);
+    expect(disableResult.outcome).toBe('applied');
+
+    // Persist-only: the entry's runtime snapshot is unchanged even though the
+    // preference was durably recorded.
+    const afterInfo = coordinator.list().find((e) => e.name === 'skip-error-ext');
+    expect(afterInfo?.state).toBe('skipped');
+    expect(afterInfo?.enabled).toBe(true);
+    expect(persistCalls).toEqual([{ name: 'skip-error-ext', enabled: false }]);
+
+    await coordinator.shutdown();
+  });
+
+  it('bridges a tray manifest into the live tray menu service on an internal restart', async () => {
+    // Mirrors the "collects tray entries during load and registers them
+    // during startAll" boot-path test above, but for an extension restarted
+    // through the coordinator-internal primitive. `registerEntryTray` runs
+    // after every 'active' transition, boot or restart alike, so the tray
+    // stays in sync without waiting for a process restart.
+    const registeredEntries: TrayMenuEntry[] = [];
+    bus.on(TrayMenuSubjects.register, (ctx) => {
+      registeredEntries.push(TrayMenuEntrySchema.parse(ctx.payload.entry));
+      ctx.setResult({ entryId: ctx.payload.entry.entryId });
+    });
+
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+    coordinator.load([
+      makePackage('tray-restart-enable', {
+        tray: { label: 'Hot Tool', section: 'tools' },
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+    expect(registeredEntries).toHaveLength(1);
+
+    await coordinator.applyExtensionTransition('tray-restart-enable', false);
+    const result = await coordinator.applyExtensionTransition('tray-restart-enable', true);
+    expect(result).toBe('applied');
+
+    expect(registeredEntries).toHaveLength(2);
+    expect(registeredEntries[1]).toMatchObject({
+      packageName: 'tray-restart-enable',
+      entryId: 'default',
+      label: 'Hot Tool',
+      section: 'tools',
+    });
+
+    await coordinator.shutdown();
+  });
+
+  it('removes a tray manifest from the live tray menu service on an internal restart', async () => {
+    // Mirrors the registration test above. Without this, a tray-owning
+    // extension stopped through the internal restart primitive leaves a
+    // stale, clickable entry in the running tray menu that no longer has a
+    // live service behind it.
+    const registeredEntries: TrayMenuEntry[] = [];
+    const unregisterCalls: Array<{ packageName: string; entryId: string }> = [];
+    bus.on(TrayMenuSubjects.register, (ctx) => {
+      registeredEntries.push(TrayMenuEntrySchema.parse(ctx.payload.entry));
+      ctx.setResult({ entryId: ctx.payload.entry.entryId });
+    });
+    bus.on(TrayMenuSubjects.unregister, (ctx) => {
+      unregisterCalls.push({ packageName: ctx.payload.packageName, entryId: ctx.payload.entryId });
+      ctx.setResult({ removed: true });
+    });
+
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+    coordinator.load([
+      makePackage('tray-restart-disable', {
+        tray: { label: 'Disable Tool', section: 'tools' },
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+    expect(registeredEntries).toHaveLength(1);
+
+    const result = await coordinator.applyExtensionTransition('tray-restart-disable', false);
+    expect(result).toBe('applied');
+
+    expect(unregisterCalls).toHaveLength(1);
+    expect(unregisterCalls[0]).toStrictEqual({ packageName: 'tray-restart-disable', entryId: 'default' });
+
+    await coordinator.shutdown();
+  });
+
+  it('refuses to collect window surfaces for a boot-skipped extension through setEnabled', async () => {
+    // A window-owning extension disabled at boot never had its surfaces
+    // collected (see `load()`), and `setEnabled` never runs a live
+    // transition — so hot-enabling it can never register the deferred
+    // window. Only a process restart, which re-runs `load()`, collects it.
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (name === 'windowed-disabled' ? false : undefined),
+      persistEnabled: async () => undefined,
+    });
+    coordinator.load([
+      makePackage('windowed-disabled', {
+        windows: [{ id: 'settings', style: 'utility' }],
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+    await coordinator.startAll();
+
+    // Surfaces are deferred at load time; the window is not in the registry yet.
+    expect(coordinator.windowRegistry.get('windowed-disabled:settings')).toBeUndefined();
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, {
+      name: 'windowed-disabled',
+      enabled: true,
+    });
+    expect(result).toEqual({ success: false, outcome: 'restart-required' });
+
+    // The window stays unregistered — only a restart can collect it.
+    expect(coordinator.windowRegistry.get('windowed-disabled:settings')).toBeUndefined();
+
+    await coordinator.shutdown();
+  });
+
+  it('registers windows for a hand-disabled critical extension during load', () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (name === 'critical-windowed' ? false : undefined),
+    });
+    coordinator.load([
+      makePackage('critical-windowed', {
+        critical: true,
+        windows: [{ id: 'panel', style: 'utility' }],
+      }),
+    ]);
+
+    // Critical extension is force-enabled at load; its window must be registered
+    // even though loadEnabled returned false.
+    const reg = coordinator.windowRegistry.get('critical-windowed:panel');
+    expect(reg).toBeDefined();
+    expect(reg?.packageName).toBe('critical-windowed');
   });
 
   // ---------------------------------------------------------------------------
@@ -1483,8 +2837,8 @@ describe('ExtensionCoordinator', () => {
     const before = coordinator.list().find((e) => e.name === unencodableName);
     expect(before?.state).toBe('failed');
 
-    const reenabled = await coordinator.handleSetEnabled(unencodableName, true);
-    expect(reenabled).toBe(false);
+    const reenabled = await coordinator.applyExtensionTransition(unencodableName, true);
+    expect(reenabled).toBe('rejected');
 
     const after = coordinator.list().find((e) => e.name === unencodableName);
     expect(after?.state).toBe('failed');
@@ -1537,13 +2891,15 @@ describe('ExtensionCoordinator', () => {
     expect(capturedDataDirs.get('Gateway')).not.toBe(capturedDataDirs.get('gateway'));
   });
 
-  // 21h. Re-enabling an extension whose name differs only in case from another
-  //      loaded extension reaches `active` too, for the same reason as 21g:
-  //      the two names never shared a segment in the first place.
-  it('re-enables an extension whose name differs only in case from another loaded extension', async () => {
+  // 21h. Restarting an extension whose name differs only in case from another
+  //      loaded extension reaches `active` again, for the same reason as 21g:
+  //      the two names never shared a segment in the first place. The restart
+  //      goes through `applyExtensionTransition`, the coordinator's internal
+  //      primitive for packages that were activated during this boot —
+  //      a boot-disabled entry stays `restart-required` by design.
+  it('restarts an extension whose name differs only in case from another loaded extension', async () => {
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: TEST_PKG_CTX_BASE,
-      loadEnabled: (name) => (name === 'Gateway' ? false : undefined),
     });
 
     coordinator.load([
@@ -1552,11 +2908,13 @@ describe('ExtensionCoordinator', () => {
     ]);
     await coordinator.startAll();
 
+    const stopOutcome = await coordinator.applyExtensionTransition('Gateway', false);
+    expect(stopOutcome).toBe('applied');
     const before = coordinator.list().find((e) => e.name === 'Gateway');
-    expect(before?.state).toBe('skipped');
+    expect(before?.state).toBe('stopped');
 
-    const reenabled = await coordinator.handleSetEnabled('Gateway', true);
-    expect(reenabled).toBe(true);
+    const reenabled = await coordinator.applyExtensionTransition('Gateway', true);
+    expect(reenabled).toBe('applied');
 
     const after = coordinator.list().find((e) => e.name === 'Gateway');
     expect(after?.state).toBe('active');
@@ -1941,7 +3299,7 @@ describe('ExtensionCoordinator', () => {
   // extension.enabledChanged event
   // ---------------------------------------------------------------------------
 
-  // 33. enabledChanged fires when setEnabled disables an active extension
+  // 33. enabledChanged fires when the internal restart primitive disables an active extension
   it('enabledChanged event fires with correct payload when disabling', async () => {
     const events: Array<{ name: string; enabled: boolean }> = [];
 
@@ -1955,14 +3313,16 @@ describe('ExtensionCoordinator', () => {
       events.push({ name: ctx.payload.name, enabled: ctx.payload.enabled });
     });
 
-    await bus.request(ExtensionSubjects.setEnabled, { name: 'event-ext', enabled: false });
+    // `setEnabled` is persist-only and never emits `enabledChanged` — only a
+    // primitive that actually transitions the entry does.
+    await coordinator.applyExtensionTransition('event-ext', false);
 
     expect(events).toContainEqual({ name: 'event-ext', enabled: false });
 
     await coordinator.shutdown();
   });
 
-  // 34. enabledChanged fires when setEnabled re-enables a stopped extension
+  // 34. enabledChanged fires when the internal restart primitive re-enables a stopped extension
   it('enabledChanged event fires with correct payload when re-enabling', async () => {
     const events: Array<{ name: string; enabled: boolean }> = [];
 
@@ -1973,13 +3333,13 @@ describe('ExtensionCoordinator', () => {
     await coordinator.startAll();
 
     // Disable first so re-enable has a valid transition (stopped -> active).
-    await bus.request(ExtensionSubjects.setEnabled, { name: 'toggle-ext', enabled: false });
+    await coordinator.applyExtensionTransition('toggle-ext', false);
 
     bus.on(ExtensionSubjects.enabledChanged, (ctx) => {
       events.push({ name: ctx.payload.name, enabled: ctx.payload.enabled });
     });
 
-    await bus.request(ExtensionSubjects.setEnabled, { name: 'toggle-ext', enabled: true });
+    await coordinator.applyExtensionTransition('toggle-ext', true);
 
     expect(events).toContainEqual({ name: 'toggle-ext', enabled: true });
 
@@ -1990,7 +3350,7 @@ describe('ExtensionCoordinator', () => {
   // list() reflects stopped state after disable
   // ---------------------------------------------------------------------------
 
-  // 35. list() shows stopped state after disable via setEnabled
+  // 35. list() shows stopped state after an internal restart's disable
   it('list() shows state: stopped for a disabled extension', async () => {
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: TEST_PKG_CTX_BASE,
@@ -1998,7 +3358,7 @@ describe('ExtensionCoordinator', () => {
     coordinator.load([makePackage('stoppable-ext', { create: (ctx) => makeMockService(ctx.bus) })]);
     await coordinator.startAll();
 
-    await bus.request(ExtensionSubjects.setEnabled, { name: 'stoppable-ext', enabled: false });
+    await coordinator.applyExtensionTransition('stoppable-ext', false);
 
     const listResult = await bus.request(ExtensionSubjects.list, {});
     const info = listResult.extensions.find((e) => e.name === 'stoppable-ext');
@@ -2553,6 +3913,7 @@ describe('ExtensionCoordinator', () => {
             detail: 'permission denied',
           },
         }),
+        persistEnabled: async () => undefined,
       });
 
       coordinator.load([
@@ -2608,8 +3969,11 @@ describe('ExtensionCoordinator', () => {
       const lookupsAfterStart = operatorConfig.lookups.filter((n) => n === 'toggle-operator-ext').length;
       expect(lookupsAfterStart).toBeGreaterThan(0);
 
-      await bus.request(ExtensionSubjects.setEnabled, { name: 'toggle-operator-ext', enabled: false });
-      await bus.request(ExtensionSubjects.setEnabled, { name: 'toggle-operator-ext', enabled: true });
+      // `setEnabled` is persist-only and never re-resolves config — the
+      // coordinator-internal restart primitive is what actually re-runs
+      // `create` against a freshly resolved config.
+      await coordinator.applyExtensionTransition('toggle-operator-ext', false);
+      await coordinator.applyExtensionTransition('toggle-operator-ext', true);
 
       expect(coordinator.list().find((e) => e.name === 'toggle-operator-ext')?.state).toBe('active');
       expect(configs).toEqual([{ mode: 'operator' }, { mode: 'operator' }]);
@@ -3475,7 +4839,17 @@ describe('ExtensionCoordinator', () => {
       await coordinator.shutdown();
     });
 
-    it('includes disabled packages when collecting migration sources', async () => {
+    it('excludes a disabled package from migration sources but keeps its entry toggleable via setEnabled', async () => {
+      // A disabled extension is the operator's escape hatch when its own
+      // migration is what is breaking boot. Running that migration anyway —
+      // before `startExtensionEntry` ever gets a chance to skip the disabled
+      // entry — would defeat the escape hatch and could still mutate the
+      // database or abort startup. Only an enabled package's migrations run;
+      // the disabled package still gets a coordinator entry so it is
+      // observable and toggleable, even though `setEnabled` on it can only
+      // ever report `'restart-required'` — its migrations were skipped here,
+      // so nothing this process could enable would run against a schema they
+      // never created.
       const migrationSources: Array<{ name: string; migrationsPath: string; migrationSourceId: string }> = [];
       const runMigrations = vi.fn(
         async (sources: ReadonlyArray<{ name: string; migrationsPath: string; migrationSourceId: string }>) => {
@@ -3504,16 +4878,15 @@ describe('ExtensionCoordinator', () => {
       expect(runMigrations).toHaveBeenCalledOnce();
       expect(migrationSources).toEqual([
         {
-          name: 'disabled-migrations-pkg',
-          migrationsPath: '/disabled/drizzle',
-          migrationSourceId: '/disabled/drizzle',
-        },
-        {
           name: 'enabled-migrations-pkg',
           migrationsPath: '/enabled/drizzle',
           migrationSourceId: '/enabled/drizzle',
         },
       ]);
+
+      const disabledInfo = coordinator.list().find((e) => e.name === 'disabled-migrations-pkg');
+      expect(disabledInfo?.state).toBe('skipped');
+      expect(disabledInfo?.enabled).toBe(false);
 
       await coordinator.shutdown();
     });

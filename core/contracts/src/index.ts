@@ -1511,6 +1511,7 @@ export {
   getBootstrapAssetKey,
   getExtensionWarningActionLabel,
   isDetachedDescriptor,
+  isRuntimeOwnershipFieldClaimed,
   parseExtensionConfig,
   parseExtensionDescriptor,
   allMigrationsPaths,
