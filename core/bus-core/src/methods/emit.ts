@@ -1,4 +1,10 @@
-import type { EmitOptions, HandlerEntry, MakaioBusContext, WithReceiveContext } from '../types/index.js';
+import type {
+  BusEventMessage,
+  EmitOptions,
+  HandlerEntry,
+  MakaioBusContext,
+  WithReceiveContext,
+} from '../types/index.js';
 import { nanoid } from 'nanoid';
 
 import { matchesSubscription } from '../utils/subscription-matching.js';
@@ -91,7 +97,7 @@ async function executeHandlers(
  * @param options - Emit options (messageId, correlationId, transports)
  * @see {@link IMakaioBus.emit} for full documentation and examples.
  */
-// eslint-disable-next-line max-lines-per-function -- effectiveTransports resolution adds 5 lines to localOnly + transport dispatch; splitting would fragment a single routing decision
+// eslint-disable-next-line max-lines-per-function -- effectiveTransports resolution, message construction for canSend-aware routing, and transport dispatch are one routing decision; splitting would fragment it
 export async function emit<T extends SubjectDefinition>(
   context: MakaioBusContext,
   subjectDefinition: T,
@@ -176,8 +182,22 @@ export async function emit<T extends SubjectDefinition>(
     await executeHandlers(handlers, eventContext, fullSubjectKey);
   }
 
+  // Build the outbound event message once so it can be used for both transport
+  // selection (canSend gate) and the actual wire send — avoids duplicating the
+  // object literal and keeps the two uses in sync.
+  const eventMessage: BusEventMessage = {
+    type: 'event',
+    subject: subject,
+    namespace: subjectDefinition.$meta.namespace,
+    payload: finalPayload,
+    messageId,
+    correlationId,
+  };
+
   // effectiveTransports was resolved above alongside localOnly.
-  const transportTargets = normalizeTransportTargets(context, effectiveTransports, subjectDefinition);
+  // Pass the event message so transports with canSend can apply per-message
+  // eligibility (e.g. relay codec passing control-plane frames pre-session).
+  const transportTargets = normalizeTransportTargets(context, effectiveTransports, subjectDefinition, eventMessage);
 
   // Send to transports if applicable
   if (transportTargets.length > 0) {
@@ -185,20 +205,11 @@ export async function emit<T extends SubjectDefinition>(
 
     for (const transport of transportTargets) {
       transportPromises.push(
-        transport
-          .send({
-            type: 'event',
-            subject: subject,
-            namespace: subjectDefinition.$meta.namespace,
-            payload: finalPayload,
-            messageId,
-            correlationId,
-          })
-          .catch((error: unknown) => {
-            // Log errors but don't fail the whole emission
-            const logPrefix = correlationId ? `[${correlationId}][${messageId}]` : `[${messageId}]`;
-            console.error(`${logPrefix} Error sending event "${subject}" to transport:`, error);
-          }),
+        transport.send(eventMessage).catch((error: unknown) => {
+          // Log errors but don't fail the whole emission
+          const logPrefix = correlationId ? `[${correlationId}][${messageId}]` : `[${messageId}]`;
+          console.error(`${logPrefix} Error sending event "${subject}" to transport:`, error);
+        }),
       );
     }
 

@@ -91,24 +91,36 @@ export function getSortedTransports(
 }
 
 /**
- * Returns ready transports — sorted transports filtered to those whose
- * `isReady()` check does not return `false`.
+ * Returns ready transports — sorted transports filtered to those that can handle
+ * the given outbound message.
  *
- * Used on outbound send paths (request, broadcast) and RPC relay to skip
- * transports that have not yet established end-to-end connectivity (e.g.,
- * the E2E relay transport before the session key is established).
+ * Used on outbound send paths (event relay) and RPC relay to skip transports that
+ * have not yet established end-to-end connectivity (e.g. the E2E relay transport
+ * before the session key is established).
  *
- * The `!== false` predicate preserves backward compatibility: transports that
- * do not implement `isReady()` are treated as always ready.
+ * When `message` is provided and a transport implements `canSend`, the
+ * per-message predicate is used: `transport.canSend(message)`. This allows
+ * relay codecs to pass control-plane frames in plaintext before a session key
+ * exists while still vetoing application-level messages.
+ * When `message` is absent (or when the transport does not implement `canSend`),
+ * the message-agnostic `isReady()` check applies. The `!== false` predicate
+ * preserves backward compatibility: transports that do not implement `isReady()`
+ * are treated as always ready.
  * @param context - Bus context containing the transport registry
  * @param exclude - Optional transport name to exclude (e.g., message source for relay)
- * @returns Deterministically ordered `{ name, transport }` pairs for ready transports
+ * @param message - Optional outbound bus message; enables per-message eligibility via `canSend`
+ * @returns Deterministically ordered `{ name, transport }` pairs for eligible transports
  */
 export function getReadyTransports(
   context: MakaioBusContext,
   exclude?: BusTransportKeys,
+  message?: BusMessage,
 ): Array<{ name: BusTransportKeys; transport: BusTransport }> {
-  return getSortedTransports(context, exclude).filter(({ transport }) => transport.isReady?.() !== false);
+  return getSortedTransports(context, exclude).filter(({ transport }) =>
+    message !== undefined
+      ? (transport.canSend?.(message) ?? transport.isReady?.() !== false)
+      : transport.isReady?.() !== false,
+  );
 }
 
 /**

@@ -328,11 +328,48 @@ export class WebSocketClientTransport implements BusTransport {
   }
 
   /**
+   * Whether the wire session is live: an owned socket is open and auth completed.
+   *
+   * Codec encoding eligibility (`canEncode`) is deliberately excluded — it gates
+   * per-message outbound routing, not the session lifecycle. The transport lifecycle
+   * (connected/disconnected) is driven by wire-session state so that `onDisconnected`
+   * is always preceded by `onConnected` regardless of codec state.
+   *
+   * `hasLiveWireSession` is the internal predicate shared across the lifecycle and
+   * reconnect logic. `isReady()` is the `BusTransport`-contract surface that delegates
+   * to it; the two exist separately so lifecycle code can call the predicate without
+   * going through the public method.
+   * @returns `true` when the socket is open and authenticated
+   */
+  private hasLiveWireSession(): boolean {
+    return this.socket !== null && this.socket.readyState === 1 && this.authComplete;
+  }
+
+  /**
    * Returns `true` when the socket is open (`readyState === 1`) and auth has completed.
-   * @returns `true` if the transport can send messages
+   *
+   * Wire-session state only — codec encoding eligibility is deliberately excluded.
+   * Use `canSend(message)` to check whether a specific outbound message can be
+   * dispatched through this transport.
+   * @returns `true` when the wire session is live
    */
   public isReady(): boolean {
-    return this.socket !== null && this.socket.readyState === 1 && this.authComplete;
+    return this.hasLiveWireSession();
+  }
+
+  /**
+   * Returns `true` when the wire session is live and the codec can encode the given
+   * outbound bus message.
+   *
+   * Combines `hasLiveWireSession()` with the codec's message-selective `canEncode`
+   * gate. A relay codec may return `true` for control-plane frames that travel in
+   * plaintext before the E2E session key is established, while returning `false`
+   * for application-level messages.
+   * @param message - Outbound bus message to test
+   * @returns `true` when the wire session is live and the codec can encode the message
+   */
+  public canSend(message: BusMessage): boolean {
+    return this.hasLiveWireSession() && (this.codec.canEncode?.(message) ?? true);
   }
 
   /**
@@ -344,7 +381,7 @@ export class WebSocketClientTransport implements BusTransport {
    * @returns Promise that resolves when the attempt is initiated (loop) or completes (one-shot)
    */
   public async reconnect(): Promise<void> {
-    if (this.isReady()) return;
+    if (this.hasLiveWireSession()) return;
     if (this.backoffWakeAbort !== null) {
       this.backoffWakeAbort.abort();
       this.backoffWakeAbort = null;
@@ -536,7 +573,11 @@ export class WebSocketClientTransport implements BusTransport {
       notifyConnected: () => {
         const socket = this.socket;
         this.onConnectedCallback?.();
-        if (socket !== null && this.socket === socket && this.isReady()) this.onConnected?.();
+        // Gate the registry callback on wire-session state only, not codec encoding
+        // eligibility (canEncode). Codec encoding eligibility gates per-message outbound
+        // routing; `onConnected` represents the wire session being live so that
+        // `onDisconnected` is always preceded by it.
+        if (this.socket === socket && this.hasLiveWireSession()) this.onConnected?.();
       },
       notifyDisconnected: () => {
         this.onDisconnectedCallback?.();

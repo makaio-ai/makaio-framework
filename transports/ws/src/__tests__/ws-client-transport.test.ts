@@ -10,16 +10,41 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ConnectionLostError } from '@makaio/bus-core';
+import { ConnectionLostError, type BusEventMessage, type BusMessage } from '@makaio/bus-core';
 import { WebSocketClientTransport, type WebSocketClientTransportReadinessMode } from '../ws-client-transport.js';
+import { DEFAULT_CODEC } from '../ws-client-options.js';
 import { MockWebSocket } from './test-helpers.js';
 import { waitForCondition } from './test-utils.js';
-import type { TransportAuth } from '../types.js';
+import type { ClientTransportCodec, TransportAuth } from '../types.js';
 import type { TransportReceiveContext } from '@makaio/core';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Build a minimal `ClientTransportCodec` for tests.
+ *
+ * Spreads `DEFAULT_CODEC`'s encode/decode so callers only need to supply
+ * an optional `canEncode` override, avoiding the bottom-type `as never` escape
+ * that inline codec literals require.
+ * @param canEncode - Optional message-selective encoding predicate; omit to produce an always-encodable codec
+ * @returns Codec with default JSON encode/decode and optional per-message gate
+ */
+function makeCodec(canEncode?: (message: BusMessage) => boolean): ClientTransportCodec {
+  return {
+    ...DEFAULT_CODEC,
+    ...(canEncode !== undefined && { canEncode }),
+  };
+}
+
+/**
+ * Build a minimal `BusEventMessage` for use as a `canSend` test argument.
+ * @returns A simple event message with a predictable shape
+ */
+function makeTestEvent(): BusEventMessage {
+  return { type: 'event', subject: 'test.event', namespace: 'test', payload: {}, messageId: 'msg-test' };
+}
 
 /**
  * Create a `WebSocketClientTransport` backed by a controllable `MockWebSocket`.
@@ -35,6 +60,7 @@ function makeTransport(options: {
   autoReconnect?: { baseMs: number; maxMs: number } | false;
   auth?: TransportAuth;
   readiness?: WebSocketClientTransportReadinessMode;
+  codec?: ClientTransportCodec;
 }): { transport: WebSocketClientTransport; mock: MockWebSocket } {
   const mock = new MockWebSocket();
   const transport = new WebSocketClientTransport({
@@ -45,6 +71,7 @@ function makeTransport(options: {
     onDisconnected: options.onDisconnected,
     auth: options.auth,
     ...(options.readiness !== undefined && { readiness: options.readiness }),
+    ...(options.codec !== undefined && { codec: options.codec }),
   });
   return { transport, mock };
 }
@@ -83,6 +110,22 @@ describe('WebSocketClientTransport — onConnected', () => {
     const { transport } = makeTransport({});
 
     await expect(transport.connect()).resolves.toBeUndefined();
+
+    await transport.disconnect();
+  });
+
+  it('registry onConnected fires even when codec.canEncode() returns false (wire session gates lifecycle, not codec)', async () => {
+    // The registry's onConnected represents wire-session establishment (socket
+    // open + auth complete). Codec encoding eligibility gates outbound bus traffic,
+    // not the transport lifecycle — disconnected must always be preceded by connected.
+    const registryOnConnected = vi.fn();
+    const codec = makeCodec(() => false);
+    const { transport } = makeTransport({ codec });
+    transport.onConnected = registryOnConnected;
+
+    await transport.connect();
+
+    expect(registryOnConnected).toHaveBeenCalledTimes(1);
 
     await transport.disconnect();
   });
@@ -382,7 +425,7 @@ describe('WebSocketClientTransport — unsubscribe', () => {
 // ---------------------------------------------------------------------------
 
 describe('WebSocketClientTransport — isReady', () => {
-  it('reflects connection state accurately', async () => {
+  it('reflects wire-session state accurately (socket open + auth complete)', async () => {
     const { transport } = makeTransport({});
 
     expect(transport.isReady()).toBe(false);
@@ -392,6 +435,74 @@ describe('WebSocketClientTransport — isReady', () => {
 
     await transport.disconnect();
     expect(transport.isReady()).toBe(false);
+  });
+
+  it('returns true regardless of codec.canEncode result — isReady is wire-session only', async () => {
+    // isReady no longer consults the codec; use canSend for message-selective gating.
+    const codec = makeCodec(() => false);
+    const { transport } = makeTransport({ codec });
+
+    await transport.connect();
+    expect(transport.isReady()).toBe(true);
+
+    await transport.disconnect();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// canSend
+// ---------------------------------------------------------------------------
+
+describe('WebSocketClientTransport — canSend', () => {
+  it('returns false when disconnected', () => {
+    const { transport } = makeTransport({});
+    expect(transport.canSend(makeTestEvent())).toBe(false);
+  });
+
+  it('returns false for a message when codec.canEncode returns false, even when wire session is live', async () => {
+    let codecAccepts = false;
+    const msg = makeTestEvent();
+    const codec = makeCodec(() => codecAccepts);
+    const { transport } = makeTransport({ codec });
+
+    await transport.connect();
+    // Wire session is live but codec rejects this specific message.
+    expect(transport.canSend(msg)).toBe(false);
+
+    codecAccepts = true;
+    expect(transport.canSend(msg)).toBe(true);
+
+    await transport.disconnect();
+  });
+
+  it('returns true for a control message when codec.canEncode returns true for it', async () => {
+    const controlMsg = makeTestEvent();
+    const normalMsg: BusEventMessage = {
+      type: 'event',
+      subject: 'normal.event',
+      namespace: 'app',
+      payload: {},
+      messageId: 'msg-normal',
+    };
+    // Codec accepts only the control message (simulates a relay codec allowing control frames pre-session)
+    const codec = makeCodec((msg) => 'subject' in msg && msg.subject === controlMsg.subject);
+    const { transport } = makeTransport({ codec });
+
+    await transport.connect();
+    expect(transport.canSend(controlMsg)).toBe(true);
+    expect(transport.canSend(normalMsg)).toBe(false);
+
+    await transport.disconnect();
+  });
+
+  it('treats a codec without canEncode as always able to encode any message', async () => {
+    const codec = makeCodec(); // no canEncode — backward-compatible default
+    const { transport } = makeTransport({ codec });
+
+    await transport.connect();
+    expect(transport.canSend(makeTestEvent())).toBe(true);
+
+    await transport.disconnect();
   });
 });
 

@@ -488,6 +488,31 @@ export interface BusTransport {
   isReady?(): boolean;
 
   /**
+   * Optional: message-selective outbound eligibility check for transports whose
+   * encoding capability depends on the message (e.g. an end-to-end codec that
+   * passes control-plane frames in plaintext before a session exists).
+   *
+   * **When it applies:** the bus consults `canSend` on outbound event and broadcast
+   * paths (both local-origin and relay). Request paths do not consult `canSend`; the
+   * relay leg is still attempted and any encode error is logged.
+   *
+   * **Governs instead of `isReady`:** when `canSend` is present, the bus uses it in
+   * place of `isReady()` to gate the specific message being sent. Implementers must
+   * therefore fold their own wire-session readiness into the return value — the bus
+   * will not call `isReady()` as a fallback when `canSend` is defined and the message
+   * is available.
+   *
+   * **Must not throw:** `canSend` is called inside a transport-list filter. An
+   * unhandled exception aborts the entire emit, so implementers must catch any
+   * internal errors and return `false` instead of letting them propagate.
+   *
+   * When absent, `isReady()` governs.
+   * @param message - Outbound bus message to test
+   * @returns `true` when the transport can encode and send this message; `false` otherwise
+   */
+  canSend?(message: BusMessage): boolean;
+
+  /**
    * Optional: Report which subjects this transport is interested in.
    * Enables transport-level filtering for efficiency.
    *
