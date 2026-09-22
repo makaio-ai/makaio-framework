@@ -12,19 +12,57 @@
 import { createBusInstance, OnceAbortError } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
-import type { WebSocketClientTransportOptions } from '@makaio/bus-transport-websocket';
+import type {
+  WebSocketClientTransportOptions,
+  WebSocketCloseEvent,
+  WebSocketLike,
+} from '@makaio/bus-transport-websocket';
 import { BootSubjects, KernelSubjects } from '@makaio/kernel';
 import { UiSubjects, type UiReadyEvent } from '@makaio/ui-kernel';
 import type { ContextForSubjectDefinition, ExtractSubjectResponse, SubjectDefinition } from '@makaio/core';
+import { WebSocket } from 'ws';
 import type { SpawnedProcess } from './spawn-helpers.js';
+
+/** First close frame observed by a test bus connection. */
+export interface TestBusCloseDetails {
+  /** WebSocket protocol close code. */
+  readonly code: number;
+  /** Peer-supplied close reason. */
+  readonly reason: string;
+}
 
 /**
  * Options for {@link connectTestBus}.
  *
  * A subset of {@link WebSocketClientTransportOptions} forwarded to the
- * underlying transport. The `url` is always provided separately.
+ * underlying transport. The `url` is always provided separately. `onSocketClose`
+ * is an E2E-only observer; it does not change the transport's close handling.
  */
-export type ConnectTestBusOptions = Partial<Omit<WebSocketClientTransportOptions, 'url' | 'autoReconnect'>>;
+export interface ConnectTestBusOptions extends Partial<Omit<WebSocketClientTransportOptions, 'url' | 'autoReconnect'>> {
+  /** Observe the first socket close without changing production transport behavior. */
+  onSocketClose?: (details: TestBusCloseDetails) => void;
+}
+
+/**
+ * Attach a one-shot close recorder to an E2E socket.
+ * @param socket - Socket created for the test bus transport.
+ * @param onSocketClose - Optional diagnostic observer.
+ * @returns The unchanged socket for the transport to own.
+ */
+function recordFirstSocketClose(
+  socket: WebSocketLike,
+  onSocketClose: ((details: TestBusCloseDetails) => void) | undefined,
+): WebSocketLike {
+  if (onSocketClose === undefined) return socket;
+
+  let recorded = false;
+  socket.addEventListener('close', (event: WebSocketCloseEvent) => {
+    if (recorded) return;
+    recorded = true;
+    onSocketClose({ code: event.code, reason: event.reason });
+  });
+  return socket;
+}
 
 /**
  * Connect a bus client to a test daemon or runtime.
@@ -34,11 +72,20 @@ export type ConnectTestBusOptions = Partial<Omit<WebSocketClientTransportOptions
  */
 export async function connectTestBus(port: number, options?: ConnectTestBusOptions): Promise<IMakaioBus> {
   const url = `ws://localhost:${port}/bus`;
+  const { onSocketClose, ...transportOptions } = options ?? {};
   console.info('[connectTestBus] Connecting to %s', url);
   const transport = new WebSocketClientTransport({
-    ...options,
+    ...transportOptions,
     url,
     autoReconnect: false,
+    ...(onSocketClose === undefined
+      ? {}
+      : {
+          createWebSocket: async (targetUrl: string): Promise<WebSocketLike> => {
+            const socket = await transportOptions.createWebSocket?.(targetUrl);
+            return recordFirstSocketClose(socket ?? new WebSocket(targetUrl), onSocketClose);
+          },
+        }),
   });
   const bus = createBusInstance({ transports: [transport] });
   await bus.connect();
