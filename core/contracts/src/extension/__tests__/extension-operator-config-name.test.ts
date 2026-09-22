@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   decodeExtensionOperatorConfigName,
   encodeExtensionOperatorConfigName,
+  EXTENSION_OPERATOR_CONFIG_FILE_SUFFIX,
   EXTENSION_OPERATOR_CONFIG_NAME_UNRESERVED,
+  MAX_OPERATOR_CONFIG_FILE_NAME_BYTES,
 } from '../extension-operator-config-name.js';
 
 /** Extension names spanning every shape the manifest name rule accepts. */
@@ -19,7 +21,17 @@ const ROUND_TRIP_NAMES = [
   '日本語',
   'percent%name',
   'plus+name',
+  '.hidden',
+  '...',
 ] as const;
+
+/**
+ * Longest stem the encoding may produce, given the file name bound.
+ *
+ * Restated from the two constants rather than written out, so a change to
+ * either is a change to what this test expects.
+ */
+const MAX_STEM_LENGTH = MAX_OPERATOR_CONFIG_FILE_NAME_BYTES - EXTENSION_OPERATOR_CONFIG_FILE_SUFFIX.length;
 
 /**
  * Encode a name the test states is addressable, failing loudly when it is not.
@@ -76,9 +88,42 @@ describe('extension operator config name encoding', () => {
     expect(decodeExtensionOperatorConfigName('%FF')).toBeUndefined();
   });
 
-  it('accepts a dot-containing name that is not a dot segment', () => {
-    expect(decodeExtensionOperatorConfigName('.hidden')).toBe('.hidden');
-    expect(decodeExtensionOperatorConfigName('...')).toBe('...');
+  it('escapes a leading dot so no stem it produces is a hidden file', () => {
+    expect(encodeExtensionOperatorConfigName('.hidden')).toBe('%2Ehidden');
+    expect(encodeExtensionOperatorConfigName('...')).toBe('%2E..');
+  });
+
+  it('keeps dots that are not leading verbatim', () => {
+    expect(encodeExtensionOperatorConfigName('com.example.tools')).toBe('com.example.tools');
+  });
+
+  it.each([
+    ['a stem spelled with a literal leading dot', '.hidden'],
+    ['a stem that is only literal dots', '...'],
+    ['platform bookkeeping that survives the suffix check', '.DS_Store'],
+  ])('rejects %s, which the encoding cannot have produced', (_label, stem) => {
+    expect(decodeExtensionOperatorConfigName(stem)).toBeUndefined();
+  });
+
+  it('gives a name no stem once its file name would pass the component limit', () => {
+    expect(stemOf('a'.repeat(MAX_STEM_LENGTH))).toHaveLength(MAX_STEM_LENGTH);
+    expect(encodeExtensionOperatorConfigName('a'.repeat(MAX_STEM_LENGTH + 1))).toBeUndefined();
+  });
+
+  it('measures the bound on the encoded name, not on the name as typed', () => {
+    // 43 two-byte characters are 43 characters and 258 encoded ones.
+    const name = 'ü'.repeat(43);
+    expect(name).toHaveLength(43);
+    expect(encodeExtensionOperatorConfigName(name)).toBeUndefined();
+  });
+
+  it('never produces a file name above the bound for a name it accepts', () => {
+    // 41 two-byte characters encode to 246 characters, the longest such name
+    // that still fits.
+    for (const name of [...ROUND_TRIP_NAMES, 'a'.repeat(MAX_STEM_LENGTH), 'ü'.repeat(41)]) {
+      const fileName = `${stemOf(name)}${EXTENSION_OPERATOR_CONFIG_FILE_SUFFIX}`;
+      expect(new TextEncoder().encode(fileName).byteLength).toBeLessThanOrEqual(MAX_OPERATOR_CONFIG_FILE_NAME_BYTES);
+    }
   });
 
   it.each([
@@ -99,6 +144,15 @@ describe('extension operator config name encoding', () => {
     expect(encodeExtensionOperatorConfigName('\uD800')).toBeUndefined();
     expect(stemOf('\uFFFD')).toBe('%EF%BF%BD');
     expect(decodeExtensionOperatorConfigName('%EF%BF%BD')).toBe('\uFFFD');
+  });
+
+  it('keeps a leading byte-order mark, which is a character of the name and not a document marker', () => {
+    // A decoder that consumed it would answer a different name, the round-trip
+    // would fail, and the correctly named file would be rejected.
+    const name = '﻿tools';
+    expect(stemOf(name)).toBe('%EF%BB%BFtools');
+    expect(decodeExtensionOperatorConfigName('%EF%BB%BFtools')).toBe(name);
+    expect(decodeExtensionOperatorConfigName('%EF%BB%BFtools')).not.toBe('tools');
   });
 
   it('keeps an astral character, which is a well-formed surrogate pair', () => {

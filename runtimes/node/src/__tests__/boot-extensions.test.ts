@@ -28,7 +28,7 @@ import {
 import { ExecutionAttemptAuthority, workflowAttemptOutcomeCodec } from '@makaio/subsystem-workflow-engine';
 import { createInMemoryAttemptRepository, requireCommittedOutcome } from '@makaio/subsystem-workflow-engine/testing';
 import type { DiscoveredExtension } from '../extension-discovery.js';
-import { ExtensionCoordinator, type KernelMakaioExtension } from '@makaio/kernel';
+import { ExtensionCoordinator, type ExtensionRuntimeSurface, type KernelMakaioExtension } from '@makaio/kernel';
 import { ExplicitDescriptorDiscovery, FilesystemDescriptorDiscovery } from '../extension-discovery.js';
 import { loadExtensions, mergePackagesByDescriptorSourcePriority } from '../load-extensions.js';
 import type { CoreBootOptions } from '../boot.js';
@@ -474,6 +474,40 @@ describe('runtime boot contribution rollback', () => {
     expect(calls).toStrictEqual(['second-cleanup', 'first-cleanup']);
     expect(thrown).toBeInstanceOf(AggregateError);
     expect((thrown as AggregateError).errors).toStrictEqual([configureError, cleanupError]);
+  });
+
+  it('registers nothing for a package the coordinator filtered out', () => {
+    const bus = createBusInstance();
+    const coordinator = new ExtensionCoordinator(bus, { surface: 'headless' });
+    const configured: string[] = [];
+
+    /**
+     * Build a package that records the moment its boot contribution is configured.
+     * @param name - Package name.
+     * @param surface - Runtime surface the package declares.
+     * @returns The package, ready to be handed to the coordinator.
+     */
+    const makeBootContributor = (name: string, surface: ExtensionRuntimeSurface): KernelMakaioExtension => ({
+      ...makePackage(name),
+      surface,
+      runtimeBoot: {
+        configure: () => {
+          configured.push(name);
+          return [];
+        },
+      },
+    });
+
+    const packagesToLoad = [
+      makeBootContributor('interactive-only', 'interactive'),
+      makeBootContributor('kept', 'headless'),
+    ];
+    // Exactly the composition boot performs: register for what load returned.
+    // A filtered package never activates, so configuring its boot contribution
+    // would install behaviour for an extension that does not run.
+    registerExtensionBootContributions(coordinator.load(packagesToLoad), bus, coordinator);
+
+    expect(configured).toStrictEqual(['kept']);
   });
 });
 

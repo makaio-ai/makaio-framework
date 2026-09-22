@@ -137,7 +137,9 @@ export type { ExtensionConfigProvider } from './extension-config-provider.js';
 export {
   decodeExtensionOperatorConfigName,
   encodeExtensionOperatorConfigName,
+  EXTENSION_OPERATOR_CONFIG_FILE_SUFFIX,
   EXTENSION_OPERATOR_CONFIG_NAME_UNRESERVED,
+  MAX_OPERATOR_CONFIG_FILE_NAME_BYTES,
 } from './extension-operator-config-name.js';
 export type {
   ExtensionOperatorConfigEntry,

@@ -114,6 +114,7 @@ describe('createIsolatedWorkflowRuntime integration', () => {
     }> = [];
     const runtimeBootConfigured = vi.fn();
     const runtimeBootCleanup = vi.fn();
+    const interactiveOnlyRuntimeBootConfigured = vi.fn();
     const processedExtensions: string[] = [];
 
     const repositoryEchoTool = defineTool({
@@ -159,6 +160,21 @@ describe('createIsolatedWorkflowRuntime integration', () => {
         return {};
       },
     };
+    // This runtime is headless, so the coordinator excludes the package and it
+    // never activates; its boot contribution must not be configured either.
+    const interactiveOnlyContribution: KernelMakaioExtension = {
+      name: 'test-interactive-only-contribution',
+      displayName: 'Test interactive-only contribution',
+      version: '1.0.0',
+      surface: 'interactive',
+      runtimeBoot: {
+        configure: () => {
+          interactiveOnlyRuntimeBootConfigured();
+          return [];
+        },
+      },
+      create: () => ({}),
+    };
     const session: IMakaioSession = {
       sessionId: 'subagent-session-1',
       parentSessionId: 'workflow-coordinator-session',
@@ -200,7 +216,7 @@ describe('createIsolatedWorkflowRuntime integration', () => {
         },
         loadContributedPackages: async () => {
           expect(authorityConnected).toBe(true);
-          return [contributedClient];
+          return [contributedClient, interactiveOnlyContribution];
         },
         contributedPackages: [],
         configRepository: createEmptyAdapterRepository(),
@@ -232,6 +248,8 @@ describe('createIsolatedWorkflowRuntime integration', () => {
         results: [{ clientId: 'missing-client', found: false }],
       });
       expect(runtimeBootConfigured).toHaveBeenCalledOnce();
+      expect(interactiveOnlyRuntimeBootConfigured).not.toHaveBeenCalled();
+      expect(runtime.coordinator.list().map((pkg) => pkg.name)).not.toContain('test-interactive-only-contribution');
       expect(processedExtensions).toContain('test-client-contribution');
       await authority.request(SessionStorageSubjects.set, { sessionId: session.sessionId, session });
 

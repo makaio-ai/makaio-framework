@@ -226,7 +226,9 @@ export function selectFrameworkCorePackages(
 
 /**
  * Register extension-owned boot contributions before coordinator startup.
- * @param packages - Packages loaded into the coordinator.
+ * @param packages - Packages the coordinator retained, not the ones it was
+ *   offered: a package excluded by surface or environment filtering never
+ *   activates, so its boot contributions must not be installed either.
  * @param bus - Runtime bus.
  * @param coordinator - Extension coordinator being configured.
  * @returns Cleanup callbacks for registered boot contributions.

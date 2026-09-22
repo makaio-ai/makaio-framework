@@ -204,8 +204,11 @@ export async function createIsolatedWorkflowRuntime(
       // already be running to process.
       ...orderAfterAdapterSubsystem(contributedPackages),
     ];
-    coordinator.load(packagesToLoad);
-    shutdownSteps.push(...registerExtensionBootContributions(packagesToLoad, bus, coordinator));
+    // Retained packages only: this runtime is headless, so a package declaring
+    // an interactive surface never activates here, and configuring its boot
+    // contribution would install behaviour for an extension that does not run.
+    const retainedPackages = coordinator.load(packagesToLoad);
+    shutdownSteps.push(...registerExtensionBootContributions(retainedPackages, bus, coordinator));
     shutdownSteps.push(() => coordinator.shutdown());
     await coordinator.startAll();
 

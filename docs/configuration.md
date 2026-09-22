@@ -36,12 +36,22 @@ outer envelope, no `$schema` field, plain JSON.
 
 **File naming.** The file stem is the extension's manifest name with
 percent-encoding applied to every character outside `[A-Za-z0-9._-]`. Unreserved
-characters are kept as-is; everything else becomes `%XX` in uppercase. Examples:
+characters are kept as-is; everything else becomes `%XX` in uppercase. A leading
+`.` is escaped as well, so the file is never hidden from the operator editing
+it. Examples:
 
 | Extension name | File |
 |---|---|
 | `gateway` | `gateway.json` |
+| `com.example.tools` | `com.example.tools.json` |
 | `@acme/weather-tools` | `%40acme%2Fweather-tools.json` |
+| `.hidden` | `%2Ehidden.json` |
+
+The encoded file name is limited to 255 bytes, the per-component limit of the
+filesystems a Makaio home lives on. Percent-encoding expands one non-ASCII
+character to up to twelve, so a name of about 40 non-ASCII characters can exceed
+it. Such an extension loads and runs, but has no operator config file at all;
+boot says so once, and the other configuration layers still apply to it.
 
 **Precedence** — four layers, lowest to highest:
 
@@ -68,13 +78,17 @@ disabling and re-enabling resolves against the same boot-time snapshot.
 | Absent `config/extensions/` directory | Nothing — no warning, no directory created |
 | Unreadable directory (other than absent) | Boot fails with the path and error code |
 | File name does not end in `.json`, or its stem is not a canonical percent-encoded name | Boot warning naming the file; file is ignored |
-| File name with a leading dot | Skipped silently |
+| File name with a leading dot | Skipped silently: an encoded stem never starts with a dot, so such an entry is editor or platform bookkeeping (`.DS_Store`, `.#gateway.json`) rather than something an operator wrote. The file for an extension named `.hidden` is `%2Ehidden.json` |
+| Entry that is not a regular file — a directory, FIFO, socket, or device, or a symlink to one | Treated as unreadable without being opened; extension activation fails with the file path in the error. A symlink to a regular file is followed and read |
+| File that is not valid UTF-8 | Treated as invalid JSON; extension activation fails with the file path in the error. The bytes are never repaired into a usable object |
+| File saved with a leading byte-order mark | Accepted: the mark is consumed before parsing, so a file an editor saved as "UTF-8 with BOM" is not reported as invalid JSON over a byte it does not show |
 | Two file names that differ only in case (observable only on a case-sensitive filesystem, where both files coexist) | Boot warning naming both candidate file names and both decoded extension names; both are kept and each reaches its own extension. It is a portability notice: copied onto a case-insensitive filesystem the home would hold only one of them |
 | File above 1 MiB | Treated as unreadable; extension activation fails with the file path in the error |
 | Unreadable file, invalid JSON, or top-level value is not an object | Extension activation fails with the file path in the error; non-critical extensions fail alone without aborting boot |
 | Merged config is rejected by the extension's `configSchema` while an operator file is present | Extension activation fails with the file path and the schema issue in the error, rather than falling back to schema defaults — even when a lower layer supplied the rejected value, since the file is the input an operator can act on. Without an operator file the pre-existing behaviour is unchanged: a warning, then the schema's own defaults |
 | File names a loaded extension without a `configSchema` | Boot warning naming the file; config is never applied; a *malformed* file (invalid JSON etc.) for such an extension still fails that extension's activation |
-| File names an extension that is not loaded | Boot warning naming the file and the decoded extension name; never fatal |
+| File names an extension that is not loaded | Boot warning naming the file and the decoded extension name; never fatal. "Loaded" means what the extension coordinator actually retained, so a file for an extension this surface excludes is reported rather than silently dropped |
+| Loaded extension whose encoded file name would exceed 255 bytes | Boot warning naming the extension; it cannot be configured by file, and no file name would work |
 
 **Relation to `makaio.config.*`.** Runtime config files control extension
 discovery, launcher commands, and `packageConfigDefaults` (layer 2 above). The
