@@ -105,7 +105,7 @@ that falls through to this global default with `ctx.next()`.
 
 | Field | Type | Required |
 |-------|------|----------|
-| `mode` | `"disabled" \| "discover" \| "import"` | yes |
+| `mode` | `"import" \| "disabled" \| "discover"` | yes |
 
 ### <a id="log-import.getStats"></a>`log-import.getStats` (rpc)
 
@@ -248,7 +248,7 @@ _Empty object._
 
 | Field | Type | Required |
 |-------|------|----------|
-| `settings` | `{ adapterName: string; mode: "disabled" \| "discover" \| "import"; createdAt: number; updatedAt: number; }[]` | yes |
+| `settings` | `{ adapterName: string; mode: "import" \| "disabled" \| "discover"; createdAt: number; updatedAt: number; }[]` | yes |
 
 ### <a id="log-import.progress"></a>`log-import.progress` (rpc)
 
@@ -311,7 +311,7 @@ that falls through to this global default with `ctx.next()`.
 | Field | Type | Required |
 |-------|------|----------|
 | `adapterName` | `string` | yes |
-| `mode` | `"disabled" \| "discover" \| "import"` | yes |
+| `mode` | `"import" \| "disabled" \| "discover"` | yes |
 
 **Response:**
 

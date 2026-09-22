@@ -300,6 +300,14 @@ export const sessionsDual = defineDualTable(
      * without stamping their own machine ID.
      */
     machineId: c.text('machine_id'),
+
+    /**
+     * Principal that atomically registered this imported session.
+     *
+     * Storage-private ownership evidence: public session records and generic
+     * session writes deliberately do not expose or mutate this value.
+     */
+    ownerPrincipalId: c.text('owner_principal_id'),
   }),
   {
     sqlite: (t) => [

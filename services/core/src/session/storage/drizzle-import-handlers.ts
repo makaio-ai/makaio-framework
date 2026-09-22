@@ -1,35 +1,17 @@
 import { eq, desc, and, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { getRawSqlExecutor, resolveSchema, type MakaioDatabase, type StorageDialect } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import { SessionSubjects, type BranchKind, type IMakaioSession, type ImportUpsertRequest } from '@makaio/contracts';
+import { SessionSubjects, type ImportUpsertRequest } from '@makaio/contracts';
 import { SessionStorageSubjects } from './namespace.js';
 import { sessionStorageSchema } from './schema.variants.js';
 import { mapAgentsBySession, mapToSession } from './drizzle-utils.js';
-import { kindToBranchKind } from '../import/lineage-utils.js';
 import type { SessionHandlerDeps } from './drizzle-handler.js';
-import { createMonotonicClock } from './monotonic-clock.js';
-import { resolveImportCreateStatus } from './import-lifecycle.js';
 import { registerRebindObservedHandler } from './drizzle-rebind-observed-handler.js';
-
-const nextDiscoveredAt = createMonotonicClock();
+import { buildInitialImportValues, emitImportUpsertLifecycleEvent } from './drizzle-import-registration-utils.js';
+import { registerDrizzleOwnedImportHandlers } from './drizzle-owned-import-handlers.js';
 
 /** Canonical column shape of the sessions table, resolved through the dialect seam. */
 type SessionsTable = typeof sessionStorageSchema.sqlite.sessions;
-
-type ClientIdentityObservation = IMakaioSession['lastClientIdentityObservation'];
-
-/**
- * Serialize a client identity observation for persistence.
- *
- * Mirrors the `storage:session.set` handler's serialization of the
- * `last_client_identity_observation` JSON-string column so both write paths
- * stay byte-compatible.
- * @param observation - Latest observed client identity payload, if any
- * @returns JSON string for storage, or null when no observation is present
- */
-function serializeClientIdentityObservation(observation: ClientIdentityObservation | undefined): string | null {
-  return observation ? JSON.stringify(observation) : null;
-}
 
 /**
  * Build the SELECT branch that re-encodes one metadata source's top-level
@@ -290,69 +272,20 @@ function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
 
   return bus.on(SessionStorageSubjects.importUpsert, async (ctx) => {
     const payload = ctx.payload;
-    const {
-      externalSessionId,
-      source,
-      clientId,
-      adapterId,
-      cwd,
-      logFilePath,
-      startedAt,
-      title,
-      kind,
-      parentAdapterSessionId,
-      forkPointMessageId,
-      metadata,
-      lastClientIdentityObservation,
-      importStatus,
-      isSidechain,
-      machineId,
-      activation,
-    } = payload;
-
-    const nowMs = nextDiscoveredAt();
     const sessionId = crypto.randomUUID();
-    const createdAt = startedAt ?? nowMs;
-    const branchKind = kindToBranchKind(kind) ?? null;
-
-    // parentAdapterSessionId is null for root sessions and a string for
-    // fork/subagent/compress sessions (guaranteed by the discriminated union).
-    const parentExternalSessionId = parentAdapterSessionId ?? null;
+    const initial = buildInitialImportValues(payload, sessionId);
 
     // Single-statement UPSERT — avoids SELECT+INSERT/UPDATE race on the shared
     // SQLite connection (see CONCURRENCY INVARIANT on registerDrizzleSessionStorage).
     const [row] = await db
       .insert(sessions)
-      .values({
-        sessionId,
-        status: resolveImportCreateStatus(payload),
-        isImported: true,
-        importStatus: importStatus ?? 'discovered',
-        adapterName: source,
-        adapterSessionId: externalSessionId,
-        source: source ?? null,
-        clientId: clientId ?? null,
-        adapterId: adapterId ?? null,
-        targetWorkingDirectory: cwd ?? null,
-        logFilePath: logFilePath ?? null,
-        forkPointMessageId: forkPointMessageId ?? null,
-        branchKind,
-        parentExternalSessionId,
-        discoveredAt: nowMs,
-        title: title ?? null,
-        metadata: metadata ?? null,
-        lastClientIdentityObservation: serializeClientIdentityObservation(lastClientIdentityObservation),
-        isSidechain: isSidechain ?? null,
-        machineId: machineId ?? null,
-        createdAt,
-        lastActivityAt: createdAt,
-      })
+      .values(initial.values)
       .onConflictDoUpdate({
         // Imported-session identity is source-scoped. Rows that lack `source`
         // cannot participate in the `(source, adapterSessionId)` invariant, so
         // this handler does not merge them into a sourced import.
         target: [sessions.source, sessions.adapterSessionId],
-        set: buildImportConflictSet(sessions, startedAt, dialect, machineId, activation),
+        set: buildImportConflictSet(sessions, payload.startedAt, dialect, payload.machineId, payload.activation),
       })
       .returning({
         sessionId: sessions.sessionId,
@@ -363,107 +296,9 @@ function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
 
     const created = row.sessionId === sessionId;
 
-    await emitImportUpsertLifecycleEvent(bus, db, row, created, branchKind, createdAt, source);
+    await emitImportUpsertLifecycleEvent(bus, db, row, created, initial.branchKind, initial.createdAt, payload.source);
     ctx.setResult({ sessionId: row.sessionId, created });
   });
-}
-
-/**
- * Emit the appropriate lifecycle event after an importUpsert operation.
- * @param bus - Bus for event emission
- * @param db - Database for parent resolution
- * @param row - The upserted row's key fields
- * @param created - Whether the row was newly created
- * @param branchKind - Branch kind for the created event
- * @param createdAt - Timestamp for the created event
- * @param source - Source tool identity for resolving imported parent links
- */
-async function emitImportUpsertLifecycleEvent(
-  bus: IMakaioBus,
-  db: MakaioDatabase,
-  row: {
-    sessionId: string;
-    discoveredAt: number | null;
-    parentExternalSessionId: string | null;
-    parentSessionId: string | null;
-  },
-  created: boolean,
-  branchKind: BranchKind | null,
-  createdAt: number,
-  source: string | undefined,
-): Promise<void> {
-  if (created) {
-    const resolvedParentSessionId = await resolveParentSession(db, row.sessionId, row.parentExternalSessionId, source);
-    void bus
-      .emit(SessionSubjects.created, {
-        sessionId: row.sessionId,
-        parentSessionId: resolvedParentSessionId,
-        branchKind,
-        createdAt,
-      })
-      .catch((err) => console.error('[SessionStorage] Failed to emit session.created:', err));
-  } else {
-    // Enrichment upsert may have filled parentExternalSessionId for the first
-    // time while the parent was already imported. Resolve parent now so the
-    // child doesn't stay orphaned waiting for a session.import.completed that
-    // already fired.
-    if (row.parentExternalSessionId !== null && row.parentSessionId === null) {
-      await resolveParentSession(db, row.sessionId, row.parentExternalSessionId, source);
-    }
-
-    void bus
-      .emit(SessionSubjects.updated, {
-        sessionId: row.sessionId,
-        changedProperties: ['source', 'targetWorkingDirectory', 'title'],
-      })
-      .catch((err) => console.error('[SessionStorage] Failed to emit session.updated:', err));
-  }
-}
-
-/**
- * Attempt to link a newly created imported session to its parent.
- *
- * Queries for an existing session whose source-scoped `adapterSessionId`
- * matches `parentExternalSessionId`, then updates the new session's
- * `parentSessionId` and `rootSessionId` in a single UPDATE statement.
- *
- * This is best-effort: if the parent has not been imported yet the call is a
- * no-op, and the parent-resolver service will fill the gap when the parent
- * arrives.
- * @param db - Drizzle database instance
- * @param newSessionId - ID of the session that was just created
- * @param parentExternalSessionId - External session ID of the intended parent, or null
- * @param source - Source tool identity for the imported lineage
- * @returns The resolved Makaio parent session ID, or null if not found
- */
-async function resolveParentSession(
-  db: MakaioDatabase,
-  newSessionId: string,
-  parentExternalSessionId: string | null,
-  source: string | undefined,
-): Promise<string | null> {
-  const { sessions } = resolveSchema(db, sessionStorageSchema);
-  if (parentExternalSessionId === null || source === undefined) {
-    return null;
-  }
-
-  const [parentRow] = await db
-    .select({ sessionId: sessions.sessionId, rootSessionId: sessions.rootSessionId })
-    .from(sessions)
-    .where(and(eq(sessions.adapterSessionId, parentExternalSessionId), eq(sessions.source, source)))
-    .limit(1);
-
-  if (!parentRow) {
-    return null;
-  }
-
-  const resolvedRootSessionId = parentRow.rootSessionId ?? parentRow.sessionId;
-  await db
-    .update(sessions)
-    .set({ parentSessionId: parentRow.sessionId, rootSessionId: resolvedRootSessionId })
-    .where(eq(sessions.sessionId, newSessionId));
-
-  return parentRow.sessionId;
 }
 
 /**
@@ -658,8 +493,8 @@ function registerUpdateImportStatusHandler(deps: SessionHandlerDeps): () => void
 /**
  * Register Drizzle-based session import storage handlers.
  *
- * Covers the 6 import-specific bus subjects: `importUpsert`, `rebindObserved`,
- * `getByLogFilePath`, `listImported`, `countBySource`, and `updateImportStatus`.
+ * Covers import-specific bus subjects, including ordinary upserts and
+ * ownership-aware registration and verification.
  *
  * Called by `registerDrizzleSessionStorage` as part of the full handler set.
  * @param bus - The bus instance to register handlers on
@@ -670,6 +505,7 @@ export function registerDrizzleSessionImportHandlers(bus: IMakaioBus, db: Makaio
   const deps: SessionHandlerDeps = { bus, db };
   return [
     registerImportUpsertHandler(deps),
+    ...registerDrizzleOwnedImportHandlers(bus, deps),
     registerRebindObservedHandler(deps),
     registerGetByLogFilePathHandler(deps),
     registerListImportedHandler(deps),

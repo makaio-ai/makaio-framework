@@ -17,6 +17,8 @@ import type {
 export interface SessionStorageMemoryState {
   /** Session rows keyed by `sessionId`. */
   readonly sessions: Map<string, IMakaioSession>;
+  /** Internal owner-principal rows keyed by `sessionId`. */
+  readonly sessionOwnerPrincipalIds: Map<string, string>;
   /** Agent rows keyed by `agentId`. */
   readonly agents: Map<string, MakaioSessionAgent>;
   /** Claim rows keyed by `claimId`. */
@@ -36,6 +38,7 @@ export interface SessionStorageMemoryState {
 export function createSessionStorageMemoryState(): SessionStorageMemoryState {
   return {
     sessions: new Map<string, IMakaioSession>(),
+    sessionOwnerPrincipalIds: new Map<string, string>(),
     agents: new Map<string, MakaioSessionAgent>(),
     claims: new Map<string, AdapterSessionClaimRecord>(),
     runtimeInstances: new Map<string, RuntimeInstanceRecord>(),
