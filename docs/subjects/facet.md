@@ -56,7 +56,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `namespaces` | `{ namespace: string; cardinality: "single" \| "multiple"; values: readonly string[] \| "open"; authority: readonly ("agent" \| "system" \| "human")[]; appliesTo: readonly ("surface" \| "workpiece" \| "artifact")[]; description?: string \| undefined; }[]` | yes |
+| `namespaces` | `{ namespace: string; cardinality: "single" \| "multiple"; values: "open" \| readonly string[]; authority: readonly ("agent" \| "system" \| "human")[]; appliesTo: readonly ("artifact" \| "workpiece" \| "surface")[]; description?: string \| undefined; }[]` | yes |
 
 ### <a id="facet.namespace.register"></a>`facet.namespace.register` (rpc)
 
@@ -70,12 +70,12 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `appliesTo` | `readonly ("surface" \| "workpiece" \| "artifact")[]` | yes |
+| `appliesTo` | `readonly ("artifact" \| "workpiece" \| "surface")[]` | yes |
 | `authority` | `readonly ("agent" \| "system" \| "human")[]` | yes |
 | `cardinality` | `"single" \| "multiple"` | yes |
 | `description` | `string \| undefined` | no |
 | `namespace` | `string` | yes |
-| `values` | `readonly string[] \| "open"` | yes |
+| `values` | `"open" \| readonly string[]` | yes |
 
 **Response:**
 

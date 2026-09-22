@@ -11,6 +11,7 @@
 
 import { onboardingStepRegistry } from '@makaio/ui-kernel';
 import type { OnboardingContext, ComponentLike } from '@makaio/ui-kernel';
+import { seedManagedExtensions } from './seed-managed-extensions.js';
 import type { OnboardingStepDefinition, OnboardingStepProps } from './types.js';
 
 /**
@@ -136,11 +137,17 @@ export function registerCoreOnboardingSteps(components: CoreOnboardingStepCompon
     order: 40,
     skippable: true,
     /**
-     * Only show when at least one plugin is discovered.
+     * Only show when at least one extension-managed plugin is discovered.
+     *
+     * `context.extensions` is the full, unfiltered snapshot — the registry
+     * seam that receives it makes no promise about extension-managed
+     * narrowing (see {@link useOnboardingFlow}) — so this condition narrows
+     * to the extension-managed subset itself, matching the view the Plugins
+     * step actually renders.
      * @param context - Snapshot of the onboarding context at flow start
-     * @returns True when any extensions are available
+     * @returns True when any extension-managed plugin is available
      */
-    condition: (context: OnboardingContext): boolean => context.extensions.length > 0,
+    condition: (context: OnboardingContext): boolean => seedManagedExtensions(context.extensions).managed.length > 0,
     component: components.PluginsStep,
   });
 

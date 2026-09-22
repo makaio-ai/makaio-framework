@@ -164,7 +164,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `baseConfigDir` | `string` | yes |
-| `configInheritance` | `"full" \| "auth-only" \| "empty"` | yes |
+| `configInheritance` | `"auth-only" \| "full" \| "empty"` | yes |
 | `platform` | `"darwin" \| "linux" \| "win32"` | yes |
 | `projectDir` | `string \| undefined` | no |
 | `sessionDir` | `string` | yes |

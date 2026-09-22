@@ -11,14 +11,14 @@ next: false
 
 | Metric | Count |
 |--------|-------|
-| Namespaces | 105 |
-| Subjects | 1001 (400 events, 601 RPCs) |
+| Namespaces | 106 |
+| Subjects | 1015 (407 events, 608 RPCs) |
 | framework | 101 |
-| extension | 4 |
+| extension | 5 |
 | kind: bus | 74 |
 | kind: adapter | 9 |
 | kind: client | 2 |
-| kind: extension | 2 |
+| kind: extension | 3 |
 | kind: storage | 16 |
 | kind: extension-storage | 2 |
 
@@ -28,7 +28,7 @@ next: false
 |-----------|-----------|----------|
 | [adapters/](./adapters/index.md) | 1 | 3 |
 | [clients/](./clients/index.md) | 2 | 25 |
-| [extensions/](./extensions/index.md) | 4 | 18 |
+| [extensions/](./extensions/index.md) | 5 | 19 |
 | [services/](./services/index.md) | 32 | 230 |
 | [ui/](./ui/index.md) | 3 | 9 |
 
@@ -49,12 +49,12 @@ next: false
 | [`agent`](./agent.md) | bus | 35 | 24E / 11R |
 | [`agentResolution`](./agentresolution.md) | bus | 1 | 0E / 1R |
 | [`approval`](./approval.md) | bus | 2 | 0E / 2R |
-| [`artifact`](./artifact.md) | bus | 16 | 6E / 10R |
+| [`artifact`](./artifact.md) | bus | 24 | 8E / 16R |
 | [`automation-triggers`](./automation-triggers.md) | bus | 2 | 1E / 1R |
 | [`bus:lifecycle`](./bus-lifecycle.md) | bus | 2 | 2E / 0R |
 | [`canonicalModel`](./canonicalmodel.md) | bus | 1 | 0E / 1R |
 | [`capability`](./capability.md) | bus | 4 | 2E / 2R |
-| [`client`](./client.md) | bus | 37 | 12E / 25R |
+| [`client`](./client.md) | bus | 41 | 15E / 26R |
 | [`client-binary:storage`](./client-binary-storage.md) | bus | 11 | 0E / 11R |
 | [`client-profile:storage`](./client-profile-storage.md) | bus | 7 | 0E / 7R |
 | [`client-runtime:storage`](./client-runtime-storage.md) | bus | 2 | 0E / 2R |
@@ -96,7 +96,7 @@ next: false
 | [`vcs:pr`](./vcs-pr.md) | bus | 8 | 5E / 3R |
 | [`vision`](./vision.md) | bus | 1 | 0E / 1R |
 | [`voice`](./voice.md) | bus | 6 | 4E / 2R |
-| [`worker`](./worker.md) | bus | 12 | 8E / 4R |
+| [`worker`](./worker.md) | bus | 13 | 9E / 4R |
 | [`workflow`](./workflow.md) | bus | 58 | 26E / 32R |
 | [`workflow-blocks`](./workflow-blocks.md) | bus | 2 | 1E / 1R |
 

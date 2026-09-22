@@ -246,6 +246,29 @@ function printNotLoadedInstalledExtensions(
 }
 
 /**
+ * Format the trailing note appended to a framework package's listing row
+ * when an operator-managed installed package shares its name.
+ *
+ * The coordinator loads the framework package unconditionally under the
+ * shared name, so the installed override never gets its own coordinator
+ * entry — it would otherwise be silently invisible: `liveNames` (built from
+ * the live snapshot) already contains the name, so
+ * {@link printNotLoadedInstalledExtensions}'s dedup skips it as if nothing
+ * were installed under that name at all. This surfaces the override's
+ * presence directly on the framework package's own row instead, without a
+ * second listing entry for the same name.
+ * @param ext - Live extension entry to check for a name collision.
+ * @param installedNames - Names of packages installed under this
+ *   `$MAKAIO_HOME` (see {@link listInstalledExtensions}'s `'shared-home'` tier).
+ * @returns The trailing note, or an empty string when `ext` is
+ *   operator-managed or no installed package shares its name.
+ */
+function frameworkPackageOverrideNote(ext: ExtensionInfo, installedNames: ReadonlySet<string>): string {
+  if (ext.extensionManaged || !installedNames.has(ext.name)) return '';
+  return ' (installed override present, shadowed by a framework package of the same name until it no longer claims it)';
+}
+
+/**
  * Print a local server's live extension snapshot, merged with any
  * installed-but-not-loaded names discovered on this same `$MAKAIO_HOME`.
  *
@@ -267,6 +290,7 @@ async function printLocalLiveListing(
 ): Promise<void> {
   const liveNames = new Set(extensions.map((ext) => ext.name));
   const installed = await listInstalledExtensions(makaioHome, 'shared-home');
+  const installedNames = new Set(installed.map((ext) => ext.name));
   const hasNotLoaded = installed.some((ext) => !liveNames.has(ext.name));
 
   if (extensions.length === 0 && !hasNotLoaded) {
@@ -275,7 +299,9 @@ async function printLocalLiveListing(
   }
   for (const ext of extensions) {
     const stateLabel = extensionStateLabel(ext.state, ext.enabled, ext.persistedEnabled, ext.critical);
-    console.info(`${ext.displayName} (${ext.name}) [${stateLabel}]`);
+    console.info(
+      `${ext.displayName} (${ext.name}) [${stateLabel}]${frameworkPackageOverrideNote(ext, installedNames)}`,
+    );
   }
   printNotLoadedInstalledExtensions(installed, liveNames, enablementStore);
   console.info(
@@ -317,9 +343,14 @@ function printRemoteLiveListing(extensions: readonly ExtensionInfo[]): void {
  * Query the running server's live extension snapshot and print it.
  *
  * Merged with installed-but-not-loaded names only when the bus is local —
- * see {@link printLocalLiveListing} and {@link printRemoteLiveListing}.
+ * see {@link printLocalLiveListing} and {@link printRemoteLiveListing}. The
+ * local enablement store is loaded only once that local/remote decision is
+ * made, and only on the local branch: a reachable *remote* server's listing
+ * never reads or reports on this machine's own `extensions.json` — that file
+ * belongs to a different host and {@link printRemoteLiveListing} never
+ * consults it, so eagerly loading it here would surface a read failure (and
+ * the exit-1 it causes) for a file this call never actually uses.
  * @param makaioHome - Resolved Makaio data home.
- * @param enablementStore - Enablement store used to label not-loaded entries.
  * @param health - Health payload of the reachable server.
  * @param busUrl - Resolved bus URL the caller connected to, decided once by
  *   {@link runList}.
@@ -328,7 +359,6 @@ function printRemoteLiveListing(extensions: readonly ExtensionInfo[]): void {
  */
 async function tryPrintLiveListing(
   makaioHome: string,
-  enablementStore: ExtensionEnablementStore,
   health: NonNullable<Awaited<ReturnType<typeof probeHealth>>>,
   busUrl: string,
 ): Promise<boolean> {
@@ -355,6 +385,8 @@ async function tryPrintLiveListing(
     if (isRemoteBusUrl(busUrl)) {
       printRemoteLiveListing(extensions);
     } else {
+      const enablementStore = await loadExtensionEnablementStore(makaioHome);
+      warnOnEnablementReadFailure(enablementStore);
       await printLocalLiveListing(makaioHome, enablementStore, extensions);
     }
     return true;
@@ -396,27 +428,34 @@ async function tryPrintLiveListing(
  * this machine's own installed packages and enablement file, which is a
  * faithful stand-in for "no server to query" only because a local server
  * would read the exact same state. `MAKAIO_BUS_URL` naming a remote host
- * that did not answer the health probe has no such relationship to this
- * machine — falling back would present this machine's installs as if they
- * were the configured server's, exactly the failure mode
+ * that did not answer the health probe — or one that answered the probe but
+ * then failed to connect for a non-auth reason, the same probe/connect race
+ * {@link tryPrintLiveListing} falls through for — has no such relationship to
+ * this machine — falling back would present this machine's installs as if
+ * they were the configured server's, exactly the failure mode
  * {@link runSetEnabled} already refuses for the same reason (see
- * {@link remoteUnreachableRefusalMessage}), so this refuses identically
- * instead of falling through.
+ * {@link remoteUnreachableRefusalMessage}), so the offline branch below is
+ * entered through a single guard that refuses a remote target regardless of
+ * which of those two paths led here, instead of only the outright-unreachable
+ * one.
  */
 async function runList(): Promise<void> {
   try {
     const makaioHome = resolveMakaioHome();
-    const enablementStore = await loadExtensionEnablementStore(makaioHome);
-    warnOnEnablementReadFailure(enablementStore);
 
     // Try to get live state from a running server.
     const busUrl = resolveBusUrl();
     const health = await probeHealth(busUrl);
-    if (health) {
-      if (await tryPrintLiveListing(makaioHome, enablementStore, health, busUrl)) {
-        return;
-      }
-    } else if (isRemoteBusUrl(busUrl)) {
+    if (health && (await tryPrintLiveListing(makaioHome, health, busUrl))) {
+      return;
+    }
+
+    // Single guard for every path that falls through to the offline branch
+    // below — an outright-failed health probe, or a health probe that
+    // succeeded followed by a non-auth connection failure (see
+    // `tryPrintLiveListing`'s TSDoc) — so a remote target refuses identically
+    // in both cases rather than only the more obvious one.
+    if (isRemoteBusUrl(busUrl)) {
       console.error(remoteUnreachableRefusalMessage('list extensions', busUrl));
       process.exitCode = 1;
       return;
@@ -424,7 +463,12 @@ async function runList(): Promise<void> {
 
     // Offline: installed packages + persisted disabled set. No server is
     // reachable, so this CLI process is the sole relevant view — every tier,
-    // including its own project-local `{cwd}/node_modules`, is in scope.
+    // including its own project-local `{cwd}/node_modules`, is in scope. Only
+    // reached for a local bus, so the local enablement file this process
+    // reads below is the same one a local server would have read.
+    const enablementStore = await loadExtensionEnablementStore(makaioHome);
+    warnOnEnablementReadFailure(enablementStore);
+
     const installed = await listInstalledExtensions(makaioHome, 'all');
 
     if (installed.length === 0) {

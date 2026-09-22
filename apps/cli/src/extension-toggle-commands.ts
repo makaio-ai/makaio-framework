@@ -14,7 +14,7 @@ import {
   isRemoteBusUrl,
   type ServerHealth,
 } from './bus-client.js';
-import { ExtensionSubjects, type TransitionOutcome } from '@makaio/kernel';
+import { ExtensionSubjects, type ExtensionInfo, type TransitionOutcome } from '@makaio/kernel';
 import { listInstalledExtensions, type InstalledExtensionEntry } from './extension-installed-listing.js';
 
 /**
@@ -120,6 +120,9 @@ function reportUnknownExtensionName(name: string, verb: string): void {
  * - "already matches this state" — the process's current runtime state already matches the request
  * - "persisted; no running server — takes effect on next boot" — no server was reachable
  * - "persisted; ... takes effect on next boot" — a server persisted it, but the process's runtime state diverges
+ * - "persisted; a framework package currently holds this name" — the reachable server loaded a framework
+ *   package under this name instead of the operator-managed extension being toggled; the CLI writes the
+ *   preference directly, the same unmanaged-name path used when the coordinator never loaded any entry
  * - "the request was rejected" — an unknown name or a race with the coordinator; nothing was written
  * - "the configured server ... is unreachable" — `MAKAIO_BUS_URL` names a remote host that did not
  *   answer the health probe; nothing was written, since this machine's enablement file is not the
@@ -210,9 +213,17 @@ interface LiveToggleOptions {
  * — interactive-only on a headless server, unmet `requires`, or suppressed via
  * `MAKAIO_SKIP_EXTENSIONS` — is the one case the reachable server cannot
  * persist for: `kernel:extension.get` reports it as `null`, so there is no
- * entry for `setEnabled` to compare against. The per-name single-writer rule
- * does not apply to that name either way, because the server never touches
- * it; the CLI writes the enablement file directly for it instead — while the
+ * entry for `setEnabled` to compare against. The same is true when `get`
+ * *does* report an entry but {@link ExtensionInfo.extensionManaged} is
+ * `false`: a framework package retains that entry under the requested name
+ * (the coordinator loads framework packages unconditionally, so a disabled
+ * operator-managed package never displaces one that shares its name), and
+ * `setEnabled` throws outright for a non-operator-managed entry — there is
+ * still no preference for it to compare against, just a different reason
+ * than a `null` `get` response. Both cases route to the same unmanaged-name
+ * fallback below. The per-name single-writer rule does not apply to that name
+ * either way, because the server never touches it for `setEnabled`'s purposes;
+ * the CLI writes the enablement file directly for it instead — while the
  * server may be concurrently writing for a name it does manage, which the
  * store's cross-process lock, not process exclusivity, keeps safe — after
  * confirming against the installed-package listing (the same "does this name
@@ -229,24 +240,52 @@ async function applyLiveToggle(options: LiveToggleOptions): Promise<void> {
   try {
     const { extension } = await bus.request(ExtensionSubjects.get, { name });
 
-    // `extension` is `null` for a name the server never loaded into its
-    // coordinator; fetch the installed-package listing once up front for that
+    // An entry the coordinator reports but does not operator-manage is a
+    // framework package retaining this name, not the requested extension —
+    // `setEnabled` has nothing to compare against for it (see this
+    // function's own TSDoc), so it is treated identically to a `null` `get`
+    // response below, distinguished only for the fallback's own message.
+    const managedEntry: ExtensionInfo | null = extension?.extensionManaged ? extension : null;
+    const frameworkPackageCollision = extension !== null && !extension.extensionManaged;
+
+    // `managedEntry` is `null` for a name the server never loaded into its
+    // coordinator, or one currently held by a same-named framework package —
+    // both fall back to {@link applyUnmanagedNameToggle}'s direct file write,
+    // which is only legitimate for a local bus (see that function's TSDoc).
+    // Refuse a remote target here, before either local-machine call below
+    // (the installed-package listing and the critical check that consults
+    // it): neither is meaningful for a host whose installed packages this
+    // process cannot see, so a remote target must never trigger them just to
+    // reach a refusal `applyUnmanagedNameToggle` would have produced anyway.
+    // This is the single guard site for both the null-entry and the
+    // framework-package-collision cases — `applyUnmanagedNameToggle` itself
+    // no longer re-checks it.
+    if (!managedEntry && isRemoteBusUrl(busUrl)) {
+      console.error(
+        `Failed to ${verb} extension "${name}": the reachable server does not manage "${name}"; ` +
+          "run this command on the server's host to persist the preference.",
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    // Fetch the installed-package listing once up front for the unmanaged
     // case so both the critical check below and `applyUnmanagedNameToggle`
     // reuse it instead of each issuing their own installer round trip. A
     // server is reachable here, and it may have been started from a
     // different project directory than this CLI invocation, so only the
     // `$MAKAIO_HOME`-shared tiers are trustworthy for it (`'shared-home'`) —
     // see {@link listInstalledExtensions}'s TSDoc.
-    const installedListing = extension ? undefined : await listInstalledExtensions(makaioHome, 'shared-home');
+    const installedListing = managedEntry ? undefined : await listInstalledExtensions(makaioHome, 'shared-home');
 
-    if (!enabled && (await isCriticalExtension(makaioHome, name, extension, 'shared-home', installedListing))) {
+    if (!enabled && (await isCriticalExtension(makaioHome, name, managedEntry, 'shared-home', installedListing))) {
       console.error(criticalRefusalMessage(name));
       process.exitCode = 1;
       return;
     }
 
-    if (!extension) {
-      await applyUnmanagedNameToggle(makaioHome, name, enabled, verb, busUrl, installedListing);
+    if (!managedEntry) {
+      await applyUnmanagedNameToggle(makaioHome, name, enabled, verb, installedListing, frameworkPackageCollision);
       return;
     }
 
@@ -273,11 +312,11 @@ async function applyLiveToggle(options: LiveToggleOptions): Promise<void> {
       return;
     }
 
-    // Reuse the `extension` fetched above rather than issuing a second `get`
-    // request: `setEnabled` never mutates the entry (it is persist-only), so
-    // the entry's `error` field already carries whatever reason a re-fetch
-    // would report for this outcome.
-    reportRejectedToggle(name, outcome, extension.error, verb);
+    // Reuse the `managedEntry` fetched above rather than issuing a second
+    // `get` request: `setEnabled` never mutates the entry (it is
+    // persist-only), so the entry's `error` field already carries whatever
+    // reason a re-fetch would report for this outcome.
+    reportRejectedToggle(name, outcome, managedEntry.error, verb);
   } finally {
     bus.disconnect();
   }
@@ -285,15 +324,21 @@ async function applyLiveToggle(options: LiveToggleOptions): Promise<void> {
 
 /**
  * Persist an enable/disable preference for a name the reachable server does
- * not manage (never loaded into its coordinator).
+ * not manage — either never loaded into its coordinator at all, or currently
+ * held there by a same-named framework package (see
+ * {@link ExtensionInfo.extensionManaged}).
  *
  * This direct write is only legitimate when the enablement file this process
  * writes is the same file the reachable server reads — true only when the
- * bus is local. `busUrl` is checked with {@link isRemoteBusUrl} before doing
- * anything else: a remote server's installed-package set cannot be
- * discovered from here (there is no RPC for it), so validating "is this name
- * actually installed" against *this* machine's packages, or writing *this*
- * machine's enablement file, would both silently operate on the wrong host.
+ * bus is local. The caller ({@link applyLiveToggle}) checks
+ * {@link isRemoteBusUrl} before calling this function at all — a remote
+ * server's installed-package set cannot be discovered from here (there is no
+ * RPC for it), so validating "is this name actually installed" against
+ * *this* machine's packages, or writing *this* machine's enablement file,
+ * would both silently operate on the wrong host. That guard sits in the
+ * caller, ahead of the installed-package listing fetch it also owns, so a
+ * remote target never triggers a local listing scan just to reach a refusal
+ * this function would have produced anyway.
  *
  * No server-owned persist RPC exists for this case by design, not oversight:
  * the coordinator only knows extensions it actually loaded, so it cannot
@@ -317,32 +362,28 @@ async function applyLiveToggle(options: LiveToggleOptions): Promise<void> {
  * @param name - Extension package name to toggle.
  * @param enabled - Desired enabled state.
  * @param verb - Verb used in output ("enable" or "disable").
- * @param busUrl - Resolved bus URL the caller connected to, used to detect a remote server.
  * @param installedListing - Installed-package listing already fetched by the caller, when
  *   available; omit it to have this function fetch the listing itself.
+ * @param frameworkPackageCollision - `true` when the reason this name is
+ *   unmanaged is that a framework package currently holds it (as opposed to
+ *   the coordinator never having loaded any entry for it), so the confirmation
+ *   message explains the collision instead of the generic not-loaded reasons.
  */
 async function applyUnmanagedNameToggle(
   makaioHome: string,
   name: string,
   enabled: boolean,
   verb: string,
-  busUrl: string,
   installedListing?: readonly InstalledExtensionEntry[],
+  frameworkPackageCollision = false,
 ): Promise<void> {
-  if (isRemoteBusUrl(busUrl)) {
-    console.error(
-      `Failed to ${verb} extension "${name}": the reachable server does not manage "${name}"; ` +
-        "run this command on the server's host to persist the preference.",
-    );
-    process.exitCode = 1;
-    return;
-  }
-
-  // This function only ever runs against a reachable, local server (the
-  // remote case returned above), which may not share this CLI invocation's
-  // `cwd` — only `$MAKAIO_HOME` is guaranteed shared, so the fallback fetch
-  // uses `'shared-home'`, matching the listing `applyLiveToggle` already
-  // fetched with the same mode when it had one to pass.
+  // The caller already refused a remote target before fetching (or
+  // requesting this function fetch) the installed-package listing — see this
+  // function's own TSDoc. This function only ever runs against a reachable,
+  // local server, which may not share this CLI invocation's `cwd` — only
+  // `$MAKAIO_HOME` is guaranteed shared, so the fallback fetch uses
+  // `'shared-home'`, matching the listing `applyLiveToggle` already fetched
+  // with the same mode when it had one to pass.
   const installed = installedListing ?? (await listInstalledExtensions(makaioHome, 'shared-home'));
   if (!installed.some((ext) => ext.name === name)) {
     reportUnknownExtensionName(name, verb);
@@ -352,8 +393,12 @@ async function applyUnmanagedNameToggle(
   const enablementStore = await loadExtensionEnablementStore(makaioHome);
   await enablementStore.persistEnabled(name, enabled);
   console.info(
-    `Extension "${name}" ${verb}d. Persisted; not loaded in the running server ` +
-      '(interactive-only, unmet requirements, or MAKAIO_SKIP_EXTENSIONS) — takes effect on next boot.',
+    frameworkPackageCollision
+      ? `Extension "${name}" ${verb}d. Persisted; a framework package currently holds this name — ` +
+          'the installed override takes effect after enabling and restart, once the framework package no ' +
+          'longer claims the name.'
+      : `Extension "${name}" ${verb}d. Persisted; not loaded in the running server ` +
+          '(interactive-only, unmet requirements, or MAKAIO_SKIP_EXTENSIONS) — takes effect on next boot.',
   );
 }
 

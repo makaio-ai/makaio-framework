@@ -188,6 +188,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `hasSchema` | `boolean` | yes |
+| `operatorConfig` | `{ source: string; keys: string[]; values?: Record<string, unknown> \| undefined; } \| undefined` | no |
 | `schema` | `Record<string, unknown> \| null` | yes |
 | `uiConfig` | `{ editMode: "inline" \| "slidePanel" \| "fullPage"; hiddenFields?: string[] \| undefined; readOnlyInEditMode?: string[] \| undefined; fieldOverrides?: Record<string, { widget?: string \| undefined; delimiter?: string \| undefined; placeholder?: string \| undefined; helpText?: string \| undefined; min?: number \| undefined; max?: number \| undefined; step?: number \| undefined; options?: { value: string; label: string; }[] \| undefined; }> \| undefined; sections?: { id: string; title: string; fields: string[]; description?: string \| undefined; }[] \| undefined; } \| null` | yes |
 

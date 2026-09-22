@@ -7,10 +7,11 @@ next: false
 
 # extensions
 
-4 namespaces, 18 subjects (2 events, 16 RPCs).
+5 namespaces, 19 subjects (3 events, 16 RPCs).
 
 | Prefix | Kind | Subjects | Type Breakdown |
 |--------|------|----------|----------------|
+| [`extension:gateway`](./extension-gateway.md) | extension | 1 | 1E / 0R |
 | [`extension:shell`](./extension-shell.md) | extension | 6 | 0E / 6R |
 | [`extension:telemetry-otel`](./extension-telemetry-otel.md) | extension | 3 | 2E / 1R |
 | [`storage:extension:pin-message`](./storage-extension-pin-message.md) | extension-storage | 5 | 0E / 5R |

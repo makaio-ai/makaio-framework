@@ -537,12 +537,15 @@ async function reinitializeService(
  * Tear down an active extension.
  *
  * Stops contribution processors, destroys the service, unregisters storage
- * handlers, and transitions to `stopped`.
+ * handlers, unregisters the tray menu entry, and transitions to `stopped`.
  *
- * Teardown is completed even when the service fails to destroy — the extension
- * really is stopped and must not be left claiming otherwise — but the failure
- * is recorded on `entry.error` rather than changing the outcome: the runtime
- * really did reach `stopped`, so this still reports `'applied'`.
+ * Teardown is completed even when a step fails — the service fails to
+ * destroy, storage cleanup throws, or the tray menu service rejects the
+ * unregister request — the extension really is stopped and must not be left
+ * claiming otherwise, nor left with a stale, clickable tray entry pointing at
+ * a destroyed service. Every one of those failures is recorded on
+ * `entry.error` rather than changing the outcome: the runtime really did
+ * reach `stopped`, so this still reports `'applied'`.
  *
  * When the extension is already inactive — `stopped`, `failed`, `skipped`, or
  * never started this boot (`discovered`) — there is nothing to tear down, but
@@ -626,6 +629,22 @@ async function disableExtension(
     }
   }
 
+  // Mirror the tray registration `enableExtension` performs after the
+  // 'active' transition: without this, a tray-owning extension's entry stays
+  // live in the running tray menu after this coordinator-internal restart's
+  // disable, clickable into a service that no longer exists. Folded into the
+  // same teardown-failure contract as the processor/service/storage steps
+  // above — recorded on `entry.error` before the `'stopped'` transition and
+  // its `stateChanged` announcement fire, exactly like the others, rather
+  // than being merely logged after the extension already reports itself
+  // stopped.
+  try {
+    await unregisterPackageTrayMenuEntry(host.bus, entry.pkg);
+  } catch (err) {
+    teardownFailures.push(err);
+    console.error(`[ExtensionCoordinator] Failed to unregister tray entry for ${name}:`, err);
+  }
+
   if (teardownFailures.length > 0) {
     const detail = teardownFailures.map((failure) => getErrorString(failure)).join('; ');
     const teardownError = new AggregateError(
@@ -636,16 +655,6 @@ async function disableExtension(
   }
 
   transitionPackageEntry(host.bus, entry, 'stopped');
-
-  // Mirror the tray registration `enableExtension` performs after the
-  // 'active' transition: without this, a tray-owning extension's entry stays
-  // live in the running tray menu after this coordinator-internal restart's
-  // disable, clickable into a service that no longer exists.
-  try {
-    await unregisterPackageTrayMenuEntry(host.bus, entry.pkg);
-  } catch (err) {
-    console.warn(`[ExtensionCoordinator] Failed to unregister tray entry for ${name}:`, err);
-  }
 
   entry.warnings = [];
 

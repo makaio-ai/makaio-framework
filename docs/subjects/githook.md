@@ -37,7 +37,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `operation` | `"merge" \| "commit" \| "checkout" \| "rebase"` | yes |
+| `operation` | `"commit" \| "merge" \| "checkout" \| "rebase"` | yes |
 | `repoPath` | `string` | yes |
 | `worktree` | `string \| undefined` | no |
 
@@ -46,7 +46,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `covered` | `boolean` | yes |
-| `coveredOperations` | `("merge" \| "commit" \| "checkout" \| "rebase")[]` | yes |
+| `coveredOperations` | `("commit" \| "merge" \| "checkout" \| "rebase")[]` | yes |
 | `reason` | `"covered" \| "not-installed" \| "hook-missing" \| "hook-not-executable" \| "state-missing" \| "state-mismatch" \| "unsupported-operation" \| "provider-unavailable"` | yes |
 
 ### <a id="gitHook.merge"></a>`gitHook.merge` (event)

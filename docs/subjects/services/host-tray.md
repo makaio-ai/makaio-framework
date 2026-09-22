@@ -48,7 +48,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `group` | `{ packageName: string; groupId: string; entries: { label: string; entryId: string; metadata?: Record<string, unknown> \| undefined; priority?: number \| undefined; enabled?: boolean \| undefined; }[]; section: "tools" \| "utilities" \| "views"; priority?: number \| undefined; }` | yes |
+| `group` | `{ packageName: string; groupId: string; entries: { label: string; entryId: string; metadata?: Record<string, unknown> \| undefined; enabled?: boolean \| undefined; priority?: number \| undefined; }[]; section: "views" \| "tools" \| "utilities"; priority?: number \| undefined; }` | yes |
 
 **Response:**
 
@@ -101,7 +101,7 @@ _Empty object._
 
 | Field | Type | Required |
 |-------|------|----------|
-| `entries` | `{ packageName: string; entryId: string; label: string; section: "tools" \| "utilities" \| "views"; priority: number; enabled: boolean; metadata?: Record<string, unknown> \| undefined; groupId?: string \| undefined; }[]` | yes |
+| `entries` | `{ packageName: string; entryId: string; label: string; section: "views" \| "tools" \| "utilities"; priority: number; enabled: boolean; metadata?: Record<string, unknown> \| undefined; groupId?: string \| undefined; }[]` | yes |
 
 ### <a id="host:tray.register"></a>`host:tray.register` (rpc)
 
@@ -112,7 +112,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `entry` | `{ packageName: string; entryId: string; label: string; section: "tools" \| "utilities" \| "views"; priority?: number \| undefined; enabled?: boolean \| undefined; metadata?: Record<string, unknown> \| undefined; }` | yes |
+| `entry` | `{ packageName: string; entryId: string; label: string; section: "views" \| "tools" \| "utilities"; priority?: number \| undefined; enabled?: boolean \| undefined; metadata?: Record<string, unknown> \| undefined; }` | yes |
 
 **Response:**
 

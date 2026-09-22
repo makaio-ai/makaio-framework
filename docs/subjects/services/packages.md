@@ -163,7 +163,7 @@ _Empty object._
 
 | Field | Type | Required |
 |-------|------|----------|
-| `packages` | `{ name: string; version: string; hasDescriptor: boolean; description?: string \| undefined; serverImportPath?: string \| undefined; }[]` | yes |
+| `packages` | `{ name: string; version: string; hasDescriptor: boolean; description?: string \| undefined; descriptorName?: string \| undefined; serverImportPath?: string \| undefined; critical?: boolean \| undefined; }[]` | yes |
 
 ### <a id="packages.uninstall"></a>`packages.uninstall` (rpc)
 

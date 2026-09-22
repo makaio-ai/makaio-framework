@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { isGitIgnoredSync } from 'globby';
 import * as ts from 'typescript';
 
 import { isFrameworkDistributionRoot, relativeInventoryPath } from './path-utils.js';
@@ -8,6 +9,15 @@ import type { NamespaceTier } from './types.js';
 /**
  * Creates a TS program from the analysis root tsconfig.json.
  * This gives us access to the full type checker across the selected analysis root.
+ *
+ * `tsconfig.json`'s `exclude` list only knows about static path globs, so it
+ * cannot see gitignored build outputs (e.g. an Electrobun app bundle) that
+ * happen to fall under `include`. Those directories are not source — they are
+ * regenerated artifacts that can embed a stale, minified copy of any bus
+ * namespace registration — so this filters `rootNames` through the same
+ * gitignore-aware predicate the repo's other file scans use (see
+ * `scripts/lib/validate/util/file-resolver.ts`) before handing them to the
+ * TS compiler.
  * @param analysisRoot - Absolute path to the analysis root directory.
  * @returns A TypeScript `Program` covering all workspace source files.
  */
@@ -27,8 +37,11 @@ export function createAnalysisProgram(analysisRoot: string): ts.Program {
     throw new Error(`Failed to parse tsconfig.json: ${parsed.errors.map(formatDiagnosticMessage).join('\n')}`);
   }
 
+  const isGitIgnored = isGitIgnoredSync({ cwd: analysisRoot });
+  const rootNames = parsed.fileNames.filter((fileName) => !isGitIgnored(fileName));
+
   return ts.createProgram({
-    rootNames: parsed.fileNames,
+    rootNames,
     options: { ...parsed.options, noEmit: true },
   });
 }
