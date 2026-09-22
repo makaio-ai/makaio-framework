@@ -26,6 +26,7 @@
     "./config": "./src/config/index.ts",
     "./canonical-model": "./src/canonical-model/index.ts",
     "./capabilities": "./src/capabilities/index.ts",
+    "./context-projection": "./src/context-projection/index.ts",
     "./harness": "./src/harness/index.ts",
     "./host": "./src/host/index.ts",
     "./extension": "./src/extension/index.ts",
@@ -120,6 +121,10 @@
       "./capabilities": {
         "types": "./dist/capabilities/index.d.ts",
         "default": "./dist/capabilities/index.mjs"
+      },
+      "./context-projection": {
+        "types": "./dist/context-projection/index.d.ts",
+        "default": "./dist/context-projection/index.mjs"
       },
       "./harness": {
         "types": "./dist/harness/index.d.ts",
