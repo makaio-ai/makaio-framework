@@ -80,6 +80,8 @@ export type {
   ExtensionConfigComponentProps,
   ExtensionConfigComponentLoader,
   ExtensionFieldTypeLoader,
+  ExtensionFieldTypeRegistration,
+  ExtensionFieldTypeEntry,
   ExtensionOperatorConfigProvenance,
 } from './web-ui-types.js';
 

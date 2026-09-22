@@ -19,10 +19,10 @@ export type BuiltinWidget = 'tags' | 'textarea-array' | 'password' | 'slider' | 
  * Plugin widget registry - augment to add custom widgets.
  * @example Augmenting from a plugin
  * ```typescript
- * // extensions/loop/src/types.ts
+ * // extensions/my-extension/src/types.ts
  * declare module '@makaio/contracts' {
  *   interface PluginWidgetRegistry {
- *     'success-criteria': true;
+ *     'star-rating': true;
  *   }
  * }
  * ```
@@ -187,8 +187,8 @@ export type EntityUIConfig = z.infer<typeof EntityUIConfigSchema>;
  * controls continue to use `type: 'number'` with `widget: 'slider'`.
  *
  * Use `'custom'` when field rendering is fully delegated to the widget
- * specified in `widget` — SchemaForm will route the field to the registered
- * widget and ignore the type for rendering purposes.
+ * specified in `widget` — the host-owned form layout routes the field to the
+ * registered widget and ignores the type for rendering purposes.
  */
 export type FieldType = 'text' | 'password' | 'number' | 'boolean' | 'select' | 'array' | 'custom';
 
@@ -257,12 +257,38 @@ export type FieldDefinition = StandardFieldDefinition | CustomFieldDefinition;
  * Defines the contract between the form rendering infrastructure and
  * individual field components. Both framework extensions and host UI
  * implement components that accept this interface.
+ *
+ * ### Control id contract
+ *
+ * The host-owned form layout/shell owns label rendering for single-control
+ * field types: it sets {@link controlId} and targets it with
+ * `<label htmlFor>`. Components **must** set this id on their focusable
+ * control (`id={controlId ?? inputId ?? field.key}`, where `inputId` is a
+ * component-local prop some field components additionally accept for
+ * standalone usage without a shell); a component that ignores `controlId`
+ * renders with a dangling `htmlFor` and an unlabelled control. Composite
+ * field types, which render more than one control and therefore have no
+ * single element `controlId` could target, opt out by declaring
+ * `composite: true` in their `ExtensionFieldTypeRegistration` contribution
+ * metadata and are named through `aria-labelledby` on a wrapping group
+ * instead — the shell does not set `controlId` for those field types.
+ *
+ * ### Error ownership
+ *
+ * Components render their control only; the validation error message,
+ * like the label and description, belongs to the owning form layout. A
+ * component therefore receives the invalid *state* ({@link invalid}) and the
+ * id of the message element ({@link describedById}), never the message text
+ * — a component that rendered the text as well would display and announce
+ * the same error twice.
  * @param field - Field definition describing what to render
  * @param value - Current value of the field
  * @param onChange - Callback when the field value changes
  * @param className - Optional additional CSS class
- * @param idPrefix - Optional id prefix (defaults to 'field')
- * @param error - Error state message (when present, field shows error styling)
+ * @param idPrefix - Namespace supplied by the owning form layout that every id the component generates internally must carry
+ * @param controlId - Id the component must set on its focusable control, when supplied by the owning form layout
+ * @param invalid - Whether the control should render as invalid for assistive technology
+ * @param describedById - Id(s) of the element(s) that describe this control, forwarded to the control's `aria-describedby`
  */
 export interface FormFieldProps {
   /** Field definition describing what to render. */
@@ -273,8 +299,59 @@ export interface FormFieldProps {
   onChange: (value: unknown) => void;
   /** Optional additional CSS class. */
   className?: string;
-  /** Optional id prefix (defaults to 'field'). */
+  /**
+   * Namespace every DOM id this component generates internally must carry.
+   *
+   * Supplied by the owning form layout, which derives it from its own form
+   * instance, so two layouts rendering the same field definitions on one
+   * page never produce colliding ids. A component that generates ids of its
+   * own — a composite field naming its sub-controls, for instance — must
+   * scope them under this prefix *and* the field key, or those ids collide
+   * across instances even though the shell's own ids do not.
+   *
+   * The prefix is used verbatim, so it is already a valid id fragment
+   * (no whitespace). Anything the component appends to it is not: field
+   * keys and option values are arbitrary strings, where a raw space would
+   * split one id into two dangling references in an
+   * `aria-labelledby`/`aria-describedby` IDREF list, and an unescaped
+   * separator would blur the boundary between id segments. Components
+   * therefore compose ids through the host's shared id encoder rather than
+   * by string concatenation.
+   *
+   * `undefined` for standalone usage without an owning form layout; a
+   * component rendering on its own picks its own per-instance namespace.
+   */
   idPrefix?: string;
-  /** Error message (when present, field shows error styling). */
-  error?: string;
+  /**
+   * Id the component must set on its focusable control (`id={controlId}`),
+   * when supplied by the form layout that owns label rendering — see the
+   * control id contract above. `undefined` for standalone usage without an
+   * owning shell, and for composite field types, which have no single
+   * control this id could target.
+   */
+  controlId?: string;
+  /**
+   * Whether the control should render as invalid for assistive technology
+   * and error styling.
+   *
+   * The validation error *message* is not part of this contract: the owning
+   * form layout renders it (see the error ownership note above) and points
+   * the control at it through {@link describedById}, so a component must
+   * never render the message itself — doing so would show it twice and
+   * announce it twice.
+   */
+  invalid?: boolean;
+  /**
+   * Id(s) of the element(s) that describe this control (error message,
+   * description, provenance hint), space-separated per the
+   * `aria-describedby` attribute contract.
+   *
+   * Set by a form layout that owns description/error rendering outside the
+   * control, for single-control field types only — composite field types
+   * keep their description attached to the surrounding group instead, since
+   * no single control could carry it correctly. Cooperating field
+   * components spread this directly onto their control's
+   * `aria-describedby`.
+   */
+  describedById?: string;
 }

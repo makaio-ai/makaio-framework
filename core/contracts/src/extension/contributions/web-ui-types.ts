@@ -190,6 +190,37 @@ export interface ExtensionConfigComponentProps<TConfig = unknown> {
 export type ExtensionFieldTypeLoader = () => Promise<{ default: ComponentType<FormFieldProps> }>;
 
 /**
+ * Registration metadata paired with a field type's loader.
+ *
+ * Field types that render more than one focusable control (e.g. a grouped
+ * capability picker) have no single element a `<label htmlFor>` could
+ * target. Declaring `composite: true` here tells the host's field registry —
+ * and through it the host-owned form layout/shell — to name the rendered
+ * group through `aria-labelledby` on a wrapping element instead of
+ * associating a label with a single control.
+ */
+export interface ExtensionFieldTypeRegistration {
+  /** Lazy loader for the field type's component. */
+  loader: ExtensionFieldTypeLoader;
+  /**
+   * Whether the field type renders more than one focusable control.
+   * Defaults to `false` — most field types render exactly one control.
+   */
+  composite?: boolean;
+}
+
+/**
+ * A single `fieldTypes` contribution entry.
+ *
+ * Accepts either a bare {@link ExtensionFieldTypeLoader} — the common case,
+ * for field types that render exactly one control — or an
+ * {@link ExtensionFieldTypeRegistration} object for field types that must
+ * declare `composite: true`. Registration code should branch on
+ * `typeof entry === 'function'` to distinguish the two shapes.
+ */
+export type ExtensionFieldTypeEntry = ExtensionFieldTypeLoader | ExtensionFieldTypeRegistration;
+
+/**
  * Async loader for a custom extension configuration component.
  *
  * Must return a module with a default export of a React component that accepts

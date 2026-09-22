@@ -16,7 +16,7 @@ import type {
   MakaioWebUiRoute,
   MakaioWebUiActions,
   ExtensionConfigComponentLoader,
-  ExtensionFieldTypeLoader,
+  ExtensionFieldTypeEntry,
 } from './contributions/web-ui-types.js';
 
 /**
@@ -153,14 +153,25 @@ export interface ExtensionUiContribution {
    *
    * Maps field type identifiers to lazy-loaded React components that accept
    * `FormFieldProps`. Registered with `FormFieldRegistry` on extension load.
-   * @example
+   * Each entry is either a bare loader — for field types that render exactly
+   * one control, the common case — or an
+   * {@link ExtensionFieldTypeRegistration} object declaring `composite: true`
+   * for field types that render more than one focusable control (see
+   * {@link ExtensionFieldTypeEntry}).
+   * @example Single-control field type
    * ```typescript
    * fieldTypes: {
    *   'image-upload': () => import('./ui/ImageUploadField.js'),
    * }
    * ```
+   * @example Composite field type
+   * ```typescript
+   * fieldTypes: {
+   *   'grid-field': { loader: () => import('./ui/GridField.js'), composite: true },
+   * }
+   * ```
    */
-  readonly fieldTypes?: Record<string, ExtensionFieldTypeLoader>;
+  readonly fieldTypes?: Record<string, ExtensionFieldTypeEntry>;
 
   /**
    * Fully custom configuration component loader.
