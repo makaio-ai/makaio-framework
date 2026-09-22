@@ -4,10 +4,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createBusContext, createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { startBusServer, type BusServer } from '@makaio/bus-server';
 import { HostSubjects, type WindowState } from '@makaio/host-shared';
 import { UiSubjects } from '@makaio/ui-kernel';
-import { waitForUiReady } from '../../shared/bus-helpers.js';
+import { WebSocketServer } from 'ws';
+import { connectTestBus, waitForUiReady } from '../../shared/bus-helpers.js';
 import { spawnAndDiscoverPort, type SpawnedProcess } from '../../shared/spawn-helpers.js';
 import {
   removeDesktopE2eHome,
@@ -79,6 +81,44 @@ describe('removeDesktopE2eHome', () => {
       recursive: true,
       retryDelay: 100,
     });
+  });
+});
+
+describe('connectTestBus close diagnostics', () => {
+  it('reports the first real WebSocket close frame through its optional observer', async () => {
+    const webSocketServer = new WebSocketServer({ host: '127.0.0.1', path: '/bus', port: 0 });
+    let busServer: BusServer | undefined;
+    let client: IMakaioBus | undefined;
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        webSocketServer.once('listening', resolve);
+        webSocketServer.once('error', reject);
+      });
+      const address = webSocketServer.address();
+      if (address === null || typeof address === 'string') throw new Error('Failed to resolve test bus port');
+
+      busServer = await startBusServer({
+        bus: createBusInstance({ context: createBusContext() }),
+        websocket: webSocketServer,
+      });
+      const closed = Promise.withResolvers<{ code: number; reason: string }>();
+      client = await connectTestBus(address.port, { onSocketClose: closed.resolve });
+
+      const serverSocket = [...webSocketServer.clients][0];
+      if (serverSocket === undefined) throw new Error('Expected connected test bus socket');
+      serverSocket.close(4100, 'desktop diagnostic');
+
+      await expect(closed.promise).resolves.toEqual({ code: 4100, reason: 'desktop diagnostic' });
+    } finally {
+      client?.disconnect();
+      await busServer?.stop();
+      if (webSocketServer.address() !== null) {
+        await new Promise<void>((resolve, reject) => {
+          webSocketServer.close((error) => (error === undefined ? resolve() : reject(error)));
+        });
+      }
+    }
   });
 });
 

@@ -16,7 +16,13 @@ import type { SurfaceType } from '@makaio/contracts';
 import { HostSubjects } from '@makaio/host-shared';
 import { BootSubjects, ExtensionSubjects, KernelSubjects } from '@makaio/kernel';
 import type { SpawnedProcess } from '../shared/spawn-helpers.js';
-import { connectTestBus, waitForBoot, waitForRuntimeReady, waitForUiReady } from '../shared/bus-helpers.js';
+import {
+  connectTestBus,
+  type TestBusCloseDetails,
+  waitForBoot,
+  waitForRuntimeReady,
+  waitForUiReady,
+} from '../shared/bus-helpers.js';
 import { resolveFreeLoopbackPort } from '../shared/free-port.js';
 import {
   attributeMidBootDependencyReoptimization,
@@ -30,6 +36,14 @@ export type StartMakaioDevDesktopHost = (options: {
   /** Milliseconds to wait for the host to announce its bus port. */
   timeoutMs: number;
 }) => Promise<SpawnedProcess>;
+
+/** One successful desktop test-bus connection and its private close recorder. */
+interface ConnectedDesktopBus {
+  /** Connected test-bus client. */
+  readonly bus: IMakaioBus;
+  /** Returns the first close frame belonging to this connection only. */
+  readonly getSocketClose: () => TestBusCloseDetails | undefined;
+}
 
 /** Options for {@link runMakaioDevDesktopSmoke}. */
 export interface MakaioDevDesktopSmokeOptions {
@@ -97,20 +111,26 @@ export async function removeDesktopE2eHome(homeDir: string, remove: RemoveDirect
  * @param port - Bus server port announced by the host.
  * @param hostLabel - Host label used in diagnostics.
  * @param timeoutMs - Milliseconds to wait before failing.
- * @returns Connected bus client.
+ * @returns Connected bus client and its private close recorder.
  */
 async function connectDesktopBus(
   port: number,
   hostLabel: string,
   timeoutMs: number = STARTUP_TIMEOUT_MS,
-): Promise<IMakaioBus> {
+): Promise<ConnectedDesktopBus> {
   const deadline = Date.now() + timeoutMs;
   let attempt = 0;
 
   while (Date.now() < deadline) {
     attempt += 1;
+    let socketClose: TestBusCloseDetails | undefined;
     try {
-      return await connectTestBus(port);
+      const bus = await connectTestBus(port, {
+        onSocketClose: (details) => {
+          socketClose ??= details;
+        },
+      });
+      return { bus, getSocketClose: () => socketClose };
     } catch (err) {
       console.info(
         '[desktop-e2e:%s] Bus connection attempt %d failed: %s',
@@ -123,6 +143,111 @@ async function connectDesktopBus(
   }
 
   throw new Error(`[desktop-e2e:${hostLabel}] Failed to connect to bus within ${timeoutMs}ms`);
+}
+
+/**
+ * Re-throw a desktop smoke failure with the bounded host output and an observed
+ * test-bus close frame when one is available.
+ * @param error - Original boot or UI-readiness failure.
+ * @param hostOutput - Bounded stdout and stderr captured from the native host.
+ * @param hostLabel - Host label used in the diagnostic prefix.
+ * @param socketClose - First close frame from the connected test bus, if observed.
+ */
+function throwDesktopSmokeFailureDiagnostics(
+  error: unknown,
+  hostOutput: string,
+  hostLabel: string,
+  socketClose: TestBusCloseDetails | undefined,
+): never {
+  try {
+    attributeMidBootDependencyReoptimization(error, hostOutput, hostLabel);
+  } catch (attributedError) {
+    const closeDescription =
+      socketClose === undefined
+        ? 'Test bus socket close: not observed.'
+        : `Test bus socket close: code=${socketClose.code}, reason=${JSON.stringify(socketClose.reason)}.`;
+    throw new Error(
+      `[desktop-e2e:${hostLabel}] Boot or UI readiness failed. ${closeDescription}\nCaptured host output:\n${hostOutput}`,
+      { cause: attributedError },
+    );
+  }
+}
+
+/** Options for the assertions performed after a desktop host has started. */
+interface VerifyDesktopSmokeBootOptions {
+  /** Connected test-bus client. */
+  readonly bus: IMakaioBus;
+  /** Native desktop host. */
+  readonly host: SpawnedProcess;
+  /** Expected active extension. */
+  readonly expectedExtensionName: string;
+  /** Expected opened window registration. */
+  readonly expectedRegistrationId: string;
+  /** Expected renderer UI surface. */
+  readonly expectedUiSurface: Extract<SurfaceType, 'electron' | 'electrobun'>;
+  /** Names of startup failures accepted by this host's smoke test. */
+  readonly allowedFailedServices: readonly string[];
+  /** Host label used in diagnostics. */
+  readonly hostLabel: string;
+  /** Returns the currently observed close frame for the test-bus session. */
+  readonly getSocketClose: () => TestBusCloseDetails | undefined;
+}
+
+/**
+ * Verify that a started desktop host completed boot, opened its window, and
+ * mounted the expected renderer before proceeding to shutdown.
+ * @param options - Started host, test bus, and expected desktop surface.
+ */
+async function verifyDesktopSmokeBoot(options: VerifyDesktopSmokeBootOptions): Promise<void> {
+  const {
+    allowedFailedServices,
+    bus,
+    expectedExtensionName,
+    expectedRegistrationId,
+    expectedUiSurface,
+    getSocketClose,
+    host,
+    hostLabel,
+  } = options;
+  try {
+    const uiReadyPromise = waitForUiReady(bus, expectedUiSurface, host, WINDOW_TIMEOUT_MS);
+    const bootPayload = await waitForBoot(bus, STARTUP_TIMEOUT_MS);
+    expect(Number.isFinite(bootPayload.totalDurationMs)).toBe(true);
+    expect(bootPayload.totalDurationMs).toBeGreaterThanOrEqual(0);
+    expectOnlyAllowedFailedServices(bootPayload.failedServices, allowedFailedServices, hostLabel);
+
+    const bootState = await bus.request(BootSubjects.getState, {});
+    expect(bootState.complete).toBe(true);
+    expect(bootState.completedCount).toBe(bootState.totalCount);
+    expect(bootState.totalCount).toBeGreaterThan(0);
+    expectOnlyAllowedFailedServices(bootState.failedServices, allowedFailedServices, hostLabel);
+
+    const { ready, machineId } = await waitForRuntimeReady(bus, STARTUP_TIMEOUT_MS);
+    expect(ready).toBe(true);
+    expect(machineId.length).toBeGreaterThan(0);
+    const runtimeProbe = await bus.request(KernelSubjects.isReady, {});
+    expect(runtimeProbe.ready).toBe(true);
+    expect(runtimeProbe.machineId).toBe(machineId);
+
+    const extResp = await bus.request(ExtensionSubjects.list, {});
+    const { extensions } = extResp as { extensions: Array<{ name: string; state: string }> };
+    expect(extensions.find((extension) => extension.name === expectedExtensionName)?.state).toBe('active');
+
+    const openedWindow = await waitForWindowRegistration(bus, expectedRegistrationId, hostLabel);
+    expect(openedWindow.registrationId).toBe(expectedRegistrationId);
+    expect(openedWindow.windowId).toBeGreaterThan(0);
+    const { windows } = await bus.request(HostSubjects.window.list, {});
+    expect(windows.length).toBeGreaterThanOrEqual(1);
+    const mainWindow = windows.find((window) => window.registrationId === expectedRegistrationId);
+    expect(mainWindow).toBeDefined();
+    expect(mainWindow!.windowId).toBe(openedWindow.windowId);
+
+    const uiReady = await uiReadyPromise;
+    expect(uiReady.surface).toBe(expectedUiSurface);
+    expect(uiReady.timestamp).toBeGreaterThan(0);
+  } catch (error) {
+    throwDesktopSmokeFailureDiagnostics(error, host.getOutput(), hostLabel, getSocketClose());
+  }
 }
 
 /**
@@ -211,55 +336,22 @@ export async function runMakaioDevDesktopSmoke(options: MakaioDevDesktopSmokeOpt
     console.info('[desktop-e2e:%s] Host started, bus port: %d', hostLabel, startedHost.port);
     expect(startedHost.port).toBe(hostPort);
 
-    bus = await connectDesktopBus(startedHost.port, hostLabel);
+    const connectedBus = await connectDesktopBus(startedHost.port, hostLabel);
+    bus = connectedBus.bus;
     console.info('[desktop-e2e:%s] Bus connected on port %d', hostLabel, startedHost.port);
 
     // A mid-boot re-optimization reloads the renderer and can crash the
-    // webview, which makes the boot/wait sequence below time out before the
-    // success-path drift guard runs. Attribute such failures from the
-    // captured host output so the drift diagnostic survives the error path.
-    try {
-      const uiReadyPromise = waitForUiReady(bus, expectedUiSurface, startedHost, WINDOW_TIMEOUT_MS);
-
-      const bootPayload = await waitForBoot(bus, STARTUP_TIMEOUT_MS);
-      expect(Number.isFinite(bootPayload.totalDurationMs)).toBe(true);
-      expect(bootPayload.totalDurationMs).toBeGreaterThanOrEqual(0);
-      expectOnlyAllowedFailedServices(bootPayload.failedServices, allowedFailedServices, hostLabel);
-
-      const bootState = await bus.request(BootSubjects.getState, {});
-      expect(bootState.complete).toBe(true);
-      expect(bootState.completedCount).toBe(bootState.totalCount);
-      expect(bootState.totalCount).toBeGreaterThan(0);
-      expectOnlyAllowedFailedServices(bootState.failedServices, allowedFailedServices, hostLabel);
-
-      const { ready, machineId } = await waitForRuntimeReady(bus, STARTUP_TIMEOUT_MS);
-      expect(ready).toBe(true);
-      expect(machineId.length).toBeGreaterThan(0);
-
-      const runtimeProbe = await bus.request(KernelSubjects.isReady, {});
-      expect(runtimeProbe.ready).toBe(true);
-      expect(runtimeProbe.machineId).toBe(machineId);
-
-      const extResp = await bus.request(ExtensionSubjects.list, {});
-      const { extensions } = extResp as { extensions: Array<{ name: string; state: string }> };
-      expect(extensions.find((extension) => extension.name === expectedExtensionName)?.state).toBe('active');
-
-      const openedWindow = await waitForWindowRegistration(bus, expectedRegistrationId, hostLabel);
-      expect(openedWindow.registrationId).toBe(expectedRegistrationId);
-      expect(openedWindow.windowId).toBeGreaterThan(0);
-
-      const { windows } = await bus.request(HostSubjects.window.list, {});
-      expect(windows.length).toBeGreaterThanOrEqual(1);
-      const mainWindow = windows.find((window) => window.registrationId === expectedRegistrationId);
-      expect(mainWindow).toBeDefined();
-      expect(mainWindow!.windowId).toBe(openedWindow.windowId);
-
-      const uiReady = await uiReadyPromise;
-      expect(uiReady.surface).toBe(expectedUiSurface);
-      expect(uiReady.timestamp).toBeGreaterThan(0);
-    } catch (error) {
-      attributeMidBootDependencyReoptimization(error, startedHost.getOutput(), hostLabel);
-    }
+    // webview. The assertion helper retains host and socket diagnostics.
+    await verifyDesktopSmokeBoot({
+      allowedFailedServices,
+      bus,
+      expectedExtensionName,
+      expectedRegistrationId,
+      expectedUiSurface,
+      getSocketClose: connectedBus.getSocketClose,
+      host: startedHost,
+      hostLabel,
+    });
 
     expectNoMidBootDependencyReoptimization(startedHost.getOutput(), hostLabel);
 
