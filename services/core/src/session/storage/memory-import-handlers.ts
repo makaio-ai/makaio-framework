@@ -12,6 +12,7 @@ type CloneSession = (session: IMakaioSession) => IMakaioSession;
 interface MemoryImportHandlerDeps {
   bus: IMakaioBus;
   store: Map<string, IMakaioSession>;
+  sessionOwnerPrincipalIds: Map<string, string>;
   populateAgents: PopulateAgents;
   cloneSession: CloneSession;
 }
@@ -429,12 +430,80 @@ function registerMemoryRebindObservedHandler(bus: IMakaioBus, store: Map<string,
 }
 
 /**
+ * Register the in-memory owned-import registration handler.
+ *
+ * Existing import rows are observed only: this operation never applies import
+ * convergence, so a caller cannot enrich a row it does not own.
+ * @param bus - Bus instance
+ * @param store - In-memory session store
+ * @param sessionOwnerPrincipalIds - Owner principal IDs keyed by session ID
+ * @returns Cleanup function to unsubscribe the handler
+ */
+function registerMemoryOwnedImportHandler(
+  bus: IMakaioBus,
+  store: Map<string, IMakaioSession>,
+  sessionOwnerPrincipalIds: Map<string, string>,
+): () => void {
+  return bus.on(SessionStorageSubjects.registerOwnedImport, (ctx) => {
+    const payload = structuredClone(ctx.payload);
+    const existing = findByImportIdentity(store, payload.import.source, payload.import.externalSessionId);
+    if (existing) {
+      const ownerPrincipalId = sessionOwnerPrincipalIds.get(existing.sessionId);
+      if (ownerPrincipalId === undefined) {
+        ctx.setResult({ outcome: 'unowned' });
+      } else if (ownerPrincipalId === payload.ownerPrincipalId) {
+        ctx.setResult({ outcome: 'owned', sessionId: existing.sessionId });
+      } else {
+        ctx.setResult({ outcome: 'foreign' });
+      }
+      return;
+    }
+
+    const session = createImportedSession(payload.import, crypto.randomUUID(), nextDiscoveredAt());
+    store.set(session.sessionId, session);
+    sessionOwnerPrincipalIds.set(session.sessionId, payload.ownerPrincipalId);
+    resolveMemoryImportParent(store, session);
+    emitMemoryImportUpsertLifecycle(bus, session, true);
+    ctx.setResult({ outcome: 'created', sessionId: session.sessionId });
+  });
+}
+
+/**
+ * Register the in-memory owner-verification handler.
+ * @param bus - Bus instance
+ * @param store - In-memory session store
+ * @param sessionOwnerPrincipalIds - Owner principal IDs keyed by session ID
+ * @returns Cleanup function to unsubscribe the handler
+ */
+function registerMemoryVerifyOwnerHandler(
+  bus: IMakaioBus,
+  store: Map<string, IMakaioSession>,
+  sessionOwnerPrincipalIds: Map<string, string>,
+): () => void {
+  return bus.on(SessionStorageSubjects.verifyOwner, (ctx) => {
+    const session = store.get(ctx.payload.sessionId);
+    if (!session) {
+      ctx.setResult({ outcome: 'missing' });
+      return;
+    }
+    const ownerPrincipalId = sessionOwnerPrincipalIds.get(session.sessionId);
+    if (ownerPrincipalId === undefined) {
+      ctx.setResult({ outcome: 'unowned' });
+    } else if (ownerPrincipalId === ctx.payload.ownerPrincipalId) {
+      ctx.setResult({ outcome: 'owned' });
+    } else {
+      ctx.setResult({ outcome: 'foreign' });
+    }
+  });
+}
+
+/**
  * Register in-memory import-specific session storage handlers.
  * @param deps - Handler dependencies
  * @returns Cleanup functions for import handlers
  */
 export function registerMemorySessionImportHandlers(deps: MemoryImportHandlerDeps): Array<() => void> {
-  const { bus, store, cloneSession, populateAgents } = deps;
+  const { bus, store, sessionOwnerPrincipalIds, cloneSession, populateAgents } = deps;
   return [
     bus.on(SessionStorageSubjects.importUpsert, (ctx) => {
       // Import metadata is stored on newly created rows and can contain nested
@@ -459,6 +528,8 @@ export function registerMemorySessionImportHandlers(deps: MemoryImportHandlerDep
       emitMemoryImportUpsertLifecycle(bus, session, created);
       ctx.setResult({ sessionId: session.sessionId, created });
     }),
+    registerMemoryOwnedImportHandler(bus, store, sessionOwnerPrincipalIds),
+    registerMemoryVerifyOwnerHandler(bus, store, sessionOwnerPrincipalIds),
     registerMemoryRebindObservedHandler(bus, store),
     bus.on(SessionStorageSubjects.getByLogFilePath, async (ctx) => {
       const session = Array.from(store.values()).find((candidate) => candidate.logFilePath === ctx.payload.logFilePath);

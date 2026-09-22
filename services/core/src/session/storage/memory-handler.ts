@@ -353,6 +353,7 @@ export function registerMemorySessionStorage(
         state,
         (claim) => claim.sessionId === ctx.payload.sessionId || orphanedAgentIds.has(claim.agentId),
       );
+      state.sessionOwnerPrincipalIds.delete(ctx.payload.sessionId);
       store.delete(ctx.payload.sessionId);
       ctx.setResult({ success: true });
       await ctx.next();
@@ -400,7 +401,15 @@ export function registerMemorySessionStorage(
 
   // storage:session.getByAdapterSessionId
   unsubs.push(registerGetByAdapterSessionIdHandler(bus, store));
-  unsubs.push(...registerMemorySessionImportHandlers({ bus, store, populateAgents, cloneSession }));
+  unsubs.push(
+    ...registerMemorySessionImportHandlers({
+      bus,
+      store,
+      sessionOwnerPrincipalIds: state.sessionOwnerPrincipalIds,
+      populateAgents,
+      cloneSession,
+    }),
+  );
 
   return () => unsubs.forEach((fn) => fn());
 }

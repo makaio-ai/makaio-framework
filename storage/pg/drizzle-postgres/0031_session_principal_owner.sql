@@ -1,0 +1,1 @@
+ALTER TABLE "sessions" ADD COLUMN "owner_principal_id" text;

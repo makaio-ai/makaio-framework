@@ -390,6 +390,74 @@ export const ImportUpsertRequestSchema = z.discriminatedUnion('kind', [
 
 export type ImportUpsertRequest = z.infer<typeof ImportUpsertRequestSchema>;
 
+/** Stable identity of the principal that owns an imported session. */
+const OwnerPrincipalIdSchema = z.string().trim().min(1).max(256);
+
+/**
+ * Atomically create an imported session for a principal, or verify the
+ * principal already owns the matching row without enriching that row.
+ */
+export const SessionStorageRegisterOwnedImportRequestSchema = z.object({
+  ownerPrincipalId: OwnerPrincipalIdSchema,
+  import: ImportUpsertRequestSchema,
+});
+
+export type SessionStorageRegisterOwnedImportRequest = z.infer<typeof SessionStorageRegisterOwnedImportRequestSchema>;
+
+/**
+ * Outcome of atomically registering a principal-owned imported session.
+ *
+ * Ownership identities remain storage-private; callers receive only their
+ * relationship to the row and never the stored owner principal ID.
+ */
+export const SessionStorageRegisterOwnedImportResponseSchema = z.discriminatedUnion('outcome', [
+  z.object({
+    outcome: z.literal('created'),
+    sessionId: z.string(),
+  }),
+  z.object({
+    outcome: z.literal('owned'),
+    sessionId: z.string(),
+  }),
+  z.object({
+    outcome: z.literal('unowned'),
+  }),
+  z.object({
+    outcome: z.literal('foreign'),
+  }),
+  z.object({
+    outcome: z.literal('missing'),
+  }),
+]);
+
+export type SessionStorageRegisterOwnedImportResult = z.infer<typeof SessionStorageRegisterOwnedImportResponseSchema>;
+
+/** Verify whether a principal owns a stored session without disclosing its owner. */
+export const SessionStorageVerifyOwnerRequestSchema = z.object({
+  sessionId: z.string(),
+  ownerPrincipalId: OwnerPrincipalIdSchema,
+});
+
+export type SessionStorageVerifyOwnerRequest = z.infer<typeof SessionStorageVerifyOwnerRequestSchema>;
+
+/** Ownership relationship of a principal to a stored session. */
+export const SessionStorageVerifyOwnerResponseSchema = z.discriminatedUnion('outcome', [
+  z.object({
+    outcome: z.literal('owned'),
+  }),
+  z.object({
+    outcome: z.literal('unowned'),
+  }),
+  z.object({
+    outcome: z.literal('foreign'),
+  }),
+  z.object({
+    outcome: z.literal('missing'),
+  }),
+]);
+
+export type SessionStorageVerifyOwnerResult = z.infer<typeof SessionStorageVerifyOwnerResponseSchema>;
+
 // ─── Observed rebind schemas ────────────────────────────────────────────────
 
 /**
@@ -664,6 +732,31 @@ export const SessionStorageNamespace = createContractStorageNamespace('session',
         /** Whether a new session record was created during this call. */
         created: z.boolean(),
       }),
+    },
+
+    /**
+     * Atomically register an imported session to a principal, creating the row
+     * only when absent. An existing row is checked but never enriched or
+     * otherwise modified by this operation.
+     *
+     * Subject: `storage:session.registerOwnedImport`
+     * Type: Request (RPC)
+     */
+    registerOwnedImport: {
+      request: SessionStorageRegisterOwnedImportRequestSchema,
+      response: SessionStorageRegisterOwnedImportResponseSchema,
+    },
+
+    /**
+     * Verify a principal's relationship to a session without disclosing the
+     * session's stored owner.
+     *
+     * Subject: `storage:session.verifyOwner`
+     * Type: Request (RPC)
+     */
+    verifyOwner: {
+      request: SessionStorageVerifyOwnerRequestSchema,
+      response: SessionStorageVerifyOwnerResponseSchema,
     },
 
     /**

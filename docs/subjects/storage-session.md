@@ -33,10 +33,12 @@ next: false
 | `list` | [`storage:session.list`](#storage:session.list) | rpc | — |
 | `listImported` | [`storage:session.listImported`](#storage:session.listImported) | rpc | — |
 | `rebindObserved` | [`storage:session.rebindObserved`](#storage:session.rebindObserved) | rpc | — |
+| `registerOwnedImport` | [`storage:session.registerOwnedImport`](#storage:session.registerOwnedImport) | rpc | — |
 | `search` | [`storage:session.search`](#storage:session.search) | rpc | — |
 | `set` | [`storage:session.set`](#storage:session.set) | rpc | — |
 | `update` | [`storage:session.update`](#storage:session.update) | rpc | — |
 | `updateImportStatus` | [`storage:session.updateImportStatus`](#storage:session.updateImportStatus) | rpc | — |
+| `verifyOwner` | [`storage:session.verifyOwner`](#storage:session.verifyOwner) | rpc | — |
 
 ## Subject Details
 
@@ -295,6 +297,29 @@ Type: Request (RPC)
 | `outcome` | `"rebound" \| "not-found"` | yes |
 | `sessionId` | `string \| undefined` | no |
 
+### <a id="storage:session.registerOwnedImport"></a>`storage:session.registerOwnedImport` (rpc)
+
+Atomically register an imported session to a principal, creating the row
+only when absent. An existing row is checked but never enriched or
+otherwise modified by this operation.
+
+Subject: `storage:session.registerOwnedImport`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `import` | `{ externalSessionId: string; source: string; cwd: string \| null; kind: "root"; parentAdapterSessionId: null; forkPointMessageId: null; clientId?: string \| undefined; adapterId?: string \| undefined; logFilePath?: string \| null \| undefined; startedAt?: number \| undefined; title?: string \| null \| undefined; metadata?: Record<string, JsonValue> \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; importStatus?: "discovered" \| "tracking" \| undefined; activation?: "live" \| undefined; isSidechain?: boolean \| undefined; machineId?: string \| null \| undefined; } \| { externalSessionId: string; source: string; cwd: string \| null; kind: "fork"; parentAdapterSessionId: string; forkPointMessageId: string \| null; clientId?: string \| undefined; adapterId?: string \| undefined; logFilePath?: string \| null \| undefined; startedAt?: number \| undefined; title?: string \| null \| undefined; metadata?: Record<string, JsonValue> \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; importStatus?: "discovered" \| "tracking" \| undefined; activation?: "live" \| undefined; isSidechain?: boolean \| undefined; machineId?: string \| null \| undefined; } \| { externalSessionId: string; source: string; cwd: string \| null; kind: "subagent"; parentAdapterSessionId: string; forkPointMessageId: null; clientId?: string \| undefined; adapterId?: string \| undefined; logFilePath?: string \| null \| undefined; startedAt?: number \| undefined; title?: string \| null \| undefined; metadata?: Record<string, JsonValue> \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; importStatus?: "discovered" \| "tracking" \| undefined; activation?: "live" \| undefined; isSidechain?: boolean \| undefined; machineId?: string \| null \| undefined; } \| { externalSessionId: string; source: string; cwd: string \| null; kind: "compress"; parentAdapterSessionId: string; forkPointMessageId: null; clientId?: string \| undefined; adapterId?: string \| undefined; logFilePath?: string \| null \| undefined; startedAt?: number \| undefined; title?: string \| null \| undefined; metadata?: Record<string, JsonValue> \| undefined; lastClientIdentityObservation?: { clientId: string; source: string; kind: string; observedAt: number; payload: Record<string, unknown>; } \| undefined; importStatus?: "discovered" \| "tracking" \| undefined; activation?: "live" \| undefined; isSidechain?: boolean \| undefined; machineId?: string \| null \| undefined; }` | yes |
+| `ownerPrincipalId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `outcome` | `"created" \| "owned" \| "unowned" \| "foreign" \| "missing"` | yes |
+| `sessionId` | `string \| undefined` | no |
+
 ### <a id="storage:session.search"></a>`storage:session.search` (rpc)
 
 Search sessions by message content (full-text: FTS5 on SQLite,
@@ -405,6 +430,27 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `success` | `boolean` | yes |
+
+### <a id="storage:session.verifyOwner"></a>`storage:session.verifyOwner` (rpc)
+
+Verify a principal's relationship to a session without disclosing the
+session's stored owner.
+
+Subject: `storage:session.verifyOwner`
+Type: Request (RPC)
+
+**Request:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `ownerPrincipalId` | `string` | yes |
+| `sessionId` | `string` | yes |
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `outcome` | `"owned" \| "unowned" \| "foreign" \| "missing"` | yes |
 
 ---
 

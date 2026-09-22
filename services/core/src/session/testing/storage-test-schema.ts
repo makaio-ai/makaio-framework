@@ -58,7 +58,8 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
         OR import_status IN ('discovered', 'imported', 'tracking')
       ),
       is_sidechain INTEGER,
-      machine_id TEXT
+      machine_id TEXT,
+      owner_principal_id TEXT
     )
   `,
   sql`CREATE UNIQUE INDEX IF NOT EXISTS uniq_sessions_source_adapter_session_id ON sessions(source, adapter_session_id)`,
