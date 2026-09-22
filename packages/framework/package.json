@@ -149,6 +149,10 @@
       "types": "./dist/contracts/capabilities/index.d.mts",
       "default": "./dist/contracts/capabilities/index.mjs"
     },
+    "./contracts/context-projection": {
+      "types": "./dist/contracts/context-projection/index.d.mts",
+      "default": "./dist/contracts/context-projection/index.mjs"
+    },
     "./contracts/extension": {
       "types": "./dist/contracts/extension/index.d.mts",
       "default": "./dist/contracts/extension/index.mjs"
@@ -260,6 +264,10 @@
     "./services/code-execution": {
       "types": "./dist/services/code-execution/index.d.mts",
       "default": "./dist/services/code-execution/index.mjs"
+    },
+    "./services/context-projection": {
+      "types": "./dist/services/context-projection/index.d.mts",
+      "default": "./dist/services/context-projection/index.mjs"
     },
     "./services/materialization": {
       "types": "./dist/services/materialization/index.d.mts",
