@@ -42,6 +42,23 @@ export interface WebSocketClientTransportHeartbeatOptions {
 }
 
 /**
+ * What "ready" means for a `WebSocketClientTransport`.
+ *
+ * The bus gates request dispatch on a transport's `ready` promise, so the mode
+ * must describe a milestone the peer can actually deliver.
+ *
+ * - `'peer-sync'` — ready once the peer's `subscribe-sync-complete` handshake
+ *   arrives, meaning its remote handler routes have been advertised to this
+ *   node. Only a Makaio bus server answers that handshake.
+ * - `'session-established'` — ready once this transport's own session is up:
+ *   socket open, authentication complete and buffered subscriptions replayed.
+ *   For a relay-backed peer that forwards frames without participating in bus
+ *   routing, this is the strongest promise the connection can honestly make;
+ *   declaring `'peer-sync'` there would leave `ready` pending forever.
+ */
+export type WebSocketClientTransportReadinessMode = 'peer-sync' | 'session-established';
+
+/**
  * Configuration options for `WebSocketClientTransport`.
  */
 export interface WebSocketClientTransportOptions {
@@ -64,6 +81,17 @@ export interface WebSocketClientTransportOptions {
    * Authentication strategy for HMAC or E2E handshakes.
    */
   auth?: TransportAuth;
+
+  /**
+   * Milestone at which this transport's `ready` promise resolves.
+   *
+   * Leave at the default when connecting to a Makaio bus server. Set
+   * `'session-established'` when the peer relays frames without answering the
+   * `subscribe-sync-complete` handshake, so `ready` reports the session this
+   * connection actually establishes instead of one the peer never confirms.
+   * @defaultValue 'peer-sync'
+   */
+  readiness?: WebSocketClientTransportReadinessMode;
 
   /**
    * Wire codec for encryption or custom framing.
@@ -165,6 +193,15 @@ export interface WebSocketClientTransportOptions {
  * not supplied.
  */
 export const DEFAULT_CONNECT_TIMEOUT_MS = 30_000;
+
+/**
+ * Default readiness milestone.
+ *
+ * Applied when {@link WebSocketClientTransportOptions.readiness} is not
+ * supplied: the peer is assumed to be a Makaio bus server that answers the
+ * `subscribe-sync-complete` handshake.
+ */
+export const DEFAULT_READINESS_MODE: WebSocketClientTransportReadinessMode = 'peer-sync';
 
 /**
  * Default heartbeat watchdog timing.

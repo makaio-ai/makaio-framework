@@ -22,10 +22,12 @@ import { type WebSocketClientTransportReconnectOptions } from './ws-client-recon
 import {
   DEFAULT_CODEC,
   DEFAULT_CONNECT_TIMEOUT_MS,
+  DEFAULT_READINESS_MODE,
   resolveHeartbeatConfig,
   resolveReconnectConfig,
   type WebSocketClientTransportHeartbeatOptions,
   type WebSocketClientTransportOptions,
+  type WebSocketClientTransportReadinessMode,
 } from './ws-client-options.js';
 import {
   connectOnce,
@@ -42,7 +44,11 @@ import { sendClientMessage } from './ws-client-send.js';
 
 // Re-export public types so that consumers and index.ts can import them
 // from this module's path without needing to know the sub-module layout.
-export type { WebSocketClientTransportHeartbeatOptions, WebSocketClientTransportOptions } from './ws-client-options.js';
+export type {
+  WebSocketClientTransportHeartbeatOptions,
+  WebSocketClientTransportOptions,
+  WebSocketClientTransportReadinessMode,
+} from './ws-client-options.js';
 export type { WebSocketClientTransportReconnectOptions } from './ws-client-reconnect.js';
 
 /**
@@ -69,6 +75,7 @@ export class WebSocketClientTransport implements BusTransport {
   private readonly autoReconnectConfig: Required<WebSocketClientTransportReconnectOptions> | false;
   private readonly heartbeatConfig: Required<WebSocketClientTransportHeartbeatOptions> | false;
   private readonly connectTimeoutMs: number;
+  private readonly readiness: WebSocketClientTransportReadinessMode;
   private readonly wsFactory: (url: string) => WebSocketLike | Promise<WebSocketLike>;
   private readonly debug: boolean;
   private readonly onConnectedCallback: (() => void) | undefined;
@@ -112,7 +119,13 @@ export class WebSocketClientTransport implements BusTransport {
   /** Resolver for the current ready promise; `null` once resolved. */
   private readyResolve: (() => void) | null = null;
 
-  /** Resolves when the subscribe-sync-complete handshake is received; reset on each reconnect. */
+  /**
+   * Resolves at the milestone selected by the `readiness` option; reset on each reconnect.
+   *
+   * Under `'peer-sync'` (the default) that is the inbound `subscribe-sync-complete`
+   * handshake; under `'session-established'` it is this side's own session coming up.
+   * Also resolved on disconnect so a dropped connection never gates bus dispatch.
+   */
   public ready: Promise<void>;
 
   /** Set by the transport registry to track each session's ready promise for dispatch gating. */
@@ -146,6 +159,7 @@ export class WebSocketClientTransport implements BusTransport {
     this.autoReconnectConfig = resolveReconnectConfig(options.autoReconnect);
     this.heartbeatConfig = resolveHeartbeatConfig(options.heartbeat);
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+    this.readiness = options.readiness ?? DEFAULT_READINESS_MODE;
     this.wsFactory = options.createWebSocket ?? this.defaultWsFactory;
     this.onConnectedCallback = options.onConnected;
     this.onDisconnectedCallback = options.onDisconnected;
@@ -472,6 +486,7 @@ export class WebSocketClientTransport implements BusTransport {
       wsFactory: this.wsFactory,
       url: this.url,
       connectTimeoutMs: this.connectTimeoutMs,
+      readiness: this.readiness,
       heartbeat: this.heartbeatConfig,
       getSocket: () => this.socket,
       setSocket: (ws, failure) => {

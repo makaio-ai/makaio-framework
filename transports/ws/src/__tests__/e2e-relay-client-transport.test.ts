@@ -8,7 +8,7 @@ import { E2ERelayAuth } from '../auth/e2e-relay-auth.js';
 import { generateSigningKeyPair } from '../crypto/ecdsa.js';
 import { decryptRelayEnvelope, encryptRelayEnvelope, type RelayEnvelopeMessage } from '../e2e-relay-envelope.js';
 import { createRelayControlRegistry } from '../relay-control-registry.js';
-import { MockWebSocket, createRelayAuthPairRaw } from './test-helpers.js';
+import { MockWebSocket, createRelayAuthPair, createRelayAuthPairRaw } from './test-helpers.js';
 import { buildRelayControlTestRegistry, createRelayControlTestHelpers } from './relay-control-test-registry.js';
 import { waitForCondition } from './test-utils.js';
 
@@ -49,6 +49,36 @@ async function createUnauthenticatedRelayCodec(
   });
   return createE2ERelayCodec(e2eAuth, testRegistry).codec;
 }
+
+describe('createE2ERelayCodec — subscribe-sync-complete is unreachable', () => {
+  // A relay-backed leg cannot resolve `ready` from the bus peer-sync handshake: the
+  // codec refuses that frame in both session states, so `onSyncComplete` is never
+  // reached. This is the evidence behind `readiness: 'session-established'` on every
+  // relay-backed client transport; pinning it stops a revert to 'peer-sync' that would
+  // leave `ready` pending for the connection's lifetime.
+  const syncComplete = { type: 'subscribe-sync-complete' } as const;
+
+  it('rejects the frame before an E2E session exists (not in the plaintext-allowed set)', async () => {
+    const codec = await createUnauthenticatedRelayCodec('device-no-session');
+
+    await expect(codec.decode(syncComplete)).rejects.toThrow('E2E relay session not established');
+  });
+
+  it('rejects the frame once an E2E session exists (plaintext on an encrypted channel)', async () => {
+    const { initiator } = await createRelayAuthPair({ deviceId: 'device-sync', machineId: 'machine-sync' });
+    const { codec } = createE2ERelayCodec(initiator, testRegistry);
+
+    await expect(codec.decode(syncComplete)).rejects.toThrow(/plaintext message on relay E2E channel/);
+  });
+
+  it('refuses to encode the frame without a session, so no peer can ever receive it', async () => {
+    const codec = await createUnauthenticatedRelayCodec('device-encode');
+
+    // `subscribe` / `unsubscribe` / `subscription-ack` are the only frames allowed
+    // through in the clear; the sync handshake is not among them.
+    await expect(codec.encode(syncComplete as never)).rejects.toThrow('E2E relay session not established');
+  });
+});
 
 describe('createE2ERelayClientTransport', () => {
   it('fails immediately when constructed with a mutable relay control registry', async () => {

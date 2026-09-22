@@ -1857,6 +1857,36 @@ describe('inbound request response-route lifetime', () => {
     expect(registry.consumeResponseClient('no-timeout')).toBe(requester);
   });
 
+  it('tracks the response route when the sender minted a deadline already in the past', () => {
+    // A client whose clock trails the server by more than the timeout sends a wire
+    // deadline that is already past here, while `timeout` still carries the real
+    // remaining budget. Comparing that instant against our clock would drop the route
+    // and strand the response with no socket to return to.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    const registry = new ClientRegistry();
+    const requester = new MockWebSocket();
+    registry.addClient(requester);
+
+    registry.trackRequestOrigin(requester, makeRequest('skewed-sender', 30_000, Date.now() - 120_000));
+    vi.advanceTimersByTime(29_000);
+
+    expect(registry.consumeResponseClient('skewed-sender')).toBe(requester);
+  });
+
+  it('expires that route on its own relative budget rather than the sender instant', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+    const registry = new ClientRegistry();
+    const requester = new MockWebSocket();
+    registry.addClient(requester);
+
+    registry.trackRequestOrigin(requester, makeRequest('skewed-expiry', 50, Date.now() - 120_000));
+    vi.advanceTimersByTime(50);
+
+    expect(registry.consumeResponseClient('skewed-expiry')).toBeUndefined();
+  });
+
   it('removes a cancelled request response route', () => {
     const registry = new ClientRegistry();
     const requester = new MockWebSocket();

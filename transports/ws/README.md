@@ -131,6 +131,31 @@ const transport = new WebSocketClientTransport({
 });
 ```
 
+### Readiness
+
+`WebSocketClientTransport.ready` is the promise the bus dispatch readiness gate waits on, so it
+must describe a milestone the peer can actually deliver. The `readiness` option selects it:
+
+- `'peer-sync'` (default) — resolves when the peer's `subscribe-sync-complete` frame arrives,
+  meaning its handler routes have been advertised. Correct for a Makaio bus server peer.
+- `'session-established'` — resolves as soon as this side's session is up: socket open,
+  authentication complete, buffered subscriptions replayed.
+
+Use `'session-established'` when the peer forwards frames without participating in bus routing
+(a message relay). Such a peer never sends `subscribe-sync-complete`, so under `'peer-sync'`
+`ready` would stay pending for the whole connection and gate every non-local request.
+
+```typescript
+const transport = new WebSocketClientTransport({
+  url: 'wss://relay.example.com/ws',
+  name: 'relay',
+  readiness: 'session-established',
+});
+```
+
+Each reconnect re-arms readiness for the new session, and both modes resolve the outgoing
+session's promise while disconnected so a dropped connection does not gate dispatch.
+
 Register transports with the bus before calling `connect()` so receive handlers and subscription
 sync are installed before socket messages arrive. The default registry names are `websocket` for
 `ServerTransport` and `ws-client` for `WebSocketClientTransport`; pass `name` when a bus registers

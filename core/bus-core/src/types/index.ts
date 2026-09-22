@@ -7,7 +7,7 @@ export type {
   InterceptorResult,
   InterceptorEntry,
 } from './interceptor.js';
-export { DEFAULT_REQUEST_TIMEOUT_MS } from './options.js';
+export { DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_READINESS_TIMEOUT_MS } from './options.js';
 export type { OnOptions, EmitOptions, RequestOptions, WithReceiveContext } from './options.js';
 export type {
   BusSubscribeMessage,

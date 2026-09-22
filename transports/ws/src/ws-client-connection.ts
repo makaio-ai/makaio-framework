@@ -19,7 +19,10 @@ import { buildSubscribeMessage, type SubscriptionEntry } from './subscribe-messa
 import { backoffMs, sleep, type WebSocketClientTransportReconnectOptions } from './ws-client-reconnect.js';
 import { handleInboundMessage } from './ws-client-message-handler.js';
 import { startHeartbeatWatchdog } from './ws-client-heartbeat.js';
-import type { WebSocketClientTransportHeartbeatOptions } from './ws-client-options.js';
+import type {
+  WebSocketClientTransportHeartbeatOptions,
+  WebSocketClientTransportReadinessMode,
+} from './ws-client-options.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,6 +56,13 @@ export interface ConnectionDeps {
   readonly url: string;
   /** Bound in milliseconds for socket creation, opening, authentication and replay. */
   readonly connectTimeoutMs: number;
+  /**
+   * Milestone at which the session's ready promise resolves.
+   *
+   * `'peer-sync'` defers to the inbound `subscribe-sync-complete` handshake;
+   * `'session-established'` resolves as soon as this side's session is up.
+   */
+  readonly readiness: WebSocketClientTransportReadinessMode;
   /**
    * Resolved heartbeat watchdog timing, or `false` when the liveness
    * watchdog is disabled. Started per socket in `connectOnce`; the watchdog
@@ -150,7 +160,11 @@ function attachMessageListener(ws: WebSocketLike, deps: ConnectionDeps): void {
       correlations: deps.correlations,
       handlers: deps.handlers,
       onSyncComplete: () => {
-        deps.resolveReady();
+        // Only the peer-sync contract promises readiness on this frame. Under
+        // 'session-established' the listener is already installed before auth and
+        // replay, so honouring an inbound (or relayed) sync-complete here would
+        // settle `ready` ahead of the milestone this transport actually promises.
+        if (deps.readiness === 'peer-sync') deps.resolveReady();
       },
       onSubscriptionAck: (ackId) => {
         deps.resolveSubscriptionAck(ackId);
@@ -371,6 +385,11 @@ async function establishSocket(socket: WebSocketLike, deps: ConnectionDeps, sign
   // Arm only after replay: no async gap may allow the watchdog to terminate
   // before the caller installs the established-connection close listener.
   if (deps.heartbeat !== false) startHeartbeatWatchdog(socket, deps.heartbeat, deps);
+  // A peer that never answers `subscribe-sync-complete` would otherwise leave this
+  // session's ready promise pending for its whole lifetime. Under
+  // `'session-established'` readiness this point — socket open, authenticated,
+  // subscriptions replayed — is the milestone the connection actually owns.
+  if (deps.readiness === 'session-established') deps.resolveReady();
   if (deps.debug) console.info(`[WebSocketClientTransport:${deps.name}] Connected to ${deps.url}`);
   deps.notifyConnected();
 }
