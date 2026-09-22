@@ -256,6 +256,27 @@ function isServerWebSocketLike(websocket: unknown): websocket is WebSocketServer
  */
 export interface ClientTransportCodec {
   /**
+   * Report whether this codec can encode the given outbound bus message right now.
+   *
+   * When absent the codec is treated as able to encode any message. Return
+   * `false` when a prerequisite is not yet satisfied for this specific message —
+   * for example, when an end-to-end encryption session has not been established
+   * and the message is not one of the control-plane frames that travel in
+   * plaintext before the session exists.
+   *
+   * Unlike a global readiness gate, `canEncode` is message-selective: a relay
+   * codec may return `true` for control-plane frames that travel in plaintext
+   * while returning `false` for application-level messages that require an
+   * established session key.
+   *
+   * Side effects must not occur inside `canEncode`. In particular, tracked
+   * correlation IDs must only be consumed (deleted) inside `encode`, never
+   * during a `canEncode` check.
+   * @param message - Outbound bus message to test
+   * @returns `true` when this codec can encode the message; `false` otherwise
+   */
+  canEncode?(message: BusMessage): boolean;
+  /**
    * Encode a bus message for transmission.
    * @param message - Bus message to encode
    * @returns Encoded payload to send over the socket

@@ -108,6 +108,41 @@ const isSubscriptionAckMessage = (message: unknown): message is BusSubscriptionA
 };
 
 /**
+ * Evaluate whether a bus message is eligible for relay-codec encoding at the
+ * current point in the E2E session lifecycle.
+ *
+ * This predicate is side-effect free: it calls `.has()` on `trackedResponseIds`
+ * and never `.delete()`, so it can safely be called from `canEncode` without
+ * duplicating the tracking side-effects that live in `encode`.
+ *
+ * Relay-control bus messages always return `true` regardless of session state.
+ * Tracked relay-control response correlation IDs return `true` via `.has()` only.
+ * Subscription-control and subscription-ack frames return `true` before a session
+ * key exists to allow the subscribe-sync handshake to proceed.
+ * All other messages require a non-null session key.
+ * @param message - Outbound bus message to evaluate
+ * @param isRelayControl - Predicate that returns true for relay-control bus messages
+ * @param trackedResponseIds - Read-only map of tracked relay-control response correlation IDs to creation timestamps
+ * @param e2eAuth - E2E relay auth instance used to check for an established session key
+ * @returns True when the message may be encoded and forwarded through the relay codec
+ */
+function canEncodeRelayMessage(
+  message: BusMessage,
+  isRelayControl: (message: BusMessage) => boolean,
+  trackedResponseIds: ReadonlyMap<string, number>,
+  e2eAuth: E2ERelayAuth,
+): boolean {
+  if (isRelayControl(message)) return true;
+  // Mirror-completeness with encode: the bus never calls canSend for response messages
+  // today (the bus only emits events and broadcasts), but the check is kept to match the
+  // encode path. Note: encode additionally prunes expired IDs before its own .has().
+  if (message.type === 'response' && trackedResponseIds.has(message.correlationId)) return true;
+  const sessionKey = e2eAuth.getSessionKey();
+  if (!sessionKey && (isSubscriptionControlMessage(message) || isSubscriptionAckMessage(message))) return true;
+  return Boolean(sessionKey);
+}
+
+/**
  * Create the codec used by relay E2E transport.
  * @param e2eAuth - Relay E2E auth instance
  * @param debug - Enable diagnostic logging
@@ -135,6 +170,8 @@ function createRelayCodec(
   };
 
   return {
+    canEncode: (message: BusMessage): boolean =>
+      canEncodeRelayMessage(message, isRelayControlBusMessage, relayControlResponseIds, e2eAuth),
     encode: async (message: BusMessage): Promise<string> => {
       if (isRelayControlBusMessage(message)) {
         if (message.type === 'request') {
@@ -205,7 +242,14 @@ function createRelayCodec(
  * session when the codec is reused across reconnections.
  */
 export interface E2ERelayCodecHandle {
-  /** Wire codec for E2E relay encryption. */
+  /**
+   * Wire codec for E2E relay encryption.
+   *
+   * Implements `canEncode` with message-selective logic: relay-control frames,
+   * tracked relay-control responses, and subscription-control frames return `true`
+   * before any E2E session exists; all other messages require a session key
+   * (`e2eAuth.getSessionKey()` non-null).
+   */
   codec: ClientTransportCodec;
   /**
    * Clear all relay-control correlation IDs.
@@ -223,6 +267,12 @@ export interface E2ERelayCodecHandle {
  * The codec handles message encryption/decryption and relay-control envelope
  * routing. Use this when constructing a `WebSocketClientTransport` with E2E
  * relay encryption instead of the lower-level `createE2ERelayClientTransport`.
+ *
+ * The returned codec implements `canEncode` with message-selective logic: relay-control
+ * frames, tracked relay-control responses, and subscription-control frames are allowed
+ * before any E2E session exists; all other messages require a session key. Use
+ * `WebSocketClientTransport.canSend(message)` to gate outbound bus traffic correctly
+ * per message.
  *
  * The returned `reset()` method **must** be called at the start of each new
  * connection attempt when the codec is reused across reconnections. Failing to
@@ -312,6 +362,10 @@ export function createE2ERelayClientTransport(options: E2ERelayClientTransportOp
     subscribe: innerTransport.subscribe.bind(innerTransport),
     unsubscribe: innerTransport.unsubscribe.bind(innerTransport),
     getSubscriptions: innerTransport.getSubscriptions.bind(innerTransport),
-    isReady: () => Boolean(e2eAuth.getSessionKey()) && innerTransport.isReady(),
+    // isReady reflects wire-session state only (socket open + auth complete).
+    // Message-selective encoding eligibility is expressed through canSend, which
+    // combines the wire-session check with the codec's canEncode gate.
+    isReady: innerTransport.isReady.bind(innerTransport),
+    canSend: innerTransport.canSend.bind(innerTransport),
   };
 }

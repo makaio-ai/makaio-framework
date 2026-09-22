@@ -1,4 +1,4 @@
-import type { RequestOptions, MakaioBusContext, WithReceiveContext } from '../types/index.js';
+import type { BusBroadcastMessage, RequestOptions, MakaioBusContext, WithReceiveContext } from '../types/index.js';
 import type { RequestContext, RequestHandler, SubjectDefinition, TransportReceiveContext } from '@makaio/core';
 import { nanoid } from 'nanoid';
 import { LOCAL_ORIGIN, REMOTE_ORIGIN } from '../utils/transport-helpers.js';
@@ -258,6 +258,18 @@ export async function broadcast<
   // Find all local handlers matching this subject
   const handlers = getMatchingHandlers(context, fullSubjectKey);
 
+  // Build the outbound broadcast message once so the same object is used for
+  // both transport-selection (canSend gate) and the actual wire send.
+  const broadcastMessage: BusBroadcastMessage = {
+    type: 'broadcast',
+    subject: subjectKey,
+    namespace: subjectDefinition.$meta.namespace,
+    payload,
+    correlationId,
+    messageId,
+    timeout,
+  };
+
   // Unfiltered by default — subscription filtering can silently exclude valid
   // respondents when subscriptions are populated lazily (e.g., WorkerTransport
   // accumulates subscriptions after init, causing broadcast subjects not in
@@ -267,12 +279,15 @@ export async function broadcast<
   // so normalizeTransportTargets applies their specification directly. This is
   // critical for handleBroadcastMessage which passes transports:[] to suppress
   // transport dispatch during relay (local-only execution).
+  //
+  // The broadcast message is passed so transports with canSend can apply
+  // per-message eligibility (mirrors the emit path).
   const transportTargets =
     effectiveTransports === undefined
       ? subjectDefinition.$meta.local
         ? []
-        : getReadyTransports(context).map(({ transport }) => transport)
-      : normalizeTransportTargets(context, effectiveTransports, subjectDefinition);
+        : getReadyTransports(context, undefined, broadcastMessage).map(({ transport }) => transport)
+      : normalizeTransportTargets(context, effectiveTransports, subjectDefinition, broadcastMessage);
 
   const localPromises = handlers.map(async (handler) => {
     const handlerResults = await executeLocalBroadcastHandler<Request, Response>(handler, {
@@ -290,18 +305,7 @@ export async function broadcast<
   // Execute transport broadcasts in parallel (each transport returns array of results)
   const transportPromises = transportTargets.map(async (transport) => {
     try {
-      const transportResults = await transport.send(
-        {
-          type: 'broadcast',
-          subject: subjectKey,
-          namespace: subjectDefinition.$meta.namespace,
-          payload,
-          correlationId,
-          messageId,
-          timeout,
-        },
-        timeout,
-      );
+      const transportResults = await transport.send(broadcastMessage, timeout);
 
       // Transport returns array of { nodeId, payload } from all remote handlers
       for (const result of transportResults) {

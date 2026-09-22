@@ -68,15 +68,21 @@ const resolveSubjectDefinition = (
  * this client. They must not gate outbound relay, because a client may emit
  * events it does not subscribe to (e.g., Electron renderer emits `ui.ready`
  * without listening to it).
+ *
+ * When `message` is provided and a transport implements `canSend`, per-message
+ * eligibility is applied. This allows relay codecs to pass control-plane frames
+ * before their E2E session key is established.
  * @param context - Bus context
  * @param sourceTransportName - Transport to exclude (message origin)
+ * @param message - The message being relayed; enables per-message eligibility via `canSend`
  * @returns Array of `{ name, transport }` pairs eligible for relay
  */
 const getRelayTargets = (
   context: MakaioBusContext,
   sourceTransportName: BusTransportKeys,
+  message?: BusMessage,
 ): Array<{ name: BusTransportKeys; transport: BusTransport }> => {
-  return getReadyTransports(context, sourceTransportName);
+  return getReadyTransports(context, sourceTransportName, message);
 };
 
 /**
@@ -117,8 +123,10 @@ const handleEventMessage = async (
   // PHASE 1: RELAY — forward to other transports (excluding source)
   // This happens unless the subject is collector-only, even when no schema exists (SharedWorker relay case).
   // Uses readiness filtering (not subscription filtering) — see getRelayTargets.
+  // The message is passed so relay codecs with canSend can pass control-plane frames
+  // before their E2E session key is established (e.g. relay.connection.stateChanged).
   if (!context.namespaceRegistry.isCollectorOnlySubject(fullSubject)) {
-    const relayTargets = getRelayTargets(context, sourceTransportName);
+    const relayTargets = getRelayTargets(context, sourceTransportName, message);
     const relayResults = await Promise.allSettled(relayTargets.map(async ({ transport }) => transport.send(message)));
     for (const [index, result] of relayResults.entries()) {
       if (result.status === 'rejected') {
@@ -371,7 +379,7 @@ const handleBroadcastMessage = async (
     // Uses unfiltered RPC relay (same as requests) because subscription filtering
     // can silently drop valid respondents, producing incomplete result arrays
     // with no error signal.
-    const relayTargets = getRelayTargets(context, sourceTransportName);
+    const relayTargets = getRelayTargets(context, sourceTransportName, message);
     const relayPromises = relayTargets.map(async ({ name: targetName, transport: targetTransport }) => {
       try {
         allResults.push(...(await targetTransport.send(message, relayTimeout)));

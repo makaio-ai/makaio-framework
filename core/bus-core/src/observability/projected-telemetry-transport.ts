@@ -256,6 +256,10 @@ export function createProjectedTelemetryTransport(options: ProjectedTelemetryTra
     isReady(): boolean {
       return inner.isReady?.() ?? true;
     },
+    // canSend is deliberately NOT forwarded. This wrapper sends projected telemetry facts,
+    // not the caller's original message — forwarding canSend would pass the wrong message
+    // to the inner codec and produce incorrect eligibility decisions. The message-agnostic
+    // isReady fallback is the correct conservative behavior for a projection transport.
 
     cancelRequest(correlationId: string, error?: Error): void {
       inner.cancelRequest?.(correlationId, error);

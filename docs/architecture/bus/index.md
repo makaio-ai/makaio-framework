@@ -391,6 +391,7 @@ interface BusTransport {
   unsubscribe(subject: string): Promise<void>;
   ready?: Promise<void>;
   isReady?(): boolean;
+  canSend?(message: BusMessage): boolean; // Per-message eligibility; governs when present
 }
 ```
 

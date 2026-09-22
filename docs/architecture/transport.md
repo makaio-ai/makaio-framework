@@ -38,6 +38,7 @@ interface BusTransport {
   ready?: Promise<void>;
   onNewReadySession?: (promise: Promise<void>) => void;
   isReady?(): boolean;
+  canSend?(message: BusMessage): boolean; // Per-message eligibility; governs when present
 
   // Registry callbacks and optional filtering
   onConnected?: () => void;

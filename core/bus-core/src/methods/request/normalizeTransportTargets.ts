@@ -1,5 +1,5 @@
 import { BusTransportRegistry } from '../../registries/index.js';
-import type { MakaioBusContext, BusTransport } from '../../types/index.js';
+import type { BusMessage, MakaioBusContext, BusTransport } from '../../types/index.js';
 import { getFullSubjectForSubjectDefinition } from '../../utils/subject-transformation.js';
 import { getReadyTransports } from '../../utils/transport.js';
 import type { SubjectDefinition } from '@makaio/core';
@@ -21,12 +21,14 @@ export function isExplicitLocalOnlyTransportSpec(
  *
  * Outbound routing semantics:
  *
- * - `undefined` — send to **all** registered transports (no subscription filtering).
- *   Subscriptions are an inbound concern: they tell the server which subjects to
- *   forward back to this client. They must not gate outbound sends — a client may
- *   emit events it does not subscribe to (e.g., Electron emits `window.opened`
- *   without listening to it). This matches how `request()` and `broadcast()`
- *   dispatch via `getSortedTransports` without filtering.
+ * - `undefined` — send to all **ready or eligible** transports (no subscription
+ *   filtering). Subscriptions are an inbound concern: they tell the server which
+ *   subjects to forward back to this client. They must not gate outbound sends — a
+ *   client may emit events it does not subscribe to (e.g., Electron emits
+ *   `window.opened` without listening to it). When `message` is provided, transports
+ *   with `canSend` are filtered per-message; otherwise the message-agnostic `isReady`
+ *   check applies. This matches how `request()` and `broadcast()` dispatch via
+ *   `getSortedTransports` without subscription filtering.
  * - `[]` / empty Set — local-only (no transport dispatch)
  * - named transports — exact lookup, no subscription filtering
  *
@@ -37,12 +39,16 @@ export function isExplicitLocalOnlyTransportSpec(
  * @param transports - Explicit transport specification from options
  * @param subjectDefinition - Subject definition, used for local-subject guard
  *   and subject key resolution
+ * @param message - Optional outbound bus message; when provided, per-message
+ *   eligibility via `canSend` is applied so relay codecs can pass control-plane
+ *   frames before their E2E session is established
  * @returns Array of transport instances to send to
  */
 export function normalizeTransportTargets(
   context: MakaioBusContext,
   transports: Set<keyof BusTransportRegistry> | Array<keyof BusTransportRegistry> | undefined,
   subjectDefinition: SubjectDefinition,
+  message?: BusMessage,
 ): BusTransport[] {
   // Local subjects never go to transports
   if (subjectDefinition.$meta.local) {
@@ -54,15 +60,17 @@ export function normalizeTransportTargets(
     return [];
   }
 
-  // undefined: send to all ready transports (no subscription filtering), unless
+  // undefined: send to all eligible transports (no subscription filtering), unless
   // the subject's $meta declares a 'local-only' default. In that case an absent
   // explicit transports option is treated as local-only suppression — callers can
   // still force transport delivery by passing an explicit non-empty list.
+  // When a message is provided, per-message eligibility (canSend) is applied so that
+  // relay codecs can pass control-plane frames before their E2E session is established.
   if (transports === undefined) {
     if (subjectDefinition.$meta.defaultTransports === 'local-only') {
       return [];
     }
-    return getReadyTransports(context).map(({ transport }) => transport);
+    return getReadyTransports(context, undefined, message).map(({ transport }) => transport);
   }
 
   // Empty array/set: don't send to any transports (local only)

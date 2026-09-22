@@ -3,12 +3,38 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { z } from 'zod';
+import {
+  createBusInstance,
+  type BusEventMessage,
+  type BusMessage,
+  type BusRequestMessage,
+  type BusResponseMessage,
+  type BusSubscribeMessage,
+  type BusTransportRegistry,
+  type BusUnsubscribeMessage,
+} from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
 import { createE2ERelayClientTransport, createE2ERelayCodec } from '../e2e-relay-client-transport.js';
+import { WebSocketClientTransport } from '../ws-client-transport.js';
 import { E2ERelayAuth } from '../auth/e2e-relay-auth.js';
 import { generateSigningKeyPair } from '../crypto/ecdsa.js';
-import { decryptRelayEnvelope, encryptRelayEnvelope, type RelayEnvelopeMessage } from '../e2e-relay-envelope.js';
+import {
+  decryptRelayEnvelope,
+  encryptRelayEnvelope,
+  isRelayEnvelopeMessage,
+  type RelayEnvelopeMessage,
+} from '../e2e-relay-envelope.js';
+import { type RelayControlEnvelopeMessage } from '../relay-control-envelope.js';
 import { createRelayControlRegistry } from '../relay-control-registry.js';
-import { MockWebSocket, createRelayAuthPair, createRelayAuthPairRaw } from './test-helpers.js';
+import {
+  MockWebSocket,
+  connectRelayTransportWithSession,
+  createPreSessionRelayAuth,
+  createPreSessionRelayTransport,
+  createRelayAuthPair,
+  createRelayAuthPairRaw,
+} from './test-helpers.js';
 import { buildRelayControlTestRegistry, createRelayControlTestHelpers } from './relay-control-test-registry.js';
 import { waitForCondition } from './test-utils.js';
 
@@ -39,14 +65,7 @@ async function expectStillPending(promise: Promise<unknown>, timeoutMs: number):
 async function createUnauthenticatedRelayCodec(
   identityId: string,
 ): Promise<ReturnType<typeof createE2ERelayCodec>['codec']> {
-  const signingKeys = await generateSigningKeyPair();
-  const e2eAuth = new E2ERelayAuth({
-    signingKeyPair: signingKeys,
-    identityId,
-    getPeerSigningKey: async () => null,
-    mode: 'responder',
-    blocking: false,
-  });
+  const e2eAuth = await createPreSessionRelayAuth(identityId);
   return createE2ERelayCodec(e2eAuth, testRegistry).codec;
 }
 
@@ -103,39 +122,7 @@ describe('createE2ERelayClientTransport', () => {
   });
 
   it('encrypts subscribe and unsubscribe frames with relay envelope', async () => {
-    // Use createRelayAuthPairRaw so we can manually drive the handshake: the
-    // transport calls connect() which triggers authenticateClient(), and we
-    // forward the key exchange messages between the two sides to allow both
-    // sides to derive the same session key before subscribe/unsubscribe are sent.
-    const { initiator, responder, sendToResponder } = await createRelayAuthPairRaw();
-
-    // Wire up a MockWebSocket that relays auth messages between initiator and
-    // responder in-process, simulating a relay server forwarding them.
-    const ws = new MockWebSocket();
-    const originalSend = ws.send.bind(ws);
-    ws.send = (data: string | BufferSource | Blob): void => {
-      originalSend(data);
-      if (typeof data !== 'string') return;
-      const msg = JSON.parse(data) as { type?: string };
-      if (msg.type === 'e2e-relay-key-exchange') {
-        // Forward initiator's key exchange to the responder so it can derive
-        // the session key and send its own exchange back.
-        sendToResponder(msg);
-      }
-    };
-
-    // When responder sends its key exchange back, inject it into the transport's
-    // inbound message pipeline so the initiator can derive the session key.
-    const sendToInitiatorViaWs = (message: unknown): void => {
-      ws.receiveMessage(JSON.stringify(message));
-    };
-
-    // Start both sides of the handshake concurrently.
-    const responderAuth = responder.authenticateClient(sendToInitiatorViaWs);
-
-    const transport = createE2ERelayClientTransport({ websocket: ws, e2eAuth: initiator, registry: testRegistry });
-    await Promise.all([transport.connect(), responderAuth]);
-
+    const { transport, ws, initiator } = await connectRelayTransportWithSession(testRegistry);
     const sessionKey = initiator.getSessionKey();
     expect(sessionKey).not.toBeNull();
 
@@ -583,4 +570,339 @@ describe('createE2ERelayClientTransport', () => {
       },
     });
   });
+});
+
+// ---------------------------------------------------------------------------
+// createE2ERelayCodec — canEncode (message-selective gate)
+// ---------------------------------------------------------------------------
+
+describe('createE2ERelayCodec — canEncode', () => {
+  it('returns true for a relay-control event before session key is established', async () => {
+    const codec = await createUnauthenticatedRelayCodec('device-canEncode-ctrl');
+    // relay.error is registered as a control event in testRegistry.
+    const relayControlEvent: BusEventMessage = {
+      type: 'event',
+      subject: 'error',
+      namespace: 'relay',
+      payload: { code: 'conn_err', message: 'oops', timestamp: 0 },
+      messageId: 'msg-ctrl-1',
+    };
+    expect(codec.canEncode?.(relayControlEvent)).toBe(true);
+  });
+
+  it('returns false for a normal event before session, true after session', async () => {
+    const normalEvent: BusEventMessage = {
+      type: 'event',
+      subject: 'some.event',
+      namespace: 'app',
+      payload: {},
+      messageId: 'msg-normal-1',
+    };
+    const preSess = await createUnauthenticatedRelayCodec('device-canEncode-normal-pre');
+    expect(preSess.canEncode?.(normalEvent)).toBe(false);
+
+    const { initiator } = await createRelayAuthPair({
+      deviceId: 'device-canEncode-normal-post',
+      machineId: 'machine-canEncode-normal',
+    });
+    const { codec: postSessCodec } = createE2ERelayCodec(initiator, testRegistry);
+    expect(initiator.getSessionKey()).not.toBeNull();
+    expect(postSessCodec.canEncode?.(normalEvent)).toBe(true);
+  });
+
+  it('returns true for subscription-control frames before session key is established', async () => {
+    const codec = await createUnauthenticatedRelayCodec('device-canEncode-sub-ctrl');
+    const subscribeMsg: BusSubscribeMessage = {
+      type: 'subscribe',
+      subjects: { 'test.subject': [] },
+      deliveryClasses: { 'test.subject': 'relayable' },
+    };
+    const unsubscribeMsg: BusUnsubscribeMessage = {
+      type: 'unsubscribe',
+      subjects: { 'test.subject': [] },
+    };
+    expect(codec.canEncode?.(subscribeMsg)).toBe(true);
+    expect(codec.canEncode?.(unsubscribeMsg)).toBe(true);
+  });
+
+  it('returns true for tracked relay-control response IDs without consuming the ID', async () => {
+    // canEncode must not call .delete() on the tracked-ID map — only encode() may.
+    const e2eAuth = await createPreSessionRelayAuth('device-canEncode-resp-track');
+    const { codec } = createE2ERelayCodec(e2eAuth, testRegistry);
+
+    const relayRequest: BusRequestMessage = {
+      type: 'request',
+      subject: 'oauth.refresh',
+      namespace: 'relay',
+      payload: {},
+      correlationId: 'corr-track-123',
+      messageId: 'msg-req-track',
+    };
+    // Encode the request so its correlation ID is tracked.
+    await codec.encode(relayRequest);
+
+    const responseMsg: BusResponseMessage = {
+      type: 'response',
+      correlationId: 'corr-track-123',
+      result: { ok: true },
+    };
+
+    // canEncode returns true — and does NOT consume the ID (checked twice).
+    expect(codec.canEncode?.(responseMsg)).toBe(true);
+    expect(codec.canEncode?.(responseMsg)).toBe(true);
+
+    // encode() consumes the ID; a subsequent canEncode() returns false.
+    await codec.encode(responseMsg);
+    expect(codec.canEncode?.(responseMsg)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createE2ERelayClientTransport — isReady and canSend
+// ---------------------------------------------------------------------------
+
+describe('createE2ERelayClientTransport — isReady and canSend', () => {
+  it('isReady returns true when wire session is live (wire-session only, not codec)', async () => {
+    // Non-blocking responder mode: authenticateClient() returns immediately
+    // without waiting for a peer key exchange, so connect() resolves with
+    // authComplete=true but getSessionKey()=null.
+    const { transport, e2eAuth } = await createPreSessionRelayTransport(testRegistry, {
+      identityId: 'machine-pre-session-isReady',
+    });
+
+    // Wire session is live (socket open + auth complete) — isReady reflects that.
+    expect(e2eAuth.getSessionKey()).toBeNull();
+    expect(transport.isReady?.()).toBe(true);
+
+    await transport.disconnect();
+  });
+
+  it('canSend returns false for a normal event before E2E session, true after', async () => {
+    const normalEvent: BusEventMessage = {
+      type: 'event',
+      subject: 'some.event',
+      namespace: 'app',
+      payload: {},
+      messageId: 'msg-cansend-normal',
+    };
+
+    const { transport: preTransport, e2eAuth } = await createPreSessionRelayTransport(testRegistry, {
+      identityId: 'machine-canSend-normal-pre',
+    });
+
+    expect(e2eAuth.getSessionKey()).toBeNull();
+    expect(preTransport.canSend?.(normalEvent)).toBe(false);
+
+    await preTransport.disconnect();
+
+    const { transport: postTransport, initiator } = await connectRelayTransportWithSession(testRegistry);
+    expect(initiator.getSessionKey()).not.toBeNull();
+    expect(postTransport.canSend?.(normalEvent)).toBe(true);
+
+    await postTransport.disconnect();
+  });
+
+  it('canSend returns true for a relay-control event before E2E session', async () => {
+    const { transport, e2eAuth } = await createPreSessionRelayTransport(testRegistry, {
+      identityId: 'machine-canSend-ctrl-pre',
+    });
+
+    // relay.error is a control event in testRegistry — canSend is true even pre-session.
+    const relayControlEvent: BusEventMessage = {
+      type: 'event',
+      subject: 'error',
+      namespace: 'relay',
+      payload: { code: 'conn_err', message: 'oops', timestamp: 0 },
+      messageId: 'msg-ctrl-cansend',
+    };
+
+    expect(e2eAuth.getSessionKey()).toBeNull();
+    expect(transport.canSend?.(relayControlEvent)).toBe(true);
+
+    await transport.disconnect();
+  });
+
+  it('isReady returns true once the E2E session is established', async () => {
+    const { transport, initiator } = await connectRelayTransportWithSession(testRegistry);
+
+    expect(initiator.getSessionKey()).not.toBeNull();
+    expect(transport.isReady?.()).toBe(true);
+
+    await transport.disconnect();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration: emit skips pre-session relay transport (regression: issue #1372)
+// ---------------------------------------------------------------------------
+
+const relayReadinessNamespace = createBusNamespace('e2eRelayReadiness', {
+  testEvent: z.object({ value: z.string() }),
+});
+
+// Bus namespace whose subject maps to a relay-control event in testRegistry:
+// namespace='relay', subject='error'. The codec routes this as a plaintext
+// relay-control envelope regardless of E2E session state.
+const relayControlTestNamespace = createBusNamespace('relay', {
+  error: z.object({ code: z.string(), message: z.string(), timestamp: z.number() }),
+});
+
+describe('E2E relay transport — emit integration (issue #1372)', () => {
+  it(
+    'bus.emit skips normal events pre-session, delivers relay-control events as plaintext,' +
+      ' and sends normal events encrypted post-session',
+    async () => {
+      // Fresh bus instance so registration is isolated and the singleton stays clean.
+      const bus = createBusInstance();
+      bus.registerNamespace(relayReadinessNamespace);
+      bus.registerNamespace(relayControlTestNamespace);
+      const { registerTransport } = bus.getContext().transportRegistry;
+
+      // -----------------------------------------------------------------------
+      // Phase 1: pre-session — plain WebSocketClientTransport composition (the
+      // product composition path that regressed in issue #1372). The transport
+      // is connected and auth has completed but the E2E codec has no session key.
+      // Normal events must be skipped; relay-control events must flow as plaintext.
+      // -----------------------------------------------------------------------
+      const e2eAuth = await createPreSessionRelayAuth('machine-emit-pre-session');
+      const ws = new MockWebSocket();
+      const { codec } = createE2ERelayCodec(e2eAuth, testRegistry);
+      const preSessionTransport = new WebSocketClientTransport({
+        url: 'ws://localhost:9999',
+        createWebSocket: () => ws,
+        auth: e2eAuth,
+        codec,
+        autoReconnect: false,
+      });
+      await preSessionTransport.connect();
+
+      // e2eAuth is in non-blocking responder mode: session key is still null.
+      expect(e2eAuth.getSessionKey()).toBeNull();
+      // isReady is wire-session only — true once socket is open + auth complete.
+      expect(preSessionTransport.isReady()).toBe(true);
+      // canSend is message-selective — false for normal events without a session key.
+      const normalTestEvent: BusEventMessage = {
+        type: 'event',
+        subject: relayReadinessNamespace.subjects.testEvent.subject,
+        namespace: 'e2eRelayReadiness',
+        payload: { value: 'x' },
+        messageId: 'pre-check',
+      };
+      expect(preSessionTransport.canSend(normalTestEvent)).toBe(false);
+
+      const { unregister: unregisterPre } = registerTransport(
+        'relay' as keyof BusTransportRegistry,
+        preSessionTransport,
+      );
+
+      // Spy before emit: if codec.encode were reached for a normal event it
+      // would throw and the bus catch block would call console.error.
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      ws.clearSentMessages();
+
+      await bus.emit(relayReadinessNamespace.subjects.testEvent, { value: 'pre-session' });
+
+      // Normal event was excluded by canSend — console.error must be silent and no wire frame.
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(ws.sentMessages).toHaveLength(0);
+      errorSpy.mockRestore();
+
+      // -----------------------------------------------------------------------
+      // Phase 1.5: relay-control event pre-session — must reach the wire as a
+      // plaintext relay-control envelope (the core regression fix for #1372).
+      // relay.error is registered in testRegistry as a control event subject.
+      // -----------------------------------------------------------------------
+      ws.clearSentMessages();
+      await bus.emit(relayControlTestNamespace.subjects.error, {
+        code: 'connection_error',
+        message: 'relay down',
+        timestamp: Date.now(),
+      });
+
+      // The relay-control event must appear on the wire as a plaintext envelope.
+      expect(ws.sentMessages).toHaveLength(1);
+      const relayControlWireMsg = JSON.parse(ws.sentMessages[0]) as RelayControlEnvelopeMessage;
+      expect(relayControlWireMsg.type).toBe('relay-control');
+      expect(relayControlWireMsg.payload.type).toBe('event');
+      if (relayControlWireMsg.payload.type === 'event') {
+        expect(relayControlWireMsg.payload.subject).toBe('error');
+        expect(relayControlWireMsg.payload.namespace).toBe('relay');
+      }
+
+      unregisterPre();
+      await preSessionTransport.disconnect();
+
+      // -----------------------------------------------------------------------
+      // Phase 2: session established — same WebSocketClientTransport + codec
+      // composition as Phase 1 (the product path that regressed in #1372).
+      // Transport must now be included and the encrypted event envelope must
+      // appear on the wire.
+      // -----------------------------------------------------------------------
+      const {
+        initiator: sessionInitiator,
+        responder: sessionResponder,
+        sendToResponder: sendToSessionResponder,
+      } = await createRelayAuthPairRaw({ machineId: 'machine-emit-session' });
+
+      const sessionWs = new MockWebSocket();
+      const { codec: sessionCodec } = createE2ERelayCodec(sessionInitiator, testRegistry);
+
+      // Forward key-exchange frames from the transport to the responder.
+      const originalSessionSend = sessionWs.send.bind(sessionWs);
+      sessionWs.send = (data: string | BufferSource | Blob): void => {
+        originalSessionSend(data);
+        if (typeof data !== 'string') return;
+        const msg = JSON.parse(data) as { type?: string };
+        if (msg.type === 'e2e-relay-key-exchange') sendToSessionResponder(msg);
+      };
+
+      const sessionResponderPromise = sessionResponder.authenticateClient((msg: unknown): void => {
+        sessionWs.receiveMessage(JSON.stringify(msg));
+      });
+
+      const sessionTransport = new WebSocketClientTransport({
+        url: 'ws://localhost:9999',
+        createWebSocket: () => sessionWs,
+        auth: sessionInitiator,
+        codec: sessionCodec,
+        autoReconnect: false,
+      });
+
+      await Promise.all([sessionTransport.connect(), sessionResponderPromise]);
+
+      const { unregister: unregisterSession } = registerTransport(
+        'relay' as keyof BusTransportRegistry,
+        sessionTransport,
+      );
+
+      sessionWs.clearSentMessages();
+      await bus.emit(relayReadinessNamespace.subjects.testEvent, { value: 'post-session' });
+
+      // Locate the encrypted event frame by decrypting each wire message and
+      // filtering for the event — avoids assuming positional indexing.
+      expect(sessionWs.sentMessages.length).toBeGreaterThan(0);
+      const sessionKey = sessionInitiator.getSessionKey();
+      expect(sessionKey).not.toBeNull();
+      if (sessionKey === null) throw new Error('Expected established session key after handshake');
+
+      let decryptedEvent: BusMessage | undefined;
+      for (const raw of sessionWs.sentMessages) {
+        const parsed: unknown = JSON.parse(raw);
+        if (!isRelayEnvelopeMessage(parsed)) continue;
+        const frame = await decryptRelayEnvelope(parsed, sessionKey);
+        if (frame.type === 'event') {
+          decryptedEvent = frame;
+          break;
+        }
+      }
+      expect(decryptedEvent).toBeDefined();
+      if (decryptedEvent === undefined) throw new Error('Expected encrypted event frame on wire');
+      expect(decryptedEvent.type).toBe('event');
+      if (decryptedEvent.type !== 'event') throw new Error('Expected event message from relay wire');
+      expect(decryptedEvent.subject).toBe(relayReadinessNamespace.subjects.testEvent.subject);
+
+      unregisterSession();
+      await sessionTransport.disconnect();
+    },
+  );
 });
