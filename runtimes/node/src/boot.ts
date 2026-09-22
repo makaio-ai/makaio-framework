@@ -713,6 +713,8 @@ export async function bootMakaioRuntimeCore(
         () => adapterServiceRef.current?.getLoadedAdapters() ?? [],
         () => adapterServiceRef.current?.getAdapterInstances() ?? new Map(),
         (name) => coordinator.getExtension(name),
+        (name) => operatorConfig.get(name),
+        (name) => coordinator.getResolvedConfig(name),
       ),
     );
 

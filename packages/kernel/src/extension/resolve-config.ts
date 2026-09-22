@@ -112,6 +112,31 @@ export interface ResolveConfigInput {
 }
 
 /**
+ * The result of a configuration resolution, together with how it was reached.
+ *
+ * The distinction matters to callers that report configuration back to a
+ * human: after a rejected merge, the returned object is the schema's own
+ * `.default()` values with every configuration layer discarded — including the
+ * operator's. Presenting those as the values an extension is running with
+ * would attribute schema defaults to the operator, and to a configuration the
+ * extension was never able to accept.
+ */
+export interface ExtensionConfigResolution {
+  /**
+   * Parsed config object, or `undefined` when the extension declares no config
+   * schema or no parse produced a usable object.
+   */
+  readonly config: unknown;
+  /**
+   * `true` when the merged configuration was rejected by the schema and
+   * `config` holds the schema's defaults instead, so no configuration layer is
+   * reflected in it. `false` whenever `config` reflects the merged layers, and
+   * whenever there is nothing to reflect (no schema, or no usable fallback).
+   */
+  readonly usedSchemaDefaults: boolean;
+}
+
+/**
  * Resolve an extension's configuration by composing every configuration layer
  * and parsing the result through the extension's config schema.
  *
@@ -157,15 +182,34 @@ export interface ResolveConfigInput {
  *   configuration fails the schema.
  */
 export function resolveConfig(input: ResolveConfigInput): unknown {
+  return resolveConfigOutcome(input).config;
+}
+
+/**
+ * Resolve an extension's configuration and report how the result was reached.
+ *
+ * Identical to {@link resolveConfig} in every layer, parse, diagnostic, and
+ * throwing rule — it is the same resolution — but returns an
+ * {@link ExtensionConfigResolution} so a caller can tell a resolved
+ * configuration from the schema-default fallback.
+ * @param input - The extension identity, resolution mode, and one value per
+ *   configuration layer.
+ * @returns The resolution, carrying the parsed config and whether it came from
+ *   the schema's defaults after a rejected merge.
+ * @throws ExtensionOperatorConfigError In `'activate'` mode, when the operator
+ *   entry is unusable, or when an operator layer is present and the merged
+ *   configuration fails the schema.
+ */
+export function resolveConfigOutcome(input: ResolveConfigInput): ExtensionConfigResolution {
   const { name, configSchema, configDefaults, storedConfig, operatorEntry, mode } = input;
 
   const operatorLayer = resolveOperatorLayer(name, operatorEntry, mode);
-  if (!configSchema) return undefined;
+  if (!configSchema) return { config: undefined, usedSchemaDefaults: false };
 
   const merged = { ...(configDefaults ?? {}), ...(storedConfig ?? {}), ...(operatorLayer?.config ?? {}) };
 
   try {
-    return configSchema.parse(merged);
+    return { config: configSchema.parse(merged), usedSchemaDefaults: false };
   } catch (err) {
     const detail = summarizeDiagnosticText(getErrorString(err));
     if (mode === 'activate' && operatorLayer !== undefined) {
@@ -178,10 +222,10 @@ export function resolveConfig(input: ResolveConfigInput): unknown {
     }
     console.warn(`[ExtensionCoordinator] Config parse failed for "${name}", starting with schema defaults:`, detail);
     try {
-      return configSchema.parse({});
+      return { config: configSchema.parse({}), usedSchemaDefaults: true };
     } catch {
       console.warn(`[ExtensionCoordinator] Fallback config parse also failed for "${name}" — config will be absent`);
-      return undefined;
+      return { config: undefined, usedSchemaDefaults: false };
     }
   }
 }

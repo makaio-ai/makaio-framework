@@ -457,4 +457,186 @@ describe('registerRuntimeHandlers', () => {
 
     cleanup();
   });
+
+  it('includes operatorConfig in the config schema response when the accessor yields a config entry', async () => {
+    const cleanup = registerRuntimeHandlers(
+      MakaioBus,
+      () => [],
+      () => new Map(),
+      (name) => (name === 'my-extension' ? { configSchema: z.object({ apiKey: z.string() }) } : undefined),
+      (name) =>
+        name === 'my-extension'
+          ? { kind: 'config', source: '/etc/makaio/operator.json', config: { apiKey: 'op-key' } }
+          : undefined,
+      (name) => (name === 'my-extension' ? { config: { apiKey: 'op-key' }, usedSchemaDefaults: false } : undefined),
+    );
+
+    const result = await MakaioBus.request(SettingsSubjects.extension.getConfigSchema, {
+      extensionName: 'my-extension',
+    });
+
+    expect(result.operatorConfig).toEqual({
+      source: '/etc/makaio/operator.json',
+      keys: ['apiKey'],
+      values: { apiKey: 'op-key' },
+    });
+
+    cleanup();
+  });
+
+  it('omits operatorConfig from the config schema response when the accessor yields undefined', async () => {
+    const cleanup = registerRuntimeHandlers(
+      MakaioBus,
+      () => [],
+      () => new Map(),
+      (name) => (name === 'my-extension' ? { configSchema: z.object({ apiKey: z.string() }) } : undefined),
+      () => undefined,
+    );
+
+    const result = await MakaioBus.request(SettingsSubjects.extension.getConfigSchema, {
+      extensionName: 'my-extension',
+    });
+
+    expect(result.operatorConfig).toBeUndefined();
+
+    cleanup();
+  });
+
+  it('omits operatorConfig from the config schema response when the accessor yields a failure entry', async () => {
+    const cleanup = registerRuntimeHandlers(
+      MakaioBus,
+      () => [],
+      () => new Map(),
+      (name) => (name === 'my-extension' ? { configSchema: z.object({ apiKey: z.string() }) } : undefined),
+      (name) =>
+        name === 'my-extension'
+          ? { kind: 'failure', source: '/etc/makaio/bad.json', reason: 'invalid-json' }
+          : undefined,
+    );
+
+    const result = await MakaioBus.request(SettingsSubjects.extension.getConfigSchema, {
+      extensionName: 'my-extension',
+    });
+
+    expect(result.operatorConfig).toBeUndefined();
+
+    cleanup();
+  });
+
+  it('omits operatorConfig when no configSchema is registered for the extension', async () => {
+    const cleanup = registerRuntimeHandlers(
+      MakaioBus,
+      () => [],
+      () => new Map(),
+      (name) => (name === 'schema-less' ? {} : undefined),
+      (name) =>
+        name === 'schema-less'
+          ? { kind: 'config', source: '/etc/makaio/operator.json', config: { flag: true } }
+          : undefined,
+    );
+
+    const result = await MakaioBus.request(SettingsSubjects.extension.getConfigSchema, {
+      extensionName: 'schema-less',
+    });
+
+    // kernel drops the operator layer without a configSchema, so there is nothing
+    // to lock in that case — provenance is omitted.
+    expect(result.hasSchema).toBe(false);
+    expect(result.operatorConfig).toBeUndefined();
+
+    cleanup();
+  });
+
+  it('uses schema-resolved values for operatorConfig when the extension is active (e.g. .trim() applied)', async () => {
+    // The operator file contains a value with surrounding whitespace. The schema
+    // applies .trim(), so the resolved effective config has the trimmed value.
+    // The provenance snapshot must reflect what the extension actually received,
+    // not the raw file content.
+    const cleanup = registerRuntimeHandlers(
+      MakaioBus,
+      () => [],
+      () => new Map(),
+      (name) => (name === 'my-extension' ? { configSchema: z.object({ locale: z.string().trim() }) } : undefined),
+      (name) =>
+        name === 'my-extension'
+          ? { kind: 'config', source: '/etc/makaio/operator.json', config: { locale: ' en-US ' } }
+          : undefined,
+      // Simulates the coordinator returning the schema-parsed effective config.
+      (name) => (name === 'my-extension' ? { config: { locale: 'en-US' }, usedSchemaDefaults: false } : undefined),
+    );
+
+    const result = await MakaioBus.request(SettingsSubjects.extension.getConfigSchema, {
+      extensionName: 'my-extension',
+    });
+
+    expect(result.operatorConfig).toEqual({
+      source: '/etc/makaio/operator.json',
+      keys: ['locale'],
+      // The trimmed value from the resolved config, not the raw ' en-US ' string.
+      values: { locale: 'en-US' },
+    });
+
+    cleanup();
+  });
+
+  it('reports operator-owned keys without values when resolution fell back to schema defaults', async () => {
+    // When the merged configuration is rejected, the kernel resolves to the
+    // schema's own defaults with every configuration layer — the operator's
+    // included — discarded, and the extension never receives those values.
+    // Reporting them as effective operator values would be a lie; only the
+    // owned keys are reported, so the fields stay locked.
+    const cleanup = registerRuntimeHandlers(
+      MakaioBus,
+      () => [],
+      () => new Map(),
+      (name) =>
+        name === 'my-extension' ? { configSchema: z.object({ locale: z.string().default('en') }) } : undefined,
+      (name) =>
+        name === 'my-extension'
+          ? { kind: 'config', source: '/etc/makaio/operator.json', config: { locale: 42 } }
+          : undefined,
+      (name) => (name === 'my-extension' ? { config: { locale: 'en' }, usedSchemaDefaults: true } : undefined),
+    );
+
+    const result = await MakaioBus.request(SettingsSubjects.extension.getConfigSchema, {
+      extensionName: 'my-extension',
+    });
+
+    expect(result.operatorConfig).toEqual({ source: '/etc/makaio/operator.json', keys: ['locale'] });
+    // The schema default 'en' is never presented as an operator-managed value.
+    expect(result.operatorConfig?.values).toBeUndefined();
+
+    cleanup();
+  });
+
+  it('reports operator-owned keys without values when no resolved config is available', async () => {
+    // Config resolution yields nothing when a required field has no default and
+    // the merged configuration is rejected. The operator layer still shadows its
+    // keys at merge time, so they must stay locked: `keys` is reported and only
+    // `values` is omitted. Emitting the raw operator input as `values` is not an
+    // option — the field carries no marker distinguishing raw input from
+    // schema-resolved effective values, so a consumer could not tell them apart.
+    const cleanup = registerRuntimeHandlers(
+      MakaioBus,
+      () => [],
+      () => new Map(),
+      (name) => (name === 'my-extension' ? { configSchema: z.object({ apiKey: z.string().trim() }) } : undefined),
+      (name) =>
+        name === 'my-extension'
+          ? { kind: 'config', source: '/etc/makaio/operator.json', config: { apiKey: ' raw-key ' } }
+          : undefined,
+      () => undefined,
+    );
+
+    const result = await MakaioBus.request(SettingsSubjects.extension.getConfigSchema, {
+      extensionName: 'my-extension',
+    });
+
+    expect(result.hasSchema).toBe(true);
+    expect(result.operatorConfig).toEqual({ source: '/etc/makaio/operator.json', keys: ['apiKey'] });
+    // The raw ' raw-key ' operator input is never surfaced as an effective value.
+    expect(result.operatorConfig?.values).toBeUndefined();
+
+    cleanup();
+  });
 });

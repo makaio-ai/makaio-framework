@@ -2351,6 +2351,118 @@ describe('ExtensionCoordinator', () => {
 
       await coordinator.shutdown();
     });
+
+    // getResolvedConfig is what a settings surface reads to report which values
+    // an extension is actually running with. It must report the schema-parsed
+    // values, not the operator's raw input.
+    describe('getResolvedConfig', () => {
+      const TrimmingSchema = z.object({ locale: z.string().trim() });
+
+      /**
+       * Build a coordinator whose operator source supplies an untrimmed locale
+       * for a single extension declaring {@link TrimmingSchema}.
+       * @param enabled - Whether the extension is enabled, so the same fixture
+       *   covers both the active and the toggled-off case.
+       * @returns A loaded, not-yet-started coordinator.
+       */
+      function makeTrimmingCoordinator(enabled: boolean): ExtensionCoordinator {
+        const coordinator = new ExtensionCoordinator(bus, {
+          extensionContextBase: TEST_PKG_CTX_BASE,
+          loadEnabled: () => enabled,
+          operatorConfig: makeOperatorConfig({
+            'trimming-ext': { kind: 'config', source: OPERATOR_SOURCE, config: { locale: ' en-US ' } },
+          }),
+        });
+        coordinator.load([
+          makePackage('trimming-ext', {
+            configSchema: TrimmingSchema,
+            create: (ctx) => makeMockService(ctx.bus),
+          }),
+        ]);
+        return coordinator;
+      }
+
+      it('returns the schema-parsed values an active extension actually received', async () => {
+        const coordinator = makeTrimmingCoordinator(true);
+        await coordinator.startAll();
+
+        expect(coordinator.list().find((e) => e.name === 'trimming-ext')?.state).toBe('active');
+        expect(coordinator.getResolvedConfig('trimming-ext')).toEqual({
+          config: { locale: 'en-US' },
+          usedSchemaDefaults: false,
+        });
+
+        await coordinator.shutdown();
+      });
+
+      // A settings page is exactly where an extension gets toggled off, so a
+      // disabled extension must not start reporting the raw operator value.
+      it('returns the same schema-parsed values for a disabled extension', async () => {
+        const coordinator = makeTrimmingCoordinator(false);
+        await coordinator.startAll();
+
+        expect(coordinator.list().find((e) => e.name === 'trimming-ext')).toMatchObject({
+          state: 'skipped',
+          enabled: false,
+        });
+        expect(coordinator.getResolvedConfig('trimming-ext')).toEqual({
+          config: { locale: 'en-US' },
+          usedSchemaDefaults: false,
+        });
+
+        await coordinator.shutdown();
+      });
+
+      // A merged configuration the schema rejects falls back to the schema's own
+      // defaults, with the operator layer discarded. A settings surface must be
+      // able to tell that apart from a real resolution, or it would present
+      // schema defaults as the values the operator manages.
+      it('reports the schema-default fallback when the merged configuration is rejected', async () => {
+        const coordinator = new ExtensionCoordinator(bus, {
+          extensionContextBase: TEST_PKG_CTX_BASE,
+          operatorConfig: makeOperatorConfig({
+            'rejecting-ext': { kind: 'config', source: OPERATOR_SOURCE, config: { locale: 42 } },
+          }),
+        });
+        coordinator.load([
+          makePackage('rejecting-ext', {
+            configSchema: z.object({ locale: z.string().default('en') }),
+            create: (ctx) => makeMockService(ctx.bus),
+          }),
+        ]);
+
+        // The empty parse succeeds, so a config object exists — but it holds
+        // schema defaults only, which the flag is what makes visible.
+        expect(coordinator.getResolvedConfig('rejecting-ext')).toEqual({
+          config: { locale: 'en' },
+          usedSchemaDefaults: true,
+        });
+      });
+
+      it('returns undefined for an extension that was never loaded', () => {
+        const coordinator = makeTrimmingCoordinator(true);
+
+        expect(coordinator.getResolvedConfig('never-loaded-ext')).toBeUndefined();
+      });
+
+      it('reports an absent config for a loaded extension that declares no config schema', async () => {
+        const coordinator = new ExtensionCoordinator(bus, {
+          extensionContextBase: TEST_PKG_CTX_BASE,
+          operatorConfig: makeOperatorConfig({
+            'schema-less-ext': { kind: 'config', source: OPERATOR_SOURCE, config: { locale: ' en-US ' } },
+          }),
+        });
+        coordinator.load([makePackage('schema-less-ext', { create: (ctx) => makeMockService(ctx.bus) })]);
+        await coordinator.startAll();
+
+        expect(coordinator.getResolvedConfig('schema-less-ext')).toEqual({
+          config: undefined,
+          usedSchemaDefaults: false,
+        });
+
+        await coordinator.shutdown();
+      });
+    });
   });
 
   // ---------------------------------------------------------------------------

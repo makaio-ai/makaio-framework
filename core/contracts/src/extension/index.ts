@@ -172,6 +172,7 @@ export type {
   ExtensionConfigComponentLoader,
   ExtensionConfigComponentProps,
   ExtensionFieldTypeLoader,
+  ExtensionOperatorConfigProvenance,
   GatheredContext,
   GatheredEntry,
   HashSuggestion,

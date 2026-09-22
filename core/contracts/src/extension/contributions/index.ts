@@ -78,8 +78,9 @@ export type {
   PromisifiedActions,
   LoaderContext,
   ExtensionConfigComponentProps,
-  ExtensionFieldTypeLoader,
   ExtensionConfigComponentLoader,
+  ExtensionFieldTypeLoader,
+  ExtensionOperatorConfigProvenance,
 } from './web-ui-types.js';
 
 export type {
