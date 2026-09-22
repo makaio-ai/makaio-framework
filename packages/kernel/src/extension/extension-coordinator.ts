@@ -9,10 +9,17 @@ import { registerCoordinatorRpcHandlers } from './coordinator-rpc-handlers.js';
 import { emitWarnings, emitWarningsForEntry } from './health-warning-emitter.js';
 import { entryToExtensionInfo } from './extension-info.js';
 import { createExtensionIdentity } from './extension-identity-builder.js';
-import { handleSetEnabled as handleSetEnabledImpl } from './extension-toggle.js';
+import {
+  applyExtensionTransition as applyExtensionTransitionImpl,
+  handleSetEnabled as handleSetEnabledImpl,
+  type SetEnabledResult,
+  type ToggleHost,
+  type TransitionOutcome,
+} from './extension-toggle.js';
 import { coalesceExtensionOverrides, filterEligibleExtensions } from './extension-selection.js';
 import { WindowRegistry } from '../window/window-registry.js';
 import { topoSort } from './topo-sort.js';
+import { resolveBootEnabledNames } from './extension-boot-enablement.js';
 import type {
   ContributionProcessor,
   ExtensionCoordinatorOptions,
@@ -30,6 +37,7 @@ import {
   resolveExtensionEntryConfigOutcome,
 } from './extension-context-builder.js';
 import type { ExtensionConfigResolution } from './resolve-config.js';
+import { closeEnabledExtensionEntries } from './extension-entry-closure.js';
 import { runExtensionMigrations, type ExtensionMigrationRunner } from './extension-migration-runner.js';
 import { runExtensionHealthCheck, type ExtensionHealthHost } from './extension-health-runner.js';
 import { collectExtensionSurfaces, extensionsWithHttp } from './extension-surface-collector.js';
@@ -57,9 +65,16 @@ import { startExtensionEntry } from './extension-start-runner.js';
  *
  * During {@link load}, window manifests are registered into
  * {@link windowRegistry}, tray entries are collected into {@link trayEntries},
- * and CLI contributions are collected into {@link cliContributions}. Static
- * tray entries are bridged to the tray menu bus service after each extension
- * starts so the tray service can be supplied by the same extension graph.
+ * CLI contributions are collected into {@link cliContributions}, and package
+ * namespaces are registered on the bus — but only for entries whose
+ * preference-enabled state survives the dependency closure computed by
+ * `closeEnabledExtensionEntries` (`extension-entry-closure.ts`), so an entry
+ * that can never reach `active` this process never registers surfaces a
+ * `cli.execute` or window-open call could otherwise dispatch into, and its
+ * namespace can never win a collision against an active entry's or a
+ * framework namespace of the same name. Static tray entries are bridged to
+ * the tray menu bus service after each extension starts so the tray service
+ * can be supplied by the same extension graph.
  *
  * During {@link startAll}, each extension's {@link MakaioExtension.create} factory
  * is called with a `NodeExtensionContext`, followed by `service.init()`.
@@ -119,6 +134,7 @@ export class ExtensionCoordinator {
   private readonly loadConfig: ((name: string) => Record<string, unknown> | undefined) | undefined;
   private readonly operatorConfig: ExtensionOperatorConfigSource | undefined;
   private readonly runMigrations: ExtensionMigrationRunner | undefined;
+  private readonly extensionManagedNames: ReadonlySet<string> | undefined;
 
   /**
    * @param bus - Bus instance for emitting lifecycle events and serving the list RPC.
@@ -135,6 +151,7 @@ export class ExtensionCoordinator {
     this.loadConfig = options.loadConfig;
     this.operatorConfig = options.operatorConfig;
     this.runMigrations = options.runMigrations;
+    this.extensionManagedNames = options.extensionManagedNames;
     this.rpcCleanups.push(
       registerWarningActionHandler(this.bus, this.warningActionMap, options.launcherCommand ?? 'makaio'),
     );
@@ -187,8 +204,10 @@ export class ExtensionCoordinator {
    * silently excluded. Dependents of excluded extensions are transitively pruned.
    *
    * Window manifests are registered into {@link windowRegistry}, tray entries
-   * are collected into {@link trayEntries}, and CLI contributions are collected
-   * into {@link cliContributions} -- all before any services are started.
+   * are collected into {@link trayEntries}, CLI contributions are collected
+   * into {@link cliContributions}, and package bus namespaces are registered
+   * -- all before any services are started, and all gated by the same
+   * dependency closure (see the class-level doc comment above).
    *
    * Single-use: calling this method twice on the same instance throws.
    *
@@ -228,28 +247,84 @@ export class ExtensionCoordinator {
     const eligible = coalesceExtensionOverrides(
       filterEligibleExtensions(packages, this.surface, this.runtimeEnvironment),
     );
-    this.loadOrder = topoSort(eligible);
+
+    // Resolve preference-enabled names before sorting: `topoSort` scopes its
+    // fatal graph validation (missing dependency, incompatible version,
+    // cycle) to this same set, so a disabled entry's own broken dependency
+    // graph is recorded as a warning on that entry instead of aborting boot
+    // for the rest of the fleet. See `resolveBootEnabledNames` and
+    // `topoSort`'s `enabledNames` option.
+    const { enabled: bootEnabledNames } = resolveBootEnabledNames(
+      eligible,
+      this.extensionManagedNames,
+      this.loadEnabled,
+    );
+    const softValidationWarnings = new Map<string, string[]>();
+    this.loadOrder = topoSort(eligible, {
+      enabledNames: bootEnabledNames,
+      onSoftValidationWarning: (name, message) => {
+        const existing = softValidationWarnings.get(name);
+        if (existing) existing.push(message);
+        else softValidationWarnings.set(name, [message]);
+      },
+    });
 
     const retained: KernelMakaioExtension[] = [];
+    const orderedEntries: Array<{ readonly name: string; readonly entry: ExtensionEntry }> = [];
     for (const name of this.loadOrder) {
       const pkg = eligible.find((p) => p.name === name)!;
       retained.push(pkg);
+      const warningMessages = softValidationWarnings.get(name);
       const entry: ExtensionEntry = {
         pkg,
         identity: createExtensionIdentity(pkg.name),
         state: 'discovered',
-        enabled: this.loadEnabled?.(name) !== false,
+        enabled: bootEnabledNames.has(name),
+        extensionManaged: this.extensionManagedNames?.has(name) ?? true,
         warnings: [],
+        // A disabled entry whose graph validation was downgraded from fatal
+        // to a warning (see above) records it here so it is visible to a
+        // re-enable attempt even before this entry reaches `'skipped'` at
+        // `startAll()`. See `ExtensionEntry.error`'s own TSDoc.
+        ...(warningMessages ? { error: warningMessages.join('; ') } : {}),
       };
       if (configDefaults) {
         const defaults = configDefaults.get(name);
         if (defaults) entry.configDefaults = defaults;
       }
-      // Namespace definitions are static package surface. Register them during
-      // load so activation and re-enable lifecycles cannot fail on registration.
       this.entries.set(name, entry);
-      if (pkg.namespaces) {
-        this.bus.registerNamespaces(pkg.namespaces);
+      orderedEntries.push({ name, entry });
+    }
+
+    // Only collect static surfaces (windows, tray, CLI) and register bus
+    // namespaces for entries whose preference-enabled state survives the
+    // dependency closure. A disabled entry is registered so it is observable
+    // and toggleable, but enabling it only ever takes effect on the next
+    // process restart — see the persist-only `setEnabled` contract in
+    // `extension-toggle.ts` — so there is no live path that ever needs its
+    // surfaces collected or its namespace registered before then. A
+    // preference-enabled entry whose required, non-optional dependency is
+    // disabled is no different in outcome: `startExtensionEntry`'s own
+    // dependency check refuses it before it ever reaches `active`, so
+    // registering its windows/tray/CLI now would let e.g. `cli.execute`
+    // dispatch into code that is guaranteed never to run this process, and
+    // registering its namespace now would let its routing metadata collide
+    // with — and abort boot for — an active entry's or framework namespace of
+    // the same name, defeating disabling the excluded entry as a recovery
+    // path. See {@link closeEnabledExtensionEntries} for the closure this
+    // mirrors.
+    const { closed: surfaceEligibleNames, exclusions } = closeEnabledExtensionEntries(orderedEntries);
+    for (const { name, missingDependencies } of exclusions) {
+      console.warn(
+        '[ExtensionCoordinator] Excluding extension "%s" from static surface collection and namespace registration: required dependency %s is disabled',
+        name,
+        missingDependencies.join(', '),
+      );
+    }
+    for (const { name, entry } of orderedEntries) {
+      if (!surfaceEligibleNames.has(name)) continue;
+      if (entry.pkg.namespaces) {
+        this.bus.registerNamespaces(entry.pkg.namespaces);
       }
       collectExtensionSurfaces(
         {
@@ -257,21 +332,33 @@ export class ExtensionCoordinator {
           trayEntries: this._trayEntries,
           cliContributions: this._cliContributions,
         },
-        pkg,
+        entry.pkg,
       );
+      entry.surfacesCollected = true;
     }
 
+    this.registerRpcHandlers();
+    this.loaded = true;
+    return retained;
+  }
+
+  /**
+   * Register the `kernel:extension.*` and `cli.*` RPC handlers on the bus.
+   *
+   * Extracted out of {@link load} purely to stay within that method's line
+   * budget; it has no meaning independent of the single call site there.
+   */
+  private registerRpcHandlers(): void {
     this.rpcCleanups.push(
       ...registerCoordinatorRpcHandlers({
         bus: this.bus,
         entries: this.entries,
         cliContributions: this._cliContributions,
         list: () => this.list(),
+        getInfo: (name) => this.getInfo(name),
         handleSetEnabled: (name, enabled) => this.handleSetEnabled(name, enabled),
       }),
     );
-    this.loaded = true;
-    return retained;
   }
 
   /**
@@ -425,7 +512,21 @@ export class ExtensionCoordinator {
    * @returns Array of {@link ExtensionInfo} objects reflecting current observable states.
    */
   public list(): ExtensionInfo[] {
-    return [...this.entries.values()].map((entry) => entryToExtensionInfo(entry));
+    return [...this.entries.values()].map((entry) => entryToExtensionInfo(entry, this.loadEnabled));
+  }
+
+  /**
+   * Return the current state snapshot for a single named package.
+   *
+   * Backs the `kernel:extension.get` RPC (see `coordinator-rpc-handlers.ts`)
+   * so that handler does not need its own access to {@link loadEnabled} to
+   * populate `ExtensionInfo.persistedEnabled`.
+   * @param name - Extension name to look up.
+   * @returns The {@link ExtensionInfo} snapshot, or `null` when unknown.
+   */
+  public getInfo(name: string): ExtensionInfo | null {
+    const entry = this.entries.get(name);
+    return entry ? entryToExtensionInfo(entry, this.loadEnabled) : null;
   }
 
   /**
@@ -557,11 +658,13 @@ export class ExtensionCoordinator {
    *
    * The processor's `processActivated` method is called
    * (and awaited) each time an extension transitions to `active` — both during
-   * {@link startAll} and on re-enable via `kernel:extension.setEnabled(true)`.
+   * {@link startAll} and on a coordinator-internal restart via
+   * {@link applyExtensionTransition} (`true`).
    *
    * `processStopped` (when present) is called before
-   * the extension's service is destroyed during {@link shutdown} or
-   * `kernel:extension.setEnabled(false)`.
+   * the extension's service is destroyed during {@link shutdown} or a
+   * coordinator-internal restart via {@link applyExtensionTransition}
+   * (`false`).
    *
    * Processors run in registration order during activation and reverse
    * registration order during deactivation. During activation, processor errors
@@ -580,37 +683,88 @@ export class ExtensionCoordinator {
   }
 
   /**
-   * Handle the `kernel:extension.setEnabled` RPC by enabling or disabling an extension.
+   * Handle the `kernel:extension.setEnabled` RPC by durably recording the
+   * operator's enablement preference for an extension.
    *
-   * Public so the extracted RPC handler module can call it. Delegates to the
-   * shared toggle lifecycle helper.
+   * This is the operator-preference seam, and it is **persist-only**: it
+   * never runs a live state-machine transition. It persists the requested
+   * preference (refusing outright to disable a `critical` extension, or when
+   * this coordinator was constructed without a `persistEnabled` writer) and
+   * reports whether the process's current runtime state already matches it.
+   * See {@link handleSetEnabledImpl} for the full rationale — several package
+   * contributions are composed exactly once at boot and cannot be replayed
+   * for one package in isolation while the process keeps running.
+   * Coordinator-internal or product-internal callers that need to actually
+   * restart an already-started extension as part of their own mechanics
+   * should call {@link applyExtensionTransition} instead.
    * @param name - Name of the extension to toggle.
    * @param enabled - `true` to enable, `false` to disable.
-   * @returns `true` on success, `false` when the state machine rejects.
+   * @returns A {@link SetEnabledResult}: `success` is `true` when the
+   *   preference already matches the runtime state and `false` when the
+   *   request was rejected or can only take effect on the next process
+   *   restart; `outcome` always carries the underlying {@link TransitionOutcome}
+   *   (`'applied'`, `'rejected'`, or `'restart-required'`) so callers can tell
+   *   those two `false` cases apart.
+   * @throws Error when `enabled` is `false` and the extension is `critical`,
+   *   or when this coordinator has no durable `persistEnabled` writer.
    */
-  public async handleSetEnabled(name: string, enabled: boolean): Promise<boolean> {
-    if (this.shutdownRequested) return false;
+  public async handleSetEnabled(name: string, enabled: boolean): Promise<SetEnabledResult> {
+    if (this.shutdownRequested) return { success: false, outcome: 'rejected' };
 
-    return await this.enqueueLifecycle(() =>
-      handleSetEnabledImpl(
-        {
-          ...this.createExtensionContextHost(),
-          db: this.db,
-          entries: this.entries,
-          persistEnabled: this.persistEnabled,
-          contributionProcessors: this.contributionProcessors,
-          runHealthCheck: (n) => runExtensionHealthCheck(this.createExtensionHealthHost(), n),
-          emitWarningsForEntry: (n, entry) =>
-            emitWarningsForEntry(
-              { bus: this.bus, entries: this.entries, warningActionMap: this.warningActionMap },
-              n,
-              entry,
-            ),
-        },
-        name,
-        enabled,
-      ),
-    );
+    return await this.enqueueLifecycle(() => handleSetEnabledImpl(this.createToggleHost(), name, enabled));
+  }
+
+  /**
+   * Enable or disable an already-boot-started extension without touching
+   * operator preference.
+   *
+   * This is the coordinator-internal lifecycle primitive: it does not persist
+   * anything and does not refuse a `critical` extension, but it does run the
+   * real state-machine transition (unlike {@link handleSetEnabled}, which is
+   * persist-only). Use it when a restart is part of the coordinator's own
+   * mechanics rather than an operator-originated request — for example a
+   * dependency registry that restarts a `critical` extension built to survive
+   * that gap (see the `automation-trigger` binding runtime package for the
+   * canonical example). It refuses to activate an extension boot skipped
+   * entirely (never started `create`/`init` this process) — see the
+   * boot-skip guard in `enableExtension` — because that entry's boot-only
+   * contribution surfaces were never composed in the first place.
+   * @param name - Name of the extension to toggle.
+   * @param enabled - `true` to enable, `false` to disable.
+   * @returns The transition outcome: `'applied'` or `'rejected'`.
+   */
+  public async applyExtensionTransition(
+    name: string,
+    enabled: boolean,
+  ): Promise<Exclude<TransitionOutcome, 'restart-required'>> {
+    if (this.shutdownRequested) return 'rejected';
+
+    return await this.enqueueLifecycle(() => applyExtensionTransitionImpl(this.createToggleHost(), name, enabled));
+  }
+
+  /**
+   * Build the {@link ToggleHost} surface shared by {@link handleSetEnabled} and
+   * {@link applyExtensionTransition}.
+   *
+   * Centralizing this avoids the two toggle entry points drifting out of sync
+   * on which coordinator state the toggle helpers can see.
+   * @returns Host surface for the toggle lifecycle helpers.
+   */
+  private createToggleHost(): ToggleHost {
+    return {
+      ...this.createExtensionContextHost(),
+      db: this.db,
+      entries: this.entries,
+      persistEnabled: this.persistEnabled,
+      contributionProcessors: this.contributionProcessors,
+      runHealthCheck: (n) => runExtensionHealthCheck(this.createExtensionHealthHost(), n),
+      emitWarningsForEntry: (n, entry) =>
+        emitWarningsForEntry(
+          { bus: this.bus, entries: this.entries, warningActionMap: this.warningActionMap },
+          n,
+          entry,
+        ),
+    };
   }
 
   /**

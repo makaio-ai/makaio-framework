@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { primaryMigrationsPath, type StorageDialect } from '@makaio/contracts';
+import { closeEnabledExtensionEntries } from './extension-entry-closure.js';
 import type { ExtensionEntry, KernelMakaioExtension } from './types.js';
 
 /** Extension migration source passed from the coordinator to the host runtime. */
@@ -19,6 +20,29 @@ export type ExtensionMigrationRunner = (sources: ReadonlyArray<ExtensionMigratio
 
 /**
  * Collect migration sources in dependency order and invoke the host callback.
+ *
+ * An extension the coordinator's soft-enablement gate has disabled is
+ * excluded from the collected sources even though its entry stays in
+ * `loadOrder` (registered so it is observable and toggleable for the next
+ * process restart). Disabling an extension is the operator's escape
+ * hatch when its migration is the thing breaking boot; running that migration
+ * anyway — before {@link startExtensionEntry} ever gets a chance to skip the
+ * disabled entry — would defeat the escape hatch and could still mutate the
+ * database or abort startup. A `critical` package is exempt because
+ * {@link ExtensionCoordinator.load} forces `entry.enabled` back to `true` for
+ * it regardless of the enablement store.
+ *
+ * `entry.enabled` alone only reflects one extension's own preference. A
+ * preference-enabled extension whose required, non-optional dependency is
+ * disabled will never reach `active` either — {@link startExtensionEntry}'s
+ * own dependency check refuses it — so its migration must be excluded for
+ * the same reason a directly disabled extension's migration is:
+ * {@link closeEnabledExtensionEntries} closes `entry.enabled` under the
+ * dependency graph before collection, mirroring
+ * `closeEffectiveEnabledBootPackages` (`runtimes/node/src/boot-extension-selection.ts`)
+ * at coordinator-entry granularity. {@link ExtensionCoordinator.load} applies
+ * the same closure before static surface collection, so a preference-enabled
+ * extension blocked by a disabled dependency is excluded from both.
  * @param options - Coordinator state and host migration callback.
  */
 export async function runExtensionMigrations(options: {
@@ -28,12 +52,27 @@ export async function runExtensionMigrations(options: {
 }): Promise<void> {
   if (!options.runMigrations) return;
 
-  const sources: ExtensionMigrationSource[] = [];
+  const orderedEntries: Array<{ readonly name: string; readonly entry: ExtensionEntry }> = [];
   for (const name of options.loadOrder) {
     const entry = options.entries.get(name);
     if (!entry) {
       throw new Error(`Extension "${name}" is in loadOrder but missing from entries`);
     }
+    orderedEntries.push({ name, entry });
+  }
+
+  const { closed: dependencyClosedEnabledNames, exclusions } = closeEnabledExtensionEntries(orderedEntries);
+  for (const { name, missingDependencies } of exclusions) {
+    console.warn(
+      '[ExtensionCoordinator] Excluding extension "%s" from migration collection: required dependency %s is disabled',
+      name,
+      missingDependencies.join(', '),
+    );
+  }
+
+  const sources: ExtensionMigrationSource[] = [];
+  for (const { name, entry } of orderedEntries) {
+    if (!dependencyClosedEnabledNames.has(name)) continue;
     const migrations = entry.pkg.storage?.migrations;
     if (!migrations) continue;
 

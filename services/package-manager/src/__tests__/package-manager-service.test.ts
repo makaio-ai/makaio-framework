@@ -164,13 +164,24 @@ class StubRegistryService implements PackageRegistryClient {
  * In-memory local installer stub.
  */
 class StubLocalInstaller implements LocalInstallClient {
-  public readonly installed: Array<{ name: string; version: string; sourcePath: string; serverImportPath: string }> =
-    [];
+  public readonly installed: Array<{
+    name: string;
+    version: string;
+    sourcePath: string;
+    serverImportPath: string;
+    critical?: boolean;
+  }> = [];
 
-  public async install(sourcePath: string): Promise<PackageInstallResult> {
+  public async install(sourcePath: string, critical?: boolean): Promise<PackageInstallResult> {
     const name = `local-ext-${this.installed.length}`;
     const version = '0.1.0';
-    this.installed.push({ name, version, sourcePath, serverImportPath: `${sourcePath}/src/server.ts` });
+    this.installed.push({
+      name,
+      version,
+      sourcePath,
+      serverImportPath: `${sourcePath}/src/server.ts`,
+      ...(critical !== undefined && { critical }),
+    });
     return { success: true, packageName: name, version, restartRequired: true };
   }
 
@@ -189,7 +200,14 @@ class StubLocalInstaller implements LocalInstallClient {
   }
 
   public async list(): Promise<
-    Array<{ name: string; version: string; sourcePath: string; source: 'local'; serverImportPath: string }>
+    Array<{
+      name: string;
+      version: string;
+      sourcePath: string;
+      source: 'local';
+      serverImportPath: string;
+      critical?: boolean;
+    }>
   > {
     return this.installed.map((e) => ({ ...e, source: 'local' as const }));
   }
@@ -277,9 +295,41 @@ describe('PackageManagerService', () => {
       expect(result.packages).toEqual([
         {
           name: 'local-ext-0',
+          descriptorName: 'local-ext-0',
           version: '0.1.0',
           hasDescriptor: true,
           serverImportPath: '/tmp/my-local-ext/src/server.ts',
+        },
+      ]);
+
+      await localService.destroy();
+    });
+
+    it('carries the critical flag through for a local-path extension, matching the npm path', async () => {
+      // `LocalPathInstaller.list()` already reads `critical` off the
+      // descriptor; the normalization into `PackageInfo` must not drop it —
+      // an npm-installed extension with the same descriptor would report
+      // `critical: true` (see `yarn-integration.ts`), and a local install of
+      // the identical descriptor must report the same fact.
+      const localInstaller = new StubLocalInstaller();
+      await localInstaller.install('/tmp/my-critical-local-ext', true);
+      const localBus = createBusInstance({ context: createBusContext() });
+      const localService = new PackageManagerService(localBus, '/tmp/.makaio', {
+        yarnManager: new StubPackageManager([], new Map()),
+        localInstaller,
+      });
+      await localService.init();
+
+      const result = await localBus.request(PackageSubjects.list, {});
+
+      expect(result.packages).toEqual([
+        {
+          name: 'local-ext-0',
+          descriptorName: 'local-ext-0',
+          version: '0.1.0',
+          hasDescriptor: true,
+          serverImportPath: '/tmp/my-critical-local-ext/src/server.ts',
+          critical: true,
         },
       ]);
 

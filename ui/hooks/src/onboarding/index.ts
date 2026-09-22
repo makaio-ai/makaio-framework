@@ -28,7 +28,6 @@ export type {
   UseOnboardingFlowResult,
 } from './types.js';
 
-export type { PersistedExtensionConfigEntry } from './plugin-persistence.js';
 export { persistPluginEnabled } from './plugin-persistence.js';
 
 export type { OnboardingAdapter, OnboardingClient, ScanContext } from './scan-onboarding-adapters.js';

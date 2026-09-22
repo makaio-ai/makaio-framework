@@ -87,11 +87,20 @@ export const PLUGIN_CATEGORIES: ReadonlyArray<PluginCategory> = [
 
 /**
  * Derive the initial enabled state for a plugin based on its category.
+ *
+ * A `critical` extension is always treated as enabled by default, regardless
+ * of which category it falls into (including the synthetic "Other" category
+ * a critical extension outside every declared category would otherwise land
+ * in with `defaultEnabled: false`): the kernel force-starts it on every boot
+ * and refuses to persist a disable for it, so a default-derivation that
+ * disagreed would only misrepresent a state the kernel can never actually
+ * apply.
  * @param category - The category this plugin belongs to
+ * @param critical - Whether the plugin is a `critical` extension
  * @returns True when the plugin should be toggled on by default
  */
-export function deriveDefaultEnabled(category: PluginCategory): boolean {
-  return category.alwaysEnabled || category.defaultEnabled;
+export function deriveDefaultEnabled(category: PluginCategory, critical = false): boolean {
+  return critical || category.alwaysEnabled || category.defaultEnabled;
 }
 
 /** Fallback category for extensions not listed in any known category. */

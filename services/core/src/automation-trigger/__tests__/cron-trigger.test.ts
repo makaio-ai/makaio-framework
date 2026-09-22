@@ -307,14 +307,18 @@ describe('cron scheduler restart', () => {
       // Disabling the provider destroys its jobs. The activation that captured it
       // must be retired here — while it stays indexed, it is permanently inert and
       // any later acquisition would join it instead of building a live one.
-      await expect(coordinator.handleSetEnabled(AutomationCronSchedulerToken.name, false)).resolves.toBe(true);
+      await expect(coordinator.applyExtensionTransition(AutomationCronSchedulerToken.name, false)).resolves.toBe(
+        'applied',
+      );
       expect(instances[0]?.cleanups).toHaveBeenCalledTimes(1);
 
       // Re-enabling installs a new provider and re-registers the built-ins, whose
       // `automation-triggers.changed` event is the only signal a subscriber can
       // reconcile on.
       const changedBeforeReenable = changed.length;
-      await expect(coordinator.handleSetEnabled(AutomationCronSchedulerToken.name, true)).resolves.toBe(true);
+      await expect(coordinator.applyExtensionTransition(AutomationCronSchedulerToken.name, true)).resolves.toBe(
+        'applied',
+      );
       expect(instances).toHaveLength(2);
       await vi.waitFor(() => expect(changed.length).toBeGreaterThan(changedBeforeReenable));
 

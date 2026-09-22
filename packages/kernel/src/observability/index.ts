@@ -18,4 +18,5 @@ export type {
   ServiceInfo,
   ExtensionInfo,
 } from './shared-schemas.js';
-export { ExtensionNamespace, ExtensionSubjects } from './extension-namespace.js';
+export { ExtensionNamespace, ExtensionSubjects, TransitionOutcomeSchema } from './extension-namespace.js';
+export type { TransitionOutcome } from './extension-namespace.js';

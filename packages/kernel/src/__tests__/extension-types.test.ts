@@ -22,6 +22,8 @@ describe('ExtensionInfo (from observability/shared-schemas)', () => {
       displayName: 'Docker',
       state: 'failed',
       enabled: false,
+      extensionManaged: true,
+      critical: false,
       error: 'Docker daemon not running',
     };
 
@@ -35,6 +37,8 @@ describe('ExtensionInfo (from observability/shared-schemas)', () => {
       displayName: 'Voice Bridge',
       state: 'active',
       enabled: true,
+      extensionManaged: true,
+      critical: false,
     };
 
     expectTypeOf(info).toMatchTypeOf<ExtensionInfo>();
@@ -46,6 +50,8 @@ describe('ExtensionInfo (from observability/shared-schemas)', () => {
       displayName: 'Relay',
       state: 'initializing',
       enabled: true,
+      extensionManaged: true,
+      critical: false,
     };
 
     expectTypeOf(info.state).toEqualTypeOf<ComponentState>();
@@ -58,6 +64,8 @@ describe('ExtensionInfo (from observability/shared-schemas)', () => {
       displayName: 'Relay',
       state: 'active',
       enabled: true,
+      extensionManaged: true,
+      critical: false,
       browser,
     });
 

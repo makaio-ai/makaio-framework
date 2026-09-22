@@ -90,8 +90,67 @@ export const ExtensionInfoSchema = ComponentInfoSchema.extend({
    * `undefined` is equivalent to `'any'`.
    */
   surface: z.enum(['interactive', 'headless', 'any']).optional(),
-  /** Whether this extension is currently enabled by the user or platform config. */
+  /**
+   * Whether this extension's runtime entry is currently enabled.
+   *
+   * Set once at boot (from the durable preference, with the `critical`
+   * override applied) and only ever changed afterwards by a real state
+   * transition — the coordinator-internal `applyExtensionTransition`
+   * primitive. `kernel:extension.setEnabled` never changes it: that RPC is
+   * persist-only, so this flag can read stale relative to the durable
+   * preference after a `setEnabled` call whose `outcome` was
+   * `'restart-required'` — the preference file already reflects the request,
+   * this flag reflects the process's actual runtime state until the next
+   * restart catches up.
+   */
   enabled: z.boolean(),
+  /**
+   * Whether this extension's enablement is operator-managed.
+   *
+   * `true` for a descriptor-based extension package: its enable/disable
+   * preference is read from and written to the durable enablement store
+   * (`loadEnabled` / `persistEnabled` / `kernel:extension.setEnabled`).
+   * `false` for a framework package — the coordinator loads it
+   * unconditionally, `kernel:extension.setEnabled` refuses to toggle it, and
+   * `persistedEnabled` below is always `undefined` for it, because there is
+   * no durable preference to report.
+   *
+   * A caller building an enable/disable control (onboarding, the CLI's
+   * `extensions` command, a settings surface) reads this field to decide
+   * whether to offer the control at all, rather than discovering the
+   * refusal only after attempting the RPC.
+   */
+  extensionManaged: z.boolean(),
+  /**
+   * The durable enablement preference, read live from the coordinator's
+   * `loadEnabled` callback at snapshot time (`kernel:extension.list` /
+   * `kernel:extension.get`) — not a copy of `enabled` and not subject to the
+   * `critical` override below.
+   *
+   * Contrast with `enabled`: `enabled` is the *runtime* state and can lag
+   * this preference until the next restart, because `setEnabled` is
+   * persist-only (see `enabled`'s own doc). This field is the preference
+   * itself as currently recorded, so a hand-disabled `critical` extension —
+   * which the coordinator force-starts regardless of the store — reports
+   * `enabled: true` alongside `persistedEnabled: false`. A caller such as
+   * onboarding that seeds *new* choices from an existing snapshot must read
+   * this field, not `enabled`, or it will silently discard a durable disable
+   * whose runtime effect has not caught up yet.
+   *
+   * `undefined` when the coordinator was built without a `loadEnabled`
+   * reader at all (for example an isolated, headless runtime with no durable
+   * enablement store), or when `extensionManaged` is `false` — neither case
+   * has a durable preference to report, which is a different answer from
+   * either `true` or `false`.
+   */
+  persistedEnabled: z.boolean().optional(),
+  /**
+   * When `true`, the runtime cannot function without this extension: a disable
+   * request is refused, and a disabled entry in the enablement store is
+   * overridden at boot. Surfaces that offer an enable/disable control read this
+   * flag so they can refuse the same requests the runtime refuses.
+   */
+  critical: z.boolean(),
   /** Browser entry point declared by the package manifest, if any. */
   browser: BrowserEntrypointSchema.optional(),
 });

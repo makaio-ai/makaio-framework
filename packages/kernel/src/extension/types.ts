@@ -111,13 +111,58 @@ export interface ExtensionCoordinatorOptions {
    */
   runtimeEnvironment?: RuntimeEnvironment;
   /**
-   * Optional callback to persist enabled/disabled state after a setEnabled call.
-   * The composition root supplies this to bridge into PreferencesSubjects or another durable store.
+   * Names of packages whose enablement is operator-managed.
+   *
+   * Scopes the coordinator's enablement machinery to the packages a
+   * descriptor actually declares: {@link ExtensionCoordinatorOptions.loadEnabled}
+   * is only consulted for a name in this set, `handleSetEnabled`
+   * (`kernel:extension.setEnabled`) refuses outright for any other name, and
+   * `ExtensionInfo.persistedEnabled` is `undefined` for it. Every name absent
+   * from this set boots unconditionally enabled — a framework package is not
+   * subject to operator enablement at all, so the enablement store's
+   * category defaults (and a hand-edited disable) can never skip it, and
+   * dependents cannot be excluded by a framework name looking "disabled".
+   *
+   * Omitted entirely: every loaded package is treated as managed, which
+   * preserves prior behavior for coordinators built without this option
+   * (including every existing test that constructs one without it).
+   */
+  extensionManagedNames?: ReadonlySet<string>;
+  /**
+   * Optional callback to durably persist an enablement preference.
+   *
+   * Called by `handleSetEnabled` (the `kernel:extension.setEnabled` RPC
+   * handler) on every request it does not refuse outright — unconditionally,
+   * regardless of whether the preference appears unchanged, and regardless of
+   * this same coordinator's own {@link ExtensionCoordinatorOptions.loadEnabled}
+   * value. The composition root supplies this to bridge into a durable store
+   * (for example `ExtensionEnablementStore` from `@makaio/runtime-node`),
+   * which re-reads its backing file before writing so a concurrent hand-edit
+   * is never silently overwritten by a stale in-memory guess.
    */
   persistEnabled?: (name: string, enabled: boolean) => Promise<void>;
   /**
-   * Optional callback to retrieve persisted enabled state during startAll.
-   * Returns `false` to skip a package at boot, `true` or `undefined` to start normally.
+   * Optional callback to retrieve the persisted enablement preference.
+   *
+   * Called once per package during {@link ExtensionCoordinator.load}, to seed
+   * `entry.enabled` for this boot: returns `false` to skip the package at
+   * boot, `true` or `undefined` to start it normally. That boot-time read is
+   * a snapshot — nothing later re-derives `entry.enabled` from it, and
+   * `handleSetEnabled` must never use it (or `entry.enabled`) to decide
+   * whether a write is necessary — see {@link persistEnabled}. A hand-edit to
+   * the backing store between boots is exactly what this snapshot is meant to
+   * pick up on the *next* restart, not something a live `setEnabled` call
+   * reconciles against.
+   *
+   * `list()` and the singular `get` lookup (`kernel:extension.list` /
+   * `kernel:extension.get`) also call this — once per extension, per call —
+   * to populate `ExtensionInfo.persistedEnabled`. Unlike the boot-time read
+   * above, that call is live: a caller backed by `ExtensionEnablementStore`
+   * (`@makaio/runtime-node`) reflects every `persistEnabled` write this
+   * process has committed in-process since boot, because that store updates
+   * its in-memory set only after its own write lands (see that module). It
+   * does not reflect a concurrent hand-edit made by another process; the
+   * next boot's `load()` call is what picks that up.
    */
   loadEnabled?: (name: string) => boolean | undefined;
   /**
@@ -194,11 +239,39 @@ export interface ExtensionEntry {
   state: ComponentState;
   /** Whether this extension is currently enabled. Defaults to `true` on load. */
   enabled: boolean;
+  /**
+   * Whether this entry's enablement is operator-managed.
+   *
+   * Set once in {@link ExtensionCoordinator.load} from
+   * {@link ExtensionCoordinatorOptions.extensionManagedNames}: `true` when the
+   * name is present in that set, or when the coordinator was built without
+   * one at all (test compatibility — every entry is then treated as
+   * managed). `false` marks a framework package, which the coordinator loads
+   * unconditionally: `handleSetEnabled` refuses to toggle it, and
+   * {@link ExtensionCoordinatorOptions.loadEnabled} is never consulted for it
+   * (neither to seed `enabled` above nor to populate
+   * `ExtensionInfo.persistedEnabled`) — a non-managed entry's `enabled` is
+   * therefore always `true`.
+   */
+  extensionManaged: boolean;
   /** Instantiated service, present after successful `create + init`. */
   service?: ExtensionService;
   /** Cleanup returned by `storage.registerHandlers`, if any. */
   storageCleanup?: () => void;
-  /** Error message captured when state is `'failed'` or `'skipped'`. */
+  /**
+   * Error message captured when state is `'failed'` or `'skipped'`.
+   *
+   * {@link ExtensionCoordinator.load} also pre-populates this field for a
+   * boot-disabled entry whose own declared dependency graph would otherwise
+   * have failed the coordinator's fatal graph validation (missing
+   * dependency, incompatible version, or a cycle running only through
+   * disabled entries) — see `topoSort`'s `onSoftValidationWarning` seam. That
+   * write happens while the entry still sits at `'discovered'`, ahead of the
+   * `'skipped'` transition `startExtensionEntry` applies for it moments later
+   * at `startAll()`, so the reason is already visible to a re-enable attempt
+   * (`kernel:extension.setEnabled`) made before this process ever reaches
+   * `startAll()`.
+   */
   error?: string;
   /**
    * Weakest configuration layer for this extension: the descriptor's own
@@ -214,4 +287,36 @@ export interface ExtensionEntry {
    * package is disabled or stopped. An empty array signals no active warnings.
    */
   warnings: ExtensionWarning[];
+  /**
+   * Whether static surfaces (windows, tray, CLI) and the package's bus
+   * namespace have been collected/registered for this entry.
+   *
+   * Set to `true` during {@link ExtensionCoordinator.load} for extensions
+   * whose preference-enabled state survives the dependency closure computed
+   * by `closeEnabledExtensionEntries` (`extension-entry-closure.ts`). An
+   * entry disabled at boot, or one that is preference-enabled but excluded
+   * from that closure because a required, non-optional dependency is
+   * disabled, never sets this: neither can reach `active` this process — the
+   * first because `startExtensionEntry` skips it outright, the second
+   * because its own dependency check refuses it — so nothing was collected
+   * or registered for either. Withholding namespace registration this way
+   * also keeps a disabled entry's routing metadata from colliding with, and
+   * aborting boot for, an active entry's or framework namespace of the same
+   * name — disabling the offending entry remains a working recovery path.
+   * Both can only be corrected by a fresh process restart, whose own
+   * {@link ExtensionCoordinator.load} call collects surfaces and registers
+   * namespaces normally once the blocking condition is gone. This flag also
+   * distinguishes the two ways an entry reaches `'skipped'` — set for a
+   * self-skip during this process's own `create`/`init`, unset for a
+   * boot-time disable that short-circuited before any start attempt — which
+   * `applyExtensionTransition`'s boot-skip guard relies on to refuse
+   * activating an entry boot never started. A closure-excluded entry never
+   * reaches `'skipped'` itself (its own dependency check fails it into
+   * `'failed'` instead), so this flag is unset but does not need to gate
+   * that guard for it: the same dependency check re-runs on every re-enable
+   * attempt and keeps failing while the dependency stays disabled, so the
+   * entry whose namespace was never registered can never reach the
+   * `create`/`init` call that would need it in this process.
+   */
+  surfacesCollected?: boolean;
 }

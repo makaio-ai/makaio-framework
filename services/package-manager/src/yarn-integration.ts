@@ -330,9 +330,11 @@ export class YarnPackageManager {
           name,
           version,
           hasDescriptor: true,
+          descriptorName: descriptorResult.descriptorName,
           ...(descriptorResult.serverImportPath !== undefined && {
             serverImportPath: descriptorResult.serverImportPath,
           }),
+          ...(descriptorResult.critical !== undefined && { critical: descriptorResult.critical }),
         });
       }
 
@@ -390,7 +392,10 @@ export class YarnPackageManager {
    */
   private async readInstalledDescriptor(
     packageName: string,
-  ): Promise<{ hasDescriptor: false } | { hasDescriptor: true; serverImportPath?: string }> {
+  ): Promise<
+    | { hasDescriptor: false }
+    | { hasDescriptor: true; descriptorName: string; serverImportPath?: string; critical?: boolean }
+  > {
     const descriptor = await this.readInstalledExtensionDescriptor(packageName);
     if (descriptor === null) {
       return { hasDescriptor: false };
@@ -399,7 +404,9 @@ export class YarnPackageManager {
     const serverImportPath = await this.resolveInstalledServerEntrypoint(packageName, descriptor);
     return {
       hasDescriptor: true,
+      descriptorName: descriptor.name,
       ...(serverImportPath !== undefined && { serverImportPath }),
+      ...(descriptor.critical !== undefined && { critical: descriptor.critical }),
     };
   }
 

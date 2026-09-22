@@ -355,9 +355,9 @@ describe('client hook response contributions', () => {
     const registry = runtime.coordinator.getExtensionService(ClientsCoreToken)!.hookResponseRegistry;
     try {
       expect(snapshot(runtime.coordinator)).toHaveLength(1);
-      await runtime.coordinator.handleSetEnabled('lifecycle', false);
+      await runtime.coordinator.applyExtensionTransition('lifecycle', false);
       expect(snapshot(runtime.coordinator)).toHaveLength(0);
-      await runtime.coordinator.handleSetEnabled('lifecycle', true);
+      await runtime.coordinator.applyExtensionTransition('lifecycle', true);
       expect(snapshot(runtime.coordinator)).toHaveLength(1);
       expect(activations).toBe(2);
     } finally {

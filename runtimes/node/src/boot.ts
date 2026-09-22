@@ -9,7 +9,9 @@
  * Startup sequence:
  *  0. Makaio home resolution + operator extension config snapshot (read once from
  *     `<makaioHome>/config/extensions/`; an unlistable directory fails boot here,
- *     before anything has started)
+ *     before anything has started) + enablement store (read from
+ *     `<makaioHome>/config/extensions.json`; missing or corrupt file defaults to
+ *     all-extensions-enabled with a console warning)
  *  1. Config + identity resolution (including machineId mismatch guard)
  *  2. Bus creation (MakaioBus singleton) + namespace registration + busCreated phase event
  *  3. Transport — BusServerTransportProvider (WebSocket bus server on provided HTTP server)
@@ -34,6 +36,7 @@ import {
   BootNamespace,
   ExtensionNamespace,
   KernelNamespace,
+  type KernelMakaioExtension,
 } from '@makaio/kernel';
 import { CliNamespace } from '@makaio/kernel/cli';
 import { RuntimeSubjects, RuntimeNamespace } from './bus/runtime/namespace.js';
@@ -60,9 +63,12 @@ import {
   createToolContributionProcessor,
   createTransitionContributionProcessor,
   createWorkflowBlockContributionProcessor,
+  frameworkCorePackages,
   FrameworkServicesCoreNamespaces,
+  ModelRegistryToken,
 } from '@makaio/services-core';
 import {
+  AutomationCronSchedulerToken,
   createAutomationTriggerContributionProcessor,
   selectAutomationCronSchedulerPackage,
 } from '@makaio/services-core/automation-trigger';
@@ -76,7 +82,7 @@ import { createPackageManagerPackage } from '@makaio/services-package-manager/pa
 import { createHttpContributionProcessor } from './http-contribution-processor.js';
 import { resolveMakaioHome } from './makaio-config.js';
 import { preferencesStoragePackage } from '@makaio/preferences/package';
-import { createClientsCorePackage } from '@makaio/subsystem-client';
+import { ClientsCoreToken, createClientsCorePackage } from '@makaio/subsystem-client';
 import { createNodeClientBinaryStrategyDependencies } from './client-binary-strategy-dependencies.js';
 import { cliDetectionPackage } from './cli-detection/package.js';
 import { activateAdapterRuntimeIdentity, prepareAdapterRuntime } from './compose-adapter-runtime.js';
@@ -92,16 +98,19 @@ import {
   warnOnUnaddressableExtensionOperatorConfigNames,
   warnOnUnappliedExtensionOperatorConfig,
 } from './extension-operator-config.js';
+import { loadExtensionEnablementStore } from './extension-enablement-store.js';
 import { createBootModelRegistryFetcher } from './boot-model-registry.js';
 import { ensureFrameworkPackageLink } from './framework-package-link.js';
 import {
   buildRuntimeEnvironment,
   collectHostCleanups,
+  composeBootExtensionSelection,
   normalizeNodeHostCapabilities,
   parseSkipExtensions,
   registerExtensionBootContributions,
   selectEligibleAutomationCronSchedulerHostPackages,
   selectBootEligibleExtensionPackages,
+  selectExtensionManagedEnabledPackages,
   selectFrameworkCorePackages,
 } from './boot-extension-selection.js';
 import { loadBootExtensions } from './boot-extension-loading.js';
@@ -216,6 +225,15 @@ export async function bootMakaioRuntimeCore(
   // core already resolves. Every host reaches this function, so none of them
   // carries a loader of its own and none of them can drift from the others.
   const operatorConfig = options.operatorConfig ?? (await loadExtensionOperatorConfig({ makaioHome }));
+
+  // Framework-owned enablement store — the single source of truth for which
+  // extensions have been explicitly disabled. Read once before coordinator
+  // creation; writes are atomic (temp-file rename). A missing or corrupt file
+  // defaults to all-extensions-enabled and records a diagnostic on the store.
+  const enablementStore = await loadExtensionEnablementStore(makaioHome);
+  if (enablementStore.readFailure) {
+    console.warn('[boot] Extension enablement file could not be read:', enablementStore.readFailure.diagnostic);
+  }
 
   // Resolve discovery strategies and module-loader overrides once up-front
   // so the boot sequence body is free of repeated `?? new Filesystem*()` guards.
@@ -417,10 +435,59 @@ export async function bootMakaioRuntimeCore(
     const runtimeEnvironment = buildRuntimeEnvironment(process.platform, options.hostCapabilities);
     const bootEligibleExtensionPackages = selectBootEligibleExtensionPackages({
       packages: allExtensionPackages,
-      configProvider: options.extensionConfigProvider,
+      configProvider: enablementStore,
       surface: options.surface ?? 'headless',
       runtimeEnvironment,
     });
+
+    // -----------------------------------------------------------------------
+    // Framework package name universe for collision resolution.
+    //
+    // `composeBootExtensionSelection`'s Stage 2 needs every package name this
+    // boot loads unconditionally, regardless of extension state — but
+    // assembling the real `frameworkPackages` array needs the extension
+    // closure result for two entries (`clientsCorePackage`'s client
+    // definitions, and the ownership-conditional session-orchestrator
+    // package). Building that array first and composing the closure second
+    // would recreate the exact ordering bug this composition fixes. Every
+    // framework package name is, however, static and extension-independent:
+    // `selectFrameworkCorePackages` only ever REMOVES a name already present
+    // in the static `frameworkCorePackages` list, and every scheduler
+    // candidate registers under the single, fixed
+    // `AutomationCronSchedulerToken.name` regardless of which package wins
+    // that slot. So the full name universe is assembled from static package
+    // identities and host-option-gated (never extension-gated) names, ahead
+    // of and independent of the extension-closure result below.
+    // -----------------------------------------------------------------------
+    let platformMacOSPackage: KernelMakaioExtension | undefined;
+    if (process.platform === 'darwin') {
+      ({ platformMacOSPackage } = await import('@makaio/platform-macos'));
+    }
+    const frameworkPackageNames = new Set<string>([
+      preferencesStoragePackage.name,
+      cliDetectionPackage.name,
+      ClientsCoreToken.name,
+      ...(options.enablePackageManager !== false ? [createPackageManagerPackage().name] : []),
+      AdapterSubsystemToken.name,
+      ...frameworkCorePackages.map((pkg) => pkg.name),
+      WorkflowEngineToken.name,
+      ModelRegistryToken.name,
+      logImportRegistryPackage.name,
+      AutomationCronSchedulerToken.name,
+      ...(platformMacOSPackage ? [platformMacOSPackage.name] : []),
+    ]);
+
+    // Single composition seam: every downstream consumer below (client
+    // definitions, runtime ownership, scheduler policy selection,
+    // `packagesToLoad`, `registerExtensionBootContributions`, warning
+    // diagnostics) reads its sets from this one result instead of
+    // recomputing any stage independently — see `composeBootExtensionSelection`.
+    const selection = composeBootExtensionSelection({
+      bootEligibleExtensionPackages,
+      configProvider: enablementStore,
+      frameworkPackageNames,
+    });
+    const { effectiveEnabledBootPackages, effectiveEnabledPackageNames, mergeableExtensionPackages } = selection;
 
     const busUrl = buildLocalBusUrl(boundHost, boundPort);
 
@@ -445,11 +512,15 @@ export async function bootMakaioRuntimeCore(
       loadConfig: options.extensionConfigProvider
         ? (name) => options.extensionConfigProvider!.loadConfig(name)
         : undefined,
-      loadEnabled: options.extensionConfigProvider
-        ? (name) => options.extensionConfigProvider!.loadEnabled(name)
-        : undefined,
+      loadEnabled: (name) => enablementStore.loadEnabled(name),
+      persistEnabled: (name, enabled) => enablementStore.persistEnabled(name, enabled),
       operatorConfig,
       runMigrations: (sources) => runBootExtensionMigrations(db, sources),
+      // Names of the post-collision extension package pool (Stage 2 of
+      // `composeBootExtensionSelection`) — the kernel uses this to enforce
+      // that framework/core packages are never toggleable through the
+      // enablement store, independent of the boot-time sets derived from it.
+      extensionManagedNames: selection.extensionManagedPackageNames,
     });
 
     // Framework-level packages load unconditionally — they provide core
@@ -461,7 +532,7 @@ export async function bootMakaioRuntimeCore(
         providerConfigsDir: path.join(makaioHome, 'provider-configs'),
         adaptersDir: path.join(makaioHome, 'adapters'),
       });
-    const clientDefinitions = bootEligibleExtensionPackages.flatMap((pkg) => pkg.clients ?? []);
+    const clientDefinitions = effectiveEnabledBootPackages.flatMap((pkg) => pkg.clients ?? []);
 
     const frameworkPackages = [
       preferencesStoragePackage,
@@ -521,14 +592,13 @@ export async function bootMakaioRuntimeCore(
 
     frameworkPackages.push(
       adapterSubsystemPackage,
-      ...selectFrameworkCorePackages(bootEligibleExtensionPackages),
+      ...selectFrameworkCorePackages(effectiveEnabledBootPackages),
       createWorkflowEnginePackage(workflowRunnerPackageOptions),
       createModelRegistryPackage(modelRegistryFetcher),
       logImportRegistryPackage,
     );
 
-    if (process.platform === 'darwin') {
-      const { platformMacOSPackage } = await import('@makaio/platform-macos');
+    if (platformMacOSPackage) {
       frameworkPackages.push(platformMacOSPackage);
     }
 
@@ -536,18 +606,34 @@ export async function bootMakaioRuntimeCore(
     // provider. Resolve that provider against everything this boot is about to
     // load, so a duplicate or mis-registered provider fails here rather than
     // leaving cron bindings silently unscheduled: framework-only boot falls back
-    // to the framework's local in-process provider.
+    // to the framework's local in-process provider. `loadedPackages` uses the
+    // dependency-closed enabled set (`effectiveEnabledBootPackages`), not the
+    // eligibility-only set: a disabled extension still reaches the coordinator
+    // (soft-skipped, so status/listing still know about it and a preference
+    // change takes effect on the next boot) but never runs, so it must not count as
+    // a provider here either — otherwise it would suppress the local fallback
+    // while the coordinator soft-skips it, leaving cron bindings unscheduled.
+    // The same reasoning applies to a preference-enabled extension whose own
+    // required dependency is disabled: the coordinator will never start it
+    // either. `selectEligibleAutomationCronSchedulerHostPackages` is handed
+    // `selection.effectiveEnabledBootPackages` directly here instead of
+    // recomputing its own closure, so the scheduler-eligibility stage reads
+    // from the same single composed result as every other consumer.
     const automationCronSchedulerPackage = selectAutomationCronSchedulerPackage({
       hostPackages: [
         ...(options.automationCronSchedulerPackage ? [options.automationCronSchedulerPackage] : []),
-        ...selectEligibleAutomationCronSchedulerHostPackages(extensionLoadResult.automationCronSchedulerHostPolicies, {
-          packages: allExtensionPackages,
-          configProvider: options.extensionConfigProvider,
-          surface: options.surface ?? 'headless',
-          runtimeEnvironment,
-        }),
+        ...selectEligibleAutomationCronSchedulerHostPackages(
+          extensionLoadResult.automationCronSchedulerHostPolicies,
+          {
+            packages: allExtensionPackages,
+            configProvider: enablementStore,
+            surface: options.surface ?? 'headless',
+            runtimeEnvironment,
+          },
+          effectiveEnabledBootPackages,
+        ),
       ],
-      loadedPackages: [...frameworkPackages, ...bootEligibleExtensionPackages],
+      loadedPackages: [...frameworkPackages, ...effectiveEnabledBootPackages],
     });
     if (automationCronSchedulerPackage) {
       frameworkPackages.push(automationCronSchedulerPackage);
@@ -563,7 +649,15 @@ export async function bootMakaioRuntimeCore(
     // by the adapter subsystem the moment they activate, so they must start
     // after it. Stamped here rather than declared by each extension: a
     // contributed package names adapters, not framework packages.
-    const packagesToLoad = [...frameworkPackages, ...orderAfterAdapterSubsystem(bootEligibleExtensionPackages)];
+    //
+    // `mergeableExtensionPackages`/`extensionManagedPackageNames` come from
+    // `selection` (composed once, above, from `frameworkPackageNames`) — not
+    // recomputed here. A disabled extension package (or an enabled one whose
+    // own required dependency is disabled — see `effectiveEnabledPackageNames`)
+    // never reaches `active`, so it must not be allowed to win the
+    // coordinator's own name-collision coalescing against a framework package
+    // that otherwise loads unconditionally: see `excludeIneffectiveCoreNameOverrides`.
+    const packagesToLoad = [...frameworkPackages, ...orderAfterAdapterSubsystem(mergeableExtensionPackages)];
     const loadedPackageNames = new Set(packagesToLoad.map((pkg) => pkg.name));
     const configDefaults = filterConfigDefaultsForLoadedPackages(
       mergePackageConfigDefaults(
@@ -613,10 +707,28 @@ export async function bootMakaioRuntimeCore(
     if (options.routeGraphBuilder) {
       coordinator.registerContributionProcessor(createHttpContributionProcessor(options.routeGraphBuilder));
     }
-    // Retained packages only: a package the coordinator filtered out never
-    // activates, so registering its contribution processors and bus handlers
-    // would install boot-time behaviour for an extension that does not run.
-    collectHostCleanups(shutdownSteps, registerExtensionBootContributions(retainedPackages, bus, coordinator));
+    // Retained + enabled packages only: a coordinator-filtered package never
+    // activates, and a persistently-disabled package starts in skipped state, so
+    // neither should have its runtimeBoot.configure callback invoked. Calling it
+    // for a disabled package would install boot-time state (e.g. contribution
+    // processors, global counters) for an extension that does not run. An
+    // extension-managed package (one that survived collision resolution and
+    // was merged into the boot composition — see `extensionManagedPackageNames`
+    // above) additionally needs the dependency closure above: a
+    // preference-enabled extension whose required dependency is disabled will
+    // never reach `active` either, so its runtimeBoot.configure must not run.
+    // A retained package outside `extensionManagedPackageNames` is, by
+    // construction, an unconditionally-loaded framework package — including
+    // one that just won a name collision against a disabled extension
+    // override — and is never subject to the enablement store; see
+    // `selectExtensionManagedEnabledPackages` for why the store must not be
+    // consulted by name here.
+    const enabledRetainedPackages = selectExtensionManagedEnabledPackages(
+      retainedPackages,
+      selection.extensionManagedPackageNames,
+      effectiveEnabledPackageNames,
+    );
+    collectHostCleanups(shutdownSteps, registerExtensionBootContributions(enabledRetainedPackages, bus, coordinator));
     // Close the credential channel before the bus/transport tears down. In
     // reverse shutdown order this runs after coordinator.shutdown() (which
     // stops all extension activity) and before transport.disconnect().

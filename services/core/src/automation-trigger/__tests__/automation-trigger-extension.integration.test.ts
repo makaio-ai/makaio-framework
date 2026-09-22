@@ -138,7 +138,7 @@ describe('AutomationTrigger extension acceptance (real coordinator lifecycle)', 
     const subscription = await harness.runtime.subscribe({ kind: KIND, params: {} }, noopListener);
     expect(harness.activate).toHaveBeenCalledTimes(1);
 
-    await harness.coordinator.handleSetEnabled('demo', false);
+    await harness.coordinator.applyExtensionTransition('demo', false);
     expect(harness.cleanup).toHaveBeenCalledTimes(1);
     await expect(harness.runtime.subscribe({ kind: KIND, params: {} }, noopListener)).rejects.toThrow(/not registered/);
     await subscription.detach();
@@ -154,12 +154,12 @@ describe('AutomationTrigger extension acceptance (real coordinator lifecycle)', 
     // Disabling the registry does not cascade a stop to the binding runtime, so
     // the processor must stop the sources it owns before dropping the cleanup
     // closures that are the only handles able to reach `stopOwner`.
-    await harness.coordinator.handleSetEnabled(AutomationTriggerRegistryToken.name, false);
+    await harness.coordinator.applyExtensionTransition(AutomationTriggerRegistryToken.name, false);
     expect(harness.cleanup).toHaveBeenCalledTimes(1);
 
     // Disabling the contributor afterwards must neither resurrect nor re-run an
     // executable last-good closure.
-    await expect(harness.coordinator.handleSetEnabled('demo', false)).resolves.toBe(true);
+    await expect(harness.coordinator.applyExtensionTransition('demo', false)).resolves.toBe('applied');
     expect(harness.cleanup).toHaveBeenCalledTimes(1);
 
     await subscription.detach();
@@ -171,11 +171,11 @@ describe('AutomationTrigger extension acceptance (real coordinator lifecycle)', 
     await harness.runtime.subscribe({ kind: KIND, params: {} }, noopListener);
 
     // The runtime's own teardown disposes the activation.
-    await harness.coordinator.handleSetEnabled(AutomationTriggerBindingRuntimeToken.name, false);
+    await harness.coordinator.applyExtensionTransition(AutomationTriggerBindingRuntimeToken.name, false);
     expect(harness.cleanup).toHaveBeenCalledTimes(1);
 
     // With the runtime reference nulled, the cleanup closure still deregisters.
-    await expect(harness.coordinator.handleSetEnabled('demo', false)).resolves.toBe(true);
+    await expect(harness.coordinator.applyExtensionTransition('demo', false)).resolves.toBe('applied');
     expect(harness.coordinator.getExtensionService(AutomationTriggerRegistryToken)?.list()).toEqual([]);
 
     await harness.coordinator.shutdown();
@@ -233,8 +233,8 @@ describe('AutomationTrigger extension acceptance (real coordinator lifecycle)', 
   it('re-registers active contributors when the registry-owning extension restarts', async () => {
     const harness = await bootHarness();
 
-    await harness.coordinator.handleSetEnabled(AutomationTriggerRegistryToken.name, false);
-    await harness.coordinator.handleSetEnabled(AutomationTriggerRegistryToken.name, true);
+    await harness.coordinator.applyExtensionTransition(AutomationTriggerRegistryToken.name, false);
+    await harness.coordinator.applyExtensionTransition(AutomationTriggerRegistryToken.name, true);
 
     const restoredRuntime = harness.coordinator.getExtensionService(AutomationTriggerBindingRuntimeToken);
     if (!restoredRuntime) {
@@ -269,8 +269,8 @@ describe('AutomationTrigger extension acceptance (real coordinator lifecycle)', 
     });
 
     try {
-      await harness.coordinator.handleSetEnabled(AutomationTriggerBindingRuntimeToken.name, false);
-      await harness.coordinator.handleSetEnabled(AutomationTriggerBindingRuntimeToken.name, true);
+      await harness.coordinator.applyExtensionTransition(AutomationTriggerBindingRuntimeToken.name, false);
+      await harness.coordinator.applyExtensionTransition(AutomationTriggerBindingRuntimeToken.name, true);
 
       expect(harness.triggerFactoryCalls()).toBe(2);
       await vi.waitFor(() => expect(changed).toHaveLength(1));
@@ -343,16 +343,20 @@ describe('AutomationTrigger extension acceptance (real coordinator lifecycle)', 
 
     // Restart the binding runtime with a batch the registry will reject, so the
     // replay fails partway through.
-    await expect(coordinator.handleSetEnabled(AutomationTriggerBindingRuntimeToken.name, false)).resolves.toBe(true);
+    await expect(coordinator.applyExtensionTransition(AutomationTriggerBindingRuntimeToken.name, false)).resolves.toBe(
+      'applied',
+    );
     contributeRejectedBatch = true;
-    await expect(coordinator.handleSetEnabled(AutomationTriggerBindingRuntimeToken.name, true)).resolves.toBe(false);
+    await expect(coordinator.applyExtensionTransition(AutomationTriggerBindingRuntimeToken.name, true)).resolves.toBe(
+      'rejected',
+    );
 
     // The registry is alive and must no longer hold the cleared contributor.
     expect(coordinator.getExtensionService(AutomationTriggerRegistryToken)).toBe(registry);
     expect(registry.list()).toEqual([]);
 
     // Disabling the contributor afterwards is clean and still leaves nothing behind.
-    await expect(coordinator.handleSetEnabled('demo', false)).resolves.toBe(true);
+    await expect(coordinator.applyExtensionTransition('demo', false)).resolves.toBe('applied');
     expect(registry.list()).toEqual([]);
 
     await coordinator.shutdown();
@@ -404,12 +408,12 @@ describe('AutomationTrigger extension acceptance (real coordinator lifecycle)', 
 
     // Trigger a registry restart so the factory is called a second time
     // (async) while we queue a disable of the contributor.
-    await coordinator.handleSetEnabled(AutomationTriggerRegistryToken.name, false);
-    const reenabling = coordinator.handleSetEnabled(AutomationTriggerRegistryToken.name, true);
+    await coordinator.applyExtensionTransition(AutomationTriggerRegistryToken.name, false);
+    const reenabling = coordinator.applyExtensionTransition(AutomationTriggerRegistryToken.name, true);
     await factoryEntered.promise;
 
     let disableSettled = false;
-    const disabling = coordinator.handleSetEnabled('demo', false).finally(() => {
+    const disabling = coordinator.applyExtensionTransition('demo', false).finally(() => {
       disableSettled = true;
     });
     await Promise.resolve();
@@ -417,8 +421,8 @@ describe('AutomationTrigger extension acceptance (real coordinator lifecycle)', 
     expect(disableSettled).toBe(false);
 
     releaseFactory.resolve();
-    await expect(reenabling).resolves.toBe(true);
-    await expect(disabling).resolves.toBe(true);
+    await expect(reenabling).resolves.toBe('applied');
+    await expect(disabling).resolves.toBe('applied');
 
     // After the factory resolved and the disable ran, the trigger must not
     // be registered and a subscribe must fail.

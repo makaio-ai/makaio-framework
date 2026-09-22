@@ -35,6 +35,14 @@ export interface LocalExtensionEntry {
   readonly source: 'local';
   /** Absolute import path for the resolved server entrypoint, when present. */
   readonly serverImportPath?: string;
+  /**
+   * Whether the descriptor declares the extension as critical.
+   *
+   * Surfaces that offer an enable/disable control read this before any
+   * extension code is loaded, so they can refuse a disable the runtime would
+   * refuse anyway. Absent when the descriptor does not declare the flag.
+   */
+  readonly critical?: boolean;
 }
 
 /**
@@ -293,6 +301,7 @@ export class LocalPathInstaller {
         sourcePath,
         source: 'local',
         ...(serverImportPath !== undefined && { serverImportPath }),
+        ...(result.data.critical !== undefined && { critical: result.data.critical }),
       };
     } catch {
       return null;

@@ -684,12 +684,22 @@ export default {
     );
     vi.stubGlobal('__makaioBootZeroRuntimeBootCalls', 0);
 
+    // Write the enablement file so the disabled owner is skipped.
+    // The boot reads from <makaioHome>/config/extensions.json. resolveMakaioHome()
+    // returns path.join(os.homedir(), '.makaio') — os.homedir() is mocked to
+    // tempHome in this suite's beforeEach, so the effective path is
+    // <tempHome>/.makaio/config/extensions.json.
+    const makaioHome = path.join(tempHome, '.makaio');
+    const enablementDir = path.join(makaioHome, 'config');
+    await fs.mkdir(enablementDir, { recursive: true });
+    await fs.writeFile(
+      path.join(enablementDir, 'extensions.json'),
+      JSON.stringify({ disabled: [disabledOwnerPackageName] }),
+      'utf-8',
+    );
+
     runtime = await bootMakaioRuntimeCore(transport, 0, '127.0.0.1', {
       discovery: new ExplicitDescriptorDiscovery([descriptor]),
-      extensionConfigProvider: {
-        loadConfig: () => undefined,
-        loadEnabled: (name) => (name === disabledOwnerPackageName ? false : undefined),
-      },
       frameworkVersion: '3.0.0',
       hostCapabilities: ['node'],
     });
@@ -698,8 +708,14 @@ export default {
     const sessionOrchestrator = extensions.find((extension) => extension.name === SessionOrchestratorToken.name);
     const disabledOwner = extensions.find((extension) => extension.name === disabledOwnerPackageName);
 
+    // The default session orchestrator must be active — the disabled owner's
+    // runtimeOwnership claim must not suppress it.
     expect(sessionOrchestrator?.state).toBe('active');
-    expect(disabledOwner).toBeUndefined();
+    // The disabled owner is registered (skipped state) so status and listing
+    // still know about it and a preference change takes effect on the next
+    // boot, but it must not have started or contributed to boot.
+    expect(disabledOwner?.state).toBe('skipped');
+    expect(disabledOwner?.enabled).toBe(false);
     expect(runtime.trayEntries).toEqual([]);
     expect(runtime.windowRegistry.get('disabled-runtime-owner:settings')).toBeUndefined();
     expect(globalThis).toHaveProperty('__makaioBootZeroRuntimeBootCalls', 0);

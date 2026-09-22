@@ -185,7 +185,7 @@ describe('Extension health warnings', () => {
     expect(before.entries).toHaveLength(1);
 
     // Disable the package
-    await bus.request(ExtensionSubjects.setEnabled, { name: 'clearable-pkg', enabled: false });
+    await coordinator.applyExtensionTransition('clearable-pkg', false);
 
     // Warnings should now be cleared
     const after = await bus.request(ExtensionSubjects.warnings.list, {});
@@ -212,7 +212,7 @@ describe('Extension health warnings', () => {
       changedEvents.push({ extensionName: ctx.payload.extensionName, warnings: ctx.payload.warnings });
     });
 
-    await bus.request(ExtensionSubjects.setEnabled, { name: 'disable-emitting-pkg', enabled: false });
+    await coordinator.applyExtensionTransition('disable-emitting-pkg', false);
 
     expect(changedEvents).toHaveLength(1);
     expect(changedEvents[0]).toMatchObject({
@@ -253,8 +253,8 @@ describe('Extension health warnings', () => {
     expect(before.entries[0]?.warnings[0]?.title).toBe('Warning from call 1');
 
     // Disable clears warnings; re-enable must call create again and run checkHealth
-    await bus.request(ExtensionSubjects.setEnabled, { name: 're-enable-pkg', enabled: false });
-    await bus.request(ExtensionSubjects.setEnabled, { name: 're-enable-pkg', enabled: true });
+    await coordinator.applyExtensionTransition('re-enable-pkg', false);
+    await coordinator.applyExtensionTransition('re-enable-pkg', true);
 
     // The result must carry the second instance's specific warning, proving
     // checkHealth ran on the freshly created service and not on stale state.

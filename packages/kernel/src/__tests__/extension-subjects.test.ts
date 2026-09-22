@@ -116,8 +116,23 @@ describe('ExtensionSubjects', () => {
       };
       const result = schema.response.safeParse({
         extensions: [
-          { name: 'slash-command', displayName: 'Slash Command', state: 'active', enabled: true },
-          { name: 'docker', displayName: 'Docker', state: 'failed', enabled: false, error: 'Not found' },
+          {
+            name: 'slash-command',
+            displayName: 'Slash Command',
+            state: 'active',
+            enabled: true,
+            extensionManaged: true,
+            critical: false,
+          },
+          {
+            name: 'docker',
+            displayName: 'Docker',
+            state: 'failed',
+            enabled: false,
+            extensionManaged: true,
+            critical: false,
+            error: 'Not found',
+          },
         ],
       });
       expect(result.success).toBe(true);
@@ -129,7 +144,7 @@ describe('ExtensionSubjects', () => {
         response: z.ZodType;
       };
       const result = schema.response.safeParse({
-        extensions: [{ name: 'voice', displayName: 'Voice', state: 'running', enabled: true }],
+        extensions: [{ name: 'voice', displayName: 'Voice', state: 'running', enabled: true, critical: false }],
       });
       expect(result.success).toBe(false);
     });
@@ -178,6 +193,8 @@ describe('ExtensionSubjects', () => {
           displayName: 'Slash Command',
           state: 'active',
           enabled: true,
+          extensionManaged: true,
+          critical: false,
         },
       });
       expect(result.success).toBe(true);

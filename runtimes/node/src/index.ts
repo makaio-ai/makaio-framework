@@ -53,6 +53,18 @@ export {
   type ExtensionOperatorConfigSnapshot,
   type LoadExtensionOperatorConfigOptions,
 } from './extension-operator-config.js';
+export {
+  MAX_ENABLEMENT_FILE_BYTES,
+  isExtensionDisabledInStore,
+  isExtensionEnabled,
+  loadExtensionEnablementStore,
+  resolveExtensionEnablementFile,
+  type ExtensionCriticalView,
+  type ExtensionEnablementFileData,
+  type ExtensionEnablementReadFailure,
+  type ExtensionEnablementReadFailureReason,
+  type ExtensionEnablementStore,
+} from './extension-enablement-store.js';
 export { attachUpstreamTelemetry } from './upstream-telemetry.js';
 export type { AttachedUpstreamTelemetry } from './upstream-telemetry.js';
 export {
@@ -116,6 +128,7 @@ export {
   isCliContributionLike,
   entrypointStem,
   resolveConventionEntrypoint,
+  normalizePackageExport,
 } from './load-extensions.js';
 export type { DescriptorSourcePackageGroup, LoadExtensionsOptions } from './load-extensions.js';
 export {

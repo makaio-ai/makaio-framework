@@ -114,6 +114,12 @@ segments, must not contain empty, `.`, `..`, `src`, or `dist` segments, and must
 a dotted final segment. The loader performs a containment check on the resolved path, so
 symlink or platform-specific path behavior cannot bypass the descriptor contract.
 
+A server entrypoint's top level must contain only declarations — the exported `MakaioExtension`
+object literal(s) and whatever pure helpers they reference. Side effects belong in `create()` or
+`init()`, never at module scope: the loader and offline tooling both import the module to read its
+default export before any service is started, so top-level side effects would run unconditionally
+just from being discovered, not from being activated.
+
 ### Descriptor Namespace
 
 The descriptor `name` owns the extension identity namespace. This rule applies to every
@@ -591,12 +597,74 @@ Critical extension failures still fail boot because the host declared that exten
 
 **Phases:**
 
-1. **`load(packages)`** — validates dependencies, topological sort, registers windows,
-   and collects tray entries and CLI contributions. No service code runs.
+1. **`load(packages)`** — validates dependencies, topological sort, and — for
+   _enabled_ extensions only — registers windows and collects tray entries and CLI
+   contributions. Disabled extensions receive a coordinator entry but their static
+   surfaces are only ever collected by a later process restart's own `load()` call.
+   No service code runs.
 2. **`startAll()`** — calls `create(ctx)` then `service.init()` for each package in
    dependency order. Storage handlers are registered after migrations are applied, and
    contribution processors activate executable surfaces such as HTTP routes.
 3. **`shutdown()`** — calls `service.destroy()` in reverse boot order.
+
+### Enable and disable
+
+Enabled state is persisted to `$MAKAIO_HOME/config/extensions.json`. The coordinator
+reads it at boot via `loadEnabled` and writes it via `persistEnabled` whenever
+`kernel:extension.setEnabled` is called.
+
+**`kernel:extension.setEnabled` is persist-only.** It durably records the operator's
+enable/disable preference for the next boot, but it **never applies the change to the
+running process**. Live extension toggling is not a contract this runtime can honor:
+several package contributions — `clients` definitions (wired into the client registry
+at construction time), `runtimeOwnership` roles (a second owner cannot be added to a
+live process), `runtimeBoot.configure` callbacks (registered before `startAll`),
+`storage.migrations` (applied once, at boot), and host-level policies wired in outside
+the coordinator's own visibility (for example the automation cron scheduler host
+policy, whose single scheduler provider is resolved once from the packages eligible
+**and** enabled at boot) — are all composed exactly once during boot and have no seam
+to replay for one package in isolation while the process keeps running.
+
+`setEnabled` persists the requested preference unconditionally — refusing outright,
+before writing anything, only for an unknown extension name or a disable of a
+`critical` extension — and reports `outcome` as a comparison between the request and
+the process's actual current runtime state:
+
+- `'applied'` — the process's runtime state already matches the request (for example,
+  disabling an extension that is already `skipped`, `stopped`, or `failed`).
+- `'restart-required'` — the preference was persisted, but the process's runtime state
+  diverges from it; only the next restart makes the runtime match.
+- `'rejected'` — the request was refused outright and nothing was persisted.
+
+**Boot gate (soft):** A package whose `loadEnabled` returns `false` starts in `skipped`
+state rather than being excluded from the coordinator entirely, so it stays
+observable and toggleable through `kernel:extension.list` / `setEnabled` even though
+enabling it can only ever report `'restart-required'`.
+
+**Coordinator-internal restarts.** `ExtensionCoordinator.applyExtensionTransition(name,
+enabled)` is the primitive that actually runs the enable/disable state machine —
+re-registering storage handlers, re-activating contribution processors, tearing down
+cleanly on disable. It is for the coordinator's or a product package's own mechanics
+(for example a dependency registry restarting a dependent that is built to tolerate
+the gap), never for an operator-originated request: it does not persist anything and
+does not refuse a `critical` extension. It refuses to activate an extension this
+process never started (`'skipped'` state with no surfaces collected), because that
+entry's boot-only contributions were never composed in the first place; a `'stopped'`
+or `'failed'` entry that already started this boot restarts normally.
+
+**Critical guard:** Extensions marked `critical: true` cannot be disabled via
+`setEnabled` (RPC or CLI). If a critical extension appears in the `"disabled"` list of
+the enablement file (e.g. added by hand), the runtime starts it anyway at boot and
+emits a console warning, so a corrupt file cannot brick the runtime.
+
+**Evaluation order:**
+
+1. `MAKAIO_SKIP_EXTENSIONS` env var — acts at discovery; extensions suppressed here are
+   absent from the coordinator entirely.
+2. Enablement file (`$MAKAIO_HOME/config/extensions.json`) — names in `"disabled"` start
+   in `skipped` state; enabling them takes effect on the next process restart.
+3. Surface and runtime-environment filter — independent of enablement; cannot be
+   overridden at runtime.
 
 ---
 

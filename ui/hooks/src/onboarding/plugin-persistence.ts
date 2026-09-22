@@ -1,66 +1,57 @@
 /**
- * Extension config persistence helper for onboarding.
+ * Extension enablement persistence helper for onboarding.
  *
  * Provides the `persistPluginEnabled` bus helper and the
- * `PersistedExtensionConfigEntry` cache record type. Separated from
+ * `PersistPluginEnabledResult` type. Separated from
  * `\@makaio/ui-kernel/onboarding/plugin-categories` because it depends on the
- * extension-config storage namespace in `\@makaio/services-core` — kernel must
- * remain bus-free.
+ * kernel extension namespace — kernel must remain bus-free.
+ *
+ * **Breaking change (2026-09-18):** Enablement writes now go through
+ * `ExtensionSubjects.setEnabled` (kernel RPC) instead of the product storage
+ * namespace. `PersistPluginEnabledResult` now carries `success` instead of a
+ * storage row `id`.
+ *
+ * `ExtensionSubjects.setEnabled` is persist-only: it durably records the
+ * preference in the enablement file via the coordinator's
+ * `persistEnabled` callback, but never applies the change to the running
+ * process. `PersistPluginEnabledResult` carries `outcome` (the same
+ * `TransitionOutcome` the CLI reads from this RPC) so a caller can tell
+ * `'applied'` (the process's current runtime state already matches the
+ * request) apart from `'restart-required'` (persisted, but only a process
+ * restart applies it) or `'rejected'` (nothing was persisted) instead of
+ * guessing from `success` alone. This module's own callers currently only
+ * branch on `outcome === 'rejected'`, to decide whether to revert an
+ * optimistic UI update.
  * @packageDocumentation
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { ExtensionConfigStorageSubjects } from '@makaio/services-core/settings/storage/extension-configs/namespace';
+import { ExtensionSubjects, type TransitionOutcome } from '@makaio/kernel';
 
 export interface PersistPluginEnabledResult {
-  id: string;
+  /** Whether the kernel accepted the enablement change. */
+  success: boolean;
+  /** The transition outcome the kernel actually reached. */
+  outcome: TransitionOutcome;
 }
 
 /**
- * Persisted extension config entry cached in a ref to preserve config blobs
- * across enabled-state toggles without driving re-renders.
- */
-export interface PersistedExtensionConfigEntry {
-  /** Stable storage row identifier */
-  id: string;
-  /** Existing extension config payload that must be preserved across enabled toggles */
-  config: Record<string, unknown> | undefined;
-}
-
-/**
- * Persist only the enabled state for a plugin config row.
+ * Persist only the enabled state for a plugin via the kernel RPC.
  *
- * This uses the storage layer's atomic `setEnabled` RPC instead of
- * reconstructing a partial `set` payload client-side. Cached config blobs stay
- * available in-memory for future full writes, but enabled toggles no longer
- * need to round-trip or risk clearing them.
- * @param pluginName - Registry name of the plugin
- * @param enabled - Desired enabled state
- * @param cache - Ref map of persisted config entries
- * @param bus - Bus instance used to dispatch the set request
- * @returns Persisted row identifier for the extension config record
+ * Fires `kernel:extension.setEnabled`, which durably writes the preference to
+ * the enablement file via the coordinator's `persistEnabled`
+ * callback. This never applies the change to the running process — see the
+ * module doc for why. Enabled state is the single source of truth in the
+ * kernel; no local cache is mutated.
+ * @param pluginName - Registry name of the plugin.
+ * @param enabled - Desired enabled state.
+ * @param bus - Bus instance used to dispatch the set request.
+ * @returns Result from the kernel enablement RPC.
  */
 export function persistPluginEnabled(
   pluginName: string,
   enabled: boolean,
-  cache: Map<string, PersistedExtensionConfigEntry>,
   bus: IMakaioBus,
 ): Promise<PersistPluginEnabledResult> {
-  const existing = cache.get(pluginName);
-  const entry: PersistedExtensionConfigEntry = existing ?? {
-    id: `onboarding-${pluginName}`,
-    config: undefined,
-  };
-  cache.set(pluginName, entry);
-
-  return bus
-    .request(ExtensionConfigStorageSubjects.setEnabled, {
-      extensionName: pluginName,
-      scope: 'default',
-      enabled,
-    })
-    .then((result) => {
-      cache.set(pluginName, { ...entry, id: result.id });
-      return result;
-    });
+  return bus.request(ExtensionSubjects.setEnabled, { name: pluginName, enabled });
 }

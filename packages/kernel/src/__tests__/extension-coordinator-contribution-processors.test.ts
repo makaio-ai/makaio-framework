@@ -106,11 +106,11 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
     expect(activated).toHaveBeenCalledTimes(1);
     expect(activated.mock.calls[0]?.[0]).toBe('feature');
 
-    await coordinator.handleSetEnabled('feature', false);
+    await coordinator.applyExtensionTransition('feature', false);
     expect(stopped).toHaveBeenCalledTimes(1);
     expect(stopped.mock.calls[0]?.[0]).toBe('feature');
 
-    await coordinator.handleSetEnabled('feature', true);
+    await coordinator.applyExtensionTransition('feature', true);
     expect(activated).toHaveBeenCalledTimes(2);
     expect(activated.mock.calls[1]?.[0]).toBe('feature');
   });
@@ -248,7 +248,7 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
 
     coordinator.load([pkg('feature')]);
     await coordinator.startAll();
-    await coordinator.handleSetEnabled('feature', false);
+    await coordinator.applyExtensionTransition('feature', false);
 
     expect(callOrder).toEqual(['second', 'first']);
   });
@@ -282,10 +282,13 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
     ]);
     await coordinator.startAll();
 
-    const disabled = await coordinator.handleSetEnabled('feature', false);
+    const disabled = await coordinator.applyExtensionTransition('feature', false);
     const info = coordinator.list().find((entry) => entry.name === 'feature');
 
-    expect(disabled).toBe(false);
+    // The extension really did reach `stopped`, so the outcome is `'applied'`
+    // even though teardown left a failure — that failure travels on
+    // `info.error`, not on the outcome.
+    expect(disabled).toBe('applied');
     expect(info?.state).toBe('stopped');
     expect(info?.error).toContain('stopped processor failed');
     expect(events).toEqual(['processor-failed', 'service-destroyed', 'storage-cleaned']);
@@ -419,11 +422,11 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
 
     const starting = coordinator.startAll();
     await activationStarted.promise;
-    const disabling = coordinator.handleSetEnabled('feature', false);
+    const disabling = coordinator.applyExtensionTransition('feature', false);
 
     releaseActivation.resolve();
     await starting;
-    await expect(disabling).resolves.toBe(true);
+    await expect(disabling).resolves.toBe('applied');
 
     expect(coordinator.list().find((entry) => entry.name === 'feature')?.state).toBe('stopped');
     expect(stopped).toHaveBeenCalledTimes(1);
@@ -459,7 +462,7 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
 
     expect(extensionSignal?.aborted).toBe(true);
     expect(stopped).not.toHaveBeenCalled();
-    await expect(coordinator.handleSetEnabled('feature', false)).resolves.toBe(false);
+    await expect(coordinator.handleSetEnabled('feature', false)).resolves.toMatchObject({ success: false });
 
     releaseActivation.resolve();
     await starting;
@@ -526,9 +529,16 @@ describe('ExtensionCoordinator contribution processor lifecycle', () => {
     const laterDisable = coordinator.handleSetEnabled('feature', false);
 
     await expect(failedDisable).rejects.toThrow('persistence unavailable');
-    await expect(laterDisable).resolves.toBe(true);
+    // `handleSetEnabled` is persist-only: the entry never actually stops, so
+    // the second call's persisted preference (`enabled: false`) diverges from
+    // the still-`active` runtime state — `'restart-required'`, not
+    // `'applied'`. What this test guards is that the lane itself kept
+    // processing admitted work after the first call's persistence rejection:
+    // `persistenceCalls` reaching 2 proves the second call's write was not
+    // skipped or stuck behind the first one's failure.
+    await expect(laterDisable).resolves.toMatchObject({ success: false, outcome: 'restart-required' });
     expect(persistenceCalls).toBe(2);
-    expect(coordinator.list().find((entry) => entry.name === 'feature')?.state).toBe('stopped');
+    expect(coordinator.list().find((entry) => entry.name === 'feature')?.state).toBe('active');
   });
 
   it('removed processor is not called after cleanup function is invoked', async () => {
