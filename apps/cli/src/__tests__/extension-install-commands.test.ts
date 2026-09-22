@@ -13,7 +13,11 @@ import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { Command } from 'commander';
 import { registerExtensionCommands } from '../extension-commands.js';
-import { FilesystemDescriptorDiscovery, type FrameworkModuleResolver } from '@makaio/runtime-node';
+import {
+  buildConfiguredRuntimeOptions,
+  FilesystemDescriptorDiscovery,
+  type FrameworkModuleResolver,
+} from '@makaio/runtime-node';
 import type { ExtensionDescriptor } from '@makaio/contracts';
 import {
   ExtensionSubjects,
@@ -2042,6 +2046,30 @@ describe('extension enable/disable commands', () => {
       await rm(projectRoot, { recursive: true, force: true });
     });
 
+    it('leaves a project-local-only extension unaddressable when the discovery this invocation resolved does not scan that tier', async () => {
+      // The counterpart to every assertion in this block: the project-local
+      // tier is visible because the host handed the commands a discovery that
+      // scans it. Runtime config's own no-`discoveryPaths` default covers the
+      // data home's two roots and nothing else, and that same default is what
+      // `serve` boots with — so a descriptor found only in `{cwd}/node_modules`
+      // is one no server started here would load, and offering a preference for
+      // it would promise an effect the next boot cannot deliver. Declaring
+      // `extensions.discoveryPaths` is what opts that tier in, for boot and for
+      // this listing alike.
+      await writeProjectLocalDescriptor(projectRoot, browserOnlyDescriptor('project-only-ext', '1.0.0'));
+      const configured = new Command();
+      registerExtensionCommands(configured, {
+        discovery: (await buildConfiguredRuntimeOptions({ makaioHome: packageManagerMockState.makaioHome })).discovery,
+      });
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      await configured.parseAsync(['extension', 'disable', 'project-only-ext'], { from: 'user' });
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('no installed extension with this name'));
+      expect(enablementMockState.disabled.has('project-only-ext')).toBe(false);
+      expect(process.exitCode).toBe(1);
+    });
+
     it('refuses to disable a critical extension found only in the project-local node_modules tier', async () => {
       // `$MAKAIO_HOME` knows nothing about this name — it is a dependency of
       // the project the CLI is invoked from, discoverable only through the
@@ -2224,15 +2252,17 @@ describe('extension enable/disable commands', () => {
      * importable module rather than descriptor metadata.
      * @param descriptorName - Descriptor identity the entry exports itself under.
      * @param surface - Runtime surface the exported package restricts itself to.
+     * @param critical - Whether the exported package declares itself critical.
      */
     async function installSurfacedNpmExtension(
       descriptorName: string,
       surface: 'interactive' | 'headless',
+      critical = false,
     ): Promise<void> {
       await installNpmExtension(descriptor(descriptorName, '9.0.0'), {
         entrySource:
           `export default { name: ${JSON.stringify(descriptorName)}, displayName: 'Surfaced', version: '9.0.0', ` +
-          `surface: ${JSON.stringify(surface)} };\n`,
+          `critical: ${critical}, surface: ${JSON.stringify(surface)} };\n`,
       });
     }
 
@@ -2316,6 +2346,57 @@ describe('extension enable/disable commands', () => {
       await program.parseAsync(['extension', 'disable', 'surfaced-parent.child'], { from: 'user' });
       expect(enablementMockState.disabled.has('surfaced-parent.child')).toBe(true);
       expect(process.exitCode).toBeUndefined();
+    });
+
+    it("judges a two-surface name against the interactive copy when the host's serve boots interactive", async () => {
+      // A desktop host hands `serve` `surface: 'interactive'`, so that is the
+      // copy its next start loads and the only one whose `critical` flag can
+      // decide this disable. Resolving as headless here would persist a
+      // preference the interactive start refuses to honour — and the host
+      // surface is the one thing this process cannot infer for itself.
+      await writeProjectLocalDescriptor(projectRoot, descriptor('host-surfaced', '1.0.0'));
+      await writeProjectLocalServerEntry(projectRoot, 'host-surfaced', [
+        { name: 'host-surfaced' },
+        { name: 'host-surfaced.child', surface: 'interactive', critical: true },
+      ]);
+      await installSurfacedNpmExtension('host-surfaced.child', 'headless');
+      const interactive = new Command();
+      registerExtensionCommands(interactive, {
+        discovery: new FilesystemDescriptorDiscovery(projectRoot, {
+          extensionsDir: path.join(packageManagerMockState.makaioHome, 'extensions'),
+          nodeModulesDir: path.join(packageManagerMockState.makaioHome, 'node_modules'),
+        }),
+        surface: 'interactive',
+      });
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      await interactive.parseAsync(['extension', 'disable', 'host-surfaced.child'], { from: 'user' });
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('it is a critical extension'));
+      expect(enablementMockState.disabled.has('host-surfaced.child')).toBe(false);
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('refuses an offline disable of a two-surface name whose headless copy is the critical one', async () => {
+      // The two copies target different surfaces, so neither collides and the
+      // name toggles fine — but only one of them is the copy a server started
+      // here would load. `makaio serve` boots headless, so the headless copy's
+      // `critical` flag is the one that decides, no matter which row the scan
+      // happened to list first (the project-local tier leads, and its copy is
+      // the interactive, non-critical one).
+      await writeProjectLocalDescriptor(projectRoot, descriptor('two-faced', '1.0.0'));
+      await writeProjectLocalServerEntry(projectRoot, 'two-faced', [
+        { name: 'two-faced' },
+        { name: 'two-faced.child', surface: 'interactive' },
+      ]);
+      await installSurfacedNpmExtension('two-faced.child', 'headless', true);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      await program.parseAsync(['extension', 'disable', 'two-faced.child'], { from: 'user' });
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('it is a critical extension'));
+      expect(enablementMockState.disabled.has('two-faced.child')).toBe(false);
+      expect(process.exitCode).toBe(1);
     });
 
     it('reports two npm packages declaring one descriptor name as a collision instead of one shadowing the other', async () => {

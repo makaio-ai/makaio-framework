@@ -37,6 +37,7 @@ export {
   ExtensionOperatorConfigError,
   coalesceExtensionOverrides,
   filterEligibleExtensions,
+  resolveInstalledExtensionRecord,
 } from './extension/index.js';
 
 export {

@@ -12,7 +12,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
-import type { InstalledExtensionCatalogSource, KernelMakaioExtension } from '../extension/types.js';
+import type {
+  ExtensionRuntimeSurface,
+  InstalledExtensionCatalogSource,
+  KernelMakaioExtension,
+} from '../extension/types.js';
 import { ExtensionSubjects } from '../observability/extension-namespace.js';
 import type { InstalledExtensionRecord } from '../observability/installed-extension-catalog-schemas.js';
 
@@ -69,6 +73,7 @@ describe('installed-extension catalog', () => {
     readonly installed?: readonly InstalledExtensionRecord[];
     readonly managedNames?: ReadonlySet<string>;
     readonly onCatalogRead?: () => Promise<void>;
+    readonly surface?: ExtensionRuntimeSurface;
   }): Harness {
     const persisted = new Map<string, boolean>();
     let reads = 0;
@@ -81,6 +86,7 @@ describe('installed-extension catalog', () => {
             return options.installed ?? [];
           };
     const coordinator = new ExtensionCoordinator(bus, {
+      ...(options.surface && { surface: options.surface }),
       loadEnabled: (name) => persisted.get(name),
       persistEnabled: async (name, enabled) => {
         persisted.set(name, enabled);
@@ -286,6 +292,150 @@ describe('installed-extension catalog', () => {
     });
 
     const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'contested-ext', enabled: false });
+
+    expect(result).toEqual({ success: false, outcome: 'rejected', reason: 'name-collision' });
+    expect(harness.persisted.size).toBe(0);
+  });
+
+  it("validates a name two surface variants claim against the variant this coordinator's surface loads", async () => {
+    // Two copies restricted to different surfaces are deliberately *not* a
+    // collision — the coordinator filters by surface before it resolves names,
+    // so each boots on its own surface. That makes the name resolvable and the
+    // surface the only thing deciding which copy's `critical` flag the next
+    // boot here honours. Neither row is loaded in this process (an
+    // interactive-only package on a headless runtime, and a headless one the
+    // boot suppressed), so the catalog is the whole answer.
+    const installed = [
+      record('dual-ext', { origin: 'project-local', surface: 'interactive' }),
+      record('dual-ext', { origin: 'npm', surface: 'headless', critical: true }),
+    ];
+    const harness = makeHarness({ packages: [], installed, surface: 'headless' });
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'dual-ext', enabled: false });
+
+    expect(result).toEqual({ success: false, outcome: 'rejected', reason: 'critical' });
+    expect(harness.persisted.size).toBe(0);
+  });
+
+  it('accepts the same disable on the surface whose variant is not critical', async () => {
+    // The mirror of the case above, and the reason the rule is surface-aware
+    // rather than conservative for every claimant: refusing here would refuse
+    // a disable on the strength of a package this runtime never loads.
+    const installed = [
+      record('dual-ext', { origin: 'project-local', surface: 'interactive' }),
+      record('dual-ext', { origin: 'npm', surface: 'headless', critical: true }),
+    ];
+    const harness = makeHarness({ packages: [], installed, surface: 'interactive' });
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'dual-ext', enabled: false });
+
+    expect(result).toEqual({ success: true, outcome: 'applied', reason: 'not-loaded' });
+    expect(harness.persisted.get('dual-ext')).toBe(false);
+  });
+
+  it('validates against the live copy, not the shadowed one, when a lower tier is restricted to this surface', async () => {
+    // Shadowing is resolved by descriptor name alone, so a shadowed row can
+    // still be the only one declaring this runtime's surface. It describes an
+    // install no boot loads, and answering from it would refuse a disable the
+    // runtime would allow.
+    const installed = [
+      record('shadowed-ext', { origin: 'project-local' }),
+      record('shadowed-ext', { origin: 'npm', surface: 'headless', critical: true, shadowedBy: 'project-local' }),
+    ];
+    const harness = makeHarness({ packages: [], installed, surface: 'headless' });
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'shadowed-ext', enabled: false });
+
+    expect(result).toEqual({ success: true, outcome: 'applied', reason: 'not-loaded' });
+    expect(harness.persisted.get('shadowed-ext')).toBe(false);
+  });
+
+  it("judges a name only another surface's copies claim by the strictest of them", async () => {
+    // Neither copy loads on this runtime, so neither contests the name here —
+    // but the preference is still addressable, and the next start on the
+    // surface they *do* load is the one that would have to honour it. Reading
+    // only the first row would answer from a package with no more claim to the
+    // name than the other.
+    const installed = [
+      record('elsewhere-ext', { origin: 'project-local', surface: 'interactive' }),
+      record('elsewhere-ext', { origin: 'npm', surface: 'interactive', critical: true }),
+    ];
+    const harness = makeHarness({ packages: [], installed, surface: 'headless' });
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'elsewhere-ext', enabled: false });
+
+    expect(result).toEqual({ success: false, outcome: 'rejected', reason: 'critical' });
+    expect(harness.persisted.size).toBe(0);
+  });
+
+  it('resolves a name whose only other claimant this surface never loads, instead of inheriting its contest', async () => {
+    // An unrestricted copy and an interactive-only one *do* contest the name —
+    // on an interactive runtime, which loads both and then cannot resolve
+    // between them. The catalog describes the host, so it marks both rows. A
+    // headless runtime loads exactly one of them, resolves the name cleanly,
+    // and must not refuse a preference on the strength of a copy it never
+    // offers to that resolution.
+    const installed = [
+      record('shared-name', { origin: 'npm', collidesWith: 'project-local' }),
+      record('shared-name', { origin: 'project-local', surface: 'interactive', collidesWith: 'npm' }),
+    ];
+    const harness = makeHarness({ packages: [], installed, surface: 'headless' });
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'shared-name', enabled: false });
+
+    expect(result).toEqual({ success: true, outcome: 'applied', reason: 'not-loaded' });
+    expect(harness.persisted.get('shared-name')).toBe(false);
+  });
+
+  it('still refuses that same name on the surface that loads both claimants', async () => {
+    const installed = [
+      record('shared-name', { origin: 'npm', collidesWith: 'project-local' }),
+      record('shared-name', { origin: 'project-local', surface: 'interactive', collidesWith: 'npm' }),
+    ];
+    const harness = makeHarness({ packages: [], installed, surface: 'interactive' });
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'shared-name', enabled: false });
+
+    expect(result).toEqual({ success: false, outcome: 'rejected', reason: 'name-collision' });
+    expect(harness.persisted.size).toBe(0);
+  });
+
+  it('refuses a name several copies this surface loads claim, even when the catalog source marked none of them', async () => {
+    // The catalog source is a host seam. Whatever it reports, every row that
+    // survives the surface filter is handed to the coordinator's name
+    // resolution together, and it aborts on the second one — so the contest is
+    // derived from what loads here rather than trusted from the input.
+    const installed = [record('unmarked-ext', { origin: 'project-local' }), record('unmarked-ext', { origin: 'npm' })];
+    const harness = makeHarness({ packages: [], installed, surface: 'headless' });
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'unmarked-ext', enabled: true });
+
+    expect(result).toEqual({ success: false, outcome: 'rejected', reason: 'name-collision' });
+    expect(harness.persisted.size).toBe(0);
+  });
+
+  it('keeps refusing a contest discovery itself refuses, even where only one copy could load', async () => {
+    // Two packages in one discovery tier claiming one descriptor name are
+    // refused before any package is loaded, so no surface declaration exists
+    // yet to exempt them and every start aborts — including this one, which
+    // loads only the headless copy.
+    const installed = [
+      record('same-tier-ext', {
+        origin: 'npm',
+        surface: 'interactive',
+        collidesWith: 'npm',
+        collisionIgnoresSurface: true,
+      }),
+      record('same-tier-ext', {
+        origin: 'npm',
+        surface: 'headless',
+        collidesWith: 'npm',
+        collisionIgnoresSurface: true,
+      }),
+    ];
+    const harness = makeHarness({ packages: [], installed, surface: 'headless' });
+
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'same-tier-ext', enabled: false });
 
     expect(result).toEqual({ success: false, outcome: 'rejected', reason: 'name-collision' });
     expect(harness.persisted.size).toBe(0);

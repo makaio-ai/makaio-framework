@@ -16,8 +16,8 @@ import {
 } from './bus-client.js';
 import { ExtensionSubjects, type SetEnabledReason, type TransitionOutcome } from '@makaio/kernel';
 import {
-  findCollidingInstalledEntry,
   listInstalledExtensions,
+  resolveInstalledEntry,
   type InstalledExtensionListingOptions,
   type InstalledExtensionRecord,
 } from './extension-installed-listing.js';
@@ -91,21 +91,16 @@ export function remoteUnreachableRefusalMessage(action: string, busUrl: string):
  * preference is read (see {@link InstalledExtensionRecord.collidesWith}).
  * Persisting anyway would report success for a change that cannot take effect
  * and would silently apply to whichever copy survives the operator's cleanup.
- * @param installed - Installed-package listing to check the name against.
+ * @param record - Record the name resolved to, from {@link resolveInstalledEntry}.
  * @param name - Extension package name being toggled.
  * @param verb - Verb used in output ("enable" or "disable").
  * @returns `true` when the request was refused and nothing should be written.
  */
-function refuseCollidingExtensionName(
-  installed: readonly InstalledExtensionRecord[],
-  name: string,
-  verb: string,
-): boolean {
-  const colliding = findCollidingInstalledEntry(installed, name);
-  if (colliding === undefined) return false;
+function refuseCollidingExtensionName(record: InstalledExtensionRecord, name: string, verb: string): boolean {
+  if (record.collidesWith === undefined) return false;
   console.error(
     `Failed to ${verb} extension "${name}": more than one installed copy claims this name ` +
-      `(${colliding.origin} and ${colliding.collidesWith}), so it does not resolve to a single extension and ` +
+      `(${record.origin} and ${record.collidesWith}), so it does not resolve to a single extension and ` +
       'the next server start refuses to boot. Uninstall or rename one of them first; nothing was written. ' +
       'Run "makaio extension list" to see both copies.',
   );
@@ -206,16 +201,16 @@ async function applyOfflineToggle(
   const makaioHome = resolveMakaioHome();
   const installed = await listInstalledExtensions(makaioHome, listingOptions);
 
-  // Checked ahead of "is it installed at all" and of criticality: both of
-  // those answer for a single resolved copy, and a contested name has none.
-  if (refuseCollidingExtensionName(installed, name, verb)) return;
-
-  const record = installed.find((ext) => ext.name === name);
+  const record = resolveInstalledEntry(installed, name, listingOptions);
 
   if (!record) {
     reportUnknownExtensionName(name, verb);
     return;
   }
+
+  // Checked ahead of criticality: that rule answers for a single resolved
+  // copy, and a contested name has none.
+  if (refuseCollidingExtensionName(record, name, verb)) return;
 
   if (!enabled && record.critical) {
     console.error(criticalRefusalMessage(name));

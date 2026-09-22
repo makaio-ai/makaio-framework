@@ -761,7 +761,12 @@ export class ExtensionCoordinator {
    * @returns Host surface for the catalog helpers.
    */
   private createCatalogHost(): CatalogHost {
-    return { entries: this.entries, loadEnabled: this.loadEnabled, installedCatalog: this.installedCatalog };
+    return {
+      entries: this.entries,
+      loadEnabled: this.loadEnabled,
+      installedCatalog: this.installedCatalog,
+      surface: this.surface,
+    };
   }
 
   /**

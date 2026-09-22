@@ -492,7 +492,11 @@ interface NameClaim {
  *   coordinator's own package coalescing then aborts the load. Every claimant
  *   is marked `collidesWith` — none of them loads. A cross-tier claim is
  *   judged per surface, because the coordinator's name check only ever sees
- *   the packages one surface loaded — see {@link claimsContest}.
+ *   the packages one surface loaded — see {@link claimsContest}. The same-tier
+ *   case additionally carries `collisionIgnoresSurface`, since discovery
+ *   refuses it before any surface exists: a consumer resolving the name for one
+ *   concrete surface re-judges every other contest against the copies that
+ *   surface loads, and has to keep this one whatever it finds.
  *
  * This is deliberately *not* what the boot path does with the same input: boot
  * refuses, this describes. The catalog is an observation over every tier,
@@ -602,9 +606,21 @@ function markNameCollisions(
     if (claims.length < 2) continue;
     for (const claim of claims) {
       const record = result[claim.mergedIndex];
-      const other = claims.find((candidate) => candidate !== claim && claimsContest(claim, candidate));
+      const contesting = claims.filter((candidate) => candidate !== claim && claimsContest(claim, candidate));
+      const other = contesting[0];
       if (record === undefined || other === undefined) continue;
-      result[claim.mergedIndex] = { ...record, collidesWith: other.origin };
+      // A same-tier descriptor duplicate is refused by discovery itself, so no
+      // surface can exempt it. Reported separately because a consumer deciding
+      // for one concrete surface re-judges every *other* contest against the
+      // copies that surface loads, and would otherwise drop this one with them.
+      const ignoresSurface = contesting.some(
+        (candidate) => claim.sameTierDescriptorContest || candidate.sameTierDescriptorContest,
+      );
+      result[claim.mergedIndex] = {
+        ...record,
+        collidesWith: other.origin,
+        ...(ignoresSurface && { collisionIgnoresSurface: true }),
+      };
     }
   }
   return result;

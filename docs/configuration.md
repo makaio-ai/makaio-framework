@@ -232,6 +232,14 @@ the command tree without runtime config, and therefore hands `serve` no boot
 discovery either) gets that same three-tier default offline: the project-local
 tier leads, ahead of whatever the config file resolves to.
 
+The standalone CLI is not such a host — it resolves runtime config before it
+builds its command tree, and hands `serve` the very same discovery. So with no
+`discoveryPaths` declared, an extension present only in the invoking project's
+`node_modules` is neither listed nor toggleable offline, because a `makaio
+serve` started in that directory would not load it either. Declare
+`extensions.discoveryPaths: ['node_modules']` to opt that tier in; boot and the
+offline paths pick it up together.
+
 A name found in an earlier root shadows the same name in every later one, so an
 override of an otherwise-installed extension — including its `critical` flag —
 is what the offline paths above see, exactly as a locally started server would

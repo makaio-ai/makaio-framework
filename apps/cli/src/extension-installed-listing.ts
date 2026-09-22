@@ -11,6 +11,7 @@
  * later would read the same tiers.
  * @packageDocumentation
  */
+import { resolveInstalledExtensionRecord, type ExtensionRuntimeSurface } from '@makaio/kernel';
 import {
   buildConfiguredRuntimeOptions,
   FilesystemDescriptorDiscovery,
@@ -39,6 +40,17 @@ export interface InstalledExtensionListingOptions {
    * listing then reconstructs the discovery such a host's `serve` would boot
    * with — see {@link buildUnconfiguredDiscovery} — never a separate hardcoded
    * tier list.
+   *
+   * Deliberately used verbatim, with no project-local tier mixed in. A
+   * supplied discovery is the one `serve` boots with here, and with no
+   * `discoveryPaths` declared that is the data home's two roots and nothing
+   * else — so a descriptor found only in `{cwd}/node_modules` is one no server
+   * started from this directory would load. Listing or toggling it would offer
+   * a preference that never takes effect, which is the report this listing
+   * exists to stop producing. Making that tier visible is a boot decision, not
+   * a listing one: a host that wants it declares
+   * `extensions.discoveryPaths: ['node_modules']`, or hands `serve` no
+   * discovery at all, and this listing follows either way.
    */
   readonly discovery?: ExtensionDiscovery;
   /**
@@ -54,6 +66,21 @@ export interface InstalledExtensionListingOptions {
    * hosts that resolve `@makaio/framework/*` natively.
    */
   readonly frameworkModuleResolver?: FrameworkModuleResolver;
+  /**
+   * Runtime surface the server this host would start boots with.
+   *
+   * Decides which of two same-named copies restricted to different surfaces an
+   * offline toggle answers for — the coordinator filters by surface before it
+   * resolves names, so only one of them is the copy that next start loads. The
+   * host that owns `serve`'s boot overrides is the only place this is known,
+   * which is why it is passed in rather than assumed: a desktop host whose
+   * `serve` boots interactive must not have its extensions judged against the
+   * headless copy.
+   *
+   * Defaults to `'headless'`, the same default `serve` applies when its host
+   * declares none.
+   */
+  readonly surface?: ExtensionRuntimeSurface;
 }
 
 /**
@@ -104,21 +131,33 @@ async function buildUnconfiguredDiscovery(makaioHome: string): Promise<Extension
 }
 
 /**
- * Find the installed record that reports a name as unresolvably claimed.
+ * Surface a server started from this machine boots with when its host declares
+ * none — the same default `serve` applies.
+ */
+const DEFAULT_OFFLINE_SURFACE: ExtensionRuntimeSurface = 'headless';
+
+/**
+ * Resolve the installed record an offline toggle must validate a name against.
  *
- * Shared by the toggle commands so an enablement preference is never persisted
- * for a name no boot will resolve — see
- * {@link InstalledExtensionRecord.collidesWith}. Scanning for any colliding row
- * rather than the first row matching the name matters because every claimant
- * carries the marker, and the first one is not a winner.
+ * Delegates to the coordinator's own resolution so a name claimed by several
+ * installed copies is decided identically whether a server answered or this
+ * process did: shadowed copies lose to live ones, the surface the next boot
+ * runs on decides between same-name copies restricted to different surfaces,
+ * and the contest is judged against the copies that surface actually loads.
+ * Callers read {@link InstalledExtensionRecord.collidesWith} on the result to
+ * refuse a name no boot resolves.
  * @param installed - Installed-package listing from {@link listInstalledExtensions}.
  * @param name - Extension package name being addressed.
- * @returns The first colliding record claiming `name`, or `undefined` when the
- *   name is unambiguous.
+ * @param options - Host capabilities for this invocation; its
+ *   {@link InstalledExtensionListingOptions.surface} is what the answer is
+ *   resolved for.
+ * @returns The record to validate against, or `undefined` when nothing
+ *   installed here claims the name.
  */
-export function findCollidingInstalledEntry(
+export function resolveInstalledEntry(
   installed: readonly InstalledExtensionRecord[],
   name: string,
+  options: InstalledExtensionListingOptions = {},
 ): InstalledExtensionRecord | undefined {
-  return installed.find((ext) => ext.name === name && ext.collidesWith !== undefined);
+  return resolveInstalledExtensionRecord(installed, name, options.surface ?? DEFAULT_OFFLINE_SURFACE);
 }
