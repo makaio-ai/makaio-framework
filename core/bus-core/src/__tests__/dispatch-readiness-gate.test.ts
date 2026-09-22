@@ -524,11 +524,13 @@ describe('Dispatch readiness gate', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Scenario 9j: the readiness wait is bounded by the request deadline, and no
-  // retry runs after it — dispatch is not cancellable by the caller's p-timeout
+  // Scenario 9j: a handler registered after the request deadline is never dispatched
   // -------------------------------------------------------------------------
 
-  it('abandons the readiness wait and the retry once the request deadline has passed', async () => {
+  it('does not dispatch a handler registered after the request deadline', async () => {
+    const requestTimeoutMs = 200;
+    const lateHandlerDelayMs = requestTimeoutMs + 100;
+    const readinessTimeoutMs = 5000;
     const { transport, sendSpy } = createReadinessTransport({
       name: 'gate-s9j',
       ready: new Promise<void>(() => {}), // never settles
@@ -537,31 +539,44 @@ describe('Dispatch readiness gate', () => {
 
     let lateHandlerCalls = 0;
     let cleanup: (() => void) | undefined;
+    vi.useFakeTimers();
     try {
-      // Registered well after the 200 ms deadline. If the gate kept waiting on its
-      // configured 5 s budget it would rebuild the list here and invoke this handler
-      // after the caller was already rejected.
+      // This handler becomes available only after the request deadline. A later
+      // readiness-gate continuation must not dispatch it.
       timers.push(
         setTimeout(() => {
           cleanup = MakaioBus.on(GateNamespace.ping, (ctx) => {
             lateHandlerCalls += 1;
             ctx.setResult({ pong: true });
           });
-        }, 300),
+        }, lateHandlerDelayMs),
       );
 
-      const started = Date.now();
-      await expect(
-        MakaioBus.request(GateNamespace.ping, { id: 'deadline-bound' }, { timeout: 200, readinessTimeout: 5000 }),
-      ).rejects.toThrow(TimeoutError);
-      expect(Date.now() - started).toBeLessThan(1000);
+      const request = MakaioBus.request(
+        GateNamespace.ping,
+        { id: 'deadline-bound' },
+        {
+          timeout: requestTimeoutMs,
+          readinessTimeout: readinessTimeoutMs,
+        },
+      );
+      const rejection = request.catch((error: unknown) => error);
+      // Advance to the exact absolute deadline and drain the timeout continuation.
+      await vi.advanceTimersByTimeAsync(requestTimeoutMs);
+      expect(await rejection).toBeInstanceOf(TimeoutError);
 
-      // Outlive the late registration and confirm nothing ran after the deadline.
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      // Run through the configured readiness budget after the late registration. No
+      // continuation may dispatch a handler after the request deadline.
+      await vi.advanceTimersByTimeAsync(readinessTimeoutMs - requestTimeoutMs);
       expect(lateHandlerCalls).toBe(0);
       expect(getRequestCalls(sendSpy)).toHaveLength(0);
     } finally {
       cleanup?.();
+      for (const timer of timers) {
+        clearTimeout(timer);
+      }
+      timers.length = 0;
+      vi.useRealTimers();
     }
   });
 
