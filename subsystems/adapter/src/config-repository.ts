@@ -13,6 +13,7 @@ import type {
   IAdapterConfigRepository,
   ProviderConfigFileSet,
 } from '@makaio/services-core/adapter-subsystem';
+import type { ZodError } from 'zod';
 import { ProviderConfigDiagnosticError } from './provider-config-diagnostic-error.js';
 
 const JSON_FILE_EXTENSION = '.json';
@@ -52,7 +53,7 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
 
   /**
    * Load all validated adapter config files from disk.
-   * Invalid JSON or schema mismatches are skipped.
+   * Unreadable, invalid-JSON, or schema-mismatched files are skipped with a warning.
    * @returns Validated adapter config file set.
    */
   public async loadAdapterConfigs(): Promise<AdapterFileConfigSet> {
@@ -67,7 +68,7 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
 
       const parsed = AdapterFileSchema.safeParse(entry.jsonData);
       if (!parsed.success) {
-        this.warnInvalidFile('adapter', entry.filePath);
+        this.warnSkippedFile('adapter', entry.filePath, 'invalid-adapter-config', formatSchemaIssues(parsed.error));
         continue;
       }
 
@@ -80,13 +81,14 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
   /**
    * Load all validated provider config files from disk.
    *
-   * Structurally invalid provider configs fail the load with a typed diagnostic
-   * so legacy authentication semantics are never silently ignored.
+   * Each non-conforming file (unreadable, invalid JSON, legacy v1 schema,
+   * unsupported version, schema-invalid) is skipped with a per-file diagnostic
+   * warning so a single stale or inaccessible file never aborts the boot sequence.
    * @returns Validated provider config file set.
    */
   public async loadProviderConfigs(): Promise<ProviderConfigFileSet> {
     const configs = new Map<string, ProviderConfigFile>();
-    const entries = await this.readJsonFiles(this.providerConfigsDir, 'provider config', 'reject');
+    const entries = await this.readJsonFiles(this.providerConfigsDir, 'provider config');
 
     for (const entry of entries) {
       const fileStem = this.getCanonicalLoadedStem(entry.stem, 'provider config', entry.filePath);
@@ -94,7 +96,15 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
         continue;
       }
 
-      configs.set(fileStem, this.parseProviderConfig(entry.jsonData, fileStem));
+      try {
+        configs.set(fileStem, this.parseProviderConfig(entry.jsonData, fileStem));
+      } catch (error) {
+        if (error instanceof ProviderConfigDiagnosticError) {
+          this.warnSkippedFile('provider config', entry.filePath, error.code, error.message);
+          continue;
+        }
+        throw error;
+      }
     }
 
     return { configs };
@@ -165,15 +175,18 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
 
   /**
    * Read raw JSON files from a directory, returning an empty array when missing.
+   *
+   * Each per-file read or parse error is skipped with a warning so that one
+   * inaccessible or malformed file does not prevent others from loading.
+   * An ENOENT on the directory itself returns an empty array; any other
+   * directory-level error is re-thrown.
    * @param directoryPath - Directory to scan.
    * @param label - Human-readable file label for warnings.
-   * @param invalidJsonPolicy - Whether malformed JSON is skipped or rejected.
    * @returns JSON file entries sorted by file name.
    */
   private async readJsonFiles(
     directoryPath: string,
     label: string,
-    invalidJsonPolicy: 'skip' | 'reject' = 'skip',
   ): Promise<Array<{ filePath: string; stem: string; jsonData: unknown }>> {
     try {
       const entries = await fs.readdir(directoryPath, { withFileTypes: true });
@@ -188,22 +201,17 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
             const content = await fs.readFile(filePath, 'utf-8');
             return { filePath, stem: path.parse(entry.name).name, jsonData: JSON.parse(content) };
           } catch (error) {
+            let reason: string;
+            let detail: string;
             if (error instanceof SyntaxError) {
-              if (invalidJsonPolicy === 'reject') {
-                throw new ProviderConfigDiagnosticError(
-                  'invalid-provider-config',
-                  sanitizeDiagnosticFileName(entry.name),
-                  'file does not contain valid JSON.',
-                );
-              }
-              this.warnInvalidFile(label, filePath);
-              return null;
+              reason = 'invalid-json';
+              detail = 'file does not contain valid JSON.';
+            } else {
+              reason = 'unreadable';
+              detail = error instanceof Error ? error.message : String(error);
             }
-            if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
-              this.warnInvalidFile(label, filePath);
-              return null;
-            }
-            throw error;
+            this.warnSkippedFile(label, filePath, reason, detail);
+            return null;
           }
         }),
       );
@@ -219,12 +227,21 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
   }
 
   /**
-   * Emit a warning for a skipped invalid file.
-   * @param label - Human-readable file label.
+   * Emit a warning for a skipped file with a machine-readable reason code and
+   * operator-actionable detail.
+   * @param label - Human-readable file label (e.g. 'provider config', 'adapter').
    * @param filePath - Absolute path to the skipped file.
+   * @param reason - Stable machine-readable reason code.
+   * @param detail - Safe structural detail explaining the skip reason.
    */
-  private warnInvalidFile(label: string, filePath: string): void {
-    console.warn('[FileAdapterConfigRepository] Skipping invalid %s file: %s', label, filePath);
+  private warnSkippedFile(label: string, filePath: string, reason: string, detail: string): void {
+    console.warn(
+      '[FileAdapterConfigRepository] Skipping invalid %s file (%s): %s — %s',
+      label,
+      reason,
+      filePath,
+      detail,
+    );
   }
 
   /**
@@ -261,10 +278,7 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
 
     const parsed = ProviderConfigFileSchema.safeParse(value);
     if (!parsed.success) {
-      const issues = parsed.error.issues
-        .map((issue) => `${issue.path.length > 0 ? issue.path.join('.') : '<root>'}: ${issue.message}`)
-        .join('; ');
-      throw new ProviderConfigDiagnosticError('invalid-provider-config', source, issues);
+      throw new ProviderConfigDiagnosticError('invalid-provider-config', source, formatSchemaIssues(parsed.error));
     }
 
     return parsed.data;
@@ -280,8 +294,9 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
   private getCanonicalLoadedStem(stem: string, label: string, filePath: string): string | null {
     try {
       return this.assertCanonicalFileStem(stem, `${label} file stem`);
-    } catch {
-      this.warnInvalidFile(label, filePath);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      this.warnSkippedFile(label, filePath, 'invalid-file-name', detail);
       return null;
     }
   }
@@ -407,11 +422,12 @@ export class FileAdapterConfigRepository implements IAdapterConfigRepository {
 }
 
 /**
- * Remove control characters and path-like punctuation from a diagnostic file name.
- * @param fileName - Directory-entry name that may contain untrusted characters.
- * @returns Safe basename suitable for an error message or structured diagnostic.
+ * Format Zod validation issues into a single readable string.
+ * @param error - Zod error from a failed `safeParse` or `parse` call.
+ * @returns Semicolon-separated list of `path: message` entries.
  */
-function sanitizeDiagnosticFileName(fileName: string): string {
-  const sanitized = path.basename(fileName).replace(/[^A-Za-z0-9._-]/g, '_');
-  return sanitized || 'provider-config.json';
+function formatSchemaIssues(error: ZodError): string {
+  return error.issues
+    .map((issue) => `${issue.path.length > 0 ? issue.path.join('.') : '<root>'}: ${issue.message}`)
+    .join('; ');
 }

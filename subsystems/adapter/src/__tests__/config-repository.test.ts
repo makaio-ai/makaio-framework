@@ -135,27 +135,48 @@ describe('FileAdapterConfigRepository', () => {
     expect(warnSpy).toHaveBeenCalled();
   });
 
-  it('fails malformed provider JSON with a sanitized typed diagnostic', async () => {
-    const filePath = path.join(ctx.makaioDir, 'provider-configs', 'broken.json');
-    await writeTextFile(filePath, '{ secret-looking-invalid-json');
+  it('skips an invalid-JSON file and still loads the other provider configs', async () => {
+    const validConfig = createNoAuthConfig('anthropic');
+    const dir = path.join(ctx.makaioDir, 'provider-configs');
 
-    const load = ctx.repository.loadProviderConfigs();
+    await writeJsonFile(path.join(dir, 'good.json'), validConfig);
+    await writeTextFile(path.join(dir, 'broken.json'), '{ secret-looking-invalid-json');
 
-    await expect(load).rejects.toMatchObject({
-      name: 'ProviderConfigDiagnosticError',
-      code: 'invalid-provider-config',
-      source: 'broken.json',
+    const { configs } = await ctx.repository.loadProviderConfigs();
+
+    expect([...configs.keys()]).toEqual(['good']);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[FileAdapterConfigRepository]'),
+      'provider config',
+      'invalid-json',
+      expect.stringContaining(path.join(dir, 'broken.json')),
+      'file does not contain valid JSON.',
+    );
+  });
+
+  it('skips one legacy-v1 file and still loads the other provider configs', async () => {
+    const validConfig = createNoAuthConfig('anthropic');
+    const dir = path.join(ctx.makaioDir, 'provider-configs');
+
+    await writeJsonFile(path.join(dir, 'good.json'), validConfig);
+    await writeJsonFile(path.join(dir, 'legacy.json'), {
+      $schema: 'makaio/provider-config/v1',
+      definitionId: 'anthropic',
     });
-    await expect(load).rejects.not.toThrow(filePath);
-    await expect(load).rejects.not.toThrow('secret-looking-invalid-json');
+
+    const { configs } = await ctx.repository.loadProviderConfigs();
+
+    expect([...configs.keys()]).toEqual(['good']);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[FileAdapterConfigRepository]'),
+      'provider config',
+      'legacy-provider-config',
+      expect.stringContaining(path.join(dir, 'legacy.json')),
+      expect.stringContaining('Recreate this config'),
+    );
   });
 
   it.each([
-    {
-      name: 'v1 schema',
-      value: { $schema: 'makaio/provider-config/v1', definitionId: 'anthropic' },
-      code: 'legacy-provider-config',
-    },
     {
       name: 'legacy credentials field',
       value: {
@@ -174,15 +195,29 @@ describe('FileAdapterConfigRepository', () => {
       value: { $schema: 'makaio/provider-config/v2', definitionId: 'anthropic' },
       code: 'invalid-provider-config',
     },
-  ])('fails loading $name with a typed reset diagnostic', async ({ value, code }) => {
-    const filePath = path.join(ctx.makaioDir, 'provider-configs', 'legacy.json');
-    await writeJsonFile(filePath, value);
+    {
+      name: 'unsupported schema version',
+      value: { $schema: 'makaio/provider-config/v99', definitionId: 'anthropic' },
+      code: 'unsupported-provider-config-version',
+    },
+  ])('skips a $name provider config with its diagnostic code and loads the others', async ({ value, code }) => {
+    const validConfig = createNoAuthConfig('openai');
+    const dir = path.join(ctx.makaioDir, 'provider-configs');
 
-    await expect(ctx.repository.loadProviderConfigs()).rejects.toMatchObject({
-      name: 'ProviderConfigDiagnosticError',
+    await writeJsonFile(path.join(dir, 'good.json'), validConfig);
+    await writeJsonFile(path.join(dir, 'bad.json'), value);
+
+    const { configs } = await ctx.repository.loadProviderConfigs();
+
+    expect(configs.has('good')).toBe(true);
+    expect(configs.has('bad')).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('[FileAdapterConfigRepository]'),
+      'provider config',
       code,
-      source: 'legacy',
-    });
+      expect.stringContaining(path.join(dir, 'bad.json')),
+      expect.any(String),
+    );
   });
 
   it('loads validated adapter files and uses the file stem as the adapter name', async () => {
@@ -369,6 +404,19 @@ describe('FileAdapterConfigRepository', () => {
     await expect(ctx.repository.deleteProviderConfig('../escape')).rejects.toThrow(
       'Invalid canonical provider config id: ../escape',
     );
+  });
+
+  it('throws when writing a provider config that carries a legacy field', async () => {
+    const legacy: ProviderConfigFile & { isSentinel: boolean } = {
+      ...createNoAuthConfig('anthropic'),
+      isSentinel: false,
+    };
+
+    await expect(ctx.repository.writeProviderConfig('legacy', legacy)).rejects.toMatchObject({
+      name: 'ProviderConfigDiagnosticError',
+      code: 'legacy-provider-config',
+      source: 'legacy',
+    });
   });
 
   it('writes adapter files by creating parent directories and persisting validated JSON', async () => {
