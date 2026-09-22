@@ -3,13 +3,17 @@
  *
  * Resolves and installs a root set of extension packages together with their
  * transitive descriptor-declared dependencies. Resolution is breadth-first with
- * cycle detection, and the descriptor graph it leaves behind is validated once
- * at the end, against the resolved target state rather than against the
- * transient state between installs. On any required-dependency failure the
- * pre-install manifest snapshot is restored; optional dependency failures are collected and skipped
- * without triggering a rollback — except an extension-name claim conflict
- * ({@link ExtensionNameClaimedError}), which is an identity violation rather
- * than a failed install and is fatal for optional dependencies too.
+ * cycle detection, and everything the descriptor graph has to satisfy — which
+ * npm package claims which extension name, and whether every declared
+ * dependency still resolves — is judged once at the end, against the resolved
+ * target state rather than against the transient state between installs. On any
+ * required-dependency failure the pre-install manifest snapshot is restored;
+ * optional dependency failures are collected and skipped without triggering a
+ * rollback. Skipping is a statement about the *declared dependency*, not about
+ * the disk: a package that installed and only then failed an assertion stays
+ * installed, joins the resolved set, and is judged with it — which is how an
+ * extension-name claim conflict ({@link ExtensionNameClaimedError}) stays fatal
+ * however the dependency was declared.
  * @packageDocumentation
  */
 import { versionSatisfies } from '@makaio/contracts';
@@ -76,12 +80,17 @@ export interface ResolvedPackage {
 }
 
 /**
- * A package that was skipped because it is optional and its installation failed.
+ * An optional dependency that was not accepted as satisfied.
+ *
+ * Says nothing about whether the package reached disk: most skips are installs
+ * that never succeeded, but a package can also install cleanly and then fail an
+ * assertion about its descriptor. Such a package stays installed — the resolver
+ * has no per-package undo — and is judged with the rest of the resolved set.
  */
 export interface SkippedPackage {
   /** npm package name. */
   readonly npmName: string;
-  /** Human-readable reason the installation was skipped. */
+  /** Human-readable reason the dependency was not accepted. */
   readonly reason: string;
 }
 
@@ -102,10 +111,17 @@ export interface ResolutionResult {
  */
 export interface ResolutionOptions {
   /**
-   * When `true`, the resolved graph is not validated: existing installed
-   * packages that depend on an upgraded package may be left with a version
-   * outside their declared range, or with a required dependency name the
-   * upgrade released (see {@link DependencyResolver.assertResolvedGraphConsistent}).
+   * When `true`, the resolved dependency graph is not validated: existing
+   * installed packages that depend on an upgraded package may be left with a
+   * version outside their declared range, or with a required dependency name
+   * the upgrade released (see
+   * {@link DependencyResolver.assertResolvedGraphConsistent}).
+   *
+   * Does not extend to extension-name claims. A dependent left on an
+   * unsatisfiable range still boots with its dependency skipped, which is a
+   * degraded state an operator can knowingly accept; two packages claiming one
+   * extension name leave discovery with no bootable state at all, so
+   * {@link DependencyResolver.claimDescriptorNames} refuses it either way.
    */
   readonly force?: boolean;
 
@@ -152,19 +168,35 @@ interface ParsedRoot {
 }
 
 /**
- * Mutable in-memory index of currently-installed extension packages, keyed by
- * both identities a package carries: the npm name it is installed under, and
- * the extension name its descriptor declares.
+ * Mutable in-memory index of installed extension packages, keyed by the npm
+ * name each one is installed under.
  *
- * The two are independent — an npm package may ship a descriptor declaring any
- * name — and only the descriptor name is the runtime identity. Indexing both
- * is what lets {@link DependencyResolver} tell "this npm package is already
- * installed" (a no-op or upgrade) apart from "a *different* npm package
- * already claims this extension name" (an identity collision).
+ * This is the only installed state the resolution loop maintains, and it always
+ * describes the target set: entries start as what is on disk and are replaced
+ * as packages are installed or upgraded. Everything keyed on the *extension*
+ * name a package declares is derived from it once the queue has drained — see
+ * {@link DescriptorNameClaims} — because an extension name can move between npm
+ * packages within a single resolution and only the final set says where it
+ * ended up.
  */
-interface InstalledIndex {
-  byNpmName: Map<string, InstalledExtensionDescriptor>;
-  byDescriptorName: Map<string, InstalledExtensionDescriptor>;
+type InstalledIndex = Map<string, InstalledExtensionDescriptor>;
+
+/**
+ * Extension-name facts derived from the descriptor set a resolution resolved to.
+ *
+ * npm identity and extension identity are independent: any npm package may ship
+ * a `descriptor.json` declaring any name, and an upgrade may declare a
+ * different name than the version it replaced. Both maps therefore only become
+ * knowable once every install in the batch has been read back.
+ */
+interface DescriptorNameClaims {
+  /** Extension name to the single installed package declaring it afterwards. */
+  readonly byDescriptorName: ReadonlyMap<string, InstalledExtensionDescriptor>;
+  /**
+   * Extension names that were declared before this resolution and are declared
+   * by nothing afterwards, keyed to the npm package that gave each one up.
+   */
+  readonly released: ReadonlyMap<string, string>;
 }
 
 /**
@@ -176,8 +208,8 @@ interface InstalledIndex {
  * existing runtime identity, so a caller that would otherwise tolerate the
  * failure (an optional dependency) must not, or the resolution reports success
  * while leaving discovery with two packages claiming one name at the next boot.
- * See {@link DependencyResolver.assertDescriptorNameUnclaimed} for why the
- * check can only run after the install.
+ * See {@link DependencyResolver.claimDescriptorNames} for why the contest can
+ * only be judged once every install in the batch has been read back.
  */
 export class ExtensionNameClaimedError extends Error {
   /**
@@ -215,9 +247,10 @@ export class ExtensionNameClaimedError extends Error {
  * 4. After each install, read the installed `descriptor.json` to discover the
  *    next wave of dependencies and enqueue them.
  * 5. On any required-dependency failure, restore the manifest snapshot.
- * 6. On an optional-dependency failure, collect the skip reason and continue —
- *    unless it is an {@link ExtensionNameClaimedError}, which is fatal for
- *    optional dependencies too.
+ * 6. On an optional-dependency failure, collect the skip reason and continue,
+ *    keeping anything that did reach disk in the resolved set.
+ * 7. Once the queue has drained, derive the extension-name claims of the
+ *    resolved set and validate the dependency graph against it.
  */
 export class DependencyResolver {
   /**
@@ -270,7 +303,8 @@ export class DependencyResolver {
    * @returns Aggregate resolution result.
    */
   private async runBfs(roots: readonly string[], force: boolean): Promise<ResolutionResult> {
-    const installedIndex = await this.readInstalledIndex();
+    const initialInstalled = await this.packages.listInstalledExtensionDescriptors();
+    const installedIndex: InstalledIndex = new Map(initialInstalled.map((entry) => [entry.npmName, entry]));
     const queue: QueueEntry[] = roots.map((root) => {
       const parsed = parseRootPackageSpec(root);
       const expectedDescriptorName = expectedRootDescriptorName(parsed.npmName);
@@ -289,13 +323,11 @@ export class DependencyResolver {
     const warnings: string[] = [];
     /** npm packages whose installed version changed during this resolution. */
     const changedNpmNames = new Set<string>();
-    /** Extension names released by a rename, keyed to the package that gave each up. */
-    const releasedDescriptorNames = new Map<string, string>();
 
     while (queue.length > 0) {
       const entry = queue.shift()!;
       const alreadyProcessed = processedNpmNames.has(entry.npmName);
-      const current = installedIndex.byNpmName.get(entry.npmName);
+      const current = installedIndex.get(entry.npmName);
 
       if (alreadyProcessed) {
         if (current) {
@@ -330,19 +362,29 @@ export class DependencyResolver {
         if (!descriptor) {
           throw new Error(`Installed package ${entry.npmName} does not contain a valid descriptor.json`);
         }
+        // The package is on disk under this descriptor from here on, whatever
+        // the assertions below decide about it, and the resolver has no way to
+        // take that back: its only undo is the whole-transaction manifest
+        // snapshot, which an optional failure deliberately does not trigger,
+        // and for an upgrade there is nothing to uninstall back to anyway.
+        // Recording it before the assertions can divert control is what keeps
+        // the resolved set equal to what an operator would actually boot — a
+        // package skipped for its own declared range still claims the
+        // extension name its descriptor declares.
+        installedIndex.set(entry.npmName, { npmName: entry.npmName, version, descriptor });
+        changedNpmNames.add(entry.npmName);
+
         this.assertDescriptorMatches(entry, descriptor);
-        this.assertDescriptorNameUnclaimed(entry.npmName, descriptor, installedIndex);
         this.assertDescriptorVersionSatisfies(entry, descriptor);
         installedDescriptor = descriptor;
       } catch (error) {
-        // Optionality covers a dependency that could not be installed, not one
-        // that must not stay installed. An extension-name claim conflict is the
-        // latter: the package is already on disk, so skipping it would leave a
-        // duplicate identity behind, report the resolution as successful, and
-        // fail at the next boot's discovery instead — where the rollback that
-        // removes it again is no longer available. It is fatal regardless of
-        // optionality, which is what makes the caller's manifest restore run.
-        if (entry.optional && !(error instanceof ExtensionNameClaimedError)) {
+        // Optionality lets a *declared dependency* go unsatisfied; it does not
+        // erase an install that already happened. Both consequences of one that
+        // did are therefore judged against the resolved set after the queue
+        // drains — a contested extension name by claimDescriptorNames, a
+        // version no dependent's range accepts by assertResolvedGraphConsistent
+        // — where optionality no longer suppresses them.
+        if (entry.optional) {
           skipped.push({ npmName: entry.npmName, reason: error instanceof Error ? error.message : String(error) });
           continue;
         }
@@ -350,18 +392,12 @@ export class DependencyResolver {
       }
 
       installed.push({ npmName: entry.npmName, version, source: current ? 'upgraded' : 'new' });
-      changedNpmNames.add(entry.npmName);
-      const record: InstalledExtensionDescriptor = { npmName: entry.npmName, version, descriptor: installedDescriptor };
-      installedIndex.byNpmName.set(entry.npmName, record);
-      // Claim the extension name for the rest of this resolution too, so two
-      // packages in one root set colliding on it is refused exactly like a
-      // collision against a package installed by an earlier run.
-      this.transferDescriptorNameClaim(installedIndex, current, record, releasedDescriptorNames);
       await this.enqueueDependencies(queue, entry, installedDescriptor);
       processedNpmNames.add(entry.npmName);
     }
 
-    this.assertResolvedGraphConsistent(installedIndex, changedNpmNames, releasedDescriptorNames, force);
+    const claims = this.claimDescriptorNames(initialInstalled, installedIndex, changedNpmNames);
+    this.assertResolvedGraphConsistent(installedIndex, claims, changedNpmNames, force);
 
     return { installed, skipped, warnings };
   }
@@ -369,18 +405,6 @@ export class DependencyResolver {
   // ---------------------------------------------------------------------------
   // Private helpers
   // ---------------------------------------------------------------------------
-
-  /**
-   * Build the initial installed index from all currently-installed descriptors.
-   * @returns Dual-keyed index of installed extension records.
-   */
-  private async readInstalledIndex(): Promise<InstalledIndex> {
-    const entries = await this.packages.listInstalledExtensionDescriptors();
-    return {
-      byNpmName: new Map(entries.map((entry) => [entry.npmName, entry])),
-      byDescriptorName: new Map(entries.map((entry) => [entry.descriptor.name, entry])),
-    };
-  }
 
   /**
    * Check whether an installed version satisfies the requested semver range.
@@ -426,8 +450,8 @@ export class DependencyResolver {
   }
 
   /**
-   * Assert that no *other* installed npm package already claims this
-   * descriptor's extension name.
+   * Derive which npm package claims each extension name in the set this
+   * resolution resolved to, refusing any name two packages still claim.
    *
    * npm identity and extension identity are independent: any npm package may
    * ship a `descriptor.json` declaring any name. The runtime keys everything
@@ -440,73 +464,62 @@ export class DependencyResolver {
    * than picking one. Refusing the install is how an operator finds out at the
    * moment they can still act on it, instead of at the next start.
    *
-   * The check necessarily runs after the package is on disk — its descriptor
-   * is not readable before that — so the refusal propagates as a required
-   * dependency failure and the caller's manifest rollback removes it again.
+   * Judged over the resolved set rather than per install, for the same reason
+   * {@link assertResolvedGraphConsistent} is: a name can legitimately move
+   * between npm packages inside one batch, when the package holding it is
+   * upgraded to a descriptor that declares a different name and another package
+   * takes the released one over. Both packages are installed under one
+   * rollback, so the order the roots were submitted in says nothing about the
+   * intended target graph — checking each install against the transient set
+   * would accept the handover for one order and refuse it for the other.
    *
-   * Scope is this installer's own tier. A name claimed by a symlinked install
-   * under `{makaioHome}/extensions`, or by a package in the invoking project's
-   * own `node_modules`, is a *cross*-tier collision, which discovery resolves
-   * by tier precedence rather than refusing — so it is deliberately not an
-   * install error here.
-   * @param npmName - npm package being installed or upgraded.
-   * @param descriptor - Descriptor read from that package after install.
-   * @param installedIndex - Index of packages already installed in this tier.
-   * @throws ExtensionNameClaimedError when a different npm package already declares this extension name.
+   * A contest is only this resolution's to refuse when it changed one of the
+   * contenders. Two packages that already shared a name before the batch are
+   * left to discovery, which refuses to boot on them regardless; failing every
+   * unrelated install until they are sorted out would not make that any more
+   * visible. The package this resolution changed is reported as the offender so
+   * the message names the install an operator can still undo, and the resolved
+   * set is walked in npm-name order so a batch that changed both contenders
+   * still reports the same pair either way round.
+   * @param before - Installed records as they were when the resolution started.
+   * @param after - Installed records this resolution resolved to.
+   * @param changedNpmNames - npm packages whose installed version this resolution changed.
+   * @returns Name claims and releases of the resolved set.
+   * @throws ExtensionNameClaimedError when two packages in the resolved set declare one extension name.
    */
-  private assertDescriptorNameUnclaimed(
-    npmName: string,
-    descriptor: ExtensionDescriptor,
-    installedIndex: InstalledIndex,
-  ): void {
-    const claimant = installedIndex.byDescriptorName.get(descriptor.name);
-    if (claimant === undefined || claimant.npmName === npmName) {
-      return;
+  private claimDescriptorNames(
+    before: readonly InstalledExtensionDescriptor[],
+    after: InstalledIndex,
+    changedNpmNames: ReadonlySet<string>,
+  ): DescriptorNameClaims {
+    const byDescriptorName = new Map<string, InstalledExtensionDescriptor>();
+    for (const record of [...after.values()].sort(compareByNpmName)) {
+      const contender = byDescriptorName.get(record.descriptor.name);
+      if (contender === undefined) {
+        byDescriptorName.set(record.descriptor.name, record);
+        continue;
+      }
+
+      const offender = changedNpmNames.has(record.npmName) ? record : contender;
+      if (!changedNpmNames.has(offender.npmName)) continue;
+      throw new ExtensionNameClaimedError(
+        offender.npmName,
+        record.descriptor.name,
+        offender === record ? contender : record,
+      );
     }
 
-    throw new ExtensionNameClaimedError(npmName, descriptor.name, claimant);
-  }
-
-  /**
-   * Move the extension-name claim of a just-installed package onto its new
-   * record, releasing the name its previous version declared.
-   *
-   * An upgrade may ship a descriptor declaring a *different* extension name
-   * than the version it replaced. The old name is then no longer declared by
-   * anything on disk, so leaving it in the index would keep an identity
-   * reserved by a package that gave it up and refuse a later install in the
-   * same resolution that legitimately takes it over. The release is guarded on
-   * the previous claim still pointing at this npm package: when another package
-   * holds that name, the index entry is not this package's to remove.
-   *
-   * A released name is recorded rather than just dropped: an installed package
-   * may declare a required dependency on it, which nothing satisfies once the
-   * name is gone. {@link assertResolvedGraphConsistent} judges that against the
-   * resolution's final state, so a batch that also upgrades the dependent onto
-   * the new name stays legal while one that strands it is refused.
-   * @param installedIndex - Index being updated for this resolution.
-   * @param previous - Record this package had before the install, when it was already present.
-   * @param record - Record for the version just installed.
-   * @param releasedDescriptorNames - Accumulator of names given up during this
-   *   resolution, keyed to the npm package that gave each one up.
-   */
-  private transferDescriptorNameClaim(
-    installedIndex: InstalledIndex,
-    previous: InstalledExtensionDescriptor | undefined,
-    record: InstalledExtensionDescriptor,
-    releasedDescriptorNames: Map<string, string>,
-  ): void {
-    const previousName = previous?.descriptor.name;
-    if (
-      previousName !== undefined &&
-      previousName !== record.descriptor.name &&
-      installedIndex.byDescriptorName.get(previousName)?.npmName === record.npmName
-    ) {
-      installedIndex.byDescriptorName.delete(previousName);
-      releasedDescriptorNames.set(previousName, record.npmName);
+    // A name nothing declares any more was given up by whichever package
+    // declared it before: packages are only ever added or upgraded here, so a
+    // rename is the only way a name can leave the set.
+    const released = new Map<string, string>();
+    for (const record of before) {
+      if (!byDescriptorName.has(record.descriptor.name)) {
+        released.set(record.descriptor.name, record.npmName);
+      }
     }
-    releasedDescriptorNames.delete(record.descriptor.name);
-    installedIndex.byDescriptorName.set(record.descriptor.name, record);
+
+    return { byDescriptorName, released };
   }
 
   /**
@@ -557,31 +570,30 @@ export class DependencyResolver {
    *   optional dependents too: the dependency is installed and will be offered
    *   to the coordinator at a version the dependent declared it cannot use.
    *
-   * Dependency names are matched through the installed index's descriptor-name
-   * key, not through {@link IDescriptorNameResolver}: the index records which
-   * npm package actually declares each extension name, while the name resolver
-   * only predicts where one would be published.
-   * @param installedIndex - Final installed index for this resolution.
+   * Dependency names are matched through the resolved name claims, not through
+   * {@link IDescriptorNameResolver}: the claims record which npm package
+   * actually declares each extension name, while the name resolver only
+   * predicts where one would be published.
+   * @param installedIndex - Installed records this resolution resolved to.
+   * @param claims - Extension-name claims and releases of that resolved set.
    * @param changedNpmNames - npm packages whose installed version this resolution changed.
-   * @param releasedDescriptorNames - Extension names no installed package declares any
-   *   more, keyed to the npm package that gave each one up.
    * @param force - When `true`, violations are ignored.
    */
   private assertResolvedGraphConsistent(
     installedIndex: InstalledIndex,
+    claims: DescriptorNameClaims,
     changedNpmNames: ReadonlySet<string>,
-    releasedDescriptorNames: ReadonlyMap<string, string>,
     force: boolean,
   ): void {
     if (force) return;
 
     const violations: string[] = [];
     const offenders = new Set<string>();
-    for (const entry of installedIndex.byNpmName.values()) {
+    for (const entry of installedIndex.values()) {
       for (const dep of entry.descriptor.dependencies ?? []) {
-        const claimant = installedIndex.byDescriptorName.get(dep.name);
+        const claimant = claims.byDescriptorName.get(dep.name);
         const requirement = `${entry.npmName} requires ${dep.name} ${dep.version}`;
-        const releasedBy = releasedDescriptorNames.get(dep.name);
+        const releasedBy = claims.released.get(dep.name);
         if (claimant === undefined) {
           if (dep.optional === true || releasedBy === undefined) continue;
           violations.push(`${requirement}, which ${releasedBy} no longer declares`);
@@ -632,6 +644,21 @@ export class DependencyResolver {
       });
     }
   }
+}
+
+/**
+ * Order two installed records by npm name.
+ *
+ * Gives {@link DependencyResolver.claimDescriptorNames} a submission-independent
+ * walk over the resolved set, so a contested extension name always reports the
+ * same pair of packages.
+ * @param a - First installed record.
+ * @param b - Second installed record.
+ * @returns Negative, zero, or positive per the `Array.prototype.sort` contract.
+ */
+function compareByNpmName(a: InstalledExtensionDescriptor, b: InstalledExtensionDescriptor): number {
+  if (a.npmName === b.npmName) return 0;
+  return a.npmName < b.npmName ? -1 : 1;
 }
 
 /**
