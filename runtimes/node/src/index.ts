@@ -47,6 +47,7 @@ export {
   createExtensionOperatorConfigSnapshot,
   loadExtensionOperatorConfig,
   resolveExtensionOperatorConfigDir,
+  warnOnUnaddressableExtensionOperatorConfigNames,
   warnOnUnappliedExtensionOperatorConfig,
   type ExtensionOperatorConfigConsumer,
   type ExtensionOperatorConfigSnapshot,

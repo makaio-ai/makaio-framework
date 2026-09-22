@@ -189,16 +189,30 @@ export class ExtensionCoordinator {
    * into {@link cliContributions} -- all before any services are started.
    *
    * Single-use: calling this method twice on the same instance throws.
+   *
+   * The retained names are returned because filtering happens here and nowhere
+   * else: a composition root that wants to diagnose what it handed in — an
+   * operator config file for an extension this surface excludes, for example —
+   * would otherwise have to restate the surface and environment rules and drift
+   * from them. They are a result of this call rather than an accessor, so there
+   * is no state in which they can be read as "nothing was retained" when in fact
+   * nothing has been loaded yet.
    * @param packages - Extension manifests to register.
    * @param configDefaults - Optional map of extension name to default config values
    *   sourced from descriptor.json.
+   * @returns The packages actually registered, in load order: the input minus
+   *   the ones excluded by surface or environment filtering and their pruned
+   *   dependents, with one entry per name — the registration that won an
+   *   override, never the one it replaced. The manifests themselves rather than
+   *   their names, because a caller matching names back against its own input
+   *   would re-admit exactly the overridden registrations this dropped.
    * @throws Error if called more than once, if a dependency cycle is detected,
    *   or if dependency sorting fails.
    */
   public load(
     packages: ReadonlyArray<KernelMakaioExtension>,
     configDefaults?: ReadonlyMap<string, Readonly<Record<string, unknown>>>,
-  ): void {
+  ): readonly KernelMakaioExtension[] {
     if (this.shutdownRequested) {
       throw new Error('ExtensionCoordinator.load() called after shutdown(). The coordinator is terminal.');
     }
@@ -214,8 +228,10 @@ export class ExtensionCoordinator {
     );
     this.loadOrder = topoSort(eligible);
 
+    const retained: KernelMakaioExtension[] = [];
     for (const name of this.loadOrder) {
       const pkg = eligible.find((p) => p.name === name)!;
+      retained.push(pkg);
       const entry: ExtensionEntry = {
         pkg,
         identity: createExtensionIdentity(pkg.name),
@@ -253,6 +269,7 @@ export class ExtensionCoordinator {
       }),
     );
     this.loaded = true;
+    return retained;
   }
 
   /**

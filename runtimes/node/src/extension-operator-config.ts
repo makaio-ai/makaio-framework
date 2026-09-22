@@ -17,6 +17,8 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import {
   decodeExtensionOperatorConfigName,
+  encodeExtensionOperatorConfigName,
+  EXTENSION_OPERATOR_CONFIG_FILE_SUFFIX,
   type ExtensionOperatorConfigEntry,
   type ExtensionOperatorConfigFailure,
   type ExtensionOperatorConfigFailureReason,
@@ -27,9 +29,6 @@ import { summarizeDiagnosticText } from '@makaio/utils';
 
 /** Path, relative to the Makaio home, of the directory that holds operator config files. */
 const OPERATOR_CONFIG_DIR_SEGMENTS = ['config', 'extensions'] as const;
-
-/** Suffix every operator config file carries; JSON is the only accepted format. */
-const OPERATOR_CONFIG_FILE_SUFFIX = '.json';
 
 /**
  * Largest operator config file the loader will read into memory.
@@ -82,7 +81,7 @@ export interface ExtensionOperatorConfigSnapshot extends ExtensionOperatorConfig
   readonly entries: readonly (readonly [string, ExtensionOperatorConfigEntry])[];
 }
 
-/** The part of a loaded package {@link warnOnUnappliedExtensionOperatorConfig} inspects. */
+/** The part of a retained package {@link warnOnUnappliedExtensionOperatorConfig} inspects. */
 export interface ExtensionOperatorConfigConsumer {
   /** Package name, matched against the name an operator file decodes to. */
   readonly name: string;
@@ -146,12 +145,15 @@ export function createExtensionOperatorConfigSnapshot(
   }
   const listed = Object.freeze([...captured].map((pair) => Object.freeze(pair)));
 
-  return {
+  // The wrapper is frozen for the same reason its contents are: whoever holds
+  // the snapshot must not be able to repoint `get` or `entries` at something
+  // else once boot has resolved configuration against it.
+  return Object.freeze({
     entries: listed,
     get(extensionName: string): ExtensionOperatorConfigEntry | undefined {
       return captured.get(extensionName);
     },
-  };
+  });
 }
 
 /**
@@ -177,9 +179,10 @@ export function createExtensionOperatorConfigSnapshot(
  *
  * Entries that address no extension are skipped: a name that does not end in
  * `.json`, or whose stem is not a canonical encoding of an extension name, is
- * reported and dropped. Dot-prefixed names are skipped silently — an editor
- * lock file such as `.#gateway.json` or a `.DS_Store` is bookkeeping, not
- * something an operator wrote to configure anything.
+ * reported and dropped. Dot-prefixed names are skipped silently — a canonical
+ * stem never begins with a dot, so an editor lock file such as `.#gateway.json`
+ * or a `.DS_Store` is bookkeeping, not something an operator wrote to configure
+ * anything.
  *
  * Windows reserves a handful of device names (`con`, `prn`, `aux`, `nul`,
  * `com1`–`com9`, `lpt1`–`lpt9`) that an extension manifest does not exclude, so
@@ -222,13 +225,13 @@ export async function loadExtensionOperatorConfig(
  * they are raised when that extension activates, so reporting them twice would
  * only make the activation failure harder to find.
  * @param snapshot - Operator config snapshot built for this process.
- * @param loadedPackages - Packages handed to the coordinator for this boot.
+ * @param retainedPackages - Packages the coordinator retained for this boot.
  */
 export function warnOnUnappliedExtensionOperatorConfig(
   snapshot: ExtensionOperatorConfigSnapshot,
-  loadedPackages: readonly ExtensionOperatorConfigConsumer[],
+  retainedPackages: readonly ExtensionOperatorConfigConsumer[],
 ): void {
-  const configSchemaByName = new Map(loadedPackages.map((pkg) => [pkg.name, pkg.configSchema]));
+  const configSchemaByName = new Map(retainedPackages.map((pkg) => [pkg.name, pkg.configSchema]));
 
   for (const [extensionName, entry] of snapshot.entries) {
     const displayName = summarizeDiagnosticText(extensionName);
@@ -243,6 +246,31 @@ export function warnOnUnappliedExtensionOperatorConfig(
         `[boot] Operator config ${entry.source} names extension "${displayName}", which declares no config schema; it has no effect`,
       );
     }
+  }
+}
+
+/**
+ * Report loaded extensions that no operator config file can ever name.
+ *
+ * The encoding is defined for every name an extension realistically carries, but
+ * not for all of them: a name whose percent-encoded file name would exceed a
+ * filesystem's per-component limit has no stem, and neither has one that is not
+ * well-formed Unicode. Such an extension is configurable through every other
+ * layer and only through them, which is invisible until an operator writes a
+ * file for it and nothing happens — there is no file name for them to have
+ * written, so the unapplied-entry check above can never speak for it either.
+ *
+ * Never fatal: the extension runs, it simply cannot be configured by file.
+ * @param retainedPackages - Packages the coordinator retained for this boot.
+ */
+export function warnOnUnaddressableExtensionOperatorConfigNames(
+  retainedPackages: readonly ExtensionOperatorConfigConsumer[],
+): void {
+  for (const pkg of retainedPackages) {
+    if (encodeExtensionOperatorConfigName(pkg.name) !== undefined) continue;
+    console.warn(
+      `[boot] Extension "${summarizeDiagnosticText(pkg.name)}" has no operator config file name; it cannot be configured from ${OPERATOR_CONFIG_DIR_SEGMENTS.join('/')}`,
+    );
   }
 }
 
@@ -283,18 +311,21 @@ async function listOperatorConfigFiles(directory: string): Promise<readonly Oper
  */
 function acceptOperatorConfigFile(directory: string, fileName: string): OperatorConfigFile | undefined {
   // Checked before the suffix, so `.#gateway.json` is as silent as `.DS_Store`.
-  // An extension name may legitimately begin with a dot, but an operator config
-  // file that is hidden from the operator who has to edit it is a contradiction.
+  // Nothing addressable is lost: the encoding escapes a leading dot as `%2E`,
+  // so a canonical stem never begins with one and a dot-prefixed entry can only
+  // ever be editor or platform bookkeeping. Reporting each one would turn every
+  // boot on a machine that writes such files into a page of noise about files
+  // no operator authored.
   if (fileName.startsWith('.')) return undefined;
 
-  if (!fileName.endsWith(OPERATOR_CONFIG_FILE_SUFFIX)) {
+  if (!fileName.endsWith(EXTENSION_OPERATOR_CONFIG_FILE_SUFFIX)) {
     console.warn(
-      `[boot] Ignoring ${describeDirectoryEntry(directory, fileName)}: operator config file names must end in ${OPERATOR_CONFIG_FILE_SUFFIX}`,
+      `[boot] Ignoring ${describeDirectoryEntry(directory, fileName)}: operator config file names must end in ${EXTENSION_OPERATOR_CONFIG_FILE_SUFFIX}`,
     );
     return undefined;
   }
 
-  const fileStem = fileName.slice(0, -OPERATOR_CONFIG_FILE_SUFFIX.length);
+  const fileStem = fileName.slice(0, -EXTENSION_OPERATOR_CONFIG_FILE_SUFFIX.length);
   const extensionName = decodeExtensionOperatorConfigName(fileStem);
   if (extensionName === undefined) {
     console.warn(
@@ -346,22 +377,41 @@ function warnOnCaseInsensitiveFileCollisions(files: readonly OperatorConfigFile[
  * @returns The file's configuration object, or the reason it cannot be used.
  */
 async function readOperatorConfigEntry(filePath: string): Promise<ExtensionOperatorConfigEntry> {
-  let content: string;
+  let bytes: Uint8Array;
   try {
-    // The size is taken from the open handle rather than from the path, so the
-    // bytes measured are the bytes read.
-    const handle = await fs.open(filePath, 'r');
+    const irregularity = await findIrregularFileReason(filePath);
+    if (irregularity !== undefined) return operatorConfigFailure(filePath, 'unreadable', irregularity);
+
+    // `O_NONBLOCK` so that opening cannot block even if the entry became a FIFO
+    // after the check above: a FIFO with no writer opens immediately instead of
+    // parking the boot path. It has no effect on a regular file.
+    const handle = await fs.open(filePath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
     try {
-      const { size } = await handle.stat();
-      if (size > MAX_OPERATOR_CONFIG_BYTES) {
+      // The descriptor, not the path, is what is judged and measured, so an
+      // entry swapped between the check above and this open cannot get itself
+      // read: whatever was opened has to be a regular file within the bound.
+      const opened = await handle.stat();
+      if (!opened.isFile()) return operatorConfigFailure(filePath, 'unreadable', 'not a regular file');
+      if (opened.size > MAX_OPERATOR_CONFIG_BYTES) {
         return operatorConfigFailure(filePath, 'unreadable', `exceeds ${MAX_OPERATOR_CONFIG_BYTES} bytes`);
       }
-      content = await handle.readFile('utf-8');
+      bytes = await handle.readFile();
     } finally {
       await handle.close();
     }
   } catch (error) {
     return operatorConfigFailure(filePath, 'unreadable', describeIoFailure(error));
+  }
+
+  let content: string;
+  try {
+    // Fatal decoding, because the lenient one substitutes U+FFFD for every
+    // malformed sequence: a truncated or corrupted file would then parse as a
+    // valid object whose strings — URLs, identifiers, credential references —
+    // silently differ from what the operator wrote.
+    content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return operatorConfigFailure(filePath, 'invalid-json', 'not valid UTF-8');
   }
 
   let parsed: unknown;
@@ -375,6 +425,29 @@ async function readOperatorConfigEntry(filePath: string): Promise<ExtensionOpera
     return operatorConfigFailure(filePath, 'not-an-object', `top-level value is ${describeJsonKind(parsed)}`);
   }
   return { kind: 'config', source: filePath, config: parsed };
+}
+
+/**
+ * Decide whether a candidate is something other than a regular file, before it is opened.
+ *
+ * This is the reporting half of the rule, not the authoritative one. It names
+ * what is wrong with a path — a directory, a FIFO, a socket, a device, a
+ * dangling symlink — while the entry can still be described, which a descriptor
+ * cannot do as precisely. The decision is then confirmed on the opened
+ * descriptor, so an entry swapped in between the two calls is still refused.
+ *
+ * A symlink is resolved to its final target and judged by it, because pointing
+ * an operator config file at a file kept elsewhere is a reasonable thing for an
+ * operator to do. Everything else is refused.
+ * @param filePath - Absolute path to the candidate.
+ * @returns A short phrase naming what is wrong, or `undefined` for a regular file.
+ * @throws Error When the candidate cannot be inspected at all.
+ */
+async function findIrregularFileReason(filePath: string): Promise<string | undefined> {
+  const listed = await fs.lstat(filePath);
+  if (listed.isFile()) return undefined;
+  if (listed.isSymbolicLink() && (await fs.stat(filePath)).isFile()) return undefined;
+  return 'not a regular file';
 }
 
 /**

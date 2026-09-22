@@ -174,10 +174,44 @@ describe('ExtensionCoordinator', () => {
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: TEST_PKG_CTX_BASE,
     });
-    coordinator.load(packages);
+    const retained = coordinator.load(packages);
     await coordinator.startAll();
 
     expect(callOrder).toEqual(['a', 'b', 'c']);
+    expect(retained.map((pkg) => pkg.name)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('prunes a dependent of a filtered package from what load reports as retained', () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+
+    const retained = coordinator.load([
+      makePackage('interactive-only', { surface: 'interactive', create: (ctx) => makeMockService(ctx.bus) }),
+      makePackage('dependent', {
+        dependencies: [dep('interactive-only')],
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+      makePackage('standalone', { create: (ctx) => makeMockService(ctx.bus) }),
+    ]);
+
+    expect(retained.map((pkg) => pkg.name)).toEqual(['standalone']);
+  });
+
+  it('reports the winning registration of an overridden name, not the one it replaced', () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+    const overridden = makePackage('my-ext', { create: (ctx) => makeMockService(ctx.bus) });
+    const override = makePackage('my-ext', { create: (ctx) => makeMockService(ctx.bus) });
+
+    const retained = coordinator.load([overridden, override]);
+
+    // Manifests, not names: a caller matching names back against its own input
+    // would find both registrations and re-admit the one this dropped.
+    expect(retained).toHaveLength(1);
+    expect(retained[0]).toBe(override);
+    expect(retained).not.toContain(overridden);
   });
 
   it('filters out packages that do not match the runtime surface', async () => {
@@ -187,7 +221,7 @@ describe('ExtensionCoordinator', () => {
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: TEST_PKG_CTX_BASE,
     });
-    coordinator.load([
+    const retained = coordinator.load([
       makePackage('interactive-only', {
         surface: 'interactive',
         create: (ctx) => makeMockService(ctx.bus, initInteractive),
@@ -197,6 +231,10 @@ describe('ExtensionCoordinator', () => {
         create: (ctx) => makeMockService(ctx.bus, initHeadless),
       }),
     ]);
+
+    // What load() retained is what a composition root has to diagnose against;
+    // the excluded package must not appear in it.
+    expect(retained.map((pkg) => pkg.name)).toEqual(['headless-only']);
 
     await coordinator.startAll();
 

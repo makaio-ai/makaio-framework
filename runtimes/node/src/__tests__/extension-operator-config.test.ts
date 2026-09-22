@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
@@ -12,11 +13,15 @@ import {
   createExtensionOperatorConfigSnapshot,
   loadExtensionOperatorConfig,
   resolveExtensionOperatorConfigDir,
+  warnOnUnaddressableExtensionOperatorConfigNames,
   warnOnUnappliedExtensionOperatorConfig,
 } from '../extension-operator-config.js';
 
 /** A permission-denied directory is unreachable on Windows and irrelevant to root. */
 const CAN_DENY_DIRECTORY_ACCESS = process.platform !== 'win32' && process.getuid?.() !== 0;
+
+/** Windows has no `mkfifo`, and no way to put a FIFO in a directory listing. */
+const CAN_CREATE_FIFO = process.platform !== 'win32';
 
 /** File names that survive the `.json` check but decode to no extension name. */
 const UNDECODABLE_FILE_NAMES = ['%40acme%2fweather.json', 'gateway!.json', '%zz.json'];
@@ -182,7 +187,7 @@ describe('extension operator config loader', () => {
     });
   });
 
-  it('classifies an entry it cannot read as unreadable', async () => {
+  it('classifies a directory named like a config file as unreadable without opening it', async () => {
     await fs.mkdir(path.join(configDir, 'gateway.json'), { recursive: true });
 
     const snapshot = await loadExtensionOperatorConfig({ makaioHome });
@@ -191,8 +196,125 @@ describe('extension operator config loader', () => {
       kind: 'failure',
       reason: 'unreadable',
       source: path.join(configDir, 'gateway.json'),
-      detail: 'EISDIR',
+      detail: 'not a regular file',
     });
+  });
+
+  it.runIf(CAN_CREATE_FIFO)('refuses a FIFO instead of blocking boot on a reader that never opens it', async () => {
+    await fs.mkdir(configDir, { recursive: true });
+    const filePath = path.join(configDir, 'gateway.json');
+    execFileSync('mkfifo', [filePath]);
+
+    // Reaching this assertion at all is the point: opening a FIFO with no
+    // writer blocks, so a loader that opened before checking would hang here.
+    const snapshot = await loadExtensionOperatorConfig({ makaioHome });
+
+    expect(snapshot.get('gateway')).toEqual({
+      kind: 'failure',
+      reason: 'unreadable',
+      source: filePath,
+      detail: 'not a regular file',
+    });
+  });
+
+  it.runIf(CAN_CREATE_FIFO)('opens without blocking and judges the descriptor, closing the swap window', async () => {
+    // The entry can become a FIFO between the pre-open check and the open, so
+    // the loader opens non-blocking and re-decides on the descriptor. Both
+    // halves of that are asserted here against a real FIFO: reaching the
+    // assertion at all proves the open did not park on a writer that never
+    // comes, and the descriptor answers that it is not a regular file.
+    await fs.mkdir(configDir, { recursive: true });
+    const filePath = path.join(configDir, 'swapped.json');
+    execFileSync('mkfifo', [filePath]);
+
+    const handle = await fs.open(filePath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+    try {
+      expect((await handle.stat()).isFile()).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('follows a symlink to a regular file, which is a reasonable way to keep the file elsewhere', async () => {
+    await fs.mkdir(configDir, { recursive: true });
+    const target = path.join(makaioHome, 'elsewhere.json');
+    await fs.writeFile(target, JSON.stringify({ port: 6299 }), 'utf-8');
+    await fs.symlink(target, path.join(configDir, 'gateway.json'));
+
+    const snapshot = await loadExtensionOperatorConfig({ makaioHome });
+
+    expect(snapshot.get('gateway')).toMatchObject({ kind: 'config', config: { port: 6299 } });
+  });
+
+  it('refuses a symlink whose target is not a regular file', async () => {
+    await fs.mkdir(configDir, { recursive: true });
+    const target = path.join(makaioHome, 'elsewhere');
+    await fs.mkdir(target);
+    const filePath = path.join(configDir, 'gateway.json');
+    await fs.symlink(target, filePath);
+
+    const snapshot = await loadExtensionOperatorConfig({ makaioHome });
+
+    expect(snapshot.get('gateway')).toEqual({
+      kind: 'failure',
+      reason: 'unreadable',
+      source: filePath,
+      detail: 'not a regular file',
+    });
+  });
+
+  it('reports a dangling symlink by the error its target lookup raised', async () => {
+    await fs.mkdir(configDir, { recursive: true });
+    const filePath = path.join(configDir, 'gateway.json');
+    await fs.symlink(path.join(makaioHome, 'absent.json'), filePath);
+
+    const snapshot = await loadExtensionOperatorConfig({ makaioHome });
+
+    expect(snapshot.get('gateway')).toEqual({
+      kind: 'failure',
+      reason: 'unreadable',
+      source: filePath,
+      detail: 'ENOENT',
+    });
+  });
+
+  it('rejects malformed UTF-8 as invalid JSON rather than repairing it into a usable object', async () => {
+    await fs.mkdir(configDir, { recursive: true });
+    const filePath = path.join(configDir, 'gateway.json');
+    // A valid JSON document whose one string value carries a truncated UTF-8
+    // sequence: lenient decoding would substitute U+FFFD and hand the extension
+    // a token that is not the one on disk.
+    await fs.writeFile(
+      filePath,
+      Buffer.concat([Buffer.from('{"token":"', 'utf-8'), Buffer.from([0xc3]), Buffer.from('"}', 'utf-8')]),
+    );
+
+    const snapshot = await loadExtensionOperatorConfig({ makaioHome });
+
+    expect(snapshot.get('gateway')).toEqual({
+      kind: 'failure',
+      reason: 'invalid-json',
+      source: filePath,
+      detail: 'not valid UTF-8',
+    });
+  });
+
+  it('reads a well-formed non-ASCII value unchanged', async () => {
+    await writeConfigFile('gateway.json', JSON.stringify({ greeting: 'grüße' }));
+
+    const snapshot = await loadExtensionOperatorConfig({ makaioHome });
+
+    expect(snapshot.get('gateway')).toMatchObject({ kind: 'config', config: { greeting: 'grüße' } });
+  });
+
+  it('accepts a file a Windows editor saved with a byte-order mark', async () => {
+    // The decoder consumes the mark, so an operator is not told their file is
+    // invalid JSON because of a byte their editor wrote and does not show them.
+    await writeConfigFile('gateway.json', `﻿${JSON.stringify({ port: 6299 })}`);
+
+    const snapshot = await loadExtensionOperatorConfig({ makaioHome });
+
+    expect(snapshot.get('gateway')).toMatchObject({ kind: 'config', config: { port: 6299 } });
   });
 
   it.each(UNDECODABLE_FILE_NAMES)('reports and skips %s, which encodes no extension name', async (fileName) => {
@@ -212,6 +334,8 @@ describe('extension operator config loader', () => {
     // An editor lock file: dot-prefixed and `.json`-suffixed at the same time,
     // which is why the dot is checked before the suffix.
     await writeConfigFile('.#gateway.json', JSON.stringify({ port: 1 }));
+    // Not the canonical file for an extension named `.hidden` — that one is
+    // `%2Ehidden.json` — so nothing addressable is lost by staying silent.
     await writeConfigFile('.hidden.json', JSON.stringify({ port: 1 }));
     await fs.mkdir(path.join(configDir, 'backups'), { recursive: true });
 
@@ -222,6 +346,16 @@ describe('extension operator config loader', () => {
       expect.stringContaining(`Ignoring ${path.join(configDir, 'backups')}`),
       expect.stringContaining(`Ignoring ${path.join(configDir, 'gateway.yaml')}`),
     ]);
+  });
+
+  it('reaches an extension whose name begins with a dot through its escaped stem', async () => {
+    await writeConfigFile(`${stemOf('.hidden')}.json`, JSON.stringify({ port: 6299 }));
+
+    const snapshot = await loadExtensionOperatorConfig({ makaioHome });
+
+    expect(stemOf('.hidden')).toBe('%2Ehidden');
+    expect(snapshot.get('.hidden')).toMatchObject({ kind: 'config', config: { port: 6299 } });
+    expect(warnings()).toEqual([]);
   });
 
   it('rejects a file larger than the operator config size limit without reading it', async () => {
@@ -418,6 +552,21 @@ describe('createExtensionOperatorConfigSnapshot', () => {
     expect(Object.isFrozen(config)).toBe(true);
   });
 
+  it('refuses to have its own members repointed after boot has resolved against it', () => {
+    const entry: ExtensionOperatorConfigEntry = { kind: 'config', source: 'test', config: { port: 1 } };
+    const snapshot = createExtensionOperatorConfigSnapshot(
+      new Map<string, ExtensionOperatorConfigEntry>([['gateway', entry]]),
+    );
+
+    // `Reflect.set` rather than assignment: the module is strict, so a plain
+    // assignment would throw and prove nothing about the object itself.
+    expect(Reflect.set(snapshot, 'get', () => undefined)).toBe(false);
+    expect(Reflect.set(snapshot, 'entries', [])).toBe(false);
+
+    expect(snapshot.get('gateway')).toBe(entry);
+    expect(snapshot.entries).toEqual([['gateway', entry]]);
+  });
+
   it('freezes a failure entry without needing a configuration tree', () => {
     const snapshot = createExtensionOperatorConfigSnapshot(
       new Map<string, ExtensionOperatorConfigEntry>([
@@ -483,5 +632,44 @@ describe('warnOnUnappliedExtensionOperatorConfig', () => {
     warnOnUnappliedExtensionOperatorConfig(snapshot, [{ name: 'gateway' }]);
 
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('warnOnUnaddressableExtensionOperatorConfigNames', () => {
+  /** A name whose 258-character encoded stem leaves no room for a file name. */
+  const UNADDRESSABLE_NAME = 'ü'.repeat(43);
+
+  let warnSpy: MockInstance<typeof console.warn>;
+
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it('reports a loaded extension whose encoded file name would not fit a directory entry', () => {
+    warnOnUnaddressableExtensionOperatorConfigNames([{ name: UNADDRESSABLE_NAME, configSchema: {} }]);
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(String(warnSpy.mock.calls[0]?.[0])).toContain('has no operator config file name');
+  });
+
+  it('stays silent for every name a file can address, dot-prefixed and non-ASCII ones included', () => {
+    warnOnUnaddressableExtensionOperatorConfigNames([
+      { name: 'gateway' },
+      { name: '@acme/weather-tools' },
+      { name: '.hidden' },
+      { name: 'a'.repeat(250) },
+    ]);
+
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('flattens control characters in a name it reports', () => {
+    warnOnUnaddressableExtensionOperatorConfigNames([{ name: `gate\u0007way\n${UNADDRESSABLE_NAME}` }]);
+
+    expect(String(warnSpy.mock.calls[0]?.[0])).toContain('"gate way ');
   });
 });

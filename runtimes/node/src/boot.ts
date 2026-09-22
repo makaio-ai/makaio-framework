@@ -87,7 +87,11 @@ import {
   mergePackageConfigDefaults,
   registerConfigHandlers,
 } from './boot-config.js';
-import { loadExtensionOperatorConfig, warnOnUnappliedExtensionOperatorConfig } from './extension-operator-config.js';
+import {
+  loadExtensionOperatorConfig,
+  warnOnUnaddressableExtensionOperatorConfigNames,
+  warnOnUnappliedExtensionOperatorConfig,
+} from './extension-operator-config.js';
 import { createBootModelRegistryFetcher } from './boot-model-registry.js';
 import { ensureFrameworkPackageLink } from './framework-package-link.js';
 import {
@@ -561,9 +565,6 @@ export async function bootMakaioRuntimeCore(
     // contributed package names adapters, not framework packages.
     const packagesToLoad = [...frameworkPackages, ...orderAfterAdapterSubsystem(bootEligibleExtensionPackages)];
     const loadedPackageNames = new Set(packagesToLoad.map((pkg) => pkg.name));
-    // The load set is only now known, so this is the first point at which an
-    // operator file that nothing will read can be named.
-    warnOnUnappliedExtensionOperatorConfig(operatorConfig, packagesToLoad);
     const configDefaults = filterConfigDefaultsForLoadedPackages(
       mergePackageConfigDefaults(
         extensionLoadResult.configDefaults,
@@ -573,7 +574,14 @@ export async function bootMakaioRuntimeCore(
       ),
       loadedPackageNames,
     );
-    coordinator.load(packagesToLoad, configDefaults);
+    // The coordinator applies surface and environment filtering of its own, so
+    // the set it retained — not the set handed to it — is what decides whether
+    // an operator file will ever be read. Diagnosing before the call would count
+    // a file for an interactive-only extension as consumed during a headless
+    // boot and then drop it silently.
+    const retainedPackages = coordinator.load(packagesToLoad, configDefaults);
+    warnOnUnappliedExtensionOperatorConfig(operatorConfig, retainedPackages);
+    warnOnUnaddressableExtensionOperatorConfigNames(retainedPackages);
 
     // -----------------------------------------------------------------------
     // Contribution processors are registered before startAll() so extension
@@ -605,7 +613,10 @@ export async function bootMakaioRuntimeCore(
     if (options.routeGraphBuilder) {
       coordinator.registerContributionProcessor(createHttpContributionProcessor(options.routeGraphBuilder));
     }
-    collectHostCleanups(shutdownSteps, registerExtensionBootContributions(packagesToLoad, bus, coordinator));
+    // Retained packages only: a package the coordinator filtered out never
+    // activates, so registering its contribution processors and bus handlers
+    // would install boot-time behaviour for an extension that does not run.
+    collectHostCleanups(shutdownSteps, registerExtensionBootContributions(retainedPackages, bus, coordinator));
     // Close the credential channel before the bus/transport tears down. In
     // reverse shutdown order this runs after coordinator.shutdown() (which
     // stops all extension activity) and before transport.disconnect().

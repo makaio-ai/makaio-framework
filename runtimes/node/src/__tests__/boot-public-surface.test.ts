@@ -53,6 +53,9 @@ describe('runtime-node boot public surface', () => {
       expect(rootModule.warnOnUnappliedExtensionOperatorConfig).toBe(
         implementation.warnOnUnappliedExtensionOperatorConfig,
       );
+      expect(rootModule.warnOnUnaddressableExtensionOperatorConfigNames).toBe(
+        implementation.warnOnUnaddressableExtensionOperatorConfigNames,
+      );
     },
     ROOT_EXPORT_TIMEOUT_MS,
   );
