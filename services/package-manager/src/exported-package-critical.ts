@@ -46,6 +46,21 @@ function isValidExportedCriticalFlag(value: unknown): value is boolean | undefin
   return value === undefined || typeof value === 'boolean';
 }
 
+/**
+ * Narrow an exported package's `surface` declaration to a single concrete
+ * runtime surface.
+ *
+ * Mirrors the coordinator's own gate: a package loads everywhere unless it
+ * names exactly one surface. `'any'`, an absent value, and anything the schema
+ * would have rejected therefore collapse to `undefined` — "not restricted" —
+ * rather than being reported as a restriction this process invented.
+ * @param value - Candidate `surface` value read off an exported package.
+ * @returns The single surface the package is restricted to, or `undefined`.
+ */
+function toRestrictedSurface(value: unknown): 'interactive' | 'headless' | undefined {
+  return value === 'interactive' || value === 'headless' ? value : undefined;
+}
+
 /** Milliseconds to wait for the import worker before treating it as hung and reporting criticality unknown. */
 const IMPORT_WORKER_TIMEOUT_MS = 10_000;
 
@@ -79,10 +94,14 @@ const IMPORT_WORKER_TIMEOUT_MS = 10_000;
  * dedicated tests in `__tests__/exported-package-critical.test.ts` asserting
  * worker behavior for the same invalid-shape, duplicate-name, and
  * out-of-namespace cases `load-extensions.test.ts` asserts for
- * `normalizePackageExport`. It hands only the matched package's raw `critical`
- * value back to the main thread, which still applies
- * {@link isValidExportedCriticalFlag} — the boolean-shape check is
- * deliberately not duplicated in worker text.
+ * `normalizePackageExport`. It hands every accepted package's identity,
+ * version, and raw `critical` value back to the main thread, which still
+ * applies {@link isValidExportedCriticalFlag} — the boolean-shape check is
+ * deliberately not duplicated in worker text. The raw value crosses the
+ * thread boundary unmodified, so a package declaring a non-cloneable
+ * `critical` (a function, a class instance) fails the `postMessage` structured
+ * clone inside the worker's own `try`, which reports the whole export as
+ * unreadable rather than inventing a flag for it.
  *
  * When `workerData.frameworkDistPath` is set (a packaged Electron host —
  * see {@link importOwnPackageViaWorker}'s `frameworkDistPath` parameter),
@@ -244,8 +263,15 @@ const { parentPort, workerData } = require('node:worker_threads');
       packages = [exported];
     }
 
-    const ownPackage = packages.find((item) => item.name === descriptorName);
-    parentPort.postMessage({ kind: 'match', critical: ownPackage.critical });
+    parentPort.postMessage({
+      kind: 'match',
+      packages: packages.map((item) => ({
+        name: item.name,
+        version: item.version,
+        critical: item.critical,
+        surface: item.surface,
+      })),
+    });
   } catch (error) {
     parentPort.postMessage({
       kind: 'worker-error',
@@ -255,12 +281,41 @@ const { parentPort, workerData } = require('node:worker_threads');
 })();
 `;
 
+/**
+ * One package the import worker accepted from a server entry's default
+ * export, as it crosses the thread boundary.
+ *
+ * `name` and `version` are guaranteed strings — the worker only forwards
+ * packages that passed its structural check — while `critical` and `surface`
+ * are the raw declared values, still unvalidated at this point (see
+ * {@link isValidExportedCriticalFlag} and {@link toRestrictedSurface}).
+ */
+interface WorkerExportedPackage {
+  readonly name: string;
+  readonly version: string;
+  readonly critical: unknown;
+  readonly surface: unknown;
+}
+
 /** Message an import worker posts back after inspecting a server entry's default export. */
 type WorkerResultMessage =
-  | { readonly kind: 'match'; readonly critical: unknown }
+  | { readonly kind: 'match'; readonly packages: readonly WorkerExportedPackage[] }
   | { readonly kind: 'no-match' }
   | { readonly kind: 'invalid'; readonly reason: string }
   | { readonly kind: 'worker-error'; readonly message: string };
+
+/**
+ * Structural check for one entry of a `'match'` message's package array.
+ * @param value - Candidate array entry.
+ * @returns Whether `value` carries the string identity fields the worker guarantees.
+ */
+function isWorkerExportedPackage(value: unknown): value is WorkerExportedPackage {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return typeof record['name'] === 'string' && typeof record['version'] === 'string';
+}
 
 /**
  * Structural check for a message received from the import worker.
@@ -273,8 +328,12 @@ function isWorkerResultMessage(value: unknown): value is WorkerResultMessage {
   }
   const record = value as Record<string, unknown>;
   const kind = record['kind'];
-  if (kind === 'match' || kind === 'no-match' || kind === 'worker-error') {
+  if (kind === 'no-match' || kind === 'worker-error') {
     return true;
+  }
+  if (kind === 'match') {
+    const packages = record['packages'];
+    return Array.isArray(packages) && packages.every((entry) => isWorkerExportedPackage(entry));
   }
   return kind === 'invalid' && typeof record['reason'] === 'string';
 }
@@ -328,7 +387,7 @@ async function importOwnPackageViaWorker(
       // alongside this one. Catching here instead keeps the failure on the
       // same "warn and report undefined" path as the 'error' event below.
       console.warn(
-        `${label}: failed to import server entry while resolving critical flag:`,
+        `${label}: failed to import server entry while reading its exported packages:`,
         error instanceof Error ? error.message : error,
       );
       resolve(undefined);
@@ -348,7 +407,7 @@ async function importOwnPackageViaWorker(
     };
 
     const timer = setTimeout(() => {
-      console.warn(`${label}: timed out importing server entry while resolving critical flag`);
+      console.warn(`${label}: timed out importing server entry while reading its exported packages`);
       settle(undefined);
     }, IMPORT_WORKER_TIMEOUT_MS);
 
@@ -363,7 +422,7 @@ async function importOwnPackageViaWorker(
 
     worker.once('error', (error) => {
       console.warn(
-        `${label}: failed to import server entry while resolving critical flag:`,
+        `${label}: failed to import server entry while reading its exported packages:`,
         error instanceof Error ? error.message : error,
       );
       settle(undefined);
@@ -384,25 +443,61 @@ async function importOwnPackageViaWorker(
 }
 
 /**
- * Import a resolved server entrypoint inside an isolated worker and read the
- * `critical` flag off the exported package whose name matches the descriptor
- * identity.
+ * One executable package a server entrypoint exports, as reported by
+ * {@link resolveExportedPackages}.
+ */
+export interface ExportedPackageInfo {
+  /** Executable package identity — the descriptor name, or one of its dot-prefixed children. */
+  readonly name: string;
+  /** Version the exported package declares. */
+  readonly version: string;
+  /**
+   * Whether the exported package declares itself critical.
+   *
+   * Omitted both when nothing declares the flag and when the declared value
+   * failed {@link isValidExportedCriticalFlag}; those two cases are told apart
+   * by {@link ExportedPackageListing.invalidCriticalNames}.
+   */
+  readonly critical?: boolean;
+  /**
+   * Single runtime surface the exported package restricts itself to, when it
+   * declares exactly one. Absent means "loads on every surface" — see
+   * {@link toRestrictedSurface}.
+   */
+  readonly surface?: 'interactive' | 'headless';
+}
+
+/** Result of {@link resolveExportedPackages}: every accepted package, plus the ones whose `critical` was unusable. */
+export interface ExportedPackageListing {
+  /** Every package the server entry exports, with any invalid `critical` value stripped. */
+  readonly packages: readonly ExportedPackageInfo[];
+  /**
+   * Names of exported packages whose `critical` field was present but not a
+   * `boolean`. Criticality is unresolved for these, not legitimately absent,
+   * so a caller that gates a decision on it must refuse rather than read the
+   * omitted flag as `false`.
+   */
+  readonly invalidCriticalNames: ReadonlySet<string>;
+}
+
+/**
+ * Import a resolved server entrypoint inside an isolated worker and report
+ * every executable package it exports.
  *
  * The import executes the module's top-level code; the extension server-
  * module contract (see `docs/architecture/extensions/index.md`) requires
  * that top level to contain only declarations, with side effects deferred to
  * `create()`/`init()`, which this function never calls — so this never starts
  * a service. Import failures and shape violations are logged and resolve to
- * `undefined` rather than inventing `false`, so a broken export is reported
- * as "criticality unknown" instead of silently downgrading a critical
- * extension to optional.
+ * `undefined` rather than to an empty listing, so a broken export is reported
+ * as "unreadable" instead of "exports nothing".
  *
  * The import runs inside a `worker_threads.Worker` ({@link importOwnPackageViaWorker})
  * rather than a cache-busted `import()` on this thread: this process (a
- * long-lived server, not the short-lived CLI) can call this function again
- * for the same `serverImportPath` after an extension is reinstalled in place
- * — an update that bumps the file's content but not necessarily its path —
- * and Node's ESM loader caches modules by resolved URL, so importing the
+ * long-lived server, not a short-lived CLI invocation) can call this function
+ * again for the same `serverImportPath` after an extension is reinstalled in
+ * place — an update that bumps the file's content but not necessarily its path
+ * — and Node's ESM loader caches modules by resolved URL, so importing the
  * same URL again on this thread would keep resolving to the pre-update
  * module. A query-string-busted URL only defeats that cache for the
  * entrypoint file itself: if the entrypoint re-exports its package object
@@ -412,34 +507,36 @@ async function importOwnPackageViaWorker(
  * re-importing the same file URL inside it always re-evaluates that file and
  * everything it imports/re-exports — the whole module graph is current, not
  * just the entrypoint. The cost is one worker spawn per server-backed
- * extension per `packages.list` call; accepted because that call is an
- * infrequent, interactive flow (settings/CLI), not a hot path — and unlike
- * the cache-busting approach, the worker's module registry is reclaimed with
- * it when it terminates instead of accumulating in this process.
+ * extension per listing call; accepted because those calls are infrequent,
+ * interactive flows (settings, CLI, the installed-extension catalog), not a
+ * hot path — and unlike the cache-busting approach, the worker's module
+ * registry is reclaimed with it when it terminates instead of accumulating in
+ * this process.
  * @param serverImportPath - Absolute, already-resolved import path for the
  *   descriptor's server entrypoint.
- * @param descriptorName - Descriptor package name the exported package must
- *   match.
+ * @param descriptorName - Descriptor package name the export must be anchored
+ *   against: one exported package must carry it, and every other must be
+ *   dot-prefixed under it.
  * @param label - Log prefix identifying the caller and extension for warnings.
  * @param frameworkDistPath - Forwarded to {@link importOwnPackageViaWorker} —
  *   see its `frameworkDistPath` parameter.
- * @returns The matching exported package's `critical` flag, or `undefined`
- *   when the entrypoint does not exist, the import failed or timed out,
- *   contains no matching package, or declares a non-boolean `critical` value.
+ * @returns The exported packages, or `undefined` when the entrypoint does not
+ *   exist, the import failed or timed out, or the export violated the
+ *   identity contract.
  */
-export async function resolveExportedPackageCritical(
+export async function resolveExportedPackages(
   serverImportPath: string,
   descriptorName: string,
   label: string,
   frameworkDistPath?: string,
-): Promise<boolean | undefined> {
+): Promise<ExportedPackageListing | undefined> {
   try {
     // Existence check up front: fails fast with the same warning shape an
     // import failure would produce, without paying for a worker spawn.
     await fs.access(serverImportPath);
   } catch (error) {
     console.warn(
-      `${label}: failed to import server entry while resolving critical flag:`,
+      `${label}: failed to import server entry while reading its exported packages:`,
       error instanceof Error ? error.message : error,
     );
     return undefined;
@@ -452,7 +549,7 @@ export async function resolveExportedPackageCritical(
   }
 
   if (result.kind === 'worker-error') {
-    console.warn(`${label}: failed to import server entry while resolving critical flag:`, result.message);
+    console.warn(`${label}: failed to import server entry while reading its exported packages:`, result.message);
     return undefined;
   }
 
@@ -466,15 +563,65 @@ export async function resolveExportedPackageCritical(
     return undefined;
   }
 
-  if (!isValidExportedCriticalFlag(result.critical)) {
+  // The worker only checks each package's identity fields, so a malformed
+  // `critical` (e.g. `'yes'`) still arrives here — strip it rather than let it
+  // masquerade as a resolved flag, and record the name so the caller reports
+  // that package as unresolved instead of legitimately non-critical.
+  const invalidCriticalNames = new Set<string>();
+  const packages = result.packages.map((pkg): ExportedPackageInfo => {
+    const surface = toRestrictedSurface(pkg.surface);
+    const base: ExportedPackageInfo = {
+      name: pkg.name,
+      version: pkg.version,
+      ...(surface !== undefined && { surface }),
+    };
+    if (isValidExportedCriticalFlag(pkg.critical)) {
+      return pkg.critical === undefined ? base : { ...base, critical: pkg.critical };
+    }
+    invalidCriticalNames.add(pkg.name);
     console.warn(
-      `${label}: server entry export's 'critical' field for '${descriptorName}' is not a boolean ` +
-        `(got ${typeof result.critical}); treating criticality as unresolved`,
+      `${label}: server entry export's 'critical' field for '${pkg.name}' is not a boolean ` +
+        `(got ${typeof pkg.critical}); treating criticality as unresolved`,
     );
-    return undefined;
-  }
+    return base;
+  });
 
-  return result.critical;
+  return { packages, invalidCriticalNames };
+}
+
+/**
+ * Import a resolved server entrypoint inside an isolated worker and read the
+ * `critical` flag off the exported package whose name matches the descriptor
+ * identity.
+ *
+ * A thin projection of {@link resolveExportedPackages} — one import, one
+ * contract — for the listing producers that only need the descriptor's own
+ * package. Every failure mode is that function's: an unreadable entrypoint, a
+ * contract violation, or a non-boolean flag all resolve to `undefined` rather
+ * than inventing `false`, so a broken export is reported as "criticality
+ * unknown" instead of silently downgrading a critical extension to optional.
+ * @param serverImportPath - Absolute, already-resolved import path for the
+ *   descriptor's server entrypoint.
+ * @param descriptorName - Descriptor package name the exported package must
+ *   match.
+ * @param label - Log prefix identifying the caller and extension for warnings.
+ * @param frameworkDistPath - Forwarded to {@link resolveExportedPackages} —
+ *   see its `frameworkDistPath` parameter.
+ * @returns The matching exported package's `critical` flag, or `undefined`
+ *   when the entrypoint does not exist, the import failed or timed out,
+ *   contains no matching package, or declares a non-boolean `critical` value.
+ */
+export async function resolveExportedPackageCritical(
+  serverImportPath: string,
+  descriptorName: string,
+  label: string,
+  frameworkDistPath?: string,
+): Promise<boolean | undefined> {
+  const listing = await resolveExportedPackages(serverImportPath, descriptorName, label, frameworkDistPath);
+  // `resolveExportedPackages` guarantees a package carrying the descriptor
+  // name whenever it resolves at all (the worker reports `no-match`
+  // otherwise), so a missing entry here can only mean the listing failed.
+  return listing?.packages.find((pkg) => pkg.name === descriptorName)?.critical;
 }
 
 /**

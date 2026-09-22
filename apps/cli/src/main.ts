@@ -164,9 +164,18 @@ function parsePort(value: string): number {
  * Create and configure the root Commander program with builtins only.
  * @param serveConfig - Host-provided configuration for the `serve` command.
  * @param hostConfig - Host-provided capabilities for this invocation.
+ * @param discovery - Discovery strategy this invocation resolved from runtime
+ *   config, forwarded to the extension commands so their offline listing
+ *   describes the same roots and filters `serve` would boot with. Omitted by
+ *   callers that build the command tree without resolving runtime config; the
+ *   offline listing then loads that config itself.
  * @returns The configured Commander program.
  */
-export function createProgram(serveConfig?: ServeConfig, hostConfig?: CliHostConfig): CommandInstance {
+export function createProgram(
+  serveConfig?: ServeConfig,
+  hostConfig?: CliHostConfig,
+  discovery?: ExtensionDiscovery,
+): CommandInstance {
   const program = new Command('makaio').description('Makaio CLI — orchestrate AI agents').version('0.1.0');
 
   registerOpenCommand(program);
@@ -190,7 +199,10 @@ export function createProgram(serveConfig?: ServeConfig, hostConfig?: CliHostCon
       });
     });
 
-  registerExtensionCommands(program, { frameworkModuleResolver: hostConfig?.frameworkModuleResolver });
+  registerExtensionCommands(program, {
+    ...(discovery && { discovery }),
+    ...(hostConfig?.frameworkModuleResolver && { frameworkModuleResolver: hostConfig.frameworkModuleResolver }),
+  });
 
   return program;
 }
@@ -532,7 +544,7 @@ export async function main(
     parsedArgv.push('open');
   }
 
-  const program = createProgram(effectiveServeConfig, hostConfig);
+  const program = createProgram(effectiveServeConfig, hostConfig, effectiveDiscovery);
   const allContributions = [...BUILTIN_CLI_CONTRIBUTIONS, ...contributions];
 
   if (isDiscoveryFreeBuiltin(parsedArgv)) {

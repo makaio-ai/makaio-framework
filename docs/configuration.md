@@ -134,27 +134,29 @@ makaio extension disable <name>
 makaio extension list
 ```
 
-When the reachable server is local (`MAKAIO_BUS_URL` resolves to a loopback
-host, or is unset), the live listing is merged with any installed-but-not-
-loaded name found on this machine — see the `setEnabled` bullet above for why
-that name can exist at all — but, unlike the offline listing, only through the
-tiers CLI and server are guaranteed to share (`$MAKAIO_HOME/extensions` and
-`$MAKAIO_HOME/node_modules`), since a local server can have been started from
-a different project directory than this CLI invocation and its own
-project-local `{cwd}/node_modules` is therefore not addressable from here; the
-command prints a note about this alongside the merged listing. When the
-reachable server is remote, only the live snapshot is printed: this machine's
-own installs are not that host's, and there is currently no RPC that reports a
-remote server's own installed-but-not-loaded names, so the command prints a
-note instead of guessing.
+When a server is reachable, the whole listing comes from that server: its live
+snapshot (`kernel:extension.list`) merged with the packages it has installed
+but never loaded (`kernel:extension.catalog`). Both halves describe the same
+host, so the listing is equally complete for a local and a remote bus, and it
+covers discovery roots no client can see — another machine's install tiers, or
+the roots a server configured for itself relative to the directory it was
+started from. This machine's own installs are never spliced in. A server wired without an installed-extension
+catalog reports that fact, and the command notes it rather than filling the gap
+with a different host's view.
 
-A disable is checked against the target's `critical` flag before anything is
-written; see [Critical extensions](#critical-extensions). Otherwise, when a
-server is reachable and manages the named extension, the CLI delegates to
-`kernel:extension.setEnabled` — persist-only: it durably records the preference
-but never applies it to the running process, because several package
-contributions are composed exactly once at boot and cannot be replayed for one
-package in isolation. It reports precisely which happened:
+When a server is reachable, every toggle is likewise the server's decision: the
+CLI forwards the request to `kernel:extension.setEnabled`, which validates it
+against the extensions that server loaded or — for a name it never loaded —
+against its own installed-extension catalog, and then writes its own enablement
+file. The CLI never writes anything itself while a server is reachable, not even
+for a loopback bus: a local server can have been started from a different
+project directory, so this process's installed packages are not a reliable
+stand-in for its own.
+
+`setEnabled` is persist-only: it durably records the preference but never
+applies it to the running process, because several package contributions are
+composed exactly once at boot and cannot be replayed for one package in
+isolation. The command reports precisely what happened:
 
 - **"Persisted; the running server's process already matches this state."** —
   the process's current runtime state already matches the request, so no
@@ -164,26 +166,31 @@ package in isolation. It reports precisely which happened:
   name is actually installed (see
   [Offline discovery precedence](#offline-discovery-precedence)); start the
   server to activate.
-- **"Persisted; \<reason\>. The preference will take effect on next boot."** —
-  a reachable server persisted the preference, but the process's runtime state
-  diverges from it (for example enabling a `runtimeOwnership` extension that
-  was never started this boot). Restart to activate it.
+- **"Persisted; the running server's process is not in the requested state.
+  Takes effect on next boot."** — the server persisted the preference, but its
+  runtime state diverges from it (for example enabling a `runtimeOwnership`
+  extension that was never started this boot). Restart to activate it.
 - **"Persisted; not loaded in the running server (interactive-only, unmet
-  requirements, or MAKAIO_SKIP_EXTENSIONS) — takes effect on next boot."** —
-  the extension is installed but the reachable server never loaded it into its
-  coordinator, so the CLI wrote the file directly for that one name after
-  confirming it is actually installed.
-- **"the request was rejected. Nothing was written."** — the request itself
-  was refused (an unknown name, or a race with the coordinator). The command
-  exits non-zero.
+  requirements, or MAKAIO_SKIP_EXTENSIONS)."** — the package is installed on the
+  server's host but that server never loaded it into its coordinator. The server
+  validated the name against its own installed-extension catalog and recorded
+  the preference; an enable additionally reports that it takes effect on the
+  next boot.
+- **"Persisted; a framework package currently holds this name..."** — a
+  framework package is loaded under the requested name, so the installed package
+  behind it stays shadowed until that package no longer claims the name. The
+  preference is recorded regardless.
+- **"the running server is shutting down. Nothing was written."** — the request
+  reached a coordinator that is tearing down. The command exits non-zero.
+- **"the request was rejected. Nothing was written."** — the request was
+  refused for a reason the server did not name. The command exits non-zero.
 - **"request failed: \<reason\>. Nothing was written locally..."** — the RPC
   itself failed (a transport error). The command exits non-zero.
-- **"the reachable server does not manage \<name\>; run this command on the
-  server's host to persist the preference."** — the reachable server is on a
-  different machine (`MAKAIO_BUS_URL` resolves to a non-loopback host) and
-  never loaded the name into its coordinator, so writing this machine's
-  enablement file would not affect the server that reads it; nothing is
-  written, and the command exits non-zero.
+- **"the running server has not loaded this extension and cannot enumerate its
+  installed packages..."** — the server exposes no installed-extension catalog,
+  so it cannot tell a real installed name from a typo and refuses rather than
+  persisting on the caller's word. Nothing is written, and the command exits
+  non-zero.
 - **"the configured server at \<url\> is unreachable; retry when it is up, or
   run this command on that host."** — `MAKAIO_BUS_URL` names a remote host and
   the health probe found nothing there. The CLI never falls back to writing
@@ -192,9 +199,10 @@ package in isolation. It reports precisely which happened:
   a preference the configured remote host never sees. The command exits
   non-zero without writing anything.
 - **"no installed extension with this name. Run \"makaio extension list\" to
-  see installed extensions."** — no local server is reachable and the name
-  does not match anything in the offline installed-package listing (a typo).
-  Nothing is written, and the command exits non-zero.
+  see installed extensions."** — nothing on the deciding host has this name
+  installed (a typo). Whichever side made the decision — the reachable server
+  for its own host, or this process when none is reachable — nothing is
+  written, and the command exits non-zero.
 
 A server that answers the health probe but cannot be connected to fails the
 command without writing anything, so the file is never left ahead of a server
@@ -204,23 +212,35 @@ whose state is unknown.
 
 Every offline check above — the critical-extension refusal, the "is this name
 installed" validation, and `makaio extension list`'s offline listing — reads
-the same installed-package view the runtime's own boot-time discovery
-produces, at the same three-tier precedence:
+the installed-package view produced by *the discovery this invocation resolved*,
+never a separate tier list of its own. A host that declares
+`extensions.discoveryPaths`, `include`, or `exclude` therefore sees exactly the
+descriptors its next boot would consider: nothing it would load is reported
+not-installed, and nothing it filtered out is offered as toggleable.
 
-1. `{cwd}/node_modules` — a dependency of the project the CLI is invoked from
-2. `$MAKAIO_HOME/extensions` — locally symlinked installs
-3. `$MAKAIO_HOME/node_modules` — npm installs
+With no `discoveryPaths` declared, that discovery is the data home's two
+default roots:
 
-A name found in an earlier tier shadows the same name in every later tier, so
-a project-local override of a `$MAKAIO_HOME`-installed extension — including
-its `critical` flag — is what the offline paths above see, exactly as a
-locally started server would only ever load one of the two.
+1. `$MAKAIO_HOME/extensions` — locally symlinked installs
+2. `$MAKAIO_HOME/node_modules` — npm installs
 
-The equivalent *live* checks — the not-loaded merge in a local live listing,
-and the unmanaged-name validation/critical-check a live toggle falls back to
-— drop tier 1 (`{cwd}/node_modules`) and only read tiers 2 and 3, because
-those are the only ones a reachable local server is guaranteed to share with
-this CLI invocation; see the live-listing paragraph above.
+A host that boots its own discovery — the programmatic `bootMakaioRuntime`
+default, or an explicitly supplied strategy — additionally prioritizes
+`{cwd}/node_modules`, the dependencies of the project it was started from,
+above both. An invocation that resolved no discovery at all (a host that built
+the command tree without runtime config, and therefore hands `serve` no boot
+discovery either) gets that same three-tier default offline: the project-local
+tier leads, ahead of whatever the config file resolves to.
+
+A name found in an earlier root shadows the same name in every later one, so an
+override of an otherwise-installed extension — including its `critical` flag —
+is what the offline paths above see, exactly as a locally started server would
+only ever load one of the two.
+
+A reachable server answers the equivalent *live* questions from its own
+discovery, rooted at its own working directory and data home — which is why a
+live listing and a live toggle can address packages this process cannot see at
+all.
 
 #### Offline listing of executable child packages
 
@@ -264,17 +284,21 @@ file's `"disabled"` list is simply absent — the file entry is inert.
 ### Critical extensions
 
 Extensions marked `critical: true` cannot be disabled via the
-`kernel:extension.setEnabled` bus RPC — the toggle is refused with a clear error.
+`kernel:extension.setEnabled` bus RPC — the toggle is refused, with a `reason` of
+`critical` on the response, and nothing is written.
 If a critical extension is listed in `"disabled"` anyway (a hand-edited file), boot
 starts it regardless and emits a console warning on every boot.
 
 `makaio extension disable <name>` therefore refuses a critical extension before
-writing anything, and exits non-zero. It resolves the flag from the running server
-(`kernel:extension.get`) when one is reachable, and offline otherwise. `makaio
-extension list` applies the same rule, so a critical extension that is present in
-`"disabled"` is reported as `enabled` — which is what boot does with it.
+writing anything, and exits non-zero. A reachable server resolves the flag itself
+— from the extension it loaded, or from its installed-extension catalog for one
+it did not — and refuses the request as a response the command renders; offline,
+this process resolves it from its own installed listing. `makaio extension list`
+applies the same rule, so a critical extension that is present in `"disabled"` is
+reported as `enabled` — which is what boot does with it.
 
-Offline resolution reads the same exported package the runtime would act on, not
+Criticality resolution — on the server for its own host, or in this process when
+none is reachable — reads the same exported package the runtime would act on, not
 `descriptor.json`, for any descriptor that declares a `server` entrypoint: it
 dynamically imports the already-resolved server entrypoint and reads `critical` off
 the exported package matching the descriptor name, the same normalization
@@ -282,7 +306,7 @@ the exported package matching the descriptor name, the same normalization
 `critical` itself in that case — `ExtensionDescriptorSchema` rejects the combination
 at discovery, install, and verify, because a server entrypoint can export several
 packages, each with its own criticality. When the entrypoint cannot be imported or
-its export does not resolve to a valid package, offline resolution fails closed to
+its export does not resolve to a valid package, resolution fails closed to
 *unknown* rather than guessing — `makaio extension disable` then refuses the
 extension rather than risk disabling one that turns out to be critical, and `makaio
 extension list` reports it accordingly.
@@ -290,7 +314,7 @@ extension list` reports it accordingly.
 Only a descriptor *without* a server entrypoint (detached, CLI-only, browser-only)
 has no exported package for the runtime to read; there, the descriptor's own
 `critical` field in `descriptor.json` *is* that synthesized package's flag, and is
-the value offline CLI paths use directly.
+the value used directly.
 
 ### Diagnostics
 

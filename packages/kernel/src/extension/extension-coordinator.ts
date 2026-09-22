@@ -12,11 +12,17 @@ import { createExtensionIdentity } from './extension-identity-builder.js';
 import {
   applyExtensionTransition as applyExtensionTransitionImpl,
   handleSetEnabled as handleSetEnabledImpl,
+  type SetEnabledCatalogLookup,
   type SetEnabledResult,
   type ToggleHost,
   type TransitionOutcome,
 } from './extension-toggle.js';
 import { coalesceExtensionOverrides, filterEligibleExtensions } from './extension-selection.js';
+import {
+  buildInstalledExtensionCatalog,
+  lookupInstalledExtension,
+  type CatalogHost,
+} from './installed-extension-catalog.js';
 import { WindowRegistry } from '../window/window-registry.js';
 import { topoSort } from './topo-sort.js';
 import { resolveBootEnabledNames } from './extension-boot-enablement.js';
@@ -25,6 +31,7 @@ import type {
   ExtensionCoordinatorOptions,
   ExtensionEntry,
   ExtensionRuntimeSurface,
+  InstalledExtensionCatalogSource,
   KernelExtensionContext,
   KernelMakaioExtension,
   RuntimeEnvironment,
@@ -136,6 +143,7 @@ export class ExtensionCoordinator {
   private readonly runMigrations: ExtensionMigrationRunner | undefined;
   private readonly extensionManagedNames: ReadonlySet<string> | undefined;
   private readonly frameworkPackageNames: ReadonlySet<string> | undefined;
+  private readonly installedCatalog: InstalledExtensionCatalogSource | undefined;
 
   /**
    * @param bus - Bus instance for emitting lifecycle events and serving the list RPC.
@@ -154,6 +162,7 @@ export class ExtensionCoordinator {
     this.runMigrations = options.runMigrations;
     this.extensionManagedNames = options.extensionManagedNames;
     this.frameworkPackageNames = options.frameworkPackageNames;
+    this.installedCatalog = options.installedCatalog;
     this.rpcCleanups.push(
       registerWarningActionHandler(this.bus, this.warningActionMap, options.launcherCommand ?? 'makaio'),
     );
@@ -363,6 +372,7 @@ export class ExtensionCoordinator {
         list: () => this.list(),
         getInfo: (name) => this.getInfo(name),
         handleSetEnabled: (name, enabled) => this.handleSetEnabled(name, enabled),
+        getInstalledCatalog: () => buildInstalledExtensionCatalog(this.createCatalogHost()),
       }),
     );
   }
@@ -694,15 +704,28 @@ export class ExtensionCoordinator {
    *
    * This is the operator-preference seam, and it is **persist-only**: it
    * never runs a live state-machine transition. It persists the requested
-   * preference (refusing outright to disable a `critical` extension, or when
-   * this coordinator was constructed without a `persistEnabled` writer) and
-   * reports whether the process's current runtime state already matches it.
-   * See {@link handleSetEnabledImpl} for the full rationale — several package
+   * preference (refusing to disable a `critical` extension, or one whose
+   * criticality could not be resolved, and throwing when this coordinator was
+   * constructed without a `persistEnabled` writer) and reports whether the
+   * process's current runtime state already matches it. See
+   * {@link handleSetEnabledImpl} for the full rationale — several package
    * contributions are composed exactly once at boot and cannot be replayed
    * for one package in isolation while the process keeps running.
    * Coordinator-internal or product-internal callers that need to actually
    * restart an already-started extension as part of their own mechanics
    * should call {@link applyExtensionTransition} instead.
+   *
+   * Every request is validated against the host's installed-extension catalog
+   * — a name this coordinator never loaded as an operator-managed extension
+   * for its existence, and every name for whether more than one installed copy
+   * claims it. A second copy installed while this process runs never reaches
+   * `entries`, which still describes the single copy loaded at boot, so only
+   * the catalog can see that the next start will refuse the name. That read
+   * scans install tiers and imports extension code, so it happens here, before
+   * the request enters the lifecycle queue — holding the lifecycle lock across
+   * it would stall shutdown and every other transition behind an interactive
+   * request. Because it is awaited outside the queue, admission is decided
+   * after it rather than before (see {@link admitLifecycle}).
    * @param name - Name of the extension to toggle.
    * @param enabled - `true` to enable, `false` to disable.
    * @returns A {@link SetEnabledResult}: `success` is `true` when the
@@ -710,14 +733,35 @@ export class ExtensionCoordinator {
    *   request was rejected or can only take effect on the next process
    *   restart; `outcome` always carries the underlying {@link TransitionOutcome}
    *   (`'applied'`, `'rejected'`, or `'restart-required'`) so callers can tell
-   *   those two `false` cases apart.
-   * @throws Error when `enabled` is `false` and the extension is `critical`,
-   *   or when this coordinator has no durable `persistEnabled` writer.
+   *   those two `false` cases apart, and `reason` the detail behind it.
+   * @throws Error when this coordinator has no durable `persistEnabled`
+   *   writer, or when a framework package holds the requested name and this
+   *   coordinator has no installed-extension catalog.
    */
   public async handleSetEnabled(name: string, enabled: boolean): Promise<SetEnabledResult> {
-    if (this.shutdownRequested) return { success: false, outcome: 'rejected' };
+    const shuttingDown: SetEnabledResult = { success: false, outcome: 'rejected', reason: 'shutting-down' };
+    // Cheap pre-check so an already-terminal coordinator never pays for a tier
+    // scan it will refuse anyway. It is not the admission decision — that one
+    // has to happen in the same turn as the enqueue, which `admitLifecycle`
+    // below does, because `shutdown()` can be requested while the scan is in
+    // flight.
+    if (this.shutdownRequested) return shuttingDown;
 
-    return await this.enqueueLifecycle(() => handleSetEnabledImpl(this.createToggleHost(), name, enabled));
+    const catalog: SetEnabledCatalogLookup = await lookupInstalledExtension(this.createCatalogHost(), name);
+
+    return await this.admitLifecycle(
+      () => handleSetEnabledImpl(this.createToggleHost(), name, enabled, catalog),
+      shuttingDown,
+    );
+  }
+
+  /**
+   * Build the {@link CatalogHost} surface the installed-extension catalog
+   * assembly reads.
+   * @returns Host surface for the catalog helpers.
+   */
+  private createCatalogHost(): CatalogHost {
+    return { entries: this.entries, loadEnabled: this.loadEnabled, installedCatalog: this.installedCatalog };
   }
 
   /**
@@ -743,9 +787,10 @@ export class ExtensionCoordinator {
     name: string,
     enabled: boolean,
   ): Promise<Exclude<TransitionOutcome, 'restart-required'>> {
-    if (this.shutdownRequested) return 'rejected';
-
-    return await this.enqueueLifecycle(() => applyExtensionTransitionImpl(this.createToggleHost(), name, enabled));
+    return await this.admitLifecycle(
+      () => applyExtensionTransitionImpl(this.createToggleHost(), name, enabled),
+      'rejected',
+    );
   }
 
   /**
@@ -771,6 +816,27 @@ export class ExtensionCoordinator {
           entry,
         ),
     };
+  }
+
+  /**
+   * Admit an operator-originated lifecycle transition, unless this coordinator
+   * is already terminal.
+   *
+   * The shutdown check and the enqueue happen in the same synchronous turn,
+   * and that is the entire contract: `shutdown()` marks the coordinator
+   * terminal and reserves the teardown slot in one turn too, so anything
+   * admitted here is admitted strictly before teardown. A caller that awaited
+   * between its own check and the enqueue — `handleSetEnabled` awaits the
+   * installed-extension catalog scan — would otherwise queue work behind
+   * teardown and still persist a preference after the runtime stopped.
+   * @param operation - Lifecycle transition to run exclusively.
+   * @param onShutdown - Result reported instead of running `operation` when the
+   *   coordinator is already terminal.
+   * @returns The operation's result, or `onShutdown`.
+   */
+  private async admitLifecycle<T>(operation: () => Promise<T>, onShutdown: T): Promise<T> {
+    if (this.shutdownRequested) return onShutdown;
+    return await this.enqueueLifecycle(operation);
   }
 
   /**

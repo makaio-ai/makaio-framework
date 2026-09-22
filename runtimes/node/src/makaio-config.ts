@@ -5,7 +5,12 @@ import { pathToFileURL } from 'node:url';
 import { minimatch } from 'minimatch';
 import { z } from 'zod';
 import { parseExtensionDescriptor } from '@makaio/contracts';
-import { enumerateDescriptorPaths, type DiscoveredExtension, type ExtensionDiscovery } from './extension-discovery.js';
+import {
+  deduplicateByDescriptorName,
+  enumerateDescriptorPaths,
+  type DiscoveredExtension,
+  type ExtensionDiscovery,
+} from './extension-discovery.js';
 
 /** Environment override for the runtime config file path. */
 export const MAKAIO_CONFIG_FILE_ENV = 'MAKAIO_CONFIG_FILE';
@@ -309,21 +314,33 @@ class ConfiguredDescriptorDiscovery implements ExtensionDiscovery {
 
   /**
    * Discover descriptor-backed extensions from every configured root.
-   * @returns First-match-wins discovered extensions after include/exclude filters.
+   *
+   * Each configured root is one precedence layer, resolved by the same rule
+   * every other discovery strategy applies: an earlier root wins a name a
+   * later one also declares, and two packages declaring one name *inside* a
+   * single root have no precedence to appeal to and are refused rather than
+   * resolved by filesystem order.
+   * @returns Discovered extensions after include/exclude filters, with one
+   *   package per descriptor name.
+   * @throws ExtensionNameCollisionError when one configured root declares the
+   *   same descriptor name twice.
    */
   public async discover(): Promise<DiscoveredExtension[]> {
-    const discovered = new Map<string, DiscoveredExtension>();
+    return deduplicateByDescriptorName(await this.discoverTiers());
+  }
+
+  /**
+   * Report one precedence layer per configured discovery root, filtered but
+   * not yet deduplicated.
+   * @returns One array per configured root, in configured order.
+   */
+  public async discoverTiers(): Promise<DiscoveredExtension[][]> {
+    const tiers: DiscoveredExtension[][] = [];
     for (const discoveryRoot of this.config.extensions.discoveryRoots) {
-      for (const extension of await discoverFromPath(discoveryRoot)) {
-        if (
-          !discovered.has(extension.descriptor.name) &&
-          shouldIncludeExtension(extension.descriptor.name, this.config)
-        ) {
-          discovered.set(extension.descriptor.name, extension);
-        }
-      }
+      const discovered = await discoverFromPath(discoveryRoot);
+      tiers.push(discovered.filter((ext) => shouldIncludeExtension(ext.descriptor.name, this.config)));
     }
-    return [...discovered.values()];
+    return tiers;
   }
 }
 

@@ -63,6 +63,34 @@ export interface FilesystemDescriptorDiscoveryOptions {
 export interface ExtensionDiscovery {
   /** Scan for extensions and return validated discoveries. */
   discover(): Promise<DiscoveredExtension[]>;
+  /**
+   * Report this strategy's raw precedence layers, highest priority first, with
+   * no name collision resolved yet.
+   *
+   * {@link discover} answers what the runtime loads: exactly one extension per
+   * name, refusing outright where no precedence can decide the winner. An
+   * observer — a catalog listing every installed package, including ones no
+   * boot would load — needs the input to that decision instead, so it can
+   * describe a contest rather than abort on it.
+   *
+   * Optional: a strategy that has no internal layering is one precedence layer
+   * by definition, which {@link discoverExtensionTiers} supplies for it.
+   */
+  discoverTiers?(): Promise<DiscoveredExtension[][]>;
+}
+
+/**
+ * Read a discovery strategy's precedence layers, whether or not it reports
+ * them itself.
+ *
+ * A strategy without {@link ExtensionDiscovery.discoverTiers} is a single
+ * precedence layer — the same status {@link MergedDescriptorDiscovery} already
+ * gives each strategy it merges — so its resolved result is that one layer.
+ * @param discovery - Strategy to read.
+ * @returns Its layers, highest priority first.
+ */
+export async function discoverExtensionTiers(discovery: ExtensionDiscovery): Promise<DiscoveredExtension[][]> {
+  return discovery.discoverTiers ? discovery.discoverTiers() : [await discovery.discover()];
 }
 
 const DESCRIPTOR_FILENAME = 'descriptor.json';
@@ -91,7 +119,13 @@ export async function enumerateDescriptorPaths(discoveryPath: string): Promise<s
       glob(pattern, {
         absolute: true,
         cwd: discoveryPath,
-        ...(isNodeModulesRoot ? {} : { ignore: [...DESCRIPTOR_GLOB_IGNORES] }),
+        // `**` does not descend into symlinked directories unless told to, and
+        // an extension installed from a local path is exactly that: a link in
+        // the managed install directory pointing at its source tree. Without
+        // this, every locally installed extension is invisible to a
+        // recursively searched discovery root — including the managed install
+        // directory itself.
+        ...(isNodeModulesRoot ? {} : { follow: true, ignore: [...DESCRIPTOR_GLOB_IGNORES] }),
         windowsPathsNoEscape: true,
       }),
     ),
@@ -142,12 +176,15 @@ export class FilesystemDescriptorDiscovery implements ExtensionDiscovery {
    * @throws ExtensionNameCollisionError when one tier declares the same descriptor name twice.
    */
   public async discover(): Promise<DiscoveredExtension[]> {
-    const [local, installed, globalNpm] = await Promise.all([
-      this.scanLocal(),
-      this.scanInstalled(),
-      this.scanGlobalNpm(),
-    ]);
-    return this.deduplicate(local, installed, globalNpm);
+    return deduplicateByDescriptorName(await this.discoverTiers());
+  }
+
+  /**
+   * Scan all three extension locations without resolving any name collision.
+   * @returns One array per tier, ordered local → installed → global-npm.
+   */
+  public async discoverTiers(): Promise<DiscoveredExtension[][]> {
+    return Promise.all([this.scanLocal(), this.scanInstalled(), this.scanGlobalNpm()]);
   }
 
   /**
@@ -241,19 +278,6 @@ export class FilesystemDescriptorDiscovery implements ExtensionDiscovery {
     }
     return results;
   }
-
-  /**
-   * Deduplicate by descriptor name across priority tiers.
-   *
-   * Tiers are processed in priority order — earlier tiers win a cross-tier
-   * name collision; a collision within one tier throws.
-   * @param tiers - Extension arrays ordered by descending priority.
-   * @returns Merged list with no duplicate names.
-   * @throws ExtensionNameCollisionError when one tier declares the same descriptor name twice.
-   */
-  private deduplicate(...tiers: DiscoveredExtension[][]): DiscoveredExtension[] {
-    return deduplicateByDescriptorName(tiers);
-  }
 }
 
 /**
@@ -274,6 +298,14 @@ export class ExplicitDescriptorDiscovery implements ExtensionDiscovery {
    */
   public async discover(): Promise<DiscoveredExtension[]> {
     return this.extensions;
+  }
+
+  /**
+   * Report the fixed list as the single precedence layer it is.
+   * @returns One layer holding the extension list passed to the constructor.
+   */
+  public async discoverTiers(): Promise<DiscoveredExtension[][]> {
+    return [[...this.extensions]];
   }
 }
 
@@ -297,14 +329,34 @@ export class ExtensionNameCollisionError extends Error {
     claimed: DiscoveredExtension,
     conflicting: DiscoveredExtension,
   ) {
-    super(
-      `Extension name collision: "${descriptorName}" is declared by two packages in the same discovery tier ` +
-        `(${describeProvenance(claimed)} and ${describeProvenance(conflicting)}). ` +
-        'A descriptor name is an extension identity and cannot be shared, and packages within one tier ' +
-        'have no precedence over each other. Remove or rename one of them.',
-    );
+    super(describeSameTierNameCollision(descriptorName, claimed, conflicting));
     this.name = 'ExtensionNameCollisionError';
   }
+}
+
+/**
+ * Describe a descriptor name declared twice inside one discovery tier,
+ * including both packages' provenance.
+ *
+ * Shared with observers that report such a collision instead of refusing on it
+ * (an installed-package catalog, for example), so the diagnostic an operator
+ * has to act on reads identically wherever it surfaces.
+ * @param descriptorName - Descriptor name claimed by both packages.
+ * @param claimed - Package that already claimed the name in this tier.
+ * @param conflicting - Package that re-declared the already claimed name.
+ * @returns Operator-readable description of the collision.
+ */
+export function describeSameTierNameCollision(
+  descriptorName: string,
+  claimed: DiscoveredExtension,
+  conflicting: DiscoveredExtension,
+): string {
+  return (
+    `Extension name collision: "${descriptorName}" is declared by two packages in the same discovery tier ` +
+    `(${describeProvenance(claimed)} and ${describeProvenance(conflicting)}). ` +
+    'A descriptor name is an extension identity and cannot be shared, and packages within one tier ' +
+    'have no precedence over each other. Remove or rename one of them.'
+  );
 }
 
 /**
@@ -330,8 +382,20 @@ export class MergedDescriptorDiscovery implements ExtensionDiscovery {
    * @throws ExtensionNameCollisionError when one discovery returns the same descriptor name twice.
    */
   public async discover(): Promise<DiscoveredExtension[]> {
-    const discoveredTiers = await Promise.all(this.discoveries.map((discovery) => discovery.discover()));
-    return deduplicateByDescriptorName(discoveredTiers);
+    return deduplicateByDescriptorName(await this.discoverTiers());
+  }
+
+  /**
+   * Report every merged strategy's layers, concatenated in constructor order.
+   *
+   * A strategy that layers internally contributes its own layers rather than
+   * one flattened result, so the precedence an observer sees is the same one
+   * {@link discover} resolves.
+   * @returns Every layer, ordered by descending priority.
+   */
+  public async discoverTiers(): Promise<DiscoveredExtension[][]> {
+    const nested = await Promise.all(this.discoveries.map((discovery) => discoverExtensionTiers(discovery)));
+    return nested.flat();
   }
 }
 
@@ -357,7 +421,9 @@ export class MergedDescriptorDiscovery implements ExtensionDiscovery {
  * @returns Merged discoveries with the winning tier's descriptor kept per name.
  * @throws ExtensionNameCollisionError when one tier contains two descriptors declaring the same name.
  */
-function deduplicateByDescriptorName(tiers: ReadonlyArray<ReadonlyArray<DiscoveredExtension>>): DiscoveredExtension[] {
+export function deduplicateByDescriptorName(
+  tiers: ReadonlyArray<ReadonlyArray<DiscoveredExtension>>,
+): DiscoveredExtension[] {
   const byName = new Map<string, DiscoveredExtension>();
   for (const tier of tiers) {
     const claimedInTier = new Map<string, DiscoveredExtension>();

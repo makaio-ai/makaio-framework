@@ -22,6 +22,7 @@ next: false
 
 | Key | Wire | Type | Schema |
 |-----|------|------|--------|
+| `catalog` | [`kernel:extension.catalog`](#kernel:extension.catalog) | rpc | — |
 | `contributions.catalog` | [`kernel:extension.contributions.catalog`](#kernel:extension.contributions.catalog) | rpc | — |
 | `enabledChanged` | [`kernel:extension.enabledChanged`](#kernel:extension.enabledChanged) | event | — |
 | `get` | [`kernel:extension.get`](#kernel:extension.get) | rpc | — |
@@ -32,6 +33,37 @@ next: false
 | `warnings.list` | [`kernel:extension.warnings.list`](#kernel:extension.warnings.list) | rpc | — |
 
 ## Subject Details
+
+### <a id="kernel:extension.catalog"></a>`kernel:extension.catalog` (rpc)
+
+Request every extension package installed on the host running this
+coordinator.
+
+Subject: `kernel:extension.catalog`
+Type: RPC (request/response)
+Purpose: Exposes the coordinator host's own installed-package view —
+across every discovery tier it reads, including the project-local
+`node_modules` of the directory it was started from — enriched with the
+enablement facts only the host holding the durable store can answer.
+Callers that cannot inspect this host's filesystem (a client configured
+against a remote bus, or one invoked from a different working directory)
+have no other way to enumerate installed-but-not-loaded extensions, and
+`kernel:extension.setEnabled` validates against this same catalog.
+
+Returns `{ entries: null }` — not an empty array — when this runtime has
+no installed-extension catalog at all, because "nothing is installed" and
+"this host cannot answer" must not read alike to a caller deciding
+whether to trust the result.
+
+**Request:**
+
+_Empty object._
+
+**Response:**
+
+| Field | Type | Required |
+|-------|------|----------|
+| `entries` | `{ name: string; version: string; origin: "local" \| "npm" \| "project-local"; extensionManaged: boolean; critical?: boolean \| undefined; criticalityUnknown?: boolean \| undefined; declaresServerEntrypoint?: boolean \| undefined; npmName?: string \| undefined; surface?: "interactive" \| "headless" \| undefined; shadowedBy?: "local" \| "npm" \| "project-local" \| undefined; collidesWith?: "local" \| "npm" \| "project-local" \| undefined; persistedEnabled?: boolean \| undefined; }[] \| null` | yes |
 
 ### <a id="kernel:extension.contributions.catalog"></a>`kernel:extension.contributions.catalog` (rpc)
 
@@ -133,6 +165,14 @@ the process's current runtime state already matches the request
 (`'applied'`) or a restart is needed for it to take effect
 (`'restart-required'`).
 
+Names this coordinator never loaded are addressable too, provided it
+exposes an installed-extension catalog (`kernel:extension.catalog`): the
+request is validated against that catalog — the name must be installed
+here, and a disable of a `critical` package, or of one whose criticality
+could not be resolved, is refused — before anything is written. This is
+what lets a caller that cannot see this host's filesystem persist a
+preference without having to vouch for the name itself.
+
 **Request:**
 
 | Field | Type | Required |
@@ -145,6 +185,7 @@ the process's current runtime state already matches the request
 | Field | Type | Required |
 |-------|------|----------|
 | `outcome` | `"applied" \| "rejected" \| "restart-required"` | yes |
+| `reason` | `"critical" \| "not-installed" \| "criticality-unknown" \| "no-catalog" \| "name-collision" \| "shutting-down" \| "runtime-state-diverges" \| "not-loaded" \| "framework-package-shadowed" \| undefined` | no |
 | `success` | `boolean` | yes |
 
 ### <a id="kernel:extension.stateChanged"></a>`kernel:extension.stateChanged` (event)

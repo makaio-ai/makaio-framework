@@ -45,9 +45,7 @@ export interface LocalExtensionEntry {
    * from "a server entrypoint is declared but its convention-resolved file is
    * missing or unreadable" (criticality is genuinely unknown, not
    * "not critical") — both leave `serverImportPath` `undefined`. Consumers
-   * that gate a decision on criticality (see
-   * `InstalledExtensionEntry.criticalityUnknown` in the CLI's
-   * `extension-installed-listing.ts`) must check this field first.
+   * that gate a decision on criticality must check this field first.
    */
   readonly declaresServerEntrypoint?: boolean;
   /**

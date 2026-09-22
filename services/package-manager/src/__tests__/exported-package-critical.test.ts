@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   resolveExportedPackageCritical,
+  resolveExportedPackages,
   resolveCriticalFlag,
   toLocalPackageInfo,
 } from '../exported-package-critical.js';
@@ -300,6 +301,110 @@ describe('resolveExportedPackageCritical', () => {
         distDir,
       );
       expect(withHook).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+describe('resolveExportedPackages', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'resolve-exported-packages-test-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('reports every package an array export declares, not just the descriptor-named one', async () => {
+    // The enablement store is keyed by executable package name, and one
+    // descriptor can export several — a listing that only saw the descriptor's
+    // own package could not address its children at all.
+    const modulePath = path.join(tempDir, 'server.mjs');
+    await fs.writeFile(
+      modulePath,
+      `export default [\n` +
+        `  { name: 'parent-ext', displayName: 'Parent', version: '1.0.0', critical: false },\n` +
+        `  { name: 'parent-ext.child', displayName: 'Child', version: '2.0.0', critical: true },\n` +
+        `];\n`,
+    );
+
+    const listing = await resolveExportedPackages(modulePath, 'parent-ext', '[test] parent-ext');
+
+    expect(listing?.packages).toEqual([
+      { name: 'parent-ext', version: '1.0.0', critical: false },
+      { name: 'parent-ext.child', version: '2.0.0', critical: true },
+    ]);
+    expect(listing?.invalidCriticalNames.size).toBe(0);
+  });
+
+  it('omits a declared-but-unusable critical flag and names the package it belongs to', async () => {
+    // Reporting `critical: undefined` alone would be indistinguishable from a
+    // package that legitimately declares nothing, which is the difference
+    // between refusing a disable and allowing it.
+    const modulePath = path.join(tempDir, 'server.mjs');
+    await fs.writeFile(
+      modulePath,
+      `export default [\n` +
+        `  { name: 'parent-ext', displayName: 'Parent', version: '1.0.0' },\n` +
+        `  { name: 'parent-ext.child', displayName: 'Child', version: '1.0.0', critical: 'yes' },\n` +
+        `];\n`,
+    );
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const listing = await resolveExportedPackages(modulePath, 'parent-ext', '[test] parent-ext');
+
+      expect(listing?.packages).toEqual([
+        { name: 'parent-ext', version: '1.0.0' },
+        { name: 'parent-ext.child', version: '1.0.0' },
+      ]);
+      expect([...(listing?.invalidCriticalNames ?? [])]).toEqual(['parent-ext.child']);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("'critical' field for 'parent-ext.child' is not a boolean (got string)"),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('resolves undefined, never a partial listing, when the export violates the identity contract', async () => {
+    const modulePath = path.join(tempDir, 'server.mjs');
+    await fs.writeFile(
+      modulePath,
+      `export default [\n` +
+        `  { name: 'parent-ext', displayName: 'Parent', version: '1.0.0' },\n` +
+        `  { name: 'unrelated-ext', displayName: 'Unrelated', version: '1.0.0' },\n` +
+        `];\n`,
+    );
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const listing = await resolveExportedPackages(modulePath, 'parent-ext', '[test] parent-ext');
+
+      expect(listing).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('outside descriptor namespace'));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('resolves undefined when the entrypoint does not exist', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const listing = await resolveExportedPackages(
+        path.join(tempDir, 'missing.mjs'),
+        'missing-ext',
+        '[test] missing-ext',
+      );
+
+      expect(listing).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('failed to import server entry while reading its exported packages'),
+        expect.anything(),
+      );
     } finally {
       warnSpy.mockRestore();
     }

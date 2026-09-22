@@ -4,6 +4,7 @@ import type { CliContribution } from '../cli/types.js';
 import { CliRpcSubjects } from '../bus/cli/namespace.js';
 import { ExtensionSubjects } from '../observability/extension-namespace.js';
 import type { ExtensionInfo } from '../observability/shared-schemas.js';
+import type { InstalledExtensionCatalogEntry } from '../observability/installed-extension-catalog-schemas.js';
 import { handleListContributions, handleExecute } from './cli-rpc-handlers.js';
 import type { SetEnabledResult } from './extension-toggle.js';
 import type { ExtensionEntry } from './types.js';
@@ -26,6 +27,13 @@ export interface RpcHost {
    */
   getInfo(name: string): ExtensionInfo | null;
   handleSetEnabled(name: string, enabled: boolean): Promise<SetEnabledResult>;
+  /**
+   * Return every extension package installed on this coordinator's host,
+   * enriched with the enablement facts the coordinator holds for each name.
+   * @returns The catalog snapshot, or `null` when this runtime has no
+   *   installed-extension catalog to report.
+   */
+  getInstalledCatalog(): Promise<InstalledExtensionCatalogEntry[] | null>;
 }
 
 /**
@@ -53,8 +61,14 @@ export function registerCoordinatorRpcHandlers(host: RpcHost): Array<() => void>
 
   cleanups.push(
     host.bus.on(ExtensionSubjects.setEnabled, async (ctx) => {
-      const { success, outcome } = await host.handleSetEnabled(ctx.payload.name, ctx.payload.enabled);
-      ctx.setResult({ success, outcome });
+      const { success, outcome, reason } = await host.handleSetEnabled(ctx.payload.name, ctx.payload.enabled);
+      ctx.setResult({ success, outcome, ...(reason !== undefined && { reason }) });
+    }),
+  );
+
+  cleanups.push(
+    host.bus.on(ExtensionSubjects.catalog, async (ctx) => {
+      ctx.setResult({ entries: await host.getInstalledCatalog() });
     }),
   );
 
