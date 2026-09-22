@@ -2,8 +2,8 @@
  * Tool call formatter types for package declarations.
  *
  * Defines the formatter declaration shape that packages use to contribute tool
- * call formatters. The UI layer bridges these declarations to the
- * `ToolCallFormatterRegistry`.
+ * call formatters. The UI layer bridges these declarations to the host's
+ * tool-call formatter registry.
  * @packageDocumentation
  */
 
