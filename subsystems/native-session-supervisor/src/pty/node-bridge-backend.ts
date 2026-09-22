@@ -102,12 +102,12 @@ class BridgePtyProcess implements IPtyProcess {
   }
 
   /**
-   * Write raw input to the PTY. The data is base64-encoded before sending
+   * Write text input to the PTY. The data is base64-encoded before sending
    * over the JSON-RPC channel.
    *
-   * PTY traffic is tunneled through JSON as a byte-preserving "binary string":
-   * latin1 maps code points 0–255 directly to bytes, unlike utf8 which would
-   * re-encode multi-byte characters and corrupt escape sequences / raw output.
+   * Input is encoded as UTF-8 bytes before base64 transport so JavaScript
+   * Unicode strings arrive at the PTY unchanged. The bridge uses the same
+   * UTF-8 encoding for text output.
    * @param data - The string to write.
    */
   public write(data: string): void {
@@ -117,7 +117,7 @@ class BridgePtyProcess implements IPtyProcess {
       id: 0,
       cmd: 'input',
       ptyId: this.ptyId,
-      data: Buffer.from(data, 'latin1').toString('base64'),
+      data: Buffer.from(data, 'utf8').toString('base64'),
     });
   }
 
@@ -574,7 +574,7 @@ export class NodeBridgeBackend implements IPtyBackend {
       case 'data': {
         const proc = this.sessions.get(event.ptyId);
         if (!proc) return;
-        const decoded = Buffer.from(event.data, 'base64').toString('latin1');
+        const decoded = Buffer.from(event.data, 'base64').toString('utf8');
         proc.pushData(decoded);
         return;
       }

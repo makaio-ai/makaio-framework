@@ -98,9 +98,15 @@ function assertSupervisorAdapterSessionIdentity(record: ClientRuntimeRecord, inp
 /**
  * Determine whether an observation reports the Codex root-clear transition.
  *
- * The transition comes from the internal Codex hook-service lifecycle path;
- * it is deliberately not inferred from arbitrary producer metadata. It is
- * valid only while replacing the adapter root of the same supervised process.
+ * The Codex hook-service lifecycle path emits this shape for an explicit
+ * root-clear transition. Runtime observations are a trusted host-bus contract:
+ * `source` records provenance and lifecycle intent, rather than authenticating
+ * a producer. Likewise, a supervisor session ID correlates a process; it is
+ * not a credential or an ownership claim. A deployment that needs untrusted
+ * hook producers must establish that authority at its transport boundary.
+ *
+ * The transition is valid only while replacing the adapter root of the same
+ * supervised process.
  * @param record - Existing runtime selected by supervisor identity
  * @param input - Incoming runtime observation
  * @returns `true` when the observation may rotate the native root identity
@@ -174,7 +180,7 @@ function enrichRecord(record: ClientRuntimeRecord, input: ClientRuntimeObserveRe
  * A cleared Codex conversation has no established framework session yet, so
  * the prior session correlation must not leak into the new adapter root.
  * @param record - Existing runtime selected by supervisor identity
- * @param input - Trusted root-clear observation
+ * @param input - Root-clear observation
  */
 function rotateCodexRootAfterClear(record: ClientRuntimeRecord, input: ClientRuntimeObserveRequest): void {
   record.adapterSessionId = input.adapterSessionId;

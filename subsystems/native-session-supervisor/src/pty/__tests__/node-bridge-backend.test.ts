@@ -216,7 +216,7 @@ describe('NodeBridgeBackend', () => {
     const id = process.commands[0]!.id;
     process.emitEvents([
       { id, event: 'spawned', ptyId: 1, pid: 321, process: '/bin/bash' },
-      { ptyId: 1, event: 'data', data: Buffer.from('pre-listener output', 'latin1').toString('base64') },
+      { ptyId: 1, event: 'data', data: Buffer.from('pre-listener output € 漢字 😀', 'utf8').toString('base64') },
       { ptyId: 1, event: 'exit', exitCode: 7, signal: 0 },
     ]);
 
@@ -226,10 +226,10 @@ describe('NodeBridgeBackend', () => {
     pty.onData(data);
     pty.onExit(exit);
 
-    expect(data).toHaveBeenCalledExactlyOnceWith('pre-listener output');
+    expect(data).toHaveBeenCalledExactlyOnceWith('pre-listener output € 漢字 😀');
     expect(exit).toHaveBeenCalledExactlyOnceWith({ exitCode: 7 });
 
-    process.emitEvents([{ ptyId: 1, event: 'data', data: Buffer.from('ignored', 'latin1').toString('base64') }]);
+    process.emitEvents([{ ptyId: 1, event: 'data', data: Buffer.from('ignored', 'utf8').toString('base64') }]);
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(data).toHaveBeenCalledOnce();
     expect(exit).toHaveBeenCalledOnce();
@@ -355,6 +355,82 @@ describe('NodeBridgeBackend', () => {
     expect(output).toContain('bun-bridge-smoke');
   }, 10_000);
 
+  it('delivers Unicode output through the real Bun bridge as public text', async () => {
+    const expectedText = '€ 漢字 😀';
+    const childCommand = `printf %s ${JSON.stringify(expectedText)}`;
+    const bridgeUrl = new URL('../node-bridge-backend.ts', import.meta.url).href;
+    const output = await runBunScript(`
+      import { NodeBridgeBackend } from ${JSON.stringify(bridgeUrl)};
+      const backend = new NodeBridgeBackend();
+      try {
+        const pty = await backend.spawn('/bin/sh', ['-c', ${JSON.stringify(childCommand)}], {});
+        let received = '';
+        const exitCode = await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('PTY did not exit')), 3_000);
+          pty.onData((data) => { received += data; });
+          pty.onExit(({ exitCode }) => {
+            clearTimeout(timeout);
+            resolve(exitCode);
+          });
+        });
+        if (exitCode !== 0) {
+          throw new Error('PTY did not exit successfully');
+        }
+        console.log(JSON.stringify(received));
+      } finally {
+        await backend.dispose();
+      }
+    `);
+
+    expect(output.trim()).toBe(JSON.stringify(expectedText));
+  }, 10_000);
+
+  it('preserves UTF-8 input bytes through the real Bun bridge without inserting NUL bytes', async () => {
+    const input = 'Euro € 漢字 😀';
+    const inputByteLength = Buffer.byteLength(input, 'utf8');
+    const expectedHex = Buffer.from(input, 'utf8').toString('hex').match(/../g)?.join(' ');
+    const bridgeUrl = new URL('../node-bridge-backend.ts', import.meta.url).href;
+    const output = await runBunScript(`
+      import { NodeBridgeBackend } from ${JSON.stringify(bridgeUrl)};
+      const backend = new NodeBridgeBackend();
+      try {
+        const pty = await backend.spawn('/bin/sh', [
+          '-c',
+          'stty -echo -icanon min 1 time 0; printf ready; dd bs=${inputByteLength} count=1 2>/dev/null | od -An -v -tx1',
+        ], {});
+        let received = '';
+        let inputSent = false;
+        const exitCode = await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('PTY did not exit')), 3_000);
+          pty.onData((data) => {
+            received += data;
+            if (!inputSent && received.includes('ready')) {
+              inputSent = true;
+              pty.write(${JSON.stringify(input)});
+            }
+          });
+          pty.onExit(({ exitCode }) => {
+            clearTimeout(timeout);
+            resolve(exitCode);
+          });
+        });
+        if (exitCode !== 0) {
+          throw new Error('PTY did not exit successfully');
+        }
+        console.log(received);
+      } finally {
+        await backend.dispose();
+      }
+    `);
+
+    const observedHex = output
+      .match(/\b[0-9a-f]{2}\b/gi)
+      ?.join(' ')
+      .toLowerCase();
+    expect(observedHex).toBe(expectedHex);
+    expect(observedHex).not.toContain('00');
+  }, 10_000);
+
   // ── spawnViaNode code path (Bun global absent) ──────────────────────────────
 
   it('reaches child_process.spawn when the Bun global is absent', async () => {
@@ -429,7 +505,7 @@ describe('NodeBridgeBackend', () => {
 
   it('routes bridge data events through the onData pipeline to registered listeners', async () => {
     // Verifies the output streaming path: a `data` event emitted by the bridge
-    // subprocess (base64-encoded latin1) is decoded and forwarded to every
+    // subprocess (base64-encoded UTF-8) is decoded and forwarded to every
     // onData listener registered on the returned IPtyProcess handle.
     const process = createBridgeProcess();
     const spawn = vi.fn().mockReturnValue(process);
@@ -441,10 +517,10 @@ describe('NodeBridgeBackend', () => {
     const received: string[] = [];
     pty.onData((data) => received.push(data));
 
-    // Encode the expected output as base64 (latin1) — matching the bridge wire
+    // Encode the expected output as UTF-8 base64 — matching the bridge wire
     // format defined in node-bridge-backend.ts dispatch('data').
-    const expectedText = 'hello from pty\r\n';
-    const encoded = Buffer.from(expectedText, 'latin1').toString('base64');
+    const expectedText = 'hello from pty € 漢字 😀\r\n';
+    const encoded = Buffer.from(expectedText, 'utf8').toString('base64');
 
     process.emitEvent({ ptyId: 1, event: 'data', data: encoded });
 
@@ -472,7 +548,7 @@ describe('NodeBridgeBackend', () => {
     pty.onData((data) => secondReceived.push(data));
 
     const chunk = 'output chunk';
-    const encoded = Buffer.from(chunk, 'latin1').toString('base64');
+    const encoded = Buffer.from(chunk, 'utf8').toString('base64');
     process.emitEvent({ ptyId: 1, event: 'data', data: encoded });
 
     await vi.waitFor(() => {
@@ -501,7 +577,7 @@ describe('NodeBridgeBackend', () => {
     // Dispose immediately — no events should be received after this.
     disposable.dispose();
 
-    const encoded = Buffer.from('should not arrive', 'latin1').toString('base64');
+    const encoded = Buffer.from('should not arrive', 'utf8').toString('base64');
     process.emitEvent({ ptyId: 1, event: 'data', data: encoded });
 
     // Yield to the I/O event loop so the stream reader and readline interface
