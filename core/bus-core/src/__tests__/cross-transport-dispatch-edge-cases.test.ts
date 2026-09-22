@@ -233,7 +233,7 @@ describe('Test 6b: Deadline surfaces in RequestContext for local and inbound req
     }
   });
 
-  it('inbound transport request propagates wire deadline into handler context', async () => {
+  it('inbound transport request anchors the handler deadline from the relative timeout', async () => {
     let observedDeadline: number | undefined;
 
     const cleanup = MakaioBus.on(EdgeNamespace.ping, (ctx) => {
@@ -264,8 +264,12 @@ describe('Test 6b: Deadline surfaces in RequestContext for local and inbound req
     );
 
     try {
-      const wireDeadline = Date.now() + 10_000;
+      // Deliberately far beyond the relative budget, so that adopting the wire
+      // value instead of re-anchoring would be unmistakable rather than a
+      // coincidence of both clocks landing in the same millisecond.
+      const wireDeadline = Date.now() + 60_000;
 
+      const before = Date.now();
       await sourceHandler?.({
         type: 'request',
         namespace: 'edgeCase',
@@ -276,9 +280,16 @@ describe('Test 6b: Deadline surfaces in RequestContext for local and inbound req
         timeout: 10_000,
         deadline: wireDeadline,
       });
+      const after = Date.now();
 
-      // The handler must observe the exact wire deadline — not a re-minted one
-      expect(observedDeadline).toBe(wireDeadline);
+      // The receiving hop anchors its own deadline from the relative `timeout`
+      // against its own clock and never adopts the wire value: that is an
+      // absolute instant on the *sender's* clock, and two nodes' clocks need not
+      // agree. See `BusRequestMessage.deadline` in ../types/transports.ts and
+      // `anchorRequestDeadline` in ../registries/transport-registry.ts.
+      expect(observedDeadline).toBeDefined();
+      expect(observedDeadline).toBeGreaterThanOrEqual(before + 10_000);
+      expect(observedDeadline).toBeLessThanOrEqual(after + 10_000);
     } finally {
       cleanup();
       unregisterSource.unregister();
