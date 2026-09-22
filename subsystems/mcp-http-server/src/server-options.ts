@@ -2,10 +2,15 @@ import type { McpAgentContext, ToolExecutionContextOverrides } from '@makaio/con
 import type { IMcpContextRegistry } from './context-registry.js';
 import type { McpToolDiscoveryOptions } from './tool-discovery.js';
 
-/** Resolve session-stable context overrides for an adapter session. */
+/**
+ * Resolve session-stable context overrides for an adapter session.
+ *
+ * The resolver may obtain the current values asynchronously. Tool dispatch
+ * waits for it to fulfill; a rejection prevents the tool from executing.
+ */
 export type ResolveContextOverrides = (
   adapterSessionId: string | undefined,
-) => ToolExecutionContextOverrides | undefined;
+) => ToolExecutionContextOverrides | undefined | Promise<ToolExecutionContextOverrides | undefined>;
 
 /** Shared timeout option for MCP tool execution. */
 interface ToolExecutionTimeoutOption {

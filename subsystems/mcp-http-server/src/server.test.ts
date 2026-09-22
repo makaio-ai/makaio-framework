@@ -5,7 +5,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { createBusInstance } from '@makaio/bus-core';
-import { ToolSubjects } from '@makaio/contracts';
+import { ToolSubjects, type ToolExecutionContextOverrides } from '@makaio/contracts';
 import { McpContextRegistry } from './context-registry.js';
 import { createMcpServer } from './create-mcp-server.js';
 import {
@@ -433,6 +433,116 @@ describe('createMcpServer', () => {
     await expect(
       createMcpServer(createBusInstance(), 'invalid-timeout', { toolExecutionTimeoutMs: timeout }),
     ).rejects.toThrow('toolExecutionTimeoutMs must be a positive safe integer');
+  });
+
+  describe('asynchronous context overrides', () => {
+    it('waits for each resolved context before executing the matching tool call', async () => {
+      const bus = createBusInstance();
+      const capturedContexts: unknown[] = [];
+      const firstResolverStarted = Promise.withResolvers<void>();
+      const secondResolverStarted = Promise.withResolvers<void>();
+      const firstContext = Promise.withResolvers<ToolExecutionContextOverrides | undefined>();
+      const secondContext = Promise.withResolvers<ToolExecutionContextOverrides | undefined>();
+      const contexts = [firstContext, secondContext];
+      const resolverStarted = [firstResolverStarted, secondResolverStarted];
+      let resolutionIndex = 0;
+      const resolveContextOverrides = vi.fn(() => {
+        const currentIndex = resolutionIndex++;
+        resolverStarted[currentIndex]?.resolve();
+        return contexts[currentIndex]?.promise;
+      });
+      const cleanupList = bus.on(ToolSubjects.list, (ctx) => {
+        ctx.setResult({
+          tools: [{ name: 'echo', description: 'Echo', toolsetName: 'test', inputSchema: { type: 'object' } }],
+          toolsets: [],
+        });
+      });
+      const cleanupExecute = bus.on(ToolSubjects.execute, (ctx) => {
+        capturedContexts.push(ctx.payload.contextOverrides);
+        ctx.setResult({ success: true, data: ctx.payload.input });
+      });
+      const server = await createMcpServer(bus, 'fallback-session', { resolveContextOverrides });
+      const client = new Client({ name: 'async-context-client', version: '1.0.0' });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+      try {
+        await server.connect(serverTransport);
+        await client.connect(clientTransport);
+
+        const firstCall = client.callTool({ name: 'echo', arguments: { value: 'first' } });
+        await firstResolverStarted.promise;
+        expect(capturedContexts).toEqual([]);
+
+        firstContext.resolve({ cwd: '/workspace/first', sessionId: 'first-session' });
+        const firstResult = await firstCall;
+        expect(firstResult.isError).not.toBe(true);
+
+        const secondCall = client.callTool({ name: 'echo', arguments: { value: 'second' } });
+        await secondResolverStarted.promise;
+        expect(capturedContexts).toHaveLength(1);
+
+        secondContext.resolve({ cwd: '/workspace/second', sessionId: 'second-session' });
+        const secondResult = await secondCall;
+        expect(secondResult.isError).not.toBe(true);
+
+        expect(resolveContextOverrides).toHaveBeenCalledTimes(2);
+        expect(capturedContexts).toEqual([
+          expect.objectContaining({ cwd: '/workspace/first', sessionId: 'first-session' }),
+          expect.objectContaining({ cwd: '/workspace/second', sessionId: 'second-session' }),
+        ]);
+      } finally {
+        firstContext.resolve(undefined);
+        secondContext.resolve(undefined);
+        await client.close();
+        await server.close();
+        cleanupExecute();
+        cleanupList();
+      }
+    });
+
+    it('rejects a tool call without dispatching it when context resolution fails', async () => {
+      const bus = createBusInstance();
+      const resolverStarted = Promise.withResolvers<void>();
+      const context = Promise.withResolvers<ToolExecutionContextOverrides | undefined>();
+      const cleanupList = bus.on(ToolSubjects.list, (ctx) => {
+        ctx.setResult({
+          tools: [{ name: 'echo', description: 'Echo', toolsetName: 'test', inputSchema: { type: 'object' } }],
+          toolsets: [],
+        });
+      });
+      const execute = vi.fn();
+      const cleanupExecute = bus.on(ToolSubjects.execute, (ctx) => {
+        execute();
+        ctx.setResult({ success: true, data: ctx.payload.input });
+      });
+      const server = await createMcpServer(bus, 'fallback-session', {
+        resolveContextOverrides: () => {
+          resolverStarted.resolve();
+          return context.promise;
+        },
+      });
+      const client = new Client({ name: 'rejected-context-client', version: '1.0.0' });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+
+      try {
+        await server.connect(serverTransport);
+        await client.connect(clientTransport);
+
+        const call = client.callTool({ name: 'echo', arguments: { value: 'never' } });
+        await resolverStarted.promise;
+        expect(execute).not.toHaveBeenCalled();
+
+        context.reject(new Error('context lookup failed'));
+        await expect(call).rejects.toThrow('context lookup failed');
+        expect(execute).not.toHaveBeenCalled();
+      } finally {
+        context.resolve(undefined);
+        await client.close();
+        await server.close();
+        cleanupExecute();
+        cleanupList();
+      }
+    });
   });
 
   describe('tool registry change notifications', () => {
