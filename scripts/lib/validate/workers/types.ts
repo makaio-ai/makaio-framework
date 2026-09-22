@@ -29,7 +29,7 @@ export interface WorkerInput {
     verbose?: boolean;
     /** TypeScript config path (for typescript worker) */
     tsConfigFile?: string;
-    /** Runtime profile controlling worker sizing */
+    /** Declared validation topology (see {@link ValidateProfile}) */
     profile?: ValidateProfile;
   };
 }
