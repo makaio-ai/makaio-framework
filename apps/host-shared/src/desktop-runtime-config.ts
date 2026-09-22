@@ -10,6 +10,7 @@
 import {
   createMakaioConfigDiscovery,
   loadMakaioConfig,
+  mergePackageConfigDefaults,
   type CoreBootOptions,
   type LoadMakaioConfigOptions,
   type ParsedMakaioConfig,
@@ -28,6 +29,13 @@ export type DesktopRuntimeConfigSelectionOptions = Pick<LoadMakaioConfigOptions,
  * The config owns runtime extension discovery and runtime defaults. Existing
  * host metadata, such as framework version and host capabilities, remains on
  * the input options.
+ *
+ * Package config defaults compose key-wise, config file over host, through the
+ * runtime's single merge rule. A host that injects one key for an extension and
+ * a `makaio.config.*` file that sets another for the same extension both
+ * survive; neither replaces the other's record wholesale. This is the same
+ * composition the headless CLI performs, so the two hosts and `makaio serve`
+ * agree on what an extension's weakest configuration layer contains.
  * @param runtimeOptions - Desktop runtime options assembled from host metadata.
  * @param config - Loaded runtime config, or `undefined` when no config file was selected.
  * @returns Runtime options with config-owned discovery/defaults overlaid.
@@ -44,7 +52,10 @@ export function applyDesktopRuntimeConfig<TOptions extends Partial<CoreBootOptio
     ...runtimeOptions,
     discovery: createMakaioConfigDiscovery(config),
     launcherCommand: config.launcherCommand,
-    packageConfigDefaults: config.packageConfigDefaults,
+    packageConfigDefaults: mergePackageConfigDefaults(
+      runtimeOptions.packageConfigDefaults,
+      config.packageConfigDefaults,
+    ),
   };
 }
 

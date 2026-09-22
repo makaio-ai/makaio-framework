@@ -271,6 +271,49 @@ describe('main — remote manifest behavior', () => {
     }
   });
 
+  it('merges host-supplied and config-file package defaults key-wise instead of replacing the record', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-cli-merge-'));
+    const configPath = path.join(tempRoot, 'makaio.config.json');
+
+    try {
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          packageConfigDefaults: {
+            'account-manager': { makaioCommand: 'makaio-from-config' },
+          },
+        }),
+        'utf-8',
+      );
+
+      await main(['node', 'makaio', '--config', configPath, 'serve'], [], emptyDiscovery, {
+        boot: {
+          packageConfigDefaults: new Map([
+            ['account-manager', { makaioCommand: 'makaio-from-host', hostOnlyKey: 'from-host' }],
+            ['host-only-extension', { enabled: true }],
+          ]),
+        },
+      });
+
+      const serveCall = vi.mocked(serveMocks.serve).mock.calls[0];
+      if (serveCall === undefined) {
+        throw new Error('Expected serve to be called');
+      }
+      const [serveOptions] = serveCall;
+
+      // The config file wins the key it sets; the host's other keys and other
+      // packages survive. One merge rule, shared with the desktop hosts and the
+      // runtime's own defaults assembly.
+      expect(serveOptions.boot?.packageConfigDefaults?.get('account-manager')).toEqual({
+        makaioCommand: 'makaio-from-config',
+        hostOnlyKey: 'from-host',
+      });
+      expect(serveOptions.boot?.packageConfigDefaults?.get('host-only-extension')).toEqual({ enabled: true });
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('uses env-selected config to discover local source-tree commands', async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'makaio-cli-env-config-'));
     const extensionRoot = path.join(tempRoot, 'extensions', 'account-manager');

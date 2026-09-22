@@ -1,5 +1,6 @@
 import type {
   ExtensionContributionProcessor,
+  ExtensionOperatorConfigSource,
   ExtensionWarning,
   MakaioExtension,
   ExtensionIdentity,
@@ -125,6 +126,20 @@ export interface ExtensionCoordinatorOptions {
    */
   loadConfig?: (name: string) => Record<string, unknown> | undefined;
   /**
+   * Optional operator-owned configuration layer, consulted at every config
+   * resolution point.
+   *
+   * Sits above both descriptor/host defaults and {@link ExtensionCoordinatorOptions.loadConfig},
+   * so an explicit operator decision is never silently overwritten by a write
+   * from the storage tier. An entry the source reports as unusable fails the
+   * affected extension when it activates, under the coordinator's existing
+   * criticality rules; extensions the source says nothing about are unaffected.
+   *
+   * When absent, config resolution behaves exactly as it does without an
+   * operator layer.
+   */
+  operatorConfig?: ExtensionOperatorConfigSource;
+  /**
    * Optional callback invoked by {@link ExtensionCoordinator.startAll} to run
    * database migrations declared by loaded packages before any services start.
    *
@@ -185,7 +200,12 @@ export interface ExtensionEntry {
   storageCleanup?: () => void;
   /** Error message captured when state is `'failed'` or `'skipped'`. */
   error?: string;
-  /** Default config values from descriptor.json, merged under stored config. */
+  /**
+   * Weakest configuration layer for this extension: the descriptor's own
+   * defaults combined with any host-supplied defaults by the composition root.
+   *
+   * Both stored configuration and the operator layer override these values.
+   */
   configDefaults?: Readonly<Record<string, unknown>>;
   /**
    * Active health warnings reported by the package's `checkHealth` hook.

@@ -1,6 +1,6 @@
 /* eslint max-lines: ["error", { "max": 490, "skipBlankLines": true, "skipComments": true }] */
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionService, ExtensionToken, TrayManifest } from '@makaio/contracts';
+import type { ExtensionOperatorConfigSource, ExtensionService, ExtensionToken, TrayManifest } from '@makaio/contracts';
 import type { ExtensionWarningAction } from '@makaio/contracts/extension';
 import type { CliContribution } from '../cli/types.js';
 import { BootProgressObserver } from './boot-progress-observer.js';
@@ -115,6 +115,7 @@ export class ExtensionCoordinator {
   private readonly persistEnabled: ((name: string, enabled: boolean) => Promise<void>) | undefined;
   private readonly loadEnabled: ((name: string) => boolean | undefined) | undefined;
   private readonly loadConfig: ((name: string) => Record<string, unknown> | undefined) | undefined;
+  private readonly operatorConfig: ExtensionOperatorConfigSource | undefined;
   private readonly runMigrations: ExtensionMigrationRunner | undefined;
 
   /**
@@ -130,6 +131,7 @@ export class ExtensionCoordinator {
     this.persistEnabled = options.persistEnabled;
     this.loadEnabled = options.loadEnabled;
     this.loadConfig = options.loadConfig;
+    this.operatorConfig = options.operatorConfig;
     this.runMigrations = options.runMigrations;
     this.rpcCleanups.push(
       registerWarningActionHandler(this.bus, this.warningActionMap, options.launcherCommand ?? 'makaio'),
@@ -456,6 +458,10 @@ export class ExtensionCoordinator {
    *
    * Intended for host-owned integration code that needs a snapshot of active
    * packages after the coordinator has completed startup.
+   *
+   * Configuration is resolved in observe mode, so a configuration that has since
+   * become invalid degrades that extension's `ctx.config` to schema defaults
+   * rather than throwing and abandoning the rest of the iteration.
    * @param callback - Called once per active extension with its name, manifest,
    *   and a per-extension `NodeExtensionContext`.
    */
@@ -466,7 +472,7 @@ export class ExtensionCoordinator {
     for (const name of this.loadOrder) {
       const entry = this.entries.get(name);
       if (!entry || entry.state !== 'active') continue;
-      const config = resolveExtensionEntryConfig(contextHost, name, entry);
+      const config = resolveExtensionEntryConfig(contextHost, name, entry, 'observe');
       const pkgCtx = buildExtensionContext(contextHost, entry, config);
       callback(name, entry.pkg, pkgCtx);
     }
@@ -476,7 +482,8 @@ export class ExtensionCoordinator {
    * Invoke a callback for a single active extension with its resolved context.
    *
    * Singular complement to {@link forEachActiveExtension} for targeted operations
-   * after an extension is re-enabled.
+   * after an extension is re-enabled, and resolves configuration in the same
+   * non-throwing observe mode.
    * No-ops when the extension is not found or not in `active` state.
    * @param name - Name of the extension to target.
    * @param callback - Called with the extension name, manifest, and a
@@ -489,7 +496,7 @@ export class ExtensionCoordinator {
     const entry = this.entries.get(name);
     if (!entry || entry.state !== 'active') return;
     const contextHost = this.createExtensionContextHost();
-    const config = resolveExtensionEntryConfig(contextHost, name, entry);
+    const config = resolveExtensionEntryConfig(contextHost, name, entry, 'observe');
     const pkgCtx = buildExtensionContext(contextHost, entry, config);
     callback(name, entry.pkg, pkgCtx);
   }
@@ -536,16 +543,11 @@ export class ExtensionCoordinator {
     return await this.enqueueLifecycle(() =>
       handleSetEnabledImpl(
         {
-          bus: this.bus,
+          ...this.createExtensionContextHost(),
           db: this.db,
           entries: this.entries,
-          extensionContextBase: this.extensionContextBase,
-          loadConfig: this.loadConfig,
-          signal: this.shutdownController.signal,
-          hasActiveExtension: (n: string): boolean => this.hasActiveExtension(n),
           persistEnabled: this.persistEnabled,
           contributionProcessors: this.contributionProcessors,
-          getExtensionService: <T>(n: string) => this.getExtensionService<T>(n),
           runHealthCheck: (n) => runExtensionHealthCheck(this.createExtensionHealthHost(), n),
           emitWarningsForEntry: (n, entry) =>
             emitWarningsForEntry(
@@ -589,6 +591,7 @@ export class ExtensionCoordinator {
       bus: this.bus,
       extensionContextBase: this.extensionContextBase,
       loadConfig: this.loadConfig,
+      operatorConfig: this.operatorConfig,
       signal: this.shutdownController.signal,
       hasActiveExtension: (name: string): boolean => this.hasActiveExtension(name),
       getExtensionService: <T>(name: string): T | undefined => this.getExtensionService<T>(name),

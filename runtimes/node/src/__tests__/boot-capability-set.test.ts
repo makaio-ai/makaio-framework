@@ -16,12 +16,7 @@ import { createBusInstance } from '@makaio/bus-core';
 import type { KernelMakaioExtension } from '@makaio/kernel';
 import { ExtensionCoordinator } from '@makaio/kernel';
 import { frameworkCorePackages, SessionOrchestratorToken } from '@makaio/services-core';
-import {
-  buildRuntimeEnvironment,
-  mergePackageConfigDefaults,
-  normalizeNodeHostCapabilities,
-  selectFrameworkCorePackages,
-} from '../boot.js';
+import { buildRuntimeEnvironment, normalizeNodeHostCapabilities, selectFrameworkCorePackages } from '../boot.js';
 import { isMissingOptionalRuntimePackage } from '../optional-package.js';
 
 describe('buildRuntimeEnvironment', () => {
@@ -122,20 +117,6 @@ describe('selectFrameworkCorePackages', () => {
     expect(selectedNames).toStrictEqual(
       frameworkCorePackages.map((pkg) => pkg.name).filter((name) => name !== SessionOrchestratorToken.name),
     );
-  });
-});
-
-describe('mergePackageConfigDefaults', () => {
-  it('merges host package defaults without dropping descriptor defaults', () => {
-    const merged = mergePackageConfigDefaults(
-      new Map([['account-manager', { pollIntervalMs: 5_000 }]]),
-      new Map([['account-manager', { pollIntervalMs: 10_000, makaioCommand: 'host-cli' }]]),
-    );
-
-    expect(merged.get('account-manager')).toStrictEqual({
-      pollIntervalMs: 10_000,
-      makaioCommand: 'host-cli',
-    });
   });
 });
 

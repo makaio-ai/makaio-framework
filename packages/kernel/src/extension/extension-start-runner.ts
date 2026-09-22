@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import { getErrorString } from '@makaio/utils';
 import { ServiceSkipError } from '../service-skip-error.js';
 import type { BootProgressObserver } from './boot-progress-observer.js';
 import { runContributionProcessors } from './contribution-processor-runner.js';
@@ -59,10 +60,18 @@ export async function startExtensionEntry(
 
   host.bootProgress.starting(entry.pkg);
   transitionPackageEntry(host.bus, entry, 'initializing');
-  // Config resolution is non-throwing: loadConfig and schema parse failures
-  // are logged and represented as absent config, so startup failure isolation
-  // remains owned by storage/create/init below.
-  const config = resolveExtensionEntryConfig(host.contextHost, name, entry);
+  // Config resolution fails only when an operator-supplied layer cannot be
+  // honoured; loadConfig and stored-config parse failures stay non-throwing and
+  // are represented as absent config. An operator failure is an activation
+  // failure and takes the same criticality path as storage/create/init below.
+  let config: unknown;
+  try {
+    config = resolveExtensionEntryConfig(host.contextHost, name, entry, 'activate');
+  } catch (err) {
+    failEntry(host, name, entry, getErrorString(err));
+    if (entry.pkg.critical) throw err;
+    return;
+  }
 
   if (!registerEntryStorage(host, name, entry, config)) return;
 

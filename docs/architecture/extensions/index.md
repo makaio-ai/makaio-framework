@@ -194,6 +194,29 @@ The base context is host-agnostic. Node-based hosts provide `NodeExtensionContex
 extensions that read OS or filesystem fields should type their factories against that
 explicit host context.
 
+### Config resolution
+
+`ctx.config` is the result of composing four layers through the extension's
+`configSchema` (if declared), lowest to highest:
+
+1. **`descriptor.json` `config.defaults`** — the extension author's baseline.
+2. **`packageConfigDefaults`** — values from the runtime config file
+   (`makaio.config.*`) or host composition root.
+3. **Stored settings records** — supplied by a host that wires an
+   `ExtensionConfigProvider`; no host ships one today, so this layer is currently
+   inert; the kernel contract is what is specified here.
+4. **Operator config file** — `$MAKAIO_HOME/config/extensions/<encoded-name>.json`;
+   read once at boot; highest priority.
+
+Merging is shallow at one level: a value at layer 4 replaces the entire
+corresponding top-level key from lower layers rather than merging recursively.
+Schema validation happens after all layers are composed; an error caused by the
+operator file fails that extension's activation rather than falling back to schema
+defaults.
+
+See [Configuration](../../configuration.md) for the file format, name encoding,
+diagnostics, and the relation between operator files and runtime config files.
+
 ---
 
 ## Surface types

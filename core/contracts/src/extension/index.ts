@@ -134,6 +134,18 @@ export { parseExtensionConfig } from './parse-extension-config.js';
 export { CapabilityTokenSchema } from './capability-token.js';
 export type { CapabilityToken, CapabilityTokenMap } from './capability-token.js';
 export type { ExtensionConfigProvider } from './extension-config-provider.js';
+export {
+  decodeExtensionOperatorConfigName,
+  encodeExtensionOperatorConfigName,
+  EXTENSION_OPERATOR_CONFIG_NAME_UNRESERVED,
+} from './extension-operator-config-name.js';
+export type {
+  ExtensionOperatorConfigEntry,
+  ExtensionOperatorConfigFailure,
+  ExtensionOperatorConfigFailureReason,
+  ExtensionOperatorConfigSource,
+  ExtensionOperatorConfigValue,
+} from './extension-operator-config.js';
 export { getBootstrapAssetKey } from './contributions/index.js';
 export type {
   ActionCategory,

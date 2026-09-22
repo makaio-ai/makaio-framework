@@ -43,7 +43,19 @@ const runtimeNodeMocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock('@makaio/runtime-node', () => runtimeNodeMocks);
+// The runtime's package-config-defaults merge rule is a pure function and the
+// single implementation in the tree, so it is taken from the real module rather
+// than restated here — a local copy would let the two drift apart unnoticed. It
+// comes from the narrow `boot-config` subpath rather than from the barrel: the
+// barrel is the runtime composition root, and importing it here would pull the
+// kernel, the services graph, and the worker pools into a unit test of one pure
+// function.
+vi.mock('@makaio/runtime-node', async () => {
+  const { mergePackageConfigDefaults } = await vi.importActual<typeof import('@makaio/runtime-node/boot-config')>(
+    '@makaio/runtime-node/boot-config',
+  );
+  return { ...runtimeNodeMocks, mergePackageConfigDefaults };
+});
 
 // ---------------------------------------------------------------------------
 // Imports (after mocks are registered)

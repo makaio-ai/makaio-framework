@@ -28,7 +28,12 @@ export type {
   RuntimeCapability,
   RuntimeEnvironment,
 } from './extension/index.js';
-export { ExtensionCoordinator, coalesceExtensionOverrides, filterEligibleExtensions } from './extension/index.js';
+export {
+  ExtensionCoordinator,
+  ExtensionOperatorConfigError,
+  coalesceExtensionOverrides,
+  filterEligibleExtensions,
+} from './extension/index.js';
 
 export {
   ComponentStateSchema,

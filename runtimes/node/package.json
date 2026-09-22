@@ -15,6 +15,7 @@
   "types": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./boot-config": "./src/boot-config.ts",
     "./client-binary-strategy-dependencies": "./src/client-binary-strategy-dependencies.ts",
     "./extension-discovery": "./src/extension-discovery.ts",
     "./extension-validation": "./src/extension-validation.ts",
@@ -94,6 +95,10 @@
       ".": {
         "types": "./dist/index.d.ts",
         "default": "./dist/index.mjs"
+      },
+      "./boot-config": {
+        "types": "./dist/boot-config.d.ts",
+        "default": "./dist/boot-config.mjs"
       },
       "./client-binary-strategy-dependencies": {
         "types": "./dist/client-binary-strategy-dependencies.d.ts",

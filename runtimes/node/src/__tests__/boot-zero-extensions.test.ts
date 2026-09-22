@@ -47,6 +47,10 @@ import { bootMakaioRuntimeCore, createCompositeWorkspaceRootResolver, type Makai
 import { CLI_DETECTION_PACKAGE_NAME } from '../cli-detection/package.js';
 import { ExplicitDescriptorDiscovery, type DiscoveredExtension } from '../extension-discovery.js';
 import { RuntimeSubjects } from '../bus/runtime/namespace.js';
+import {
+  createExtensionOperatorConfigSnapshot,
+  resolveExtensionOperatorConfigDir,
+} from '../extension-operator-config.js';
 
 const { homedirMock } = vi.hoisted(() => ({
   homedirMock: vi.fn<() => string>(),
@@ -303,6 +307,45 @@ async function filesystemDescriptorFixture(
     extensionPath,
     source: 'local',
   };
+}
+
+/**
+ * Build a descriptor whose server entrypoint is an already-constructed package.
+ *
+ * Keeps config fixtures in the test file rather than in an on-disk ESM module,
+ * so a Zod `configSchema` can be declared inline.
+ * @param extensionPath - Directory the descriptor claims as its package root.
+ * @param pkg - Package the descriptor's server entrypoint resolves to.
+ * @returns Discovered extension the explicit discovery strategy can return.
+ */
+function preloadedDescriptorFixture(extensionPath: string, pkg: KernelMakaioExtension): DiscoveredExtension {
+  return {
+    descriptor: {
+      name: pkg.name,
+      displayName: pkg.displayName,
+      version: pkg.version,
+      makaio: { framework: '>=1.0.0' },
+      entrypoints: { server: true },
+    },
+    extensionPath,
+    source: 'local',
+    preloadedModule: { default: pkg },
+  };
+}
+
+/**
+ * Write one operator config file into a Makaio home, creating its directory.
+ * @param makaioHome - Makaio home the runtime will boot against.
+ * @param fileName - Operator config file name, including its `.json` suffix.
+ * @param content - Raw content, written verbatim so malformed input stays malformed.
+ * @returns Absolute path to the written file.
+ */
+async function writeOperatorConfigFile(makaioHome: string, fileName: string, content: string): Promise<string> {
+  const directory = resolveExtensionOperatorConfigDir(makaioHome);
+  await fs.mkdir(directory, { recursive: true });
+  const filePath = path.join(directory, fileName);
+  await fs.writeFile(filePath, content, 'utf-8');
+  return filePath;
 }
 
 // These integration cases perform real identity/config/SQLite initialization
@@ -956,5 +999,164 @@ export default {
     expect(identityResponse.identity).toBe(machineIdentity);
     expect(runtime.machineId).toBe('lan-machine-id');
     expect(setE2EAuthSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('boots without a diagnostic and without creating anything when the home has no operator config', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      runtime = await bootMakaioRuntimeCore(new FakeTransportProvider(), 0, '127.0.0.1', {
+        makaioHome: tempHome,
+        discovery: new ExplicitDescriptorDiscovery([]),
+        frameworkVersion: '3.0.0',
+        hostCapabilities: ['node'],
+      });
+
+      expect(warnSpy.mock.calls.map((call) => String(call[0]))).not.toContainEqual(
+        expect.stringContaining('operator config'),
+      );
+      await expect(fs.access(resolveExtensionOperatorConfigDir(tempHome))).rejects.toThrow();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('hands an operator config file to the extension it names, above host-supplied defaults', async () => {
+    let observedConfig: unknown;
+    const pkg: KernelMakaioExtension = {
+      name: 'operator-config-fixture',
+      displayName: 'Operator Config Fixture',
+      version: '1.0.0',
+      configSchema: z.object({
+        port: z.number().default(1),
+        label: z.string().default('descriptor'),
+      }),
+      create(ctx) {
+        observedConfig = ctx.config;
+        return {};
+      },
+    };
+    await writeOperatorConfigFile(tempHome, 'operator-config-fixture.json', JSON.stringify({ port: 6299 }));
+
+    runtime = await bootMakaioRuntimeCore(new FakeTransportProvider(), 0, '127.0.0.1', {
+      makaioHome: tempHome,
+      discovery: new ExplicitDescriptorDiscovery([preloadedDescriptorFixture(tempHome, pkg)]),
+      frameworkVersion: '3.0.0',
+      hostCapabilities: ['node'],
+      packageConfigDefaults: new Map([['operator-config-fixture', { port: 1, label: 'host-default' }]]),
+    });
+
+    // The operator layer wins for the key it declares and leaves the others to
+    // the layer beneath it.
+    expect(observedConfig).toEqual({ port: 6299, label: 'host-default' });
+  });
+
+  it('fails only the extension whose operator config file is malformed', async () => {
+    const pkg: KernelMakaioExtension = {
+      name: 'operator-config-broken',
+      displayName: 'Operator Config Broken',
+      version: '1.0.0',
+      configSchema: z.object({ port: z.number().default(1) }),
+      create() {
+        throw new Error('create must not run for an extension with an unusable operator config');
+      },
+    };
+    const filePath = await writeOperatorConfigFile(tempHome, 'operator-config-broken.json', '{ "port": }');
+
+    runtime = await bootMakaioRuntimeCore(new FakeTransportProvider(), 0, '127.0.0.1', {
+      makaioHome: tempHome,
+      discovery: new ExplicitDescriptorDiscovery([preloadedDescriptorFixture(tempHome, pkg)]),
+      frameworkVersion: '3.0.0',
+      hostCapabilities: ['node'],
+    });
+
+    const { extensions } = await MakaioBus.request(ExtensionSubjects.list, {});
+    const failed = extensions.find((entry) => entry.name === 'operator-config-broken');
+
+    expect(failed?.state).toBe('failed');
+    expect(failed?.error).toContain(filePath);
+    expect(extensions.filter((entry) => entry.state === 'active').map((entry) => entry.name)).toEqual(
+      expect.arrayContaining([...EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES]),
+    );
+  });
+
+  it('warns once for an operator config file naming an extension that is not loaded', async () => {
+    const filePath = await writeOperatorConfigFile(tempHome, 'never-installed.json', JSON.stringify({ port: 1 }));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      runtime = await bootMakaioRuntimeCore(new FakeTransportProvider(), 0, '127.0.0.1', {
+        makaioHome: tempHome,
+        discovery: new ExplicitDescriptorDiscovery([]),
+        frameworkVersion: '3.0.0',
+        hostCapabilities: ['node'],
+      });
+
+      expect(warnSpy.mock.calls.map((call) => String(call[0])).filter((message) => message.includes(filePath))).toEqual(
+        [`[boot] Operator config ${filePath} names extension "never-installed", which is not loaded; it has no effect`],
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('warns for an operator config file naming a loaded extension that declares no config schema', async () => {
+    const pkg: KernelMakaioExtension = {
+      name: 'operator-config-schemaless',
+      displayName: 'Operator Config Schemaless',
+      version: '1.0.0',
+    };
+    const filePath = await writeOperatorConfigFile(
+      tempHome,
+      'operator-config-schemaless.json',
+      JSON.stringify({ port: 1 }),
+    );
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      runtime = await bootMakaioRuntimeCore(new FakeTransportProvider(), 0, '127.0.0.1', {
+        makaioHome: tempHome,
+        discovery: new ExplicitDescriptorDiscovery([preloadedDescriptorFixture(tempHome, pkg)]),
+        frameworkVersion: '3.0.0',
+        hostCapabilities: ['node'],
+      });
+
+      expect(warnSpy.mock.calls.map((call) => String(call[0])).filter((message) => message.includes(filePath))).toEqual(
+        [
+          `[boot] Operator config ${filePath} names extension "operator-config-schemaless", which declares no config schema; it has no effect`,
+        ],
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('uses a host-injected operator config layer instead of reading the home', async () => {
+    let observedConfig: unknown;
+    const pkg: KernelMakaioExtension = {
+      name: 'operator-config-injected',
+      displayName: 'Operator Config Injected',
+      version: '1.0.0',
+      configSchema: z.object({ port: z.number().default(1) }),
+      create(ctx) {
+        observedConfig = ctx.config;
+        return {};
+      },
+    };
+    // A file on disk that the injected layer must shadow, proving the option is
+    // the source of truth rather than an additional layer.
+    await writeOperatorConfigFile(tempHome, 'operator-config-injected.json', JSON.stringify({ port: 1111 }));
+
+    runtime = await bootMakaioRuntimeCore(new FakeTransportProvider(), 0, '127.0.0.1', {
+      makaioHome: tempHome,
+      discovery: new ExplicitDescriptorDiscovery([preloadedDescriptorFixture(tempHome, pkg)]),
+      frameworkVersion: '3.0.0',
+      hostCapabilities: ['node'],
+      operatorConfig: createExtensionOperatorConfigSnapshot(
+        new Map([['operator-config-injected', { kind: 'config', source: 'host', config: { port: 2222 } }]]),
+      ),
+    });
+
+    expect(observedConfig).toEqual({ port: 2222 });
   });
 });
