@@ -166,7 +166,7 @@ describe('BaseStreamConnector terminal initialization', () => {
     expect(connector.currentSession()).toBeUndefined();
   });
 
-  it('rejects a snapshotted turn handler once close takes the terminal latch', async () => {
+  it('keeps a turn handler that completed before close takes the terminal latch', async () => {
     const hostBus = createTestBusInstance();
     await TestNamespace.scopedBus(hostBus.getContext());
     let releaseFirstHandler: (() => void) | undefined;
@@ -188,6 +188,7 @@ describe('BaseStreamConnector terminal initialization', () => {
       cwd: process.cwd(),
     });
     await connector.initialize();
+    const turnStarted = connector.onceProcessingStateChanged();
 
     const emitting = (await TestNamespace.scopedBus(hostBus.getContext())).emit(
       TestNamespace.subjects.turn.turn_started,
@@ -200,11 +201,14 @@ describe('BaseStreamConnector terminal initialization', () => {
       },
     );
     await firstHandlerStarted;
+    await turnStarted;
+    expect(connector.getProcessingState()).toBe('turn_started');
+
     const closing = connector.close();
     releaseFirstHandler?.();
 
     await Promise.all([emitting, closing]);
-    expect(connector.getProcessingState()).toBe('idle');
+    expect(connector.getProcessingState()).toBe('turn_started');
   });
 
   it('waits for an active turn handler without letting it mutate after close', async () => {

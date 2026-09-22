@@ -116,11 +116,11 @@ export class ClientRuntimeService extends BaseService {
   /**
    * Clear all in-memory state on destroy.
    */
-  protected override onDestroy(): void {
+  protected override async onDestroy(): Promise<void> {
+    await this.runtimeRegistry.clear();
     this.latestSnapshots.clear();
     this.activeIdentities.clear();
     this.accountRegistry.clear();
-    this.runtimeRegistry.clear();
   }
 
   /**
@@ -180,6 +180,9 @@ export class ClientRuntimeService extends BaseService {
   private async handleRuntimeObserve(
     ctx: ContextForSubjectDefinition<typeof ClientSubjects.runtime.observe>,
   ): Promise<void> {
+    if (!this.initialized) {
+      throw new Error('client.runtime.observe: service is stopping');
+    }
     const { payload } = ctx;
 
     // Defense-in-depth: the Zod schema has a .refine() for this invariant, but
@@ -198,6 +201,15 @@ export class ClientRuntimeService extends BaseService {
 
     const { record, ...result } = await this.runtimeRegistry.upsertRuntime(payload);
 
+    if (!this.initialized) {
+      ctx.setResult({
+        clientRuntimeId: result.clientRuntimeId,
+        created: result.created,
+        promoted: result.promoted,
+      });
+      return;
+    }
+
     // Mark adapter-owned provenance when the observation comes from the
     // adapter layer. This populates the in-memory set that backs
     // `hasAdapterSession` / `isAdapterManaged`, ensuring only adapter-layer
@@ -207,8 +219,10 @@ export class ClientRuntimeService extends BaseService {
       this.runtimeRegistry.markAdapterOwned(payload.adapterSessionId, payload.clientId);
     }
 
-    if (result.created || result.promoted) {
-      await this.bus.emit(ClientSubjects.runtime.started, {
+    // TODO(FACT-360): A local listener rejection currently prevents transport fanout.
+    // Use the explicit delivery policy once the bus-core contract is published.
+    void this.bus
+      .emit(ClientSubjects.runtime.observed, {
         clientRuntimeId: record.clientRuntimeId,
         clientId: record.clientId,
         status: record.status,
@@ -222,7 +236,34 @@ export class ClientRuntimeService extends BaseService {
         cwd: record.cwd,
         argv: record.argv,
         metadata: record.metadata,
+        updatedAt: record.updatedAt,
+      })
+      .catch((error: unknown) => {
+        console.warn('[ClientRuntimeService] Failed to emit client.runtime.observed:', error);
       });
+
+    // TODO(FACT-358): A callback from an older lifecycle can resume after a clean re-init.
+    // Guard this emission with a lifecycle generation, not initialized alone.
+    if ((result.created || result.promoted) && this.initialized) {
+      await this.bus
+        .emit(ClientSubjects.runtime.started, {
+          clientRuntimeId: record.clientRuntimeId,
+          clientId: record.clientId,
+          status: record.status,
+          source: payload.source,
+          observedAt: payload.observedAt,
+          supervisorSessionId: record.supervisorSessionId,
+          pid: record.pid,
+          parentPid: record.parentPid,
+          adapterSessionId: record.adapterSessionId,
+          sessionId: record.sessionId,
+          cwd: record.cwd,
+          argv: record.argv,
+          metadata: record.metadata,
+        })
+        .catch((error: unknown) => {
+          console.warn('[ClientRuntimeService] Failed to emit client.runtime.started:', error);
+        });
     }
 
     ctx.setResult({

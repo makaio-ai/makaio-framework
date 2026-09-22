@@ -130,6 +130,40 @@ describe('bus.intercept()', () => {
   });
 
   describe('interceptor execution', () => {
+    it('admits handlers before emit yields through synchronous interceptors', async () => {
+      const releaseHandler = Promise.withResolvers<void>();
+      let handlerInvoked = false;
+      MakaioBus.intercept(TestSubjects.action, () => {});
+      MakaioBus.on(TestSubjects.action, async () => {
+        handlerInvoked = true;
+        await releaseHandler.promise;
+      });
+
+      const emitted = MakaioBus.emit(TestSubjects.action, { value: 'test' });
+
+      expect(handlerInvoked).toBe(true);
+      releaseHandler.resolve();
+      await emitted;
+    });
+
+    it('defers handlers until an asynchronous interceptor settles', async () => {
+      const releaseInterceptor = Promise.withResolvers<void>();
+      let handlerInvoked = false;
+      MakaioBus.intercept(TestSubjects.action, async () => {
+        await releaseInterceptor.promise;
+      });
+      MakaioBus.on(TestSubjects.action, () => {
+        handlerInvoked = true;
+      });
+
+      const emitted = MakaioBus.emit(TestSubjects.action, { value: 'test' });
+
+      expect(handlerInvoked).toBe(false);
+      releaseInterceptor.resolve();
+      await emitted;
+      expect(handlerInvoked).toBe(true);
+    });
+
     it('should run interceptors before handlers', async () => {
       const order: string[] = [];
 

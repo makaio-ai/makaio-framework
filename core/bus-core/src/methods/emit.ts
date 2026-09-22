@@ -70,14 +70,21 @@ async function executeHandlers(
   const promises: Promise<unknown>[] = [];
 
   for (const handler of handlers) {
+    let handlerResult: void | Promise<void>;
+    try {
+      // Start each handler before emit yields so it can synchronously install a
+      // dependent subscription. Its asynchronous completion remains parallel
+      // with every sibling and is awaited below.
+      handlerResult = handler(eventContext);
+    } catch (error) {
+      handlerResult = Promise.reject(error);
+    }
     promises.push(
-      Promise.resolve()
-        .then(() => handler(eventContext))
-        .catch((error) => {
-          const logPrefix = correlationId ? `[${correlationId}][${messageId}]` : `[${messageId}]`;
-          console.error(`${logPrefix} Error in event handler for "${fullSubjectKey}":`, error);
-          throw error;
-        }),
+      Promise.resolve(handlerResult).catch((error) => {
+        const logPrefix = correlationId ? `[${correlationId}][${messageId}]` : `[${messageId}]`;
+        console.error(`${logPrefix} Error in event handler for "${fullSubjectKey}":`, error);
+        throw error;
+      }),
     );
   }
 
@@ -87,8 +94,11 @@ async function executeHandlers(
 /**
  * Emit an event to all registered handlers.
  *
- * Local handlers execute in parallel and are awaited before this resolves, so an
- * awaited emit orders subsequent work after the handlers' effects. Handler
+ * Local handlers are invoked synchronously after a fully synchronous
+ * interceptor chain completes, then execute in parallel and are awaited before
+ * this resolves, so an awaited emit orders subsequent work after the handlers'
+ * effects. An asynchronous interceptor defers handler admission until it
+ * settles; a stopped chain does not invoke handlers. Handler
  * errors are logged and never stop sibling handlers, but they reject the
  * returned promise.
  * @param context - Makaio bus context

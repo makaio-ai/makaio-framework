@@ -6165,10 +6165,11 @@ __metadata:
     "@makaio/services-core": "workspace:*"
     "@makaio/storage-drizzle": "workspace:*"
     "@makaio/test-utils": "workspace:*"
+    "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     drizzle-orm: "npm:0.45.2"
     tsdown: "npm:0.22.0"
-    tsx: "npm:^4.23.1"
+    tsx: "npm:^4.22.3"
     vitest: "npm:4.1.10"
     zod: "npm:4.4.3"
   languageName: unknown

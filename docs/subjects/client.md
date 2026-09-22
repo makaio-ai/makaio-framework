@@ -39,6 +39,7 @@ next: false
 | `resolveBinary` | [`client.resolveBinary`](#client.resolveBinary) | rpc | [`binary-resolution.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/binary-resolution.ts) |
 | `runtime.isAdapterManaged` | [`client.runtime.isAdapterManaged`](#client.runtime.isAdapterManaged) | rpc | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/runtime-observation.ts) |
 | `runtime.observe` | [`client.runtime.observe`](#client.runtime.observe) | rpc | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/runtime-observation.ts) |
+| `runtime.observed` | [`client.runtime.observed`](#client.runtime.observed) | event | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/runtime-observation.ts) |
 | `runtime.resolveBySupervisorSessionId` | [`client.runtime.resolveBySupervisorSessionId`](#client.runtime.resolveBySupervisorSessionId) | rpc | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/runtime-observation.ts) |
 | `runtime.started` | [`client.runtime.started`](#client.runtime.started) | event | [`runtime-observation.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/runtime-observation.ts) |
 | `scan` | [`client.scan`](#client.scan) | rpc | [`schemas.ts`](https://github.com/makaio-ai/makaio-framework/blob/develop/core/contracts/src/client/schemas.ts) |
@@ -507,13 +508,44 @@ Type: Request (RPC)
 | `created` | `boolean` | yes |
 | `promoted` | `boolean` | yes |
 
+### <a id="client.runtime.observed"></a>`client.runtime.observed` (event)
+
+Snapshot emitted after every accepted `client.runtime.observe` request.
+
+Each payload is a committed registry snapshot. `updatedAt` is assigned by
+the runtime registry and orders mutations of this runtime independently of
+the observation producer's clock. Consumers can compare snapshots from one
+runtime without trusting `observedAt` ordering; it is not a global ordering
+across runtimes or a durable-storage acknowledgement.
+
+Subject: `client.runtime.observed`
+Type: Event
+
+| Field | Type | Required |
+|-------|------|----------|
+| `adapterSessionId` | `string \| undefined` | no |
+| `argv` | `string[] \| undefined` | no |
+| `clientId` | `string` | yes |
+| `clientRuntimeId` | `string` | yes |
+| `cwd` | `string \| undefined` | no |
+| `metadata` | `Record<string, unknown> \| undefined` | no |
+| `observedAt` | `number` | yes |
+| `parentPid` | `number \| undefined` | no |
+| `pid` | `number \| undefined` | no |
+| `sessionId` | `string \| undefined` | no |
+| `source` | `{ layer: "adapter" \| "supervisor" \| "client-hook" \| "statusline" \| "cli-wrapper"; producer: string; }` | yes |
+| `status` | `"started" \| "observed"` | yes |
+| `supervisorSessionId` | `string \| undefined` | no |
+| `updatedAt` | `number` | yes |
+
 ### <a id="client.runtime.resolveBySupervisorSessionId"></a>`client.runtime.resolveBySupervisorSessionId` (rpc)
 
 Request and response schemas for `client.runtime.resolveBySupervisorSessionId`.
 
-Reads the correlation recorded for a supervisor session ID and client ID.
-This is not a current process liveness check and does not authorize access
-to the runtime.
+Reads the committed registry snapshot for a supervisor session ID and client
+ID. This is not a current process liveness check, does not authorize access
+to the runtime, and does not imply durable storage when no storage handler
+is available.
 
 Subject: `client.runtime.resolveBySupervisorSessionId`
 Type: Request (RPC)
@@ -529,7 +561,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `runtime` | `{ clientId: string; supervisorSessionId: string; adapterSessionId?: string \| undefined; sessionId?: string \| undefined; } \| null` | yes |
+| `runtime` | `{ clientId: string; supervisorSessionId: string; updatedAt: number; adapterSessionId?: string \| undefined; sessionId?: string \| undefined; } \| null` | yes |
 
 ### <a id="client.runtime.started"></a>`client.runtime.started` (event)
 

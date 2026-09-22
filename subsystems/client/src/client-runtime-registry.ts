@@ -19,6 +19,7 @@
 import { randomUUID } from 'node:crypto';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ClientRuntimeObserveRequest } from '@makaio/contracts/client';
+import { SerialLane } from '@makaio/utils';
 import type { ClientRuntimeRecord, RuntimeUpsertResult } from './client-runtime-registry-types.js';
 import { RuntimeMap } from './storage/runtime-map.js';
 import { ClientRuntimeStorageSubjects } from './storage/runtime-storage-namespace.js';
@@ -198,6 +199,7 @@ function rotateCodexRootAfterClear(record: ClientRuntimeRecord, input: ClientRun
  */
 export class ClientRuntimeRegistry {
   private readonly runtimeMap = new RuntimeMap();
+  private readonly mutationLane = new SerialLane();
   private readonly bus: IMakaioBus | undefined;
   private latestCreatedAt = 0;
 
@@ -217,6 +219,10 @@ export class ClientRuntimeRegistry {
    * no bus is wired in, this is a no-op.
    */
   public async loadFromStorage(): Promise<void> {
+    await this.mutationLane.run(() => this.loadFromStorageInLane());
+  }
+
+  private async loadFromStorageInLane(): Promise<void> {
     if (!this.bus) {
       return;
     }
@@ -246,6 +252,10 @@ export class ClientRuntimeRegistry {
    * @returns Upsert result with the stable `clientRuntimeId` and change flags
    */
   public async upsertRuntime(input: ClientRuntimeObserveRequest): Promise<RuntimeUpsertResult> {
+    return this.mutationLane.run(() => this.upsertRuntimeInLane(input));
+  }
+
+  private async upsertRuntimeInLane(input: ClientRuntimeObserveRequest): Promise<RuntimeUpsertResult> {
     // Priority-based lookup: returns the strongest single match. When multiple
     // evidence fields point to different records, the strongest wins and weaker
     // records remain unreferenced. Multi-match merging is a v2 concern.
@@ -257,38 +267,38 @@ export class ClientRuntimeRegistry {
     );
 
     if (existing) {
-      const priorRecord = cloneRuntimeRecord(existing);
-      assertSupervisorAdapterSessionIdentity(existing, input);
+      const candidate = cloneRuntimeRecord(existing);
+      assertSupervisorAdapterSessionIdentity(candidate, input);
 
-      const rotatesCodexRoot = isCodexRootClearTransition(existing, input);
+      const rotatesCodexRoot = isCodexRootClearTransition(candidate, input);
       if (rotatesCodexRoot) {
-        rotateCodexRootAfterClear(existing, input);
+        rotateCodexRootAfterClear(candidate, input);
       }
 
-      const wasObserved = existing.status === 'observed';
+      const wasObserved = candidate.status === 'observed';
       const willStart = wasObserved && evidenceWarrantsStarted(input);
-      const fieldsChanged = enrichRecord(existing, input);
-      const refreshObserved = wasObserved && input.observedAt > existing.observedAt;
+      const fieldsChanged = enrichRecord(candidate, input);
+      const refreshObserved = wasObserved && input.observedAt > candidate.observedAt;
 
       if (willStart) {
-        existing.status = 'started';
+        candidate.status = 'started';
       }
 
       if (rotatesCodexRoot || fieldsChanged || willStart || refreshObserved) {
-        existing.updatedAt = nextUpdatedAt(existing.updatedAt);
+        candidate.updatedAt = nextUpdatedAt(candidate.updatedAt);
         if (refreshObserved) {
-          existing.observedAt = input.observedAt;
+          candidate.observedAt = input.observedAt;
         }
-        // Re-register in map to update secondary indexes for any new fields
-        this.runtimeMap.set(existing, priorRecord);
-        await this.persistRecord(existing);
+        await this.persistRecord(candidate);
+        // Commit the persisted candidate and update indexes from the prior snapshot.
+        this.runtimeMap.set(candidate, existing);
       }
 
       return {
-        clientRuntimeId: existing.clientRuntimeId,
+        clientRuntimeId: candidate.clientRuntimeId,
         created: false,
         promoted: willStart,
-        record: cloneRuntimeRecord(existing),
+        record: cloneRuntimeRecord(candidate),
       };
     }
 
@@ -313,8 +323,8 @@ export class ClientRuntimeRegistry {
       updatedAt: now,
     };
 
-    this.runtimeMap.set(newRecord);
     await this.persistRecord(newRecord);
+    this.runtimeMap.set(newRecord);
 
     return {
       clientRuntimeId,
@@ -354,6 +364,7 @@ export class ClientRuntimeRegistry {
     supervisorSessionId: string;
     adapterSessionId?: string;
     sessionId?: string;
+    updatedAt: number;
   } | null {
     const record = this.runtimeMap.findByEvidence(supervisorSessionId, undefined, undefined, clientId);
     if (record === undefined || record.clientId !== clientId || record.supervisorSessionId !== supervisorSessionId) {
@@ -365,6 +376,7 @@ export class ClientRuntimeRegistry {
       supervisorSessionId: record.supervisorSessionId,
       ...(record.adapterSessionId !== undefined && { adapterSessionId: record.adapterSessionId }),
       ...(record.sessionId !== undefined && { sessionId: record.sessionId }),
+      updatedAt: record.updatedAt,
     };
   }
 
@@ -409,9 +421,12 @@ export class ClientRuntimeRegistry {
    *
    * Does not touch persisted records — the storage layer is authoritative
    * across restarts. Call {@link loadFromStorage} to re-hydrate.
+   * @returns Promise that resolves after already-admitted mutations drain and memory is cleared.
    */
-  public clear(): void {
-    this.runtimeMap.clear();
+  public async clear(): Promise<void> {
+    await this.mutationLane.run(async () => {
+      this.runtimeMap.clear();
+    });
   }
 
   /**
@@ -440,6 +455,9 @@ export class ClientRuntimeRegistry {
     if (!this.bus) {
       return;
     }
-    await this.bus.requestOptional(ClientRuntimeStorageSubjects.upsert, cloneRuntimeRecord(record));
+    const result = await this.bus.requestOptional(ClientRuntimeStorageSubjects.upsert, cloneRuntimeRecord(record));
+    if (result.handled && !result.data.success) {
+      throw new Error(`client runtime storage rejected persistence for '${record.clientRuntimeId}'`);
+    }
   }
 }
