@@ -15,7 +15,7 @@ const baseCtx: Omit<ExtensionContext<IMakaioBus>, 'platform'> = {
   identity: Object.freeze({ extensionName: 'account-manager' }) as ExtensionContext<IMakaioBus>['identity'],
   homedir: '/tmp/test-home',
   makaioHome: path.join('/tmp/test-home', '.makaio'),
-  dataDir: path.join('/tmp/test-home', '.makaio', 'account-manager'),
+  dataDir: path.join('/tmp/test-home', '.makaio', 'data', 'account-manager'),
   username: 'testuser',
   machineId: 'test-machine-id',
   config: { makaioCommand: 'makaio-test' },

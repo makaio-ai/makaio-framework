@@ -3,11 +3,7 @@ import * as fs from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import {
-  encodeExtensionOperatorConfigName,
-  type ExtensionOperatorConfigEntry,
-  type JsonValue,
-} from '@makaio/contracts';
+import { encodeExtensionNameAsPathSegment, type ExtensionOperatorConfigEntry, type JsonValue } from '@makaio/contracts';
 import {
   MAX_OPERATOR_CONFIG_BYTES,
   createExtensionOperatorConfigSnapshot,
@@ -24,7 +20,15 @@ const CAN_DENY_DIRECTORY_ACCESS = process.platform !== 'win32' && process.getuid
 const CAN_CREATE_FIFO = process.platform !== 'win32';
 
 /** File names that survive the `.json` check but decode to no extension name. */
-const UNDECODABLE_FILE_NAMES = ['%40acme%2fweather.json', 'gateway!.json', '%zz.json'];
+const UNDECODABLE_FILE_NAMES = [
+  '%40acme%2fweather.json',
+  'gateway!.json',
+  '%zz.json',
+  // A literal uppercase letter is never part of a canonical stem: the codec
+  // escapes every uppercase byte, so `Gateway.json` is not the encoded form
+  // of any extension name — `Gateway`'s file is `%47ateway.json`.
+  'Gateway.json',
+];
 
 /** Secret-looking value written into fixtures to prove diagnostics never echo file content. */
 const SENTINEL_VALUE = 'never-echo-this-token';
@@ -35,7 +39,7 @@ const SENTINEL_VALUE = 'never-echo-this-token';
  * @returns That name's file stem, never the string `undefined`.
  */
 function stemOf(name: string): string {
-  const stem = encodeExtensionOperatorConfigName(name);
+  const stem = encodeExtensionNameAsPathSegment(name);
   if (stem === undefined) throw new Error(`expected "${name}" to be addressable`);
   return stem;
 }
@@ -407,26 +411,20 @@ describe('extension operator config loader', () => {
     expect(warnings()).toEqual([]);
   });
 
-  it('keeps both files whose names differ only in case and reports that they are not portable', async (ctx) => {
-    await writeConfigFile('Gateway.json', JSON.stringify({ port: 1 }));
-    await writeConfigFile('gateway.json', JSON.stringify({ port: 2 }));
-    if ((await fs.readdir(configDir)).length < 2) {
-      // A case-insensitive filesystem stored one file, not two, so the pair this
-      // warning is about cannot exist here. A name/file case mismatch on such a
-      // filesystem is a different failure, reported as "not loaded" instead.
-      ctx.skip('Requires a case-sensitive filesystem');
-      return;
-    }
+  it('accepts both a file and a case-differing extension name on distinct, non-colliding stems', async () => {
+    // `Gateway` and `gateway` used to share a case-insensitive-only distinction
+    // that this loader warned about. The codec now escapes every uppercase
+    // byte, so `Gateway`'s canonical stem is `%47ateway`, not `Gateway`: the
+    // two files below never collide, on any filesystem, and there is nothing
+    // to warn about.
+    await writeConfigFile(`${stemOf('Gateway')}.json`, JSON.stringify({ port: 1 }));
+    await writeConfigFile(`${stemOf('gateway')}.json`, JSON.stringify({ port: 2 }));
 
     const snapshot = await loadExtensionOperatorConfig({ makaioHome });
 
     expect(snapshot.get('Gateway')).toMatchObject({ kind: 'config', config: { port: 1 } });
     expect(snapshot.get('gateway')).toMatchObject({ kind: 'config', config: { port: 2 } });
-    const [collision] = warnings();
-    expect(warnings()).toHaveLength(1);
-    expect(collision).toContain('Gateway.json');
-    expect(collision).toContain('gateway.json');
-    expect(collision).toContain('differ only in case');
+    expect(warnings()).toEqual([]);
   });
 
   it('does not observe a file rewritten after the snapshot was taken', async () => {

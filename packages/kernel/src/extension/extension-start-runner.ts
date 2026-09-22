@@ -5,6 +5,7 @@ import type { BootProgressObserver } from './boot-progress-observer.js';
 import { runContributionProcessors } from './contribution-processor-runner.js';
 import {
   buildExtensionContext,
+  checkExtensionNameAddressable,
   type ExtensionContextHost,
   resolveExtensionEntryConfig,
 } from './extension-context-builder.js';
@@ -55,6 +56,28 @@ export async function startExtensionEntry(
     const message = `Required dependencies not active: ${inactiveDeps.map((d) => d.name).join(', ')}`;
     failEntry(host, name, entry, message);
     if (entry.pkg.critical) throw new Error(`Critical package "${name}" failed: ${message}`);
+    return;
+  }
+
+  // Validate name addressability eagerly, before any lifecycle transition.
+  //
+  // buildExtensionContext throws for an unencodable name, but it is only called
+  // on the create-factory and storage-registration code paths. An extension
+  // with no `create`, no `storage`, and no contribution processors would skip
+  // all three and reach `active` with an unencodable name. A subsequent
+  // forEachActiveExtension or forExtension call would then invoke
+  // buildExtensionContext outside per-extension isolation and abort the caller.
+  // Checking here ensures the failure is always contained as a per-extension
+  // `failed` transition regardless of which lifecycle hooks are declared.
+  //
+  // `enableExtension` (kernel:extension.setEnabled(true)) is the other seam
+  // that can move an entry toward `active`; it runs this exact same check via
+  // the shared `checkExtensionNameAddressable` predicate so the two paths
+  // cannot drift apart.
+  const addressabilityError = checkExtensionNameAddressable(entry.identity.extensionName);
+  if (addressabilityError !== undefined) {
+    failEntry(host, name, entry, addressabilityError);
+    if (entry.pkg.critical) throw new Error(`Critical package "${name}" failed: ${addressabilityError}`);
     return;
   }
 
