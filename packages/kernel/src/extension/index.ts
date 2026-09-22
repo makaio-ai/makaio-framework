@@ -7,7 +7,7 @@ export type {
   RuntimeEnvironment,
 } from './types.js';
 /** @public */
-export type { ExtensionCoordinatorOptions } from './types.js';
+export type { ExtensionCoordinatorOptions, InstalledExtensionCatalogSource } from './types.js';
 export type { SetEnabledResult, TransitionOutcome } from './extension-toggle.js';
 export { ExtensionCoordinator } from './extension-coordinator.js';
 export { ExtensionOperatorConfigError } from './resolve-config.js';

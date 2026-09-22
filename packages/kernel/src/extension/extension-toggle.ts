@@ -1,5 +1,10 @@
 import { getErrorString } from '@makaio/utils';
-import { ExtensionSubjects, type TransitionOutcome } from '../observability/extension-namespace.js';
+import {
+  ExtensionSubjects,
+  type SetEnabledReason,
+  type TransitionOutcome,
+} from '../observability/extension-namespace.js';
+import type { InstalledExtensionRecord } from '../observability/installed-extension-catalog-schemas.js';
 import { ServiceSkipError } from '../service-skip-error.js';
 import {
   buildExtensionContext,
@@ -112,7 +117,41 @@ export interface SetEnabledResult {
   readonly success: boolean;
   /** The transition outcome computed for this request. */
   readonly outcome: TransitionOutcome;
+  /**
+   * Machine-readable detail for this outcome, when there is one to report —
+   * which refusal it was, or why a persisted preference is not in effect. See
+   * {@link SetEnabledReason}. Absent only for the plain `'applied'` case,
+   * where the loaded extension already matches the request and there is
+   * nothing further to explain.
+   */
+  readonly reason?: SetEnabledReason;
 }
+
+/**
+ * The installed-extension catalog's answer for one `setEnabled` request,
+ * resolved before the request enters the coordinator's lifecycle queue.
+ *
+ * Reading the catalog scans install tiers and imports extension code, so it
+ * happens outside the queue — holding the lifecycle lock across it would
+ * stall shutdown and every other transition behind an interactive request.
+ *
+ * Consulted for *every* request, including one that resolves to a loaded,
+ * operator-managed entry: a second copy installed while this process runs is
+ * invisible to the coordinator — which holds the single copy it loaded at boot
+ * — yet contests the name at the next start. Only the catalog sees that copy,
+ * so skipping the read for a loaded name would persist a preference no boot
+ * will ever act on.
+ *
+ * The two variants are deliberately distinct:
+ * - `'unavailable'` — this runtime exposes no installed-extension catalog at
+ *   all, so it cannot vouch for any name it did not load.
+ * - `'resolved'` — the catalog was read; an absent `record` means this name is
+ *   genuinely not installed here, which is a typo, not an unanswerable
+ *   question.
+ */
+export type SetEnabledCatalogLookup =
+  | { readonly kind: 'unavailable' }
+  | { readonly kind: 'resolved'; readonly record: InstalledExtensionRecord | undefined };
 
 /**
  * Coordinator-owned runtime lifecycle primitive: enable or disable an extension
@@ -203,66 +242,94 @@ export async function applyExtensionTransition(
  * request that appears to "apply" live here would silently lie about having
  * fully activated or deactivated the extension.
  *
- * Refuses outright, before persisting anything, in three cases: when the
- * extension is not operator-managed ({@link ExtensionEntry.extensionManaged}
- * is `false` — a framework package, which the coordinator loads
- * unconditionally and has no preference to record for at all); when the
- * coordinator was built without a {@link ToggleHost.persistEnabled} writer
- * (a runtime with no durable enablement store cannot honour *any* preference
- * request, and reporting `'applied'`/`'restart-required'` for a write that
- * never happened would lie about persistence that does not exist); and when
- * `enabled` is `false` and the extension is `critical` (the coordinator
- * always force-starts a critical extension on the next boot regardless of
- * what the file says, so persisting the disable would only produce a
- * permanent warning). Every other request is persisted unconditionally, then
- * compared against the direction the process's own runtime state is already
- * headed to compute the {@link TransitionOutcome}: `'applied'` when the two
- * already agree, `'restart-required'` when they diverge — see the comparison
- * below for how an entry still at `'discovered'` (between `load()` and
- * `startAll()`) is handled. There is no rollback path — persistence always
- * succeeds or throws, and there is no transition attempt whose failure could
- * leave runtime state ahead of durable state.
+ * Two kinds of name reach this seam, and the split below is exactly that
+ * distinction:
+ *
+ * - A name this coordinator loaded as an operator-managed extension
+ *   ({@link persistForLoadedEntry}) — the preference is compared against the
+ *   direction that entry's runtime state is already headed.
+ * - Every other name ({@link persistForUnloadedName}) — never loaded at all
+ *   (surface affinity, unmet requirements, boot-time suppression), or loaded
+ *   under a framework package that holds the same name. The coordinator has
+ *   nothing of its own to validate such a name against, so it validates
+ *   against the host's installed-extension catalog instead. Without a catalog
+ *   it refuses rather than writing a preference for a name that may be a typo.
+ *
+ * Both paths refuse before writing when this coordinator has no
+ * {@link ToggleHost.persistEnabled} writer — a runtime with no durable
+ * enablement store cannot honour *any* preference request, and reporting
+ * `'applied'`/`'restart-required'` for a write that never happened would lie
+ * about persistence that does not exist. Both also refuse a disable of a
+ * `critical` package: the coordinator force-starts one on the next boot
+ * regardless of the store, so persisting the disable would only produce a
+ * permanent, ignored entry. The catalog path additionally refuses a disable
+ * whose criticality could not be resolved at all — a loaded entry never has
+ * that problem, because the coordinator imported the package to load it. There is no rollback path — persistence always succeeds or
+ * throws, and there is no transition attempt whose failure could leave
+ * runtime state ahead of durable state.
  * @param host - Coordinator surface providing shared state.
  * @param name - Name of the extension to toggle.
  * @param enabled - `true` to enable, `false` to disable.
+ * @param catalog - The installed-extension catalog's answer for this name,
+ *   resolved by the caller outside the lifecycle queue. Decides the
+ *   name-collision refusal for every request, and additionally validates the
+ *   name itself on the {@link persistForUnloadedName} path.
  * @returns A {@link SetEnabledResult} whose `success` is `true` when the
  *   preference already matches the runtime state and `false` when it was
  *   rejected or can only take effect on the next process restart; `outcome`
- *   always carries the underlying {@link TransitionOutcome} so callers can
- *   tell those two `false` cases apart.
- * @throws Error when `enabled` is `false` and the extension is `critical`,
- *   when {@link ToggleHost.persistEnabled} is absent, or when the extension
- *   is not operator-managed ({@link ExtensionEntry.extensionManaged} is
- *   `false` — a framework package).
+ *   always carries the underlying {@link TransitionOutcome}, and `reason` the
+ *   machine-readable detail behind it.
+ * @throws Error when {@link ToggleHost.persistEnabled} is absent, or when a
+ *   framework package holds the requested name and this runtime exposes no
+ *   installed-extension catalog to discover a shadowed install through.
  */
-export async function handleSetEnabled(host: ToggleHost, name: string, enabled: boolean): Promise<SetEnabledResult> {
-  const entry = host.entries.get(name);
-  if (!entry) return { success: false, outcome: 'rejected' };
-
-  // Refuse before any write: a framework package is not subject to operator
-  // enablement at all, regardless of whether this coordinator even has a
-  // durable store wired in. See `extensionManaged`'s own TSDoc on
-  // `ExtensionEntry`.
-  if (!entry.extensionManaged) {
-    throw new Error(
-      `Cannot set enablement preference for "${name}": framework packages are always loaded and have no operator enablement preference.`,
-    );
+export async function handleSetEnabled(
+  host: ToggleHost,
+  name: string,
+  enabled: boolean,
+  catalog: SetEnabledCatalogLookup,
+): Promise<SetEnabledResult> {
+  // Checked ahead of every other rule, for loaded and unloaded names alike: the
+  // rules below all answer for the single copy the runtime resolves this name
+  // to, and a contested name has none. The next start refuses to boot before
+  // any preference is read, so persisting one here would report a change
+  // nothing can act on.
+  if (catalog.kind === 'resolved' && catalog.record?.collidesWith !== undefined) {
+    return { success: false, outcome: 'rejected', reason: 'name-collision' };
   }
 
+  const entry = host.entries.get(name);
+  if (entry?.extensionManaged) {
+    return persistForLoadedEntry(host, name, enabled, entry);
+  }
+  return persistForUnloadedName(host, name, enabled, entry !== undefined, catalog);
+}
+
+/**
+ * Persist the preference for a name this coordinator loaded as an
+ * operator-managed extension, and report how it relates to that entry's
+ * runtime state.
+ * @param host - Coordinator surface providing shared state.
+ * @param name - Name of the extension to toggle.
+ * @param enabled - `true` to enable, `false` to disable.
+ * @param entry - The loaded, operator-managed runtime entry for `name`.
+ * @returns The persist-only result for this request.
+ * @throws Error when {@link ToggleHost.persistEnabled} is absent.
+ */
+async function persistForLoadedEntry(
+  host: ToggleHost,
+  name: string,
+  enabled: boolean,
+  entry: ExtensionEntry,
+): Promise<SetEnabledResult> {
   if (!host.persistEnabled) {
     throw new Error(
       `Cannot set enablement preference for "${name}": this runtime has no durable enablement store, so extension enablement is not persistable here.`,
     );
   }
 
-  // Refuse to disable a critical extension before writing anything — the
-  // coordinator's boot-time override (a warning + forced start) prevents a
-  // corrupt store from bricking the runtime, but the preference-write is
-  // fully preventable here instead of producing a permanent, ignored entry.
   if (!enabled && entry.pkg.critical) {
-    throw new Error(
-      `Cannot disable critical extension "${name}": critical extensions must remain enabled to keep the runtime functional.`,
-    );
+    return { success: false, outcome: 'rejected', reason: 'critical' };
   }
 
   // Persist unconditionally — this is the seam's only write path, and it must
@@ -275,10 +342,10 @@ export async function handleSetEnabled(host: ToggleHost, name: string, enabled: 
 
   // No transition is attempted. The outcome is a pure comparison between the
   // requested preference and the direction this process's own runtime state
-  // is already headed, without mutating anything: `handleSetEnabled` never
-  // touches `entry.enabled` or `entry.state`, so this comparison must read
-  // whichever of them already answers "will this process start or keep this
-  // extension running, unless a restart intervenes?"
+  // is already headed, without mutating anything: this seam never touches
+  // `entry.enabled` or `entry.state`, so this comparison must read whichever
+  // of them already answers "will this process start or keep this extension
+  // running, unless a restart intervenes?"
   //
   // `'active'` and `'initializing'` both count as heading enabled:
   // `'initializing'` is transient and resolves through the normal lifecycle
@@ -308,8 +375,84 @@ export async function handleSetEnabled(host: ToggleHost, name: string, enabled: 
       : entry.state === 'discovered'
         ? entry.enabled
         : false;
-  const outcome: TransitionOutcome = headingEnabled === enabled ? 'applied' : 'restart-required';
-  return { success: outcome === 'applied', outcome };
+  return headingEnabled === enabled
+    ? { success: true, outcome: 'applied' }
+    : { success: false, outcome: 'restart-required', reason: 'runtime-state-diverges' };
+}
+
+/**
+ * Persist the preference for a name this coordinator did not load as an
+ * operator-managed extension, validated against the host's
+ * installed-extension catalog.
+ *
+ * Nothing in this process will start such a name before a restart — it was
+ * either never loaded, or the name is currently held by a framework package
+ * that shadows the installed one — so a disable already matches the runtime
+ * (`'applied'`) while an enable can only take effect on the next boot
+ * (`'restart-required'`). The `reason` carries which of the two situations it
+ * is, since the outcome alone does not distinguish "not loaded here" from
+ * "shadowed by a framework package", and an operator needs to know which.
+ * @param host - Coordinator surface providing shared state.
+ * @param name - Name of the extension to toggle.
+ * @param enabled - `true` to enable, `false` to disable.
+ * @param frameworkPackageHoldsName - `true` when the coordinator did load an
+ *   entry under this name, but one that is not operator-managed.
+ * @param catalog - The installed-extension catalog's answer for this name.
+ * @returns The persist-only result for this request.
+ * @throws Error when {@link ToggleHost.persistEnabled} is absent, or when a
+ *   framework package holds the name and no catalog is available to discover
+ *   a shadowed install through.
+ */
+async function persistForUnloadedName(
+  host: ToggleHost,
+  name: string,
+  enabled: boolean,
+  frameworkPackageHoldsName: boolean,
+  catalog: SetEnabledCatalogLookup,
+): Promise<SetEnabledResult> {
+  if (!host.persistEnabled) {
+    throw new Error(
+      `Cannot set enablement preference for "${name}": this runtime has no durable enablement store, so extension enablement is not persistable here.`,
+    );
+  }
+
+  if (catalog.kind !== 'resolved') {
+    // A framework package under this name with no catalog to check is the one
+    // case that is a caller error rather than a refusable request: the name
+    // resolves to a package that is never subject to operator enablement, and
+    // without a catalog there is no way to learn that an installed package is
+    // shadowed behind it. See `extensionManaged`'s own TSDoc on
+    // `ExtensionEntry`.
+    if (frameworkPackageHoldsName) {
+      throw new Error(
+        `Cannot set enablement preference for "${name}": framework packages are always loaded and have no operator enablement preference.`,
+      );
+    }
+    return { success: false, outcome: 'rejected', reason: 'no-catalog' };
+  }
+
+  const record = catalog.record;
+  if (!record) {
+    return { success: false, outcome: 'rejected', reason: 'not-installed' };
+  }
+
+  if (!enabled && record.critical) {
+    return { success: false, outcome: 'rejected', reason: 'critical' };
+  }
+
+  // Fail closed: an unresolved `critical` is not "not critical". The next boot
+  // that can read the export might force-start this package anyway, which
+  // would leave the persisted disable permanently ignored.
+  if (!enabled && record.criticalityUnknown) {
+    return { success: false, outcome: 'rejected', reason: 'criticality-unknown' };
+  }
+
+  await host.persistEnabled(name, enabled);
+
+  const reason: SetEnabledReason = frameworkPackageHoldsName ? 'framework-package-shadowed' : 'not-loaded';
+  return enabled
+    ? { success: false, outcome: 'restart-required', reason }
+    : { success: true, outcome: 'applied', reason };
 }
 
 /**

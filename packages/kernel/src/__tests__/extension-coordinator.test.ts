@@ -1146,7 +1146,7 @@ describe('ExtensionCoordinator', () => {
       name: 'discovered-enabled-ext',
       enabled: false,
     });
-    expect(disableResult).toEqual({ success: false, outcome: 'restart-required' });
+    expect(disableResult).toEqual({ success: false, outcome: 'restart-required', reason: 'runtime-state-diverges' });
     expect(persisted).toContainEqual({ name: 'discovered-enabled-ext', enabled: false });
 
     // Requesting the direction the entry is already headed reports 'applied'
@@ -1187,7 +1187,7 @@ describe('ExtensionCoordinator', () => {
       name: 'discovered-disabled-ext',
       enabled: true,
     });
-    expect(enableResult).toEqual({ success: false, outcome: 'restart-required' });
+    expect(enableResult).toEqual({ success: false, outcome: 'restart-required', reason: 'runtime-state-diverges' });
     expect(persisted).toContainEqual({ name: 'discovered-disabled-ext', enabled: true });
 
     await coordinator.startAll();
@@ -1391,7 +1391,7 @@ describe('ExtensionCoordinator', () => {
       name: 'persist-pkg',
       enabled: false,
     });
-    expect(disableResult).toEqual({ success: false, outcome: 'restart-required' });
+    expect(disableResult).toEqual({ success: false, outcome: 'restart-required', reason: 'runtime-state-diverges' });
     expect(persisted).toContainEqual({ name: 'persist-pkg', enabled: false });
 
     // Requesting `enabled: true` while the process's own runtime state is
@@ -1469,14 +1469,14 @@ describe('ExtensionCoordinator', () => {
       const entry = makeInitializingEntry('initializing-disable-ext');
       const { host, persistEnabled } = makeToggleHost(entry);
 
-      const result = await handleSetEnabled(host, entry.pkg.name, false);
+      const result = await handleSetEnabled(host, entry.pkg.name, false, { kind: 'unavailable' });
 
       // 'initializing' resolves through the normal lifecycle to 'active', so a
       // disable persisted while it is mid-flight needs a restart to take
       // effect exactly as it would once the extension reached 'active' —
       // treating it as already-satisfied (as a naive `state === 'active'`
       // check would) would silently report the wrong outcome.
-      expect(result).toEqual({ success: false, outcome: 'restart-required' });
+      expect(result).toEqual({ success: false, outcome: 'restart-required', reason: 'runtime-state-diverges' });
       expect(persistEnabled).toHaveBeenCalledWith(entry.pkg.name, false);
     });
 
@@ -1484,7 +1484,7 @@ describe('ExtensionCoordinator', () => {
       const entry = makeInitializingEntry('initializing-enable-ext');
       const { host, persistEnabled } = makeToggleHost(entry);
 
-      const result = await handleSetEnabled(host, entry.pkg.name, true);
+      const result = await handleSetEnabled(host, entry.pkg.name, true, { kind: 'unavailable' });
 
       expect(result).toEqual({ success: true, outcome: 'applied' });
       expect(persistEnabled).toHaveBeenCalledWith(entry.pkg.name, true);
@@ -1654,7 +1654,7 @@ describe('ExtensionCoordinator', () => {
     // `setEnabled` never mutates runtime state (persist-only), so the retry
     // persists cleanly but still reports `restart-required`: the package is
     // still `active` and the request asks for `enabled: false`.
-    expect(retryResult).toEqual({ success: false, outcome: 'restart-required' });
+    expect(retryResult).toEqual({ success: false, outcome: 'restart-required', reason: 'runtime-state-diverges' });
     expect(persisted).toEqual([false, false]);
 
     await coordinator.shutdown();
@@ -1986,9 +1986,12 @@ describe('ExtensionCoordinator', () => {
     ]);
     await coordinator.startAll();
 
-    await expect(bus.request(ExtensionSubjects.setEnabled, { name: 'critical-ext', enabled: false })).rejects.toThrow(
-      /Cannot disable critical extension "critical-ext"/,
-    );
+    // A disable of a critical extension is refused as a response, not a fault:
+    // the request is well-formed and the refusal is a fact about the extension
+    // the caller must be able to read off the result — including a caller that
+    // cannot inspect this host itself.
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'critical-ext', enabled: false });
+    expect(result).toEqual({ success: false, outcome: 'rejected', reason: 'critical' });
 
     // Extension must remain active after the rejected attempt.
     const info = coordinator.list().find((e) => e.name === 'critical-ext');
@@ -2015,7 +2018,8 @@ describe('ExtensionCoordinator', () => {
     ]);
     await coordinator.startAll();
 
-    await expect(bus.request(ExtensionSubjects.setEnabled, { name: 'critical-ext', enabled: false })).rejects.toThrow();
+    const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'critical-ext', enabled: false });
+    expect(result.outcome).toBe('rejected');
     expect(persisted).toHaveLength(0);
 
     await coordinator.shutdown();
@@ -2190,7 +2194,7 @@ describe('ExtensionCoordinator', () => {
     // The preference is persisted, but the process's own runtime state stays
     // `skipped` — only the next restart actually starts the extension.
     const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'skipped-ext', enabled: true });
-    expect(result).toEqual({ success: false, outcome: 'restart-required' });
+    expect(result).toEqual({ success: false, outcome: 'restart-required', reason: 'runtime-state-diverges' });
 
     const afterInfo = coordinator.list().find((e) => e.name === 'skipped-ext');
     expect(afterInfo?.state).toBe('skipped');
@@ -2221,7 +2225,7 @@ describe('ExtensionCoordinator', () => {
     // claimant reaching `active` in this process is structurally impossible
     // now, not merely refused case-by-case.
     const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'owner-ext', enabled: true });
-    expect(result).toEqual({ success: false, outcome: 'restart-required' });
+    expect(result).toEqual({ success: false, outcome: 'restart-required', reason: 'runtime-state-diverges' });
 
     const afterInfo = coordinator.list().find((e) => e.name === 'owner-ext');
     expect(afterInfo?.state).toBe('skipped');
@@ -2328,7 +2332,7 @@ describe('ExtensionCoordinator', () => {
     expect(skippedInfo?.state).toBe('skipped');
 
     const result = await bus.request(ExtensionSubjects.setEnabled, { name: 'non-owner-ext', enabled: true });
-    expect(result).toEqual({ success: false, outcome: 'restart-required' });
+    expect(result).toEqual({ success: false, outcome: 'restart-required', reason: 'runtime-state-diverges' });
 
     const afterInfo = coordinator.list().find((e) => e.name === 'non-owner-ext');
     expect(afterInfo?.state).toBe('skipped');
@@ -2747,7 +2751,7 @@ describe('ExtensionCoordinator', () => {
       name: 'windowed-disabled',
       enabled: true,
     });
-    expect(result).toEqual({ success: false, outcome: 'restart-required' });
+    expect(result).toEqual({ success: false, outcome: 'restart-required', reason: 'runtime-state-diverges' });
 
     // The window stays unregistered — only a restart can collect it.
     expect(coordinator.windowRegistry.get('windowed-disabled:settings')).toBeUndefined();

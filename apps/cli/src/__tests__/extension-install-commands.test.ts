@@ -8,14 +8,19 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync } from 'node:fs';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { Command } from 'commander';
 import { registerExtensionCommands } from '../extension-commands.js';
-import type { FrameworkModuleResolver } from '@makaio/runtime-node';
+import { FilesystemDescriptorDiscovery, type FrameworkModuleResolver } from '@makaio/runtime-node';
 import type { ExtensionDescriptor } from '@makaio/contracts';
-import type { TransitionOutcome } from '@makaio/kernel';
+import {
+  ExtensionSubjects,
+  type InstalledExtensionCatalogEntry,
+  type SetEnabledReason,
+  type TransitionOutcome,
+} from '@makaio/kernel';
 import type { PackageInfo } from '@makaio/services-package-manager/namespace';
 import { makeTestRepo, writeTestManifest } from './manifest-test-helpers.js';
 
@@ -50,19 +55,22 @@ const packageManagerMockState = vi.hoisted(() => ({
 const enablementMockState = vi.hoisted(() => ({
   disabled: new Set<string>(),
   health: null as Record<string, unknown> | null,
-  setEnabledResult: { success: true, outcome: 'applied' } as { success: boolean; outcome: TransitionOutcome },
+  setEnabledResult: { success: true, outcome: 'applied' } as {
+    success: boolean;
+    outcome: TransitionOutcome;
+    reason?: SetEnabledReason;
+  },
   setEnabledError: null as Error | null,
   /** Number of times the mocked `kernel:extension.setEnabled` RPC was invoked. */
   setEnabledCallCount: 0,
   /** Number of times the mocked `loadExtensionEnablementStore` was invoked. */
   enablementStoreLoadCount: 0,
   /**
-   * Result returned by the `kernel:extension.get` RPC. Defaults to no entry.
-   * `extensionManaged` defaults to `true` when the entry itself is present —
-   * matching every real descriptor-based extension — so only tests covering
-   * the framework-package-collision path need to set it explicitly to `false`.
+   * Entries returned by the `kernel:extension.catalog` RPC — the server's own
+   * installed-package view. `null` models a runtime that exposes no catalog at
+   * all, which is a different answer from an empty one.
    */
-  getResult: null as { extension: { error?: string; critical?: boolean; extensionManaged?: boolean } | null } | null,
+  catalogEntries: [] as InstalledExtensionCatalogEntry[] | null,
   /** Thrown by the mocked `resolveClientAuth` when set, simulating a missing/rejected credential. */
   resolveAuthError: null as Error | null,
   /** Thrown by the mocked `connectBusClient` when set, simulating a connection-establishment failure. */
@@ -124,26 +132,26 @@ vi.mock('../bus-client.js', async (importOriginal) => {
     connectBusClient: async () => {
       if (enablementMockState.connectError) throw enablementMockState.connectError;
       return {
+        // Dispatches on the subject, not the payload shape: `list` and
+        // `catalog` are both `{}` requests, and only the subject tells the two
+        // apart — the same way the bus itself routes them.
         request: async (
-          _subject: unknown,
+          subject: unknown,
           payload: Record<string, unknown>,
         ): Promise<
-          | { success: boolean; outcome: TransitionOutcome }
-          | { extension?: { error?: string; critical?: boolean; extensionManaged: boolean } | null }
+          | { success: boolean; outcome: TransitionOutcome; reason?: SetEnabledReason }
+          | { entries: InstalledExtensionCatalogEntry[] | null }
           | { extensions: typeof enablementMockState.listExtensions }
         > => {
-          // `list`'s request payload is `{}`, distinct from `get`'s `{name}`
-          // and `setEnabled`'s `{name, enabled}` — checked in that order.
-          if ('enabled' in payload) {
+          if (subject === ExtensionSubjects.setEnabled) {
             enablementMockState.setEnabledCallCount += 1;
             if (enablementMockState.setEnabledError) throw enablementMockState.setEnabledError;
-            // A real coordinator's own `persistEnabled` call is the file's sole
-            // writer once a server is reachable (the CLI writes nothing itself
-            // in this path — see `applyLiveToggle`). `setEnabled` is
-            // persist-only: it writes the requested preference for every
-            // outcome except `'rejected'`, which never writes at all (an
-            // unknown name or a critical-extension refusal). This mock bypasses
-            // the coordinator, so it reproduces that write here, keyed off
+            // A reachable server's own `persistEnabled` call is the enablement
+            // file's sole writer (the CLI writes nothing itself in this path —
+            // see `applyLiveToggle`). `setEnabled` is persist-only: it writes
+            // the requested preference for every outcome except `'rejected'`,
+            // which never writes at all. This mock stands in for the
+            // coordinator, so it reproduces that write here, keyed off
             // `outcome`, instead of a separate ad hoc flag that could drift
             // from what `outcome` implies.
             const name = String(payload['name']);
@@ -154,17 +162,9 @@ vi.mock('../bus-client.js', async (importOriginal) => {
             }
             return enablementMockState.setEnabledResult;
           }
-          if ('name' in payload) {
-            // extension.get — return getResult or a bare null-extension response.
-            // `extensionManaged` defaults to `true` when the entry is present and
-            // the test did not specify it — see `getResult`'s own doc.
-            if (!enablementMockState.getResult) return { extension: null };
-            const { extension } = enablementMockState.getResult;
-            return {
-              extension: extension && { extensionManaged: true, ...extension },
-            };
+          if (subject === ExtensionSubjects.catalog) {
+            return { entries: enablementMockState.catalogEntries };
           }
-          // extension.list
           if (enablementMockState.listRequestError) throw enablementMockState.listRequestError;
           return { extensions: enablementMockState.listExtensions };
         },
@@ -448,6 +448,111 @@ async function writeProjectLocalDescriptor(projectRoot: string, packageDescripto
     `${JSON.stringify(packageDescriptor, null, 2)}\n`,
     'utf-8',
   );
+}
+
+/**
+ * Build a descriptor with no server entrypoint.
+ *
+ * The runtime synthesizes such a descriptor's single package from descriptor
+ * metadata, which makes it the one shape that may declare `critical` on the
+ * descriptor itself — a descriptor that does declare a server entrypoint has
+ * its exported packages own that flag, and the schema rejects the combination.
+ * @param name - Descriptor package name.
+ * @param version - Descriptor version.
+ * @param critical - Critical flag to declare, when the fixture needs one.
+ * @returns Descriptor ready to be written to a fixture package.
+ */
+function browserOnlyDescriptor(name: string, version: string, critical?: boolean): ExtensionDescriptor {
+  return {
+    name,
+    displayName: name,
+    version,
+    makaio: { framework: '>=0.1.0' },
+    entrypoints: { browser: true },
+    ...(critical === undefined ? {} : { critical }),
+  };
+}
+
+/**
+ * Render a server entry module exporting the given packages.
+ * @param packages - Packages the entry exports, in export order. One must
+ *   carry the descriptor's own name; every other must be dot-prefixed under it.
+ * @returns Module source ready to be written at a convention entrypoint.
+ */
+function serverEntrySource(
+  packages: ReadonlyArray<{ readonly name: string; readonly version?: string; readonly critical?: boolean }>,
+): string {
+  const entries = packages
+    .map(
+      (pkg) =>
+        `  { name: ${JSON.stringify(pkg.name)}, displayName: ${JSON.stringify(pkg.name)}, ` +
+        `version: ${JSON.stringify(pkg.version ?? '0.1.0')}, critical: ${pkg.critical ?? false} },\n`,
+    )
+    .join('');
+  return `export default [\n${entries}];\n`;
+}
+
+/**
+ * Install a real extension package under the data home's `node_modules` — the
+ * registry-install tier the runtime's own discovery scans, and therefore the
+ * one the offline listing reads.
+ *
+ * Writes exactly what discovery reads: the npm manifest carrying the
+ * dependency identifier, `descriptor.json`, and — when the fixture supplies a
+ * module body — the convention-resolved `dist/server.mjs` the listing imports.
+ * Fixtures drive the production discovery and import path this way instead of
+ * an installer mock's in-memory answer.
+ * @param packageDescriptor - Descriptor written into the package.
+ * @param options - `npmName` when the shipping package name differs from the
+ *   descriptor identity, and `entrySource` for the server entry module body.
+ *   Omitting `entrySource` for a descriptor that declares a server entrypoint
+ *   leaves that entrypoint unresolvable, which is its own covered case.
+ */
+async function installNpmExtension(
+  packageDescriptor: ExtensionDescriptor,
+  options: { readonly npmName?: string; readonly entrySource?: string } = {},
+): Promise<void> {
+  const npmName = options.npmName ?? packageDescriptor.name;
+  const packageRoot = path.join(packageManagerMockState.makaioHome, 'node_modules', ...npmName.split('/'));
+  await mkdir(packageRoot, { recursive: true });
+  await writeFile(
+    path.join(packageRoot, 'package.json'),
+    `${JSON.stringify({ name: npmName, version: packageDescriptor.version }, null, 2)}\n`,
+    'utf-8',
+  );
+  await writeFile(
+    path.join(packageRoot, 'descriptor.json'),
+    `${JSON.stringify(packageDescriptor, null, 2)}\n`,
+    'utf-8',
+  );
+  if (options.entrySource !== undefined) {
+    await mkdir(path.join(packageRoot, 'dist'), { recursive: true });
+    await writeFile(path.join(packageRoot, 'dist', 'server.mjs'), options.entrySource, 'utf-8');
+  }
+}
+
+/**
+ * Install a real extension as a symlink under the data home's `extensions/` —
+ * the managed-install tier, reached through a link to a source directory
+ * rather than a directory of its own.
+ * @param packageDescriptor - Descriptor written into the link target.
+ * @param options - `entrySource` for the server entry module body, when the
+ *   fixture declares a resolvable server entrypoint.
+ */
+async function installSymlinkedExtension(
+  packageDescriptor: ExtensionDescriptor,
+  options: { readonly entrySource?: string } = {},
+): Promise<void> {
+  const sourceRoot = path.join(packageManagerMockState.makaioHome, 'extension-sources', packageDescriptor.name);
+  await mkdir(sourceRoot, { recursive: true });
+  await writeFile(path.join(sourceRoot, 'descriptor.json'), `${JSON.stringify(packageDescriptor, null, 2)}\n`, 'utf-8');
+  if (options.entrySource !== undefined) {
+    await mkdir(path.join(sourceRoot, 'dist'), { recursive: true });
+    await writeFile(path.join(sourceRoot, 'dist', 'server.mjs'), options.entrySource, 'utf-8');
+  }
+  const extensionsDir = path.join(packageManagerMockState.makaioHome, 'extensions');
+  await mkdir(extensionsDir, { recursive: true });
+  await symlink(sourceRoot, path.join(extensionsDir, packageDescriptor.name), 'dir');
 }
 
 async function writePublishedPackage(packageName: string, packageDescriptor: ExtensionDescriptor): Promise<void> {
@@ -847,6 +952,8 @@ class MarkerFrameworkModuleResolver implements FrameworkModuleResolver {
 
 describe('extension enable/disable commands', () => {
   let program: InstanceType<typeof Command>;
+  /** Working directory these invocations run in, kept distinct from the data home. */
+  let projectCwd: string;
 
   beforeEach(() => {
     enablementMockState.disabled.clear();
@@ -855,7 +962,7 @@ describe('extension enable/disable commands', () => {
     enablementMockState.setEnabledError = null;
     enablementMockState.setEnabledCallCount = 0;
     enablementMockState.enablementStoreLoadCount = 0;
-    enablementMockState.getResult = null;
+    enablementMockState.catalogEntries = [];
     enablementMockState.resolveAuthError = null;
     enablementMockState.connectError = null;
     enablementMockState.listExtensions = [];
@@ -868,15 +975,14 @@ describe('extension enable/disable commands', () => {
     delete process.env.MAKAIO_BUS_URL;
     process.exitCode = undefined;
     vi.restoreAllMocks();
-    // The offline listing's project-local discovery tier scans
-    // `{cwd}/node_modules` for real (unmocked — see `FilesystemDescriptorDiscovery`),
-    // so without this the test runner's own checkout — which has real
-    // extension descriptors under its workspace `node_modules` — would leak
-    // into every offline listing assertion below. `makaioHome` is a fresh,
-    // empty directory per test, so its `node_modules` (created empty by the
-    // mocked `YarnPackageManager.initialize()`) is a safe stand-in; tests that
-    // exercise the project-local tier itself override this explicitly.
-    vi.spyOn(process, 'cwd').mockReturnValue(packageManagerMockState.makaioHome);
+    // Runtime-config resolution falls back to searching the working directory
+    // for a `makaio.config.*`, and the unconfigured offline listing scans that
+    // directory's own `node_modules` as the runtime's highest-priority tier.
+    // Both are pointed at a fresh, empty directory per test, so the test
+    // runner's own checkout contributes neither config nor extensions and
+    // these fixtures' data-home tiers are the whole view.
+    projectCwd = mkdtempSync(path.join(tmpdir(), 'makaio-cli-enable-cwd-'));
+    vi.spyOn(process, 'cwd').mockReturnValue(projectCwd);
     program = new Command();
     registerExtensionCommands(program);
   });
@@ -887,7 +993,7 @@ describe('extension enable/disable commands', () => {
   });
 
   it('writes the enablement file and reports offline when no server is running', async () => {
-    packageManagerMockState.packages = [{ name: 'my-ext', version: '1.0.0', hasDescriptor: true }];
+    await installNpmExtension(browserOnlyDescriptor('my-ext', '1.0.0'));
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     await program.parseAsync(['extension', 'enable', 'my-ext'], { from: 'user' });
     expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Persisted; no running server'));
@@ -895,7 +1001,7 @@ describe('extension enable/disable commands', () => {
   });
 
   it('writes the disabled entry and reports offline when no server is running', async () => {
-    packageManagerMockState.packages = [{ name: 'my-ext', version: '1.0.0', hasDescriptor: true }];
+    await installNpmExtension(browserOnlyDescriptor('my-ext', '1.0.0'));
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     await program.parseAsync(['extension', 'disable', 'my-ext'], { from: 'user' });
     expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Persisted; no running server'));
@@ -915,7 +1021,7 @@ describe('extension enable/disable commands', () => {
 
   it('refuses to persist offline when the configured bus is remote and unreachable, writing nothing locally', async () => {
     process.env.MAKAIO_BUS_URL = 'ws://build-server.internal:6252/bus';
-    packageManagerMockState.packages = [{ name: 'remote-ext', version: '1.0.0', hasDescriptor: true }];
+    await installNpmExtension(browserOnlyDescriptor('remote-ext', '1.0.0'));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await program.parseAsync(['extension', 'disable', 'remote-ext'], { from: 'user' });
@@ -932,7 +1038,7 @@ describe('extension enable/disable commands', () => {
 
   it('still writes offline when the configured bus URL is explicitly local and unreachable', async () => {
     process.env.MAKAIO_BUS_URL = 'ws://127.0.0.1:6252/bus';
-    packageManagerMockState.packages = [{ name: 'my-ext', version: '1.0.0', hasDescriptor: true }];
+    await installNpmExtension(browserOnlyDescriptor('my-ext', '1.0.0'));
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
     await program.parseAsync(['extension', 'enable', 'my-ext'], { from: 'user' });
@@ -946,7 +1052,7 @@ describe('extension enable/disable commands', () => {
     process.env.MAKAIO_BUS_URL = 'ws://build-server.internal:6252/bus';
     // Installed locally, so a wrongly-taken offline fallback would list it —
     // this name must never appear in the output.
-    packageManagerMockState.packages = [{ name: 'local-only-ext', version: '1.0.0', hasDescriptor: true }];
+    await installNpmExtension(browserOnlyDescriptor('local-only-ext', '1.0.0'));
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
@@ -962,7 +1068,7 @@ describe('extension enable/disable commands', () => {
 
   it('still falls back to the offline listing when the configured bus URL is explicitly local and unreachable', async () => {
     process.env.MAKAIO_BUS_URL = 'ws://127.0.0.1:6252/bus';
-    packageManagerMockState.packages = [{ name: 'my-ext', version: '1.0.0', hasDescriptor: true }];
+    await installNpmExtension(browserOnlyDescriptor('my-ext', '1.0.0'));
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
     await program.parseAsync(['extension', 'list'], { from: 'user' });
@@ -973,10 +1079,6 @@ describe('extension enable/disable commands', () => {
 
   it('reports live-applied when server is reachable and RPC succeeds', async () => {
     enablementMockState.health = { url: 'ws://localhost:1234' };
-    // A non-null `extension` is what makes the server "manage" this name —
-    // `kernel:extension.get` reporting an entry — so the request reaches
-    // `setEnabled` instead of the unmanaged-name fallback.
-    enablementMockState.getResult = { extension: {} };
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     await program.parseAsync(['extension', 'enable', 'my-ext'], { from: 'user' });
     expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('already matches this state'));
@@ -984,7 +1086,6 @@ describe('extension enable/disable commands', () => {
 
   it('writes nothing locally when the server throws applying the request outright', async () => {
     enablementMockState.health = { url: 'ws://localhost:1234' };
-    enablementMockState.getResult = { extension: {} };
     enablementMockState.setEnabledError = new Error('transition failed');
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await program.parseAsync(['extension', 'disable', 'my-ext'], { from: 'user' });
@@ -1005,7 +1106,6 @@ describe('extension enable/disable commands', () => {
     // does not write anything of its own to flip in the live path.
     enablementMockState.disabled.add('my-ext');
     enablementMockState.health = { url: 'ws://localhost:1234' };
-    enablementMockState.getResult = { extension: {} };
     enablementMockState.setEnabledError = new Error('transition failed');
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
@@ -1014,9 +1114,12 @@ describe('extension enable/disable commands', () => {
     expect(enablementMockState.disabled.has('my-ext')).toBe(true);
   });
 
-  it('refuses to disable a critical extension reported by the running server', async () => {
+  it('reports the critical refusal the running server answered with, writing nothing', async () => {
+    // The server owns this decision: it holds the loaded extension, or the
+    // installed package behind the name, and refuses the disable as a
+    // response the CLI renders rather than a fault it has to interpret.
     enablementMockState.health = { url: 'ws://localhost:1234' };
-    enablementMockState.getResult = { extension: { critical: true } };
+    enablementMockState.setEnabledResult = { success: false, outcome: 'rejected', reason: 'critical' };
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await program.parseAsync(['extension', 'disable', 'core-ext'], { from: 'user' });
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('it is a critical extension'));
@@ -1024,11 +1127,40 @@ describe('extension enable/disable commands', () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it("reports the server's fail-closed refusal for a name whose criticality it could not resolve", async () => {
+    enablementMockState.health = { url: 'ws://localhost:1234' };
+    enablementMockState.setEnabledResult = { success: false, outcome: 'rejected', reason: 'criticality-unknown' };
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await program.parseAsync(['extension', 'disable', 'broken-ext'], { from: 'user' });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('its server entry could not be read, so whether it is critical is unknown'),
+    );
+    expect(enablementMockState.disabled.has('broken-ext')).toBe(false);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("reports a server that cannot enumerate its installed packages, instead of writing this machine's file", async () => {
+    // A runtime with no installed-extension catalog cannot tell a real
+    // installed name from a typo, so it refuses — and the CLI must surface
+    // that rather than quietly persisting to its own enablement file, which
+    // may not even be the one that server reads.
+    enablementMockState.health = { url: 'ws://localhost:1234' };
+    enablementMockState.setEnabledResult = { success: false, outcome: 'rejected', reason: 'no-catalog' };
+    await installNpmExtension(browserOnlyDescriptor('local-ext', '1.0.0'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'disable', 'local-ext'], { from: 'user' });
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('cannot enumerate its installed packages'));
+    expect(enablementMockState.disabled.has('local-ext')).toBe(false);
+    expect(process.exitCode).toBe(1);
+  });
+
   it('refuses to disable a critical extension offline, reading the flag from a descriptor with no exported package', async () => {
     // No `serverImportPath`: a detached, CLI-only, or browser-only descriptor,
     // whose single package the runtime synthesizes from descriptor metadata —
     // the one case where the descriptor field *is* the package field.
-    packageManagerMockState.packages = [{ name: 'core-ext', version: '1.0.0', hasDescriptor: true, critical: true }];
+    await installNpmExtension(browserOnlyDescriptor('core-ext', '1.0.0', true));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await program.parseAsync(['extension', 'disable', 'core-ext'], { from: 'user' });
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('it is a critical extension'));
@@ -1037,13 +1169,10 @@ describe('extension enable/disable commands', () => {
   });
 
   it('refuses to disable a critical extension installed from a local path, reading the flag exactly as it would for an npm install', async () => {
-    // `LocalPathInstaller.list()` carries a descriptor-synthesized package's
-    // `critical` flag through `InstalledExtensionEntry` — the offline critical
-    // check must see it identically regardless of whether the extension came
-    // from npm or a local symlink.
-    packageManagerMockState.localExtensions = [
-      { name: 'core-local-ext', version: '1.0.0', sourcePath: '/tmp/core-local-ext', source: 'local', critical: true },
-    ];
+    // A symlink under the data home's `extensions/` is its own discovery tier,
+    // reached through a link rather than a directory — the offline critical
+    // check must read the descriptor behind it identically to an npm install.
+    await installSymlinkedExtension(browserOnlyDescriptor('core-local-ext', '1.0.0', true));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await program.parseAsync(['extension', 'disable', 'core-local-ext'], { from: 'user' });
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('it is a critical extension'));
@@ -1052,7 +1181,7 @@ describe('extension enable/disable commands', () => {
   });
 
   it('enabling a critical extension is never refused', async () => {
-    packageManagerMockState.packages = [{ name: 'core-ext', version: '1.0.0', hasDescriptor: true, critical: true }];
+    await installNpmExtension(browserOnlyDescriptor('core-ext', '1.0.0', true));
     enablementMockState.disabled.add('core-ext');
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     await program.parseAsync(['extension', 'enable', 'core-ext'], { from: 'user' });
@@ -1063,7 +1192,6 @@ describe('extension enable/disable commands', () => {
   it('reports a rejected request as unwritten when the server refuses it outright', async () => {
     enablementMockState.health = { url: 'ws://localhost:1234' };
     enablementMockState.setEnabledResult = { success: false, outcome: 'rejected' };
-    enablementMockState.getResult = { extension: { error: 'active dependents remain: child' } };
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await program.parseAsync(['extension', 'disable', 'dep-ext'], { from: 'user' });
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('the request was rejected. Nothing was written.'));
@@ -1071,12 +1199,12 @@ describe('extension enable/disable commands', () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it('reports "not installed" when extension.get returns no entry and the name is not installed', async () => {
+  it('reports "not installed" when the server refuses a name it cannot find on its own host', async () => {
+    // A name nothing has installed is a typo, and the server is the one that
+    // can tell — including for tiers this process cannot see. Its refusal
+    // must never be second-guessed by writing this machine's file anyway.
     enablementMockState.health = { url: 'ws://localhost:1234' };
-    // getResult stays null → extension.get returns { extension: null }, and
-    // packageManagerMockState.packages stays empty from beforeEach, so the
-    // name is not installed either — the unmanaged-name fallback must not
-    // silently persist a preference for a name nothing will ever read.
+    enablementMockState.setEnabledResult = { success: false, outcome: 'rejected', reason: 'not-installed' };
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     await program.parseAsync(['extension', 'enable', 'my-ext'], { from: 'user' });
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('no installed extension with this name'));
@@ -1084,37 +1212,39 @@ describe('extension enable/disable commands', () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it('persists directly and reports restart-required for an installed name absent from the coordinator', async () => {
-    // The server is reachable and knows the extension is installed (surfaced
-    // through the package manager), but never loaded it into its coordinator
-    // — interactive-only on a headless server, unmet `requires`, or
-    // `MAKAIO_SKIP_EXTENSIONS`. `kernel:extension.get` reports `null` for it,
-    // so the CLI must write the preference itself instead of forwarding to
-    // `setEnabled`, which has nothing to compare against for this name.
+  it('reports the server-persisted preference for an installed name its coordinator never loaded', async () => {
+    // Installed on the server's host but absent from its coordinator —
+    // interactive-only on a headless server, unmet `requires`, or
+    // `MAKAIO_SKIP_EXTENSIONS`. The server validates the name against its own
+    // installed-extension catalog and persists it; the CLI writes nothing.
     enablementMockState.health = { url: 'ws://localhost:1234' };
-    packageManagerMockState.packages = [{ name: 'my-ext', version: '1.0.0', hasDescriptor: true }];
+    enablementMockState.setEnabledResult = { success: false, outcome: 'restart-required', reason: 'not-loaded' };
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     await program.parseAsync(['extension', 'enable', 'my-ext'], { from: 'user' });
     expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('not loaded in the running server'));
-    expect(enablementMockState.disabled.has('my-ext')).toBe(false);
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Takes effect on next boot.'));
     expect(process.exitCode).toBeUndefined();
   });
 
-  it('refuses to disable a critical extension absent from the coordinator, reading the flag from the installed listing', async () => {
+  it("never writes this machine's enablement file while a server is reachable", async () => {
+    // Whatever the outcome, the reachable server is the single writer: its
+    // enablement file, its installed packages, its discovery roots. A local
+    // write here would be validated against the wrong host — a local server
+    // can have been started from a different project directory.
     enablementMockState.health = { url: 'ws://localhost:1234' };
-    packageManagerMockState.packages = [{ name: 'core-ext', version: '1.0.0', hasDescriptor: true, critical: true }];
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    await program.parseAsync(['extension', 'disable', 'core-ext'], { from: 'user' });
-    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('it is a critical extension'));
-    expect(enablementMockState.disabled.has('core-ext')).toBe(false);
-    expect(process.exitCode).toBe(1);
+    enablementMockState.setEnabledResult = { success: false, outcome: 'rejected', reason: 'not-installed' };
+    await installNpmExtension(browserOnlyDescriptor('local-ext', '1.0.0'));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'disable', 'local-ext'], { from: 'user' });
+
+    expect(enablementMockState.enablementStoreLoadCount).toBe(0);
+    expect(packageManagerMockState.listPackagesCallCount).toBe(0);
   });
 
   it('lists a hand-disabled critical extension as enabled, matching what boot does with it', async () => {
-    packageManagerMockState.packages = [
-      { name: 'core-ext', version: '1.0.0', hasDescriptor: true, critical: true },
-      { name: 'plain-ext', version: '2.0.0', hasDescriptor: true },
-    ];
+    await installNpmExtension(browserOnlyDescriptor('core-ext', '1.0.0', true));
+    await installNpmExtension(browserOnlyDescriptor('plain-ext', '2.0.0'));
     enablementMockState.disabled.add('core-ext');
     enablementMockState.disabled.add('plain-ext');
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
@@ -1244,34 +1374,30 @@ describe('extension enable/disable commands', () => {
   });
 
   /**
-   * Write a real, dynamically-importable server entrypoint module exporting a
-   * descriptor's own package alongside one dot-prefixed child package, so the
-   * offline listing's `import()` of `serverImportPath` (unmocked — this is the
-   * real production code path) resolves it exactly as the runtime would.
+   * Install an extension whose real, dynamically-importable server entry
+   * exports the descriptor's own package alongside one dot-prefixed child
+   * package, at the convention path the runtime resolves.
+   *
+   * The listing imports that entry for real (unmocked — this is the
+   * production code path), so the child package's presence and criticality
+   * come from the module itself, exactly as they would at boot.
    * @param descriptorName - Parent descriptor package name.
    * @param childName - Dot-prefixed child package name.
    * @param childCritical - Critical flag the child package declares on itself.
    * @param parentCritical - Critical flag the descriptor's own package declares on itself.
-   * @returns Absolute path to the written `.mjs` module.
    */
-  async function writeMultiPackageServerEntry(
+  async function installMultiPackageExtension(
     descriptorName: string,
     childName: string,
     childCritical = false,
     parentCritical = false,
-  ): Promise<string> {
-    const moduleDir = path.join(packageManagerMockState.makaioHome, 'fixture-packages', descriptorName);
-    await mkdir(moduleDir, { recursive: true });
-    const modulePath = path.join(moduleDir, 'server.mjs');
-    await writeFile(
-      modulePath,
-      `export default [\n` +
-        `  { name: ${JSON.stringify(descriptorName)}, displayName: 'Parent', version: '0.1.0', critical: ${parentCritical} },\n` +
-        `  { name: ${JSON.stringify(childName)}, displayName: 'Child', version: '0.1.0', critical: ${childCritical} },\n` +
-        `];\n`,
-      'utf-8',
-    );
-    return modulePath;
+  ): Promise<void> {
+    await installNpmExtension(descriptor(descriptorName, '0.1.0'), {
+      entrySource: serverEntrySource([
+        { name: descriptorName, critical: parentCritical },
+        { name: childName, critical: childCritical },
+      ]),
+    });
   }
 
   /**
@@ -1283,20 +1409,14 @@ describe('extension enable/disable commands', () => {
    * installs — which is what makes its export unreadable, and its criticality
    * unresolved, without one.
    * @param descriptorName - Descriptor identity the entry exports itself under.
-   * @returns The entry's import path.
    */
-  async function writeFrameworkImportingServerEntry(descriptorName: string): Promise<string> {
-    const packageRoot = path.join(packageManagerMockState.makaioHome, 'fixture-packages', descriptorName);
-    await mkdir(packageRoot, { recursive: true });
-    const serverImportPath = path.join(packageRoot, 'server.mjs');
-    await writeFile(
-      serverImportPath,
-      "import { FRAMEWORK_IMPORT_RESOLVED } from '@makaio/framework/bus';\n" +
+  async function installFrameworkImportingExtension(descriptorName: string): Promise<void> {
+    await installNpmExtension(descriptor(descriptorName, '0.1.0'), {
+      entrySource:
+        "import { FRAMEWORK_IMPORT_RESOLVED } from '@makaio/framework/bus';\n" +
         `export default { name: ${JSON.stringify(descriptorName)}, displayName: 'Linked', version: '0.1.0', ` +
         'critical: FRAMEWORK_IMPORT_RESOLVED };\n',
-      'utf-8',
-    );
-    return serverImportPath;
+    });
   }
 
   it('leaves criticality unresolved offline when an extension imports @makaio/framework and no host resolver is supplied', async () => {
@@ -1304,16 +1424,7 @@ describe('extension enable/disable commands', () => {
     // subpath is unresolvable from an extension outside this process's module
     // tree, so the export cannot be read at all and the disable must be
     // refused as unresolved rather than silently treated as non-critical.
-    const serverImportPath = await writeFrameworkImportingServerEntry('unresolved-framework-ext');
-    packageManagerMockState.packages = [
-      {
-        name: 'unresolved-framework-ext',
-        version: '0.1.0',
-        hasDescriptor: true,
-        serverImportPath,
-        declaresServerEntrypoint: true,
-      },
-    ];
+    await installFrameworkImportingExtension('unresolved-framework-ext');
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
@@ -1335,22 +1446,16 @@ describe('extension enable/disable commands', () => {
    * locally linked extension whose server graph imports `@makaio/framework/*`.
    * @param descriptorName - Descriptor identity the entry exports itself under.
    * @param markerPath - File the resolver records its install state in.
-   * @returns The entry's import path.
    */
-  async function writeResolverStateServerEntry(descriptorName: string, markerPath: string): Promise<string> {
-    const packageRoot = path.join(packageManagerMockState.makaioHome, 'fixture-packages', descriptorName);
-    await mkdir(packageRoot, { recursive: true });
+  async function installResolverStateExtension(descriptorName: string, markerPath: string): Promise<void> {
     await writeFile(markerPath, 'uninstalled', 'utf-8');
-    const serverImportPath = path.join(packageRoot, 'server.mjs');
-    await writeFile(
-      serverImportPath,
-      "import { readFileSync } from 'node:fs';\n" +
+    await installNpmExtension(descriptor(descriptorName, '0.1.0'), {
+      entrySource:
+        "import { readFileSync } from 'node:fs';\n" +
         `const resolverState = readFileSync(${JSON.stringify(markerPath)}, 'utf-8');\n` +
         `export default { name: ${JSON.stringify(descriptorName)}, displayName: 'Linked', version: '0.1.0', ` +
         "critical: resolverState === 'installed' };\n",
-      'utf-8',
-    );
-    return serverImportPath;
+    });
   }
 
   it("installs the host's framework module resolver around the offline listing's server-entry imports", async () => {
@@ -1361,16 +1466,7 @@ describe('extension enable/disable commands', () => {
     // in — without it the export is unreadable and this disable is refused as
     // unresolved even though the server package is perfectly valid.
     const markerPath = path.join(packageManagerMockState.makaioHome, 'resolver-state');
-    const serverImportPath = await writeResolverStateServerEntry('hosted-resolver-ext', markerPath);
-    packageManagerMockState.packages = [
-      {
-        name: 'hosted-resolver-ext',
-        version: '0.1.0',
-        hasDescriptor: true,
-        serverImportPath,
-        declaresServerEntrypoint: true,
-      },
-    ];
+    await installResolverStateExtension('hosted-resolver-ext', markerPath);
     const resolver = new MarkerFrameworkModuleResolver(markerPath);
     const hostedProgram = new Command();
     registerExtensionCommands(hostedProgram, { frameworkModuleResolver: resolver });
@@ -1386,10 +1482,7 @@ describe('extension enable/disable commands', () => {
   });
 
   it('lists every executable child package a descriptor exports, each with its own persisted preference', async () => {
-    const serverImportPath = await writeMultiPackageServerEntry('makaio-dev', 'makaio-dev.relay-connection');
-    packageManagerMockState.packages = [
-      { name: 'makaio-dev', version: '0.1.0', hasDescriptor: true, serverImportPath },
-    ];
+    await installMultiPackageExtension('makaio-dev', 'makaio-dev.relay-connection');
     enablementMockState.disabled.add('makaio-dev.relay-connection');
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
@@ -1406,21 +1499,9 @@ describe('extension enable/disable commands', () => {
     // label a merely-non-critical hand-disabled name would get: that would
     // read as the effective state, when in fact this name force-starts on
     // the next boot if its export turns out critical.
-    const unreadableImportPath = path.join(
-      packageManagerMockState.makaioHome,
-      'fixture-packages',
-      'broken-ext',
-      'does-not-exist.mjs',
-    );
-    packageManagerMockState.packages = [
-      {
-        name: 'broken-ext',
-        version: '1.0.0',
-        hasDescriptor: true,
-        serverImportPath: unreadableImportPath,
-        declaresServerEntrypoint: true,
-      },
-    ];
+    // Declares a server entrypoint, but no convention candidate file is ever
+    // written for it — the "declared, but unresolvable" case.
+    await installNpmExtension(descriptor('broken-ext', '1.0.0'));
     enablementMockState.disabled.add('broken-ext');
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
@@ -1438,10 +1519,7 @@ describe('extension enable/disable commands', () => {
     // (one server entry can export several packages, each with its own).
     // Reading the installer's descriptor metadata here would let this disable
     // through for an extension boot force-starts anyway.
-    const serverImportPath = await writeMultiPackageServerEntry('parent-ext', 'parent-ext.child', false, true);
-    packageManagerMockState.packages = [
-      { name: 'parent-ext', version: '0.1.0', hasDescriptor: true, serverImportPath },
-    ];
+    await installMultiPackageExtension('parent-ext', 'parent-ext.child', false, true);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await program.parseAsync(['extension', 'disable', 'parent-ext'], { from: 'user' });
@@ -1457,17 +1535,9 @@ describe('extension enable/disable commands', () => {
     // offline listing must not let that string masquerade as a resolved
     // `false` — it refuses the disable exactly as an unreadable entrypoint
     // would.
-    const moduleDir = path.join(packageManagerMockState.makaioHome, 'fixture-packages', 'stringly-critical-ext');
-    await mkdir(moduleDir, { recursive: true });
-    const serverImportPath = path.join(moduleDir, 'server.mjs');
-    await writeFile(
-      serverImportPath,
-      `export default { name: 'stringly-critical-ext', displayName: 'Stringly', version: '0.1.0', critical: 'yes' };\n`,
-      'utf-8',
-    );
-    packageManagerMockState.packages = [
-      { name: 'stringly-critical-ext', version: '0.1.0', hasDescriptor: true, serverImportPath },
-    ];
+    await installNpmExtension(descriptor('stringly-critical-ext', '0.1.0'), {
+      entrySource: `export default { name: 'stringly-critical-ext', displayName: 'Stringly', version: '0.1.0', critical: 'yes' };\n`,
+    });
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
@@ -1480,15 +1550,13 @@ describe('extension enable/disable commands', () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it('lets the exported package override stale descriptor metadata claiming the descriptor is critical', async () => {
-    // Inverse drift: an installer listing still carrying `critical: true` for
-    // a descriptor that exports its own packages must not refuse a disable the
-    // coordinator would honour — the coordinator only ever reads the exported
-    // package, which declares itself optional here.
-    const serverImportPath = await writeMultiPackageServerEntry('parent-ext', 'parent-ext.child', false, false);
-    packageManagerMockState.packages = [
-      { name: 'parent-ext', version: '0.1.0', hasDescriptor: true, critical: true, serverImportPath },
-    ];
+  it("reads the descriptor's own row from its exported package, not from a critical sibling it exports", async () => {
+    // A descriptor with a server entrypoint may not declare `critical` at all
+    // (the schema rejects it), so the only possible drift is between the
+    // descriptor's own exported package and the other packages it exports.
+    // Its own row must follow its own package, which declares itself optional
+    // here, even though the child it exports is critical.
+    await installMultiPackageExtension('parent-ext', 'parent-ext.child', true, false);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
@@ -1505,21 +1573,9 @@ describe('extension enable/disable commands', () => {
     // metadata. This must refuse the disable exactly as a known-critical
     // extension would — the next boot, which can read the export, might
     // force-start it.
-    const unreadableImportPath = path.join(
-      packageManagerMockState.makaioHome,
-      'fixture-packages',
-      'broken-ext',
-      'does-not-exist.mjs',
-    );
-    packageManagerMockState.packages = [
-      {
-        name: 'broken-ext',
-        version: '1.0.0',
-        hasDescriptor: true,
-        serverImportPath: unreadableImportPath,
-        declaresServerEntrypoint: true,
-      },
-    ];
+    // Declares a server entrypoint, but no convention candidate file is ever
+    // written for it — the "declared, but unresolvable" case.
+    await installNpmExtension(descriptor('broken-ext', '1.0.0'));
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
@@ -1535,21 +1591,9 @@ describe('extension enable/disable commands', () => {
   it('still allows enabling a server-backed extension offline when its entrypoint cannot be imported', async () => {
     // Enabling is harmless regardless of criticality, so the same unresolved
     // entrypoint that refuses a disable must not block an enable.
-    const unreadableImportPath = path.join(
-      packageManagerMockState.makaioHome,
-      'fixture-packages',
-      'broken-ext',
-      'does-not-exist.mjs',
-    );
-    packageManagerMockState.packages = [
-      {
-        name: 'broken-ext',
-        version: '1.0.0',
-        hasDescriptor: true,
-        serverImportPath: unreadableImportPath,
-        declaresServerEntrypoint: true,
-      },
-    ];
+    // Declares a server entrypoint, but no convention candidate file is ever
+    // written for it — the "declared, but unresolvable" case.
+    await installNpmExtension(descriptor('broken-ext', '1.0.0'));
     enablementMockState.disabled.add('broken-ext');
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
@@ -1565,7 +1609,7 @@ describe('extension enable/disable commands', () => {
     // No `serverImportPath` at all: criticality is legitimately absent, the
     // exact case the `criticalityUnknown` marker must not apply to — contrast
     // with the unreadable-entrypoint case above, which does refuse.
-    packageManagerMockState.packages = [{ name: 'plain-ext', version: '1.0.0', hasDescriptor: true }];
+    await installNpmExtension(browserOnlyDescriptor('plain-ext', '1.0.0'));
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
@@ -1578,16 +1622,11 @@ describe('extension enable/disable commands', () => {
   });
 
   it("keeps a child package's persisted disabled preference visible in the offline listing after the server stops", async () => {
-    const serverImportPath = await writeMultiPackageServerEntry('makaio-dev', 'makaio-dev.relay-connection');
-    packageManagerMockState.packages = [
-      { name: 'makaio-dev', version: '0.1.0', hasDescriptor: true, serverImportPath },
-    ];
+    await installMultiPackageExtension('makaio-dev', 'makaio-dev.relay-connection');
 
-    // Server is running and does not manage this child (coordinator returns
-    // no entry for it), so the live toggle path writes the enablement file
-    // itself — see `applyUnmanagedNameToggle`.
+    // Server is running, so it owns the write: the CLI forwards the request
+    // and the server persists the preference for this child package name.
     enablementMockState.health = { url: 'ws://localhost:1234' };
-    enablementMockState.getResult = { extension: null };
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     await program.parseAsync(['extension', 'disable', 'makaio-dev.relay-connection'], { from: 'user' });
     expect(enablementMockState.disabled.has('makaio-dev.relay-connection')).toBe(true);
@@ -1601,10 +1640,7 @@ describe('extension enable/disable commands', () => {
   });
 
   it('disables a child package name entirely offline', async () => {
-    const serverImportPath = await writeMultiPackageServerEntry('makaio-dev', 'makaio-dev.relay-connection');
-    packageManagerMockState.packages = [
-      { name: 'makaio-dev', version: '0.1.0', hasDescriptor: true, serverImportPath },
-    ];
+    await installMultiPackageExtension('makaio-dev', 'makaio-dev.relay-connection');
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
     await program.parseAsync(['extension', 'disable', 'makaio-dev.relay-connection'], { from: 'user' });
@@ -1624,7 +1660,7 @@ describe('extension enable/disable commands', () => {
     enablementMockState.resolveAuthError = new Error(
       'Server requires authentication. Set MAKAIO_BUS_SECRET to connect.',
     );
-    packageManagerMockState.packages = [{ name: 'plain-ext', version: '2.0.0', hasDescriptor: true }];
+    await installNpmExtension(browserOnlyDescriptor('plain-ext', '2.0.0'));
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
@@ -1641,7 +1677,7 @@ describe('extension enable/disable commands', () => {
     // `kernel:extension.list` request itself fails.
     enablementMockState.health = { url: 'ws://localhost:1234' };
     enablementMockState.listRequestError = new Error('internal kernel error');
-    packageManagerMockState.packages = [{ name: 'plain-ext', version: '2.0.0', hasDescriptor: true }];
+    await installNpmExtension(browserOnlyDescriptor('plain-ext', '2.0.0'));
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
@@ -1657,7 +1693,7 @@ describe('extension enable/disable commands', () => {
     // with the server going down — is the one case that still falls through.
     enablementMockState.health = { url: 'ws://localhost:1234' };
     enablementMockState.connectError = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
-    packageManagerMockState.packages = [{ name: 'plain-ext', version: '2.0.0', hasDescriptor: true }];
+    await installNpmExtension(browserOnlyDescriptor('plain-ext', '2.0.0'));
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
     await program.parseAsync(['extension', 'list'], { from: 'user' });
@@ -1674,7 +1710,7 @@ describe('extension enable/disable commands', () => {
     process.env.MAKAIO_BUS_URL = 'ws://build-server.internal:6252/bus';
     enablementMockState.health = { url: 'ws://build-server.internal:6252/bus' };
     enablementMockState.connectError = Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
-    packageManagerMockState.packages = [{ name: 'local-only-ext', version: '1.0.0', hasDescriptor: true }];
+    await installNpmExtension(browserOnlyDescriptor('local-only-ext', '1.0.0'));
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
@@ -1687,18 +1723,19 @@ describe('extension enable/disable commands', () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it('surfaces extension entry error and defers to next boot when the outcome is restart-required', async () => {
+  it('defers to the next boot when the server persisted a preference its runtime state diverges from', async () => {
     enablementMockState.health = { url: 'ws://localhost:1234' };
-    enablementMockState.setEnabledResult = { success: false, outcome: 'restart-required' };
-    enablementMockState.getResult = {
-      extension: { error: 'restart required: runtimeOwnership extension was never started this boot' },
+    enablementMockState.setEnabledResult = {
+      success: false,
+      outcome: 'restart-required',
+      reason: 'runtime-state-diverges',
     };
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     await program.parseAsync(['extension', 'enable', 'my-ext'], { from: 'user' });
     expect(infoSpy).toHaveBeenCalledWith(
-      expect.stringContaining('restart required: runtimeOwnership extension was never started this boot'),
+      expect.stringContaining("the running server's process is not in the requested state"),
     );
-    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('The preference will take effect on next boot.'));
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Takes effect on next boot.'));
   });
 
   it('warns and exits non-zero when the enablement file could not be read, but still lists installed extensions', async () => {
@@ -1707,7 +1744,7 @@ describe('extension enable/disable commands', () => {
       diagnostic:
         'Enablement file at "/fake/config/extensions.json" contains invalid JSON; treating all extensions as enabled.',
     };
-    packageManagerMockState.packages = [{ name: 'plain-ext', version: '2.0.0', hasDescriptor: true }];
+    await installNpmExtension(browserOnlyDescriptor('plain-ext', '2.0.0'));
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
@@ -1721,34 +1758,11 @@ describe('extension enable/disable commands', () => {
     expect(process.exitCode).toBe(1);
   });
 
-  it('warns and exits non-zero when the enablement file could not be read for a local live listing', async () => {
-    // The local-live branch (a reachable server on the loopback bus) must
-    // still surface a broken enablement file — only the remote-live branch
-    // below is exempt, since it never reads this machine's file at all.
-    enablementMockState.health = { url: 'ws://localhost:1234' };
-    enablementMockState.listExtensions = [
-      { name: 'loaded-ext', displayName: 'Loaded Ext', state: 'active', enabled: true },
-    ];
-    enablementMockState.readFailure = {
-      reason: 'not-json',
-      diagnostic:
-        'Enablement file at "/fake/config/extensions.json" contains invalid JSON; treating all extensions as enabled.',
-    };
-    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-
-    await program.parseAsync(['extension', 'list'], { from: 'user' });
-
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('extension enablement preferences could not be read'));
-    expect(infoSpy).toHaveBeenCalledWith('Loaded Ext (loaded-ext) [active]');
-    expect(process.exitCode).toBe(1);
-  });
-
-  it('never loads or warns about a broken local enablement file when a remote server answers the live listing', async () => {
-    // `printRemoteLiveListing` never uses local enablement preferences, so
-    // the local file's read failure must never even be attempted for a
-    // remote target — no warning, no exit-1 side effect, and the remote
-    // snapshot is shown normally.
+  it('never loads or warns about a broken local enablement file when a server answers the live listing', async () => {
+    // A live listing reports the server's own preferences, from its own
+    // snapshot and catalog — this machine's enablement file is not part of
+    // the answer for a local bus any more than for a remote one, so a broken
+    // local file must not even be opened, let alone warned about.
     process.env.MAKAIO_BUS_URL = 'ws://build-server.internal:6252/bus';
     enablementMockState.health = { url: 'ws://build-server.internal:6252/bus' };
     enablementMockState.listExtensions = [
@@ -1770,17 +1784,24 @@ describe('extension enable/disable commands', () => {
     expect(enablementMockState.enablementStoreLoadCount).toBe(0);
   });
 
-  it('merges an installed-but-not-loaded name into the live listing with its persisted preference', async () => {
+  it("merges the server's installed-but-not-loaded packages into the live listing with their persisted preference", async () => {
     enablementMockState.health = { url: 'ws://localhost:1234' };
     enablementMockState.listExtensions = [
       { name: 'loaded-ext', displayName: 'Loaded Ext', state: 'active', enabled: true },
     ];
-    // `never-loaded` is installed but absent from the coordinator's live
-    // snapshot (interactive-only, unmet requires, or MAKAIO_SKIP_EXTENSIONS)
-    // yet has a persisted disable — exactly the case the unmanaged-name
-    // toggle fallback addresses, so the live listing must surface it too.
-    packageManagerMockState.packages = [{ name: 'never-loaded', version: '1.0.0', hasDescriptor: true }];
-    enablementMockState.disabled.add('never-loaded');
+    // Installed on the server's host but absent from its coordinator
+    // (interactive-only, unmet requires, or MAKAIO_SKIP_EXTENSIONS) — exactly
+    // the names `extension enable`/`disable` still address, so the listing
+    // must surface them, with the preference the server recorded.
+    enablementMockState.catalogEntries = [
+      {
+        name: 'never-loaded',
+        version: '1.0.0',
+        origin: 'npm',
+        extensionManaged: true,
+        persistedEnabled: false,
+      },
+    ];
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
     await program.parseAsync(['extension', 'list'], { from: 'user' });
@@ -1789,13 +1810,54 @@ describe('extension enable/disable commands', () => {
     expect(infoSpy).toHaveBeenCalledWith('never-loaded (1.0.0, npm) [not loaded, disabled]');
   });
 
+  it("reports a not-loaded package from the server's own project-local tier, which this process cannot see", async () => {
+    // The gap this catalog closes: a package installed under the server's
+    // working directory is invisible to every client, including one on the
+    // same machine started from elsewhere. Only the server can report it.
+    enablementMockState.health = { url: 'ws://localhost:1234' };
+    enablementMockState.listExtensions = [
+      { name: 'loaded-ext', displayName: 'Loaded Ext', state: 'active', enabled: true },
+    ];
+    enablementMockState.catalogEntries = [
+      { name: 'server-project-ext', version: '2.0.0', origin: 'project-local', extensionManaged: true },
+    ];
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'list'], { from: 'user' });
+
+    expect(infoSpy).toHaveBeenCalledWith('server-project-ext (2.0.0, project-local) [not loaded, enabled]');
+  });
+
+  it("keeps a critical package's durable disable visible as unresolved when the server could not read its criticality", async () => {
+    enablementMockState.health = { url: 'ws://localhost:1234' };
+    enablementMockState.listExtensions = [
+      { name: 'loaded-ext', displayName: 'Loaded Ext', state: 'active', enabled: true },
+    ];
+    enablementMockState.catalogEntries = [
+      {
+        name: 'broken-ext',
+        version: '1.0.0',
+        origin: 'npm',
+        extensionManaged: true,
+        persistedEnabled: false,
+        criticalityUnknown: true,
+      },
+    ];
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'list'], { from: 'user' });
+
+    expect(infoSpy).toHaveBeenCalledWith(
+      'broken-ext (1.0.0, npm) [not loaded, preference: disabled, effective state unknown (criticality unresolved)]',
+    );
+  });
+
   it("surfaces an installed override's presence on a same-named framework package's row instead of silently hiding it", async () => {
-    // The coordinator's live snapshot already contains an entry named
-    // `collided-ext` (the framework package), so the not-loaded merge's
-    // `liveNames` dedup would otherwise make the installed override
-    // completely invisible — neither listed as its own row (the coordinator
-    // never created one for it) nor merged as not-loaded (the name looks
-    // "seen"). The framework package's own row must carry a note instead.
+    // The live snapshot already contains an entry named `collided-ext` (the
+    // framework package), so the not-loaded merge's dedup would otherwise make
+    // the installed override completely invisible — neither its own row (the
+    // coordinator never created one) nor a merged not-loaded row (the name
+    // looks "seen"). The framework package's own row carries a note instead.
     enablementMockState.health = { url: 'ws://localhost:1234' };
     enablementMockState.listExtensions = [
       {
@@ -1806,7 +1868,9 @@ describe('extension enable/disable commands', () => {
         extensionManaged: false,
       },
     ];
-    packageManagerMockState.packages = [{ name: 'collided-ext', version: '1.0.0', hasDescriptor: true }];
+    enablementMockState.catalogEntries = [
+      { name: 'collided-ext', version: '1.0.0', origin: 'npm', extensionManaged: false },
+    ];
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
     await program.parseAsync(['extension', 'list'], { from: 'user' });
@@ -1818,47 +1882,50 @@ describe('extension enable/disable commands', () => {
     expect(infoSpy).not.toHaveBeenCalledWith(expect.stringContaining('not loaded'));
   });
 
-  it('still merges installed-but-not-loaded names when MAKAIO_BUS_URL is explicitly local', async () => {
-    process.env.MAKAIO_BUS_URL = 'ws://127.0.0.1:6252/bus';
-    enablementMockState.health = { url: 'ws://127.0.0.1:6252/bus' };
-    enablementMockState.listExtensions = [
-      { name: 'loaded-ext', displayName: 'Loaded Ext', state: 'active', enabled: true },
-    ];
-    packageManagerMockState.packages = [{ name: 'never-loaded', version: '1.0.0', hasDescriptor: true }];
-    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
-
-    await program.parseAsync(['extension', 'list'], { from: 'user' });
-
-    expect(infoSpy).toHaveBeenCalledWith('never-loaded (1.0.0, npm) [not loaded, enabled]');
-  });
-
-  it("does not merge this machine's installed-but-not-loaded names into a remote server's live listing", async () => {
+  it("merges the server's catalog for a remote bus exactly as for a local one", async () => {
+    // The listing describes one host end to end, so a remote server's
+    // installed-but-not-loaded packages are as reportable as a local one's.
     process.env.MAKAIO_BUS_URL = 'ws://build-server.internal:6252/bus';
     enablementMockState.health = { url: 'ws://build-server.internal:6252/bus' };
     enablementMockState.listExtensions = [
       { name: 'loaded-ext', displayName: 'Loaded Ext', state: 'active', enabled: true },
     ];
-    // Installed on *this* machine only — must never be reported as if it
-    // belonged to the remote host's coordinator.
-    packageManagerMockState.packages = [{ name: 'local-only-ext', version: '1.0.0', hasDescriptor: true }];
+    enablementMockState.catalogEntries = [
+      { name: 'remote-never-loaded', version: '3.0.0', origin: 'npm', extensionManaged: true },
+    ];
+    // Installed on *this* machine only — never part of the remote host's answer.
+    await installNpmExtension(browserOnlyDescriptor('local-only-ext', '1.0.0'));
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
     await program.parseAsync(['extension', 'list'], { from: 'user' });
 
     expect(infoSpy).toHaveBeenCalledWith('Loaded Ext (loaded-ext) [active]');
+    expect(infoSpy).toHaveBeenCalledWith('remote-never-loaded (3.0.0, npm) [not loaded, enabled]');
     expect(infoSpy).not.toHaveBeenCalledWith(expect.stringContaining('local-only-ext'));
-    expect(infoSpy).toHaveBeenCalledWith(
-      expect.stringContaining('this is a remote server (MAKAIO_BUS_URL) — extensions installed but not loaded'),
-    );
   });
 
-  it('reports the empty-list note for a remote server with nothing registered, without checking local installs', async () => {
-    process.env.MAKAIO_BUS_URL = 'ws://build-server.internal:6252/bus';
-    enablementMockState.health = { url: 'ws://build-server.internal:6252/bus' };
+  it('notes that a server without an installed-extension catalog cannot report its unloaded packages', async () => {
+    enablementMockState.health = { url: 'ws://localhost:1234' };
+    enablementMockState.listExtensions = [
+      { name: 'loaded-ext', displayName: 'Loaded Ext', state: 'active', enabled: true },
+    ];
+    enablementMockState.catalogEntries = null;
+    // Installed here, but this machine's view is never spliced into the
+    // server's listing — an absent catalog is reported as such instead.
+    await installNpmExtension(browserOnlyDescriptor('local-only-ext', '1.0.0'));
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'list'], { from: 'user' });
+
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('does not expose an installed-extension catalog'));
+    expect(infoSpy).not.toHaveBeenCalledWith(expect.stringContaining('local-only-ext'));
+  });
+
+  it('reports the empty-list note for a server with nothing registered and nothing installed', async () => {
+    enablementMockState.health = { url: 'ws://localhost:1234' };
     enablementMockState.listExtensions = [];
-    // A local-only install must never surface even the "not loaded" merge
-    // that the empty-list short-circuit exists to preserve for a local bus.
-    packageManagerMockState.packages = [{ name: 'local-only-ext', version: '1.0.0', hasDescriptor: true }];
+    // A local-only install must never surface as if it were the server's.
+    await installNpmExtension(browserOnlyDescriptor('local-only-ext', '1.0.0'));
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
     await program.parseAsync(['extension', 'list'], { from: 'user' });
@@ -1867,134 +1934,63 @@ describe('extension enable/disable commands', () => {
     expect(infoSpy).not.toHaveBeenCalledWith(expect.stringContaining('local-only-ext'));
   });
 
-  it('reports the remote-bus refusal and writes nothing when the unmanaged fallback would target a different machine', async () => {
+  it('forwards a remote toggle to the server instead of refusing it', async () => {
+    // The refusal this replaces existed only because the CLI could not write
+    // another machine's enablement file. The server writes its own, so a
+    // remote target is now an ordinary request.
     process.env.MAKAIO_BUS_URL = 'ws://build-server.internal:6252/bus';
     enablementMockState.health = { url: 'ws://build-server.internal:6252/bus' };
-    // `kernel:extension.get` reports no entry, so the CLI would otherwise
-    // fall back to writing the enablement file directly for this name.
-    enablementMockState.getResult = { extension: null };
-    packageManagerMockState.packages = [{ name: 'remote-ext', version: '1.0.0', hasDescriptor: true }];
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    enablementMockState.setEnabledResult = { success: true, outcome: 'applied', reason: 'not-loaded' };
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
     await program.parseAsync(['extension', 'disable', 'remote-ext'], { from: 'user' });
 
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("run this command on the server's host to persist the preference"),
-    );
-    // Nothing was written locally — the fallback refused before touching the file.
-    expect(enablementMockState.disabled.has('remote-ext')).toBe(false);
-    expect(process.exitCode).toBe(1);
-  });
-
-  it('still writes the enablement file for the unmanaged-name fallback when the bus is local', async () => {
-    process.env.MAKAIO_BUS_URL = 'ws://127.0.0.1:6252/bus';
-    enablementMockState.health = { url: 'ws://127.0.0.1:6252/bus' };
-    enablementMockState.getResult = { extension: null };
-    packageManagerMockState.packages = [{ name: 'local-ext', version: '1.0.0', hasDescriptor: true }];
-    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
-
-    await program.parseAsync(['extension', 'disable', 'local-ext'], { from: 'user' });
-
+    expect(enablementMockState.setEnabledCallCount).toBe(1);
     expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('not loaded in the running server'));
-    expect(enablementMockState.disabled.has('local-ext')).toBe(true);
     expect(process.exitCode).toBeUndefined();
   });
 
-  it('routes a name retained by a same-named framework package to the unmanaged-name fallback instead of setEnabled', async () => {
-    // `kernel:extension.get` reports an entry for this name, but
-    // `extensionManaged: false` means the coordinator loaded a framework
-    // package under it, not the disabled operator-managed override being
-    // enabled here — forwarding to `setEnabled` would have the server throw
-    // ("framework packages are not toggleable"). The CLI must persist the
-    // preference itself instead, exactly like the `extension: null` case.
+  it('reports a preference persisted for a name a framework package currently shadows', async () => {
     enablementMockState.health = { url: 'ws://localhost:1234' };
-    enablementMockState.getResult = { extension: { extensionManaged: false } };
-    packageManagerMockState.packages = [{ name: 'collided-ext', version: '1.0.0', hasDescriptor: true }];
-    // Pre-disabled, so the persisted write this test verifies actually
-    // flips the recorded preference rather than trivially matching an
-    // already-absent entry.
-    enablementMockState.disabled.add('collided-ext');
+    enablementMockState.setEnabledResult = {
+      success: false,
+      outcome: 'restart-required',
+      reason: 'framework-package-shadowed',
+    };
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
     await program.parseAsync(['extension', 'enable', 'collided-ext'], { from: 'user' });
 
-    expect(enablementMockState.setEnabledCallCount).toBe(0);
-    expect(enablementMockState.disabled.has('collided-ext')).toBe(false);
+    expect(enablementMockState.setEnabledCallCount).toBe(1);
     expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('a framework package currently holds this name'));
-    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('restart'));
+    expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Takes effect on next boot.'));
     expect(process.exitCode).toBeUndefined();
   });
 
-  it('refuses a toggle for a contested name even when the reachable server manages it', async () => {
-    // The server loaded a single copy at boot, so `kernel:extension.get` still
+  it("renders the running server's refusal of a contested name, writing nothing locally", async () => {
+    // The server loaded a single copy at boot, so its live snapshot still
     // reports a healthy managed entry — but a second copy was installed since,
-    // and the next start aborts on the contested name. Persisting a preference
-    // through `setEnabled` would report a change nothing will ever act on.
+    // and only the server's own catalog sees it. The refusal therefore comes
+    // back as a `setEnabled` outcome rather than being decided here.
     enablementMockState.health = { url: 'ws://localhost:1234' };
-    enablementMockState.getResult = { extension: { critical: false } };
-    packageManagerMockState.packages = [
-      { name: '@acme/weather-a', descriptorName: 'weather', version: '1.0.0', hasDescriptor: true },
-      { name: '@acme/weather-b', descriptorName: 'weather', version: '2.0.0', hasDescriptor: true },
-    ];
+    enablementMockState.setEnabledResult = { success: false, outcome: 'rejected', reason: 'name-collision' };
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await program.parseAsync(['extension', 'disable', 'weather'], { from: 'user' });
 
+    expect(enablementMockState.setEnabledCallCount).toBe(1);
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('more than one installed copy claims this name'));
-    expect(enablementMockState.setEnabledCallCount).toBe(0);
     expect(enablementMockState.disabled.has('weather')).toBe(false);
     expect(process.exitCode).toBe(1);
-  });
-
-  it('refuses the framework-package-collision fallback for a remote server, writing nothing locally', async () => {
-    process.env.MAKAIO_BUS_URL = 'ws://build-server.internal:6252/bus';
-    enablementMockState.health = { url: 'ws://build-server.internal:6252/bus' };
-    enablementMockState.getResult = { extension: { extensionManaged: false } };
-    packageManagerMockState.packages = [{ name: 'collided-ext', version: '1.0.0', hasDescriptor: true }];
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-
-    await program.parseAsync(['extension', 'enable', 'collided-ext'], { from: 'user' });
-
-    expect(enablementMockState.setEnabledCallCount).toBe(0);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("run this command on the server's host to persist the preference"),
-    );
-    expect(enablementMockState.disabled.has('collided-ext')).toBe(false);
-    expect(process.exitCode).toBe(1);
-    // The remote guard sits ahead of the installed-package listing fetch —
-    // a remote target must never scan this machine's local packages just to
-    // reach a refusal it was always going to report.
-    expect(packageManagerMockState.listPackagesCallCount).toBe(0);
-  });
-
-  it('refuses the never-loaded unmanaged-name fallback for a remote server without scanning local packages', async () => {
-    // Same guard as the framework-package-collision case above, but for the
-    // other `managedEntry === null` reason: the coordinator never loaded any
-    // entry for this name at all (`kernel:extension.get` returns `null`).
-    process.env.MAKAIO_BUS_URL = 'ws://build-server.internal:6252/bus';
-    enablementMockState.health = { url: 'ws://build-server.internal:6252/bus' };
-    enablementMockState.getResult = { extension: null };
-    packageManagerMockState.packages = [{ name: 'never-loaded-ext', version: '1.0.0', hasDescriptor: true }];
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-
-    await program.parseAsync(['extension', 'enable', 'never-loaded-ext'], { from: 'user' });
-
-    expect(enablementMockState.setEnabledCallCount).toBe(0);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("run this command on the server's host to persist the preference"),
-    );
-    expect(enablementMockState.disabled.has('never-loaded-ext')).toBe(false);
-    expect(process.exitCode).toBe(1);
-    expect(packageManagerMockState.listPackagesCallCount).toBe(0);
   });
 
   it('keys the offline listing and unmanaged toggle by the descriptor name, not the npm dependency identifier', async () => {
     // `@makaio/extension-opencode` installs a descriptor named `opencode` —
     // the enablement file, the runtime loader, and this listing must all key
     // on `opencode`, never on the npm package name it shipped under.
-    packageManagerMockState.packages = [
-      { name: '@makaio/extension-opencode', descriptorName: 'opencode', version: '1.0.0', hasDescriptor: true },
-    ];
+    await installNpmExtension(browserOnlyDescriptor('opencode', '1.0.0'), {
+      npmName: '@makaio/extension-opencode',
+    });
     enablementMockState.disabled.add('opencode');
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
@@ -2006,9 +2002,9 @@ describe('extension enable/disable commands', () => {
   });
 
   it('enables an npm-installed extension by its descriptor name even though the npm dependency identifier differs', async () => {
-    packageManagerMockState.packages = [
-      { name: '@makaio/extension-opencode', descriptorName: 'opencode', version: '1.0.0', hasDescriptor: true },
-    ];
+    await installNpmExtension(browserOnlyDescriptor('opencode', '1.0.0'), {
+      npmName: '@makaio/extension-opencode',
+    });
     enablementMockState.disabled.add('opencode');
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
@@ -2026,6 +2022,19 @@ describe('extension enable/disable commands', () => {
     beforeEach(async () => {
       projectRoot = await makeTestRepo('makaio-cli-project-local-');
       cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(projectRoot);
+      // The tier order under test only exists for a host that boots with it,
+      // so the commands are handed the very discovery that host would use —
+      // project-local `node_modules` first, then the data-home tiers. The
+      // offline listing describes a discovery, never a hardcoded tier list, so
+      // supplying it here is what makes these assertions about the runtime's
+      // precedence rather than about the listing's own invention.
+      program = new Command();
+      registerExtensionCommands(program, {
+        discovery: new FilesystemDescriptorDiscovery(projectRoot, {
+          extensionsDir: path.join(packageManagerMockState.makaioHome, 'extensions'),
+          nodeModulesDir: path.join(packageManagerMockState.makaioHome, 'node_modules'),
+        }),
+      });
     });
 
     afterEach(async () => {
@@ -2089,7 +2098,7 @@ describe('extension enable/disable commands', () => {
       // `$MAKAIO_HOME/node_modules` reports this name as ordinary, but the
       // project-local tier the runtime prioritizes above it overrides the
       // same name as critical — the higher-priority tier must decide.
-      packageManagerMockState.packages = [{ name: 'shared-ext', version: '1.0.0', hasDescriptor: true }];
+      await installNpmExtension(browserOnlyDescriptor('shared-ext', '1.0.0'));
       await writeProjectLocalDescriptor(projectRoot, descriptor('shared-ext', '2.0.0'));
       await writeProjectLocalServerEntry(projectRoot, 'shared-ext', [{ name: 'shared-ext', critical: true }]);
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -2105,8 +2114,8 @@ describe('extension enable/disable commands', () => {
       // The npm copy is installed but unloadable: the project-local tier wins
       // the name. Omitting it made a just-installed extension look like it had
       // never been installed, with nothing to tell the operator why.
-      packageManagerMockState.packages = [{ name: 'shared-ext', version: '1.0.0', hasDescriptor: true }];
-      await writeProjectLocalDescriptor(projectRoot, descriptor('shared-ext', '2.0.0'));
+      await installNpmExtension(browserOnlyDescriptor('shared-ext', '1.0.0'));
+      await writeProjectLocalDescriptor(projectRoot, browserOnlyDescriptor('shared-ext', '2.0.0'));
       const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
       await program.parseAsync(['extension', 'list'], { from: 'user' });
@@ -2118,24 +2127,30 @@ describe('extension enable/disable commands', () => {
       ]);
     });
 
-    it('reports the project-local name collision as a listing failure instead of an unhandled rejection', async () => {
+    it("reports a project-local same-tier name collision on both rows, with each copy's provenance", async () => {
       // Two hand-placed packages in the project-local tier claiming one
-      // identity: discovery refuses (there is no precedence within a tier),
-      // and `extension list` must end as an operator-readable message with a
-      // non-zero exit rather than a raw stack trace.
+      // identity: there is no precedence within a tier, so the next boot
+      // refuses outright. The listing does not refuse — it exists to show what
+      // is installed — so both copies are reported as contesting the name, the
+      // command exits non-zero, and the provenance the operator needs to fix
+      // it is warned alongside.
       const firstPath = await writeCollidingProjectLocalPackage('first-copy', 'shared-ext');
       const secondPath = await writeCollidingProjectLocalPackage('second-copy', 'shared-ext');
+      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
       await program.parseAsync(['extension', 'list'], { from: 'user' });
 
-      const message = errorSpy.mock.calls
-        .map((call) => String(call[0]))
-        .find((line) => line.startsWith('List failed:'));
-      expect(message).toBeDefined();
-      expect(message).toContain('shared-ext');
-      expect(message).toContain(firstPath);
-      expect(message).toContain(secondPath);
+      const rows = infoSpy.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith('shared-ext '));
+      expect(rows).toEqual([
+        'shared-ext (1.0.0, project-local) [name collision with project-local, nothing loads under this name until it is resolved]',
+        'shared-ext (1.0.0, project-local) [name collision with project-local, nothing loads under this name until it is resolved]',
+      ]);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Extension name collision: shared-ext'));
+      const provenance = warnSpy.mock.calls.map((call) => String(call[0])).find((line) => line.includes('shared-ext'));
+      expect(provenance).toContain(firstPath);
+      expect(provenance).toContain(secondPath);
       expect(process.exitCode).toBe(1);
     });
 
@@ -2151,7 +2166,7 @@ describe('extension enable/disable commands', () => {
       await mkdir(packageRoot, { recursive: true });
       await writeFile(
         path.join(packageRoot, 'descriptor.json'),
-        `${JSON.stringify(descriptor(descriptorName, '1.0.0'), null, 2)}\n`,
+        `${JSON.stringify(browserOnlyDescriptor(descriptorName, '1.0.0'), null, 2)}\n`,
         'utf-8',
       );
       return packageRoot;
@@ -2169,10 +2184,7 @@ describe('extension enable/disable commands', () => {
     /**
      * Write a real, dynamically-importable `dist/server.mjs` for a
      * project-local package at the runtime's own convention path (see
-     * `resolveConventionEntrypoint` in `load-extensions.ts`) — the
-     * project-local counterpart of `writeMultiPackageServerEntry` above, which
-     * instead points a mocked npm listing's `serverImportPath` at an arbitrary
-     * fixture location.
+     * `resolveConventionEntrypoint` in `load-extensions.ts`).
      *
      * The exported packages are the only place `critical` may be declared for
      * a descriptor with a server entrypoint, so every project-local fixture
@@ -2204,30 +2216,24 @@ describe('extension enable/disable commands', () => {
     }
 
     /**
-     * Write a single-package server entry for a mocked npm install, declaring
+     * Install a data-home npm extension whose single exported package declares
      * one runtime surface.
      *
-     * The npm tier's listing reads its `surface` from the exported package the
-     * coordinator would load, exactly as it reads `critical` — so the fixture
-     * has to be a real, importable module rather than descriptor metadata.
+     * The scan reads `surface` from the exported package the coordinator would
+     * load, exactly as it reads `critical` — so the fixture has to be a real,
+     * importable module rather than descriptor metadata.
      * @param descriptorName - Descriptor identity the entry exports itself under.
      * @param surface - Runtime surface the exported package restricts itself to.
-     * @returns The entry's import path.
      */
-    async function writeSurfacedServerEntry(
+    async function installSurfacedNpmExtension(
       descriptorName: string,
       surface: 'interactive' | 'headless',
-    ): Promise<string> {
-      const packageRoot = path.join(packageManagerMockState.makaioHome, 'fixture-packages', descriptorName);
-      await mkdir(packageRoot, { recursive: true });
-      const serverImportPath = path.join(packageRoot, 'server.mjs');
-      await writeFile(
-        serverImportPath,
-        `export default { name: ${JSON.stringify(descriptorName)}, displayName: 'Surfaced', version: '9.0.0', ` +
+    ): Promise<void> {
+      await installNpmExtension(descriptor(descriptorName, '9.0.0'), {
+        entrySource:
+          `export default { name: ${JSON.stringify(descriptorName)}, displayName: 'Surfaced', version: '9.0.0', ` +
           `surface: ${JSON.stringify(surface)} };\n`,
-        'utf-8',
-      );
-      return serverImportPath;
+      });
     }
 
     it("reports a higher-priority tier's child package name against a lower-priority tier's own descriptor of the same name as a collision, not as a resolved shadowing", async () => {
@@ -2248,9 +2254,7 @@ describe('extension enable/disable commands', () => {
         { name: 'parent-ext' },
         { name: 'parent-ext.child' },
       ]);
-      packageManagerMockState.packages = [
-        { name: 'parent-ext.child', version: '9.0.0', hasDescriptor: true, critical: true },
-      ];
+      await installNpmExtension(browserOnlyDescriptor('parent-ext.child', '9.0.0', true));
       const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
@@ -2263,8 +2267,9 @@ describe('extension enable/disable commands', () => {
         'parent-ext.child (0.1.0, project-local) [name collision with npm, nothing loads under this name until it is resolved]',
         'parent-ext.child (9.0.0, npm) [name collision with project-local, nothing loads under this name until it is resolved]',
       ]);
-      // The descriptor that won its own name is unaffected and still loadable.
-      expect(infoSpy).toHaveBeenCalledWith('parent-ext (1.0.0, project-local) [enabled]');
+      // The descriptor that won its own name is unaffected and still loadable,
+      // reported at the version its server entry exports.
+      expect(infoSpy).toHaveBeenCalledWith('parent-ext (0.1.0, project-local) [enabled]');
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Extension name collision: parent-ext.child'));
       expect(process.exitCode).toBe(1);
 
@@ -2290,16 +2295,7 @@ describe('extension enable/disable commands', () => {
         { name: 'surfaced-parent' },
         { name: 'surfaced-parent.child', surface: 'interactive' },
       ]);
-      const serverImportPath = await writeSurfacedServerEntry('surfaced-parent.child', 'headless');
-      packageManagerMockState.packages = [
-        {
-          name: 'surfaced-parent.child',
-          version: '9.0.0',
-          hasDescriptor: true,
-          serverImportPath,
-          declaresServerEntrypoint: true,
-        },
-      ];
+      await installSurfacedNpmExtension('surfaced-parent.child', 'headless');
       const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
@@ -2324,19 +2320,23 @@ describe('extension enable/disable commands', () => {
 
     it('reports two npm packages declaring one descriptor name as a collision instead of one shadowing the other', async () => {
       // Both sit in `$MAKAIO_HOME/node_modules` — one tier, no precedence to
-      // appeal to — so discovery throws `ExtensionNameCollisionError` and the
-      // boot aborts. Labelling the second row "shadowed by npm" claimed the
-      // first one loads, which it does not.
-      packageManagerMockState.packages = [
-        { name: '@acme/weather-a', descriptorName: 'weather', version: '1.0.0', hasDescriptor: true },
-        { name: '@acme/weather-b', descriptorName: 'weather', version: '2.0.0', hasDescriptor: true },
-      ];
+      // appeal to — so the next boot refuses to resolve the name. Labelling the
+      // second row "shadowed by npm" claimed the first one loads, which it
+      // does not.
+      await installNpmExtension(browserOnlyDescriptor('weather', '1.0.0'), { npmName: '@acme/weather-a' });
+      await installNpmExtension(browserOnlyDescriptor('weather', '2.0.0'), { npmName: '@acme/weather-b' });
       const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
       await program.parseAsync(['extension', 'list'], { from: 'user' });
 
-      const rows = infoSpy.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith('weather '));
+      // Sorted before comparing: two packages in one tier have no precedence
+      // over each other, so the order they appear in is the filesystem's and
+      // asserting it would encode a ranking the runtime explicitly refuses.
+      const rows = infoSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.startsWith('weather '))
+        .sort();
       expect(rows).toEqual([
         'weather (1.0.0, npm, npm package: @acme/weather-a) [name collision with npm, nothing loads under this name until it is resolved]',
         'weather (2.0.0, npm, npm package: @acme/weather-b) [name collision with npm, nothing loads under this name until it is resolved]',
@@ -2354,8 +2354,8 @@ describe('extension enable/disable commands', () => {
     it('still resolves a descriptor name claimed by two tiers by tier precedence', async () => {
       // Guard against the collision marking above swallowing the one contest
       // that *is* resolvable: two descriptors, different tiers, same name.
-      packageManagerMockState.packages = [{ name: 'tiered-ext', version: '1.0.0', hasDescriptor: true }];
-      await writeProjectLocalDescriptor(projectRoot, descriptor('tiered-ext', '2.0.0'));
+      await installNpmExtension(browserOnlyDescriptor('tiered-ext', '1.0.0'));
+      await writeProjectLocalDescriptor(projectRoot, browserOnlyDescriptor('tiered-ext', '2.0.0'));
       const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
@@ -2367,6 +2367,42 @@ describe('extension enable/disable commands', () => {
         'tiered-ext (1.0.0, npm) [shadowed by project-local, not loaded]',
       ]);
       expect(errorSpy).not.toHaveBeenCalled();
+      expect(process.exitCode).toBeUndefined();
+    });
+  });
+
+  describe('unconfigured offline discovery', () => {
+    let projectRoot: string;
+
+    beforeEach(async () => {
+      projectRoot = await makeTestRepo('makaio-cli-unconfigured-');
+      vi.spyOn(process, 'cwd').mockReturnValue(projectRoot);
+      // No discovery injected: this is the host that assembled the command
+      // tree without resolving runtime config. Its `serve` hands the runtime
+      // no boot discovery either, so the runtime falls back to its own
+      // filesystem default — and the offline listing must describe that same
+      // default, project-local tier included.
+      program = new Command();
+      registerExtensionCommands(program);
+    });
+
+    afterEach(async () => {
+      await rm(projectRoot, { recursive: true, force: true });
+    });
+
+    it('lists and toggles an extension installed only in the project node_modules', async () => {
+      // Nothing under `$MAKAIO_HOME` knows this name, and no config file
+      // declares a discovery root — the only tier that can see it is the
+      // working directory's own dependency tree.
+      await writeProjectLocalDescriptor(projectRoot, browserOnlyDescriptor('project-only-ext', '1.0.0'));
+      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+      await program.parseAsync(['extension', 'list'], { from: 'user' });
+      expect(infoSpy).toHaveBeenCalledWith('project-only-ext (1.0.0, project-local) [enabled]');
+
+      await program.parseAsync(['extension', 'disable', 'project-only-ext'], { from: 'user' });
+      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Persisted; no running server'));
+      expect(enablementMockState.disabled.has('project-only-ext')).toBe(true);
       expect(process.exitCode).toBeUndefined();
     });
   });
@@ -2385,12 +2421,13 @@ describe('extension enable/disable commands', () => {
       await rm(projectRoot, { recursive: true, force: true });
     });
 
-    it("does not surface a project-local-only extension as installed-but-not-loaded in the live listing, because a reachable server may not share this CLI invocation's cwd", async () => {
+    it("does not splice this process's project-local installs into a reachable server's listing", async () => {
+      // This process's working directory says nothing about the server's: a
+      // local server can have been started from anywhere. Only the server's
+      // own catalog describes its project-local tier, so a name found only
+      // here must never appear in a live listing.
       await writeProjectLocalDescriptor(projectRoot, descriptor('project-only-live-ext', '1.0.0'));
       enablementMockState.health = { url: 'ws://localhost:1234' };
-      // At least one live entry so the listing does not take the early
-      // empty-list return, which would print before reaching the not-loaded
-      // merge and its note.
       enablementMockState.listExtensions = [
         { name: 'loaded-ext', displayName: 'Loaded Ext', state: 'active', enabled: true },
       ];
@@ -2399,17 +2436,12 @@ describe('extension enable/disable commands', () => {
       await program.parseAsync(['extension', 'list'], { from: 'user' });
 
       expect(infoSpy).toHaveBeenCalledWith('Loaded Ext (loaded-ext) [active]');
-      // The `'all'`-tier offline listing would have reported this name as
-      // `[not loaded, enabled]` (see the offline describe block above); the
-      // live listing must not, since it only trusts the $MAKAIO_HOME-shared
-      // tiers for a reachable server.
+      // The offline listing does report this name (see the offline describe
+      // block above) — a live listing must not.
       expect(infoSpy).not.toHaveBeenCalledWith(expect.stringContaining('project-only-live-ext'));
-      expect(infoSpy).toHaveBeenCalledWith(
-        expect.stringContaining('this listing only covers extensions shared through $MAKAIO_HOME'),
-      );
     });
 
-    it('reports an empty live listing without merging a project-local-only install, and without the shared-home note', async () => {
+    it("reports an empty live listing without consulting this process's project-local installs", async () => {
       await writeProjectLocalDescriptor(projectRoot, descriptor('project-only-live-ext', '1.0.0'));
       enablementMockState.health = { url: 'ws://localhost:1234' };
       enablementMockState.listExtensions = [];
@@ -2417,22 +2449,17 @@ describe('extension enable/disable commands', () => {
 
       await program.parseAsync(['extension', 'list'], { from: 'user' });
 
-      // With no live entries and nothing in the $MAKAIO_HOME-shared tiers,
-      // `hasNotLoaded` is `false` and the command takes the empty-list
-      // short-circuit — it must not report the project-local install as
-      // installed-but-not-loaded to get there.
       expect(infoSpy).toHaveBeenCalledWith('No extensions registered in the running server.');
       expect(infoSpy).not.toHaveBeenCalledWith(expect.stringContaining('project-only-live-ext'));
     });
 
-    it('rejects the unmanaged-toggle fallback for a project-local-only name as unknown, because the reachable server may not share this cwd', async () => {
+    it("lets the server refuse a name that exists only in this process's project-local tier", async () => {
+      // Installed here, but the server is the authority on its own host: if it
+      // cannot find the name, the request is refused rather than persisted
+      // against this machine's unrelated install.
       await writeProjectLocalDescriptor(projectRoot, descriptor('project-only-live-ext', '1.0.0'));
       enablementMockState.health = { url: 'ws://localhost:1234' };
-      // `kernel:extension.get` reports no entry, so the CLI falls back to the
-      // unmanaged-name toggle path, which must validate against the
-      // `'shared-home'` listing rather than this process's own project-local
-      // tier.
-      enablementMockState.getResult = { extension: null };
+      enablementMockState.setEnabledResult = { success: false, outcome: 'rejected', reason: 'not-installed' };
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
       await program.parseAsync(['extension', 'disable', 'project-only-live-ext'], { from: 'user' });
@@ -2442,20 +2469,18 @@ describe('extension enable/disable commands', () => {
       expect(process.exitCode).toBe(1);
     });
 
-    it('still resolves a $MAKAIO_HOME-installed (non-project-local) unmanaged name live, unaffected by the shared-home restriction', async () => {
-      // Control case for the previous test: the same live, unmanaged-name
-      // fallback must keep succeeding for a name discoverable through the
-      // tiers that remain in scope (`$MAKAIO_HOME/node_modules`), confirming
-      // the restriction is specific to the project-local tier.
-      packageManagerMockState.packages = [{ name: 'home-installed-ext', version: '1.0.0', hasDescriptor: true }];
+    it("resolves a name from the server's own project-local tier, which no client can see", async () => {
+      // The inverse of the previous case, and the reason the catalog exists:
+      // the server accepts a name only its own working directory provides,
+      // and persists it — something no client-side validation could allow.
       enablementMockState.health = { url: 'ws://localhost:1234' };
-      enablementMockState.getResult = { extension: null };
+      enablementMockState.setEnabledResult = { success: true, outcome: 'applied', reason: 'not-loaded' };
       const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
-      await program.parseAsync(['extension', 'disable', 'home-installed-ext'], { from: 'user' });
+      await program.parseAsync(['extension', 'disable', 'server-project-ext'], { from: 'user' });
 
       expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('not loaded in the running server'));
-      expect(enablementMockState.disabled.has('home-installed-ext')).toBe(true);
+      expect(enablementMockState.disabled.has('server-project-ext')).toBe(true);
       expect(process.exitCode).toBeUndefined();
     });
   });

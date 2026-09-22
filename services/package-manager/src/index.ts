@@ -41,3 +41,5 @@ export { DependencyResolver, ExtensionNameClaimedError } from './dependency-reso
 export type { DependencyPackageManager, ResolutionOptions, ResolutionResult } from './dependency-resolver.js';
 export { DevPortalPackageManager } from './dev-portal-resolver.js';
 export type { DevPortalMap } from './dev-portal-resolver.js';
+export { resolveExportedPackages } from './exported-package-critical.js';
+export type { ExportedPackageInfo, ExportedPackageListing } from './exported-package-critical.js';

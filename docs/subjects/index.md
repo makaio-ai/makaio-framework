@@ -12,7 +12,7 @@ next: false
 | Metric | Count |
 |--------|-------|
 | Namespaces | 106 |
-| Subjects | 1015 (407 events, 608 RPCs) |
+| Subjects | 1016 (407 events, 609 RPCs) |
 | framework | 101 |
 | extension | 5 |
 | kind: bus | 74 |
@@ -70,7 +70,7 @@ next: false
 | [`kernel`](./kernel.md) | bus | 9 | 4E / 5R |
 | [`kernel:boot`](./kernel-boot.md) | bus | 7 | 6E / 1R |
 | [`kernel:cli`](./kernel-cli.md) | bus | 2 | 0E / 2R |
-| [`kernel:extension`](./kernel-extension.md) | bus | 8 | 3E / 5R |
+| [`kernel:extension`](./kernel-extension.md) | bus | 9 | 3E / 6R |
 | [`materialization`](./materialization.md) | bus | 6 | 3E / 3R |
 | [`mcp`](./mcp.md) | bus | 9 | 6E / 3R |
 | [`modelRegistry:public`](./modelregistry-public.md) | bus | 1 | 0E / 1R |

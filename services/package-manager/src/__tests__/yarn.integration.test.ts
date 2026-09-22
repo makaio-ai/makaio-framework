@@ -293,7 +293,7 @@ describe('YarnPackageManager', () => {
         declaresServerEntrypoint: true,
       });
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('failed to import server entry while resolving critical flag'),
+        expect.stringContaining('failed to import server entry while reading its exported packages'),
         expect.anything(),
       );
     } finally {

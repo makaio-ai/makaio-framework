@@ -10,6 +10,7 @@
  * - `kernel:extension.list`              — RPC listing all extensions with current state
  * - `kernel:extension.get`               — RPC fetching a single extension by name
  * - `kernel:extension.setEnabled`        — RPC persisting an operator enable/disable preference
+ * - `kernel:extension.catalog`           — RPC listing every extension package installed on the coordinator's host
  * - `kernel:extension.enabledChanged`    — fire-and-forget event confirming an accepted enable/disable call and the extension's effective state
  * - `kernel:extension.warnings.list`     — RPC listing active health warnings per extension
  * - `kernel:extension.warnings.changed`  — fire-and-forget snapshot after each health-check run
@@ -18,6 +19,7 @@ import { createBusNamespace, type SchemaRecord } from '@makaio/core';
 import { z } from 'zod';
 import { ClientDefinitionSchema, ProviderDefinitionSchema } from '@makaio/contracts';
 import { ComponentStateSchema, ExtensionInfoSchema, ExtensionWarningEntrySchema } from './shared-schemas.js';
+import { InstalledExtensionCatalogEntrySchema } from './installed-extension-catalog-schemas.js';
 
 const ExtensionContributionCatalogEntrySchema = z.object({
   packageName: z.string(),
@@ -44,10 +46,13 @@ const ExtensionClientContributionSchema = ExtensionContributionCatalogEntrySchem
  * - `'applied'` — the persisted preference already matches the process's
  *   current runtime state; no restart is needed for it to take effect.
  * - `'rejected'` — the request was refused outright without persisting
- *   anything: an unknown extension name, or the coordinator already shutting
- *   down. A disable of a `critical` extension is refused too, but as a thrown
- *   error, not this outcome — `'rejected'` here is a *response*, not a
- *   fault. `TransitionOutcome` is shared with the coordinator-internal
+ *   anything: an unknown extension name, a disable of a `critical` package or
+ *   of one whose criticality could not be resolved, or a coordinator already
+ *   shutting down. Every such refusal is a *response*, carrying a
+ *   {@link SetEnabledReasonSchema} code for which one it was, rather than a
+ *   fault — a caller that cannot inspect the host itself must be able to tell
+ *   "refused, and here is why" apart from "the call failed".
+ *   `TransitionOutcome` is shared with the coordinator-internal
  *   `applyExtensionTransition` primitive, where `'rejected'` additionally
  *   covers a state-machine refusal such as retrying a transition on an entry
  *   the boot phase skipped entirely.
@@ -59,6 +64,60 @@ export const TransitionOutcomeSchema = z.enum(['applied', 'rejected', 'restart-r
 
 /** Inferred union type for {@link TransitionOutcomeSchema}. */
 export type TransitionOutcome = z.infer<typeof TransitionOutcomeSchema>;
+
+/**
+ * Machine-readable detail accompanying one `kernel:extension.setEnabled`
+ * outcome.
+ *
+ * The {@link TransitionOutcomeSchema} alone cannot tell a caller *why* a
+ * request was refused, or why a persisted preference cannot take effect yet —
+ * both of which decide what an operator is told and whether they can act on
+ * it. Codes rather than prose so the wording stays with the surface that
+ * renders it:
+ *
+ * Refusals (`'rejected'`, nothing was written):
+ * - `'critical'` — a disable targeting a `critical` package. The runtime
+ *   force-starts it on every boot regardless of the store, so persisting the
+ *   disable would only produce a permanent, ignored entry.
+ * - `'criticality-unknown'` — a disable targeting a package whose criticality
+ *   could not be resolved, because its server entrypoint could not be read.
+ *   Fail-closed: a later boot that *can* read the export might force-start it.
+ * - `'not-installed'` — no loaded extension and no installed package carries
+ *   this name on this host.
+ * - `'no-catalog'` — the name is not loaded here and this runtime exposes no
+ *   installed-extension catalog, so it cannot tell a real installed package
+ *   apart from a typo and refuses rather than persisting on the caller's word.
+ * - `'name-collision'` — more than one installed package claims this name and
+ *   the runtime cannot resolve it to a single extension, so the next boot
+ *   refuses before any preference is read. A preference written now could
+ *   never be acted on, and would silently apply to whichever copy an operator
+ *   happens to leave behind.
+ * - `'shutting-down'` — the coordinator is tearing down.
+ *
+ * Persisted, but not in effect (`'restart-required'`, or `'applied'` when the
+ * runtime already matches the request):
+ * - `'runtime-state-diverges'` — the loaded extension's runtime state differs
+ *   from the persisted preference; only a restart reconciles them.
+ * - `'not-loaded'` — the package is installed but this process never loaded it
+ *   (surface affinity, unmet requirements, or boot-time suppression).
+ * - `'framework-package-shadowed'` — a framework package currently holds this
+ *   name, so the installed package under it stays shadowed until it no longer
+ *   does.
+ */
+export const SetEnabledReasonSchema = z.enum([
+  'critical',
+  'criticality-unknown',
+  'not-installed',
+  'no-catalog',
+  'name-collision',
+  'shutting-down',
+  'runtime-state-diverges',
+  'not-loaded',
+  'framework-package-shadowed',
+]);
+
+/** Inferred union type for {@link SetEnabledReasonSchema}. */
+export type SetEnabledReason = z.infer<typeof SetEnabledReasonSchema>;
 
 /**
  * Schema definitions for the `kernel:extension` bus namespace.
@@ -145,6 +204,14 @@ const ExtensionSchemas = {
    * the process's current runtime state already matches the request
    * (`'applied'`) or a restart is needed for it to take effect
    * (`'restart-required'`).
+   *
+   * Names this coordinator never loaded are addressable too, provided it
+   * exposes an installed-extension catalog (`kernel:extension.catalog`): the
+   * request is validated against that catalog — the name must be installed
+   * here, and a disable of a `critical` package, or of one whose criticality
+   * could not be resolved, is refused — before anything is written. This is
+   * what lets a caller that cannot see this host's filesystem persist a
+   * preference without having to vouch for the name itself.
    * @param name - Unique extension identifier to toggle.
    * @param enabled - Target enabled state.
    */
@@ -153,6 +220,34 @@ const ExtensionSchemas = {
     response: z.object({
       success: z.boolean(),
       outcome: TransitionOutcomeSchema,
+      reason: SetEnabledReasonSchema.optional(),
+    }),
+  },
+
+  /**
+   * Request every extension package installed on the host running this
+   * coordinator.
+   *
+   * Subject: `kernel:extension.catalog`
+   * Type: RPC (request/response)
+   * Purpose: Exposes the coordinator host's own installed-package view —
+   * across every discovery tier it reads, including the project-local
+   * `node_modules` of the directory it was started from — enriched with the
+   * enablement facts only the host holding the durable store can answer.
+   * Callers that cannot inspect this host's filesystem (a client configured
+   * against a remote bus, or one invoked from a different working directory)
+   * have no other way to enumerate installed-but-not-loaded extensions, and
+   * `kernel:extension.setEnabled` validates against this same catalog.
+   *
+   * Returns `{ entries: null }` — not an empty array — when this runtime has
+   * no installed-extension catalog at all, because "nothing is installed" and
+   * "this host cannot answer" must not read alike to a caller deciding
+   * whether to trust the result.
+   */
+  catalog: {
+    request: z.object({}),
+    response: z.object({
+      entries: z.array(InstalledExtensionCatalogEntrySchema).nullable(),
     }),
   },
 
@@ -243,6 +338,7 @@ export const ExtensionNamespace = createBusNamespace('kernel:extension', Extensi
  * - `list`                — RPC: retrieve all registered extensions and their current state
  * - `get`                 — RPC: retrieve a single extension's info by name
  * - `setEnabled`          — RPC: persist an operator enable/disable preference
+ * - `catalog`             — RPC: list every extension package installed on the coordinator's host
  * - `enabledChanged`      — event: confirms an accepted enable/disable call and the extension's effective state
  * - `warnings.list`       — RPC: retrieve active health warnings for all (or one) extension
  * - `warnings.changed`    — event: emitted after every health-check run with the latest warning snapshot

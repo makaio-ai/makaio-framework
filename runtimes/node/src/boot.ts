@@ -79,6 +79,7 @@ import {
 import { createLogImportContributionProcessor, logImportRegistryPackage } from '@makaio/services-log-import';
 import { createWorkflowEnginePackage, WorkflowEngineToken } from '@makaio/subsystem-workflow-engine/package';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
+import { createInstalledExtensionCatalogSource } from './installed-extension-catalog-source.js';
 import { createHttpContributionProcessor } from './http-contribution-processor.js';
 import { resolveMakaioHome } from './makaio-config.js';
 import { preferencesStoragePackage } from '@makaio/preferences/package';
@@ -514,6 +515,21 @@ export async function bootMakaioRuntimeCore(
         : undefined,
       loadEnabled: (name) => enablementStore.loadEnabled(name),
       persistEnabled: (name, enabled) => enablementStore.persistEnabled(name, enabled),
+      // The host's own installed-package view, taken through the very
+      // discovery this boot resolved above, so the catalog describes the roots
+      // and filters this host is configured with rather than a second,
+      // independently assembled filesystem view. It is strictly larger than
+      // what this boot loaded: discovery answers with descriptors, and surface
+      // affinity, unmet requirements or boot-time suppression all leave a
+      // discovered descriptor unloaded. Exposing it over the bus is what lets
+      // a client that cannot read this machine's filesystem enumerate and
+      // toggle those names instead of guessing from its own.
+      installedCatalog: createInstalledExtensionCatalogSource({
+        discovery: ext.extensions,
+        ...(frameworkModuleResolver?.frameworkDistPath
+          ? { frameworkDistPath: frameworkModuleResolver.frameworkDistPath }
+          : {}),
+      }),
       operatorConfig,
       runMigrations: (sources) => runBootExtensionMigrations(db, sources),
       // Names of the post-collision extension package pool (Stage 2 of

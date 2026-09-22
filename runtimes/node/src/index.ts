@@ -143,6 +143,16 @@ export {
   resolveFrameworkSpecifier,
   type FrameworkModuleResolver,
 } from './framework-module-resolver.js';
+export { scanInstalledExtensions } from './installed-extension-scan.js';
+export type { InstalledExtensionRecord, InstalledExtensionScanOptions } from './installed-extension-scan.js';
+export { createWorkerExportedPackagesReader } from './installed-extension-readers.js';
+export type {
+  ExportedPackageListing,
+  ExportedPackagesReader,
+  ExportedPackagesTarget,
+} from './installed-extension-readers.js';
+export { createInstalledExtensionCatalogSource } from './installed-extension-catalog-source.js';
+export type { InstalledExtensionCatalogSourceOptions } from './installed-extension-catalog-source.js';
 export { findWorkspaceRoot, findWorkspaceRootInfo, WorkspaceRootNotFoundError } from './find-workspace-root.js';
 export type { WorkspaceRootInfo } from './find-workspace-root.js';
 // Intentionally export only the thin Piscina name; the previous runner name

@@ -28,6 +28,7 @@ export type {
   KernelMakaioExtension,
   RuntimeCapability,
   RuntimeEnvironment,
+  InstalledExtensionCatalogSource,
   SetEnabledResult,
   TransitionOutcome,
 } from './extension/index.js';
@@ -43,7 +44,18 @@ export {
   ExtensionInfoSchema,
   ExtensionNamespace,
   ExtensionSubjects,
+  InstalledExtensionCatalogEntrySchema,
+  InstalledExtensionRecordSchema,
   ServiceInfoSchema,
 } from './observability/index.js';
 /** @public */
-export type { ComponentState, ComponentInfo, ServiceInfo, ExtensionInfo } from './observability/index.js';
+export type {
+  ComponentState,
+  ComponentInfo,
+  InstalledExtensionCatalogEntry,
+  InstalledExtensionOrigin,
+  InstalledExtensionRecord,
+  ServiceInfo,
+  ExtensionInfo,
+  SetEnabledReason,
+} from './observability/index.js';

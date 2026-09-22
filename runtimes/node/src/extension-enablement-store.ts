@@ -233,12 +233,11 @@ export async function loadExtensionEnablementStore(makaioHome: string): Promise<
         // silently discard the earlier one's change. `writeQueue` above closes
         // that gap for calls on *this* instance by serializing them, and the
         // cross-process lock acquired below closes it for calls originating in
-        // *other* processes — the CLI writes the file directly for names a
-        // reachable server does not manage (see `applyUnmanagedNameToggle` in
-        // `extension-toggle-commands.ts`) even while that server's own
-        // `persistEnabled` may be writing concurrently for a different name, so
-        // more than one process legitimately holds a writable store instance
-        // for this file at the same time. The lock, not process exclusivity, is
+        // *other* processes — a command process writes this file directly
+        // whenever no runtime is reachable, and nothing guarantees a runtime
+        // does not start (and write for some other name) in between, so more
+        // than one process legitimately holds a writable store instance for
+        // this file at the same time. The lock, not process exclusivity, is
         // what makes their read-modify-write cycles safe against each other.
         //
         // The config directory must exist before the lock is acquired: the

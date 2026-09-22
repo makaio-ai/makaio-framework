@@ -506,6 +506,33 @@ describe('makaio config', () => {
       ]);
     });
 
+    it('discovers a locally installed extension through the symlink the installer wrote', async () => {
+      // `makaio extension install --path` links the managed install directory
+      // at the extension's source tree instead of copying it, so a discovery
+      // root that refused to traverse symlinks would report the entire
+      // local-install tier as empty.
+      const sourceRoot = path.join(tmpDir, 'sources', 'linked-ext');
+      await writeDescriptor(sourceRoot, {
+        ...baseDescriptor,
+        name: 'linked-ext',
+        displayName: 'Linked Extension',
+      });
+      await fs.mkdir(path.join(makaioHome, 'extensions'), { recursive: true });
+      await fs.symlink(sourceRoot, path.join(makaioHome, 'extensions', 'linked-ext'), 'dir');
+
+      const discovery = createMakaioConfigDiscovery(parseMakaioConfig({}, { baseDir: tmpDir, makaioHome }));
+
+      const result = await discovery.discover();
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          descriptor: expect.objectContaining({ name: 'linked-ext' }),
+          extensionPath: path.join(makaioHome, 'extensions', 'linked-ext'),
+          source: 'installed',
+        }),
+      ]);
+    });
+
     it('includes all discovered extensions when autoDiscover is true', async () => {
       const root = path.join(tmpDir, 'extensions');
       await writeDescriptor(path.join(root, 'alpha'), {

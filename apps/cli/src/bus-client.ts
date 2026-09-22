@@ -64,12 +64,13 @@ const LOCAL_BUS_HOSTNAMES: ReadonlySet<string> = new Set(['localhost', '127.0.0.
  * Determine whether a bus URL points at a different machine than this CLI
  * process is running on.
  *
- * Used to gate the unmanaged-name enablement fallback (see
- * `applyUnmanagedNameToggle` in `extension-toggle-commands.ts`): that fallback
- * writes the enablement file directly, which is only correct when the file it
- * writes is the same one the reachable server reads — true only when the bus
- * is local. A URL that fails to parse is treated as remote so a malformed
- * override never causes a write to the wrong machine's file.
+ * Used to gate every offline fallback that reads or writes this machine's own
+ * extension state (see `runSetEnabled` and `runList` in
+ * `extension-toggle-commands.ts` / `extension-commands.ts`): falling back is
+ * only correct when the state this process would touch is the state the
+ * configured server would have used — true only when the bus is local. A URL
+ * that fails to parse is treated as remote so a malformed override never
+ * causes a write to, or a report about, the wrong machine.
  * @param busUrl - Resolved bus URL, as returned by {@link resolveBusUrl}.
  * @returns `true` when the URL's host is not a recognized loopback form.
  */

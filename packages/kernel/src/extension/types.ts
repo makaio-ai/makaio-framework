@@ -11,6 +11,30 @@ import type {
 } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ComponentState } from '../observability/index.js';
+import type { InstalledExtensionRecord } from '../observability/installed-extension-catalog-schemas.js';
+
+/**
+ * Host-supplied reader for the extension packages installed on the machine
+ * running this coordinator.
+ *
+ * The coordinator only knows the packages it loaded, which is a strictly
+ * smaller set than what is installed: surface affinity, unmet requirements, or
+ * boot-time suppression all leave an installed package unloaded, and its
+ * enablement preference is still addressable. Discovering the rest means
+ * scanning the host's install tiers and importing extension code, neither of
+ * which belongs in the kernel — so the composition root supplies it here, the
+ * same way it supplies the durable enablement store's read/write callbacks.
+ *
+ * Called on demand (`kernel:extension.catalog`, and the validation
+ * `kernel:extension.setEnabled` performs for a name this coordinator never
+ * loaded), never during boot, and never on a hot path. Implementations are
+ * expected to be slow — they spawn imports — and must resolve rather than
+ * reject for an individual unreadable package, reporting it as
+ * `criticalityUnknown` instead.
+ * @returns Every installed executable extension package, one record per
+ *   executable package name, in discovery-tier priority order.
+ */
+export type InstalledExtensionCatalogSource = () => Promise<readonly InstalledExtensionRecord[]>;
 
 /** Concrete Node runtime context supplied by the kernel coordinator. */
 export type KernelExtensionContext = NodeExtensionContext<IMakaioBus>;
@@ -144,6 +168,18 @@ export interface ExtensionCoordinatorOptions {
    * legitimate core override is reported as a collision.
    */
   frameworkPackageNames?: ReadonlySet<string>;
+  /**
+   * Optional reader for the extension packages installed on this host.
+   *
+   * Backs `kernel:extension.catalog` and lets `kernel:extension.setEnabled`
+   * validate — and then persist — a preference for a name this coordinator
+   * never loaded. Without it, `catalog` reports `entries: null` and
+   * `setEnabled` refuses such a name outright (reason `'no-catalog'`) rather
+   * than writing a preference on the caller's word.
+   *
+   * See {@link InstalledExtensionCatalogSource} for the contract.
+   */
+  installedCatalog?: InstalledExtensionCatalogSource;
   /**
    * Optional callback to durably persist an enablement preference.
    *
