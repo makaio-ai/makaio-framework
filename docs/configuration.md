@@ -270,15 +270,27 @@ starts it regardless and emits a console warning on every boot.
 
 `makaio extension disable <name>` therefore refuses a critical extension before
 writing anything, and exits non-zero. It resolves the flag from the running server
-(`kernel:extension.get`) when one is reachable, and from the installed
-`descriptor.json` otherwise. `makaio extension list` applies the same rule, so a
-critical extension that is present in `"disabled"` is reported as `enabled` —
-which is what boot does with it.
+(`kernel:extension.get`) when one is reachable, and offline otherwise. `makaio
+extension list` applies the same rule, so a critical extension that is present in
+`"disabled"` is reported as `enabled` — which is what boot does with it.
 
-Offline resolution only sees what the descriptor declares. An extension whose
-executable package sets `critical: true` should declare it in its `descriptor.json`
-too; otherwise offline CLI paths treat it as an ordinary extension and the refusal
-happens later, at the RPC.
+Offline resolution reads the same exported package the runtime would act on, not
+`descriptor.json`, for any descriptor that declares a `server` entrypoint: it
+dynamically imports the already-resolved server entrypoint and reads `critical` off
+the exported package matching the descriptor name, the same normalization
+`normalizePackageExport` applies at boot. `descriptor.json` must not declare
+`critical` itself in that case — `ExtensionDescriptorSchema` rejects the combination
+at discovery, install, and verify, because a server entrypoint can export several
+packages, each with its own criticality. When the entrypoint cannot be imported or
+its export does not resolve to a valid package, offline resolution fails closed to
+*unknown* rather than guessing — `makaio extension disable` then refuses the
+extension rather than risk disabling one that turns out to be critical, and `makaio
+extension list` reports it accordingly.
+
+Only a descriptor *without* a server entrypoint (detached, CLI-only, browser-only)
+has no exported package for the runtime to read; there, the descriptor's own
+`critical` field in `descriptor.json` *is* that synthesized package's flag, and is
+the value offline CLI paths use directly.
 
 ### Diagnostics
 

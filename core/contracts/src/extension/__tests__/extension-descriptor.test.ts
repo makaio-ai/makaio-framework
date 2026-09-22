@@ -276,6 +276,37 @@ describe('ExtensionDescriptorSchema', () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it('rejects critical alongside a server entrypoint', () => {
+    // The server entry's exported packages own the flag — each of them
+    // individually, since one entry may export several.
+    const result = ExtensionDescriptorSchema.safeParse({ ...baseDescriptor, critical: true });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.path.join('.'))).toContain('critical');
+  });
+
+  it('rejects critical: false alongside a server entrypoint', () => {
+    const result = ExtensionDescriptorSchema.safeParse({ ...baseDescriptor, critical: false });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts critical on a descriptor whose package the runtime synthesizes', () => {
+    // No server entrypoint: CLI-only, browser-only, and detached descriptors
+    // have no exported package, so the descriptor field is the package field.
+    for (const entrypoints of [{ cli: true }, { browser: true }]) {
+      const result = ExtensionDescriptorSchema.safeParse({ ...baseDescriptor, entrypoints, critical: true });
+      expect(result.success).toBe(true);
+    }
+
+    const detached = ExtensionDescriptorSchema.safeParse({
+      ...baseDescriptor,
+      entrypoints: undefined,
+      execution: 'detached',
+      transport: { type: 'bus-stdio', command: 'my-extension-host' },
+      critical: true,
+    });
+    expect(detached.success).toBe(true);
+  });
 });
 
 describe('legacy field rejection', () => {

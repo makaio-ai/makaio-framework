@@ -5,6 +5,9 @@
  * We verify bus handler wiring, local-install routing, and lifecycle behavior.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { createBusInstance, createBusContext, type IMakaioBus } from '@makaio/bus-core';
 import { PackageSubjects } from '../namespace.js';
 import type { PackageInfo, PackageRegistry, PackageInstallResult, PackageUninstallResult } from '../namespace.js';
@@ -168,19 +171,32 @@ class StubLocalInstaller implements LocalInstallClient {
     name: string;
     version: string;
     sourcePath: string;
-    serverImportPath: string;
+    serverImportPath?: string;
     critical?: boolean;
   }> = [];
 
-  public async install(sourcePath: string, critical?: boolean): Promise<PackageInstallResult> {
+  /**
+   * @param sourcePath - Fake symlink source path recorded on the entry.
+   * @param options - `critical` declared directly on the fake descriptor
+   *   (only meaningful without a server entrypoint); `serverImportPath`
+   *   overrides the default fake path, or `null` to simulate a descriptor
+   *   with no server entrypoint at all.
+   * @returns Fake install result.
+   */
+  public async install(
+    sourcePath: string,
+    options?: { readonly critical?: boolean; readonly serverImportPath?: string | null },
+  ): Promise<PackageInstallResult> {
     const name = `local-ext-${this.installed.length}`;
     const version = '0.1.0';
+    const serverImportPath =
+      options?.serverImportPath === null ? undefined : (options?.serverImportPath ?? `${sourcePath}/src/server.ts`);
     this.installed.push({
       name,
       version,
       sourcePath,
-      serverImportPath: `${sourcePath}/src/server.ts`,
-      ...(critical !== undefined && { critical }),
+      ...(serverImportPath !== undefined && { serverImportPath }),
+      ...(options?.critical !== undefined && { critical: options.critical }),
     });
     return { success: true, packageName: name, version, restartRequired: true };
   }
@@ -205,7 +221,7 @@ class StubLocalInstaller implements LocalInstallClient {
       version: string;
       sourcePath: string;
       source: 'local';
-      serverImportPath: string;
+      serverImportPath?: string;
       critical?: boolean;
     }>
   > {
@@ -305,14 +321,16 @@ describe('PackageManagerService', () => {
       await localService.destroy();
     });
 
-    it('carries the critical flag through for a local-path extension, matching the npm path', async () => {
-      // `LocalPathInstaller.list()` already reads `critical` off the
-      // descriptor; the normalization into `PackageInfo` must not drop it —
-      // an npm-installed extension with the same descriptor would report
-      // `critical: true` (see `yarn-integration.ts`), and a local install of
-      // the identical descriptor must report the same fact.
+    it('carries the critical flag through for a local-path extension with no server entrypoint, matching the npm path', async () => {
+      // A descriptor with no server entrypoint has no exported package — the
+      // runtime synthesizes its package straight from the descriptor, so the
+      // descriptor's own `critical` is authoritative and the normalization
+      // into `PackageInfo` must not drop it. An npm-installed extension with
+      // the same shape would report `critical: true` too (see
+      // `yarn-integration.ts`), and a local install of the identical
+      // descriptor must report the same fact.
       const localInstaller = new StubLocalInstaller();
-      await localInstaller.install('/tmp/my-critical-local-ext', true);
+      await localInstaller.install('/tmp/my-critical-local-ext', { critical: true, serverImportPath: null });
       const localBus = createBusInstance({ context: createBusContext() });
       const localService = new PackageManagerService(localBus, '/tmp/.makaio', {
         yarnManager: new StubPackageManager([], new Map()),
@@ -328,12 +346,55 @@ describe('PackageManagerService', () => {
           descriptorName: 'local-ext-0',
           version: '0.1.0',
           hasDescriptor: true,
-          serverImportPath: '/tmp/my-critical-local-ext/src/server.ts',
           critical: true,
         },
       ]);
 
       await localService.destroy();
+    });
+
+    it('resolves critical from the exported package for a server-backed local-path extension', async () => {
+      // A descriptor with a server entrypoint may not declare `critical`
+      // itself (the schema rejects that combination) — only its exported
+      // package may — so the local-path listing must resolve it the same way
+      // the npm producer does: by importing the real, resolved entrypoint
+      // (see `yarn-integration.ts`'s equivalent coverage).
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pm-service-local-critical-'));
+      try {
+        const distDir = path.join(tempDir, 'dist');
+        await fs.mkdir(distDir, { recursive: true });
+        const serverImportPath = path.join(distDir, 'server.mjs');
+        await fs.writeFile(
+          serverImportPath,
+          `export default { name: 'local-ext-0', displayName: 'Local Ext', version: '0.1.0', critical: true };\n`,
+        );
+
+        const localInstaller = new StubLocalInstaller();
+        await localInstaller.install(tempDir, { serverImportPath });
+        const localBus = createBusInstance({ context: createBusContext() });
+        const localService = new PackageManagerService(localBus, '/tmp/.makaio', {
+          yarnManager: new StubPackageManager([], new Map()),
+          localInstaller,
+        });
+        await localService.init();
+
+        const result = await localBus.request(PackageSubjects.list, {});
+
+        expect(result.packages).toEqual([
+          {
+            name: 'local-ext-0',
+            descriptorName: 'local-ext-0',
+            version: '0.1.0',
+            hasDescriptor: true,
+            serverImportPath,
+            critical: true,
+          },
+        ]);
+
+        await localService.destroy();
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
     });
 
     it('should install via npm by default (no source field)', async () => {

@@ -606,11 +606,17 @@ export interface ExtensionManifest {
    * disabled. Optional extensions default to isolated failure so one extension
    * cannot prevent the runtime from booting.
    *
-   * Declaring the flag in `descriptor.json` makes it readable before any
-   * extension code is loaded, which is what lets pre-load surfaces (the CLI's
-   * offline listing, for example) honour the same rule the runtime applies.
-   * An extension whose executable package sets the flag should declare it in
-   * its descriptor too, otherwise pre-load surfaces treat it as optional.
+   * The executable package that declares the flag is the only authority for
+   * it. A descriptor whose `entrypoints.server` exports the packages therefore
+   * must not declare `critical` at all — a server entrypoint can export several
+   * packages (`example`, `example.child`), each with its own criticality, so a
+   * single descriptor-level flag cannot describe them and the runtime never
+   * reads one. `ExtensionDescriptorSchema` rejects that combination.
+   *
+   * A descriptor with no server entrypoint — detached, CLI-only, browser-only —
+   * has no exported package to declare anything: the runtime synthesizes its
+   * single package straight from the descriptor, so the descriptor field *is*
+   * the package field and pre-load surfaces can read it directly.
    */
   readonly critical?: boolean;
   /** Windows this extension can open, keyed by {@link WindowManifest.id}. */

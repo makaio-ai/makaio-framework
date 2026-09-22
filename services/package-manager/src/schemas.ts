@@ -173,11 +173,35 @@ export const PackageInfoSchema = z.object({
   serverImportPath: z.string().min(1).optional(),
 
   /**
-   * Whether the package's descriptor declares the extension as critical.
+   * Whether the descriptor declares `entrypoints.server` at all, independent
+   * of whether `serverImportPath` could be resolved.
    *
-   * Surfaces that offer an enable/disable control read this before any
-   * extension code is loaded, so they can refuse a disable the runtime would
-   * refuse anyway. Absent when the descriptor does not declare the flag.
+   * `serverImportPath` alone cannot distinguish "no server entrypoint
+   * declared" (this descriptor legitimately has no exported package, so its
+   * own `critical` metadata is authoritative) from "a server entrypoint is
+   * declared but its convention-resolved file is missing or unreadable"
+   * (criticality is genuinely unknown, not "not critical") — both leave
+   * `serverImportPath` unset. Consumers that gate a decision on criticality
+   * must check this field before treating an absent `critical` as "known
+   * non-critical".
+   */
+  declaresServerEntrypoint: z.boolean().optional(),
+
+  /**
+   * Whether the descriptor's executable package declares itself critical.
+   *
+   * A descriptor with no server entrypoint has no exported package: the
+   * runtime synthesizes its single package straight from `descriptor.json`,
+   * so this is that descriptor's own `critical` field. A descriptor that
+   * declares a server entrypoint may not declare `critical` itself — the
+   * schema rejects that combination — because the entrypoint can export
+   * several packages (`example`, `example.child`), each with its own
+   * criticality; the listing producers (`YarnPackageManager.listPackages`,
+   * `PackageManagerService`'s local-path listing) resolve this field from the
+   * exported package matching the descriptor's own name in that case, by
+   * importing `serverImportPath` the same way the runtime would at boot.
+   * Absent when nothing declares the flag, or when that import failed —
+   * never synthesized as `false`.
    */
   critical: z.boolean().optional(),
 });

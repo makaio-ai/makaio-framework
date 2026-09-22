@@ -259,6 +259,8 @@ export function isDetachedDescriptor(descriptor: ExtensionDescriptor): descripto
  * - `execution === 'detached'` requires `transport`; `entrypoints` is optional.
  * - All other modes (including the default embedded mode) require `entrypoints`.
  * - `prebundleDependencies` requires a `browser` entrypoint.
+ * - `critical` is forbidden alongside a `server` entrypoint, whose exported
+ *   packages own that flag (see {@link ExtensionManifest.critical}).
  *
  * Note: `satisfies z.ZodType<ExtensionDescriptor>` is intentionally omitted
  * because `superRefine` wraps the schema in `ZodEffects`, which is incompatible
@@ -290,6 +292,14 @@ export const ExtensionDescriptorSchema = ExtensionManifestSchema.extend({
       code: z.ZodIssueCode.custom,
       message: 'prebundleDependencies requires a browser entrypoint',
       path: ['prebundleDependencies'],
+    });
+  }
+  if (descriptor.critical !== undefined && descriptor.entrypoints?.server !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "'critical' must not be declared alongside a server entrypoint — declare it on the exported MakaioExtension package instead",
+      path: ['critical'],
     });
   }
   if (descriptor.execution === 'detached') {

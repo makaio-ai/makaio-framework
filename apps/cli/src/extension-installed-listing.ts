@@ -14,16 +14,21 @@ import {
   resolveConventionEntrypoint,
   FilesystemDescriptorDiscovery,
   type DiscoveredExtension,
+  type FrameworkModuleResolver,
 } from '@makaio/runtime-node';
 import { importPackageManager } from './extension-install-transaction.js';
 
 /**
- * One installed extension as seen without loading any extension code.
+ * One installed extension as seen without starting any extension service.
  *
- * `critical` comes from the package's `descriptor.json`, which is the only
- * declaration available before the runtime imports the extension's server
- * entrypoint. It is what lets offline CLI paths honour the same critical rule
- * the runtime applies.
+ * `critical` is read from the same declaration the runtime honours: the
+ * executable `MakaioExtension` the descriptor's server entrypoint exports,
+ * enumerated here without calling any package's `create()`. A descriptor
+ * without a server entrypoint (detached, CLI-only, browser-only) has no
+ * exported package — the runtime synthesizes its package from descriptor
+ * metadata, so the descriptor's own `critical` is that package's flag and is
+ * used instead. Reading the flag from anywhere else would let offline CLI
+ * paths refuse or permit a disable the runtime would decide the other way.
  *
  * A single descriptor can export more than one executable package from its
  * server entrypoint — e.g. `makaio-dev` also exports `makaio-dev.relay-connection`
@@ -55,8 +60,34 @@ export interface InstalledExtensionEntry {
    * omits — see that function's TSDoc for why.
    */
   readonly origin: 'local' | 'npm' | 'project-local';
-  /** Whether this package declares itself critical. */
+  /**
+   * Whether the executable package under this name declares itself critical.
+   *
+   * `undefined` is ambiguous by itself — it means either "nothing declares a
+   * `critical` flag for this name" (a descriptor with no server entrypoint,
+   * legitimately non-critical) or "the declaration could not be read" (a
+   * server-backed descriptor whose entrypoint failed to import, or whose
+   * export {@link normalizePackageExport} rejected). {@link criticalityUnknown}
+   * disambiguates the two: only when it is `true` does `undefined` here mean
+   * "unknown", not "not critical". A caller that gates a disable on
+   * criticality must check {@link criticalityUnknown} first and refuse rather
+   * than treat this as `false` — see `resolveDisableCriticality` in
+   * `extension-toggle-commands.ts`.
+   */
   readonly critical?: boolean;
+  /**
+   * `true` when `critical` could not be resolved because this entry's
+   * descriptor declares a server entrypoint but this process could not read
+   * it — the candidate path was not resolvable (missing/unreadable file),
+   * the import failed, or its export was rejected by
+   * {@link normalizePackageExport} or was shaped with a non-boolean
+   * `critical` field (see the warnings logged by {@link listExportedPackages}).
+   * Never `true` for a descriptor with no server entrypoint at all, whose
+   * absent `critical` is a legitimate "not critical" rather than an
+   * unresolved one. Omitted (not `false`) when criticality is resolved,
+   * known, or legitimately absent.
+   */
+  readonly criticalityUnknown?: boolean;
   /**
    * npm dependency identifier this entry was installed under, when it
    * differs from `name` (an npm install whose descriptor declares a
@@ -89,10 +120,119 @@ interface InstallerListingEntry {
   readonly descriptorName?: string;
   /** Installed version. */
   readonly version: string;
-  /** Whether the descriptor declares the extension as critical. */
+  /**
+   * `critical` as declared in the package's `descriptor.json`.
+   *
+   * Authoritative only for a descriptor with no server entrypoint, whose
+   * package the runtime synthesizes from this metadata; the schema forbids the
+   * field on any descriptor that does declare one. See
+   * {@link InstalledExtensionEntry.critical}.
+   */
   readonly critical?: boolean;
   /** Absolute import path for the resolved server entrypoint, when present. */
   readonly serverImportPath?: string;
+  /**
+   * Whether the descriptor declares `entrypoints.server` at all, independent
+   * of whether `serverImportPath` could be resolved.
+   *
+   * `serverImportPath` alone cannot distinguish "no server entrypoint
+   * declared" (legitimately no exported package, so `critical` — absent or
+   * not — is authoritative) from "a server entrypoint is declared but its
+   * convention-resolved candidate file is missing or unreadable"
+   * (criticality is genuinely unknown) — both leave `serverImportPath`
+   * `undefined`. {@link expandInstallerEntry} uses this field, not
+   * `serverImportPath`, to compute {@link InstalledExtensionEntry.criticalityUnknown}.
+   */
+  readonly declaresServerEntrypoint?: boolean;
+}
+
+/**
+ * The subset of an exported `MakaioExtension` this listing reads.
+ *
+ * Structural on purpose: the offline listing only needs each exported
+ * package's identity, version, and criticality, never its executable surface.
+ */
+interface ExportedPackage {
+  /** Executable package identity — the descriptor name or a dot-prefixed child. */
+  readonly name: string;
+  /** Version the exported package declares. */
+  readonly version: string;
+  /**
+   * Whether the exported package declares itself critical.
+   *
+   * Typed as `boolean` for callers, but {@link listExportedPackages} still
+   * validates it is actually a `boolean` at runtime before trusting it — see
+   * {@link isValidExportedCriticalFlag}. A package whose raw `critical` value
+   * failed that check is reported here with `critical` omitted, and its name
+   * is carried in {@link ExportedPackagesResolution.invalidCriticalNames} so
+   * callers can tell "not declared" apart from "declared but unresolvable".
+   */
+  readonly critical?: boolean;
+}
+
+/** Result of {@link listExportedPackages}: every exported package, plus which of them had an unresolvable `critical`. */
+interface ExportedPackagesResolution {
+  /** Every package the server entry exports, with any invalid `critical` value stripped. */
+  readonly packages: readonly ExportedPackage[];
+  /**
+   * Names of exported packages whose raw `critical` field was present but
+   * not a `boolean`. Criticality is unresolved for these, not legitimately
+   * absent — {@link expandInstallerEntry} marks the corresponding entry
+   * {@link InstalledExtensionEntry.criticalityUnknown} instead of reporting
+   * them as non-critical.
+   */
+  readonly invalidCriticalNames: ReadonlySet<string>;
+}
+
+/**
+ * Validate that an exported package's `critical` field is either absent or a
+ * genuine `boolean`.
+ *
+ * `normalizePackageExport`'s structural check (`isMakaioExtensionLike`) only
+ * requires `name`, `displayName`, and `version` to be strings — it never
+ * inspects `critical`, so a malformed export (e.g. `critical: 'yes'`) still
+ * passes it. Left unchecked, that value would flow into
+ * {@link InstalledExtensionEntry.critical}, which every caller downstream —
+ * `resolveDisableCriticality` in particular — treats as a trustworthy
+ * `boolean`.
+ *
+ * Mirrors `isValidExportedCriticalFlag` in
+ * `@makaio/services-package-manager`'s `exported-package-critical.ts`, which
+ * applies the identical rule for the bus-facing `packages.list` listing;
+ * duplicated here rather than imported to keep this offline listing free of
+ * a dependency on that package's internal (non-exported) helper.
+ * @param value - Candidate `critical` value read off an exported package.
+ * @returns Whether `value` is safe to report as `critical`.
+ */
+function isValidExportedCriticalFlag(value: unknown): value is boolean | undefined {
+  return value === undefined || typeof value === 'boolean';
+}
+
+/**
+ * Host capabilities the offline listing needs to read the same declarations a
+ * booted runtime would.
+ */
+export interface InstalledExtensionListingOptions {
+  /**
+   * Module resolver for `@makaio/framework/*` subpath imports, as selected by
+   * the host that owns this CLI invocation.
+   *
+   * {@link listExportedPackages} imports each descriptor's server entrypoint
+   * on this process's own module registry. An extension installed from a local
+   * path lives outside this process's module tree, so its `@makaio/framework/*`
+   * imports only resolve when the host's resolver hook is installed — the same
+   * hook a packaged host installs before loading extensions at boot, and the
+   * same capability `@makaio/services-package-manager` forwards into its import
+   * worker as `frameworkDistPath`. Without it, such an extension's export is
+   * unreadable here and its criticality is reported unknown, which refuses an
+   * `extension disable` the runtime itself would have allowed.
+   *
+   * Installed for the duration of one listing and uninstalled afterwards: the
+   * hook is process-wide loader state, so the listing owns it only while it is
+   * importing extension code. Omitted by hosts that resolve
+   * `@makaio/framework/*` natively (a development workspace, Bun).
+   */
+  readonly frameworkModuleResolver?: FrameworkModuleResolver;
 }
 
 /**
@@ -136,12 +276,41 @@ interface InstallerListingEntry {
  *   `applyUnmanagedNameToggle` already documents for a *remote* bus).
  * @param makaioHome - Resolved Makaio data home.
  * @param tiers - Which discovery tiers to scan; see above.
+ * @param options - Host capabilities for this listing; see
+ *   {@link InstalledExtensionListingOptions}.
  * @returns Project-local extensions first (when `tiers` is `'all'`), then
  *   `$MAKAIO_HOME/extensions` symlinks, then npm installs; each descriptor's
  *   own entry is immediately followed by its child package entries, when it
  *   declares any.
  */
 export async function listInstalledExtensions(
+  makaioHome: string,
+  tiers: 'all' | 'shared-home',
+  options: InstalledExtensionListingOptions = {},
+): Promise<readonly InstalledExtensionEntry[]> {
+  const resolver = options.frameworkModuleResolver;
+  try {
+    await resolver?.install();
+    return await scanInstalledExtensions(makaioHome, tiers);
+  } finally {
+    // Also runs when `install()` itself threw part-way — the same cleanup the
+    // runtime performs for a failed install at boot, so a partially installed
+    // hook never outlives this listing.
+    await resolver?.uninstall();
+  }
+}
+
+/**
+ * Scan every requested discovery tier and merge the results.
+ *
+ * Split from {@link listInstalledExtensions} so the framework module
+ * resolver's install/uninstall window wraps every server-entry import this
+ * scan performs, with no early return escaping it.
+ * @param makaioHome - Resolved Makaio data home.
+ * @param tiers - Which discovery tiers to scan; see {@link listInstalledExtensions}.
+ * @returns Merged entries in tier priority order.
+ */
+async function scanInstalledExtensions(
   makaioHome: string,
   tiers: 'all' | 'shared-home',
 ): Promise<readonly InstalledExtensionEntry[]> {
@@ -193,13 +362,16 @@ async function listProjectLocalExtensionGroups(): Promise<InstalledExtensionEntr
 async function expandDiscoveredExtension(ext: DiscoveredExtension): Promise<InstalledExtensionEntry[]> {
   const { descriptor, extensionPath } = ext;
   const serverEntrypoint = descriptor.entrypoints?.server;
-  const serverImportPath =
-    serverEntrypoint === undefined ? undefined : resolveConventionEntrypoint('server', serverEntrypoint, extensionPath);
+  const declaresServerEntrypoint = serverEntrypoint !== undefined;
+  const serverImportPath = declaresServerEntrypoint
+    ? resolveConventionEntrypoint('server', serverEntrypoint, extensionPath)
+    : undefined;
   const installerEntry: InstallerListingEntry = {
     name: descriptor.name,
     version: descriptor.version,
     ...(descriptor.critical !== undefined && { critical: descriptor.critical }),
     ...(serverImportPath !== undefined && { serverImportPath }),
+    ...(declaresServerEntrypoint && { declaresServerEntrypoint }),
   };
   return expandInstallerEntry(installerEntry, 'project-local');
 }
@@ -223,6 +395,18 @@ async function expandWithChildPackagesGrouped(
 /**
  * Expand one installer entry into its descriptor entry followed by its
  * executable child package entries.
+ *
+ * The descriptor's own row takes its `critical` flag from the exported package
+ * carrying the descriptor name — the same object the coordinator loads — and
+ * falls back to the descriptor's metadata only when there is no export to read
+ * (see {@link listExportedPackages}). When the entry declares a server
+ * entrypoint but that entrypoint could not be read, the descriptor's own row
+ * is marked {@link InstalledExtensionEntry.criticalityUnknown} rather than
+ * silently reported as non-critical — the schema forbids the descriptor from
+ * declaring `critical` itself in that case, so there is no metadata to fall
+ * back to either. The exported packages are reordered so the descriptor's own
+ * entry always leads the group, which {@link mergeExtensionTiers} relies on to
+ * identify it.
  * @param ext - Installer entry to expand.
  * @param origin - Tier the entry came from.
  * @returns The descriptor's own entry followed by its child package entries.
@@ -231,7 +415,39 @@ async function expandInstallerEntry(
   ext: InstallerListingEntry,
   origin: InstalledExtensionEntry['origin'],
 ): Promise<InstalledExtensionEntry[]> {
-  return [toInstalledEntry(ext, origin), ...(await listChildPackages(ext, origin))];
+  const resolution = await listExportedPackages(ext);
+  if (resolution === undefined) {
+    // A declared server entrypoint that could not be read — whether because
+    // its candidate path never resolved or the import itself failed — leaves
+    // criticality genuinely unresolved (the schema forbids `ext.critical` in
+    // this case anyway). Checking `declaresServerEntrypoint` rather than
+    // `ext.serverImportPath` is what makes that distinction: an unresolvable
+    // path also leaves `serverImportPath` `undefined`, which would otherwise
+    // be indistinguishable from "no entrypoint declared" (a legitimate,
+    // known "not critical").
+    const criticalityUnknown = ext.declaresServerEntrypoint === true;
+    return [toInstalledEntry(ext, origin, ext.critical, criticalityUnknown)];
+  }
+
+  const { packages: exported, invalidCriticalNames } = resolution;
+  const descriptorName = ext.descriptorName ?? ext.name;
+  const ownPackage = exported.find((pkg) => pkg.name === descriptorName);
+  return [
+    // A package present in the export but whose raw `critical` value failed
+    // validation (see `isValidExportedCriticalFlag`) is not "legitimately
+    // non-critical" — it is unresolved for the same reason an unreadable
+    // entrypoint is, so it carries the same `criticalityUnknown` marker.
+    toInstalledEntry(ext, origin, ownPackage?.critical, invalidCriticalNames.has(descriptorName)),
+    ...exported
+      .filter((pkg) => pkg.name !== descriptorName)
+      .map((pkg) => ({
+        name: pkg.name,
+        version: pkg.version,
+        origin,
+        ...(pkg.critical !== undefined && { critical: pkg.critical }),
+        ...(invalidCriticalNames.has(pkg.name) && { criticalityUnknown: true }),
+      })),
+  ];
 }
 
 /**
@@ -291,78 +507,113 @@ function mergeExtensionTiers(
  * identifier is retained under `npmName` only when it differs, for display.
  * @param ext - Entry reported by one of the installers.
  * @param origin - Installer the entry came from.
- * @returns Normalized entry carrying the descriptor's critical flag.
+ * @param critical - Criticality resolved by the caller from the authoritative
+ *   declaration for this descriptor; `undefined` when nothing declares it.
+ * @param criticalityUnknown - `true` when `critical` is `undefined` because
+ *   the declaration could not be read, not because nothing declares it — see
+ *   {@link InstalledExtensionEntry.criticalityUnknown}. Defaults to `false`.
+ * @returns Normalized entry for the descriptor's own package name.
  */
 function toInstalledEntry(
   ext: InstallerListingEntry,
   origin: InstalledExtensionEntry['origin'],
+  critical: boolean | undefined,
+  criticalityUnknown = false,
 ): InstalledExtensionEntry {
   const descriptorName = ext.descriptorName ?? ext.name;
   return {
     name: descriptorName,
     version: ext.version,
     origin,
-    ...(ext.critical !== undefined && { critical: ext.critical }),
+    ...(critical !== undefined && { critical }),
+    ...(criticalityUnknown && { criticalityUnknown }),
     ...(descriptorName !== ext.name && { npmName: ext.name }),
   };
 }
 
 /**
- * Discover the executable child packages an installed extension's server
- * entrypoint exports, without invoking any package's `create()`.
+ * Enumerate the executable packages an installed extension's server entrypoint
+ * exports, without invoking any package's `create()`.
  *
  * Dynamically imports the already-resolved server entry and normalizes its
  * default export with {@link normalizePackageExport} — the same identity
- * contract the runtime applies at boot. The import executes the module's
- * top-level code; the extension server-module contract (see
- * `docs/architecture/extensions/index.md`) requires that top level to
- * contain only declarations, with side effects deferred to `create()`/
- * `init()`. `create()` itself is called exclusively by the coordinator
- * during activation, never by this offline path. A descriptor
- * with no server entrypoint (`serverImportPath` undefined) — including every
- * detached extension, whose descriptor never declares `entrypoints` — has no
- * child packages to discover and is skipped.
+ * contract the runtime applies at boot, which guarantees one exported package
+ * carries the descriptor name and every other is dot-prefixed under it. The
+ * import executes the module's top-level code; the extension server-module
+ * contract (see `docs/architecture/extensions/index.md`) requires that top
+ * level to contain only declarations, with side effects deferred to
+ * `create()`/`init()`. `create()` itself is called exclusively by the
+ * coordinator during activation, never by this offline path.
  *
- * A single-package export or an import failure both yield no child packages:
- * the caller already has a row for the descriptor name itself, and a broken
- * extension must not block the rest of the listing.
- * @param ext - Installer entry whose child packages should be discovered.
- * @param origin - Installer the entry came from.
- * @returns Entries for every dot-prefixed child package the descriptor exports.
+ * Returning `undefined` rather than an empty list distinguishes "this
+ * descriptor has no exported package to read" — no server entrypoint
+ * (`serverImportPath` undefined, including every detached extension, whose
+ * descriptor never declares `entrypoints`), or an export this process could
+ * not import or validate — from "it exports exactly one package". Only the
+ * former lets the caller fall back to descriptor metadata; a broken extension
+ * must not block the rest of the listing either way.
+ *
+ * The import runs directly on this process's own module registry, unlike
+ * `resolveExportedPackageCritical` in `@makaio/services-package-manager`'s
+ * `exported-package-critical.ts`, which imports inside an isolated
+ * `worker_threads.Worker`: that function runs inside a long-lived server
+ * process where a stale Node ESM module cache could report a pre-update
+ * `critical` value across repeated `packages.list` calls, so it needs a
+ * fresh module registry per call. Each `makaio extension list` / `enable` /
+ * `disable` invocation is a fresh, short-lived CLI process, so there is no
+ * cross-call cache to go stale within — the first import in the process is
+ * always current, and the worker's isolation overhead is unnecessary here.
+ *
+ * Running on this process's registry also means this import only resolves an
+ * extension's own `@makaio/framework/*` imports when the host's module
+ * resolver hook is installed — {@link listInstalledExtensions} installs it
+ * around this scan when the host supplied one (see
+ * {@link InstalledExtensionListingOptions.frameworkModuleResolver}).
+ * @param ext - Installer entry whose exported packages should be enumerated.
+ * @returns Every package the server entry exports plus their invalid-`critical`
+ *   names, or `undefined` when there is no readable export.
  */
-async function listChildPackages(
-  ext: InstallerListingEntry,
-  origin: InstalledExtensionEntry['origin'],
-): Promise<InstalledExtensionEntry[]> {
+async function listExportedPackages(ext: InstallerListingEntry): Promise<ExportedPackagesResolution | undefined> {
   if (ext.serverImportPath === undefined) {
-    return [];
+    return undefined;
   }
 
   const descriptorName = ext.descriptorName ?? ext.name;
   const label = `[extension list] ${descriptorName}`;
+  let packages: readonly ExportedPackage[] | undefined;
   try {
     const mod = (await import(pathToFileURL(ext.serverImportPath).href)) as { readonly default: unknown };
     // The descriptor identity, not the npm dependency identifier, is the
     // expected package identity `normalizePackageExport` anchors the export
     // against — the same identity contract `loadExtensions` applies at boot.
-    const packages = normalizePackageExport(mod.default, descriptorName, label);
-    if (!packages) {
-      return [];
-    }
-
-    return packages
-      .filter((pkg) => pkg.name !== descriptorName)
-      .map((pkg) => ({
-        name: pkg.name,
-        version: pkg.version,
-        origin,
-        ...(pkg.critical !== undefined && { critical: pkg.critical }),
-      }));
+    packages = normalizePackageExport(mod.default, descriptorName, label);
   } catch (error) {
     console.warn(
-      `${label}: failed to import server entry while listing child packages:`,
+      `${label}: failed to import server entry while listing exported packages:`,
       error instanceof Error ? error.message : error,
     );
-    return [];
+    return undefined;
   }
+
+  if (packages === undefined) {
+    return undefined;
+  }
+
+  // `normalizePackageExport`'s structural check never inspects `critical` —
+  // strip a non-boolean value rather than let it masquerade as a resolved
+  // flag downstream, and record its name so the caller marks that specific
+  // entry unresolved instead of legitimately non-critical.
+  const invalidCriticalNames = new Set<string>();
+  const sanitized = packages.map((pkg): ExportedPackage => {
+    if (isValidExportedCriticalFlag(pkg.critical)) {
+      return pkg;
+    }
+    invalidCriticalNames.add(pkg.name);
+    console.warn(
+      `${label}: exported package '${pkg.name}' declares 'critical' as ${typeof pkg.critical}, not a boolean; ` +
+        'treating criticality as unresolved',
+    );
+    return { name: pkg.name, version: pkg.version };
+  });
+  return { packages: sanitized, invalidCriticalNames };
 }

@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { versionSatisfies } from '@makaio/contracts';
+import { isExtensionManifestLike, normalizeExtensionManifestExport, versionSatisfies } from '@makaio/contracts';
 import type { KernelMakaioExtension } from '@makaio/kernel';
 import type { CliContribution, CliSubcommandEntry } from '@makaio/kernel/cli';
 import { AutomationCronSchedulerToken } from '@makaio/services-core/automation-trigger';
@@ -265,53 +265,9 @@ export function normalizePackageExport(
   descriptorName: string,
   label: string,
 ): KernelMakaioExtension[] | undefined {
-  if (Array.isArray(value)) {
-    const packages: KernelMakaioExtension[] = [];
-    const seenNames = new Set<string>();
-    for (const item of value) {
-      if (!isMakaioExtensionLike(item)) {
-        console.warn(`${label}: default export array contains an invalid MakaioExtension, skipping`);
-        return undefined;
-      }
-      if (seenNames.has(item.name)) {
-        console.warn(`${label}: default export array contains duplicate package name '${item.name}', skipping`);
-        return undefined;
-      }
-      seenNames.add(item.name);
-      packages.push(item);
-    }
-
-    const hasDescriptorPackage = packages.some((pkg) => pkg.name === descriptorName);
-    if (!hasDescriptorPackage) {
-      console.warn(
-        `${label}: default export array must include a package named '${descriptorName}' to match descriptor identity, skipping`,
-      );
-      return undefined;
-    }
-
-    if (packages.some((pkg) => pkg.name !== descriptorName && !pkg.name.startsWith(`${descriptorName}.`))) {
-      console.warn(
-        `${label}: default export array contains package names outside descriptor namespace '${descriptorName}', skipping`,
-      );
-      return undefined;
-    }
-
-    return packages;
-  }
-
-  if (!isMakaioExtensionLike(value)) {
-    console.warn(`${label}: default export is not a valid MakaioExtension or MakaioExtension[], skipping`);
-    return undefined;
-  }
-
-  if (value.name !== descriptorName) {
-    console.warn(
-      `${label}: imported package name '${value.name}' does not match descriptor name '${descriptorName}', skipping`,
-    );
-    return undefined;
-  }
-
-  return [value];
+  return normalizeExtensionManifestExport<KernelMakaioExtension>(value, descriptorName, (reason) =>
+    console.warn(`${label}: ${reason}`),
+  );
 }
 
 /**
@@ -522,16 +478,13 @@ export function mergePackagesByDescriptorSourcePriority(
 
 /**
  * Minimal structural check for a MakaioExtension-like default export.
- * Does not use Zod — just validates the minimum required fields exist.
+ * Does not use Zod — just validates the minimum required fields exist via the
+ * shared {@link isExtensionManifestLike} check from `@makaio/contracts`.
  * @param value - The default export to check.
  * @returns Whether the value is a valid {@link MakaioExtension} shape.
  */
 export function isMakaioExtensionLike(value: unknown): value is KernelMakaioExtension {
-  if (typeof value !== 'object' || value === null) return false;
-  const obj = value as Record<string, unknown>;
-  return (
-    typeof obj['name'] === 'string' && typeof obj['displayName'] === 'string' && typeof obj['version'] === 'string'
-  );
+  return isExtensionManifestLike<KernelMakaioExtension>(value);
 }
 
 /**

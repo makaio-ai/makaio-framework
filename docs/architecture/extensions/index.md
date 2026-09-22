@@ -657,6 +657,18 @@ or `'failed'` entry that already started this boot restarts normally.
 the enablement file (e.g. added by hand), the runtime starts it anyway at boot and
 emits a console warning, so a corrupt file cannot brick the runtime.
 
+**Where `critical` is declared:** on the exported `MakaioExtension`, never on a
+`descriptor.json` that declares a `server` entrypoint — one server entry may export
+several packages (`example`, `example.child`), each with its own criticality, so a
+single descriptor-level flag cannot describe them and the runtime never reads one.
+`ExtensionDescriptorSchema` rejects that combination, at descriptor validation, at
+discovery, and at install. A descriptor *without* a server entrypoint — detached,
+CLI-only, browser-only — has no exported package: the runtime synthesizes its single
+package from descriptor metadata, so the descriptor field is that package's flag and
+may be declared there. Offline surfaces (`makaio extension list`/`enable`/`disable`)
+follow the same rule: they read the flag from the exported package when there is one,
+and from descriptor metadata only when there is not.
+
 **Evaluation order:**
 
 1. `MAKAIO_SKIP_EXTENSIONS` env var — acts at discovery; extensions suppressed here are

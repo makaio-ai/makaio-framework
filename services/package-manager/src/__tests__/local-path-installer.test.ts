@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -137,6 +137,117 @@ describe('LocalPathInstaller', () => {
     expect(entries[0].sourcePath).toBe(await fs.realpath(sourceDir));
     expect(entries[0].source).toBe('local');
     expect(entries[0].serverImportPath).toBe(await fs.realpath(path.join(sourceDir, 'src', 'index.ts')));
+  });
+
+  it("reports a CLI-only descriptor's critical flag, which is that descriptor's synthesized package flag", async () => {
+    // No server entrypoint: the runtime synthesizes this extension's single
+    // package from descriptor metadata, so the descriptor field is the
+    // package field and offline surfaces may read it directly.
+    await fs.mkdir(path.join(sourceDir, 'src'), { recursive: true });
+    await fs.writeFile(path.join(sourceDir, 'src', 'cli.ts'), 'export default { name: "cli-only-ext" };');
+    await fs.writeFile(
+      path.join(sourceDir, 'descriptor.json'),
+      JSON.stringify({ ...makeDescriptor('cli-only-ext'), entrypoints: { cli: 'cli' }, critical: true }),
+    );
+
+    const installer = new LocalPathInstaller(extensionsDir);
+    expect((await installer.install(sourceDir)).success).toBe(true);
+
+    const entries = await installer.list();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].critical).toBe(true);
+    expect(entries[0].serverImportPath).toBeUndefined();
+  });
+
+  it('refuses to install a descriptor declaring critical alongside a server entrypoint', async () => {
+    // Its server entry's exported packages own that flag — one entry can
+    // export several, each with its own criticality — so a descriptor-level
+    // declaration could only ever drift from what the coordinator honours.
+    await writeExtension(sourceDir, 'drifting-ext');
+    await fs.writeFile(
+      path.join(sourceDir, 'descriptor.json'),
+      JSON.stringify({ ...makeDescriptor('drifting-ext'), critical: true }),
+    );
+
+    const installer = new LocalPathInstaller(extensionsDir);
+    const result = await installer.install(sourceDir);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('critical');
+    expect(await installer.list()).toEqual([]);
+  });
+
+  it('excludes and warns about an already-installed extension whose descriptor drifted to invalid', async () => {
+    // Simulates a symlink installed before this invariant existed (or edited
+    // by hand afterwards): the symlink survives, but its target now declares
+    // `critical` alongside a `server` entrypoint, which the schema rejects.
+    await writeExtension(sourceDir, 'drifted-ext');
+    const installer = new LocalPathInstaller(extensionsDir);
+    expect((await installer.install(sourceDir)).success).toBe(true);
+
+    await fs.writeFile(
+      path.join(sourceDir, 'descriptor.json'),
+      JSON.stringify({ ...makeDescriptor('drifted-ext'), critical: true }),
+    );
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(await installer.list()).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Skipping invalid descriptor.json'),
+        expect.any(String),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('excludes and warns about an installed extension whose descriptor.json is truncated JSON', async () => {
+    // Simulates a partial write (crash mid-write, disk full) rather than a
+    // schema violation: the file exists and is readable, but `JSON.parse`
+    // itself throws before schema validation ever runs.
+    await writeExtension(sourceDir, 'truncated-ext');
+    const installer = new LocalPathInstaller(extensionsDir);
+    expect((await installer.install(sourceDir)).success).toBe(true);
+
+    const descriptorPath = path.join(sourceDir, 'descriptor.json');
+    const validJson = await fs.readFile(descriptorPath, 'utf-8');
+    await fs.writeFile(descriptorPath, validJson.slice(0, Math.floor(validJson.length / 2)));
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(await installer.list()).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Skipping unparsable descriptor.json'),
+        expect.any(String),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('excludes and warns about a schema-invalid extension whose descriptor.json is the JSON literal `null`', async () => {
+    // `null` is valid JSON, so it must not be confused with a parse failure:
+    // it has to reach schema validation and be reported as schema-invalid,
+    // not silently swallowed as if `JSON.parse` itself had thrown.
+    await writeExtension(sourceDir, 'null-descriptor-ext');
+    const installer = new LocalPathInstaller(extensionsDir);
+    expect((await installer.install(sourceDir)).success).toBe(true);
+
+    const descriptorPath = path.join(sourceDir, 'descriptor.json');
+    await fs.writeFile(descriptorPath, 'null');
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(await installer.list()).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Skipping invalid descriptor.json'),
+        expect.any(String),
+      );
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Skipping unparsable descriptor.json'));
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('should resolve descriptor.json path to parent directory', async () => {

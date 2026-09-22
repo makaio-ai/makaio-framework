@@ -17,6 +17,7 @@ import {
   type ExtensionEntrypoints,
 } from '@makaio/contracts';
 import type { PackageInstallResult, PackageUninstallResult } from './schemas.js';
+import { parseDescriptorJson } from './descriptor-json.js';
 
 /**
  * An extension installed from the local filesystem.
@@ -36,11 +37,29 @@ export interface LocalExtensionEntry {
   /** Absolute import path for the resolved server entrypoint, when present. */
   readonly serverImportPath?: string;
   /**
-   * Whether the descriptor declares the extension as critical.
+   * Whether `descriptor.json` declares `entrypoints.server` at all, independent
+   * of whether {@link serverImportPath} could be resolved.
    *
-   * Surfaces that offer an enable/disable control read this before any
-   * extension code is loaded, so they can refuse a disable the runtime would
-   * refuse anyway. Absent when the descriptor does not declare the flag.
+   * `serverImportPath` alone cannot distinguish "no server entrypoint
+   * declared" (legitimately no exported package to read `critical` from)
+   * from "a server entrypoint is declared but its convention-resolved file is
+   * missing or unreadable" (criticality is genuinely unknown, not
+   * "not critical") — both leave `serverImportPath` `undefined`. Consumers
+   * that gate a decision on criticality (see
+   * `InstalledExtensionEntry.criticalityUnknown` in the CLI's
+   * `extension-installed-listing.ts`) must check this field first.
+   */
+  readonly declaresServerEntrypoint?: boolean;
+  /**
+   * `critical` as declared in the package's `descriptor.json`.
+   *
+   * A descriptor may only declare it when it has no server entrypoint, in
+   * which case the runtime synthesizes its single package from this metadata
+   * and the flag is that package's own. A descriptor that exports packages
+   * from a server entrypoint declares `critical` on those packages instead —
+   * the schema rejects it on such a descriptor — so this is `undefined` there
+   * and consumers must read the exported package. Absent when nothing
+   * declares the flag.
    */
   readonly critical?: boolean;
 }
@@ -267,8 +286,14 @@ export class LocalPathInstaller {
   /**
    * Read a symlink's target descriptor and produce a {@link LocalExtensionEntry}.
    *
-   * Returns `null` when the path is not a symlink, the target is unreadable, or
-   * the descriptor fails validation — callers should skip nulls gracefully.
+   * Returns `null` silently when the path is not a symlink or the target is
+   * unreadable — that is the ordinary "not a managed extension" case. Returns
+   * `null` with a `console.warn` when the descriptor exists but fails schema
+   * validation, or when it exists but is not valid JSON, so a
+   * previously-installed symlink whose descriptor drifts into invalidness
+   * (e.g. after a schema tightening, or a truncated write) doesn't just
+   * vanish from listings without a trace. Callers should skip nulls
+   * gracefully.
    * @param linkPath - Absolute path to the candidate symlink.
    * @returns A populated entry or `null` on any failure.
    */
@@ -283,17 +308,24 @@ export class LocalPathInstaller {
       const sourcePath = await fs.realpath(path.resolve(path.dirname(linkPath), rawTarget));
       const descriptorPath = path.join(sourcePath, 'descriptor.json');
       const raw = await fs.readFile(descriptorPath, 'utf-8');
-      const parsed = JSON.parse(raw) as unknown;
-      const result = safeParseExtensionDescriptor(parsed);
+      const parsed = parseDescriptorJson(raw, descriptorPath, '[LocalPathInstaller]');
+      if (!parsed.ok) {
+        return null;
+      }
+      const result = safeParseExtensionDescriptor(parsed.value);
       if (!result.success) {
+        console.warn(
+          `[LocalPathInstaller] Skipping invalid descriptor.json at ${descriptorPath}:`,
+          result.error.message,
+        );
         return null;
       }
 
       const serverEntrypoint = result.data.entrypoints?.server;
-      const serverImportPath =
-        serverEntrypoint === undefined
-          ? undefined
-          : await resolveExtensionEntrypointImportPath(sourcePath, 'server', serverEntrypoint);
+      const declaresServerEntrypoint = serverEntrypoint !== undefined;
+      const serverImportPath = declaresServerEntrypoint
+        ? await resolveExtensionEntrypointImportPath(sourcePath, 'server', serverEntrypoint)
+        : undefined;
 
       return {
         name: result.data.name,
@@ -301,6 +333,7 @@ export class LocalPathInstaller {
         sourcePath,
         source: 'local',
         ...(serverImportPath !== undefined && { serverImportPath }),
+        ...(declaresServerEntrypoint && { declaresServerEntrypoint }),
         ...(result.data.critical !== undefined && { critical: result.data.critical }),
       };
     } catch {

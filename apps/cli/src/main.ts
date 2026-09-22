@@ -16,7 +16,12 @@ import type { CliManifest, CliSubcommandManifest } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { toCliArgManifests, CliRpcSubjects } from '@makaio/kernel/cli';
 import type { CliContribution } from '@makaio/kernel/cli';
-import { resolveConventionEntrypoint, resolveMakaioHome, type ExtensionDiscovery } from '@makaio/runtime-node';
+import {
+  resolveConventionEntrypoint,
+  resolveMakaioHome,
+  type ExtensionDiscovery,
+  type FrameworkModuleResolver,
+} from '@makaio/runtime-node';
 import { registerContribution } from './schema-adapter.js';
 import { resolveBusUrl } from './bus-client.js';
 import { disconnectBusSafely } from './command-runtime.js';
@@ -91,6 +96,29 @@ export interface ServeConfig {
 }
 
 /**
+ * Host-provided capabilities for a CLI invocation.
+ *
+ * Standalone execution omits this entirely: a CLI running from a development
+ * workspace, or installed from the registry, resolves `@makaio/framework/*`
+ * through ordinary package resolution. A packaged host that ships its own
+ * framework dist passes the resolver it installs at boot, so offline commands
+ * read extension code exactly as its runtime would.
+ */
+export interface CliHostConfig {
+  /**
+   * Module resolver for `@makaio/framework/*` subpath imports.
+   *
+   * Forwarded to the extension commands' offline installed-extension listing,
+   * which imports each installed extension's server entrypoint in this process
+   * to read its exported `critical` declaration. An extension installed from a
+   * local path lives outside this process's module tree, so without the host's
+   * resolver its framework imports fail and its criticality is reported
+   * unknown — refusing an `extension disable` the runtime would have allowed.
+   */
+  readonly frameworkModuleResolver?: FrameworkModuleResolver;
+}
+
+/**
  * Determine whether argv can be handled without server-side command discovery.
  *
  * Only strictly local builtins qualify here. Help output and bare invocation
@@ -135,9 +163,10 @@ function parsePort(value: string): number {
 /**
  * Create and configure the root Commander program with builtins only.
  * @param serveConfig - Host-provided configuration for the `serve` command.
+ * @param hostConfig - Host-provided capabilities for this invocation.
  * @returns The configured Commander program.
  */
-export function createProgram(serveConfig?: ServeConfig): CommandInstance {
+export function createProgram(serveConfig?: ServeConfig, hostConfig?: CliHostConfig): CommandInstance {
   const program = new Command('makaio').description('Makaio CLI — orchestrate AI agents').version('0.1.0');
 
   registerOpenCommand(program);
@@ -161,7 +190,7 @@ export function createProgram(serveConfig?: ServeConfig): CommandInstance {
       });
     });
 
-  registerExtensionCommands(program);
+  registerExtensionCommands(program, { frameworkModuleResolver: hostConfig?.frameworkModuleResolver });
 
   return program;
 }
@@ -479,12 +508,15 @@ function fallbackHelpSuffix(fallback: FallbackReason, connectionError: string | 
  * @param discovery - Optional extension discovery strategy. Used when no
  *   explicit runtime config file is selected.
  * @param serveConfig - Host-provided configuration for the `serve` command.
+ * @param hostConfig - Host-provided capabilities for this invocation, such as
+ *   the packaged framework module resolver — see {@link CliHostConfig}.
  */
 export async function main(
   argv: string[] = process.argv,
   contributions: ReadonlyArray<CliContribution> = [],
   discovery?: ExtensionDiscovery,
   serveConfig?: ServeConfig,
+  hostConfig?: CliHostConfig,
 ): Promise<void> {
   const {
     argv: parsedArgv,
@@ -500,7 +532,7 @@ export async function main(
     parsedArgv.push('open');
   }
 
-  const program = createProgram(effectiveServeConfig);
+  const program = createProgram(effectiveServeConfig, hostConfig);
   const allContributions = [...BUILTIN_CLI_CONTRIBUTIONS, ...contributions];
 
   if (isDiscoveryFreeBuiltin(parsedArgv)) {

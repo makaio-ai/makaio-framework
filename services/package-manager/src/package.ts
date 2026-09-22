@@ -30,6 +30,12 @@ export interface PackageManagerPackageOptions {
    */
   readonly frameworkPackagePath?: string;
   /**
+   * Absolute path to the assembled `@makaio/framework` dist, when the host
+   * uses `NodeFrameworkModuleResolver` — see
+   * {@link PackageManagerServiceOptions.frameworkDistPath}.
+   */
+  readonly frameworkDistPath?: string;
+  /**
    * Dev-mode workspace package map used to rewrite install specs to `portal:` ranges.
    *
    * When provided and non-empty, the dependency resolver links known workspace
@@ -62,6 +68,7 @@ export function createPackageManagerPackage(
         dependencyResolver: options.dependencyResolver,
         frameworkPeerRange: options.frameworkPeerRange,
         frameworkPackagePath: options.frameworkPackagePath,
+        frameworkDistPath: options.frameworkDistPath,
         devPortalPackages: options.devPortalPackages,
       }),
   };
