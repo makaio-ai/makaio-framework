@@ -12,7 +12,7 @@ import {
   synthesizeBrowserOnlyPackages,
   type SynthesizedBrowserOnlyResult,
 } from './synthesize-browser-only-packages.js';
-import type { DiscoveredExtension } from './extension-discovery.js';
+import { ExtensionNameCollisionError, type DiscoveredExtension } from './extension-discovery.js';
 import { readFrameworkVersion } from './read-framework-version.js';
 import type { ResolvedExtensionOptions } from './resolve-extension-options.js';
 
@@ -38,6 +38,9 @@ export interface BootExtensionLoadingResult {
  * coordinator loading.
  * @param options - Discovery, framework-version, skip-filter, and static-mount inputs.
  * @returns Descriptor discovery and package-loading results for boot.
+ * @throws ExtensionNameCollisionError when two packages in one discovery tier
+ *   claim the same descriptor name, which must abort boot rather than degrade
+ *   to an extension-less runtime.
  */
 export async function loadBootExtensions(options: {
   readonly extensionOptions: ResolvedExtensionOptions;
@@ -64,6 +67,12 @@ export async function loadBootExtensions(options: {
       }
     }
   } catch (err) {
+    // A same-tier descriptor-name collision has no deterministic winner, so
+    // booting past it would load an arbitrary copy of a shared identity. Every
+    // other discovery failure stays recoverable and degrades to no extensions.
+    if (err instanceof ExtensionNameCollisionError) {
+      throw err;
+    }
     console.warn('[boot] Extension discovery failed, skipping:', err instanceof Error ? err.message : err);
   }
 

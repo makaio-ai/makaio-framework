@@ -3,7 +3,7 @@
  *
  * Covers the full flow for a browser-only extension (no server entry):
  *   ExplicitDescriptorDiscovery → synthesizeBrowserOnlyPackages
- *     → mergePackagesByDescriptorSourcePriority
+ *     → selectBootEligibleExtensionPackages
  *
  * Also verifies that the mount callback correctly wires a Hono app by delegating
  * to the injected `createMount` factory, and that the URL/path conventions are
@@ -18,7 +18,7 @@ import { describe, expect, it } from 'vitest';
 import type { KernelMakaioExtension } from '@makaio/kernel';
 import { ExplicitDescriptorDiscovery, type DiscoveredExtension } from '../extension-discovery.js';
 import { synthesizeBrowserOnlyPackages } from '../synthesize-browser-only-packages.js';
-import { mergePackagesByDescriptorSourcePriority } from '../load-extensions.js';
+import { selectBootEligibleExtensionPackages } from '../boot-extension-selection.js';
 import type { BridgeBrowserOptions } from '../create-static-mount.js';
 
 // ---------------------------------------------------------------------------
@@ -27,6 +27,20 @@ import type { BridgeBrowserOptions } from '../create-static-mount.js';
 
 const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const BROWSER_EXT_PATH = path.join(FIXTURES_DIR, 'browser-ext');
+
+/**
+ * Run the production boot selection stage over a package set.
+ * @param packages - Packages produced by the synthesis stage.
+ * @returns Packages eligible to reach the coordinator this boot.
+ */
+function selectEligible(packages: ReadonlyArray<KernelMakaioExtension>): ReadonlyArray<KernelMakaioExtension> {
+  return selectBootEligibleExtensionPackages({
+    packages,
+    configProvider: undefined,
+    surface: 'headless',
+    runtimeEnvironment: { hosts: new Set(['node']), capabilities: new Set() },
+  });
+}
 
 /**
  * Build a {@link DiscoveredExtension} from the browser-ext fixture.
@@ -113,18 +127,16 @@ describe('ExplicitDescriptorDiscovery with browser-only fixture', () => {
     expect(mountRecords[0]?.urlPrefix).toBe('/extensions/browser-ext/browser');
   });
 
-  it('descriptor-source merge passes the synthesized package through when it is the only source', async () => {
+  it('boot selection passes the synthesized package through when it is the only source', async () => {
     const discovery = new ExplicitDescriptorDiscovery([BROWSER_EXT_DISCOVERED]);
     const discovered = await discovery.discover();
     const mountRecords: MountCallRecord[] = [];
 
     const { packages } = synthesizeBrowserOnlyPackages(discovered, { createMount: makeMountSpy(mountRecords) });
-    const merged = mergePackagesByDescriptorSourcePriority([
-      { descriptorName: 'browser-ext', descriptorSource: 'workspace-descriptors', packages },
-    ]);
+    const eligible = selectEligible(packages);
 
-    expect(merged).toHaveLength(1);
-    expect(merged[0]?.name).toBe('browser-ext');
+    expect(eligible).toHaveLength(1);
+    expect(eligible[0]?.name).toBe('browser-ext');
   });
 });
 
@@ -210,7 +222,7 @@ describe('full pipeline: discover → synthesize browser-only → merge', () => 
     expect(mountRecords[0]?.serveRoot).toBe(path.join(FIXTURES_DIR, 'makaio-dev', 'dist'));
   });
 
-  it('browser-only extension survives full pipeline with no descriptor-source collision', async () => {
+  it('browser-only extension survives the full pipeline with no name collision', async () => {
     const discovery = new ExplicitDescriptorDiscovery([BROWSER_EXT_DISCOVERED]);
     const discovered = await discovery.discover();
     const mountRecords: MountCallRecord[] = [];
@@ -226,19 +238,16 @@ describe('full pipeline: discover → synthesize browser-only → merge', () => 
         version: '0.1.0',
       },
     ];
-    const merged = mergePackagesByDescriptorSourcePriority([
-      { descriptorName: 'browser-ext', descriptorSource: 'workspace-descriptors', packages: synthesized },
-      { descriptorName: 'bundled-browser-ext', descriptorSource: 'bundled-descriptors', packages: bundledPackages },
-    ]);
+    const eligible = selectEligible([...synthesized, ...bundledPackages]);
 
-    expect(merged).toHaveLength(2);
-    expect(merged[0]?.name).toBe('browser-ext');
-    expect(merged[0]?.browser?.entrypoint).toBe('/extensions/browser-ext/browser/index.js');
-    expect(merged[0]?.http?.prefix).toBe('/extensions/browser-ext/browser');
+    expect(eligible).toHaveLength(2);
+    expect(eligible[0]?.name).toBe('browser-ext');
+    expect(eligible[0]?.browser?.entrypoint).toBe('/extensions/browser-ext/browser/index.js');
+    expect(eligible[0]?.http?.prefix).toBe('/extensions/browser-ext/browser');
     expect(mountRecords).toHaveLength(1);
   });
 
-  it('browser-only extension wins when its descriptor source has higher priority', async () => {
+  it('boot selection refuses a bundled package that claims the browser-only extension name', async () => {
     const discovery = new ExplicitDescriptorDiscovery([BROWSER_EXT_DISCOVERED]);
     const discovered = await discovery.discover();
 
@@ -251,12 +260,13 @@ describe('full pipeline: discover → synthesize browser-only → merge', () => 
         version: '0.1.0',
       },
     ];
-    const merged = mergePackagesByDescriptorSourcePriority([
-      { descriptorName: 'browser-ext', descriptorSource: 'workspace-descriptors', packages: synthesized },
-      { descriptorName: 'browser-ext', descriptorSource: 'bundled-descriptors', packages: bundledPackages },
-    ]);
 
-    expect(merged).toStrictEqual(synthesized);
+    // Two packages under one extension name have no legitimate winner — the
+    // host has to decide which source contributes `browser-ext` before boot,
+    // not have boot silently pick one.
+    expect(() => selectEligible([...synthesized, ...bundledPackages])).toThrow(
+      /Extension name collision: "browser-ext" is registered twice/,
+    );
   });
 
   it('extensions with server entries in the same batch are not synthesized', async () => {

@@ -3,7 +3,7 @@
  *
  * These tests cover:
  * - resolveExtensionOptions correctly handles extensions
- * - Descriptor-source priority wins on package name collision
+ * - Boot selection refuses two extension packages claiming one name
  * - Extension with incompatible framework range is skipped
  *
  * Full bootMakaioRuntime integration tests are out of scope here (they require
@@ -29,8 +29,12 @@ import { ExecutionAttemptAuthority, workflowAttemptOutcomeCodec } from '@makaio/
 import { createInMemoryAttemptRepository, requireCommittedOutcome } from '@makaio/subsystem-workflow-engine/testing';
 import type { DiscoveredExtension } from '../extension-discovery.js';
 import { ExtensionCoordinator, type ExtensionRuntimeSurface, type KernelMakaioExtension } from '@makaio/kernel';
-import { ExplicitDescriptorDiscovery, FilesystemDescriptorDiscovery } from '../extension-discovery.js';
-import { loadExtensions, mergePackagesByDescriptorSourcePriority } from '../load-extensions.js';
+import {
+  ExplicitDescriptorDiscovery,
+  ExtensionNameCollisionError,
+  FilesystemDescriptorDiscovery,
+} from '../extension-discovery.js';
+import { loadExtensions } from '../load-extensions.js';
 import type { CoreBootOptions } from '../boot.js';
 import {
   buildLocalBusUrl,
@@ -220,95 +224,6 @@ describe('resolveExtensionOptions — extensions', () => {
     const resolved = resolveExtensionOptions(minimalBootOptions({ discovery }), TEST_MAKAIO_HOME);
 
     expect(resolved.extensions).toBe(discovery);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Deduplication: descriptor-source priority wins on name collision
-// ---------------------------------------------------------------------------
-
-describe('extension package merge by descriptor-source priority', () => {
-  it('keeps packages when descriptor sources do not collide by name', () => {
-    const workspace = [makePackage('workspace-ext')];
-    const lowerPriority = [makePackage('secondary-ext')];
-
-    const result = mergePackagesByDescriptorSourcePriority([
-      { descriptorName: 'workspace-ext', descriptorSource: 'workspace-descriptors', packages: workspace },
-      { descriptorName: 'secondary-ext', descriptorSource: 'lower-priority-descriptors', packages: lowerPriority },
-    ]);
-
-    expect(result.map((pkg) => pkg.name)).toStrictEqual(['workspace-ext', 'secondary-ext']);
-  });
-
-  it('keeps the earlier descriptor source when package names collide', () => {
-    const workspace = makePackage('shared-ext');
-    const lowerPriority = makePackage('shared-ext');
-
-    const result = mergePackagesByDescriptorSourcePriority([
-      { descriptorName: 'shared-ext', descriptorSource: 'workspace-descriptors', packages: [workspace] },
-      {
-        descriptorName: 'lower-priority-shared-ext',
-        descriptorSource: 'lower-priority-descriptors',
-        packages: [lowerPriority],
-      },
-    ]);
-
-    expect(result).toStrictEqual([workspace]);
-  });
-
-  it('keeps the entire earlier descriptor source when descriptor names collide', () => {
-    const workspace = [makePackage('shared-ext')];
-    const lowerPriority = [makePackage('shared-ext'), makePackage('shared-ext.settings')];
-
-    const result = mergePackagesByDescriptorSourcePriority([
-      { descriptorName: 'shared-ext', descriptorSource: 'workspace-descriptors', packages: workspace },
-      { descriptorName: 'shared-ext', descriptorSource: 'lower-priority-descriptors', packages: lowerPriority },
-    ]);
-
-    expect(result).toStrictEqual(workspace);
-  });
-
-  it('keeps the earlier descriptor family when it exports namespaced packages', () => {
-    const workspace = [makePackage('shared-ext'), makePackage('shared-ext.settings')];
-    const lowerPriority = [makePackage('shared-ext')];
-
-    const result = mergePackagesByDescriptorSourcePriority([
-      { descriptorName: 'shared-ext', descriptorSource: 'workspace-descriptors', packages: workspace },
-      { descriptorName: 'shared-ext', descriptorSource: 'lower-priority-descriptors', packages: lowerPriority },
-    ]);
-
-    expect(result).toStrictEqual(workspace);
-  });
-
-  it('keeps later-source packages that do not collide with earlier sources', () => {
-    const workspace = [makePackage('shared-ext')];
-    const lowerPriority = [makePackage('shared-ext'), makePackage('lower-priority-only')];
-
-    const result = mergePackagesByDescriptorSourcePriority([
-      { descriptorName: 'workspace-ext', descriptorSource: 'workspace-descriptors', packages: workspace },
-      {
-        descriptorName: 'lower-priority-ext',
-        descriptorSource: 'lower-priority-descriptors',
-        packages: lowerPriority,
-      },
-    ]);
-
-    expect(result.map((pkg) => pkg.name)).toStrictEqual(['shared-ext', 'lower-priority-only']);
-  });
-
-  it('keeps all packages when earlier descriptor sources are empty', () => {
-    const lowerPriority = [makePackage('ext-a'), makePackage('ext-b')];
-
-    const result = mergePackagesByDescriptorSourcePriority([
-      { descriptorName: 'workspace-ext', descriptorSource: 'workspace-descriptors', packages: [] },
-      {
-        descriptorName: 'lower-priority-ext',
-        descriptorSource: 'lower-priority-descriptors',
-        packages: lowerPriority,
-      },
-    ]);
-
-    expect(result).toHaveLength(2);
   });
 });
 
@@ -815,11 +730,11 @@ describe('selectExtensionManagedEnabledPackages', () => {
   it('keeps an enabled override that wins a core-name collision effectively enabled', () => {
     // Symmetric case: an enabled extension override legitimately shadows the
     // core package. `excludeIneffectiveCoreNameOverrides` keeps it, the
-    // coordinator's own coalescing lets it win over the core package, and it
-    // must remain classified as extension-managed AND effectively enabled so
-    // its own runtimeBoot.configure still runs.
+    // coordinator lets it win the framework package's name because boot
+    // declared that name as a framework package name, and it must remain
+    // classified as extension-managed AND effectively enabled so its own
+    // runtimeBoot.configure still runs.
     const bus = createBusInstance();
-    const coordinator = new ExtensionCoordinator(bus, { surface: 'headless' });
     const configured: string[] = [];
 
     const corePackage = makeBootContributor('makaio.clients-core', 'core', configured);
@@ -836,10 +751,11 @@ describe('selectExtensionManagedEnabledPackages', () => {
 
     const extensionManagedPackageNames = new Set(mergeableExtensionPackages.map((pkg) => pkg.name));
 
+    const coordinator = new ExtensionCoordinator(bus, { surface: 'headless', frameworkPackageNames });
     const packagesToLoad = [corePackage, ...mergeableExtensionPackages];
     const retainedPackages = coordinator.load(packagesToLoad);
-    // The coordinator's own name-collision coalescing keeps the last
-    // registration — the override — not the core package.
+    // A single override of a declared framework package name wins it; the
+    // core package's registration is the one dropped.
     expect(retainedPackages).toStrictEqual([enabledOverride]);
 
     const enabledRetainedPackages = selectExtensionManagedEnabledPackages(
@@ -851,6 +767,39 @@ describe('selectExtensionManagedEnabledPackages', () => {
     registerExtensionBootContributions(enabledRetainedPackages, bus, coordinator);
 
     expect(configured).toStrictEqual(['override']);
+  });
+
+  it('refuses a core-name override when the host never declared the name as a framework package', () => {
+    // Without `frameworkPackageNames` the coordinator has no way to tell a
+    // deliberate core override from two extensions claiming one identity, so
+    // it must refuse rather than silently let the later registration win.
+    const bus = createBusInstance();
+    const configured: string[] = [];
+    const corePackage = makeBootContributor('makaio.clients-core', 'core', configured);
+    const override = makeBootContributor('makaio.clients-core', 'override', configured);
+
+    const coordinator = new ExtensionCoordinator(bus, { surface: 'headless' });
+
+    expect(() => coordinator.load([corePackage, override])).toThrow(
+      /Extension name collision: "makaio.clients-core" is registered twice/,
+    );
+  });
+
+  it('refuses a second override of a declared framework package name', () => {
+    const bus = createBusInstance();
+    const configured: string[] = [];
+    const corePackage = makeBootContributor('makaio.clients-core', 'core', configured);
+    const firstOverride = makeBootContributor('makaio.clients-core', 'first', configured);
+    const secondOverride = makeBootContributor('makaio.clients-core', 'second', configured);
+
+    const coordinator = new ExtensionCoordinator(bus, {
+      surface: 'headless',
+      frameworkPackageNames: new Set([corePackage.name]),
+    });
+
+    expect(() => coordinator.load([corePackage, firstOverride, secondOverride])).toThrow(
+      /Extension name collision: "makaio.clients-core" is registered twice/,
+    );
   });
 
   it('excludes a non-colliding extension-managed package that is not effectively enabled', () => {
@@ -1218,7 +1167,7 @@ describe('extension loading with ExplicitDescriptorDiscovery', () => {
     ).toEqual([schedulerPackage]);
   });
 
-  it('drops a server child policy when later browser composition replaces its owner', async () => {
+  it('refuses a boot whose browser-only descriptor contests a server child package name', async () => {
     const schedulerPackage = makePackage(AutomationCronSchedulerToken.name);
     const serverChild = makePackage('example.parent.child');
     const server = {
@@ -1260,13 +1209,53 @@ describe('extension loading with ExplicitDescriptorDiscovery', () => {
       runtimeEnvironment: buildRuntimeEnvironment('linux', ['node']),
     };
 
-    expect(result.allExtensionPackages.find(({ name }) => name === serverChild.name)).not.toBe(serverChild);
-    expect(
+    // The browser-only descriptor claims the name the server descriptor's
+    // exported child package already registers. Discovery dedups by descriptor
+    // name, so both reach composition — where the contest is refused outright
+    // rather than letting the later synthesis take the name and silently
+    // strand the scheduler policy its previous owner contributed.
+    expect(result.allExtensionPackages.filter(({ name }) => name === serverChild.name)).toHaveLength(2);
+    expect(() =>
       selectEligibleAutomationCronSchedulerHostPackages(
         result.extensionLoadResult.automationCronSchedulerHostPolicies,
         eligibility,
       ),
-    ).toEqual([]);
+    ).toThrow(/Extension name collision: "example\.parent\.child"/);
+  });
+
+  it('keeps a contested child package name through CLI attachment so boot selection refuses it', async () => {
+    // A descriptor's exported child package and a same-named descriptor in
+    // another tier both register one name. Discovery resolves tiers by
+    // descriptor name only, so both survive it — and the CLI attachment pass
+    // must not collapse them either, or `coalesceExtensionOverrides` never
+    // sees the contest and an arbitrary claimant loads.
+    const parent: DiscoveredExtension = {
+      ...makeDiscovered('example.parent'),
+      preloadedModule: { default: [makePackage('example.parent'), makePackage('example.parent.settings')] },
+    };
+    const contender: DiscoveredExtension = {
+      ...makeDiscovered('example.parent.settings'),
+      preloadedModule: { default: makePackage('example.parent.settings') },
+    };
+
+    const result = await loadBootExtensions({
+      extensionOptions: resolveExtensionOptions(
+        minimalBootOptions({ discovery: new ExplicitDescriptorDiscovery([parent, contender]) }),
+        TEST_MAKAIO_HOME,
+      ),
+      skipExtensions: new Set(),
+      frameworkVersion: FRAMEWORK_VERSION,
+    });
+
+    expect(result.allExtensionPackages.filter(({ name }) => name === 'example.parent.settings')).toHaveLength(2);
+    expect(() =>
+      selectBootEligibleExtensionPackages({
+        packages: result.allExtensionPackages,
+        configProvider: undefined,
+        surface: 'headless',
+        runtimeEnvironment: buildRuntimeEnvironment('linux', ['node']),
+      }),
+    ).toThrow(/Extension name collision: "example\.parent\.settings"/);
   });
 
   it('synthesizes a managed package for detached execution mode', async () => {
@@ -1366,32 +1355,19 @@ describe('owner-anchored automation cron scheduler host policy', () => {
     ).toBe(relayScheduler);
   });
 
-  it('falls back to the local scheduler when a later server package replaces the policy owner by name', () => {
+  it('refuses a boot in which a second server package claims the policy owner name', () => {
+    // Two owners under one name used to resolve as "later registration wins",
+    // which silently decided which contributed scheduler held timer authority.
+    // Extension names are identities, so boot selection refuses instead.
     const oldOwner = owner('example.relay');
     const replacementOwner = owner('example.relay');
 
-    expect(
+    expect(() =>
       selectForBoot({
         packages: [oldOwner, replacementOwner],
         policies: [{ ownerPackage: oldOwner, package: scheduler('Old Relay Scheduler') }],
       }),
-    ).toBe(localAutomationCronSchedulerPackage);
-  });
-
-  it('selects the later policy when a later server package replaces the policy owner by name', () => {
-    const oldOwner = owner('example.relay');
-    const replacementOwner = owner('example.relay');
-    const replacementScheduler = scheduler('Replacement Relay Scheduler');
-
-    expect(
-      selectForBoot({
-        packages: [oldOwner, replacementOwner],
-        policies: [
-          { ownerPackage: oldOwner, package: scheduler('Old Relay Scheduler') },
-          { ownerPackage: replacementOwner, package: replacementScheduler },
-        ],
-      }),
-    ).toBe(replacementScheduler);
+    ).toThrow(/Extension name collision: "example.relay" is registered twice/);
   });
 
   it('ignores an ineligible competing policy', () => {
@@ -1655,7 +1631,7 @@ describe('workflow-level runner boot composition', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Pipeline integration: discover → load → descriptor-source merge
+// Pipeline integration: discover → load → boot selection
 // ---------------------------------------------------------------------------
 
 describe('extension pipeline integration', () => {
@@ -1670,10 +1646,24 @@ describe('extension pipeline integration', () => {
     }
   });
 
-  it('discovery → load → merge pipeline produces valid packages', async () => {
+  /**
+   * Run the production boot selection over an already-loaded package set.
+   * @param packages - Packages produced by `loadExtensions`.
+   * @returns Packages eligible to reach the coordinator this boot.
+   */
+  function selectEligible(packages: readonly KernelMakaioExtension[]): readonly KernelMakaioExtension[] {
+    return selectBootEligibleExtensionPackages({
+      packages: [...packages],
+      configProvider: undefined,
+      surface: 'headless',
+      runtimeEnvironment: { hosts: new Set(['node']), capabilities: new Set() },
+    });
+  }
+
+  it('discovery → load → boot selection pipeline produces valid packages', async () => {
     const discovery = new ExplicitDescriptorDiscovery([
       makeDiscovered('workspace-ext'),
-      makeDiscovered('collision-ext'),
+      makeDiscovered('secondary-ext'),
     ]);
 
     const discovered = await discovery.discover();
@@ -1681,28 +1671,17 @@ describe('extension pipeline integration', () => {
     const loaded = await loadExtensions(discovered, {
       frameworkVersion: FRAMEWORK_VERSION,
       importModule: async (entryPath) => {
-        const name = entryPath.includes('workspace-ext') ? 'workspace-ext' : 'collision-ext';
+        const name = entryPath.includes('workspace-ext') ? 'workspace-ext' : 'secondary-ext';
         return { default: makePackage(name) };
       },
     });
 
-    // Both loaded successfully before source-priority merging
     expect(loaded.packages).toHaveLength(2);
 
-    const merged = mergePackagesByDescriptorSourcePriority([
-      { descriptorName: 'workspace-ext', descriptorSource: 'workspace-descriptors', packages: loaded.packages },
-      {
-        descriptorName: 'lower-priority-ext',
-        descriptorSource: 'lower-priority-descriptors',
-        packages: [makePackage('collision-ext'), makePackage('lower-priority-ext')],
-      },
-    ]);
+    const eligible = selectEligible(loaded.packages);
 
-    expect(merged.map((pkg) => pkg.name)).toStrictEqual(['workspace-ext', 'collision-ext', 'lower-priority-ext']);
-
-    // Verify the merged package carries the expected MakaioExtension shape
-    expect(merged[0]).toHaveProperty('name');
-    expect(merged[0]).toHaveProperty('displayName');
+    expect(eligible.map((pkg) => pkg.name)).toStrictEqual(['workspace-ext', 'secondary-ext']);
+    expect(eligible[0]).toHaveProperty('displayName');
   });
 
   it('pipeline skips version-gated extensions and boot continues', async () => {
@@ -1725,35 +1704,25 @@ describe('extension pipeline integration', () => {
     expect(loaded.packages).toHaveLength(1);
     expect(loaded.packages[0]?.name).toBe('valid-ext');
 
-    const merged = mergePackagesByDescriptorSourcePriority([
-      { descriptorName: 'workspace-ext', descriptorSource: 'workspace-descriptors', packages: loaded.packages },
-    ]);
-    expect(merged).toHaveLength(1);
-    expect(merged[0]?.name).toBe('valid-ext');
+    expect(selectEligible(loaded.packages).map((pkg) => pkg.name)).toStrictEqual(['valid-ext']);
   });
 
-  it('pipeline with descriptor-source name collision keeps higher-priority source and boot continues', async () => {
+  it('refuses a boot in which two extension packages claim the same name', async () => {
+    // Discovery resolves descriptor-name collisions before this point, so two
+    // packages arriving here under one name is a pipeline violation, not an
+    // override to resolve: boot selection names both and refuses.
     const discovery = new ExplicitDescriptorDiscovery([makeDiscovered('shared-name')]);
 
-    const discovered = await discovery.discover();
-
-    const loaded = await loadExtensions(discovered, {
+    const loaded = await loadExtensions(await discovery.discover(), {
       frameworkVersion: FRAMEWORK_VERSION,
       importModule: async () => ({ default: makePackage('shared-name') }),
     });
 
     expect(loaded.packages).toHaveLength(1);
 
-    const merged = mergePackagesByDescriptorSourcePriority([
-      { descriptorName: 'shared-name', descriptorSource: 'workspace-descriptors', packages: loaded.packages },
-      {
-        descriptorName: 'shared-name',
-        descriptorSource: 'lower-priority-descriptors',
-        packages: [makePackage('shared-name')],
-      },
-    ]);
-
-    expect(merged).toStrictEqual(loaded.packages);
+    expect(() => selectEligible([...loaded.packages, makePackage('shared-name')])).toThrow(
+      /Extension name collision: "shared-name" is registered twice/,
+    );
   });
 });
 
@@ -1833,6 +1802,101 @@ describe('loadBootExtensions createMount seam', () => {
       '/extensions/browser-only-dashboard/browser',
     );
     expect(pkg?.http?.mount).toBe(mount);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Same-tier descriptor-name collision refusal at the boot loading seam
+// ---------------------------------------------------------------------------
+
+describe('loadBootExtensions descriptor-name collision refusal', () => {
+  let projectRoot: string | undefined;
+
+  beforeEach(() => {
+    projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'makaio-boot-collision-'));
+  });
+
+  afterEach(() => {
+    if (projectRoot !== undefined) {
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+      projectRoot = undefined;
+    }
+  });
+
+  /**
+   * Write a real project-local package so the unmocked filesystem discovery
+   * scans it exactly as it would at boot.
+   * @param directoryName - Package directory under the project `node_modules`.
+   * @param descriptorName - Descriptor name the package claims.
+   * @returns Absolute package root the discovery reports as provenance.
+   */
+  function writeProjectLocalPackage(directoryName: string, descriptorName: string): string {
+    const packageRoot = path.join(projectRoot!, 'node_modules', directoryName);
+    fs.mkdirSync(packageRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, 'descriptor.json'),
+      JSON.stringify({
+        name: descriptorName,
+        displayName: `${descriptorName} Display`,
+        version: '1.0.0',
+        makaio: { framework: '>=1.0.0' },
+        entrypoints: { server: true },
+      }),
+    );
+    return packageRoot;
+  }
+
+  it('aborts boot instead of degrading to an extension-less runtime when one tier claims a name twice', async () => {
+    // Boot's discovery catch degrades every recoverable failure to "no
+    // extensions". A same-tier collision is not recoverable: there is no
+    // deterministic winner, so continuing would silently start a runtime
+    // without the extensions the operator installed.
+    const firstPath = writeProjectLocalPackage('first-copy', 'shared-ext');
+    const secondPath = writeProjectLocalPackage('second-copy', 'shared-ext');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const boot = loadBootExtensions({
+      extensionOptions: resolveExtensionOptions(
+        minimalBootOptions({ discovery: new FilesystemDescriptorDiscovery(projectRoot!) }),
+        TEST_MAKAIO_HOME,
+      ),
+      skipExtensions: new Set(),
+      frameworkVersion: FRAMEWORK_VERSION,
+    });
+
+    const error = await boot.then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(error).toBeInstanceOf(ExtensionNameCollisionError);
+    const message = (error as ExtensionNameCollisionError).message;
+    expect(message).toContain('shared-ext');
+    expect(message).toContain(firstPath);
+    expect(message).toContain(secondPath);
+    expect(warnSpy).not.toHaveBeenCalledWith('[boot] Extension discovery failed, skipping:', expect.anything());
+  });
+
+  it('still degrades to an extension-less boot for a recoverable discovery failure', async () => {
+    // The targeted re-throw must not turn every discovery failure into a
+    // boot abort — only the collision is unrecoverable.
+    const failure = new Error('discovery backend unavailable');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await loadBootExtensions({
+      extensionOptions: {
+        extensions: {
+          discover: async () => {
+            throw failure;
+          },
+        },
+      },
+      skipExtensions: new Set(),
+      frameworkVersion: FRAMEWORK_VERSION,
+    });
+
+    expect(result.discovered).toStrictEqual([]);
+    expect(result.allExtensionPackages).toStrictEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith('[boot] Extension discovery failed, skipping:', failure.message);
   });
 });
 

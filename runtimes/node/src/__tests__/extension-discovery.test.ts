@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ExplicitDescriptorDiscovery,
+  ExtensionNameCollisionError,
   enumerateDescriptorPaths,
   FilesystemDescriptorDiscovery,
   MergedDescriptorDiscovery,
@@ -283,6 +284,56 @@ describe('FilesystemDescriptorDiscovery', () => {
     expect(result[0]?.extensionPath).toBe(path.join(globalNodeModules, '@scope', 'global-ext'));
   });
 
+  it('warns with both provenances when a lower tier is shadowed', async () => {
+    const shared = { ...baseDescriptor, name: 'same-name-ext' };
+    await writeDescriptor(path.join(nodeModules, 'same-name-ext'), JSON.stringify(shared));
+    await writeDescriptor(path.join(extensionsDir, 'same-name-ext'), JSON.stringify(shared));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const discovery = new FilesystemDescriptorDiscovery(tmpDir, { extensionsDir, nodeModulesDir: globalNodeModules });
+    await discovery.discover();
+
+    const message = warnSpy.mock.calls.map((call) => String(call[0])).find((line) => line.includes('same-name-ext'));
+    expect(message).toBeDefined();
+    expect(message).toContain(`local at ${path.join(nodeModules, 'same-name-ext')}`);
+    expect(message).toContain(`installed at ${path.join(extensionsDir, 'same-name-ext')}`);
+    expect(message).toContain('shadowed');
+  });
+
+  it('refuses to discover when one tier declares the same descriptor name twice', async () => {
+    // Two hand-placed packages in one tier claiming one identity: the tier has
+    // no internal precedence, so there is no winner to pick.
+    const shared = { ...baseDescriptor, name: 'same-name-ext' };
+    const firstPath = path.join(nodeModules, 'first-copy');
+    const secondPath = path.join(nodeModules, 'second-copy');
+    await writeDescriptor(firstPath, JSON.stringify(shared));
+    await writeDescriptor(secondPath, JSON.stringify(shared));
+
+    const discovery = new FilesystemDescriptorDiscovery(tmpDir, { extensionsDir, nodeModulesDir: globalNodeModules });
+
+    const error = await discovery.discover().then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+    expect(error).toBeInstanceOf(ExtensionNameCollisionError);
+    const message = (error as ExtensionNameCollisionError).message;
+    expect(message).toContain('same-name-ext');
+    expect(message).toContain(firstPath);
+    expect(message).toContain(secondPath);
+  });
+
+  it('does not treat a cross-tier collision as a same-tier collision', async () => {
+    const shared = { ...baseDescriptor, name: 'same-name-ext' };
+    await writeDescriptor(path.join(nodeModules, 'same-name-ext'), JSON.stringify(shared));
+    await writeDescriptor(path.join(extensionsDir, 'same-name-ext'), JSON.stringify(shared));
+    await writeDescriptor(path.join(globalNodeModules, 'same-name-ext'), JSON.stringify(shared));
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const discovery = new FilesystemDescriptorDiscovery(tmpDir, { extensionsDir, nodeModulesDir: globalNodeModules });
+
+    await expect(discovery.discover()).resolves.toHaveLength(1);
+  });
+
   it('deduplicates across all tiers in priority order: local, installed, then global-npm', async () => {
     const sharedDescriptor = {
       ...baseDescriptor,
@@ -360,6 +411,24 @@ describe('MergedDescriptorDiscovery', () => {
 
     expect(result).toHaveLength(1);
     expect(result[0]).toStrictEqual(local);
+  });
+
+  it('throws when one discovery returns the same descriptor name twice', async () => {
+    const first: DiscoveredExtension = {
+      descriptor: { ...baseDescriptor, name: 'shared-ext', displayName: 'First' },
+      extensionPath: '/a/shared-ext',
+      source: 'local',
+    };
+    const second: DiscoveredExtension = {
+      descriptor: { ...baseDescriptor, name: 'shared-ext', displayName: 'Second' },
+      extensionPath: '/b/shared-ext',
+      source: 'local',
+    };
+
+    const discovery = new MergedDescriptorDiscovery([new ExplicitDescriptorDiscovery([first, second])]);
+
+    await expect(discovery.discover()).rejects.toThrow(ExtensionNameCollisionError);
+    await expect(discovery.discover()).rejects.toThrow(/\/a\/shared-ext/);
   });
 
   it('appends non-conflicting names from later discoveries', async () => {

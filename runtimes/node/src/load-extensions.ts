@@ -78,18 +78,6 @@ export interface ExtensionCliAttachResult {
 }
 
 /**
- * Packages emitted by one descriptor, ordered by caller-defined source priority.
- */
-export interface DescriptorSourcePackageGroup {
-  /** Descriptor name whose executable package surface this group represents. */
-  readonly descriptorName: string;
-  /** Stable source label for diagnostics, such as `workspace-descriptors`. */
-  readonly descriptorSource: string;
-  /** Packages produced from this descriptor. */
-  readonly packages: ReadonlyArray<KernelMakaioExtension>;
-}
-
-/**
  * Load extensions by importing their server entry points.
  *
  * For each discovered extension:
@@ -277,7 +265,9 @@ export function normalizePackageExport(
  * `MakaioExtension.cli` surface so extension commands participate in the same
  * `cli.listContributions` and `cli.execute` flow as descriptor-backed packages.
  *
- * Existing packages are augmented in-place by name. Pure CLI-only extensions
+ * Existing packages are augmented in place by name, keeping the input order and
+ * every input entry — including a duplicate package name, which this pass must
+ * not resolve (see the index comment in the body). Pure CLI-only extensions
  * (no server or browser package) are synthesized here, but descriptors that
  * also declare a server entry are never synthesized if the server package
  * failed to load — that remains a load failure rather than silently changing
@@ -295,7 +285,18 @@ export async function attachExtensionCliContributions(
   options: AttachExtensionCliContributionsOptions,
 ): Promise<ExtensionCliAttachResult> {
   const { importModule = defaultImport, frameworkVersion } = options;
-  const packagesByName = new Map(packages.map((pkg) => [pkg.name, pkg] as const));
+  // The input list is carried through as a list, with a name index alongside
+  // it, rather than collapsed into a map keyed by name: two packages can reach
+  // this pass under one name (a descriptor's exported child package contested
+  // by a same-named descriptor in another tier), and a map would silently drop
+  // one of them here — before `coalesceExtensionOverrides`, the single stage
+  // that decides such a contest, ever sees it. This pass attaches CLI
+  // contributions; it does not adjudicate identities.
+  const attached = [...packages];
+  const indexByName = new Map<string, number>();
+  attached.forEach((pkg, index) => {
+    if (!indexByName.has(pkg.name)) indexByName.set(pkg.name, index);
+  });
   const configDefaults = new Map<string, Readonly<Record<string, unknown>>>();
 
   for (const ext of discovered) {
@@ -303,7 +304,8 @@ export async function attachExtensionCliContributions(
     if (!cliEntrypoint) continue;
 
     const label = `[extensions] ${ext.descriptor.name}@${ext.descriptor.version}`;
-    const existing = packagesByName.get(ext.descriptor.name);
+    const existingIndex = indexByName.get(ext.descriptor.name);
+    const existing = existingIndex === undefined ? undefined : attached[existingIndex];
     if (existing?.cli) {
       continue;
     }
@@ -326,9 +328,9 @@ export async function attachExtensionCliContributions(
       continue;
     }
 
-    if (existing) {
+    if (existingIndex !== undefined && existing !== undefined) {
       const withCli = { ...existing, cli: mod.default };
-      packagesByName.set(ext.descriptor.name, retainExtensionPackageProvenance(withCli, existing));
+      attached[existingIndex] = retainExtensionPackageProvenance(withCli, existing);
       continue;
     }
 
@@ -339,14 +341,15 @@ export async function attachExtensionCliContributions(
       continue;
     }
 
-    packagesByName.set(ext.descriptor.name, createCliOnlyExtensionPackage(ext, mod.default));
+    indexByName.set(ext.descriptor.name, attached.length);
+    attached.push(createCliOnlyExtensionPackage(ext, mod.default));
 
     if (ext.descriptor.config?.defaults) {
       configDefaults.set(ext.descriptor.name, ext.descriptor.config.defaults);
     }
   }
 
-  return { packages: [...packagesByName.values()], configDefaults };
+  return { packages: attached, configDefaults };
 }
 
 /**
@@ -427,53 +430,6 @@ async function importCliModule(
     console.warn(`${label}: failed to import cli entry:`, err instanceof Error ? err.message : err);
     return undefined;
   }
-}
-
-/**
- * Merge descriptor-derived packages by explicit descriptor-source priority.
- *
- * Groups are processed in the order supplied by the caller. Earlier sources
- * win on descriptor-name collision and keep their entire package surface.
- * Later descriptors with different names still contribute package names that
- * have not already been claimed by a higher-priority descriptor.
- * @param groups - Descriptor package groups ordered from highest to lowest priority.
- * @returns Merged packages with at most one package per name.
- */
-export function mergePackagesByDescriptorSourcePriority(
-  groups: ReadonlyArray<DescriptorSourcePackageGroup>,
-): KernelMakaioExtension[] {
-  const sourceByDescriptorName = new Map<string, string>();
-  const sourceByPackageName = new Map<string, string>();
-  const merged: KernelMakaioExtension[] = [];
-
-  for (const group of groups) {
-    const existingDescriptorSource = sourceByDescriptorName.get(group.descriptorName);
-    if (existingDescriptorSource !== undefined) {
-      console.warn(
-        `[boot] Descriptor '${group.descriptorName}' from source '${group.descriptorSource}' ` +
-          `conflicts with higher-priority descriptor source '${existingDescriptorSource}', skipping`,
-      );
-      continue;
-    }
-
-    sourceByDescriptorName.set(group.descriptorName, group.descriptorSource);
-
-    for (const pkg of group.packages) {
-      const existingSource = sourceByPackageName.get(pkg.name);
-      if (existingSource !== undefined) {
-        console.warn(
-          `[boot] Package '${pkg.name}' from descriptor source '${group.descriptorSource}' ` +
-            `conflicts with higher-priority descriptor source '${existingSource}', skipping`,
-        );
-        continue;
-      }
-
-      sourceByPackageName.set(pkg.name, group.descriptorSource);
-      merged.push(pkg);
-    }
-  }
-
-  return merged;
 }
 
 /**

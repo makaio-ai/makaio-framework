@@ -17,7 +17,7 @@ import {
 
 export { installExtensionSources } from './extension-install-transaction.js';
 export type {
-  DirectNpmInstallResolution,
+  NpmInstallResolution,
   ExtensionInstallTransactionResult,
 } from './extension-install-transaction.js';
 

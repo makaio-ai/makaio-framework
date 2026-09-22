@@ -220,9 +220,10 @@ describe('ExtensionCoordinator', () => {
     expect(retained.map((pkg) => pkg.name)).toEqual(['standalone']);
   });
 
-  it('reports the winning registration of an overridden name, not the one it replaced', () => {
+  it('reports the winning registration of an overridden framework name, not the one it replaced', () => {
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: TEST_PKG_CTX_BASE,
+      frameworkPackageNames: new Set(['my-ext']),
     });
     const overridden = makePackage('my-ext', { create: (ctx) => makeMockService(ctx.bus) });
     const override = makePackage('my-ext', { create: (ctx) => makeMockService(ctx.bus) });
@@ -483,8 +484,29 @@ describe('ExtensionCoordinator', () => {
     expect(() => coordinator.load(packages)).toThrow(/missing dependencies: missing-parent/i);
   });
 
-  // 7b. Package override
-  it('uses the later package when two packages share the same name', async () => {
+  // 7b. Core override of a declared framework package name
+  it('starts the overriding package when it claims a declared framework package name', async () => {
+    const initFramework = vi.fn();
+    const initOverride = vi.fn();
+    const packages: MakaioExtension[] = [
+      makePackage('dup', { create: (ctx) => makeMockService(ctx.bus, initFramework) }),
+      makePackage('dup', { create: (ctx) => makeMockService(ctx.bus, initOverride) }),
+    ];
+
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      frameworkPackageNames: new Set(['dup']),
+    });
+    coordinator.load(packages);
+    await coordinator.startAll();
+
+    expect(initFramework).not.toHaveBeenCalled();
+    expect(initOverride).toHaveBeenCalledOnce();
+    expect(coordinator.list()).toHaveLength(1);
+  });
+
+  // 7c. Extension identity collision — no legitimate winner
+  it('refuses to load two packages that share a name no framework package holds', () => {
     const initFirst = vi.fn();
     const initSecond = vi.fn();
     const packages: MakaioExtension[] = [
@@ -495,12 +517,31 @@ describe('ExtensionCoordinator', () => {
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: TEST_PKG_CTX_BASE,
     });
-    coordinator.load(packages);
-    await coordinator.startAll();
 
+    expect(() => coordinator.load(packages)).toThrow(/Extension name collision: "dup" is registered twice/);
     expect(initFirst).not.toHaveBeenCalled();
-    expect(initSecond).toHaveBeenCalledOnce();
-    expect(coordinator.list()).toHaveLength(1);
+    expect(initSecond).not.toHaveBeenCalled();
+  });
+
+  // 7d. Regression: a disabled registration can no longer displace an enabled one
+  it('refuses a disabled second registration instead of letting it displace the first', () => {
+    const packages: MakaioExtension[] = [
+      makePackage('dup', { create: (ctx) => makeMockService(ctx.bus) }),
+      makePackage('dup', { create: (ctx) => makeMockService(ctx.bus) }),
+    ];
+
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      extensionManagedNames: new Set(['dup']),
+      // The second registration is operator-disabled. Under the previous
+      // last-wins rule it still won the name and then never started, taking
+      // the first registration out of the boot entirely. Identity resolution
+      // no longer consults enablement at all — the collision itself is the
+      // error.
+      loadEnabled: (name) => (name === 'dup' ? false : undefined),
+    });
+
+    expect(() => coordinator.load(packages)).toThrow(/Extension name collision: "dup" is registered twice/);
   });
 
   // 8. Single-use invariant

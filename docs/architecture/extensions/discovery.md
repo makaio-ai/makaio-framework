@@ -31,6 +31,45 @@ plus installed-extension roots under the resolved Makaio home (`extensions/` and
 replace discovery paths and apply include/exclude filters. There is no architectural
 distinction between selected extensions — all go through the same descriptor-backed pipeline.
 
+## Name collisions
+
+A descriptor name is an extension identity: exactly one discovery may hold it.
+
+- **Across tiers** the tier precedence decides. The higher tier wins, and the shadowed copy is
+  reported with both provenances (tier and path) instead of disappearing. `makaio extension list`
+  shows it as `shadowed by <tier>`, so an installed-but-unloadable extension stays visible.
+  Enablement plays no part: the tier winner is fixed, and its own enablement only decides whether
+  it starts.
+- **Within one tier** there is no precedence to appeal to, so discovery throws
+  `ExtensionNameCollisionError` naming both package paths. Boot re-throws that specific type out of
+  its discovery guard — every other discovery failure still degrades to an extension-less boot — and
+  `makaio extension list` renders it as a `List failed: …` message with a non-zero exit. The managed
+  install paths already prevent this — a symlinked install is keyed by descriptor name, and an npm
+  install is refused when a *different* npm package in the same tier already declares that extension
+  name — so this only happens for hand-placed packages.
+- **Across tiers, on a package name rather than a descriptor name.** Tier precedence only settles
+  what discovery can see, and discovery sees descriptors. When a name is claimed by an executable
+  *child* package on one side (`foo.bar` exported by descriptor `foo`) and by a descriptor or child
+  of another tier on the other, both descriptors pass discovery under their own distinct names and
+  both then register the contested package name, which the coordinator refuses (below). There is no
+  precedence answer to reach for: a child package has no descriptor of its own to demote, and
+  dropping it would silently remove part of a descriptor that did win its own name. `makaio
+  extension list` reports every such claimant as a collision — not as `shadowed by <tier>`, which
+  would name a winner where none loads — and refuses to toggle the contested name. This contest is
+  judged per surface: the coordinator filters packages by `surface` *before* it resolves names, so
+  two copies restricted to different surfaces (`interactive` vs `headless`) never meet in that
+  resolution and neither is reported as colliding. `requires` is deliberately not treated the same
+  way — it is answered by the host environment of the process that boots, which an offline listing
+  cannot know, so two copies that differ only in `requires` stay reported as a collision. A
+  same-tier descriptor-name collision is unaffected by either: discovery refuses it before any
+  package is loaded to declare a surface.
+- **At the coordinator** any remaining extension-vs-extension name collision aborts
+  `ExtensionCoordinator.load()`: the identity guarantee is established upstream, so a collision
+  there is a pipeline violation, not a resolvable override. The one collision the coordinator
+  accepts is an extension registering under a *framework* package name — the supported core
+  override (see `ExtensionCoordinatorOptions.frameworkPackageNames`), and only when that extension
+  is actually going to start.
+
 ## Loading pipeline
 
 Extensions go through a multi-stage pipeline before reaching the coordinator:
@@ -39,7 +78,9 @@ Extensions go through a multi-stage pipeline before reaching the coordinator:
    files with configurable precedence.
 2. **Loading** (`load-extensions.ts`) — dynamically imports server entry modules via `import()`,
    validates them. Path containment checks prevent traversal attacks from malicious
-   descriptors.
+   descriptors. No stage between here and the coordinator may deduplicate by package name: the
+   contested-name case above only reaches the coordinator's refusal because CLI attachment carries
+   duplicates through instead of collapsing them into a name-keyed map.
 3. **Browser bridging** (`bridge-extension-browser-entries.ts`) — augments loaded extensions
    with browser entry URLs and HTTP serving fields so their UI bundles are accessible.
 4. **Browser-only synthesis** (`synthesize-browser-only-packages.ts`) — creates minimal

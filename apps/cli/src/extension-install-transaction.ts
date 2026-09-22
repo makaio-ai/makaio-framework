@@ -9,8 +9,11 @@
  * The key contract difference from the raw `DependencyResolver` result: the
  * {@link ExtensionInstallTransactionResult.directNpm} array contains only the
  * packages that were directly requested by the caller, not transitive deps.
- * Callers that need to write a manifest sync entry use `directNpm` so they do
- * not accidentally persist internal implementation details.
+ * Callers that need to write a *new* manifest entry use `directNpm` so they do
+ * not accidentally persist internal implementation details; callers that
+ * re-align *existing* manifest pins use
+ * {@link ExtensionInstallTransactionResult.changedNpm} instead — see that
+ * field for why the two sets differ in both directions.
  * @packageDocumentation
  */
 
@@ -28,10 +31,10 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * A single directly-requested npm package that was resolved and installed (or
- * confirmed already present) by the transaction.
+ * A single npm package that was resolved and installed (or confirmed already
+ * present) by the transaction.
  */
-export interface DirectNpmInstallResolution {
+export interface NpmInstallResolution {
   /** npm package name without any version suffix. */
   readonly packageName: string;
   /** Resolved installed version string. */
@@ -51,7 +54,21 @@ export interface ExtensionInstallTransactionResult {
    * Transitive dependencies installed by the resolver are intentionally omitted.
    * Use this to write manifest sync entries without leaking internal dep graph.
    */
-  readonly directNpm: readonly DirectNpmInstallResolution[];
+  readonly directNpm: readonly NpmInstallResolution[];
+  /**
+   * Resolved records for every npm package this transaction actually installed
+   * or upgraded, including transitive dependencies.
+   *
+   * Distinct from {@link ExtensionInstallTransactionResult.directNpm} in both
+   * directions: it omits a requested package that was already present at a
+   * satisfying version (nothing changed for it), and it includes a transitive
+   * dependency the resolver moved to a new version. A caller that *records* a
+   * new project requirement must use `directNpm`, or it would pin the internal
+   * dependency graph; a caller that *re-aligns existing pins* must use this,
+   * because a transitively upgraded package the project already pins keeps a
+   * stale pin otherwise and the next reconciliation downgrades it back.
+   */
+  readonly changedNpm: readonly NpmInstallResolution[];
   /** Package names of every local extension installed in this transaction. */
   readonly installedLocalPackageNames: readonly string[];
   /**
@@ -69,6 +86,16 @@ export interface ExtensionInstallTransactionResult {
 // ---------------------------------------------------------------------------
 
 type PackageManagerModule = typeof import('@makaio/services-package-manager');
+
+/**
+ * Initialized package manager instance shared by the install and update
+ * transactions.
+ *
+ * Exported so command modules can hold one without importing the
+ * package-manager module's runtime surface eagerly — see
+ * {@link importPackageManager} for why that import is deferred.
+ */
+export type ExtensionPackageManager = InstanceType<PackageManagerModule['YarnPackageManager']>;
 
 /**
  * Lazily import the package-manager module.
@@ -136,6 +163,56 @@ export async function installExtensionSources(
     makaioHome,
     yarn,
     localSources,
+    npmSources,
+    options,
+  );
+}
+
+/**
+ * Install or upgrade already-known npm extension packages through the same
+ * guarded, transactional resolver path {@link installExtensionSources} uses.
+ *
+ * Exists so no command reaches {@link YarnPackageManager.installPackage}
+ * directly for an extension package. The resolver is where the descriptor
+ * identity guard lives — a package whose new version declares an extension
+ * name another installed package already claims is refused there — and where a
+ * refusal is turned back into the pre-install manifest state. Calling the
+ * installer directly would place such a package on disk and leave the
+ * duplicate identity for the next boot's discovery to abort on.
+ *
+ * Takes an already-initialized package manager because the callers that update
+ * packages need one anyway (to list installed packages and query their latest
+ * versions), and a second instance would re-read the same Yarn project state.
+ * @param yarn - Initialized Yarn package manager for this `$MAKAIO_HOME`.
+ * @param packageNames - npm package names to resolve to their latest version.
+ *   Names only — a version suffix would pin the resolution instead of
+ *   upgrading.
+ * @param options - Install options.
+ * @returns Aggregate transaction result; `directNpm` holds one record per
+ *   requested name that resolved.
+ */
+export async function installNpmExtensionPackages(
+  yarn: ExtensionPackageManager,
+  packageNames: readonly string[],
+  options: { readonly force?: boolean } = {},
+): Promise<ExtensionInstallTransactionResult> {
+  const { LocalPathInstaller, DependencyResolver, DescriptorNameResolver, RegistryService } =
+    await importPackageManager();
+
+  // Built directly rather than through `parseInstallSource`: these names come
+  // from the installed package set, so they are npm sources by construction and
+  // must never be re-classified as a local path or git URL.
+  const npmSources: readonly InstallSource[] = packageNames.map((name) => ({
+    kind: 'npm',
+    raw: name,
+    resolved: name,
+  }));
+
+  return performInstallTransaction(
+    { LocalPathInstaller, DependencyResolver, DescriptorNameResolver, RegistryService },
+    resolveMakaioHome(),
+    yarn,
+    [],
     npmSources,
     options,
   );
@@ -223,7 +300,7 @@ async function performInstallTransaction(
   const npmSnapshot = npmSources.length > 0 ? await yarn.readManifestSnapshot() : null;
 
   try {
-    const directNpm = await installNpmSources(packageManager, yarn, npmSources, options);
+    const { directNpm, changedNpm } = await installNpmSources(packageManager, yarn, npmSources, options);
     const installedLocalPackageNames = await installLocalSources(
       new packageManager.LocalPathInstaller(path.join(makaioHome, 'extensions')),
       localSources,
@@ -231,7 +308,7 @@ async function performInstallTransaction(
 
     const changed = directNpm.length > 0 || installedLocalPackageNames.length > 0;
 
-    return { directNpm, installedLocalPackageNames, changed };
+    return { directNpm, changedNpm, installedLocalPackageNames, changed };
   } catch (error) {
     await restoreNpmSnapshot(yarn, npmSnapshot, error);
     throw error;
@@ -241,22 +318,25 @@ async function performInstallTransaction(
 /**
  * Install npm roots through the dependency resolver and print the result.
  *
- * Returns only the directly-requested root packages, not transitive deps, so
- * callers writing manifest entries do not inadvertently persist internal dep
- * graph detail.
+ * Splits the resolver's flat result into the two views their callers need: the
+ * directly-requested roots, and every package whose installed version actually
+ * changed — see {@link ExtensionInstallTransactionResult.changedNpm}.
  * @param packageManager - Package-manager constructors loaded lazily.
  * @param yarn - Initialized Yarn package manager.
  * @param npmSources - npm sources to resolve.
  * @param options - Install options.
- * @returns Resolved records for the directly-requested root packages only.
+ * @returns Directly-requested root resolutions and every changed resolution.
  */
 async function installNpmSources(
   packageManager: Pick<PackageManagerModule, 'DependencyResolver' | 'DescriptorNameResolver' | 'RegistryService'>,
   yarn: InstanceType<PackageManagerModule['YarnPackageManager']>,
   npmSources: readonly InstallSource[],
   options: { readonly force?: boolean },
-): Promise<readonly DirectNpmInstallResolution[]> {
-  if (npmSources.length === 0) return [];
+): Promise<{
+  readonly directNpm: readonly NpmInstallResolution[];
+  readonly changedNpm: readonly NpmInstallResolution[];
+}> {
+  if (npmSources.length === 0) return { directNpm: [], changedNpm: [] };
 
   // Keep runtime boot dependencies outside entrypoint loading and non-npm transactions.
   const { readFrameworkVersion } = await import('@makaio/runtime-node');
@@ -283,19 +363,27 @@ async function installNpmSources(
   // Build a lookup by package name from all installed results (direct + transitive).
   const installedByName = new Map(result.installed.map((pkg) => [pkg.npmName, pkg]));
 
-  // Return only the packages that correspond to the directly-requested root specs.
-  return npmSources.flatMap((source) => {
+  const directNpm = npmSources.flatMap((source) => {
     const rootName = extractNpmPackageName(source.resolved);
     const installed = installedByName.get(rootName);
     if (!installed) return [];
-    return [
-      {
-        packageName: rootName,
-        version: installed.version,
-        spec: formatExactExtensionSpec(rootName, installed.version),
-      },
-    ];
+    return [toNpmInstallResolution(rootName, installed.version)];
   });
+  const changedNpm = result.installed
+    .filter((pkg) => pkg.source !== 'already-present')
+    .map((pkg) => toNpmInstallResolution(pkg.npmName, pkg.version));
+
+  return { directNpm, changedNpm };
+}
+
+/**
+ * Build one resolution record for a resolved npm package.
+ * @param packageName - npm package name without a version suffix.
+ * @param version - Resolved installed version.
+ * @returns Resolution record carrying the exact spec for manifest writes.
+ */
+function toNpmInstallResolution(packageName: string, version: string): NpmInstallResolution {
+  return { packageName, version, spec: formatExactExtensionSpec(packageName, version) };
 }
 
 /**

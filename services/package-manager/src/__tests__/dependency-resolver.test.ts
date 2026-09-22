@@ -7,7 +7,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { ExtensionDescriptor } from '@makaio/contracts';
-import { DependencyResolver, type DependencyPackageManager } from '../dependency-resolver.js';
+import {
+  DependencyResolver,
+  ExtensionNameClaimedError,
+  type DependencyPackageManager,
+} from '../dependency-resolver.js';
 import type { IDescriptorNameResolver } from '../descriptor-name-resolver.js';
 import type { InstalledExtensionDescriptor } from '../yarn-integration.js';
 
@@ -184,6 +188,199 @@ describe('DependencyResolver', () => {
     expect(packages.restored).toBe(true);
   });
 
+  it('refuses a root whose extension name is already claimed by a different npm package', async () => {
+    // npm identity and extension identity are independent, so two npm packages
+    // can declare one extension name. Both would land in the same discovery
+    // tier, where there is no precedence to resolve them — the install is the
+    // last point at which an operator can act on it.
+    const packages = new FakePackages(new Map([['@acme/weather', descriptor('weather-tools')]]), [
+      { npmName: '@makaio/weather-tools', version: '2.0.0', descriptor: descriptor('weather-tools', [], '2.0.0') },
+    ]);
+    const resolver = new DependencyResolver(packages, new FakeNames(new Map()));
+
+    await expect(resolver.resolve(['@acme/weather'])).rejects.toThrow(
+      'Package @acme/weather declares extension name "weather-tools", which is already installed from ' +
+        '@makaio/weather-tools@2.0.0',
+    );
+    expect(packages.restored).toBe(true);
+  });
+
+  it('allows upgrading the npm package that already claims an extension name', async () => {
+    const packages = new FakePackages(new Map([['@makaio/weather-tools', descriptor('weather-tools', [], '2.0.0')]]), [
+      { npmName: '@makaio/weather-tools', version: '1.0.0', descriptor: descriptor('weather-tools') },
+    ]);
+    const resolver = new DependencyResolver(packages, new FakeNames(new Map()));
+
+    const result = await resolver.resolve(['@makaio/weather-tools']);
+
+    expect(result.installed).toEqual([{ npmName: '@makaio/weather-tools', version: '2.0.0', source: 'upgraded' }]);
+    expect(packages.restored).toBe(false);
+  });
+
+  it('refuses two roots in one resolution that claim the same extension name', async () => {
+    const packages = new FakePackages(
+      new Map([
+        ['@acme/weather', descriptor('weather-tools')],
+        ['@other/weather', descriptor('weather-tools')],
+      ]),
+    );
+    const resolver = new DependencyResolver(packages, new FakeNames(new Map()));
+
+    await expect(resolver.resolve(['@acme/weather', '@other/weather'])).rejects.toThrow(
+      'Package @other/weather declares extension name "weather-tools", which is already installed from @acme/weather',
+    );
+    expect(packages.restored).toBe(true);
+  });
+
+  it('refuses an optional dependency whose extension name is already claimed, instead of skipping it installed', async () => {
+    // The claim check can only run once the package is on disk, so treating it
+    // like any other optional install failure would leave the duplicate
+    // identity installed, report the resolution as successful, and hand the
+    // conflict to the next boot's discovery — past the point where the
+    // caller's manifest rollback could still remove it.
+    const rootDescriptor = descriptor('root', [
+      { type: 'extension', name: 'shared', version: '>=1.0.0', optional: true },
+    ]);
+    const packages = new FakePackages(
+      new Map([
+        ['@makaio/root', rootDescriptor],
+        ['@acme/shared', descriptor('shared')],
+      ]),
+      [{ npmName: '@other/shared', version: '2.0.0', descriptor: descriptor('shared', [], '2.0.0') }],
+    );
+    const names = new FakeNames(new Map([['shared', '@acme/shared']]));
+    const resolver = new DependencyResolver(packages, names);
+
+    await expect(resolver.resolve(['@makaio/root'])).rejects.toThrow(ExtensionNameClaimedError);
+    expect(packages.restored).toBe(true);
+  });
+
+  it('releases the extension name an upgraded package no longer declares', async () => {
+    // `@acme/renamed` used to declare "old-name" and its new version declares
+    // "new-name". A later root in the same batch may then legitimately claim
+    // "old-name": nothing on disk declares it any more.
+    const packages = new FakePackages(
+      new Map([
+        ['@acme/renamed', descriptor('new-name', [], '2.0.0')],
+        ['@acme/successor', descriptor('old-name')],
+      ]),
+      [{ npmName: '@acme/renamed', version: '1.0.0', descriptor: descriptor('old-name') }],
+    );
+    const resolver = new DependencyResolver(packages, new FakeNames(new Map()));
+
+    const result = await resolver.resolve(['@acme/renamed', '@acme/successor']);
+
+    expect(result.installed).toEqual([
+      { npmName: '@acme/renamed', version: '2.0.0', source: 'upgraded' },
+      { npmName: '@acme/successor', version: '1.0.0', source: 'new' },
+    ]);
+    expect(packages.restored).toBe(false);
+  });
+
+  it("refuses a rename that strands an installed package's required dependency", async () => {
+    // Releasing the old name is only legitimate while nothing needs it. An
+    // installed dependent declaring a required dependency on it would be
+    // skipped at every following boot, which the version check alone cannot
+    // see: the new version satisfies the range, it just no longer answers to
+    // the name the range was declared against.
+    const packages = new FakePackages(new Map([['@acme/renamed', descriptor('new-name', [], '2.0.0')]]), [
+      { npmName: '@acme/renamed', version: '1.0.0', descriptor: descriptor('old-name') },
+      {
+        npmName: '@acme/dependent',
+        version: '1.0.0',
+        descriptor: descriptor('dependent', [{ type: 'extension', name: 'old-name', version: '>=1.0.0' }]),
+      },
+    ]);
+    const resolver = new DependencyResolver(packages, new FakeNames(new Map()));
+
+    await expect(resolver.resolve(['@acme/renamed'])).rejects.toThrow(
+      '@acme/dependent requires old-name >=1.0.0, which @acme/renamed no longer declares',
+    );
+    expect(packages.restored).toBe(true);
+  });
+
+  it('allows a rename when the same batch moves the dependent onto the new name', async () => {
+    const packages = new FakePackages(
+      new Map([
+        ['@acme/renamed', descriptor('new-name', [], '2.0.0')],
+        [
+          '@acme/dependent',
+          descriptor('dependent', [{ type: 'extension', name: 'new-name', version: '>=2.0.0' }], '2.0.0'),
+        ],
+      ]),
+      [
+        { npmName: '@acme/renamed', version: '1.0.0', descriptor: descriptor('old-name') },
+        {
+          npmName: '@acme/dependent',
+          version: '1.0.0',
+          descriptor: descriptor('dependent', [{ type: 'extension', name: 'old-name', version: '>=1.0.0' }]),
+        },
+      ],
+    );
+    const resolver = new DependencyResolver(packages, new FakeNames(new Map([['new-name', '@acme/renamed']])));
+
+    const result = await resolver.resolve(['@acme/renamed', '@acme/dependent']);
+
+    expect(result.installed).toEqual([
+      { npmName: '@acme/renamed', version: '2.0.0', source: 'upgraded' },
+      { npmName: '@acme/dependent', version: '2.0.0', source: 'upgraded' },
+    ]);
+    expect(packages.restored).toBe(false);
+  });
+
+  it('accepts a batch whose target graph is consistent in either submission order', async () => {
+    // `@makaio/b@2` requires `a >=2.0.0` while the installed `@makaio/b@1`
+    // still requires `a <2.0.0`. Judging each install against the transient
+    // index refuses the batch when `a` happens to be submitted first, so the
+    // target graph — not the submission order — decides.
+    const targets = new Map([
+      ['@makaio/a', descriptor('a', [], '2.0.0')],
+      ['@makaio/b', descriptor('b', [{ type: 'extension', name: 'a', version: '>=2.0.0' }], '2.0.0')],
+    ]);
+    const installedBefore = (): InstalledExtensionDescriptor[] => [
+      { npmName: '@makaio/a', version: '1.0.0', descriptor: descriptor('a') },
+      {
+        npmName: '@makaio/b',
+        version: '1.0.0',
+        descriptor: descriptor('b', [{ type: 'extension', name: 'a', version: '<2.0.0' }]),
+      },
+    ];
+    const names = new FakeNames(new Map([['a', '@makaio/a']]));
+
+    for (const roots of [
+      ['@makaio/a', '@makaio/b'],
+      ['@makaio/b', '@makaio/a'],
+    ]) {
+      const packages = new FakePackages(targets, installedBefore());
+      const result = await new DependencyResolver(packages, names).resolve(roots);
+
+      expect(result.installed.map((pkg) => `${pkg.npmName}@${pkg.version}`).sort()).toEqual([
+        '@makaio/a@2.0.0',
+        '@makaio/b@2.0.0',
+      ]);
+      expect(packages.restored).toBe(false);
+    }
+  });
+
+  it('still refuses a claim held by a package that keeps declaring the name', async () => {
+    // Guard against the release above being applied too eagerly: the upgraded
+    // package keeps its own name, so the claim it holds must survive and the
+    // second root must still be refused.
+    const packages = new FakePackages(
+      new Map([
+        ['@acme/kept', descriptor('kept-name', [], '2.0.0')],
+        ['@acme/other', descriptor('kept-name')],
+      ]),
+      [{ npmName: '@acme/kept', version: '1.0.0', descriptor: descriptor('kept-name') }],
+    );
+    const resolver = new DependencyResolver(packages, new FakeNames(new Map()));
+
+    await expect(resolver.resolve(['@acme/kept', '@acme/other'])).rejects.toThrow(
+      'Package @acme/other declares extension name "kept-name", which is already installed from @acme/kept@2.0.0',
+    );
+    expect(packages.restored).toBe(true);
+  });
+
   it('rejects an unscoped root whose installed descriptor name does not match the requested root', async () => {
     const packages = new FakePackages(new Map([['weather-tools', descriptor('wrong-root')]]));
     const resolver = new DependencyResolver(packages, new FakeNames(new Map()));
@@ -342,9 +539,16 @@ describe('DependencyResolver', () => {
     const resolver = new DependencyResolver(packages, names);
 
     await expect(resolver.resolve(['@makaio/root-a', '@makaio/root-b'])).rejects.toThrow(
-      '@makaio/root-b requires shared >=2.0.0',
+      'descriptor version 1.5.0 does not satisfy shared >=2.0.0 (required by @makaio/root-b)',
     );
-    expect(packages.installed).toEqual(['@makaio/root-a', '@makaio/root-b', '@makaio/shared@<2.0.0']);
+    // The second, incompatible range is attempted before the conflict is
+    // reported — the shared rollback undoes it — so both range installs appear.
+    expect(packages.installed).toEqual([
+      '@makaio/root-a',
+      '@makaio/root-b',
+      '@makaio/shared@<2.0.0',
+      '@makaio/shared@>=2.0.0',
+    ]);
     expect(packages.restored).toBe(true);
   });
 
