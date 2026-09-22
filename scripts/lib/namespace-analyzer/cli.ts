@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 
@@ -117,30 +117,102 @@ export function runGenerateDocsCli(config: GenerateDocsCliConfig): void {
     console.error(message);
     process.exit(2);
   }
-  const resolvedSourceBaseUrl = config.sourceBaseUrl
-    ?.replace('{commit}', analysis.sourceCommit)
-    .replace('{branch}', opts.branch ?? 'develop');
-  const markdownOptions: MarkdownGenerationOptions = {
-    title: config.title,
-    docsRoot: opts.out,
-    sourceRoot: config.sourceRoot,
-    includeTiers: config.includeTiers,
-    includeHostCallsites: config.includeHostCallsites,
-    sourceBaseUrl: resolvedSourceBaseUrl,
-    frontmatter: config.frontmatter,
-    indexFileName: config.indexFileName,
-  };
-  const files = generateMarkdown(analysis, markdownOptions);
+  const files = generateMarkdown(
+    analysis,
+    toMarkdownOptions(config, {
+      docsRoot: opts.out,
+      sourceCommit: analysis.sourceCommit,
+      branch: opts.branch,
+    }),
+  );
 
   mkdirSync(opts.out, { recursive: true });
 
+  const generatedPaths = new Set<string>();
   for (const file of files) {
+    generatedPaths.add(file.path);
     const fullPath = join(opts.out, file.path);
     mkdirSync(dirname(fullPath), { recursive: true });
     writeFileSync(fullPath, file.content, 'utf-8');
   }
 
+  // Pages that used to be generated (e.g. a namespace was removed or renamed) are
+  // never written above, so they would otherwise linger and keep the freshness
+  // gate red even after a regeneration. Sweep them here using the same listing the
+  // gate uses to detect them.
+  const orphaned = listMarkdownPages(opts.out).filter((page) => !generatedPaths.has(page));
+  for (const page of orphaned) {
+    const fullPath = join(opts.out, page);
+    unlinkSync(fullPath);
+    console.error(`Removed orphaned page ${fullPath}`);
+  }
+
   console.error(`Wrote ${String(files.length)} files to ${opts.out}`);
+}
+
+/**
+ * Lists committed Markdown pages below a documentation directory.
+ *
+ * The `data/` subdirectory holds gitignored analysis intermediates (JSON input to the
+ * generator, not a generated page) and is skipped so a stray file there is never
+ * mistaken for an orphaned page.
+ * @param dir - Documentation directory to scan, relative to the current working directory
+ * or absolute.
+ * @returns Page paths relative to `dir`.
+ */
+export function listMarkdownPages(dir: string): string[] {
+  const pages: string[] = [];
+
+  const walk = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (prefix === '' && entry.name === 'data') continue;
+        walk(join(directory, entry.name), `${prefix}${entry.name}/`);
+        continue;
+      }
+      if (entry.name.endsWith('.md')) {
+        pages.push(`${prefix}${entry.name}`);
+      }
+    }
+  };
+
+  walk(dir, '');
+
+  return pages;
+}
+
+/** Concrete rendering context a docs surface is generated for. */
+export interface MarkdownRenderContext {
+  /** Output directory path, relative to the same root as the analyzed source paths. */
+  docsRoot: string;
+  /** Revision the analysis was taken at, substituted into `{commit}` source links. */
+  sourceCommit: string;
+  /** Branch substituted into `{branch}` source links. Defaults to `develop` when null. */
+  branch: string | null;
+}
+
+/**
+ * Binds a docs surface configuration to a concrete rendering context.
+ * @param config - Surface-level Markdown rendering configuration.
+ * @param context - Output root and source revision the surface is rendered for.
+ * @returns Fully resolved Markdown generation options.
+ */
+export function toMarkdownOptions(
+  config: GenerateDocsCliConfig,
+  context: MarkdownRenderContext,
+): MarkdownGenerationOptions {
+  return {
+    title: config.title,
+    docsRoot: context.docsRoot,
+    sourceRoot: config.sourceRoot,
+    includeTiers: config.includeTiers,
+    includeHostCallsites: config.includeHostCallsites,
+    sourceBaseUrl: config.sourceBaseUrl
+      ?.replace('{commit}', context.sourceCommit)
+      .replace('{branch}', context.branch ?? 'develop'),
+    frontmatter: config.frontmatter,
+    indexFileName: config.indexFileName,
+  };
 }
 
 /**

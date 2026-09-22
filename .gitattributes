@@ -1,0 +1,14 @@
+*.cmd text eol=crlf
+
+# Generated SDK bindings — collapse in GitHub PR diffs
+sdks/python/src/makaio/generated/** linguist-generated=true
+sdks/rust/src/generated/** linguist-generated=true
+
+# Central Drizzle generator snapshots — keep in source, collapse in GitHub PR diffs
+storage/migrations/drizzle/meta/*_snapshot.json linguist-generated=true
+storage/pg/drizzle-postgres/meta/*_snapshot.json linguist-generated=true
+
+# Bus subject docs freshness gate compares committed pages byte-for-byte against an
+# in-memory render; force LF so Windows checkouts with core.autocrlf=true don't report
+# every page as stale.
+docs/subjects/** text eol=lf

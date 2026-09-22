@@ -9,10 +9,12 @@
  * ```
  */
 
-import { dirname, resolve } from 'node:path';
-
 import { runAnalyzeNamespacesCli } from './lib/namespace-analyzer/cli.js';
+import { SUBJECT_DOCS_ANALYSIS_OPTIONS, SUBJECT_DOCS_ANALYSIS_ROOT } from './lib/subject-docs-analysis-config.js';
 
-const ROOT = dirname(import.meta.dirname);
-
-runAnalyzeNamespacesCli({ root: resolve(ROOT) });
+runAnalyzeNamespacesCli({
+  root: SUBJECT_DOCS_ANALYSIS_ROOT,
+  namespaceExcludePathPrefixes: SUBJECT_DOCS_ANALYSIS_OPTIONS.excludePathPrefixes,
+  subjectFieldTypeExpansions: SUBJECT_DOCS_ANALYSIS_OPTIONS.subjectFieldTypeExpansions,
+  classifyNamespaceTier: SUBJECT_DOCS_ANALYSIS_OPTIONS.classifyNamespaceTier,
+});

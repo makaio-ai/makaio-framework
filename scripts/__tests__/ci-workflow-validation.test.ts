@@ -22,9 +22,36 @@ describe('CI workflow validation', () => {
     );
   });
 
-  it('does not skip CI for package overview documentation changes', () => {
-    expect(reusableWorkflowText).toContain('if [ "$file" = "docs/package-overview.md" ]; then');
-    expect(reusableWorkflowText).toContain('docs_only=false');
+  /**
+   * Returns the body of the classifier's case arm for the given pattern, up to
+   * its terminating `;;`, so assertions target that arm rather than the whole
+   * workflow text.
+   * @param pattern - Literal case pattern as it appears in the workflow.
+   * @returns The case-arm body between the pattern and its `;;`.
+   */
+  function classifierCaseArm(pattern: string): string {
+    const start = reusableWorkflowText.indexOf(`${pattern})`);
+    expect(start).toBeGreaterThan(-1);
+    const end = reusableWorkflowText.indexOf(';;', start);
+    expect(end).toBeGreaterThan(start);
+    return reusableWorkflowText.slice(start, end);
+  }
+
+  it('requires validation for package overview changes while keeping the docs-only skips', () => {
+    const arm = classifierCaseArm('docs/package-overview.md');
+    expect(arm).toContain('requires_validation=true');
+    expect(arm).not.toContain('docs_only=false');
+  });
+
+  it('routes generated subject-doc changes to the validation job without dropping docs-only', () => {
+    const arm = classifierCaseArm('docs/subjects/*');
+    expect(arm).toContain('requires_validation=true');
+    expect(arm).not.toContain('docs_only=false');
+    expect(reusableWorkflowText).toContain("needs.cache.outputs.requires_validation == 'true'");
+  });
+
+  it('classifies both sides of renames instead of the rename destination only', () => {
+    expect(reusableWorkflowText).toContain('--no-renames');
   });
 
   it('counts deleted files when classifying documentation-only changes', () => {
