@@ -113,6 +113,7 @@ export {
   FilesystemDescriptorDiscovery,
   ExplicitDescriptorDiscovery,
   MergedDescriptorDiscovery,
+  ExtensionNameCollisionError,
 } from './extension-discovery.js';
 export { RuntimeSubjects } from './bus/runtime/namespace.js';
 export { getRuntimeDatabase } from './bus/runtime/get-runtime-database.js';
@@ -130,7 +131,7 @@ export {
   resolveConventionEntrypoint,
   normalizePackageExport,
 } from './load-extensions.js';
-export type { DescriptorSourcePackageGroup, LoadExtensionsOptions } from './load-extensions.js';
+export type { LoadExtensionsOptions } from './load-extensions.js';
 export {
   buildExtensionBrowserRollupInputName,
   buildExtensionBrowserRuntimeEntrypoint,

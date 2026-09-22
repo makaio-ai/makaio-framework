@@ -204,6 +204,11 @@ export async function createIsolatedWorkflowRuntime(
       // already be running to process.
       ...orderAfterAdapterSubsystem(contributedPackages),
     ];
+    // No `frameworkPackageNames`: this runtime replaces a base package by
+    // omitting it (see `shouldLoadDefaultSessionOrchestrator`), never by
+    // registering a second package under its name, so every name collision
+    // here is an error the coordinator should refuse rather than resolve.
+    //
     // Retained packages only: this runtime is headless, so a package declaring
     // an interactive surface never activates here, and configuring its boot
     // contribution would install behaviour for an extension that does not run.

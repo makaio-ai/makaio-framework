@@ -126,8 +126,15 @@ export interface BootExtensionEligibilityOptions {
  * still know about them, and an enablement preference change takes effect on
  * the next boot rather than live. Enablement filtering is the coordinator's
  * soft gate (`loadEnabled` → `entry.enabled`), not a pre-load exclusion.
+ *
+ * This pool contains descriptor-backed extension packages only — no framework
+ * packages — so {@link coalesceExtensionOverrides} is called without an
+ * overridable-name set: every name here is an extension identity, and two
+ * packages claiming one is a collision with no legitimate winner rather than
+ * an override.
  * @param options - Package set, surface, and runtime environment.
  * @returns Loaded extension packages eligible for coordinator boot.
+ * @throws Error when two eligible extension packages register under one name.
  */
 export function selectBootEligibleExtensionPackages(
   options: BootExtensionEligibilityOptions,
@@ -272,17 +279,19 @@ export function closeEffectiveEnabledBootPackages(
  * unless the extension package is actually going to run.
  *
  * The coordinator's own `load()` re-runs {@link coalesceExtensionOverrides}
- * over its full input (framework packages followed by extension packages),
- * where the *last* registration for a given name wins and every earlier
- * registration under that name is discarded outright — not soft-skipped.
- * That override rule is deliberate for extension-vs-extension name
- * collisions (a later descriptor replacing an earlier one by design; see
- * `mergePackagesByDescriptorSourcePriority` and the owner-anchored scheduler
- * host-policy tests), but it has no concept of "core" packages: a disabled
- * extension whose name happens to collide with a framework package's name
- * would silently replace that framework package's entry before the
- * coordinator ever assigns it a `skipped`/`active` state, taking mandatory
- * runtime infrastructure out of the boot composition entirely. Filtering the
+ * over its full input (framework packages followed by extension packages).
+ * There, a second registration under a *framework* package name is the
+ * supported core-override flow: the extension wins the name and the framework
+ * package's registration is discarded outright — not soft-skipped. (A second
+ * registration under any other name is an extension identity collision and
+ * aborts `load()`; extension identities are already made unique upstream by
+ * discovery's tier resolution.)
+ *
+ * That override rule is correct only for an extension that is actually going
+ * to run. A *disabled* extension whose name collides with a framework
+ * package's name would otherwise take mandatory runtime infrastructure out of
+ * the boot composition entirely — it wins the name before the coordinator ever
+ * assigns it a `skipped`/`active` state, and then never starts. Filtering the
  * extension side here, before the merge, keeps the framework package's entry
  * as the coordinator's only registration under that name, so it stays
  * active and the excluded extension package correctly never appears as a

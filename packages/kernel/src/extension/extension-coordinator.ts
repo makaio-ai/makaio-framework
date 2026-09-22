@@ -135,6 +135,7 @@ export class ExtensionCoordinator {
   private readonly operatorConfig: ExtensionOperatorConfigSource | undefined;
   private readonly runMigrations: ExtensionMigrationRunner | undefined;
   private readonly extensionManagedNames: ReadonlySet<string> | undefined;
+  private readonly frameworkPackageNames: ReadonlySet<string> | undefined;
 
   /**
    * @param bus - Bus instance for emitting lifecycle events and serving the list RPC.
@@ -152,6 +153,7 @@ export class ExtensionCoordinator {
     this.operatorConfig = options.operatorConfig;
     this.runMigrations = options.runMigrations;
     this.extensionManagedNames = options.extensionManagedNames;
+    this.frameworkPackageNames = options.frameworkPackageNames;
     this.rpcCleanups.push(
       registerWarningActionHandler(this.bus, this.warningActionMap, options.launcherCommand ?? 'makaio'),
     );
@@ -223,12 +225,15 @@ export class ExtensionCoordinator {
    *   sourced from descriptor.json.
    * @returns The packages actually registered, in load order: the input minus
    *   the ones excluded by surface or environment filtering and their pruned
-   *   dependents, with one entry per name — the registration that won an
-   *   override, never the one it replaced. The manifests themselves rather than
-   *   their names, because a caller matching names back against its own input
-   *   would re-admit exactly the overridden registrations this dropped.
-   * @throws Error if called more than once, if a dependency cycle is detected,
-   *   or if dependency sorting fails.
+   *   dependents, with one entry per name — for an accepted core override
+   *   (see {@link ExtensionCoordinatorOptions.frameworkPackageNames}), the
+   *   overriding registration rather than the framework package it replaced.
+   *   The manifests themselves rather than their names, because a caller
+   *   matching names back against its own input would re-admit exactly the
+   *   overridden registration this dropped.
+   * @throws Error if called more than once, if two registrations collide on a
+   *   name that is not an overridable framework package name, if a dependency
+   *   cycle is detected, or if dependency sorting fails.
    */
   public load(
     packages: ReadonlyArray<KernelMakaioExtension>,
@@ -246,6 +251,7 @@ export class ExtensionCoordinator {
 
     const eligible = coalesceExtensionOverrides(
       filterEligibleExtensions(packages, this.surface, this.runtimeEnvironment),
+      this.frameworkPackageNames,
     );
 
     // Resolve preference-enabled names before sorting: `topoSort` scopes its

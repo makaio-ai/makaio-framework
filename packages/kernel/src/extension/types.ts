@@ -129,6 +129,22 @@ export interface ExtensionCoordinatorOptions {
    */
   extensionManagedNames?: ReadonlySet<string>;
   /**
+   * Names of packages this host loads unconditionally as framework packages.
+   *
+   * These are the only names an extension package may legitimately register a
+   * second time: the host always loads the framework package, and a single
+   * extension registration under one of those names is the supported core
+   * override, which {@link ExtensionCoordinator.load} lets win the name. A
+   * collision under any other name is an extension identity collision with no
+   * legitimate winner and aborts `load()` — see `coalesceExtensionOverrides`.
+   *
+   * Omitted entirely: every name in the loaded set is treated as an extension
+   * identity, so any name collision aborts. A composition root that mixes
+   * framework packages into the same `load()` call must supply this set, or a
+   * legitimate core override is reported as a collision.
+   */
+  frameworkPackageNames?: ReadonlySet<string>;
+  /**
    * Optional callback to durably persist an enablement preference.
    *
    * Called by `handleSetEnabled` (the `kernel:extension.setEnabled` RPC

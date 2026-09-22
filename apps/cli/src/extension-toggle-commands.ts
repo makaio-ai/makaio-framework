@@ -16,6 +16,7 @@ import {
 } from './bus-client.js';
 import { ExtensionSubjects, type ExtensionInfo, type TransitionOutcome } from '@makaio/kernel';
 import {
+  findCollidingInstalledEntry,
   listInstalledExtensions,
   type InstalledExtensionEntry,
   type InstalledExtensionListingOptions,
@@ -142,6 +143,37 @@ export function remoteUnreachableRefusalMessage(action: string, busUrl: string):
 }
 
 /**
+ * Refuse a toggle request for a name more than one installed copy claims.
+ *
+ * An enablement preference is keyed by extension name, so there is nothing to
+ * write it *for* while two installed copies claim that name: the runtime
+ * refuses to resolve the identity and the next start aborts before any
+ * preference is read (see {@link InstalledExtensionEntry.collidesWith}).
+ * Persisting anyway would report success for a change that cannot take effect
+ * and would silently apply to whichever copy survives the operator's cleanup.
+ * @param installed - Installed-package listing to check the name against.
+ * @param name - Extension package name being toggled.
+ * @param verb - Verb used in output ("enable" or "disable").
+ * @returns `true` when the request was refused and nothing should be written.
+ */
+function refuseCollidingExtensionName(
+  installed: readonly InstalledExtensionEntry[],
+  name: string,
+  verb: string,
+): boolean {
+  const colliding = findCollidingInstalledEntry(installed, name);
+  if (colliding === undefined) return false;
+  console.error(
+    `Failed to ${verb} extension "${name}": more than one installed copy claims this name ` +
+      `(${colliding.origin} and ${colliding.collidesWith}), so it does not resolve to a single extension and ` +
+      'the next server start refuses to boot. Uninstall or rename one of them first; nothing was written. ' +
+      'Run "makaio extension list" to see both copies.',
+  );
+  process.exitCode = 1;
+  return true;
+}
+
+/**
  * Refuse a toggle request for a name absent from the installed listing.
  *
  * Shared by the offline path below and {@link applyUnmanagedNameToggle} so a
@@ -216,6 +248,11 @@ export async function runSetEnabled(
       // is in scope (`'all'`).
       const installedListing = await listInstalledExtensions(makaioHome, 'all', listingOptions);
 
+      // Checked ahead of criticality and of the "is it installed at all" check
+      // below: both of those answer for a single resolved copy, and a
+      // contested name has none.
+      if (refuseCollidingExtensionName(installedListing, name, verb)) return;
+
       if (!enabled) {
         const criticality = await resolveDisableCriticality(
           makaioHome,
@@ -289,6 +326,11 @@ interface LiveToggleOptions {
  * can legitimately run while that same server process is writing a different
  * name at the same time.
  *
+ * Every toggle against a local bus is checked against the installed-package
+ * listing first, whether or not the server manages the name: a copy installed
+ * after the server started is invisible to the running coordinator but still
+ * contests the name at the next start.
+ *
  * A name that is installed but was never loaded into the server's coordinator
  * — interactive-only on a headless server, unmet `requires`, or suppressed via
  * `MAKAIO_SKIP_EXTENSIONS` — is the one case the reachable server cannot
@@ -349,16 +391,35 @@ async function applyLiveToggle(options: LiveToggleOptions): Promise<void> {
       return;
     }
 
-    // Fetch the installed-package listing once up front for the unmanaged
-    // case so both the critical check below and `applyUnmanagedNameToggle`
-    // reuse it instead of each issuing their own installer round trip. A
-    // server is reachable here, and it may have been started from a
-    // different project directory than this CLI invocation, so only the
-    // `$MAKAIO_HOME`-shared tiers are trustworthy for it (`'shared-home'`) —
-    // see {@link listInstalledExtensions}'s TSDoc.
-    const installedListing = managedEntry
+    // Fetched once up front and reused by the collision check below, the
+    // criticality check, and `applyUnmanagedNameToggle`, instead of each
+    // issuing its own installer round trip. A server is reachable here, and it
+    // may have been started from a different project directory than this CLI
+    // invocation, so only the `$MAKAIO_HOME`-shared tiers are trustworthy for
+    // it (`'shared-home'`) — see {@link listInstalledExtensions}'s TSDoc.
+    //
+    // Fetched for a name the server *does* manage too, although that path used
+    // to need no listing at all. A second copy can be installed while the
+    // server runs: the coordinator loaded a single copy at boot and its `get`
+    // response still describes it, so the live view cannot see the contest,
+    // while the next start refuses to boot on it. Persisting a preference for
+    // that name would report a change that no start will act on. The cost is
+    // one installer scan (which imports each descriptor's server entry) per
+    // live toggle — paid on every unmanaged-name toggle already, and the same
+    // scan the refusal message tells the operator to run by hand.
+    //
+    // Skipped only for a remote bus: the listing would describe *this*
+    // machine's installed set, which says nothing about the host that boots.
+    // The unmanaged path never reaches here with a remote bus (refused
+    // above), so every caller that requires the listing still gets one.
+    const installedListing = isRemoteBusUrl(busUrl)
       ? undefined
       : await listInstalledExtensions(makaioHome, 'shared-home', listingOptions);
+
+    // Refused before the criticality check below, which resolves against the
+    // single copy a contested name does not have — reporting "it is critical"
+    // for one of two copies would name the wrong reason for the refusal.
+    if (installedListing !== undefined && refuseCollidingExtensionName(installedListing, name, verb)) return;
 
     if (!enabled) {
       const criticality = await resolveDisableCriticality(
@@ -493,6 +554,7 @@ async function applyUnmanagedNameToggle(
   // `'shared-home'`, matching the listing `applyLiveToggle` already fetched
   // with the same mode when it had one to pass.
   const installed = installedListing ?? (await listInstalledExtensions(makaioHome, 'shared-home', listingOptions));
+  if (refuseCollidingExtensionName(installed, name, verb)) return;
   if (!installed.some((ext) => ext.name === name)) {
     reportUnknownExtensionName(name, verb);
     return;

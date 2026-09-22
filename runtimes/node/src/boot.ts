@@ -521,6 +521,11 @@ export async function bootMakaioRuntimeCore(
       // that framework/core packages are never toggleable through the
       // enablement store, independent of the boot-time sets derived from it.
       extensionManagedNames: selection.extensionManagedPackageNames,
+      // The names the host loads unconditionally below. An extension package
+      // that registers under one of them is the supported core override and
+      // wins the name; a collision under any other name is an extension
+      // identity collision the coordinator refuses outright.
+      frameworkPackageNames,
     });
 
     // Framework-level packages load unconditionally — they provide core

@@ -10,10 +10,11 @@ import {
   type ExtensionEnablementStore,
 } from '@makaio/runtime-node';
 import { importPackageManager, installExtensionSources } from './extension-install-transaction.js';
+import { runUpdate } from './extension-update-command.js';
 import {
-  syncExistingProjectManifestPinsAfterUpdate,
   syncProjectManifestAfterInstall,
   syncProjectManifestAfterUninstall,
+  warnOnManifestSyncFailure,
 } from './project-manifest-sync.js';
 import {
   probeHealth,
@@ -136,20 +137,6 @@ export function registerExtensionCommands(
 // ---------------------------------------------------------------------------
 
 /**
- * Run a manifest sync operation, printing a warning instead of throwing on
- * failure. Manifest sync is best-effort: a stale or missing manifest must
- * never block the install or uninstall command itself.
- * @param operation - Async manifest sync callback to execute.
- */
-async function warnOnManifestSyncFailure(operation: () => Promise<void>): Promise<void> {
-  try {
-    await operation();
-  } catch (error) {
-    console.warn(`Project manifest sync failed: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/**
  * Install one or more extensions from local paths or the npm registry.
  *
  * Delegates the transaction to {@link installExtensionSources} and prints a
@@ -244,6 +231,11 @@ function formatInstalledOrigin(ext: InstalledExtensionEntry): string {
  * name (see {@link isExtensionDisabledInStore}): a name with no persisted
  * disable is enabled either way, critical or not, so the compact `enabled`
  * label still applies unchanged in that case.
+ *
+ * A colliding entry (see {@link InstalledExtensionEntry.collidesWith}) has no
+ * effective state at all: the contested name aborts the next start, so the
+ * label reports the collision rather than an enablement preference that will
+ * never be acted on.
  * @param enablementStore - Enablement store backing the persisted preference.
  * @param ext - Installed extension entry to label.
  * @returns `enabled` or `disabled` when the persisted preference resolves
@@ -252,10 +244,42 @@ function formatInstalledOrigin(ext: InstalledExtensionEntry): string {
  *   unresolved.
  */
 function offlineEnabledLabel(enablementStore: ExtensionEnablementStore, ext: InstalledExtensionEntry): string {
+  if (ext.collidesWith !== undefined) {
+    // Neither claimant loads, so there is no enablement state to report for
+    // this row — the next start aborts on the contested name instead.
+    return `name collision with ${ext.collidesWith}, nothing loads under this name until it is resolved`;
+  }
+  if (ext.shadowedBy !== undefined) {
+    // The enablement preference is keyed by name, and the name belongs to the
+    // winning copy — reporting this row's enabled/disabled state would report
+    // the *other* extension's state under this row's version and origin.
+    return `shadowed by ${ext.shadowedBy}, not loaded`;
+  }
   if (ext.criticalityUnknown && isExtensionDisabledInStore(enablementStore, ext.name)) {
     return 'preference: disabled, effective state unknown (criticality unresolved)';
   }
   return isExtensionEnabled(enablementStore, ext.name, ext) ? 'enabled' : 'disabled';
+}
+
+/**
+ * Report every name an installed listing found unresolvably claimed.
+ *
+ * The listing itself succeeded, so this is not a command failure — but the
+ * state it describes stops the next server start, so the command exits
+ * non-zero rather than leaving the rows to be scrolled past. Mirrors
+ * {@link warnOnEnablementReadFailure}, which treats an unusable enablement file
+ * the same way.
+ * @param installed - Installed-package listing that was printed.
+ */
+function reportInstalledNameCollisions(installed: readonly InstalledExtensionEntry[]): void {
+  const names = [...new Set(installed.filter((ext) => ext.collidesWith !== undefined).map((ext) => ext.name))];
+  if (names.length === 0) return;
+  console.error(
+    `Extension name collision: ${names.join(', ')} — claimed by more than one installed copy. ` +
+      'Extension names are identities and cannot be shared, and the copies above have no precedence over ' +
+      'each other — the next server start refuses to boot until one of them is uninstalled or renamed.',
+  );
+  process.exitCode = 1;
 }
 
 /**
@@ -279,7 +303,11 @@ function printNotLoadedInstalledExtensions(
   enablementStore: ExtensionEnablementStore,
 ): void {
   for (const ext of installed) {
-    if (liveNames.has(ext.name)) continue;
+    // A shadowed or colliding row is never the copy the server loaded under
+    // this name, so the live snapshot containing the name says nothing about
+    // it — skipping it here is exactly the silent disappearance `shadowedBy`
+    // and `collidesWith` exist to end.
+    if (ext.shadowedBy === undefined && ext.collidesWith === undefined && liveNames.has(ext.name)) continue;
     // `ext` carries the executable package's `critical` flag, so a
     // hand-disabled critical extension is reported as enabled here exactly as
     // boot starts it — see {@link offlineEnabledLabel} for the
@@ -351,6 +379,7 @@ async function printLocalLiveListing(
     );
   }
   printNotLoadedInstalledExtensions(installed, liveNames, enablementStore);
+  reportInstalledNameCollisions(installed);
   console.info(
     'Note: this listing only covers extensions shared through $MAKAIO_HOME — a project-local extension ' +
       "installed under the server's own {cwd}/node_modules (if its working directory differs from this CLI " +
@@ -536,6 +565,7 @@ async function runList(listingOptions: InstalledExtensionListingOptions): Promis
       const enabledLabel = offlineEnabledLabel(enablementStore, ext);
       console.info(`${ext.name} (${ext.version}, ${formatInstalledOrigin(ext)}) [${enabledLabel}]`);
     }
+    reportInstalledNameCollisions(installed);
   } catch (error) {
     console.error(`List failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
@@ -610,47 +640,6 @@ function extensionStateLabel(
   }
   const restartLabel = persistedEnabled ? 'enabled after restart' : 'disabled after restart';
   return `${baseLabel}, ${restartLabel}`;
-}
-
-/**
- * Update one or all npm-installed extensions to their latest published version.
- * @param name - Optional extension name. When omitted, all npm extensions are updated.
- */
-async function runUpdate(name?: string): Promise<void> {
-  try {
-    const { YarnPackageManager } = await importPackageManager();
-    const makaioHome = resolveMakaioHome();
-    const yarn = new YarnPackageManager(makaioHome);
-    await yarn.initialize();
-
-    const packages = await yarn.listPackages();
-    const targets = name ? packages.filter((p) => p.name === name) : packages;
-
-    if (targets.length === 0) {
-      console.info(name ? `Extension ${name} not found.` : 'No npm extensions installed.');
-      return;
-    }
-
-    const updatedPins: Array<{ packageName: string; version: string; spec: string }> = [];
-    for (const pkg of targets) {
-      const latest = await yarn.getLatestVersion(pkg.name);
-      if (latest === 'unknown') {
-        console.warn(`Could not determine latest version for ${pkg.name}; skipping.`);
-        continue;
-      }
-      if (latest !== pkg.version) {
-        const version = await yarn.installPackage(pkg.name);
-        updatedPins.push({ packageName: pkg.name, version, spec: `${pkg.name}@${version}` });
-        console.info(`Updated ${pkg.name}: ${pkg.version} → ${latest}`);
-      } else {
-        console.info(`${pkg.name}@${pkg.version} is up to date.`);
-      }
-    }
-    await warnOnManifestSyncFailure(() => syncExistingProjectManifestPinsAfterUpdate(process.cwd(), updatedPins));
-  } catch (error) {
-    console.error(`Update failed: ${error instanceof Error ? error.message : String(error)}`);
-    process.exitCode = 1;
-  }
 }
 
 /**

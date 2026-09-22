@@ -110,7 +110,10 @@ export async function enumerateDescriptorPaths(discoveryPath: string): Promise<s
  * Each location supports both flat (`pkg/`) and scoped (`@scope/pkg/`) packages.
  * Validates each descriptor against {@link ExtensionDescriptorSchema}.
  * Malformed or invalid descriptors are skipped with a console warning.
- * On name collision, earlier tiers win (local \> installed \> global-npm).
+ * On a cross-tier name collision, earlier tiers win (local \> installed \>
+ * global-npm) and the shadowed copy is reported; a collision *within* one tier
+ * has no precedence to appeal to and throws — see
+ * {@link deduplicateByDescriptorName}.
  */
 export class FilesystemDescriptorDiscovery implements ExtensionDiscovery {
   private readonly localNodeModulesDir: string | false;
@@ -133,8 +136,10 @@ export class FilesystemDescriptorDiscovery implements ExtensionDiscovery {
   /**
    * Scan all three extension locations and return a deduplicated list.
    *
-   * Priority: local → installed → global-npm. Earlier tiers win on name collision.
+   * Priority: local → installed → global-npm. Earlier tiers win a cross-tier
+   * name collision; a collision within one tier throws.
    * @returns Deduplicated list of discovered extensions ordered by priority.
+   * @throws ExtensionNameCollisionError when one tier declares the same descriptor name twice.
    */
   public async discover(): Promise<DiscoveredExtension[]> {
     const [local, installed, globalNpm] = await Promise.all([
@@ -240,9 +245,11 @@ export class FilesystemDescriptorDiscovery implements ExtensionDiscovery {
   /**
    * Deduplicate by descriptor name across priority tiers.
    *
-   * Tiers are processed in priority order — earlier tiers win on name collision.
+   * Tiers are processed in priority order — earlier tiers win a cross-tier
+   * name collision; a collision within one tier throws.
    * @param tiers - Extension arrays ordered by descending priority.
    * @returns Merged list with no duplicate names.
+   * @throws ExtensionNameCollisionError when one tier declares the same descriptor name twice.
    */
   private deduplicate(...tiers: DiscoveredExtension[][]): DiscoveredExtension[] {
     return deduplicateByDescriptorName(tiers);
@@ -271,12 +278,44 @@ export class ExplicitDescriptorDiscovery implements ExtensionDiscovery {
 }
 
 /**
+ * Two packages inside one discovery tier declare the same descriptor name.
+ *
+ * A descriptor name is an extension identity, and packages sitting side by side
+ * in one tier have no precedence over each other, so there is no deterministic
+ * winner to pick. Discovery refuses instead of loading an arbitrary copy, and
+ * boot propagates this refusal rather than starting without extensions — see
+ * {@link deduplicateByDescriptorName} for the full tier semantics.
+ */
+export class ExtensionNameCollisionError extends Error {
+  /**
+   * @param descriptorName - Descriptor name claimed by both packages.
+   * @param claimed - Package that already claimed the name in this tier.
+   * @param conflicting - Package that re-declared the already claimed name.
+   */
+  public constructor(
+    public readonly descriptorName: string,
+    claimed: DiscoveredExtension,
+    conflicting: DiscoveredExtension,
+  ) {
+    super(
+      `Extension name collision: "${descriptorName}" is declared by two packages in the same discovery tier ` +
+        `(${describeProvenance(claimed)} and ${describeProvenance(conflicting)}). ` +
+        'A descriptor name is an extension identity and cannot be shared, and packages within one tier ' +
+        'have no precedence over each other. Remove or rename one of them.',
+    );
+    this.name = 'ExtensionNameCollisionError';
+  }
+}
+
+/**
  * Merges multiple discovery strategies into one deduplicated result.
  *
  * Discoveries run concurrently via `Promise.all` and their results are
- * merged in constructor order. Earlier discoveries win on name collision,
- * which lets hosts layer explicit descriptor sets without changing the
- * existing tier semantics.
+ * merged in constructor order. Each discovery is one precedence layer: earlier
+ * discoveries win a name collision against later ones, which lets hosts layer
+ * explicit descriptor sets without changing the existing tier semantics. A
+ * name declared twice *by the same discovery* has no precedence to appeal to
+ * and throws — see {@link deduplicateByDescriptorName}.
  */
 export class MergedDescriptorDiscovery implements ExtensionDiscovery {
   /**
@@ -286,7 +325,9 @@ export class MergedDescriptorDiscovery implements ExtensionDiscovery {
 
   /**
    * Run all discoveries and merge their results by descriptor name.
-   * @returns Deduplicated list preserving the first occurrence of each name.
+   * @returns Deduplicated list preserving the highest-precedence discovery's
+   *   result for each name.
+   * @throws ExtensionNameCollisionError when one discovery returns the same descriptor name twice.
    */
   public async discover(): Promise<DiscoveredExtension[]> {
     const discoveredTiers = await Promise.all(this.discoveries.map((discovery) => discovery.discover()));
@@ -295,20 +336,61 @@ export class MergedDescriptorDiscovery implements ExtensionDiscovery {
 }
 
 /**
- * Deduplicate discoveries by descriptor name while preserving tier priority.
+ * Resolve descriptor-name collisions across discovery tiers.
+ *
+ * A descriptor name is an extension identity, so exactly one discovery may
+ * hold it. Which discovery that is depends on where the collision happens:
+ *
+ * - **Across tiers** the answer is the declared tier precedence (local \>
+ *   installed \> global-npm): the higher tier wins. The loser is not dropped
+ *   silently — it is reported with both provenances so an operator can see
+ *   which copy the runtime is actually going to load.
+ * - **Within one tier** there is no precedence to appeal to. Two packages
+ *   sitting side by side in the same directory claiming one identity have no
+ *   deterministic winner — the order is whatever the filesystem returned — so
+ *   this throws instead of picking one. The managed install paths already
+ *   prevent this (a symlink install is keyed by descriptor name, and an npm
+ *   install is refused when another npm package already claims the name); a
+ *   collision here therefore means packages were placed by hand and the
+ *   operator has to resolve the ambiguity.
  * @param tiers - Discovery tiers ordered from highest to lowest priority.
- * @returns Merged discoveries with the first descriptor name occurrence kept.
+ * @returns Merged discoveries with the winning tier's descriptor kept per name.
+ * @throws ExtensionNameCollisionError when one tier contains two descriptors declaring the same name.
  */
 function deduplicateByDescriptorName(tiers: ReadonlyArray<ReadonlyArray<DiscoveredExtension>>): DiscoveredExtension[] {
   const byName = new Map<string, DiscoveredExtension>();
   for (const tier of tiers) {
+    const claimedInTier = new Map<string, DiscoveredExtension>();
     for (const ext of tier) {
-      if (!byName.has(ext.descriptor.name)) {
-        byName.set(ext.descriptor.name, ext);
+      const name = ext.descriptor.name;
+      const sameTierClaim = claimedInTier.get(name);
+      if (sameTierClaim !== undefined) {
+        throw new ExtensionNameCollisionError(name, sameTierClaim, ext);
       }
+      claimedInTier.set(name, ext);
+
+      const winner = byName.get(name);
+      if (winner !== undefined) {
+        console.warn(
+          `[extensions] Extension "${name}" is installed more than once: ` +
+            `${describeProvenance(winner)} takes precedence over ${describeProvenance(ext)}, ` +
+            'which is shadowed and will not be loaded.',
+        );
+        continue;
+      }
+      byName.set(name, ext);
     }
   }
   return [...byName.values()];
+}
+
+/**
+ * Render a discovery's provenance for a collision diagnostic.
+ * @param ext - Discovered extension to describe.
+ * @returns Tier label and absolute package path.
+ */
+function describeProvenance(ext: DiscoveredExtension): string {
+  return `${ext.source} at ${ext.extensionPath}`;
 }
 
 /**

@@ -718,6 +718,11 @@ describe('extension install CLI commands', () => {
       extensions: ['@acme/weather-tools@1.0.0'],
     });
     const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(repo);
+    // The update path resolves through the dependency resolver, which reads
+    // each installed package's own `descriptor.json` — so the published
+    // fixtures have to exist, exactly as they do for an install.
+    await writePublishedPackage('@acme/weather-tools', descriptor('weather-tools', '1.1.0'));
+    await writePublishedPackage('@acme/local-only', descriptor('local-only', '2.0.0'));
     packageManagerMockState.packages = [
       { name: '@acme/weather-tools', version: '1.0.0', hasDescriptor: true },
       { name: '@acme/local-only', version: '1.0.0', hasDescriptor: true },
@@ -731,6 +736,75 @@ describe('extension install CLI commands', () => {
     expect(JSON.parse(await readFile(manifestPath, 'utf-8')).extensions).toEqual(['@acme/weather-tools@1.1.0']);
     expect(packageManagerMockState.installedPackages).toEqual(['@acme/weather-tools', '@acme/local-only']);
     cwdSpy.mockRestore();
+  });
+
+  it('re-pins a transitively upgraded package the project manifest already declares', async () => {
+    // `@acme/child` is never a requested root — the update only asks for
+    // `@acme/parent`, whose new version pulls the child forward. The project
+    // pins both, so leaving the child's pin at its pre-update version would
+    // make the next manifest reconciliation reinstall the superseded copy the
+    // new parent cannot use.
+    const repo = await makeTestRepo('makaio-extension-update-transitive-');
+    const manifestPath = await writeTestManifest(repo, {
+      extensions: ['@acme/parent@1.0.0', '@acme/child@1.0.0'],
+    });
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(repo);
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await writePublishedPackage(
+      '@acme/parent',
+      descriptor('@acme/parent', '1.0.0', [{ type: 'extension', name: '@acme/child', version: '>=1.0.0' }]),
+    );
+    await writePublishedPackage('@acme/child', descriptor('@acme/child', '1.0.0'));
+    await program.parseAsync(['node', 'test', 'extension', 'install', '@acme/parent']);
+
+    await writePublishedPackage(
+      '@acme/parent',
+      descriptor('@acme/parent', '2.0.0', [{ type: 'extension', name: '@acme/child', version: '>=2.0.0' }]),
+    );
+    await writePublishedPackage('@acme/child', descriptor('@acme/child', '2.0.0'));
+    packageManagerMockState.packages = [{ name: '@acme/parent', version: '1.0.0', hasDescriptor: true }];
+    packageManagerMockState.latestVersions.set('@acme/parent', '2.0.0');
+
+    await program.parseAsync(['node', 'test', 'extension', 'update']);
+
+    expect(JSON.parse(await readFile(manifestPath, 'utf-8')).extensions).toEqual([
+      '@acme/child@2.0.0',
+      '@acme/parent@2.0.0',
+    ]);
+    cwdSpy.mockRestore();
+  });
+
+  it('refuses an update whose new version claims an extension name another installed package already holds', async () => {
+    // The update path must be governed by the same descriptor-identity guard
+    // the install path is: installing the package directly would leave two
+    // packages in `$MAKAIO_HOME/node_modules` declaring one extension name,
+    // which the next boot's discovery aborts on — long after the operator
+    // could still act on it.
+    await writePublishedPackage('@acme/alpha', descriptor('alpha', '1.0.0'));
+    await writePublishedPackage('@acme/beta', descriptor('beta', '1.0.0'));
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    await program.parseAsync(['node', 'test', 'extension', 'install', '@acme/alpha', '@acme/beta']);
+
+    // `@acme/beta@2.0.0` renames its descriptor onto the identity `@acme/alpha`
+    // already holds.
+    await writePublishedPackage('@acme/beta', descriptor('alpha', '2.0.0'));
+    packageManagerMockState.packages = [{ name: '@acme/beta', version: '1.0.0', hasDescriptor: true }];
+    packageManagerMockState.latestVersions.set('@acme/beta', '2.0.0');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const restoresBefore = packageManagerMockState.manifestRestores;
+
+    await program.parseAsync(['node', 'test', 'extension', 'update', '@acme/beta']);
+
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Package @acme/beta declares extension name "alpha", which is already installed from @acme/alpha@1.0.0',
+      ),
+    );
+    expect(process.exitCode).toBe(1);
+    // Rolled back: the transaction restores the pre-update manifest instead of
+    // leaving the renamed package installed alongside the name's owner.
+    expect(packageManagerMockState.manifestRestores).toBeGreaterThan(restoresBefore);
   });
 });
 
@@ -1851,6 +1925,27 @@ describe('extension enable/disable commands', () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it('refuses a toggle for a contested name even when the reachable server manages it', async () => {
+    // The server loaded a single copy at boot, so `kernel:extension.get` still
+    // reports a healthy managed entry — but a second copy was installed since,
+    // and the next start aborts on the contested name. Persisting a preference
+    // through `setEnabled` would report a change nothing will ever act on.
+    enablementMockState.health = { url: 'ws://localhost:1234' };
+    enablementMockState.getResult = { extension: { critical: false } };
+    packageManagerMockState.packages = [
+      { name: '@acme/weather-a', descriptorName: 'weather', version: '1.0.0', hasDescriptor: true },
+      { name: '@acme/weather-b', descriptorName: 'weather', version: '2.0.0', hasDescriptor: true },
+    ];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    await program.parseAsync(['extension', 'disable', 'weather'], { from: 'user' });
+
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('more than one installed copy claims this name'));
+    expect(enablementMockState.setEnabledCallCount).toBe(0);
+    expect(enablementMockState.disabled.has('weather')).toBe(false);
+    expect(process.exitCode).toBe(1);
+  });
+
   it('refuses the framework-package-collision fallback for a remote server, writing nothing locally', async () => {
     process.env.MAKAIO_BUS_URL = 'ws://build-server.internal:6252/bus';
     enablementMockState.health = { url: 'ws://build-server.internal:6252/bus' };
@@ -2006,6 +2101,62 @@ describe('extension enable/disable commands', () => {
       expect(process.exitCode).toBe(1);
     });
 
+    it('lists a cross-tier shadowed extension instead of dropping it from the listing', async () => {
+      // The npm copy is installed but unloadable: the project-local tier wins
+      // the name. Omitting it made a just-installed extension look like it had
+      // never been installed, with nothing to tell the operator why.
+      packageManagerMockState.packages = [{ name: 'shared-ext', version: '1.0.0', hasDescriptor: true }];
+      await writeProjectLocalDescriptor(projectRoot, descriptor('shared-ext', '2.0.0'));
+      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+      await program.parseAsync(['extension', 'list'], { from: 'user' });
+
+      const rows = infoSpy.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith('shared-ext '));
+      expect(rows).toEqual([
+        'shared-ext (2.0.0, project-local) [enabled]',
+        'shared-ext (1.0.0, npm) [shadowed by project-local, not loaded]',
+      ]);
+    });
+
+    it('reports the project-local name collision as a listing failure instead of an unhandled rejection', async () => {
+      // Two hand-placed packages in the project-local tier claiming one
+      // identity: discovery refuses (there is no precedence within a tier),
+      // and `extension list` must end as an operator-readable message with a
+      // non-zero exit rather than a raw stack trace.
+      const firstPath = await writeCollidingProjectLocalPackage('first-copy', 'shared-ext');
+      const secondPath = await writeCollidingProjectLocalPackage('second-copy', 'shared-ext');
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      await program.parseAsync(['extension', 'list'], { from: 'user' });
+
+      const message = errorSpy.mock.calls
+        .map((call) => String(call[0]))
+        .find((line) => line.startsWith('List failed:'));
+      expect(message).toBeDefined();
+      expect(message).toContain('shared-ext');
+      expect(message).toContain(firstPath);
+      expect(message).toContain(secondPath);
+      expect(process.exitCode).toBe(1);
+    });
+
+    /**
+     * Write a project-local package whose directory name differs from the
+     * descriptor name, so two of them can claim one identity in a single tier.
+     * @param directoryName - Package directory under the project `node_modules`.
+     * @param descriptorName - Descriptor name both packages claim.
+     * @returns Absolute package root the discovery reports as provenance.
+     */
+    async function writeCollidingProjectLocalPackage(directoryName: string, descriptorName: string): Promise<string> {
+      const packageRoot = path.join(projectRoot, 'node_modules', directoryName);
+      await mkdir(packageRoot, { recursive: true });
+      await writeFile(
+        path.join(packageRoot, 'descriptor.json'),
+        `${JSON.stringify(descriptor(descriptorName, '1.0.0'), null, 2)}\n`,
+        'utf-8',
+      );
+      return packageRoot;
+    }
+
     it('lists a project-local extension offline even though it is absent from every $MAKAIO_HOME tier', async () => {
       await writeProjectLocalDescriptor(projectRoot, descriptor('project-only-ext', '1.0.0'));
       const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
@@ -2034,28 +2185,64 @@ describe('extension enable/disable commands', () => {
     async function writeProjectLocalServerEntry(
       root: string,
       descriptorName: string,
-      packages: ReadonlyArray<{ readonly name: string; readonly critical?: boolean }>,
+      packages: ReadonlyArray<{
+        readonly name: string;
+        readonly critical?: boolean;
+        readonly surface?: 'interactive' | 'headless';
+      }>,
     ): Promise<void> {
       const distDir = path.join(root, 'node_modules', ...descriptorName.split('/'), 'dist');
       await mkdir(distDir, { recursive: true });
       const entries = packages
         .map(
           (pkg) =>
-            `  { name: ${JSON.stringify(pkg.name)}, displayName: ${JSON.stringify(pkg.name)}, version: '0.1.0', critical: ${pkg.critical ?? false} },\n`,
+            `  { name: ${JSON.stringify(pkg.name)}, displayName: ${JSON.stringify(pkg.name)}, version: '0.1.0', critical: ${pkg.critical ?? false}` +
+            `${pkg.surface === undefined ? '' : `, surface: ${JSON.stringify(pkg.surface)}`} },\n`,
         )
         .join('');
       await writeFile(path.join(distDir, 'server.mjs'), `export default [\n${entries}];\n`, 'utf-8');
     }
 
-    it("resolves a higher-priority tier's child package name against a lower-priority tier's own descriptor of the same name to a single entry, keeping the higher-priority tier's precedence", async () => {
+    /**
+     * Write a single-package server entry for a mocked npm install, declaring
+     * one runtime surface.
+     *
+     * The npm tier's listing reads its `surface` from the exported package the
+     * coordinator would load, exactly as it reads `critical` — so the fixture
+     * has to be a real, importable module rather than descriptor metadata.
+     * @param descriptorName - Descriptor identity the entry exports itself under.
+     * @param surface - Runtime surface the exported package restricts itself to.
+     * @returns The entry's import path.
+     */
+    async function writeSurfacedServerEntry(
+      descriptorName: string,
+      surface: 'interactive' | 'headless',
+    ): Promise<string> {
+      const packageRoot = path.join(packageManagerMockState.makaioHome, 'fixture-packages', descriptorName);
+      await mkdir(packageRoot, { recursive: true });
+      const serverImportPath = path.join(packageRoot, 'server.mjs');
+      await writeFile(
+        serverImportPath,
+        `export default { name: ${JSON.stringify(descriptorName)}, displayName: 'Surfaced', version: '9.0.0', ` +
+          `surface: ${JSON.stringify(surface)} };\n`,
+        'utf-8',
+      );
+      return serverImportPath;
+    }
+
+    it("reports a higher-priority tier's child package name against a lower-priority tier's own descriptor of the same name as a collision, not as a resolved shadowing", async () => {
       // The project-local tier (highest priority) exports child package
       // `parent-ext.child` from descriptor `parent-ext`, non-critical. A
       // lower-priority $MAKAIO_HOME npm install happens to have its own,
       // unrelated descriptor literally named `parent-ext.child`, critical.
-      // Tracking collisions only by `group[0].name` (the descriptor) would
-      // let both entries survive the merge — the runtime's own
-      // `mergePackagesByDescriptorSourcePriority` never would, since it
-      // tracks every emitted package name, not just descriptor names.
+      //
+      // Tier precedence cannot settle this. Discovery deduplicates by
+      // *descriptor* name, and `parent-ext` and `parent-ext.child` are two
+      // different descriptor names, so both descriptors are admitted — and
+      // both then register the package name `parent-ext.child`, which
+      // `coalesceExtensionOverrides` refuses. The boot aborts, so presenting
+      // either row as the loaded copy would be a listing that contradicts the
+      // runtime.
       await writeProjectLocalDescriptor(projectRoot, descriptor('parent-ext', '1.0.0'));
       await writeProjectLocalServerEntry(projectRoot, 'parent-ext', [
         { name: 'parent-ext' },
@@ -2065,23 +2252,122 @@ describe('extension enable/disable commands', () => {
         { name: 'parent-ext.child', version: '9.0.0', hasDescriptor: true, critical: true },
       ];
       const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
       await program.parseAsync(['extension', 'list'], { from: 'user' });
 
       const childListings = infoSpy.mock.calls
         .map((call) => String(call[0]))
         .filter((line) => line.startsWith('parent-ext.child '));
-      // Exactly one row for the colliding name, from the higher-priority
-      // (project-local) tier — not the lower-priority npm descriptor.
-      expect(childListings).toEqual(['parent-ext.child (0.1.0, project-local) [enabled]']);
+      expect(childListings).toEqual([
+        'parent-ext.child (0.1.0, project-local) [name collision with npm, nothing loads under this name until it is resolved]',
+        'parent-ext.child (9.0.0, npm) [name collision with project-local, nothing loads under this name until it is resolved]',
+      ]);
+      // The descriptor that won its own name is unaffected and still loadable.
+      expect(infoSpy).toHaveBeenCalledWith('parent-ext (1.0.0, project-local) [enabled]');
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Extension name collision: parent-ext.child'));
+      expect(process.exitCode).toBe(1);
 
-      // The offline disable-validation path scans this same list for the
-      // first matching row; it must see the winning (non-critical) entry,
-      // not the shadowed npm descriptor's `critical: true`.
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      // Nothing resolves under the contested name, so a preference written for
+      // it could never be acted on — the toggle refuses instead of persisting.
+      process.exitCode = undefined;
+      errorSpy.mockClear();
       await program.parseAsync(['extension', 'disable', 'parent-ext.child'], { from: 'user' });
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('more than one installed copy claims this name'));
+      expect(enablementMockState.disabled.has('parent-ext.child')).toBe(false);
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('does not report a cross-tier child/descriptor contest as a collision when the two copies target different surfaces', async () => {
+      // The coordinator filters by surface *before* it resolves names, so an
+      // interactive-only child package and a headless-only descriptor of the
+      // same name are never handed to that resolution together: each boots on
+      // its own surface and neither displaces the other. Reporting a collision
+      // would exit non-zero and refuse a toggle for a name that resolves fine
+      // on every surface a host can actually be.
+      await writeProjectLocalDescriptor(projectRoot, descriptor('surfaced-parent', '1.0.0'));
+      await writeProjectLocalServerEntry(projectRoot, 'surfaced-parent', [
+        { name: 'surfaced-parent' },
+        { name: 'surfaced-parent.child', surface: 'interactive' },
+      ]);
+      const serverImportPath = await writeSurfacedServerEntry('surfaced-parent.child', 'headless');
+      packageManagerMockState.packages = [
+        {
+          name: 'surfaced-parent.child',
+          version: '9.0.0',
+          hasDescriptor: true,
+          serverImportPath,
+          declaresServerEntrypoint: true,
+        },
+      ];
+      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      await program.parseAsync(['extension', 'list'], { from: 'user' });
+
+      const rows = infoSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.startsWith('surfaced-parent.child '));
+      expect(rows).toEqual([
+        'surfaced-parent.child (0.1.0, project-local) [enabled]',
+        'surfaced-parent.child (9.0.0, npm) [enabled]',
+      ]);
       expect(errorSpy).not.toHaveBeenCalled();
-      expect(enablementMockState.disabled.has('parent-ext.child')).toBe(true);
+      expect(process.exitCode).toBeUndefined();
+
+      // The name resolves on both surfaces, so a preference written for it is
+      // acted on — the toggle must not be refused as contested.
+      await program.parseAsync(['extension', 'disable', 'surfaced-parent.child'], { from: 'user' });
+      expect(enablementMockState.disabled.has('surfaced-parent.child')).toBe(true);
+      expect(process.exitCode).toBeUndefined();
+    });
+
+    it('reports two npm packages declaring one descriptor name as a collision instead of one shadowing the other', async () => {
+      // Both sit in `$MAKAIO_HOME/node_modules` — one tier, no precedence to
+      // appeal to — so discovery throws `ExtensionNameCollisionError` and the
+      // boot aborts. Labelling the second row "shadowed by npm" claimed the
+      // first one loads, which it does not.
+      packageManagerMockState.packages = [
+        { name: '@acme/weather-a', descriptorName: 'weather', version: '1.0.0', hasDescriptor: true },
+        { name: '@acme/weather-b', descriptorName: 'weather', version: '2.0.0', hasDescriptor: true },
+      ];
+      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      await program.parseAsync(['extension', 'list'], { from: 'user' });
+
+      const rows = infoSpy.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith('weather '));
+      expect(rows).toEqual([
+        'weather (1.0.0, npm, npm package: @acme/weather-a) [name collision with npm, nothing loads under this name until it is resolved]',
+        'weather (2.0.0, npm, npm package: @acme/weather-b) [name collision with npm, nothing loads under this name until it is resolved]',
+      ]);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Extension name collision: weather'));
+      expect(process.exitCode).toBe(1);
+
+      process.exitCode = undefined;
+      errorSpy.mockClear();
+      await program.parseAsync(['extension', 'enable', 'weather'], { from: 'user' });
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('more than one installed copy claims this name'));
+      expect(process.exitCode).toBe(1);
+    });
+
+    it('still resolves a descriptor name claimed by two tiers by tier precedence', async () => {
+      // Guard against the collision marking above swallowing the one contest
+      // that *is* resolvable: two descriptors, different tiers, same name.
+      packageManagerMockState.packages = [{ name: 'tiered-ext', version: '1.0.0', hasDescriptor: true }];
+      await writeProjectLocalDescriptor(projectRoot, descriptor('tiered-ext', '2.0.0'));
+      const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      await program.parseAsync(['extension', 'list'], { from: 'user' });
+
+      const rows = infoSpy.mock.calls.map((call) => String(call[0])).filter((line) => line.startsWith('tiered-ext '));
+      expect(rows).toEqual([
+        'tiered-ext (2.0.0, project-local) [enabled]',
+        'tiered-ext (1.0.0, npm) [shadowed by project-local, not loaded]',
+      ]);
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(process.exitCode).toBeUndefined();
     });
   });
 

@@ -19,7 +19,24 @@ import {
 } from '@makaio/utils/project-manifest';
 import * as fs from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
-import type { DirectNpmInstallResolution } from './extension-install-transaction.js';
+import type { NpmInstallResolution } from './extension-install-transaction.js';
+
+/**
+ * Run a manifest sync operation, printing a warning instead of throwing on
+ * failure.
+ *
+ * Manifest sync is best-effort: a stale, locked, or missing manifest must never
+ * turn an install, uninstall, or update that already changed the installed set
+ * into a reported command failure.
+ * @param operation - Async manifest sync callback to execute.
+ */
+export async function warnOnManifestSyncFailure(operation: () => Promise<void>): Promise<void> {
+  try {
+    await operation();
+  } catch (error) {
+    console.warn(`Project manifest sync failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 
 const MANIFEST_LOCK_RETRIES = 40;
 const MANIFEST_LOCK_DELAY_MS = 25;
@@ -46,7 +63,7 @@ interface ManifestLockMetadata {
  */
 export async function syncProjectManifestAfterInstall(
   startDir: string,
-  directNpm: readonly DirectNpmInstallResolution[],
+  directNpm: readonly NpmInstallResolution[],
 ): Promise<void> {
   if (directNpm.length === 0) return;
   await updateProjectManifest(startDir, (manifest) => {
@@ -70,17 +87,21 @@ export async function syncProjectManifestAfterInstall(
  *
  * Unlike install sync, this never adds new project requirements. Only packages
  * already present in the project manifest are moved to their newly installed
- * exact versions.
+ * exact versions. That is what makes it safe — and necessary — to pass every
+ * package an update transaction changed, transitive dependencies included: a
+ * transitively upgraded package the project pins must move with it, while one
+ * the project never declared stays an internal implementation detail and is
+ * silently ignored here.
  * @param startDir - Directory to start searching upward for the project manifest.
- * @param directNpm - Updated npm package versions.
+ * @param changedNpm - Every npm package whose installed version changed.
  */
 export async function syncExistingProjectManifestPinsAfterUpdate(
   startDir: string,
-  directNpm: readonly DirectNpmInstallResolution[],
+  changedNpm: readonly NpmInstallResolution[],
 ): Promise<void> {
-  if (directNpm.length === 0) return;
+  if (changedNpm.length === 0) return;
   await updateProjectManifest(startDir, (manifest) => {
-    const updates = new Map(directNpm.map((resolution) => [resolution.packageName, resolution.version]));
+    const updates = new Map(changedNpm.map((resolution) => [resolution.packageName, resolution.version]));
     let changed = false;
     const extensions = manifest.extensions.map((spec) => {
       const parsed = parseExactExtensionSpec(spec);
