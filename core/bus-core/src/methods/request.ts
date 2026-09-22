@@ -59,6 +59,24 @@ function resolveAllowedTransports(transports: RequestOptions['transports']): Arr
   return names.length > 0 ? names.map(String) : undefined;
 }
 
+/**
+ * Validate the caller-supplied readiness budget.
+ *
+ * The readiness gate must never be able to fail a request, so an unusable budget
+ * is rejected here at the public seam rather than reaching the timeout primitive
+ * inside dispatch (where it would surface as a `TypeError` and fail the request).
+ * @param readinessTimeout - Raw `readinessTimeout` value from `RequestOptions`
+ * @returns The validated budget, or `undefined` to use the default
+ * @throws RangeError When the value is non-finite or negative
+ */
+function resolveReadinessTimeout(readinessTimeout: RequestOptions['readinessTimeout']): number | undefined {
+  if (readinessTimeout === undefined) return undefined;
+  if (!Number.isFinite(readinessTimeout) || readinessTimeout < 0) {
+    throw new RangeError(`readinessTimeout must be a finite number >= 0 (got ${String(readinessTimeout)})`);
+  }
+  return readinessTimeout;
+}
+
 type InternalRequestOptions = RequestOptions & WithReceiveContext;
 
 /**
@@ -88,6 +106,7 @@ export async function request<
   const messageId = options?.messageId ?? nanoid();
   const correlationId = options?.correlationId ?? nanoid();
   const timeout = options?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const readinessTimeout = resolveReadinessTimeout(options?.readinessTimeout);
   const signal = options?.signal;
   const localOnly = resolveLocalOnly(context, subjectDefinition, fullSubjectKey, options?.transports);
 
@@ -131,6 +150,7 @@ export async function request<
       correlationId,
       messageId,
       timeout,
+      readinessTimeout,
       signal,
       localOnly,
       deadline,

@@ -159,13 +159,27 @@ export interface BusRequestMessage {
   correlationId: string;
   messageId: string;
   /**
-   * Caller-specified request timeout in milliseconds.
+   * Remaining request budget in milliseconds at the moment this hop was sent.
    *
-   * Propagated across relay hops so intermediate transport registries use the
-   * same timeout policy as the original caller.
-   * A value of `0` means no automatic timeout.
+   * Each hop recomputes it from its own remaining deadline before sending, so it
+   * decreases along the chain rather than restarting the original caller's budget.
+   * A receiving hop anchors its deadline from this value, because it is relative and
+   * therefore clock-independent. A value of `0` means no automatic timeout.
+   *
+   * Wire latency between send and receive is unaccounted for by design: measuring it
+   * would need a clock the two nodes share, and the alternative — trusting the sender's
+   * absolute `deadline` — is worse, since a trailing clock would expire a request that
+   * still has its full budget. The unmeasured slack is one network hop per link.
    */
   timeout?: number;
+
+  /**
+   * Readiness-gate budget in milliseconds for this hop, when the caller set one.
+   *
+   * Carried so an inbound hop gates on the originating caller's budget rather than
+   * silently falling back to the default. Absent means "use the default".
+   */
+  readinessTimeout?: number;
   /**
    * Priority cursor for cross-transport priority-based dispatch.
    *
@@ -180,6 +194,13 @@ export interface BusRequestMessage {
    * Set on the first dispatch hop and propagated through all subsequent hops so
    * that each hop can compute its remaining time budget without relying on the
    * original timeout value alone.
+   *
+   * This is an absolute instant on the *sender's* clock. **Receivers must not consume
+   * it**, not even as a cap: two nodes' clocks need not agree, and a sender trailing by
+   * more than `timeout` would hand over an already-expired instant for a request that
+   * still has its full budget. A receiving hop anchors its own deadline from the
+   * clock-independent `timeout` instead. The field remains on the wire for the sender's
+   * own bookkeeping and for diagnostics.
    */
   deadline?: number;
 }
@@ -359,6 +380,8 @@ export interface BusTransport {
    *   console.warn('Event not delivered - no subscribers');
    * }
    * ```
+   * @remarks
+   * The bus never re-sends a request: a rejection ends that hop.
    */
   send<TMessage extends BusMessage>(
     message: TMessage,

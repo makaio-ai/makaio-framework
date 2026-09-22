@@ -1,12 +1,21 @@
 import type { MakaioBusContext, WithReceiveContext } from '../../types/index.js';
-import type { HandlerEntry } from '../../types/handler-entry.js';
-import type { RequestContext, SubjectDefinition, RequestHandler } from '@makaio/core';
+import type { RequestContext, SubjectDefinition } from '@makaio/core';
 import { getMatchingHandlerEntries, getMatchingRemoteEntries } from './getMatchingHandlers.js';
+import {
+  buildMergedList,
+  resolveRemoteCursor,
+  resolveRemoteEntries,
+  resolveStartIndex,
+  type LocalEntry,
+  type MergedEntry,
+  type RemoteEntry,
+} from './merged-list.js';
 import { getFullSubjectForSubjectDefinition } from '../../utils/subject-transformation.js';
 import { isNoHandlerErrorForSubject } from '../../utils/transport.js';
 import { LOCAL_ORIGIN, REMOTE_ORIGIN } from '../../utils/transport-helpers.js';
-import { isRequestCancellation, RequestError, toAbortError } from '../../errors/index.js';
+import { isRequestCancellation, RequestError, TimeoutError, toAbortError } from '../../errors/index.js';
 import { awaitWithTimeoutAndSignal } from './await-with-timeout-and-signal.js';
+import { remainingUntil, resolveDispatchDeadline, runReadinessGate } from './readiness-gate.js';
 
 /** Options for the recursive dispatch function. */
 export interface DispatchOptions extends WithReceiveContext {
@@ -30,6 +39,13 @@ export interface DispatchOptions extends WithReceiveContext {
   messageId: string;
   /** Timeout in milliseconds. `0` means no automatic timeout. */
   timeout: number;
+  /**
+   * Budget in milliseconds for the one readiness wait, independent of `timeout` and
+   * additionally clamped by `deadline`.
+   *
+   * Defaults to {@link DEFAULT_READINESS_TIMEOUT_MS}. `0` disables the cap.
+   */
+  readinessTimeout?: number;
   /**
    * Absolute dispatch deadline as a Unix timestamp in milliseconds.
    * Set on first dispatch, propagated through all subsequent hops so each hop
@@ -55,91 +71,12 @@ export interface DispatchOutcome {
   value?: unknown;
 }
 
-/** A merged entry for a local handler. */
-type LocalEntry = HandlerEntry<RequestHandler<unknown, unknown>> & { kind: 'local' };
-
-/** A merged entry for a remote transport pointer. */
-type RemoteEntry = { transport: string; priority: number; kind: 'remote' };
-
-/** Union of local and remote entries used in the merged dispatch list. */
-type MergedEntry = LocalEntry | RemoteEntry;
-
-/**
- * Build a merged, priority-sorted list of local handler entries and remote transport
- * entries.
- *
- * Sorted by priority descending. Local entries win ties over remote entries so that
- * equal-priority local handlers run before remote hops, avoiding unnecessary network
- * round-trips. Relative order within local entries and within remote entries at the
- * same priority is preserved (stable sort).
- * @param localEntries - Local handler entries, already sorted by priority descending
- * @param remoteEntries - Remote transport entries
- * @returns Merged array ordered by priority descending (local beats remote on ties)
- */
-function buildMergedList(
-  localEntries: ReadonlyArray<HandlerEntry<RequestHandler<unknown, unknown>>>,
-  remoteEntries: ReadonlyArray<{ transport: string; priority: number }>,
-): MergedEntry[] {
-  const merged: MergedEntry[] = [
-    ...localEntries.map((e): LocalEntry => ({ ...e, kind: 'local' })),
-    ...remoteEntries.map((e): RemoteEntry => ({ ...e, kind: 'remote' })),
-  ];
-
-  // Stable sort: descending priority, local entries precede remote entries on ties.
-  merged.sort((a, b) => {
-    if (b.priority !== a.priority) return b.priority - a.priority;
-    if (a.kind === 'local' && b.kind === 'remote') return -1;
-    if (a.kind === 'remote' && b.kind === 'local') return 1;
-    return 0;
-  });
-
-  return merged;
-}
-
-/**
- * Apply an explicit transport allowlist to remote entries.
- *
- * When the allowlist is present but no advertised handlers have arrived yet,
- * synthesize one remote entry per allowed transport so dispatch can still route
- * to the requested peer. This closes the subscribe-propagation race for callers
- * that explicitly constrain transport routing.
- * @param context - Bus context used to resolve current transport registrations
- * @param remoteEntries - Advertised remote entries for the subject
- * @param allowedTransports - Optional explicit transport allowlist
- * @returns Filtered or synthesized remote entries
- */
-function resolveRemoteEntries(
-  context: MakaioBusContext,
-  remoteEntries: ReadonlyArray<{ transport: string; priority: number }>,
-  allowedTransports?: ReadonlyArray<string>,
-): Array<{ transport: string; priority: number }> {
-  if (!allowedTransports || allowedTransports.length === 0) {
-    return [...remoteEntries];
-  }
-
-  const allowed = new Set(allowedTransports);
-  const filtered = remoteEntries.filter((entry) => allowed.has(entry.transport));
-  if (filtered.length > 0) {
-    return filtered;
-  }
-
-  const unique = [...new Set(allowedTransports)];
-  return unique
-    .filter((transportName) => {
-      const transport = context.transportRegistry.getTransport(transportName);
-      if (!transport) return false;
-      return transport.isReady?.() !== false;
-    })
-    .map((transport) => ({ transport, priority: 0 }));
-}
-
 /**
  * Execute one step in the merged dispatch chain.
  *
- * Picks the entry at `index`, executes it, and returns the outcome. When the list
- * is exhausted, rethrows `firstTransportError` if one was collected during remote
- * dispatch (preserving the old "return first non-NoHandler error" contract), or
- * returns `{ handled: false }` otherwise.
+ * Picks the entry at `index`, executes it, and returns the outcome. When the list is
+ * exhausted, any `firstTransportError` collected during remote dispatch is rethrown so
+ * a local wrapper's `ctx.next()` rejects and its compensation runs.
  * @param context - Bus context
  * @param subjectDefinition - Subject definition
  * @param payload - Current payload
@@ -159,11 +96,20 @@ async function stepDispatch(
   firstTransportError?: unknown,
 ): Promise<DispatchOutcome> {
   if (index >= merged.length) {
-    // Chain exhausted — rethrow the first transport error if any transport failed.
+    // Chain exhausted — rethrow the first transport error so a local wrapper's
+    // `ctx.next()` rejects and its compensation runs.
     if (firstTransportError !== undefined) {
       throw firstTransportError;
     }
     return { handled: false };
+  }
+
+  // Invariant 1, enforced at every advancement rather than once per pass: a slow
+  // handler can finish after the deadline, and neither its `ctx.next()` nor the
+  // auto-advance may then start the next entry's side effects. This is the single
+  // place the running chain is stopped; the boundary only classifies the result.
+  if (remainingUntil(options.deadline) <= 0) {
+    throw new TimeoutError(subjectDefinition.subject, options.timeout);
   }
 
   const entry = merged[index];
@@ -309,8 +255,9 @@ async function executeLocalEntry(
     if (isRequestCancellation(error, options.signal)) {
       throw toAbortError(error);
     }
-    if (error instanceof RequestError) {
-      throw error; // Already wrapped — don't double-wrap.
+    if (error instanceof RequestError || error instanceof TimeoutError) {
+      // Already wrapped, or a deadline failure whose identity the caller relies on.
+      throw error;
     }
     throw new RequestError(
       subjectKey,
@@ -367,23 +314,28 @@ async function executeRemoteEntry(
   const namespace = subjectDefinition.$meta.namespace;
   const fullSubjectKey = `${namespace}.${subjectKey}`;
 
-  // Set the deadline on the first hop; propagate it on subsequent hops.
-  const deadline = options.deadline ?? (options.timeout > 0 ? Date.now() + options.timeout : undefined);
+  // Invariant 1: `dispatch` resolved the deadline once and wrote it into these options.
+  // Re-deriving it here would give this hop a different instant from the rest of the chain.
+  const { deadline } = options;
   const remainingTimeout = deadline !== undefined ? Math.max(0, deadline - Date.now()) : options.timeout;
   const nextOptions = { ...options, deadline };
+
+  /**
+   * Continue the chain past this entry without sending to it.
+   * @param carriedError - Transport error to keep carrying, if any
+   * @returns Outcome of the remaining chain
+   */
+  const skipToNext = (carriedError: unknown = firstTransportError): Promise<DispatchOutcome> =>
+    stepDispatch(context, subjectDefinition, payload, merged, nextIndex, nextOptions, carriedError);
 
   // Deadline already elapsed — skip this remote entry instead of sending an
   // unbounded request. awaitWithTimeoutAndSignal treats timeout=0 as "no
   // timeout", so we must short-circuit here to preserve deadline semantics.
-  if (deadline !== undefined && remainingTimeout === 0) {
-    return stepDispatch(context, subjectDefinition, payload, merged, nextIndex, nextOptions, firstTransportError);
-  }
+  if (deadline !== undefined && remainingTimeout === 0) return skipToNext();
 
   const transport = context.transportRegistry.getTransport(entry.transport);
-  if (!transport) {
-    // Transport disconnected — skip and continue at the next position.
-    return stepDispatch(context, subjectDefinition, payload, merged, nextIndex, nextOptions, firstTransportError);
-  }
+  // Transport disconnected — skip and continue at the next position.
+  if (!transport) return skipToNext();
 
   const requestMessage = {
     type: 'request' as const,
@@ -396,29 +348,11 @@ async function executeRemoteEntry(
     // The cursor tells the remote node "start from handlers strictly below
     // this value". It is normally the priority of the last locally executed
     // entry (merged[nextIndex - 2]).
-    //
-    // Equal-priority adjustment: when the preceding entry shares the same
-    // priority as this remote entry (e.g., local:100 → remote:100, or
-    // remoteA:300 → remoteB:300), the base cursor would exclude
-    // equal-priority handlers on the receiver because dispatch uses strict
-    // `< cursor`. Incrementing by 1 includes them. This is safe because
-    // priorities are integers — no handler can exist between N and N+1.
-    //
-    // The bump applies for both local-to-remote AND remote-to-remote ties
-    // at the same priority. Without it, the second remote transport would
-    // receive a cursor equal to its own priority and skip its handlers.
-    //
-    // When nothing preceded (nextIndex < 2), forward the incoming cursor
-    // unchanged so the remote continues from where the originating node left off.
-    priority: (() => {
-      if (nextIndex < 2) return options.priority;
-      const base = merged[nextIndex - 2].priority;
-      // Bump when the preceding entry (local or remote) shares the same
-      // priority as this remote entry, so the receiver includes handlers
-      // at that tier.
-      return base === entry.priority ? base + 1 : base;
-    })(),
+    priority: resolveRemoteCursor(merged, nextIndex, entry.priority, options.priority),
     deadline,
+    // Carry the caller's readiness budget so the next hop gates on it rather than
+    // silently falling back to the default.
+    ...(options.readinessTimeout !== undefined && { readinessTimeout: options.readinessTimeout }),
   };
 
   const { signal } = options;
@@ -448,7 +382,7 @@ async function executeRemoteEntry(
 
     if (isNoHandlerErrorForSubject(error, fullSubjectKey)) {
       // Remote chain exhausted — continue to the next entry in our list.
-      return stepDispatch(context, subjectDefinition, payload, merged, nextIndex, nextOptions, firstTransportError);
+      return skipToNext();
     }
 
     // Transient transport error — log it, skip this entry, try the next.
@@ -457,15 +391,7 @@ async function executeRemoteEntry(
       `[${options.correlationId}][${options.messageId}] Error sending request "${subjectKey}" via transport '${entry.transport}':`,
       error,
     );
-    return stepDispatch(
-      context,
-      subjectDefinition,
-      payload,
-      merged,
-      nextIndex,
-      nextOptions,
-      firstTransportError ?? error,
-    );
+    return skipToNext(firstTransportError ?? error);
   }
 }
 
@@ -497,69 +423,42 @@ export async function dispatch(
 ): Promise<DispatchOutcome> {
   const fullSubjectKey = getFullSubjectForSubjectDefinition(subjectDefinition);
 
-  const localEntries = getMatchingHandlerEntries(context, fullSubjectKey);
+  // Resolve the deadline once and write it into the options every later step sees, so
+  // the chain, each handler context and each remote hop share one instant.
+  const deadline = resolveDispatchDeadline(options);
+  const dispatchOptions: DispatchOptions = options.deadline === deadline ? options : { ...options, deadline };
+  if (remainingUntil(deadline) <= 0) throw new TimeoutError(subjectDefinition.subject, dispatchOptions.timeout);
 
   // Remote entries are skipped for local-only subjects or an explicit localOnly flag.
-  const remoteEntries =
-    subjectDefinition.$meta.local || options.localOnly
-      ? []
-      : resolveRemoteEntries(
-          context,
-          getMatchingRemoteEntries(context, fullSubjectKey, options.excludeFirstHopOnlyRemote),
-          options.allowedTransports,
-        );
+  const remoteEligible = !subjectDefinition.$meta.local && !options.localOnly;
 
-  const merged = buildMergedList(localEntries, remoteEntries);
+  // The readiness gate: one bounded wait, before the chain is built. Local handlers do
+  // not pre-empt it — a pending peer may yet advertise a higher-priority handler, and
+  // the cross-transport priority contract says that handler runs first. See the seam
+  // contract in `readiness-gate.ts` for why waiting first is the whole design.
+  const pending = remoteEligible
+    ? context.transportRegistry.getPendingReadyEntries(dispatchOptions.allowedTransports)
+    : [];
+  // Checked synchronously: in steady state nothing is pending, and dispatch must not
+  // even add a microtask there — handler/cancellation orderings are observable.
+  if (pending.length > 0) {
+    const gate = await runReadinessGate({ pending, options: dispatchOptions, fullSubjectKey, deadline });
+    if (gate === 'expired') throw new TimeoutError(subjectDefinition.subject, dispatchOptions.timeout);
+  }
 
-  // When entering from a transport message with a priority cursor, find the first
-  // entry that falls strictly below that priority. This is where this node begins.
-  const cursor = options.priority;
-  const startIndex = cursor !== undefined ? merged.findIndex((e) => e.priority < cursor) : 0;
-
-  // Lazy readiness gate: if transports are still completing subscribe-sync, wait for them
-  // and rebuild the merged list before dispatching. This covers the race where a request
-  // fires before remoteRequestHandlers is fully populated.
-  //
-  // The gate fires for ALL non-local requests when pending transports exist, not only
-  // when the initial merged list is empty. A local handler may be present while
-  // lower-priority remote handlers have not yet synced; without the gate those remote
-  // entries would be silently absent from the merged list, producing an incomplete chain.
-  //
-  // Bounding semantics:
-  //   - Direct callers (request.ts): bounded by `options.timeout` / `options.signal`.
-  //   - Relay hops (handleRequestMessage in transport-registry.ts): `options.timeout` is
-  //     the wire-propagated remaining budget, so the gate is bounded by the caller's
-  //     remaining time. Relay hops should rarely reach this gate in practice — a node
-  //     receiving relay traffic should already have its transports initialised.
-  //   - `timeout === 0`: disables the cap (no-timeout callers accept an unbounded wait).
-  //
-  // getPendingReady() returns [] in steady state (all transports ready), so the inner
-  // block is never entered after startup — zero runtime cost on the hot path.
-  if (!subjectDefinition.$meta.local && !options.localOnly) {
-    const pending = context.transportRegistry.getPendingReady();
-    if (pending.length > 0) {
-      await awaitWithTimeoutAndSignal(Promise.allSettled(pending), options.timeout, options.signal);
-      // Rebuild from scratch — remoteRequestHandlers may now be populated after
-      // subscribe-sync completes.
-      const retryRemote = resolveRemoteEntries(
+  // Built once, after the wait, and dispatched once.
+  const remoteEntries = remoteEligible
+    ? resolveRemoteEntries(
         context,
         getMatchingRemoteEntries(context, fullSubjectKey, options.excludeFirstHopOnlyRemote),
         options.allowedTransports,
-      );
-      const retryMerged = buildMergedList(localEntries, retryRemote);
-      if (retryMerged.length === 0) return { handled: false };
-      const retryCursor = options.priority;
-      const retryStartIndex = retryCursor !== undefined ? retryMerged.findIndex((e) => e.priority < retryCursor) : 0;
-      if (retryStartIndex === -1) return { handled: false };
-      return stepDispatch(context, subjectDefinition, payload, retryMerged, retryStartIndex, options);
-    }
-  }
+      )
+    : [];
+  const merged = buildMergedList(getMatchingHandlerEntries(context, fullSubjectKey), remoteEntries);
+  // When entering from a transport message with a priority cursor, this node begins at
+  // the first entry strictly below that priority.
+  const startIndex = resolveStartIndex(merged, options.priority);
+  if (startIndex === -1 || merged.length === 0) return { handled: false };
 
-  // No pending transports — dispatch against the already-built merged list.
-  // All entries are at or above the cursor means this node's chain is exhausted.
-  if (startIndex === -1 || merged.length === 0) {
-    return { handled: false };
-  }
-
-  return stepDispatch(context, subjectDefinition, payload, merged, startIndex, options);
+  return stepDispatch(context, subjectDefinition, payload, merged, startIndex, dispatchOptions);
 }

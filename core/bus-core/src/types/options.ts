@@ -9,6 +9,21 @@ import type { PayloadFilter, TransportReceiveContext } from '@makaio/core';
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
 /**
+ * Default readiness budget in milliseconds for the dispatch readiness gate.
+ *
+ * The gate waits for transports that have not yet completed their `ready`
+ * handshake so that late-arriving remote routes can join the dispatch chain.
+ * That wait is a routing *hint*, not a precondition: it runs on this dedicated
+ * budget rather than on the caller's request timeout, and dispatch proceeds
+ * with the routes known so far once the budget expires.
+ *
+ * Kept short on purpose — a transport that has not synced within this window
+ * is either slow or structurally unable to complete the handshake, and neither
+ * case justifies spending the caller's full request budget.
+ */
+export const DEFAULT_READINESS_TIMEOUT_MS = 1_500;
+
+/**
  * Options for subscribing to events/requests via on().
  */
 export interface OnOptions {
@@ -98,6 +113,33 @@ export interface RequestOptions extends EmitOptions {
    * rejected, or cancelled via the `signal` AbortSignal.
    */
   timeout?: number;
+
+  /**
+   * Budget in milliseconds for the dispatch readiness gate.
+   *
+   * When any transport eligible for this request is still completing its `ready`
+   * handshake, dispatch waits up to this long for its routes to arrive, then builds
+   * the handler chain once. The wait happens whether or not a local handler could
+   * answer: a pending peer may yet advertise a *higher-priority* route, and the
+   * cross-transport priority contract says that route runs first. Local-only subjects
+   * (and `transports: []`) never wait, because no peer can contribute to them.
+   *
+   * The practical cost is up to this budget per request during a transport's connect
+   * window, and nothing at all once transports have settled. On expiry dispatch
+   * proceeds with the routes advertised so far — the gate never fails a request, it
+   * only delays it.
+   *
+   * This budget is separate from {@link RequestOptions.timeout} so a transport
+   * that never completes its handshake cannot consume the caller's whole
+   * request budget. The overall request timeout, the request deadline and `signal`
+   * all still bound it.
+   *
+   * Use `0` to disable the cap, matching `timeout: 0` semantics. A non-finite or
+   * negative value is rejected with a `RangeError` at the request seam rather than
+   * being allowed to fail the request from inside the gate.
+   * @defaultValue DEFAULT_READINESS_TIMEOUT_MS (1.5 seconds)
+   */
+  readinessTimeout?: number;
 
   /**
    * AbortSignal to cancel the request.

@@ -330,9 +330,9 @@ export class ClientRegistry {
   /**
    * Associate an accepted inbound request with its requesting socket.
    *
-   * The association is single-use and lasts until the request's propagated
-   * deadline. Requests with `timeout: 0` have no deadline and remain tracked
-   * until a response, cancellation, or socket removal.
+   * The association is single-use and lasts for the request's remaining relative
+   * budget. Requests with `timeout: 0` have no expiry and remain tracked until a
+   * response, cancellation, or socket removal.
    * @param socket - Socket that submitted the request
    * @param request - Accepted inbound request envelope
    */
@@ -341,7 +341,8 @@ export class ClientRegistry {
     if (this.requestOrigins.has(correlationId)) return;
 
     const remainingLifetime = this.getRequestRemainingLifetime(request);
-    if (remainingLifetime === 0) return;
+    // Defensive: a non-positive budget would arm a timer that fires immediately.
+    if (remainingLifetime !== undefined && remainingLifetime <= 0) return;
 
     const origin: RequestOrigin = {
       socket,
@@ -504,13 +505,17 @@ export class ClientRegistry {
 
   /**
    * Compute the remaining response-routing lifetime for an inbound request.
+   *
+   * Derived from the relative `timeout` only. The wire `deadline` is an absolute
+   * instant on the *sender's* clock, so comparing it against ours would drop the
+   * response route for a request that still has its full budget whenever a client's
+   * clock trails the server's by more than the timeout — the response would then have
+   * no socket to return to. The relative budget is clock-independent and is what every
+   * other hop anchors from.
    * @param request - Accepted request envelope
-   * @returns Remaining milliseconds, `undefined` for no-timeout requests, or `0` when expired
+   * @returns Remaining milliseconds, or `undefined` for no-timeout requests
    */
   private getRequestRemainingLifetime(request: BusRequestMessage): number | undefined {
-    if (request.deadline !== undefined) {
-      return Math.max(0, request.deadline - Date.now());
-    }
     const timeout = request.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS;
     return timeout > 0 ? timeout : undefined;
   }

@@ -11,7 +11,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ConnectionLostError } from '@makaio/bus-core';
-import { WebSocketClientTransport } from '../ws-client-transport.js';
+import { WebSocketClientTransport, type WebSocketClientTransportReadinessMode } from '../ws-client-transport.js';
 import { MockWebSocket } from './test-helpers.js';
 import { waitForCondition } from './test-utils.js';
 import type { TransportAuth } from '../types.js';
@@ -34,6 +34,7 @@ function makeTransport(options: {
   onDisconnected?: () => void;
   autoReconnect?: { baseMs: number; maxMs: number } | false;
   auth?: TransportAuth;
+  readiness?: WebSocketClientTransportReadinessMode;
 }): { transport: WebSocketClientTransport; mock: MockWebSocket } {
   const mock = new MockWebSocket();
   const transport = new WebSocketClientTransport({
@@ -43,6 +44,7 @@ function makeTransport(options: {
     onConnected: options.onConnected,
     onDisconnected: options.onDisconnected,
     auth: options.auth,
+    ...(options.readiness !== undefined && { readiness: options.readiness }),
   });
   return { transport, mock };
 }
@@ -433,6 +435,133 @@ describe('WebSocketClientTransport — ready promise', () => {
     await transport.disconnect();
 
     await waitForCondition(() => resolved, 1000, 'ready promise did not resolve after disconnect');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readiness mode
+// ---------------------------------------------------------------------------
+
+describe('WebSocketClientTransport — readiness mode', () => {
+  it('leaves ready pending under the default peer-sync mode when no handshake arrives', async () => {
+    const { transport } = makeTransport({});
+    await transport.connect();
+
+    let resolved = false;
+    void transport.ready.then(() => {
+      resolved = true;
+    });
+
+    // A peer that never answers subscribe-sync-complete leaves readiness pending.
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    await transport.disconnect();
+  });
+
+  it('resolves ready on session establishment without a subscribe-sync-complete frame', async () => {
+    // A relay forwards frames but never answers the bus handshake. Under
+    // 'session-established' the transport reports the milestone it owns, so the
+    // bus dispatch readiness gate is not armed for the connection's lifetime.
+    const { transport, mock } = makeTransport({ readiness: 'session-established' });
+    await transport.connect();
+
+    await expect(transport.ready).resolves.toBeUndefined();
+    expect(mock.sentMessages.some((m) => m.includes('subscribe-sync-complete'))).toBe(false);
+
+    await transport.disconnect();
+  });
+
+  it('ignores an inbound subscribe-sync-complete while the session is still being established', async () => {
+    // The message listener is installed before auth and replay finish, so a peer able
+    // to emit or forward that frame could otherwise settle `ready` ahead of the
+    // milestone this mode promises. Only 'peer-sync' may resolve on that frame.
+    const mock = new MockWebSocket();
+    let releaseAuth: (() => void) | undefined;
+    const authGate = new Promise<void>((resolve) => {
+      releaseAuth = resolve;
+    });
+
+    const transport = new WebSocketClientTransport({
+      url: 'ws://localhost:9999',
+      readiness: 'session-established',
+      autoReconnect: false,
+      createWebSocket: () => mock,
+      auth: {
+        authenticateClient: async () => {
+          await authGate;
+        },
+        // Must claim no frames, otherwise the sync-complete frame never reaches the
+        // inbound handler and the test would pass vacuously.
+        handleAuthMessage: () => false,
+        cleanup: () => {},
+      } as unknown as TransportAuth,
+    });
+
+    const connecting = transport.connect();
+
+    let readyResolved = false;
+    void transport.ready.then(() => {
+      readyResolved = true;
+    });
+
+    // Let connect() adopt the socket and install the inbound listener, then park on
+    // the auth gate. Delivering the frame earlier would be lost, not ignored.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Mid-authentication: the milestone has not been reached yet.
+    mock.receiveMessage(JSON.stringify({ type: 'subscribe-sync-complete' }));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(readyResolved).toBe(false);
+
+    // Auth and replay complete — now the promised milestone is reached.
+    releaseAuth?.();
+    await connecting;
+    await expect(transport.ready).resolves.toBeUndefined();
+
+    await transport.disconnect();
+  });
+
+  it('re-arms and resolves readiness again for each reconnected session', async () => {
+    vi.useFakeTimers();
+    try {
+      const sessions: Promise<void>[] = [];
+      const mocks: MockWebSocket[] = [];
+      let currentMock: MockWebSocket | undefined;
+
+      const transport = new WebSocketClientTransport({
+        url: 'ws://localhost:9999',
+        readiness: 'session-established',
+        autoReconnect: { baseMs: 50, maxMs: 200 },
+        createWebSocket: () => {
+          const m = new MockWebSocket();
+          mocks.push(m);
+          currentMock = m;
+          return m;
+        },
+      });
+      // The transport registry installs this to track each session's ready promise.
+      transport.onNewReadySession = (promise): void => {
+        sessions.push(promise);
+      };
+
+      await transport.connect();
+      await expect(transport.ready).resolves.toBeUndefined();
+
+      currentMock?.close();
+      await vi.advanceTimersByTimeAsync(200);
+
+      expect(mocks.length).toBeGreaterThanOrEqual(2);
+      // Every session promise settles, so a reconnect never leaves the registry
+      // holding a permanently pending readiness entry.
+      expect(sessions.length).toBeGreaterThanOrEqual(1);
+      await expect(Promise.all(sessions)).resolves.toBeDefined();
+      await expect(transport.ready).resolves.toBeUndefined();
+
+      await transport.disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

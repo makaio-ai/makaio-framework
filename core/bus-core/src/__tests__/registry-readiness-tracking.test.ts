@@ -159,4 +159,46 @@ describe('Transport registry readiness tracking', () => {
 
     expect(bus.getContext().transportRegistry.getPendingReady()).toHaveLength(0);
   });
+
+  // -------------------------------------------------------------------------
+  // Scenario 6: name filter — a caller pinned to one transport must not be
+  // made to wait on an unrelated one
+  // -------------------------------------------------------------------------
+
+  it('restricts pending entries to the requested transport names', () => {
+    const registry = bus.getContext().transportRegistry;
+    registry.registerTransport(
+      'filter-wanted' as BusTransportKeys,
+      createTrackingTransport({ name: 'filter-wanted', ready: new Promise<void>(() => {}) }),
+    );
+    registry.registerTransport(
+      'filter-unrelated' as BusTransportKeys,
+      createTrackingTransport({ name: 'filter-unrelated', ready: new Promise<void>(() => {}) }),
+    );
+
+    expect(registry.getPendingReady()).toHaveLength(2);
+    expect(registry.getPendingReady(['filter-wanted'])).toHaveLength(1);
+    // An unknown or already-ready name contributes nothing rather than erroring.
+    expect(registry.getPendingReady(['filter-wanted', 'never-registered'])).toHaveLength(1);
+    expect(registry.getPendingReady([])).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Scenario 7: entries carry the transport name so a waiter can report it
+  // -------------------------------------------------------------------------
+
+  it('reports the transport name alongside each pending ready promise', () => {
+    const registry = bus.getContext().transportRegistry;
+    const ready = new Promise<void>(() => {});
+    registry.registerTransport(
+      'named-entry' as BusTransportKeys,
+      createTrackingTransport({ name: 'named-entry', ready }),
+    );
+
+    const entries = registry.getPendingReadyEntries();
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0].name).toBe('named-entry');
+    expect(entries[0].ready).toBe(ready);
+  });
 });

@@ -6,13 +6,7 @@
  * service seam: admission, drain, teardown evidence, then retirement.
  */
 import { describe, expect, it } from 'vitest';
-import {
-  createBusInstance,
-  RequestError,
-  type BusMessage,
-  type BusTransport,
-  type BusTransportRegistry,
-} from '@makaio/bus-core';
+import { createBusInstance, RequestError } from '@makaio/bus-core';
 import { SessionOwnershipStorageSubjects, SessionSubjects, type AdapterSessionClaimRecord } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { MakaioSessionService } from '../session-service.js';
@@ -99,25 +93,28 @@ describe('ownership authority lifecycle', () => {
 
   it('rejects a handler snapshotted before close without reaching storage', async () => {
     const bus = createBusInstance();
-    const transportReady = deferred();
     let storageWrites = 0;
-    const transport: BusTransport = {
-      name: 'ownership-captured-handler',
-      ready: transportReady.promise,
-      send: (async (_message: BusMessage) => true) as BusTransport['send'],
-      onReceive: () => () => undefined,
-      connect: async () => undefined,
-      disconnect: async () => undefined,
-      subscribe: async () => undefined,
-      unsubscribe: async () => undefined,
-    };
-    const transportRegistration = bus
-      .getContext()
-      .transportRegistry.registerTransport('ownership-captured-handler' as keyof BusTransportRegistry, transport);
     const storageCleanup = bus.on(SessionOwnershipStorageSubjects.releaseAgentClaims, (ctx) => {
       storageWrites += 1;
       ctx.setResult({ releasedProviderSessionIds: [], markedClaims: [], claimTokenNotFound: false });
     });
+
+    // The window under test is a handler the bus has already selected whose first
+    // synchronous step runs after close(). A higher-priority handler that suspends
+    // above the authority handler holds the chain open across that boundary, without
+    // depending on any particular dispatch-internal wait.
+    const chainSuspended = deferred();
+    const resumeChain = deferred();
+    const suspendCleanup = bus.on(
+      SessionSubjects.ownership.release,
+      async (ctx) => {
+        chainSuspended.resolve();
+        await resumeChain.promise;
+        await ctx.next();
+      },
+      { priority: 100 },
+    );
+
     const registered = registerSessionOwnershipAuthority({
       bus,
       machineId: 'machine-1',
@@ -130,9 +127,10 @@ describe('ownership authority lifecycle', () => {
         agentId: 'agent-late',
         disposition: 'released',
       });
-      await Promise.resolve();
+      // The chain is now selected and parked immediately above the authority handler.
+      await chainSuspended.promise;
       await registered.ownership.close();
-      transportReady.resolve();
+      resumeChain.resolve();
 
       const refusal = await captured.catch((error: unknown) => error);
       expect(refusal).toBeInstanceOf(RequestError);
@@ -140,8 +138,8 @@ describe('ownership authority lifecycle', () => {
       expect(storageWrites).toBe(0);
     } finally {
       for (const cleanup of registered.cleanups) cleanup();
+      suspendCleanup();
       storageCleanup();
-      transportRegistration.unregister();
     }
   });
 

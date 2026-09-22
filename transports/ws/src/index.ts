@@ -65,6 +65,7 @@ export { WebSocketClientTransport } from './ws-client-transport.js';
 export type {
   WebSocketClientTransportHeartbeatOptions,
   WebSocketClientTransportOptions,
+  WebSocketClientTransportReadinessMode,
   WebSocketClientTransportReconnectOptions,
 } from './ws-client-transport.js';
 

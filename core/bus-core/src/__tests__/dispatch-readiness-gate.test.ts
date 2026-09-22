@@ -100,6 +100,17 @@ interface ReadinessTransportOptions {
    * Defaults to `{ pong: true }`.
    */
   requestResponse?: unknown;
+  /**
+   * When set, `request` messages reject with this error instead of responding,
+   * modelling a peer whose own chain is exhausted.
+   */
+  requestError?: Error;
+  /**
+   * When set, only the FIRST `request` message rejects with this error. Models a
+   * transport whose learned route survived a disconnect: the first send fails at the
+   * connection, a later send on the recovered session succeeds.
+   */
+  firstRequestError?: Error;
 }
 
 /**
@@ -113,10 +124,16 @@ function createReadinessTransport(options: ReadinessTransportOptions): {
   transport: BusTransport;
   sendSpy: ReturnType<typeof vi.fn>;
 } {
-  const { name, ready, requestResponse = { pong: true } } = options;
+  const { name, ready, requestResponse = { pong: true }, requestError, firstRequestError } = options;
 
+  let requestCount = 0;
   const sendSpy = vi.fn(async (message: BusMessage): Promise<unknown> => {
-    if (message.type === 'request') return requestResponse;
+    if (message.type === 'request') {
+      requestCount += 1;
+      if (firstRequestError && requestCount === 1) throw firstRequestError;
+      if (requestError) throw requestError;
+      return requestResponse;
+    }
     return true;
   });
 
@@ -224,8 +241,8 @@ describe('Dispatch readiness gate', () => {
     // that completed subscribe-sync before the first request is made.
     MakaioBus.getContext().remoteRequestHandlers.set('readinessGate.ping', [{ transport: 'gate-s2', priority: 0 }]);
 
-    // The gate fires for all non-local requests with pending transports.
-    // Resolve the ready promise so the gate can proceed to retry dispatch.
+    // With no local handler the pre-seeded remote entry is the whole chain. Resolve
+    // ready so the gate's retry finds it instead of reporting NoHandlerError.
     deferred.resolve();
 
     const result = await MakaioBus.request(GateNamespace.ping, { id: 'remote-pre-seeded' }, { timeout: 2000 });
@@ -435,26 +452,238 @@ describe('Dispatch readiness gate', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Scenario 9: never-settling ready + short timeout → gate times out
+  // Scenario 9: never-settling ready → the wait expires on its own budget and
+  // dispatch proceeds with the routes advertised so far, rather than on the
+  // caller's request timeout
   // -------------------------------------------------------------------------
 
-  it('times out when ready never settles instead of hanging indefinitely', async () => {
-    // The ready promise never resolves — exercises the awaitWithTimeoutAndSignal
-    // timeout path in dispatch that Scenarios 2–8 never reach.
+  it('proceeds on the readiness budget when ready never settles', async () => {
+    // The ready promise never resolves — exercises the readiness-budget expiry
+    // path in dispatch that Scenarios 2–8 never reach.
     const { transport, sendSpy } = createReadinessTransport({
       name: 'gate-s9',
       ready: new Promise<void>(() => {}), // never settles
     });
     addTransport('gate-s9', transport, registrations);
 
-    // Must throw TimeoutError (not NoHandlerError which would indicate the
-    // gate was skipped and dispatch failed immediately without waiting).
-    await expect(MakaioBus.request(GateNamespace.ping, { id: 'never-settling' }, { timeout: 50 })).rejects.toThrow(
-      TimeoutError,
+    const started = Date.now();
+    // NoHandlerError, not TimeoutError: the budget expires, dispatch rebuilds the
+    // merged list, finds nothing, and reports honestly. A readiness hint must
+    // never fail a request, and must never consume the caller's request budget.
+    await expect(
+      MakaioBus.request(GateNamespace.ping, { id: 'never-settling' }, { timeout: 5000, readinessTimeout: 50 }),
+    ).rejects.toThrow(NoHandlerError);
+    const elapsed = Date.now() - started;
+
+    // Bounded by readinessTimeout, nowhere near the 5 s request timeout.
+    expect(elapsed).toBeLessThan(1000);
+
+    // No request should have been sent since no route was ever advertised.
+    expect(getRequestCalls(sendSpy)).toHaveLength(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Scenario 9b: the readiness budget defaults independently of the caller's
+  // request timeout — `timeout: 0` no longer means an unbounded gate
+  // -------------------------------------------------------------------------
+
+  it('bounds the gate by its own budget even when the caller disables the request timeout', async () => {
+    const { transport } = createReadinessTransport({
+      name: 'gate-s9b',
+      ready: new Promise<void>(() => {}), // never settles
+    });
+    addTransport('gate-s9b', transport, registrations);
+
+    // timeout: 0 disables the request deadline entirely. Before the readiness
+    // budget existed this hung forever; now the gate expires and dispatch reports.
+    await expect(
+      MakaioBus.request(GateNamespace.ping, { id: 'no-request-timeout' }, { timeout: 0, readinessTimeout: 50 }),
+    ).rejects.toThrow(NoHandlerError);
+  });
+
+  // -------------------------------------------------------------------------
+  // Scenario 9g: an invalid readiness budget is refused at the request seam
+  // -------------------------------------------------------------------------
+
+  it('rejects a non-finite or negative readinessTimeout with a RangeError', async () => {
+    await expect(
+      MakaioBus.request(GateNamespace.ping, { id: 'negative-budget' }, { timeout: 2000, readinessTimeout: -1 }),
+    ).rejects.toThrow(RangeError);
+
+    await expect(
+      MakaioBus.request(GateNamespace.ping, { id: 'nan-budget' }, { timeout: 2000, readinessTimeout: Number.NaN }),
+    ).rejects.toThrow(RangeError);
+
+    await expect(
+      MakaioBus.request(
+        GateNamespace.ping,
+        { id: 'infinite-budget' },
+        { timeout: 2000, readinessTimeout: Number.POSITIVE_INFINITY },
+      ),
+    ).rejects.toThrow(RangeError);
+  });
+
+  // -------------------------------------------------------------------------
+  // Scenario 9j: the readiness wait is bounded by the request deadline, and no
+  // retry runs after it — dispatch is not cancellable by the caller's p-timeout
+  // -------------------------------------------------------------------------
+
+  it('abandons the readiness wait and the retry once the request deadline has passed', async () => {
+    const { transport, sendSpy } = createReadinessTransport({
+      name: 'gate-s9j',
+      ready: new Promise<void>(() => {}), // never settles
+    });
+    addTransport('gate-s9j', transport, registrations);
+
+    let lateHandlerCalls = 0;
+    let cleanup: (() => void) | undefined;
+    try {
+      // Registered well after the 200 ms deadline. If the gate kept waiting on its
+      // configured 5 s budget it would rebuild the list here and invoke this handler
+      // after the caller was already rejected.
+      timers.push(
+        setTimeout(() => {
+          cleanup = MakaioBus.on(GateNamespace.ping, (ctx) => {
+            lateHandlerCalls += 1;
+            ctx.setResult({ pong: true });
+          });
+        }, 300),
+      );
+
+      const started = Date.now();
+      await expect(
+        MakaioBus.request(GateNamespace.ping, { id: 'deadline-bound' }, { timeout: 200, readinessTimeout: 5000 }),
+      ).rejects.toThrow(TimeoutError);
+      expect(Date.now() - started).toBeLessThan(1000);
+
+      // Outlive the late registration and confirm nothing ran after the deadline.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(lateHandlerCalls).toBe(0);
+      expect(getRequestCalls(sendSpy)).toHaveLength(0);
+    } finally {
+      cleanup?.();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Scenario 9q: a wrapper must see a downstream transport failure, and must not
+  // be able to suppress it by setting its own result afterwards
+  // -------------------------------------------------------------------------
+
+  it('rejects ctx.next() on a downstream transport failure so a wrapper can compensate', async () => {
+    const transportFailure = new Error('gate-s9q exploded');
+    const { transport } = createReadinessTransport({ name: 'gate-s9q', requestError: transportFailure });
+    addTransport('gate-s9q', transport, registrations);
+
+    MakaioBus.getContext().remoteRequestHandlers.set('readinessGate.ping', [{ transport: 'gate-s9q', priority: 0 }]);
+
+    let compensated = false;
+    const cleanup = MakaioBus.on(
+      GateNamespace.ping,
+      async (ctx) => {
+        try {
+          await ctx.next();
+        } catch {
+          compensated = true;
+          // Suppression attempt: the wrapper swallows the failure and answers anyway.
+          ctx.setResult({ pong: true });
+        }
+      },
+      { priority: 100 },
     );
 
-    // No request should have been sent since the gate never passed.
-    expect(getRequestCalls(sendSpy)).toHaveLength(0);
+    try {
+      // The rollback ran, and the failure still reaches the caller.
+      await expect(
+        MakaioBus.request(GateNamespace.ping, { id: 'wrapper-compensates' }, { timeout: 2000 }),
+      ).rejects.toThrow('gate-s9q exploded');
+      expect(compensated).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Scenario 9s: the deadline is enforced at every chain advancement, not once
+  // per pass — a slow handler must not be able to start the next one's work
+  // -------------------------------------------------------------------------
+
+  it('does not advance the chain to a later handler once the deadline has passed', async () => {
+    let laterHandlerRuns = 0;
+    const slow = MakaioBus.on(
+      GateNamespace.ping,
+      async (ctx) => {
+        // Overruns the caller's deadline, then tries to advance anyway.
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        await ctx.next();
+      },
+      { priority: 100 },
+    );
+    const later = MakaioBus.on(GateNamespace.ping, (ctx) => {
+      laterHandlerRuns += 1;
+      ctx.setResult({ pong: true });
+    });
+
+    try {
+      await expect(
+        MakaioBus.request(GateNamespace.ping, { id: 'deadline-mid-chain' }, { timeout: 40 }),
+      ).rejects.toThrow(TimeoutError);
+
+      // Give the overrunning handler time to finish and attempt its next().
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(laterHandlerRuns).toBe(0);
+    } finally {
+      slow();
+      later();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Scenario 9d: an explicit transport allowlist keeps the gate armed even when
+  // a local handler is reachable — the caller pinned routing to that peer
+  // -------------------------------------------------------------------------
+
+  it('keeps the gate armed for an explicit transport allowlist despite a local handler', async () => {
+    const deferred = createDeferred();
+    const { transport, sendSpy } = createReadinessTransport({
+      name: 'gate-s9d',
+      ready: deferred.promise,
+    });
+    addTransport('gate-s9d', transport, registrations);
+
+    // A local handler exists but must not short-circuit the pinned transport.
+    let localHandlerCalls = 0;
+    const cleanup = MakaioBus.on(GateNamespace.ping, (ctx) => {
+      localHandlerCalls += 1;
+      ctx.setResult({ pong: false });
+    });
+
+    try {
+      // setTimeout is intentional: see Scenario 4 comment — dispatch must already
+      // be suspended in the gate before the deferred resolves.
+      timers.push(
+        setTimeout(() => {
+          MakaioBus.getContext().remoteRequestHandlers.set('readinessGate.ping', [
+            { transport: 'gate-s9d', priority: 10 },
+          ]);
+          deferred.resolve();
+        }, 5),
+      );
+
+      const result = await MakaioBus.request(
+        GateNamespace.ping,
+        { id: 'allowlist-pinned' },
+        { timeout: 2000, transports: ['gate-s9d' as keyof BusTransportRegistry] },
+      );
+
+      // The pinned transport's higher-priority route ran first, so the gate did
+      // wait for it rather than letting the local handler answer.
+      expect(result).toEqual({ pong: true });
+      expect(getRequestCalls(sendSpy)).toHaveLength(1);
+      expect(localHandlerCalls).toBe(0);
+    } finally {
+      cleanup();
+    }
   });
 
   // -------------------------------------------------------------------------

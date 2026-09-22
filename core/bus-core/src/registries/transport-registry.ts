@@ -23,6 +23,19 @@ import { propagateSubscribe, propagateUnsubscribe, purgeRemoteHandlersForTranspo
 export interface BusTransportRegistry extends Record<string, BusTransport> {}
 export type BusTransportKeys = keyof BusTransportRegistry;
 
+/**
+ * One transport whose `ready` promise has not settled yet.
+ *
+ * The name travels with the promise so a caller gated on readiness can report
+ * which transport it is waiting for.
+ */
+export interface PendingReadyEntry {
+  /** Registry key of the transport. */
+  name: string;
+  /** The transport session's unresolved `ready` promise. */
+  ready: Promise<void>;
+}
+
 interface RegisteredTransport {
   transport: BusTransport;
   unsubscribe: () => void;
@@ -148,6 +161,34 @@ const handleEventMessage = async (
  * @param message - The request message to handle
  * @param receiveContext - Trusted context supplied by the receiving transport
  */
+/**
+ * Anchor an inbound request's deadline against the receiving node's clock.
+ *
+ * Only the relative `timeout` is used. The wire `deadline` is an absolute instant on
+ * the *sender's* clock and is deliberately never compared against ours: a sender whose
+ * clock trails by more than the timeout would hand us an already-expired instant and we
+ * would reject a request that still has its full, clock-independent budget. The wire
+ * field stays on the message for the sender's own bookkeeping; receivers do not consume it.
+ * @param timeout - Remaining relative budget in milliseconds; `0` means unlimited
+ * @returns Local absolute deadline, or `undefined` when the request is unbounded
+ */
+export const anchorRequestDeadline = (timeout: number): number | undefined =>
+  timeout > 0 ? Date.now() + timeout : undefined;
+
+/**
+ * Validate an inbound hop's readiness budget.
+ *
+ * A peer controls this value, so it is validated on ingress exactly like `timeout`:
+ * an unusable budget is dropped in favour of the default rather than being allowed to
+ * reach the timeout primitive, where it would fail a request the gate must never fail.
+ * @param readinessTimeout - Budget carried by the message, if any
+ * @returns The budget when usable, otherwise `undefined` to use the default
+ */
+const resolveInboundReadinessTimeout = (readinessTimeout: number | undefined): number | undefined => {
+  if (readinessTimeout === undefined) return undefined;
+  return Number.isFinite(readinessTimeout) && readinessTimeout >= 0 ? readinessTimeout : undefined;
+};
+
 const handleRequestMessage = async (
   context: MakaioBusContext,
   _sourceTransportName: BusTransportKeys,
@@ -189,7 +230,10 @@ const handleRequestMessage = async (
       correlationId: message.correlationId,
       messageId: message.messageId,
       timeout: relayTimeout,
-      deadline: message.deadline,
+      // Anchored from the relative budget alone — `message.deadline` belongs to the
+      // sender's clock and is never compared against ours.
+      deadline: anchorRequestDeadline(relayTimeout),
+      readinessTimeout: resolveInboundReadinessTimeout(message.readinessTimeout),
       // Start dispatch from the cursor sent by the originating node (if any).
       priority: message.priority,
       transport: receiveContext,
@@ -410,6 +454,21 @@ const createTransportRegistry = (context: MakaioBusContext) => {
   /** Unresolved `ready` promises keyed by transport name; used for dispatch-level gating. */
   const pendingReady = new Map<BusTransportKeys, Promise<void>>();
 
+  /**
+   * Snapshot the currently unresolved `ready` entries, optionally filtered.
+   * @param names - Optional transport names to restrict the snapshot to
+   * @returns Pending entries in registration order
+   */
+  const collectPendingReady = (names?: ReadonlyArray<string>): PendingReadyEntry[] => {
+    const wanted = names === undefined ? undefined : new Set(names);
+    const entries: PendingReadyEntry[] = [];
+    for (const [name, ready] of pendingReady) {
+      if (wanted !== undefined && !wanted.has(String(name))) continue;
+      entries.push({ name: String(name), ready });
+    }
+    return entries;
+  };
+
   const handleIncomingMessage = async (
     transportName: BusTransportKeys,
     transport: BusTransport,
@@ -526,13 +585,30 @@ const createTransportRegistry = (context: MakaioBusContext) => {
     },
 
     /**
-     * Return all unresolved transport `ready` promises for dispatch-level gating.
+     * Return unresolved transport `ready` entries for dispatch-level gating.
+     *
+     * Entries carry the transport name alongside the promise so a caller waiting
+     * on readiness can report which transport it is waiting for.
+     * @param names - Optional transport names to restrict the result to. Omit to
+     *   report every pending transport; names that are absent or already ready
+     *   contribute nothing.
+     * @returns Pending entries (empty when all requested transports are ready)
+     */
+    getPendingReadyEntries(names?: ReadonlyArray<string>): PendingReadyEntry[] {
+      return collectPendingReady(names);
+    },
+
+    /**
+     * Return unresolved transport `ready` promises for dispatch-level gating.
      *
      * Use `Promise.all(registry.getPendingReady())` to await full initialization.
-     * @returns Array of pending ready promises (empty when all transports are ready)
+     * Prefer `getPendingReadyEntries()` when the caller needs to name the
+     * transports it is waiting for.
+     * @param names - Optional transport names to restrict the result to
+     * @returns Array of pending ready promises (empty when all are ready)
      */
-    getPendingReady(): Promise<void>[] {
-      return Array.from(pendingReady.values());
+    getPendingReady(names?: ReadonlyArray<string>): Promise<void>[] {
+      return collectPendingReady(names).map((entry) => entry.ready);
     },
 
     /**

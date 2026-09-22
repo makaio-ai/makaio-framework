@@ -156,7 +156,7 @@ describe('RequestContext.deadline', () => {
     expect(deadlines[0]).toBe(deadlines[1]);
   });
 
-  it('preserves one absolute deadline through local middleware and a remote terminal handler', async () => {
+  it("anchors the receiving hop's deadline locally rather than adopting the sender's instant", async () => {
     let wireDeadline: number | undefined;
     const pair = createBidirectionalTransportPair({
       label: 'deadline-remote-terminal',
@@ -192,8 +192,17 @@ describe('RequestContext.deadline', () => {
       await busA.request(DeadlineSubjects.echo, { value: 'remote' }, { timeout: 5000 });
 
       expect(localDeadline).toBeDefined();
+      // The sender still mints its own deadline and puts it on the wire.
       expect(wireDeadline).toBe(localDeadline);
-      expect(remoteDeadline).toBe(localDeadline);
+
+      // The receiver does NOT adopt it: that instant belongs to the sender's clock, and
+      // a trailing clock would expire a request that still has its full budget. It
+      // anchors from the relative `timeout`, which the sender recomputes from its
+      // remaining deadline at send time — so the receiver's deadline lands at the
+      // sender's plus the transit latency, which no shared clock can measure away.
+      expect(remoteDeadline).toBeDefined();
+      expect(remoteDeadline!).toBeGreaterThanOrEqual(localDeadline!);
+      expect(remoteDeadline!).toBeLessThan(localDeadline! + 1_000);
     } finally {
       localCleanup();
       remoteCleanup();

@@ -23,7 +23,12 @@ export type { NamespaceRegistrationOptions } from '@makaio/core';
 
 // Transport registry (orthogonal responsibility)
 export { createTransportRegistry } from './transport-registry.js';
-export type { BusTransportKeys, BusTransportRegistry, TransportRegistry } from './transport-registry.js';
+export type {
+  BusTransportKeys,
+  BusTransportRegistry,
+  PendingReadyEntry,
+  TransportRegistry,
+} from './transport-registry.js';
 
 // Centralized advertised-state computation
 export {

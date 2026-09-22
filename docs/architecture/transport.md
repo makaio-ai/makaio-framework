@@ -60,12 +60,15 @@ registry for priority-cursor dispatch. Event-only subscriptions are advertised
 with an empty priority list and can be used by multiplexing transports, such as
 the WebSocket server transport, for per-client delivery filtering.
 
-**Readiness** — `ready` is a Promise that resolves after the subscribe-sync
-handshake completes. `bus.connect()` awaits this by default. If a caller uses
-`connect({ awaitReady: false })`, request dispatch performs a bounded lazy wait
-for pending ready promises before building the remote handler chain. `isReady()`
-is the hot-path synchronous check used to skip transports whose connection or
-auth session is not currently usable.
+**Readiness** — `ready` is a Promise that resolves once the transport reaches the
+milestone it declares. For a peer that participates in bus routing that milestone
+is the subscribe-sync handshake; a transport whose peer only forwards frames must
+declare a milestone it can actually reach, such as its own session handshake.
+`bus.connect()` awaits `ready` by default. If a caller uses
+`connect({ awaitReady: false })`, request dispatch waits once for pending ready
+promises before building the remote handler chain, bounded by its own readiness
+budget. `isReady()` is the hot-path synchronous check used to skip transports
+whose connection or auth session is not currently usable.
 
 ## Shipped Transports
 
@@ -271,11 +274,26 @@ Both sides push their full advertised handler state, then send
 peer's sync-complete arrives. With the default `bus.connect()` behavior, callers
 start dispatch only after this readiness promise resolves. If a caller opts into
 `connect({ awaitReady: false })`, request dispatch checks the registry's pending
-ready promises, waits within the caller's timeout/signal budget, then rebuilds
-the remote handler chain before dispatching.
+ready promises and rebuilds the remote handler chain before dispatching.
 
 This prevents a race condition where a request would be evaluated before the
 remote side has advertised its handlers, resulting in a false `NoHandlerError`.
+
+That wait happens once, before the chain is built, and dispatch then acts once —
+it never retries or replays:
+
+- It runs whenever an eligible transport is pending, whether or not a local handler
+  could answer. A pending peer may yet advertise a *higher-priority* route, and the
+  cross-transport priority contract says that route runs first. Local-only subjects
+  (and `transports: []`) never wait; an explicit transport allowlist narrows the wait
+  to the named peers.
+- It runs on `RequestOptions.readinessTimeout` (default `DEFAULT_READINESS_TIMEOUT_MS`,
+  1.5 s), not on the caller's request timeout, and is additionally clamped by the
+  request deadline. On expiry dispatch proceeds with the routes advertised so far and
+  logs one debug diagnostic naming the transports still pending; deadline expiry raises
+  `TimeoutError`. Caller cancellation still propagates.
+- The cost is therefore at most one budget per request during a transport's connect
+  window, and nothing once transports have settled.
 
 ## Advertised State and Routing
 
@@ -545,11 +563,15 @@ await bus.connect();
 - **`subscribe-sync-complete`** — After sending your initial handler set via
   `subscribe()` calls, send a `{ type: 'subscribe-sync-complete' }` message.
   Resolve your `ready` promise when you receive one from the remote peer.
+  Only resolve on that frame when the peer is a bus participant that sends it.
+  A transport speaking to a plain message relay must resolve `ready` on a
+  milestone it owns instead, so the promise reports a real state rather than
+  staying pending for the connection's lifetime.
 
 - **`transport.ready` / `isReady()`** — `bus.connect()` awaits `ready` by
-  default, and request dispatch performs a bounded lazy wait if readiness is
-  still pending. Implement `isReady()` when the transport has a cheap
-  connection/auth check that should skip sends on the hot path.
+  default, and request dispatch performs a lazy wait on its own readiness
+  budget if readiness is still pending. Implement `isReady()` when the transport
+  has a cheap connection/auth check that should skip sends on the hot path.
 
 - **Error serialization** — Transport errors must be serializable. Use
   `serializeTransportError()` from `@makaio/bus-core` to convert Error objects
