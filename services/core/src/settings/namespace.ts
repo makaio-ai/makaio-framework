@@ -32,5 +32,5 @@ export const SubagentTemplateSettingsSubjects = SubagentTemplateSettingsNamespac
 
 // ── Re-exported bus subjects and data contracts for external consumers ─────────
 
-export { AdapterInfoSchema };
+export { AdapterInfoSchema, SettingsSchemas };
 export { ExtensionConfigStorageSubjects };

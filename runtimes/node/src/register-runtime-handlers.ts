@@ -1,5 +1,12 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { AIModel, EntityUIConfig, ProtocolEndpoints, ProtocolId } from '@makaio/contracts';
+import type {
+  AIModel,
+  EntityUIConfig,
+  ExtensionOperatorConfigEntry,
+  ProtocolEndpoints,
+  ProtocolId,
+} from '@makaio/contracts';
+import type { ExtensionConfigResolution } from '@makaio/kernel';
 import type { LoadedAdapter, AdapterInstance } from '@makaio/subsystem-adapter';
 import {
   resolveAdapterRuntimeSnapshot,
@@ -12,6 +19,7 @@ import { DefinitionSubjects } from '@makaio/services-core/definition';
 import { ProviderRuntimeSubjects } from '@makaio/services-core/provider-runtime';
 import { SettingsSubjects } from '@makaio/services-core/settings/namespace';
 import { ProviderStorageSubjects, type ProviderRecord } from '@makaio/services-core/settings/storage';
+import { isRecord } from '@makaio/utils';
 import { z } from 'zod';
 
 type LoadedProviderDefinition = LoadedAdapter['providers'][number];
@@ -150,6 +158,46 @@ function toProviderRecord(provider: LoadedAdapter['providers'][number]): Provide
   };
 }
 
+/**
+ * Build an operator provenance snapshot for the config schema response.
+ *
+ * The owned key set comes from the operator entry itself, so it is reported
+ * whenever an operator source supplies config — resolution may fail, but the
+ * operator layer still shadows those keys at merge time, so they must stay
+ * locked in the UI.
+ *
+ * Values are reported separately and only when the extension's configuration
+ * actually resolved. They are then the *effective* values — the ones the
+ * extension receives, after every schema transform (e.g. `.trim()`). Raw
+ * operator values are never emitted: the field carries no marker
+ * distinguishing the two, so a consumer that received raw values for some
+ * extensions and resolved values for others could not tell them apart and
+ * would render an operator-owned field differently depending on state.
+ *
+ * A resolution that fell back to schema defaults is treated the same as no
+ * resolution at all. Its record holds the schema's own defaults with every
+ * configuration layer discarded, so reporting it would label schema defaults
+ * as operator-managed values the extension never received.
+ * @param operatorEntry - Raw operator config entry for the extension.
+ * @param resolution - Config resolution for the extension, or `undefined`.
+ * @returns Provenance object, or `undefined` when there is no operator entry
+ *   or the entry is a failure rather than a config entry.
+ */
+function buildOperatorProvenance(
+  operatorEntry: ExtensionOperatorConfigEntry | undefined,
+  resolution: ExtensionConfigResolution | undefined,
+): { source: string; keys: string[]; values?: Record<string, unknown> } | undefined {
+  if (operatorEntry?.kind !== 'config') return undefined;
+  const keys = Object.keys(operatorEntry.config);
+  const resolved = resolution && !resolution.usedSchemaDefaults ? resolution.config : undefined;
+  if (!isRecord(resolved)) return { source: operatorEntry.source, keys };
+  return {
+    source: operatorEntry.source,
+    keys,
+    values: Object.fromEntries(keys.filter((key) => key in resolved).map((key) => [key, resolved[key]])),
+  };
+}
+
 // NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines-per-function: ["error", { "max": 190 }] */
 /**
@@ -161,6 +209,17 @@ function toProviderRecord(provider: LoadedAdapter['providers'][number]): Provide
  * @param getLoadedAdapters - Getter for current loaded adapter definitions.
  * @param getAdapterInstances - Getter for current adapter instances.
  * @param getExtension - Coordinator lookup for extension config schemas.
+ * @param getExtensionOperatorConfig - Accessor for the operator config entry for a
+ *   given extension. It supplies the set of operator-owned keys; their values
+ *   come from `getResolvedExtensionConfig`. Extensions without a `configSchema`
+ *   never receive provenance (kernel drops the operator layer in that case).
+ * @param getResolvedExtensionConfig - Accessor returning the extension's config
+ *   resolution, independent of its lifecycle state. Its config is what the
+ *   config schema response reports for operator-owned keys, so every schema
+ *   transform (e.g. `.trim()`) is reflected. When it is omitted, yields no
+ *   record, or reports that resolution fell back to schema defaults,
+ *   `operatorConfig` still reports the owned keys but carries no `values`
+ *   rather than values the extension never received.
  * @returns Cleanup function that unregisters all runtime handlers.
  */
 export function registerRuntimeHandlers(
@@ -168,6 +227,8 @@ export function registerRuntimeHandlers(
   getLoadedAdapters: () => readonly LoadedAdapter[],
   getAdapterInstances: () => ReadonlyMap<string, AdapterInstance>,
   getExtension?: (name: string) => { configSchema?: z.ZodType; uiConfig?: EntityUIConfig } | undefined,
+  getExtensionOperatorConfig?: (extensionName: string) => ExtensionOperatorConfigEntry | undefined,
+  getResolvedExtensionConfig?: (name: string) => ExtensionConfigResolution | undefined,
 ): () => void {
   const cleanups: Array<() => void> = [];
 
@@ -207,8 +268,18 @@ export function registerRuntimeHandlers(
             return;
           }
 
+          const operatorEntry = getExtensionOperatorConfig?.(payload.extensionName);
+          // Only expose provenance for successfully resolved config entries with
+          // a schema — kernel resolve-config drops the operator layer without a
+          // schema, so there is nothing to lock in that case. Failure entries are
+          // already surfaced as extension activation errors.
+          const operatorConfig = buildOperatorProvenance(
+            operatorEntry,
+            getResolvedExtensionConfig?.(payload.extensionName),
+          );
+
           const schema = stripMetaSchema(z.toJSONSchema(pkg.configSchema));
-          setResult({ hasSchema: true, schema, uiConfig: pkg.uiConfig ?? null });
+          setResult({ hasSchema: true, schema, uiConfig: pkg.uiConfig ?? null, operatorConfig });
         }),
       );
     }

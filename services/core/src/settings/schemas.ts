@@ -129,10 +129,68 @@ const AdapterGetConfigSchemaResponseSchema = z.object({
 });
 
 const ExtensionGetConfigSchemaRequestSchema = z.object({ extensionName: z.string() });
+
+/**
+ * Snapshot of the operator-owned configuration layer exposed on schema responses.
+ *
+ * Present when an operator configuration source supplies values for the
+ * extension. The UI layer uses this to render operator-owned fields as
+ * read-only and to show provenance text identifying the source.
+ *
+ * The owned key set and the effective values are two separate facts and are
+ * carried in two separate fields. Which keys the operator owns is always
+ * knowable from the operator entry alone; which values the extension ends up
+ * receiving is only knowable once its configuration resolves. Locking is
+ * therefore driven exclusively by `keys`, and `values` is a display
+ * convenience that may be absent.
+ */
+const ExtensionOperatorConfigSnapshotSchema = z.object({
+  /**
+   * Human-readable label identifying the operator configuration source.
+   *
+   * Opaque: it may be a file path, a secret-store path, or any other label.
+   * Reproduced verbatim in provenance hint text shown next to locked fields.
+   */
+  source: z.string(),
+  /**
+   * Config keys owned by the operator configuration source.
+   *
+   * Authoritative for locking: a consumer renders exactly these fields as
+   * read-only. Always present whenever an operator source supplies config for
+   * the extension, whether or not its configuration could be resolved — an
+   * operator-owned field must never become editable just because resolution
+   * failed, since the operator layer would silently shadow the edit.
+   */
+  keys: z.array(z.string()),
+  /**
+   * Effective values for the operator-owned keys of this extension.
+   *
+   * Absent when the extension's configuration could not be resolved; a
+   * consumer then locks the fields listed in `keys` without a value to show.
+   * When present, the operator layer has the highest precedence in the merged
+   * config, so these shadow whatever the stored layer holds for owned keys.
+   * They are the values the extension actually receives — the merged config
+   * after the extension's config schema has parsed it, so schema transforms
+   * such as `.trim()` are already applied. `save()` writes the stored layer
+   * verbatim, so the stored record retains its own values for operator-owned
+   * keys; when the operator layer is later removed, those stored values serve
+   * as the fallback.
+   */
+  values: z.record(z.string(), z.unknown()).optional(),
+});
+
 const ExtensionGetConfigSchemaResponseSchema = z.object({
   hasSchema: z.boolean(),
   schema: JsonSchemaType.nullable(),
   uiConfig: EntityUIConfigSchema.nullable(),
+  /**
+   * Operator-supplied config provenance for this extension.
+   *
+   * Absent when no operator configuration source supplies values for this
+   * extension. The UI layer uses this to mark owned keys as disabled and show
+   * a provenance hint.
+   */
+  operatorConfig: ExtensionOperatorConfigSnapshotSchema.optional(),
 });
 
 // ── Aggregate ───────────────────────────────────────────────────────────────

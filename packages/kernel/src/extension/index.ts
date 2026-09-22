@@ -10,4 +10,5 @@ export type {
 export type { ExtensionCoordinatorOptions } from './types.js';
 export { ExtensionCoordinator } from './extension-coordinator.js';
 export { ExtensionOperatorConfigError } from './resolve-config.js';
+export type { ExtensionConfigResolution } from './resolve-config.js';
 export { coalesceExtensionOverrides, filterEligibleExtensions } from './extension-selection.js';

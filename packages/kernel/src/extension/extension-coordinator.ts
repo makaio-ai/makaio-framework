@@ -27,7 +27,9 @@ import {
   buildExtensionContext,
   type ExtensionContextHost,
   resolveExtensionEntryConfig,
+  resolveExtensionEntryConfigOutcome,
 } from './extension-context-builder.js';
+import type { ExtensionConfigResolution } from './resolve-config.js';
 import { runExtensionMigrations, type ExtensionMigrationRunner } from './extension-migration-runner.js';
 import { runExtensionHealthCheck, type ExtensionHealthHost } from './extension-health-runner.js';
 import { collectExtensionSurfaces, extensionsWithHttp } from './extension-surface-collector.js';
@@ -445,6 +447,38 @@ export class ExtensionCoordinator {
    */
   public getExtension(name: string): KernelMakaioExtension | undefined {
     return this.entries.get(name)?.pkg;
+  }
+
+  /**
+   * Return the schema-parsed effective config for a loaded extension.
+   *
+   * Runs the same resolution path the kernel uses at activation, in `'observe'`
+   * mode, so every schema transform (e.g. `.trim()`) is reflected in the
+   * returned values. This is the correct source for building provenance
+   * snapshots — never the raw operator layer, which may not match what the
+   * extension actually received.
+   *
+   * Deliberately state-neutral. Resolution composes the configuration layers
+   * and nothing else: it needs no live service, no context, and no running
+   * lifecycle, so a disabled, stopped, failed, or not-yet-started extension
+   * resolves exactly like a running one. A settings surface is precisely where
+   * an extension gets toggled off, and it must not start reporting different
+   * values the moment it does.
+   * Reports how the configuration was reached, because the two outcomes are
+   * not interchangeable for a settings surface: when the merged configuration
+   * is rejected, resolution falls back to the schema's own defaults with every
+   * layer discarded, and reporting those as effective values would attribute
+   * schema defaults to whichever layer supplied them.
+   * @param name - Extension name.
+   * @returns The resolution, or `undefined` when no extension is loaded under
+   *   `name`. Its `config` is `undefined` when the extension declares no
+   *   `configSchema`, or when the merged configuration is rejected by the
+   *   schema and the schema-default fallback parse fails as well.
+   */
+  public getResolvedConfig(name: string): ExtensionConfigResolution | undefined {
+    const entry = this.entries.get(name);
+    if (!entry) return undefined;
+    return resolveExtensionEntryConfigOutcome(this.createExtensionContextHost(), name, entry, 'observe');
   }
 
   /**

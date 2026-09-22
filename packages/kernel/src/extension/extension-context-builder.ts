@@ -1,7 +1,11 @@
 import path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionOperatorConfigSource, ExtensionToken } from '@makaio/contracts';
-import { type ExtensionConfigResolutionMode, resolveConfig } from './resolve-config.js';
+import {
+  type ExtensionConfigResolution,
+  type ExtensionConfigResolutionMode,
+  resolveConfigOutcome,
+} from './resolve-config.js';
 import type { ExtensionEntry, KernelExtensionContext } from './types.js';
 
 /**
@@ -105,6 +109,34 @@ export function resolveExtensionEntryConfig(
   entry: ExtensionEntry,
   mode: ExtensionConfigResolutionMode,
 ): unknown {
+  return resolveExtensionEntryConfigOutcome(host, name, entry, mode).config;
+}
+
+/**
+ * Resolve config for an extension entry and report how the result was reached.
+ *
+ * The same resolution as {@link resolveExtensionEntryConfig} — same layers,
+ * same containment of a throwing `loadConfig`, same mode semantics — returning
+ * the full {@link ExtensionConfigResolution} instead of only its config. A
+ * caller that reports configuration to a human needs the distinction: after a
+ * rejected merge, the config object is the schema's defaults with every layer
+ * discarded, which is not what the extension is configured with.
+ * @param host - Coordinator surface providing config loading.
+ * @param name - Extension name used in validation errors.
+ * @param entry - Extension entry whose config is being resolved.
+ * @param mode - `'activate'` when the caller can fail the extension in response,
+ *   `'observe'` when it is only reading.
+ * @returns The resolution for this entry.
+ * @throws ExtensionOperatorConfigError In `'activate'` mode, when the operator
+ *   layer holds an unusable entry for this extension, or is what makes the
+ *   configuration it produces fail the extension's config schema.
+ */
+export function resolveExtensionEntryConfigOutcome(
+  host: ExtensionContextHost,
+  name: string,
+  entry: ExtensionEntry,
+  mode: ExtensionConfigResolutionMode,
+): ExtensionConfigResolution {
   let storedConfig: Record<string, unknown> | undefined;
   if (entry.pkg.configSchema) {
     try {
@@ -113,7 +145,7 @@ export function resolveExtensionEntryConfig(
       console.error(`[ExtensionCoordinator] loadConfig threw for "${name}":`, err);
     }
   }
-  return resolveConfig({
+  return resolveConfigOutcome({
     name,
     configSchema: entry.pkg.configSchema,
     configDefaults: entry.configDefaults,
