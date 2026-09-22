@@ -135,12 +135,13 @@ export { CapabilityTokenSchema } from './capability-token.js';
 export type { CapabilityToken, CapabilityTokenMap } from './capability-token.js';
 export type { ExtensionConfigProvider } from './extension-config-provider.js';
 export {
-  decodeExtensionOperatorConfigName,
-  encodeExtensionOperatorConfigName,
+  decodeExtensionNamePathSegment,
+  encodeExtensionNameAsPathSegment,
+  EXTENSION_DATA_DIR_SEGMENT,
+  EXTENSION_NAME_PATH_SEGMENT_UNRESERVED,
   EXTENSION_OPERATOR_CONFIG_FILE_SUFFIX,
-  EXTENSION_OPERATOR_CONFIG_NAME_UNRESERVED,
   MAX_OPERATOR_CONFIG_FILE_NAME_BYTES,
-} from './extension-operator-config-name.js';
+} from './extension-name-path-segment.js';
 export type {
   ExtensionOperatorConfigEntry,
   ExtensionOperatorConfigFailure,

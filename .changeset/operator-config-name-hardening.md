@@ -5,9 +5,9 @@
 
 Harden the operator extension config file-name codec.
 
-`encodeExtensionOperatorConfigName` now escapes a **leading dot** as `%2E`, so an
+`encodeExtensionNameAsPathSegment` now escapes a **leading dot** as `%2E`, so an
 extension named `.hidden` is addressable as `%2Ehidden.json` instead of a hidden
-file, and a canonical stem never begins with a dot. It also answers `undefined`
+file, and a canonical segment never begins with a dot. It also answers `undefined`
 when the resulting `<stem>.json` would exceed the new
 `MAX_OPERATOR_CONFIG_FILE_NAME_BYTES` (255), the per-component limit percent-
 encoding can blow past — `"ü".repeat(43)` encodes to 258 characters and used to

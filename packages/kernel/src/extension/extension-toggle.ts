@@ -3,6 +3,7 @@ import { ExtensionSubjects } from '../observability/extension-namespace.js';
 import { ServiceSkipError } from '../service-skip-error.js';
 import {
   buildExtensionContext,
+  checkExtensionNameAddressable,
   type ExtensionContextHost,
   resolveExtensionEntryConfig,
 } from './extension-context-builder.js';
@@ -144,6 +145,21 @@ async function enableExtension(host: ToggleHost, name: string, entry: ExtensionE
   if (inactiveDeps.length > 0) {
     entry.error = `Required dependencies not active: ${inactiveDeps.map((d) => d.name).join(', ')}`;
     console.error(`[ExtensionCoordinator] Cannot re-enable "${name}":`, entry.error);
+    transitionPackageEntry(host.bus, entry, 'failed');
+    return false;
+  }
+
+  // Re-validate name addressability eagerly, mirroring `startExtensionEntry`'s
+  // boot-time check via the same `checkExtensionNameAddressable` predicate. A
+  // "bare" extension (no `create`, no `storage.registerHandlers`, and no
+  // matching contribution processor) never calls `buildExtensionContext` below,
+  // so without this check it would reach `active` with an unencodable name.
+  // A later `forEachActiveExtension`/`forExtension` call would then throw
+  // outside per-extension isolation.
+  const addressabilityError = checkExtensionNameAddressable(entry.identity.extensionName);
+  if (addressabilityError !== undefined) {
+    entry.error = addressabilityError;
+    console.error(`[ExtensionCoordinator] Cannot re-enable "${name}":`, addressabilityError);
     transitionPackageEntry(host.bus, entry, 'failed');
     return false;
   }

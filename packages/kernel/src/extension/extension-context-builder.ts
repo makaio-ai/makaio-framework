@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
+import { EXTENSION_DATA_DIR_SEGMENT, encodeExtensionNameAsPathSegment } from '@makaio/contracts';
 import type { ExtensionOperatorConfigSource, ExtensionToken } from '@makaio/contracts';
 import {
   type ExtensionConfigResolution,
@@ -156,12 +157,55 @@ export function resolveExtensionEntryConfigOutcome(
 }
 
 /**
+ * Check whether an extension's name can be encoded as a filesystem path segment.
+ *
+ * This is the single source of truth for the eager "addressable data
+ * directory" pre-flight check shared by every seam that can move an extension
+ * entry toward `active` state without necessarily calling
+ * {@link buildExtensionContext} first: `startExtensionEntry`'s pre-flight check
+ * during boot, and `enableExtension`'s pre-flight check during
+ * `kernel:extension.setEnabled(true)`. Both call sites go through this one
+ * predicate and message, so the boot path and the re-enable path cannot drift
+ * apart. {@link buildExtensionContext} keeps its own equivalent check (it also
+ * needs the encoded segment value, not just a pass/fail) as a defense-in-depth
+ * throw for callers that reach it directly, such as `forEachActiveExtension`
+ * and `forExtension`.
+ * @param extensionName - Extension name to validate.
+ * @returns An error message describing why the name is unaddressable, or
+ *   `undefined` when the name encodes to a valid path segment.
+ */
+export function checkExtensionNameAddressable(extensionName: string): string | undefined {
+  if (encodeExtensionNameAsPathSegment(extensionName) !== undefined) return undefined;
+  return (
+    `Extension "${extensionName}" cannot be encoded as a filesystem path segment ` +
+    `and therefore has no addressable data directory. ` +
+    `Valid extension names must be non-empty, must not be '.' or '..', must be well-formed ` +
+    `Unicode, must not be a reserved Windows device basename (CON, NUL, COM1, etc.), ` +
+    `and must encode within the filesystem component length limit.`
+  );
+}
+
+/**
  * Build a {@link NodeExtensionContext} for extension create/storage lifecycles.
+ *
+ * The `dataDir` is resolved to `<makaioHome>/data/<encoded>` where `<encoded>`
+ * is the percent-encoded form of the extension name produced by
+ * {@link encodeExtensionNameAsPathSegment}. Encoding keeps each extension in a
+ * single directory component that is safe on every supported filesystem and
+ * cannot collide with reserved top-level names under the Makaio home.
+ *
+ * An unencodable name (empty, a dot segment, non-well-formed Unicode, or an
+ * encoded form too long for a filesystem component) is a hard error: the
+ * manifest schema makes these names unreachable in practice, but if one
+ * somehow arrives the extension cannot be given a unique, safe `dataDir` and
+ * must not start. Call sites isolate the failure per-extension (the entry
+ * transitions to `failed`; only critical extensions escalate to boot abort).
  * @param host - Coordinator surface providing bus, platform context, and service lookup.
  * @param entry - Extension entry receiving the context.
  * @param config - Optional resolved config.
  * @returns Full extension context.
  * @throws Error when `extensionContextBase` is absent.
+ * @throws Error when the extension name cannot be encoded as a filesystem path segment.
  */
 export function buildExtensionContext(
   host: ExtensionContextHost,
@@ -174,11 +218,31 @@ export function buildExtensionContext(
         'Provide it via the constructor.',
     );
   }
+  const { extensionName } = entry.identity;
+  const segment = encodeExtensionNameAsPathSegment(extensionName);
+  if (segment === undefined) {
+    // startExtensionEntry and enableExtension both validate name addressability
+    // eagerly (via checkExtensionNameAddressable) before any lifecycle
+    // transition, so this throw is the safety net for callers that skip both
+    // start paths (e.g. direct coordinator construction in tests). It is NOT
+    // the primary enforcement point — do not remove either eager check on the
+    // assumption that this throw covers all call sites; forEachActiveExtension
+    // and forExtension call buildExtensionContext outside per-extension
+    // isolation and an unencodable name there would propagate to the caller
+    // rather than failing the entry.
+    throw new Error(
+      `ExtensionCoordinator: extension "${extensionName}" cannot be encoded as a filesystem path segment ` +
+        `and therefore has no addressable data directory. ` +
+        `Valid extension names must be non-empty, must not be '.' or '..', must be well-formed Unicode, ` +
+        `must not be a reserved Windows device basename (CON, NUL, COM1, etc.), and must encode ` +
+        `within the filesystem component length limit.`,
+    );
+  }
   return {
     ...host.extensionContextBase,
     bus: host.bus,
     identity: entry.identity,
-    dataDir: path.join(host.extensionContextBase.makaioHome, entry.identity.extensionName),
+    dataDir: path.join(host.extensionContextBase.makaioHome, EXTENSION_DATA_DIR_SEGMENT, segment),
     getService: <T>(token: ExtensionToken<T>): T | undefined => host.getExtensionService(token.name),
     signal: host.signal,
     hasExtension: host.hasActiveExtension,

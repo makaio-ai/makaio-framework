@@ -16,8 +16,8 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import {
-  decodeExtensionOperatorConfigName,
-  encodeExtensionOperatorConfigName,
+  decodeExtensionNamePathSegment,
+  encodeExtensionNameAsPathSegment,
   EXTENSION_OPERATOR_CONFIG_FILE_SUFFIX,
   type ExtensionOperatorConfigEntry,
   type ExtensionOperatorConfigFailure,
@@ -198,7 +198,6 @@ export async function loadExtensionOperatorConfig(
 ): Promise<ExtensionOperatorConfigSnapshot> {
   const directory = resolveExtensionOperatorConfigDir(options.makaioHome);
   const files = await listOperatorConfigFiles(directory);
-  warnOnCaseInsensitiveFileCollisions(files);
 
   const entries = new Map<string, ExtensionOperatorConfigEntry>();
   for (const file of files) {
@@ -267,7 +266,7 @@ export function warnOnUnaddressableExtensionOperatorConfigNames(
   retainedPackages: readonly ExtensionOperatorConfigConsumer[],
 ): void {
   for (const pkg of retainedPackages) {
-    if (encodeExtensionOperatorConfigName(pkg.name) !== undefined) continue;
+    if (encodeExtensionNameAsPathSegment(pkg.name) !== undefined) continue;
     console.warn(
       `[boot] Extension "${summarizeDiagnosticText(pkg.name)}" has no operator config file name; it cannot be configured from ${OPERATOR_CONFIG_DIR_SEGMENTS.join('/')}`,
     );
@@ -326,7 +325,7 @@ function acceptOperatorConfigFile(directory: string, fileName: string): Operator
   }
 
   const fileStem = fileName.slice(0, -EXTENSION_OPERATOR_CONFIG_FILE_SUFFIX.length);
-  const extensionName = decodeExtensionOperatorConfigName(fileStem);
+  const extensionName = decodeExtensionNamePathSegment(fileStem);
   if (extensionName === undefined) {
     console.warn(
       `[boot] Ignoring ${describeDirectoryEntry(directory, fileName)}: its name is not the encoded form of any extension name`,
@@ -335,40 +334,6 @@ function acceptOperatorConfigFile(directory: string, fileName: string): Operator
   }
 
   return { extensionName, fileName, filePath: path.join(directory, fileName) };
-}
-
-/**
- * Report files whose names a case-insensitive filesystem cannot keep apart.
- *
- * Both files are kept. Each is a correctly spelled entry for its own extension,
- * extension names preserve case, and the coordinator's keys are case-sensitive,
- * so each reaches exactly the extension it names. The warning is a portability
- * notice: the same home copied onto APFS or NTFS would hold only one of them.
- *
- * Only whole file names are compared, never decoded extension names. Two
- * non-ASCII names that differ in case — `ä-tools` and `Ä-tools` — encode to
- * `%C3%A4-tools` and `%C3%84-tools`, which differ in more than case and coexist
- * everywhere; folding decoded names would report those as a collision they are
- * not.
- * @param files - Accepted files from one directory listing.
- */
-function warnOnCaseInsensitiveFileCollisions(files: readonly OperatorConfigFile[]): void {
-  const byFoldedFileName = new Map<string, OperatorConfigFile[]>();
-  for (const file of files) {
-    const folded = file.fileName.toLowerCase();
-    const collected = byFoldedFileName.get(folded);
-    if (collected === undefined) byFoldedFileName.set(folded, [file]);
-    else collected.push(file);
-  }
-
-  for (const collided of byFoldedFileName.values()) {
-    if (collided.length < 2) continue;
-    const names = collided.map((file) => `"${summarizeDiagnosticText(file.extensionName)}"`).join(', ');
-    const fileNames = collided.map((file) => file.fileName).join(', ');
-    console.warn(
-      `[boot] Operator config files ${fileNames} differ only in case and name extensions ${names}; a case-insensitive filesystem cannot keep them apart`,
-    );
-  }
 }
 
 /**

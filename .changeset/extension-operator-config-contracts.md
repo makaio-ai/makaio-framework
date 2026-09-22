@@ -6,9 +6,9 @@
 Add the operator extension config contract: `ExtensionOperatorConfigSource`,
 `ExtensionOperatorConfigEntry` (`config` | `failure` with reasons `unreadable`,
 `invalid-json`, `not-an-object`) and the percent-encoding helpers
-`encodeExtensionOperatorConfigName` / `decodeExtensionOperatorConfigName` that
+`encodeExtensionNameAsPathSegment` / `decodeExtensionNamePathSegment` that
 map an extension name to its `$MAKAIO_HOME/config/extensions/<name>.json` file
-stem and back. Encoding answers `undefined` for a name no file can address — the
+segment and back. Encoding answers `undefined` for a name no file can address — the
 empty name, a dot segment, or a name that is not well-formed Unicode — so one
 stem never stands for two extensions.
 

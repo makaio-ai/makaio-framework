@@ -1202,7 +1202,7 @@ describe('ExtensionCoordinator', () => {
       platform: TEST_PKG_CTX_BASE.platform,
       homedir: TEST_PKG_CTX_BASE.homedir,
       makaioHome: TEST_PKG_CTX_BASE.makaioHome,
-      dataDir: '/home/test/.makaio/storage-context-pkg',
+      dataDir: '/home/test/.makaio/data/storage-context-pkg',
       username: TEST_PKG_CTX_BASE.username,
       machineId: TEST_PKG_CTX_BASE.machineId,
     });
@@ -1339,8 +1339,8 @@ describe('ExtensionCoordinator', () => {
   // Context derivation tests
   // ---------------------------------------------------------------------------
 
-  // 21. dataDir is derived from makaioHome + packageName
-  it('ctx.dataDir is derived from makaioHome and packageName', async () => {
+  // 21. dataDir is resolved to data/<encoded> under makaioHome
+  it('ctx.dataDir resolves to data/<encoded-name> under makaioHome', async () => {
     let capturedCtx: ExtensionContext | undefined;
     const coordinator = new ExtensionCoordinator(bus, {
       extensionContextBase: TEST_PKG_CTX_BASE,
@@ -1357,7 +1357,275 @@ describe('ExtensionCoordinator', () => {
     await coordinator.startAll();
 
     expect(capturedCtx).toBeDefined();
-    expect(capturedCtx!.dataDir).toBe(path.join(TEST_PKG_CTX_BASE.makaioHome, 'my-extension'));
+    expect(capturedCtx!.dataDir).toBe(path.join(TEST_PKG_CTX_BASE.makaioHome, 'data', 'my-extension'));
+  });
+
+  // 21b. dataDir encodes scoped names into a single path segment
+  it('ctx.dataDir encodes a scoped name as a single path segment', async () => {
+    let capturedCtx: ExtensionContext | undefined;
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+
+    coordinator.load([
+      makePackage('@acme/weather-tools', {
+        create: (ctx) => {
+          capturedCtx = ctx;
+          return makeMockService(ctx.bus);
+        },
+      }),
+    ]);
+    await coordinator.startAll();
+
+    expect(capturedCtx).toBeDefined();
+    expect(capturedCtx!.dataDir).toBe(path.join(TEST_PKG_CTX_BASE.makaioHome, 'data', '%40acme%2Fweather-tools'));
+  });
+
+  // 21c. buildExtensionContext with an unencodable name → entry fails, not boot
+  it('transitions an extension with an unencodable name to failed without aborting boot', async () => {
+    // A lone high surrogate is not well-formed Unicode and cannot be encoded as
+    // a filesystem path segment; buildExtensionContext must throw rather than
+    // fall back to the raw name (which would violate the codec's injectivity).
+    const unencodableName = '\uD800';
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+
+    coordinator.load([
+      makePackage(unencodableName, {
+        // The create factory triggers context building; the throw happens before
+        // the factory is invoked, but the coordinator isolates it per-extension.
+        create: (ctx) => makeMockService(ctx.bus),
+      }),
+    ]);
+
+    // startAll must resolve (not throw) — boot continues.
+    await expect(coordinator.startAll()).resolves.toBeUndefined();
+
+    const info = coordinator.list().find((e) => e.name === unencodableName);
+    expect(info?.state).toBe('failed');
+    expect(info?.error).toContain('cannot be encoded as a filesystem path segment');
+  });
+
+  // 21d. Unencodable name with NO create / storage / contribution-processors:
+  //      the extension must still fail, NOT reach `active`.
+  //
+  //      Without an eager name check in startExtensionEntry, an extension with
+  //      no `create`, no `storage.registerHandlers`, and no contribution
+  //      processors would reach `active` without buildExtensionContext ever
+  //      running. A subsequent forEachActiveExtension call would then throw
+  //      outside per-extension isolation. The eager check in startExtensionEntry
+  //      ensures the entry is always isolated regardless of which lifecycle
+  //      hooks are declared.
+  it('transitions an unencodable-name extension with no create/storage to failed, not active', async () => {
+    const unencodableName = '\uD800';
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+
+    // A bare package with no create factory, no storage, and no contributions.
+    coordinator.load([makePackage(unencodableName)]);
+
+    await expect(coordinator.startAll()).resolves.toBeUndefined();
+
+    const info = coordinator.list().find((e) => e.name === unencodableName);
+    expect(info?.state).toBe('failed');
+    expect(info?.error).toContain('cannot be encoded as a filesystem path segment');
+
+    // forEachActiveExtension must not encounter the broken entry.
+    const activeNames: string[] = [];
+    coordinator.forEachActiveExtension((activeName) => {
+      activeNames.push(activeName);
+    });
+    expect(activeNames).not.toContain(unencodableName);
+  });
+
+  // 21e. The same unencodable name on a CRITICAL extension aborts startup.
+  //
+  //      21c and 21d prove the failure stays isolated. This proves the other
+  //      half of the contract: a critical extension that cannot be given an
+  //      addressable data directory must not let boot continue around it.
+  it('aborts startup when a critical extension has an unencodable name', async () => {
+    const unencodableName = '\uD800';
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+
+    coordinator.load([makePackage(unencodableName, { critical: true })]);
+
+    await expect(coordinator.startAll()).rejects.toThrow(/cannot be encoded as a filesystem path segment/);
+
+    const info = coordinator.list().find((e) => e.name === unencodableName);
+    expect(info?.state).toBe('failed');
+  });
+
+  // 21f. Re-enabling a bare unencodable-name extension after a failed startup
+  //      must not reach `active` either.
+  //
+  //      21d proves the eager check in startExtensionEntry keeps a bare
+  //      unencodable-name extension out of `active` during boot.
+  //      `kernel:extension.setEnabled(true)` is a distinct re-entry into
+  //      activation (via `enableExtension`) that also never calls
+  //      `buildExtensionContext` for a bare package, so it needs the same
+  //      guard. Both eager checks share the `checkExtensionNameAddressable`
+  //      predicate so they cannot drift apart.
+  it('rejects re-enabling a bare unencodable-name extension after a failed startup', async () => {
+    const unencodableName = '\uD800';
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+
+    // A bare package with no create factory, no storage, and no contributions —
+    // the same shape as 21d, which never calls buildExtensionContext.
+    coordinator.load([makePackage(unencodableName)]);
+    await coordinator.startAll();
+
+    const before = coordinator.list().find((e) => e.name === unencodableName);
+    expect(before?.state).toBe('failed');
+
+    const reenabled = await coordinator.handleSetEnabled(unencodableName, true);
+    expect(reenabled).toBe(false);
+
+    const after = coordinator.list().find((e) => e.name === unencodableName);
+    expect(after?.state).toBe('failed');
+    expect(after?.error).toContain('cannot be encoded as a filesystem path segment');
+
+    // forEachActiveExtension must not encounter the broken entry.
+    const activeNames: string[] = [];
+    coordinator.forEachActiveExtension((activeName) => {
+      activeNames.push(activeName);
+    });
+    expect(activeNames).not.toContain(unencodableName);
+  });
+
+  // 21g. Two names differing only in case no longer share a segment: the codec
+  //      escapes every uppercase byte, so `Gateway` encodes to `%47ateway`
+  //      while `gateway` stays `gateway`. Both extensions start and each gets
+  //      its own data directory — this is the point of escaping case in the
+  //      encoder rather than detecting the collision after the fact over
+  //      whichever names happen to be loaded (a detector that cannot see a
+  //      same-named directory left behind by an extension that is no longer
+  //      loaded, or one filtered onto another surface).
+  it('starts both extensions when their names differ only in case, each with its own data directory', async () => {
+    const capturedDataDirs = new Map<string, string>();
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+
+    coordinator.load([
+      makePackage('Gateway', {
+        create: (ctx) => {
+          capturedDataDirs.set(ctx.identity.extensionName, ctx.dataDir);
+          return makeMockService(ctx.bus);
+        },
+      }),
+      makePackage('gateway', {
+        create: (ctx) => {
+          capturedDataDirs.set(ctx.identity.extensionName, ctx.dataDir);
+          return makeMockService(ctx.bus);
+        },
+      }),
+    ]);
+
+    await coordinator.startAll();
+
+    for (const info of coordinator.list()) {
+      expect(info.state).toBe('active');
+    }
+    expect(capturedDataDirs.get('Gateway')).toBe(path.join(TEST_PKG_CTX_BASE.makaioHome, 'data', '%47ateway'));
+    expect(capturedDataDirs.get('gateway')).toBe(path.join(TEST_PKG_CTX_BASE.makaioHome, 'data', 'gateway'));
+    expect(capturedDataDirs.get('Gateway')).not.toBe(capturedDataDirs.get('gateway'));
+  });
+
+  // 21h. Re-enabling an extension whose name differs only in case from another
+  //      loaded extension reaches `active` too, for the same reason as 21g:
+  //      the two names never shared a segment in the first place.
+  it('re-enables an extension whose name differs only in case from another loaded extension', async () => {
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+      loadEnabled: (name) => (name === 'Gateway' ? false : undefined),
+    });
+
+    coordinator.load([
+      makePackage('Gateway', { create: (ctx) => makeMockService(ctx.bus) }),
+      makePackage('gateway', { create: (ctx) => makeMockService(ctx.bus) }),
+    ]);
+    await coordinator.startAll();
+
+    const before = coordinator.list().find((e) => e.name === 'Gateway');
+    expect(before?.state).toBe('skipped');
+
+    const reenabled = await coordinator.handleSetEnabled('Gateway', true);
+    expect(reenabled).toBe(true);
+
+    const after = coordinator.list().find((e) => e.name === 'Gateway');
+    expect(after?.state).toBe('active');
+  });
+
+  // 21i. Two ordinary, differently-spelled names encode to distinct segments
+  //      and start normally, as they always have.
+  it('does not fail extensions whose data-directory segments do not collide', async () => {
+    const capturedNames: string[] = [];
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+
+    coordinator.load([
+      makePackage('gateway', {
+        create: (ctx) => {
+          capturedNames.push(ctx.identity.extensionName);
+          return makeMockService(ctx.bus);
+        },
+      }),
+      makePackage('account-manager', {
+        create: (ctx) => {
+          capturedNames.push(ctx.identity.extensionName);
+          return makeMockService(ctx.bus);
+        },
+      }),
+    ]);
+
+    await coordinator.startAll();
+
+    expect(capturedNames.sort()).toEqual(['account-manager', 'gateway']);
+    for (const info of coordinator.list()) {
+      expect(info.state).toBe('active');
+    }
+  });
+
+  // 21j. `gateway` and `gateway.` would resolve to the same Windows path
+  //      component if the codec left a trailing dot unescaped (a Win32 path
+  //      resolver strips it); the codec escapes it, so both extensions get
+  //      distinct, addressable data directories and neither fails.
+  it('does not fail extensions whose names differ only by a trailing dot', async () => {
+    const capturedDataDirs = new Map<string, string>();
+    const coordinator = new ExtensionCoordinator(bus, {
+      extensionContextBase: TEST_PKG_CTX_BASE,
+    });
+
+    coordinator.load([
+      makePackage('gateway', {
+        create: (ctx) => {
+          capturedDataDirs.set(ctx.identity.extensionName, ctx.dataDir);
+          return makeMockService(ctx.bus);
+        },
+      }),
+      makePackage('gateway.', {
+        create: (ctx) => {
+          capturedDataDirs.set(ctx.identity.extensionName, ctx.dataDir);
+          return makeMockService(ctx.bus);
+        },
+      }),
+    ]);
+
+    await coordinator.startAll();
+
+    for (const info of coordinator.list()) {
+      expect(info.state).toBe('active');
+    }
+    expect(capturedDataDirs.get('gateway')).toBe(path.join(TEST_PKG_CTX_BASE.makaioHome, 'data', 'gateway'));
+    expect(capturedDataDirs.get('gateway.')).toBe(path.join(TEST_PKG_CTX_BASE.makaioHome, 'data', 'gateway%2E'));
+    expect(capturedDataDirs.get('gateway')).not.toBe(capturedDataDirs.get('gateway.'));
   });
 
   // ---------------------------------------------------------------------------
