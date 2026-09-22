@@ -280,7 +280,7 @@ ${chalk.bold('Examples:')}
   validate                              # Validate and auto-fix all files
   validate "src/**/*.ts"                # Validate src TypeScript files
   validate --json "packages/bus/**/*"   # Validate bus package, output JSON
-  validate --profile full-workspace     # Validate with full workspace worker sizing
+  validate --profile full-workspace     # Validate as part of a full workspace topology
   validate --tsconfig tsconfig.json     # Validate using explicit tsconfig
   validate --tool typescript            # Validate using only one tool
   validate file1.ts file2.ts file3.ts   # Validate specific files

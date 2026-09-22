@@ -2,26 +2,24 @@ import { describe, expect, it } from 'vitest';
 import { getWorkerConfig, resolveWorkerTools } from './validator.js';
 
 describe('getWorkerConfig', () => {
-  it('keeps standalone workers on default sizing', () => {
-    expect(getWorkerConfig('eslint', { profile: 'standalone' })).toEqual({ tool: 'eslint' });
-    expect(getWorkerConfig('typescript', { profile: 'standalone' })).toEqual({ tool: 'typescript' });
+  it('gives semantic workers the hang-detector timeout', () => {
+    expect(getWorkerConfig('eslint')).toEqual({ tool: 'eslint', timeoutMs: 1_800_000 });
+    expect(getWorkerConfig('typescript')).toEqual({ tool: 'typescript', timeoutMs: 1_800_000 });
   });
 
-  it('uses full-workspace semantic worker limits', () => {
-    expect(getWorkerConfig('eslint', { profile: 'full-workspace' })).toMatchObject({
-      tool: 'eslint',
-      timeoutMs: 1_800_000,
-    });
-    expect(getWorkerConfig('typescript', { profile: 'full-workspace' })).toMatchObject({
-      tool: 'typescript',
-      timeoutMs: 1_800_000,
-    });
+  it('applies the same semantic worker timeout on every validation topology', () => {
+    const standalone = resolveWorkerTools({ profile: 'standalone' }).map((tool) => getWorkerConfig(tool));
+    const fullWorkspace = resolveWorkerTools({ profile: 'full-workspace' }).map((tool) => getWorkerConfig(tool));
+
+    expect(standalone).toEqual(fullWorkspace);
+    expect(standalone).toContainEqual({ tool: 'eslint', timeoutMs: 1_800_000 });
+    expect(standalone).toContainEqual({ tool: 'typescript', timeoutMs: 1_800_000 });
   });
 
-  it('does not inflate format-only workers in the full workspace profile', () => {
-    expect(getWorkerConfig('biome', { profile: 'full-workspace' })).toEqual({ tool: 'biome' });
-    expect(getWorkerConfig('prettier', { profile: 'full-workspace' })).toEqual({ tool: 'prettier' });
-    expect(getWorkerConfig('stylelint', { profile: 'full-workspace' })).toEqual({ tool: 'stylelint' });
+  it('does not inflate format-only workers', () => {
+    expect(getWorkerConfig('biome')).toEqual({ tool: 'biome' });
+    expect(getWorkerConfig('prettier')).toEqual({ tool: 'prettier' });
+    expect(getWorkerConfig('stylelint')).toEqual({ tool: 'stylelint' });
   });
 });
 

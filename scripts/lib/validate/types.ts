@@ -43,11 +43,16 @@ export interface ValidationResult {
 export type FileValidationResults = Record<string, ValidationResult[]>;
 
 /**
- * Validation runtime profile.
+ * Declared validation topology.
  *
- * `standalone` uses the framework workspace sizing. `full-workspace` runs the
- * same validator against a full workspace topology, which has a larger
- * TypeScript graph and needs profile-specific semantic worker limits.
+ * `standalone` validates this workspace on its own; `full-workspace` validates
+ * it as part of a larger workspace with a bigger TypeScript graph.
+ *
+ * This is a seam, not a resource tier: hosts select it through `--profile` or
+ * `MAKAIO_VALIDATE_PROFILE` and it is forwarded to every worker, so
+ * topology-dependent behaviour has a place to attach. No topology-specific
+ * limits are applied today — semantic worker timeouts are deliberately
+ * identical for both profiles.
  */
 export type ValidateProfile = 'standalone' | 'full-workspace';
 
@@ -67,7 +72,7 @@ export interface ValidateOptions {
   tsConfigFile?: string;
   /** Show verbose output including files checked per tool */
   verbose?: boolean;
-  /** Runtime profile controlling worker sizing and repo topology assumptions */
+  /** Declared validation topology (see {@link ValidateProfile}) */
   profile?: ValidateProfile;
   /** Optional subset of validation tools to run */
   tools?: ValidationTool[];

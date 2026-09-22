@@ -5,22 +5,30 @@ import { spawnWorker } from './workers/spawner.js';
 import type { FileValidationResults, ValidateOptions, ValidationSummary, ToolRunStatus } from './types.js';
 import type { WorkerConfig, WorkerInput, WorkerTool } from './workers/types.js';
 
-const FULL_WORKSPACE_SEMANTIC_WORKER_TIMEOUT_MS = 1_800_000;
+/**
+ * Wall-clock budget for semantic workers (30 minutes).
+ *
+ * ESLint and TypeScript build a full config and type graph, so their wall time
+ * is dominated by the performance variance of hosted CI runners rather than by
+ * workspace size. The limit is therefore a hang detector, not a performance
+ * budget, and is intentionally identical for every validation topology: a
+ * healthy run finishes far below it, and a run that reaches it is stuck rather
+ * than merely slow.
+ */
+const SEMANTIC_WORKER_TIMEOUT_MS = 1_800_000;
 const DEFAULT_TOOLS: WorkerTool[] = ['biome', 'eslint', 'stylelint', 'typescript'];
 
 /**
- * Resolves worker configuration for the requested validation profile.
+ * Resolves worker configuration for a validation tool.
+ *
+ * Semantic workers get {@link SEMANTIC_WORKER_TIMEOUT_MS}; format-only workers
+ * keep the spawner default.
  * @param tool - Validation tool to run
- * @param options - Validation options
- * @returns Worker configuration with profile-specific resource limits
+ * @returns Worker configuration with tool-specific resource limits
  */
-export function getWorkerConfig(tool: WorkerTool, options: ValidateOptions): WorkerConfig {
-  if (options.profile !== 'full-workspace') {
-    return { tool };
-  }
-
+export function getWorkerConfig(tool: WorkerTool): WorkerConfig {
   if (tool === 'typescript' || tool === 'eslint') {
-    return { tool, timeoutMs: FULL_WORKSPACE_SEMANTIC_WORKER_TIMEOUT_MS };
+    return { tool, timeoutMs: SEMANTIC_WORKER_TIMEOUT_MS };
   }
 
   return { tool };
@@ -92,7 +100,7 @@ export class WorkspaceValidator {
     const tools = resolveWorkerTools(options);
 
     const workerPromises = tools.map((tool) =>
-      spawnWorker(getWorkerConfig(tool, options), workerInput).catch((error) => ({
+      spawnWorker(getWorkerConfig(tool), workerInput).catch((error) => ({
         success: false,
         results: {} as FileValidationResults,
         status: {
