@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MakaioBus } from '../bus.js';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
@@ -25,6 +25,44 @@ describe('Handler Priority', () => {
   });
 
   describe('event handlers', () => {
+    it('admits local handlers before emit yields while awaiting their completion', async () => {
+      const releaseHandler = Promise.withResolvers<void>();
+      let invoked = false;
+      MakaioBus.on(EventSubjects.action, async () => {
+        invoked = true;
+        await releaseHandler.promise;
+      });
+
+      const emitted = MakaioBus.emit(EventSubjects.action, { value: 'test' });
+
+      expect(invoked).toBe(true);
+      releaseHandler.resolve();
+      await emitted;
+    });
+
+    it('keeps the earliest handler failure while still starting sibling handlers', async () => {
+      const firstFailure = new Error('first handler failed');
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      let siblingStarted = false;
+      MakaioBus.on(
+        EventSubjects.action,
+        () => {
+          throw firstFailure;
+        },
+        { priority: 100 },
+      );
+      MakaioBus.on(EventSubjects.action, () => {
+        siblingStarted = true;
+      });
+
+      try {
+        await expect(MakaioBus.emit(EventSubjects.action, { value: 'test' })).rejects.toBe(firstFailure);
+        expect(siblingStarted).toBe(true);
+      } finally {
+        error.mockRestore();
+      }
+    });
+
     it('should execute handlers in priority order (highest first)', async () => {
       const executionOrder: string[] = [];
 

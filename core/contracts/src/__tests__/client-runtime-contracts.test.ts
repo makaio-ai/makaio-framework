@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ClientRuntimeEvidenceBaseSchema,
   ClientRuntimeObserveSchema,
+  ClientRuntimeObservedSchema,
   ClientRuntimeSourceSchema,
   ClientRuntimeStartedSchema,
   ClientSubjects,
@@ -43,6 +44,14 @@ function makeStartedEvent(overrides?: Record<string, unknown>) {
     source: makeSource(),
     observedAt: 1_713_795_200_000,
     pid: 12345,
+    ...overrides,
+  };
+}
+
+function makeObservedEvent(overrides?: Record<string, unknown>) {
+  return {
+    ...makeStartedEvent(),
+    updatedAt: 1_713_795_200_001,
     ...overrides,
   };
 }
@@ -259,6 +268,24 @@ describe('ClientRuntimeObserveSchema.response', () => {
 });
 
 // ---------------------------------------------------------------------------
+// client.runtime.observed event
+// ---------------------------------------------------------------------------
+
+describe('ClientRuntimeObservedSchema', () => {
+  it('accepts an authoritative runtime snapshot', () => {
+    const result = ClientRuntimeObservedSchema.parse(makeObservedEvent());
+
+    expect(result.adapterSessionId).toBeUndefined();
+    expect(result.updatedAt).toBe(1_713_795_200_001);
+  });
+
+  it('requires a non-negative integer server revision', () => {
+    expect(ClientRuntimeObservedSchema.safeParse(makeObservedEvent({ updatedAt: -1 })).success).toBe(false);
+    expect(ClientRuntimeObservedSchema.safeParse(makeObservedEvent({ updatedAt: 1.5 })).success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // client.runtime.started event
 // ---------------------------------------------------------------------------
 
@@ -325,6 +352,11 @@ describe('ClientSubjects — runtime observation subjects', () => {
   it('exposes client.runtime.observe with the correct subject and namespace', () => {
     expect(ClientSubjects.runtime.observe.subject).toBe('runtime.observe');
     expect(ClientSubjects.runtime.observe.$meta.namespace).toBe('client');
+  });
+
+  it('exposes client.runtime.observed with the correct subject and namespace', () => {
+    expect(ClientSubjects.runtime.observed.subject).toBe('runtime.observed');
+    expect(ClientSubjects.runtime.observed.$meta.namespace).toBe('client');
   });
 
   it('exposes client.runtime.started with the correct subject and namespace', () => {

@@ -22,6 +22,7 @@ describe('once - Promise overload', () => {
     });
 
     it('should resolve if event arrives before timeout', async () => {
+      const clearTimeoutSpy = vi.spyOn(global, 'clearTimeout');
       const promise = MakaioBus.once(EventSubjects.message, { timeoutMs: 1000 });
 
       // Emit after 50ms (before timeout)
@@ -34,11 +35,13 @@ describe('once - Promise overload', () => {
 
       const ctx = await promise;
       expect(ctx.payload.content).toBe('in-time');
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+
+      clearTimeoutSpy.mockRestore();
     });
 
-    it('should clear timeout when promise resolves (no leak)', async () => {
-      const clearTimeoutSpy = vi.spyOn(global, 'clearTimeout');
-
+    it('should resolve without arming a deferred timeout when event arrives synchronously', async () => {
+      const context = MakaioBus.getContext();
       const promise = MakaioBus.once(EventSubjects.message, { timeoutMs: 5000 });
 
       await MakaioBus.emit(EventSubjects.message, {
@@ -48,10 +51,7 @@ describe('once - Promise overload', () => {
 
       await promise;
 
-      // clearTimeout should be called during cleanup
-      expect(clearTimeoutSpy).toHaveBeenCalled();
-
-      clearTimeoutSpy.mockRestore();
+      expect(context.eventHandlers.has('oncePromise:events.message')).toBe(false);
     });
 
     it('should cleanup handler when timeout occurs', async () => {

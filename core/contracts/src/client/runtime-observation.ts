@@ -3,7 +3,7 @@
  *
  * Covers source-layer classification, source descriptors, shared evidence
  * fields, the `client.runtime.observe` request–response pair, and the
- * `client.runtime.started` event payload.
+ * runtime observation event payloads.
  * @packageDocumentation
  */
 
@@ -135,9 +135,10 @@ export type ClientRuntimeObserveResponse = z.infer<typeof ClientRuntimeObserveSc
 /**
  * Request and response schemas for `client.runtime.resolveBySupervisorSessionId`.
  *
- * Reads the correlation recorded for a supervisor session ID and client ID.
- * This is not a current process liveness check and does not authorize access
- * to the runtime.
+ * Reads the committed registry snapshot for a supervisor session ID and client
+ * ID. This is not a current process liveness check, does not authorize access
+ * to the runtime, and does not imply durable storage when no storage handler
+ * is available.
  */
 export const ClientRuntimeResolveBySupervisorSessionIdSchema = {
   request: z.strictObject({
@@ -158,6 +159,8 @@ export const ClientRuntimeResolveBySupervisorSessionIdSchema = {
         adapterSessionId: NonEmptyStringSchema.optional(),
         /** Framework session ID, when the runtime was correlated to one. */
         sessionId: NonEmptyStringSchema.optional(),
+        /** Server-assigned revision that increases only across mutations of this runtime. */
+        updatedAt: EpochMillisecondsSchema,
       })
       .nullable(),
   }),
@@ -169,6 +172,32 @@ export type ClientRuntimeResolveBySupervisorSessionIdRequest = z.infer<
 export type ClientRuntimeResolveBySupervisorSessionIdResponse = z.infer<
   typeof ClientRuntimeResolveBySupervisorSessionIdSchema.response
 >;
+
+/**
+ * Snapshot emitted after every accepted `client.runtime.observe` request.
+ *
+ * Each payload is a committed registry snapshot. `updatedAt` is assigned by
+ * the runtime registry and orders mutations of this runtime independently of
+ * the observation producer's clock. Consumers can compare snapshots from one
+ * runtime without trusting `observedAt` ordering; it is not a global ordering
+ * across runtimes or a durable-storage acknowledgement.
+ */
+export const ClientRuntimeObservedSchema = ClientRuntimeEvidenceBaseSchema.extend({
+  /** Stable runtime record ID assigned by the registry. */
+  clientRuntimeId: NonEmptyStringSchema,
+  /** Stable client ID (e.g. `'codex'`). */
+  clientId: NonEmptyStringSchema,
+  /** Lifecycle status after the observation was applied. */
+  status: z.enum(['observed', 'started']),
+  /** Source descriptor identifying the accepted observation. */
+  source: ClientRuntimeSourceSchema,
+  /** Timestamp captured by the observation producer. */
+  observedAt: EpochMillisecondsSchema,
+  /** Server-assigned revision that increases only across mutations of this runtime. */
+  updatedAt: EpochMillisecondsSchema,
+});
+
+export type ClientRuntimeObserved = z.infer<typeof ClientRuntimeObservedSchema>;
 
 /**
  * Payload for `client.runtime.started`.

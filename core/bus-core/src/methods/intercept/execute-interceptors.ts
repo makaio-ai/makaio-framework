@@ -25,9 +25,10 @@ function getMatchingInterceptors(context: MakaioBusContext, subject: string): Ar
  *
  * Errors fail fast - subsequent interceptors and handlers are skipped.
  *
- * **Performance note:** Returns synchronously when no interceptors are registered
- * to preserve timing semantics of emit(). The promise is only introduced when
- * interceptors actually need to be executed.
+ * **Timing contract:** Returns synchronously when every interceptor completes
+ * synchronously, preserving immediate local-handler admission in `emit()`. The
+ * first interceptor that returns a promise defers the remaining chain and local
+ * handlers until it settles. A stopped chain never admits handlers.
  * @param context - Makaio bus context containing interceptor registry
  * @param subject - Subject key to look up interceptors for
  * @param initialPayload - Original payload to pass through interceptor chain
@@ -44,12 +45,9 @@ export function executeInterceptors<P>(
 ): InterceptorResult<P> | Promise<InterceptorResult<P>> {
   const interceptors = getMatchingInterceptors(context, subject);
 
-  // Fast path: no interceptors, return synchronously to preserve timing
-  if (interceptors.length === 0) {
-    return { stopped: false, payload: initialPayload };
-  }
-
-  // Slow path: execute interceptors sequentially
+  // A synchronous chain must remain synchronous so emit() can admit local
+  // handlers before returning. executeInterceptorChain switches to a promise
+  // only after an interceptor actually returns one.
   return executeInterceptorChain(interceptors, subject, initialPayload, messageId, correlationId);
 }
 
@@ -62,41 +60,47 @@ export function executeInterceptors<P>(
  * @param correlationId - Correlation ID for tracing
  * @returns Result after running all interceptors
  */
-async function executeInterceptorChain<P>(
+function executeInterceptorChain<P>(
   interceptors: Array<InterceptorHandler<unknown>>,
   subject: string,
   initialPayload: P,
   messageId: string,
   correlationId: string | undefined,
-): Promise<InterceptorResult<P>> {
+): InterceptorResult<P> | Promise<InterceptorResult<P>> {
   let currentPayload = initialPayload;
   let stopped = false;
 
-  for (const interceptor of interceptors) {
-    if (stopped) break;
+  const continueFrom = (startIndex: number): InterceptorResult<P> | Promise<InterceptorResult<P>> => {
+    for (let index = startIndex; index < interceptors.length; index += 1) {
+      if (stopped) break;
 
-    // Create context for this interceptor
-    const ctx: InterceptorContext<P> = {
-      subject,
-      get payload() {
-        return currentPayload;
-      },
-      messageId,
-      correlationId,
-      stopPropagation() {
-        stopped = true;
-      },
-      replacePayload(newPayload: P) {
-        currentPayload = newPayload;
-      },
-      next() {
-        // Explicit continue - no-op since we continue by default
-      },
-    };
+      // Create context for this interceptor
+      const ctx: InterceptorContext<P> = {
+        subject,
+        get payload() {
+          return currentPayload;
+        },
+        messageId,
+        correlationId,
+        stopPropagation() {
+          stopped = true;
+        },
+        replacePayload(newPayload: P) {
+          currentPayload = newPayload;
+        },
+        next() {
+          // Explicit continue - no-op since we continue by default
+        },
+      };
 
-    // Execute interceptor (may be sync or async)
-    await interceptor(ctx as InterceptorContext<unknown>);
-  }
+      const result = interceptors[index]!(ctx as InterceptorContext<unknown>);
+      if (result instanceof Promise) {
+        return result.then(() => continueFrom(index + 1));
+      }
+    }
 
-  return { stopped, payload: currentPayload };
+    return { stopped, payload: currentPayload };
+  };
+
+  return continueFrom(0);
 }

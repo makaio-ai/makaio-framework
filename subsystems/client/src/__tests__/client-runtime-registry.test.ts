@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ClientRuntimeRegistry } from '../client-runtime-registry.js';
 import { RuntimeMap } from '../storage/runtime-map.js';
+import { ClientRuntimeStorageSubjects } from '../storage/runtime-storage-namespace.js';
 import type { ClientRuntimeObserveRequest } from '@makaio/contracts/client';
 import type { ClientRuntimeRecord } from '../client-runtime-registry-types.js';
 import type { IMakaioBus } from '@makaio/bus-core';
@@ -299,6 +300,7 @@ describe('ClientRuntimeRegistry', () => {
         clientId: 'codex',
         supervisorSessionId: 'sup-codex-clear',
         adapterSessionId: 'native-after-clear',
+        updatedAt: cleared.record.updatedAt,
       });
 
       const staleAdapter = await registry.upsertRuntime(
@@ -655,6 +657,82 @@ describe('ClientRuntimeRegistry', () => {
   });
 
   // -------------------------------------------------------------------------
+  // persistence commit boundary
+  // -------------------------------------------------------------------------
+
+  describe('persistence commit boundary', () => {
+    it('serializes overlapping evidence until the first persisted runtime is committed', async () => {
+      const firstPersistence = Promise.withResolvers<void>();
+      const releasePersistence = Promise.withResolvers<void>();
+      let upserts = 0;
+      const bus = {
+        requestOptional: vi.fn(async () => {
+          upserts += 1;
+          if (upserts === 1) {
+            firstPersistence.resolve();
+            await releasePersistence.promise;
+          }
+          return { handled: true, data: { success: true } };
+        }),
+      } as unknown as IMakaioBus;
+      const persistedRegistry = new ClientRuntimeRegistry(bus);
+
+      const first = persistedRegistry.upsertRuntime(makeObservation({ clientId: 'codex', pid: 5050 }));
+      await firstPersistence.promise;
+      const overlapping = persistedRegistry.upsertRuntime(
+        makeObservation({ clientId: 'codex', pid: 5050, supervisorSessionId: 'sup-serialized' }),
+      );
+
+      expect(persistedRegistry.size).toBe(0);
+      expect(upserts).toBe(1);
+      expect(persistedRegistry.resolveBySupervisorSessionId('codex', 'sup-serialized')).toBeNull();
+
+      releasePersistence.resolve();
+      const [created, enriched] = await Promise.all([first, overlapping]);
+
+      expect(enriched.clientRuntimeId).toBe(created.clientRuntimeId);
+      expect(persistedRegistry.resolveBySupervisorSessionId('codex', 'sup-serialized')).toEqual({
+        clientId: 'codex',
+        supervisorSessionId: 'sup-serialized',
+        updatedAt: enriched.record.updatedAt,
+      });
+    });
+
+    it('keeps the last committed snapshot when persistence rejects an enrichment', async () => {
+      let rejectPersistence = false;
+      const bus = {
+        requestOptional: vi.fn(async () => {
+          if (rejectPersistence) throw new Error('storage unavailable');
+          return { handled: true, data: { success: true } };
+        }),
+      } as unknown as IMakaioBus;
+      const persistedRegistry = new ClientRuntimeRegistry(bus);
+      const created = await persistedRegistry.upsertRuntime(
+        makeObservation({ clientId: 'codex', supervisorSessionId: 'sup-committed', pid: 5051 }),
+      );
+      const committed = persistedRegistry.getRuntime(created.clientRuntimeId);
+
+      rejectPersistence = true;
+      await expect(
+        persistedRegistry.upsertRuntime(
+          makeObservation({
+            clientId: 'codex',
+            supervisorSessionId: 'sup-committed',
+            adapterSessionId: 'native-rejected',
+          }),
+        ),
+      ).rejects.toThrow('storage unavailable');
+
+      expect(persistedRegistry.getRuntime(created.clientRuntimeId)).toEqual(committed);
+      expect(persistedRegistry.resolveBySupervisorSessionId('codex', 'sup-committed')).toEqual({
+        clientId: 'codex',
+        supervisorSessionId: 'sup-committed',
+        updatedAt: created.record.updatedAt,
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // clear and size
   // -------------------------------------------------------------------------
 
@@ -672,7 +750,7 @@ describe('ClientRuntimeRegistry', () => {
 
     it('clears all records', async () => {
       await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 1 }));
-      registry.clear();
+      await registry.clear();
 
       expect(registry.size).toBe(0);
     });
@@ -707,10 +785,11 @@ describe('ClientRuntimeRegistry', () => {
      */
     function makeMockBus(records: ClientRuntimeRecord[]): IMakaioBus {
       return {
-        requestOptional: vi.fn().mockResolvedValue({
-          handled: true,
-          data: { records },
-        }),
+        requestOptional: vi.fn(async (subject) =>
+          subject === ClientRuntimeStorageSubjects.loadAll
+            ? { handled: true, data: { records } }
+            : { handled: true, data: { success: true } },
+        ),
       } as unknown as IMakaioBus;
     }
 
@@ -834,7 +913,7 @@ describe('ClientRuntimeRegistry', () => {
           adapterSessionId: 'native-hydrated-a1',
         }),
       );
-      await busRegistry.upsertRuntime(
+      const historicalWithPid = await busRegistry.upsertRuntime(
         makeObservation({
           clientId: 'codex',
           supervisorSessionId: 'sup-hydrated-s1',
@@ -852,11 +931,13 @@ describe('ClientRuntimeRegistry', () => {
         clientId: 'codex',
         supervisorSessionId: 'sup-hydrated-s1',
         adapterSessionId: 'native-hydrated-a1',
+        updatedAt: historicalWithPid.record.updatedAt,
       });
       expect(busRegistry.resolveBySupervisorSessionId('codex', 'sup-hydrated-s2')).toEqual({
         clientId: 'codex',
         supervisorSessionId: 'sup-hydrated-s2',
         adapterSessionId: 'native-hydrated-a1',
+        updatedAt: active.record.updatedAt,
       });
     });
 

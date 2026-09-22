@@ -133,6 +133,8 @@ export abstract class BaseService {
       }
       if (!this._initialized) return;
 
+      // TODO(FACT-358): Registered handlers remain live until cleanups run after onDestroy.
+      // Async teardown can therefore admit work during this stopping interval.
       this._initialized = false;
 
       const failures: unknown[] = [];

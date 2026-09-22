@@ -24,6 +24,7 @@ import {
 import { AbsolutePathSchema, NonEmptyStringSchema } from './primitives.js';
 import {
   ClientRuntimeObserveSchema,
+  ClientRuntimeObservedSchema,
   ClientRuntimeResolveBySupervisorSessionIdSchema,
   ClientRuntimeStartedSchema,
   ClientRuntimeIsAdapterManagedSchema,
@@ -65,6 +66,7 @@ export type {
  */
 export const ClientSchemas = {
   'runtime.observe': ClientRuntimeObserveSchema,
+  'runtime.observed': ClientRuntimeObservedSchema,
   'runtime.resolveBySupervisorSessionId': ClientRuntimeResolveBySupervisorSessionIdSchema,
   'runtime.started': ClientRuntimeStartedSchema,
   'runtime.isAdapterManaged': ClientRuntimeIsAdapterManagedSchema,
