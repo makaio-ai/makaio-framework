@@ -47,8 +47,12 @@ interface CoreSessionServiceHandlerDeps {
 
 /** Core handler cleanups plus the private ownership lifecycle handle. */
 export interface RegisteredCoreSessionServiceHandlers {
-  /** Cleanup callbacks for the containing service. */
+  /** All cleanup callbacks, retained for direct composition outside BaseService. */
   readonly cleanups: readonly (() => void)[];
+  /** Ordinary handlers that must stop admitting work before `onDestroy()`. */
+  readonly handlerCleanups: readonly (() => void)[];
+  /** Ownership protocol handlers kept while the authority closes and drains. */
+  readonly shutdownProtocolCleanups: readonly (() => void)[];
   /** Private authority shutdown capability. */
   readonly ownership: OwnershipAuthorityHandle;
 }
@@ -80,23 +84,25 @@ export function registerCoreSessionServiceHandlers(
     topology: deps.topology ?? 'shared-machine',
     ...(deps.instanceId !== undefined && { instanceId: deps.instanceId }),
   });
+  const handlerCleanups = [
+    registerCreateHandler(deps),
+    registerGetHandler(deps),
+    registerListHandler(deps),
+    registerTurnAwaitHandler(deps),
+    registerCloseHandler(deps),
+    registerRestartAgentsHandler(deps.bus),
+    registerCoreUpdateHandler(deps),
+    registerCoreArchiveHandler(deps),
+    registerCorePurgeHandler(deps),
+    registerAgentAddedHandler(deps.bus),
+    registerAgentRemovedHandler(deps.bus),
+    registerAdapterSessionIdReconciliationHandler(deps.bus),
+    registerAdapterSessionMovementObserver(deps.bus),
+  ];
   return {
-    cleanups: [
-      registerCreateHandler(deps),
-      registerGetHandler(deps),
-      registerListHandler(deps),
-      registerTurnAwaitHandler(deps),
-      registerCloseHandler(deps),
-      registerRestartAgentsHandler(deps.bus),
-      registerCoreUpdateHandler(deps),
-      registerCoreArchiveHandler(deps),
-      registerCorePurgeHandler(deps),
-      registerAgentAddedHandler(deps.bus),
-      registerAgentRemovedHandler(deps.bus),
-      registerAdapterSessionIdReconciliationHandler(deps.bus),
-      ...authority.cleanups,
-      registerAdapterSessionMovementObserver(deps.bus),
-    ],
+    cleanups: [...handlerCleanups, ...authority.cleanups],
+    handlerCleanups,
+    shutdownProtocolCleanups: authority.cleanups,
     ownership: authority.ownership,
   };
 }

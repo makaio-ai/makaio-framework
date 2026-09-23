@@ -323,16 +323,21 @@ export class WorkflowExecutor extends BaseService {
    */
   protected async onInit(): Promise<void> {
     this.registerExecutionHandlers();
+    // An authority runner can finish bootstrap while onDestroy drains its
+    // admitted execution, so this completion protocol remains available until
+    // the drain is finished.
     this.addCleanup(
       registerAuthorityStateBootstrapHandler(this.bus, (executionId, definition) => {
         const active = this.activeExecutions.get(executionId);
         if (active !== undefined) active.workflow = definition;
       }),
     );
+    // Delegate results complete already-admitted remote work during the drain.
     this.addCleanup(registerDelegateResultFinalizationGateway(this.bus));
     if (this.executionAttemptAuthority !== undefined) {
       this.stopBootstrapWaits = registerBootstrapStartHandler(this.bus, this.executionAttemptAuthority);
       this.addCleanup(this.stopBootstrapWaits);
+      // Outcome submission completes already-admitted worker attempts.
       this.addCleanup(
         registerOutcomeSubmissionHandler(this.bus, {
           bus: this.bus,
@@ -340,10 +345,12 @@ export class WorkflowExecutor extends BaseService {
           acceptOutcome: this.acceptAuthorityOutcome,
         }),
       );
+      // Runtime registration and operation admission are the WorkerPool
+      // protocol that onDestroy drains; keep them available until it settles.
       registerRuntimeLifecycleHandlers(this.bus, this.executionAttemptAuthority, (cleanup) => this.addCleanup(cleanup));
     }
-    registerWorkflowStorageDelegationHandlers(this.bus).forEach((cleanup) => this.addCleanup(cleanup));
-    registerWorkflowStateHandlers(this.bus).forEach((cleanup) => this.addCleanup(cleanup));
+    registerWorkflowStorageDelegationHandlers(this.bus).forEach((cleanup) => this.addHandlerCleanup(cleanup));
+    registerWorkflowStateHandlers(this.bus).forEach((cleanup) => this.addHandlerCleanup(cleanup));
     await this.rehydratePausedGateTimeouts();
   }
 
@@ -589,7 +596,7 @@ export class WorkflowExecutor extends BaseService {
     // paused in storage but have no active in-process gate-node handler.
     // Active gate-node handlers registered by the runtime have higher priority
     // (default 0) and will intercept gate.respond before this fallback runs.
-    this.addCleanup(
+    this.addHandlerCleanup(
       this.bus.on(
         WorkflowSubjects.gate.respond,
         async (ctx) => {
@@ -612,12 +619,12 @@ export class WorkflowExecutor extends BaseService {
 
   /** Register timeout wakeup handlers for parked gates. */
   private registerGateTimeoutHandlers(): void {
-    this.addCleanup(
+    this.addHandlerCleanup(
       this.bus.on(WorkflowSubjects.gate.suspended, (ctx) => {
         this.gateTimeoutScheduler.schedule(ctx.payload);
       }),
     );
-    this.addCleanup(
+    this.addHandlerCleanup(
       this.bus.on(WorkflowSubjects.gate.resolved, (ctx) => {
         this.gateTimeoutScheduler.clear(ctx.payload.executionId, ctx.payload.stepId, ctx.payload.frameId);
       }),

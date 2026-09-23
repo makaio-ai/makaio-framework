@@ -2,6 +2,10 @@ import type { IMakaioBus, OnOptions } from '@makaio/bus-core';
 import type { SubjectDefinition, HandlerForSubjectDefinition } from '@makaio/core';
 import { getErrorString } from '@makaio/utils';
 
+type CleanupRegistration =
+  | { readonly cleanup: () => void; readonly kind: 'handler' }
+  | { readonly cleanup: () => void | Promise<void>; readonly kind: 'resource' };
+
 /**
  * Abstract base class for Makaio bus services.
  *
@@ -38,8 +42,9 @@ import { getErrorString } from '@makaio/utils';
  * cannot be rebuilt on top of them.
  */
 export abstract class BaseService {
-  private readonly _cleanups: Array<() => void | Promise<void>> = [];
+  private readonly _cleanups: CleanupRegistration[] = [];
   private _initialized = false;
+  private _serviceLifecycleGeneration = 0;
   private _initPromise: Promise<void> | null = null;
   private _destroyPromise: Promise<void> | null = null;
 
@@ -84,6 +89,7 @@ export abstract class BaseService {
     this._initPromise = (async () => {
       try {
         await this.onInit();
+        this._serviceLifecycleGeneration += 1;
         this._initialized = true;
       } catch (error) {
         // The initialization failure is what the caller asked about, so the
@@ -103,8 +109,8 @@ export abstract class BaseService {
   /**
    * Destroy the service and unsubscribe all registered handlers.
    *
-   * Calls the optional `onDestroy()` hook before running cleanups, then
-   * resets the initialized flag. Safe to call multiple times (idempotent).
+   * Unsubscribes handlers before the optional `onDestroy()` hook, then runs
+   * resource cleanups. Safe to call multiple times (idempotent).
    *
    * Teardown is best-effort but never silent: a failing `onDestroy()` does not
    * skip cleanups, and a failing cleanup does not skip the ones after it. Once
@@ -133,11 +139,9 @@ export abstract class BaseService {
       }
       if (!this._initialized) return;
 
-      // TODO(FACT-358): Registered handlers remain live until cleanups run after onDestroy.
-      // Async teardown can therefore admit work during this stopping interval.
       this._initialized = false;
 
-      const failures: unknown[] = [];
+      const failures = this.unregisterHandlers();
       try {
         await this.onDestroy?.();
       } catch (destroyError) {
@@ -167,7 +171,7 @@ export abstract class BaseService {
   /**
    * Register a bus handler and enqueue its unsubscribe function for teardown.
    *
-   * Equivalent to `this._cleanups.push(this.bus.on(subject, handler, options))`.
+   * The handler is unsubscribed before an awaitable `onDestroy()` begins.
    * @param subject - The subject definition to listen on
    * @param handler - Handler function for the subject
    * @param options - Optional handler filter and dispatch priority
@@ -181,7 +185,20 @@ export abstract class BaseService {
     // IsRequest on unresolved generic Subject. Channel-only guards are
     // enforced at the public bus API boundary where concrete subject
     // types are known; BaseService delegates through the typed interface.
-    this._cleanups.push(this.bus.on(subject as never, handler as never, options));
+    this.addHandlerCleanup(this.bus.on(subject as never, handler as never, options));
+  }
+
+  /**
+   * Enqueue a bus handler disposer for removal before `onDestroy()` runs.
+   *
+   * Use this for handler registrations returned by helpers when
+   * {@link registerHandler} cannot express their construction. Shutdown and
+   * completion protocols that must accept already-admitted work through
+   * `onDestroy()` remain resource cleanups.
+   * @param cleanup - Bus handler disposer to invoke before `onDestroy()`
+   */
+  protected addHandlerCleanup(cleanup: () => void): void {
+    this._cleanups.push({ cleanup, kind: 'handler' });
   }
 
   /**
@@ -191,7 +208,27 @@ export abstract class BaseService {
    * @param fn - Function to invoke during teardown
    */
   protected addCleanup(fn: () => void | Promise<void>): void {
-    this._cleanups.push(fn);
+    this._cleanups.push({ cleanup: fn, kind: 'resource' });
+  }
+
+  /**
+   * Current successful service lifecycle generation.
+   *
+   * Capture this at callback entry and use {@link isCurrentLifecycle} after
+   * awaitable work before producing lifecycle-scoped side effects.
+   * @returns Monotonic lifecycle generation
+   */
+  protected get serviceLifecycleGeneration(): number {
+    return this._serviceLifecycleGeneration;
+  }
+
+  /**
+   * Whether a captured lifecycle generation still owns this service.
+   * @param generation - Lifecycle generation captured at callback entry
+   * @returns `true` while that lifecycle remains active
+   */
+  protected isCurrentLifecycle(generation: number): boolean {
+    return this._initialized && this._serviceLifecycleGeneration === generation;
   }
 
   /**
@@ -206,7 +243,7 @@ export abstract class BaseService {
   /**
    * Optional service teardown hook.
    *
-   * Called by `destroy()` before automatic handler unsubscription.
+   * Called by `destroy()` after automatic handler unsubscription.
    * Implement only when there are resources beyond bus handlers to clean up
    * (e.g., stopping trackers, clearing maps, releasing external handles).
    *
@@ -217,7 +254,29 @@ export abstract class BaseService {
   protected onDestroy?(): void | Promise<void>;
 
   /**
-   * Run every registered cleanup, collecting rather than raising failures.
+   * Unsubscribe every registered bus handler before an async destroy hook runs.
+   * @returns Failures thrown by handler disposers, in registration order
+   */
+  private unregisterHandlers(): unknown[] {
+    const failures: unknown[] = [];
+    const retained: CleanupRegistration[] = [];
+    for (const registration of this._cleanups) {
+      if (registration.kind !== 'handler') {
+        retained.push(registration);
+        continue;
+      }
+      try {
+        registration.cleanup();
+      } catch (cleanupError) {
+        failures.push(cleanupError);
+      }
+    }
+    this._cleanups.splice(0, this._cleanups.length, ...retained);
+    return failures;
+  }
+
+  /**
+   * Run every remaining resource cleanup, collecting rather than raising failures.
    *
    * A cleanup that throws must not prevent the ones registered after it from
    * running, so failures are returned to the caller, which decides whether to
@@ -226,9 +285,9 @@ export abstract class BaseService {
    */
   private async runCleanups(): Promise<unknown[]> {
     const failures: unknown[] = [];
-    for (const fn of this._cleanups) {
+    for (const registration of this._cleanups) {
       try {
-        await fn();
+        await registration.cleanup();
       } catch (cleanupError) {
         failures.push(cleanupError);
       }

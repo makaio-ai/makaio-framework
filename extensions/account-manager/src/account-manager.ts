@@ -149,7 +149,7 @@ export class AccountManager extends BaseService {
       this.addCleanup(() => windowActivator.stop());
     }
     this.registerHandlers();
-    this.addCleanup(
+    this.addHandlerCleanup(
       registerAccountManagerSourceHandlers({
         bus: this.bus,
         sources: this.sources,
@@ -336,27 +336,34 @@ export class AccountManager extends BaseService {
       ctx.setResult(result);
     });
 
-    this.registerHandler(CredentialSubjects.activation.prepare, async (ctx) => {
-      const { providerContext } = ctx.payload;
-      if (providerContext.auth.mode !== 'inferred' || providerContext.auth.account === undefined) {
-        await ctx.next();
-        return;
-      }
-      const { account, method } = providerContext.auth;
-      if (account.managerId !== ACCOUNT_MANAGER_ID) {
-        await ctx.next();
-        return;
-      }
-      ctx.setResult(await this.activationTransactions.prepare(method.clientId, account.accountId));
-    });
+    // Transaction requests remain available while onDestroy closes admission and drains work.
+    this.addCleanup(
+      this.bus.on(CredentialSubjects.activation.prepare, async (ctx) => {
+        const { providerContext } = ctx.payload;
+        if (providerContext.auth.mode !== 'inferred' || providerContext.auth.account === undefined) {
+          await ctx.next();
+          return;
+        }
+        const { account, method } = providerContext.auth;
+        if (account.managerId !== ACCOUNT_MANAGER_ID) {
+          await ctx.next();
+          return;
+        }
+        ctx.setResult(await this.activationTransactions.prepare(method.clientId, account.accountId));
+      }),
+    );
 
-    this.registerHandler(CredentialSubjects.activation.commit, async (ctx) => {
-      ctx.setResult(await this.activationTransactions.commit(ctx.payload.transactionId));
-    });
+    this.addCleanup(
+      this.bus.on(CredentialSubjects.activation.commit, async (ctx) => {
+        ctx.setResult(await this.activationTransactions.commit(ctx.payload.transactionId));
+      }),
+    );
 
-    this.registerHandler(CredentialSubjects.activation.rollback, async (ctx) => {
-      ctx.setResult(await this.activationTransactions.rollback(ctx.payload.transactionId));
-    });
+    this.addCleanup(
+      this.bus.on(CredentialSubjects.activation.rollback, async (ctx) => {
+        ctx.setResult(await this.activationTransactions.rollback(ctx.payload.transactionId));
+      }),
+    );
   }
 
   /**

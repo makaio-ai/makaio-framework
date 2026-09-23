@@ -45,6 +45,7 @@ interface ActiveIdentityRecord {
  */
 export class ClientRuntimeService extends BaseService {
   private readonly latestSnapshots = new Map<string, ClientUsageSnapshot>();
+  private runtimeObserveRegistrationEpoch = 0;
 
   /**
    * Most recently activated account identity per client, keyed by `clientId`.
@@ -80,7 +81,13 @@ export class ClientRuntimeService extends BaseService {
       const results = await this.scanClients(ctx.payload.targets);
       ctx.setResult({ results });
     });
-    this.registerHandler(ClientSubjects.runtime.observe, (ctx) => this.handleRuntimeObserve(ctx));
+    // Reject requests through the typed stopping contract while onDestroy drains an admitted mutation.
+    const runtimeObserveRegistrationEpoch = ++this.runtimeObserveRegistrationEpoch;
+    this.addCleanup(
+      this.bus.on(ClientSubjects.runtime.observe, (ctx) =>
+        this.handleRuntimeObserve(ctx, runtimeObserveRegistrationEpoch),
+      ),
+    );
     this.registerHandler(ClientSubjects.runtime.resolveBySupervisorSessionId, (ctx) => {
       ctx.setResult({
         runtime: this.runtimeRegistry.resolveBySupervisorSessionId(
@@ -117,6 +124,7 @@ export class ClientRuntimeService extends BaseService {
    * Clear all in-memory state on destroy.
    */
   protected override async onDestroy(): Promise<void> {
+    this.runtimeObserveRegistrationEpoch += 1;
     await this.runtimeRegistry.clear();
     this.latestSnapshots.clear();
     this.activeIdentities.clear();
@@ -179,10 +187,12 @@ export class ClientRuntimeService extends BaseService {
 
   private async handleRuntimeObserve(
     ctx: ContextForSubjectDefinition<typeof ClientSubjects.runtime.observe>,
+    registrationEpoch: number,
   ): Promise<void> {
-    if (!this.initialized) {
+    if (registrationEpoch !== this.runtimeObserveRegistrationEpoch || !this.initialized) {
       throw new Error('client.runtime.observe: service is stopping');
     }
+    const lifecycleGeneration = this.serviceLifecycleGeneration;
     const { payload } = ctx;
 
     // Defense-in-depth: the Zod schema has a .refine() for this invariant, but
@@ -201,7 +211,7 @@ export class ClientRuntimeService extends BaseService {
 
     const { record, ...result } = await this.runtimeRegistry.upsertRuntime(payload);
 
-    if (!this.initialized) {
+    if (!this.isCurrentLifecycle(lifecycleGeneration)) {
       ctx.setResult({
         clientRuntimeId: result.clientRuntimeId,
         created: result.created,
@@ -242,9 +252,7 @@ export class ClientRuntimeService extends BaseService {
         console.warn('[ClientRuntimeService] Failed to emit client.runtime.observed:', error);
       });
 
-    // TODO(FACT-358): A callback from an older lifecycle can resume after a clean re-init.
-    // Guard this emission with a lifecycle generation, not initialized alone.
-    if ((result.created || result.promoted) && this.initialized) {
+    if ((result.created || result.promoted) && this.isCurrentLifecycle(lifecycleGeneration)) {
       await this.bus
         .emit(ClientSubjects.runtime.started, {
           clientRuntimeId: record.clientRuntimeId,

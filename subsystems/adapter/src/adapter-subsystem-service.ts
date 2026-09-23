@@ -141,20 +141,20 @@ export class AdapterSubsystemService extends BaseService {
    */
   protected override async onInit(): Promise<void> {
     await this.configStore.loadSnapshot();
-    this.configStore.registerListeners((fn) => this.addCleanup(fn));
+    this.configStore.registerListeners((fn) => this.addHandlerCleanup(fn));
     this.registerBusHandlers();
     await this.bus.emit(AdapterSubsystemSubjects.ready, {});
   }
 
   private registerBusHandlers(): void {
-    this.addCleanup(
+    this.addHandlerCleanup(
       registerProviderStorageFallbackHandlers(
         this.bus,
         () => this.registry.getLoadedAdapters(),
         this.runtimeDefinitionHandlerPriority,
       ),
     );
-    this.addCleanup(
+    this.addHandlerCleanup(
       registerClientStorageFallbackHandlers(
         this.bus,
         () => this.registry.getLoadedAdapters(),

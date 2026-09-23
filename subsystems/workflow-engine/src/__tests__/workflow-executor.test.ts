@@ -222,6 +222,34 @@ describe('WorkflowExecutor — paused gate integration', () => {
     await teardownWorkflowExecutorTest(setup);
   });
 
+  it('unregisters the paused-gate responder before executor teardown drains', async () => {
+    setup = await setupWorkflowExecutorTest();
+    const executorForTest = setup.workflowExecutor as unknown as { onDestroy: () => Promise<void> };
+    const originalOnDestroy = executorForTest.onDestroy.bind(executorForTest);
+    const destroyEntered = Promise.withResolvers<void>();
+    const releaseDestroy = Promise.withResolvers<void>();
+    vi.spyOn(executorForTest, 'onDestroy').mockImplementation(async () => {
+      destroyEntered.resolve();
+      await releaseDestroy.promise;
+      await originalOnDestroy();
+    });
+
+    const destroying = setup.workflowExecutor.destroy();
+    await destroyEntered.promise;
+
+    await expect(
+      MakaioBus.requestOptional(WorkflowSubjects.gate.respond, {
+        executionId: 'execution-shutting-down',
+        gateId: 'gate-shutting-down',
+        action: 'approve',
+        resumeData: { decision: 'approved' },
+      }),
+    ).resolves.toEqual({ handled: false });
+
+    releaseDestroy.resolve();
+    await destroying;
+  });
+
   it('parks a runner result without terminalizing the execution', async () => {
     const workflowId = `wf-paused-${Math.random().toString(36).slice(2)}`;
     const definition = createWorkflowDefinition({ id: workflowId });

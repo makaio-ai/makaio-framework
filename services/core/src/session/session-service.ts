@@ -142,18 +142,23 @@ export class MakaioSessionService extends BaseService {
     this.ownership = registered.ownership;
     // Initialization failure bypasses `onDestroy`; make the ordinary cleanup
     // unwind close the authority as well. Normal destroy reaches the same
-    // idempotent close through `onDestroy` before handler cleanup begins.
+    // idempotent close through `onDestroy` before the protocol cleanup runs.
     this.addCleanup(async () => {
       if (this.ownership === registered.ownership) this.ownership = undefined;
       await registered.ownership.close();
     });
-    for (const cleanup of registered.cleanups) {
+    for (const cleanup of registered.handlerCleanups) {
+      this.addHandlerCleanup(cleanup);
+    }
+    // The ownership authority rejects new operations and drains work inside
+    // onDestroy, so its protocol handlers must remain available until then.
+    for (const cleanup of registered.shutdownProtocolCleanups) {
       this.addCleanup(cleanup);
     }
     // Persist agent.added / branch.created lifecycle rows in every host that
     // composes the session service (turn lifecycle rows persist at emit sites).
-    this.addCleanup(registerSessionLifecycleEventWriters(this.bus));
-    this.addCleanup(this.scheduleOwnershipReconcile());
+    this.addHandlerCleanup(registerSessionLifecycleEventWriters(this.bus));
+    this.addHandlerCleanup(this.scheduleOwnershipReconcile());
     await this.reconcileOrphanedTurns();
   }
 
