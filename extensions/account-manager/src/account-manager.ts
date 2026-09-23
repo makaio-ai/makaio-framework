@@ -63,7 +63,7 @@ export class AccountManager extends BaseService {
   private readonly clientMutations = new ClientMutationQueue();
 
   /** Owns prepared account switches through one terminal action or shutdown. */
-  private readonly activationTransactions: AccountActivationTransactions;
+  private activationTransactions: AccountActivationTransactions | undefined;
 
   private readonly credentialTracker: CredentialTracker;
   private readonly clientAccountLinker: ClientAccountLinker;
@@ -121,22 +121,16 @@ export class AccountManager extends BaseService {
         prepareUsageCredential(clientId, accountId, this.getSource(clientId), this.metadataStore, this.credentialStore),
     });
 
-    this.activationTransactions = new AccountActivationTransactions({
-      clientMutations: this.clientMutations,
-      prepareActivation: async (clientId, accountId) => {
-        const target = await getStoredAccount(this.metadataStore, this.credentialStore, clientId, accountId);
-        return target === null
-          ? null
-          : prepareAccountActivation(clientId, accountId, this.buildActivationDeps(clientId), undefined, target);
-      },
-    });
-
     if (hasEnabledAutoActivationSource(options.autoActivation)) {
       this.windowActivator = new WindowActivator(bus, options.autoActivation);
     }
   }
 
   protected async onInit(): Promise<void> {
+    // Each service generation owns a distinct transaction controller. A bus
+    // callback captured before teardown must never be admitted after re-init.
+    const activationTransactions = this.createActivationTransactions();
+    this.activationTransactions = activationTransactions;
     this.clientAccountLinker.start();
     this.addCleanup(() => this.clientAccountLinker.stop());
     this.labelResolver.start();
@@ -156,7 +150,7 @@ export class AccountManager extends BaseService {
         withClientMutation: (clientId, action) => this.clientMutations.run(clientId, action),
       }),
     );
-    this.registerCredentialLifecycleHandlers();
+    this.registerCredentialLifecycleHandlers(activationTransactions);
     await this.credentialTracker.start();
     this.addCleanup(() => this.credentialTracker.stop());
     this.addCleanup(() => this.usageTracker.stop());
@@ -165,13 +159,29 @@ export class AccountManager extends BaseService {
     // Admission opens only after every fallible initialization step. BaseService
     // does not call onDestroy when onInit rejects, so opening earlier could leave
     // a prepared transaction waiting forever after handler cleanup.
-    this.activationTransactions.start();
+    activationTransactions.start();
   }
 
   /** Roll back every unconsumed activation before service-owned handlers are removed. */
   protected override async onDestroy(): Promise<void> {
     this.usageTracker.requestStop();
-    await this.activationTransactions.shutdown();
+    await this.activationTransactions?.shutdown();
+  }
+
+  /**
+   * Create the transaction owner captured by one service generation's handlers.
+   * @returns A closed transaction controller for the new generation.
+   */
+  private createActivationTransactions(): AccountActivationTransactions {
+    return new AccountActivationTransactions({
+      clientMutations: this.clientMutations,
+      prepareActivation: async (clientId, accountId) => {
+        const target = await getStoredAccount(this.metadataStore, this.credentialStore, clientId, accountId);
+        return target === null
+          ? null
+          : prepareAccountActivation(clientId, accountId, this.buildActivationDeps(clientId), undefined, target);
+      },
+    });
   }
 
   /**
@@ -287,9 +297,10 @@ export class AccountManager extends BaseService {
   }
 
   /**
-   * Registers integration hooks for the credential activation/rotation flow.
+   * Register credential handlers against the current generation's transaction owner.
+   * @param activationTransactions - Controller captured by this generation's callbacks.
    */
-  private registerCredentialLifecycleHandlers(): void {
+  private registerCredentialLifecycleHandlers(activationTransactions: AccountActivationTransactions): void {
     this.registerHandler(CredentialSubjects.activate, async (ctx) => {
       const { providerContext } = ctx.payload;
       if (providerContext.auth.mode !== 'inferred' || providerContext.auth.account === undefined) {
@@ -349,19 +360,19 @@ export class AccountManager extends BaseService {
           await ctx.next();
           return;
         }
-        ctx.setResult(await this.activationTransactions.prepare(method.clientId, account.accountId));
+        ctx.setResult(await activationTransactions.prepare(method.clientId, account.accountId));
       }),
     );
 
     this.addCleanup(
       this.bus.on(CredentialSubjects.activation.commit, async (ctx) => {
-        ctx.setResult(await this.activationTransactions.commit(ctx.payload.transactionId));
+        ctx.setResult(await activationTransactions.commit(ctx.payload.transactionId));
       }),
     );
 
     this.addCleanup(
       this.bus.on(CredentialSubjects.activation.rollback, async (ctx) => {
-        ctx.setResult(await this.activationTransactions.rollback(ctx.payload.transactionId));
+        ctx.setResult(await activationTransactions.rollback(ctx.payload.transactionId));
       }),
     );
   }
