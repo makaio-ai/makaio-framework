@@ -311,15 +311,24 @@ const runtimeNodeStaticDir = join(DIST, 'runtime-node', 'static');
 mkdirSync(runtimeNodeStaticDir, { recursive: true });
 copyFileSync(join(FRAMEWORK_ROOT, 'static', 'model-registry.yaml'), join(runtimeNodeStaticDir, 'model-registry.yaml'));
 
-// The Bun-hosted native session supervisor starts this CommonJS bridge from
-// its bundled runtime-node module. Keep it adjacent to that module so the
-// bridge path remains stable in every umbrella-framework consumer.
+// The Bun-hosted supervisor backend is emitted as a shared chunk at the dist
+// root and resolves its CommonJS bridge there. Keep the existing runtime-node
+// asset too for that entrypoint's distribution contract.
 const runtimeNodeBridgeDir = join(DIST, 'runtime-node', 'bridge');
 mkdirSync(runtimeNodeBridgeDir, { recursive: true });
-copyFileSync(
-  join(FRAMEWORK_ROOT, 'subsystems', 'native-session-supervisor', 'src', 'pty', 'bridge', 'pty-bridge.cjs'),
-  join(runtimeNodeBridgeDir, 'pty-bridge.cjs'),
+const ptyBridgeSource = join(
+  FRAMEWORK_ROOT,
+  'subsystems',
+  'native-session-supervisor',
+  'src',
+  'pty',
+  'bridge',
+  'pty-bridge.cjs',
 );
+copyFileSync(ptyBridgeSource, join(runtimeNodeBridgeDir, 'pty-bridge.cjs'));
+const sharedChunkBridgeDir = join(DIST, 'bridge');
+mkdirSync(sharedChunkBridgeDir, { recursive: true });
+copyFileSync(ptyBridgeSource, join(sharedChunkBridgeDir, 'pty-bridge.cjs'));
 
 // ---------------------------------------------------------------------------
 // Assemble runtime-only lib/ (dist/ minus type declarations)
