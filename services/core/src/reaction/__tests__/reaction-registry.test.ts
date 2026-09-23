@@ -259,7 +259,7 @@ describe('ReactionRegistry', () => {
       await expect(inFlight).resolves.toEqual({ success: true });
       await expect(registry.invoke('alpha.notify', { message: 'hi' }, makeInput())).resolves.toEqual({
         success: false,
-        error: { message: "Reaction kind 'alpha.notify' is not registered" },
+        error: { code: 'unknown-reaction', message: "Reaction kind 'alpha.notify' is not registered" },
       });
     });
   });
@@ -284,7 +284,7 @@ describe('ReactionRegistry', () => {
 
       expect(outcome).toEqual({
         success: false,
-        error: { message: "Reaction kind 'ghost.notify' is not registered" },
+        error: { code: 'unknown-reaction', message: "Reaction kind 'ghost.notify' is not registered" },
       });
       expect(console.error).toHaveBeenCalledWith(expect.stringContaining("Reaction 'ghost.notify' invocation '"));
       expect(console.error).toHaveBeenCalledWith(expect.stringContaining('(correlationId: corr-1)'));
@@ -298,6 +298,7 @@ describe('ReactionRegistry', () => {
 
       expect(outcome.success).toBe(false);
       if (!outcome.success) {
+        expect(outcome.error.code).toBe('invalid-parameters');
         expect(outcome.error.message).toContain("Invalid parameters for Reaction 'alpha.notify'");
       }
       expect(handler).not.toHaveBeenCalled();
@@ -320,6 +321,7 @@ describe('ReactionRegistry', () => {
 
       expect(outcome.success).toBe(false);
       if (!outcome.success) {
+        expect(outcome.error.code).toBe('invalid-parameters');
         expect(outcome.error.message).toContain("Parameter validation for Reaction 'alpha.explosive' threw");
         expect(outcome.error.message).toContain('transform exploded');
       }
@@ -343,6 +345,7 @@ describe('ReactionRegistry', () => {
 
       expect(outcome.success).toBe(false);
       if (!outcome.success) {
+        expect(outcome.error.code).toBe('invalid-parameters');
         expect(outcome.error.message).toContain("Invalid parameters for Reaction 'alpha.async-refined'");
         expect(outcome.error.message).toContain('refinement said no');
       }
@@ -357,7 +360,7 @@ describe('ReactionRegistry', () => {
 
       const outcome = await registry.invoke('alpha.notify', { message: 'hi' }, makeInput());
 
-      expect(outcome).toEqual({ success: false, error: { message: 'boom' } });
+      expect(outcome).toEqual({ success: false, error: { code: 'handler-failed', message: 'boom' } });
       expect(handler).toHaveBeenCalledTimes(1);
     });
 
@@ -370,7 +373,7 @@ describe('ReactionRegistry', () => {
 
       const outcome = await registry.invoke('alpha.notify', { message: 'hi' }, makeInput());
 
-      expect(outcome).toEqual({ success: false, error: { message: 'string failure' } });
+      expect(outcome).toEqual({ success: false, error: { code: 'handler-failed', message: 'string failure' } });
     });
 
     it('never enters the handler when the host signal is already aborted', async () => {
@@ -385,7 +388,7 @@ describe('ReactionRegistry', () => {
 
       expect(outcome).toEqual({
         success: false,
-        error: { message: "Reaction 'alpha.notify' host signal already aborted" },
+        error: { code: 'cancelled', message: "Reaction 'alpha.notify' host signal already aborted" },
       });
       expect(handler).not.toHaveBeenCalled();
     });
@@ -402,12 +405,12 @@ describe('ReactionRegistry', () => {
 
       expect(outcome).toEqual({
         success: false,
-        error: { message: "Reaction 'alpha.notify' deadline already passed" },
+        error: { code: 'cancelled', message: "Reaction 'alpha.notify' deadline already passed" },
       });
       expect(handler).not.toHaveBeenCalled();
     });
 
-    it('does not enter the handler when the host aborts during async parameter validation', async () => {
+    it('classifies a rejected validation as cancelled when the host aborts first', async () => {
       const hostController = new AbortController();
       let releaseValidation: (() => void) | undefined;
       const validationGate = new Promise<void>((resolve) => {
@@ -422,11 +425,14 @@ describe('ReactionRegistry', () => {
         defineReaction({
           kind: 'alpha.async-host-abort',
           description: 'Waits for async validation.',
-          parameterSchema: z.object({ message: z.string() }).refine(async () => {
-            markValidationStarted?.();
-            await validationGate;
-            return true;
-          }),
+          parameterSchema: z.object({ message: z.string() }).refine(
+            async () => {
+              markValidationStarted?.();
+              await validationGate;
+              return false;
+            },
+            { message: 'validation rejected after host abort' },
+          ),
           handler,
         }),
       ]);
@@ -442,12 +448,15 @@ describe('ReactionRegistry', () => {
 
       await expect(invocation).resolves.toEqual({
         success: false,
-        error: { message: "Reaction 'alpha.async-host-abort' cancelled before handler entry: host shutdown" },
+        error: {
+          code: 'cancelled',
+          message: "Reaction 'alpha.async-host-abort' cancelled before handler entry: host shutdown",
+        },
       });
       expect(handler).not.toHaveBeenCalled();
     });
 
-    it('does not enter the handler when the deadline expires during async parameter validation', async () => {
+    it('classifies a rejected validation as cancelled when its deadline expires first', async () => {
       vi.useFakeTimers();
       try {
         let releaseValidation: (() => void) | undefined;
@@ -463,11 +472,14 @@ describe('ReactionRegistry', () => {
           defineReaction({
             kind: 'alpha.async-deadline',
             description: 'Waits for async validation.',
-            parameterSchema: z.object({ message: z.string() }).refine(async () => {
-              markValidationStarted?.();
-              await validationGate;
-              return true;
-            }),
+            parameterSchema: z.object({ message: z.string() }).refine(
+              async () => {
+                markValidationStarted?.();
+                await validationGate;
+                return false;
+              },
+              { message: 'validation rejected after deadline' },
+            ),
             handler,
           }),
         ]);
@@ -481,6 +493,7 @@ describe('ReactionRegistry', () => {
         await expect(invocation).resolves.toEqual({
           success: false,
           error: {
+            code: 'cancelled',
             message: `Reaction 'alpha.async-deadline' cancelled before handler entry: Reaction invocation deadline reached (deadlineEpochMs: ${deadlineEpochMs})`,
           },
         });
@@ -514,7 +527,44 @@ describe('ReactionRegistry', () => {
         ).resolves.toEqual({
           success: false,
           error: {
+            code: 'cancelled',
             message: `Reaction 'alpha.sync-deadline' cancelled before handler entry: Reaction invocation deadline reached (deadlineEpochMs: ${deadlineEpochMs})`,
+          },
+        });
+        expect(handler).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('classifies a synchronous validation failure as cancelled when it crosses its deadline', async () => {
+      vi.useFakeTimers({ now: 0 });
+      try {
+        const deadlineEpochMs = 1_000;
+        const handler = vi.fn(async () => {});
+        registry.register('alpha', [
+          defineReaction({
+            kind: 'alpha.sync-invalid-deadline',
+            description: 'Rejects after advancing the clock while validating.',
+            parameterSchema: z.object({ message: z.string() }).refine(
+              () => {
+                vi.setSystemTime(deadlineEpochMs);
+                return false;
+              },
+              { message: 'validation rejected after deadline' },
+            ),
+            handler,
+          }),
+        ]);
+
+        await expect(
+          registry.invoke('alpha.sync-invalid-deadline', { message: 'hi' }, makeInput({ deadlineEpochMs })),
+        ).resolves.toEqual({
+          success: false,
+          error: {
+            code: 'cancelled',
+            message: `Reaction 'alpha.sync-invalid-deadline' cancelled before handler entry: Reaction invocation deadline reached (deadlineEpochMs: ${deadlineEpochMs})`,
           },
         });
         expect(handler).not.toHaveBeenCalled();
@@ -650,7 +700,7 @@ describe('ReactionRegistry', () => {
         makeInput({ hostSignal: hostController.signal }),
       );
 
-      expect(outcome).toEqual({ success: false, error: { message: 'host shutdown' } });
+      expect(outcome).toEqual({ success: false, error: { code: 'handler-failed', message: 'host shutdown' } });
     });
 
     it('keeps concurrent invocation IDs and cancellation isolated', async () => {
@@ -693,7 +743,10 @@ describe('ReactionRegistry', () => {
       await vi.waitFor(() => expect(contexts).toHaveLength(2));
       firstController.abort(new Error('first cancelled'));
 
-      await expect(cancelled).resolves.toEqual({ success: false, error: { message: 'first cancelled' } });
+      await expect(cancelled).resolves.toEqual({
+        success: false,
+        error: { code: 'handler-failed', message: 'first cancelled' },
+      });
       const firstContext = contexts.get(false);
       const secondContext = contexts.get(true);
       expect(firstContext?.invocationId).not.toBe(secondContext?.invocationId);
@@ -810,7 +863,7 @@ describe('ReactionRegistry', () => {
 
       await expect(invocation).resolves.toEqual({
         success: false,
-        error: { message: 'handler failed after validation' },
+        error: { code: 'handler-failed', message: 'handler failed after validation' },
       });
       expect(seen).toMatchObject({
         eventKind: 'original.event',

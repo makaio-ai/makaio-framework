@@ -151,7 +151,7 @@ describe('Reaction extension acceptance (real coordinator lifecycle)', () => {
     );
     expect(outcome).toEqual({
       success: false,
-      error: { message: `Reaction kind '${KIND}' is not registered` },
+      error: { code: 'unknown-reaction', message: `Reaction kind '${KIND}' is not registered` },
     });
     expect(harness.observed).toHaveLength(0);
 
@@ -247,7 +247,7 @@ describe('Reaction extension acceptance (real coordinator lifecycle)', () => {
       ),
     ).resolves.toEqual({
       success: false,
-      error: { message: `Reaction kind '${KIND}' is not registered` },
+      error: { code: 'unknown-reaction', message: `Reaction kind '${KIND}' is not registered` },
     });
     expect(handlerCalls).toBe(0);
 

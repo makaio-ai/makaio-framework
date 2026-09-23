@@ -42,7 +42,9 @@ export type ReactionDescriptor = z.infer<typeof ReactionDescriptorSchema>;
  * Serializable normalized outcome of a single Reaction invocation.
  *
  * A handler that resolves normally maps to `{ success: true }`; a handler
- * that throws maps to `{ success: false }` with a plain error message.
+ * that throws maps to `{ success: false }` with a stable failure code and a
+ * plain error message. Consumers can branch on the code while preserving the
+ * message for diagnostics and existing user-facing reporting.
  * Cancellation is cooperative: a handler that resolves despite an abort
  * still yields `{ success: true }` — only dispatches that are already
  * aborted or already past their deadline before handler entry are
@@ -60,6 +62,8 @@ export const ReactionOutcomeSchema = z.discriminatedUnion('success', [
     success: z.literal(false),
     /** Normalized failure details. */
     error: z.object({
+      /** Stable machine-readable classification of the invocation failure. */
+      code: z.enum(['unknown-reaction', 'invalid-parameters', 'cancelled', 'handler-failed']),
       /** Human-readable failure message extracted from the thrown value. */
       message: z.string(),
     }),

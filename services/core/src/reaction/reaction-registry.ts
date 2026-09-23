@@ -86,6 +86,9 @@ interface RegisteredReaction {
   readonly descriptor: ReactionDescriptor;
 }
 
+/** Stable classifications for normalized Reaction invocation failures. */
+type ReactionFailureCode = NonNullable<Extract<ReactionOutcome, { success: false }>['error']['code']>;
+
 /**
  * Owner-aware registry and in-process dispatcher for Reactions contributed by
  * extensions.
@@ -242,17 +245,17 @@ export class ReactionRegistry extends BaseService {
 
     const registered = this.definitionsByKind.get(kind);
     if (!registered) {
-      return this.failure(kind, invocationId, input.correlationId, `Reaction kind '${kind}' is not registered`);
-    }
-    // Cheapest gates first: an already-dead dispatch must not pay for full
-    // async schema validation.
-    if (input.hostSignal?.aborted) {
-      return this.failure(kind, invocationId, input.correlationId, `Reaction '${kind}' host signal already aborted`);
+      return this.failure(
+        kind,
+        invocationId,
+        input.correlationId,
+        'unknown-reaction',
+        `Reaction kind '${kind}' is not registered`,
+      );
     }
     const deadlineEpochMs = normalizeDeadline(input.deadlineEpochMs);
-    if (deadlineEpochMs !== undefined && deadlineEpochMs <= Date.now()) {
-      return this.failure(kind, invocationId, input.correlationId, `Reaction '${kind}' deadline already passed`);
-    }
+    const preValidationFailure = this.cancelledBeforeValidation(kind, invocationId, input, deadlineEpochMs);
+    if (preValidationFailure) return preValidationFailure;
 
     // Cancellation ownership begins before the first async boundary, so a
     // host abort or deadline reached during async validation cannot race into
@@ -273,37 +276,38 @@ export class ReactionRegistry extends BaseService {
       try {
         parsed = await registered.parameterSchema.safeParseAsync(parameters);
       } catch (error) {
+        const cancellationFailure = this.cancelledAfterValidation(
+          kind,
+          invocationId,
+          context.correlationId,
+          cancellation,
+          deadlineEpochMs,
+        );
+        if (cancellationFailure) return cancellationFailure;
         return this.failure(
           kind,
           invocationId,
           context.correlationId,
+          'invalid-parameters',
           `Parameter validation for Reaction '${kind}' threw: ${getErrorString(error)}`,
           error,
         );
       }
+      const cancellationFailure = this.cancelledAfterValidation(
+        kind,
+        invocationId,
+        context.correlationId,
+        cancellation,
+        deadlineEpochMs,
+      );
+      if (cancellationFailure) return cancellationFailure;
       if (!parsed.success) {
         return this.failure(
           kind,
           invocationId,
           context.correlationId,
+          'invalid-parameters',
           `Invalid parameters for Reaction '${kind}': ${parsed.error.message}`,
-        );
-      }
-
-      // Timers run only when the event loop regains control. Synchronous or
-      // CPU-heavy schema validation can therefore carry an invocation past its
-      // deadline before its timer callback runs. Re-check the authoritative
-      // deadline immediately before handler entry.
-      if (deadlineEpochMs !== undefined) {
-        abortWhenDeadlineReached(cancellation.controller, deadlineEpochMs);
-      }
-      if (cancellation.controller.signal.aborted) {
-        return this.failure(
-          kind,
-          invocationId,
-          context.correlationId,
-          `Reaction '${kind}' cancelled before handler entry: ${getErrorString(cancellation.controller.signal.reason)}`,
-          cancellation.controller.signal.reason,
         );
       }
 
@@ -314,7 +318,7 @@ export class ReactionRegistry extends BaseService {
       // failure site and lets the rendered error carry that message, avoiding
       // printing it twice in one console.error call.
       this.logFailure(kind, invocationId, context.correlationId, `Reaction '${kind}' handler threw`, error);
-      return { success: false, error: { message: getErrorString(error) } };
+      return { success: false, error: { code: 'handler-failed', message: getErrorString(error) } };
     } finally {
       cancellation.release();
     }
@@ -326,6 +330,7 @@ export class ReactionRegistry extends BaseService {
    * @param kind - Reaction kind that failed to invoke.
    * @param invocationId - Runtime-minted identifier of the failed invocation.
    * @param correlationId - Bus correlation identifier, when one exists.
+   * @param code - Stable machine-readable classification of the failure.
    * @param message - Normalized failure message for the log line and outcome.
    * @param cause - Original thrown value, retained only in the log.
    * @returns Normalized failure outcome carrying `message`.
@@ -334,11 +339,99 @@ export class ReactionRegistry extends BaseService {
     kind: string,
     invocationId: ReactionInvocationId,
     correlationId: string | undefined,
+    code: ReactionFailureCode,
     message: string,
     cause?: unknown,
   ): ReactionOutcome {
     this.logFailure(kind, invocationId, correlationId, message, cause);
-    return { success: false, error: { message } };
+    return { success: false, error: { code, message } };
+  }
+
+  /**
+   * Returns the normalized outcome when cancellation prevents handler entry.
+   * @param kind - Reaction kind that was cancelled.
+   * @param invocationId - Runtime-minted identifier of the cancelled invocation.
+   * @param correlationId - Bus correlation identifier, when one exists.
+   * @param reason - Cancellation reason owned by the invocation signal.
+   * @returns Normalized cancelled outcome carrying the existing diagnostic message.
+   */
+  private cancelledBeforeHandler(
+    kind: string,
+    invocationId: ReactionInvocationId,
+    correlationId: string | undefined,
+    reason: unknown,
+  ): ReactionOutcome {
+    return this.failure(
+      kind,
+      invocationId,
+      correlationId,
+      'cancelled',
+      `Reaction '${kind}' cancelled before handler entry: ${getErrorString(reason)}`,
+      reason,
+    );
+  }
+
+  /**
+   * Returns the normalized outcome when an invocation is cancelled before validation starts.
+   * @param kind - Reaction kind that was cancelled.
+   * @param invocationId - Runtime-minted identifier of the cancelled invocation.
+   * @param input - Host-supplied input for the invocation.
+   * @param deadlineEpochMs - Normalized invocation deadline, when one exists.
+   * @returns A normalized cancellation outcome, or `undefined` when validation may proceed.
+   */
+  private cancelledBeforeValidation(
+    kind: string,
+    invocationId: ReactionInvocationId,
+    input: ReactionInvocationInput,
+    deadlineEpochMs: number | undefined,
+  ): ReactionOutcome | undefined {
+    if (input.hostSignal?.aborted) {
+      return this.failure(
+        kind,
+        invocationId,
+        input.correlationId,
+        'cancelled',
+        `Reaction '${kind}' host signal already aborted`,
+      );
+    }
+    if (deadlineEpochMs !== undefined && deadlineEpochMs <= Date.now()) {
+      return this.failure(
+        kind,
+        invocationId,
+        input.correlationId,
+        'cancelled',
+        `Reaction '${kind}' deadline already passed`,
+      );
+    }
+    return undefined;
+  }
+
+  /**
+   * Returns the normalized outcome when cancellation wins after validation settles.
+   *
+   * A synchronous or CPU-heavy schema can cross a deadline before its timer
+   * callback runs. This authoritative check therefore precedes both a parsed
+   * validation failure and handler entry.
+   * @param kind - Reaction kind that was cancelled.
+   * @param invocationId - Runtime-minted identifier of the cancelled invocation.
+   * @param correlationId - Bus correlation identifier, when one exists.
+   * @param cancellation - Runtime-owned cancellation wiring for the invocation.
+   * @param deadlineEpochMs - Normalized invocation deadline, when one exists.
+   * @returns A normalized cancellation outcome, or `undefined` when processing may continue.
+   */
+  private cancelledAfterValidation(
+    kind: string,
+    invocationId: ReactionInvocationId,
+    correlationId: string | undefined,
+    cancellation: InvocationCancellation,
+    deadlineEpochMs: number | undefined,
+  ): ReactionOutcome | undefined {
+    if (deadlineEpochMs !== undefined) {
+      abortWhenDeadlineReached(cancellation.controller, deadlineEpochMs);
+    }
+    return cancellation.controller.signal.aborted
+      ? this.cancelledBeforeHandler(kind, invocationId, correlationId, cancellation.controller.signal.reason)
+      : undefined;
   }
 
   /**
