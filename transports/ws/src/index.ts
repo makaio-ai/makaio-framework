@@ -79,6 +79,11 @@ export { extractSocketErrorMessage } from './transport-helpers.js';
 // Export authentication implementations
 export { HmacAuth } from './auth/index.js';
 export {
+  MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID,
+  MAKAIO_LOCAL_CLI_PEER_KIND,
+  registerMakaioLocalCliHmacIdentity,
+} from './auth/index.js';
+export {
   captureHmacIdentitySecretCleanup,
   clearHmacIdentitySecretsForTesting,
   registerHmacIdentitySecret,

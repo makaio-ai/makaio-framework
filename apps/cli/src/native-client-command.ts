@@ -30,6 +30,7 @@ import {
 } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { formatConnectionError } from './connection-error.js';
+import { attachInteractiveTerminal } from './terminal-attachment-command.js';
 import {
   claimSubcommandName,
   findOrCreateCommand,
@@ -206,7 +207,7 @@ function registerAttachSubcommand(parent: CommandInstance, ctx: NativeClientComm
           process.exitCode = 1;
           return;
         }
-        await handleAttach(result.request, ctx);
+        await handleTerminalAttach(result.request, ctx);
       },
     );
 }
@@ -306,31 +307,13 @@ async function handleLaunch(
  * @param request - Typed attach request with exactly one locator field set.
  * @param ctx - Bus and error context.
  */
-async function handleAttach(request: NativeSupervisorAttachRequest, ctx: NativeClientCommandContext): Promise<void> {
+async function handleTerminalAttach(
+  request: NativeSupervisorAttachRequest,
+  ctx: NativeClientCommandContext,
+): Promise<void> {
   const bus = requireConnectedBus(ctx);
   if (!bus) return;
-
-  try {
-    const response = await bus.request(NativeSessionSupervisorSubjects.attach, request);
-    if (!response.success) {
-      process.stderr.write('attach: runtime not found or attach failed\n');
-      process.exitCode = 1;
-      return;
-    }
-    process.stdout.write(`Attached to runtime\n`);
-    if (response.supervisorSessionId !== undefined) {
-      process.stdout.write(`  supervisor session: ${response.supervisorSessionId}\n`);
-    }
-    if (response.pid !== undefined) {
-      process.stdout.write(`  pid: ${response.pid}\n`);
-    }
-    if (response.terminalAttachment !== undefined) {
-      process.stdout.write(`  can attach terminal: ${String(response.terminalAttachment.canAttach)}\n`);
-    }
-  } catch (err) {
-    process.stderr.write(`attach failed: ${err instanceof Error ? err.message : String(err)}\n`);
-    process.exitCode = 1;
-  }
+  await attachInteractiveTerminal(bus, request);
 }
 
 /**

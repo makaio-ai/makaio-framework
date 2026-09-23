@@ -395,6 +395,25 @@ export interface BusTransport {
   >;
 
   /**
+   * Optionally deliver an event to one trusted transport connection.
+   *
+   * The connection ID comes from a locally-derived `TransportReceiveContext`;
+   * it is never supplied on the wire. Implementations must not fall back to
+   * broadcast when the connection no longer exists.
+   * @param message - Event to deliver.
+   * @param connectionId - Transport-local connection identity.
+   * @returns Whether the event reached the still-connected target.
+   */
+  sendToConnection?(message: BusEventMessage, connectionId: string): Promise<boolean>;
+
+  /**
+   * Observe trusted remote-connection teardown.
+   * @param handler - Invoked after the connection is no longer routable.
+   * @returns Unsubscribe function.
+   */
+  onConnectionClosed?(handler: (connectionId: string) => void): () => void;
+
+  /**
    * Optional: cancel/cleanup pending correlation state for an in-flight request.
    *
    * Used when the caller aborts while the transport-level correlation promise is

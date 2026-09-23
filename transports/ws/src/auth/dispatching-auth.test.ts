@@ -342,6 +342,66 @@ describe('DispatchingAuth', () => {
     });
   });
 
+  describe('receive context and liveness delegation', () => {
+    it('delegates context and liveness checks to the sole HMAC strategy', () => {
+      const context = {
+        transportName: '',
+        peer: { kind: 'hmac', id: 'lan-device', authenticated: true },
+      };
+      const getReceiveContext = vi.fn().mockReturnValue(context);
+      const isSocketAuthenticated = vi.fn().mockReturnValue(false);
+      hmockStrategy.strategy.getReceiveContext = getReceiveContext;
+      hmockStrategy.strategy.isSocketAuthenticated = isSocketAuthenticated;
+      const auth = new DispatchingAuth({ hmac: hmockStrategy.strategy });
+
+      expect(auth.getReceiveContext(socket)).toBe(context);
+      expect(auth.isSocketAuthenticated(socket)).toBe(false);
+      expect(getReceiveContext).toHaveBeenCalledWith(socket);
+      expect(isSocketAuthenticated).toHaveBeenCalledWith(socket);
+    });
+
+    it('delegates each mixed-route socket to its selected HMAC or E2E strategy', async () => {
+      const hmacSocket = createSocket();
+      const e2eSocket = createSocket();
+      const hmacContext = {
+        transportName: '',
+        peer: { kind: 'hmac', id: 'lan-device', authenticated: true },
+      };
+      const e2eContext = {
+        transportName: '',
+        peer: { kind: 'e2e', id: 'remote-device', authenticated: true, encrypted: true },
+      };
+      const getHmacContext = vi.fn().mockReturnValue(hmacContext);
+      const getE2EContext = vi.fn().mockReturnValue(e2eContext);
+      const hmacAuthenticated = vi.fn().mockReturnValue(true);
+      const e2eAuthenticated = vi.fn().mockReturnValue(false);
+      hmockStrategy.strategy.getReceiveContext = getHmacContext;
+      hmockStrategy.strategy.isSocketAuthenticated = hmacAuthenticated;
+      e2eStrategy.strategy.getReceiveContext = getE2EContext;
+      e2eStrategy.strategy.isSocketAuthenticated = e2eAuthenticated;
+      const auth = new DispatchingAuth({ hmac: hmockStrategy.strategy, e2e: e2eStrategy.strategy });
+
+      const hmacAuthentication = auth.authenticateServer(hmacSocket, send);
+      auth.handleAuthMessage({ type: 'auth-response', signature: 'valid' }, hmacSocket);
+      hmockStrategy.resolveServerAuth();
+      await hmacAuthentication;
+
+      const e2eAuthentication = auth.authenticateServer(e2eSocket, send);
+      auth.handleAuthMessage({ type: 'e2e-key-exchange' }, e2eSocket);
+      e2eStrategy.resolveServerAuth();
+      await e2eAuthentication;
+
+      expect(auth.getReceiveContext(hmacSocket)).toBe(hmacContext);
+      expect(auth.isSocketAuthenticated(hmacSocket)).toBe(true);
+      expect(auth.getReceiveContext(e2eSocket)).toBe(e2eContext);
+      expect(auth.isSocketAuthenticated(e2eSocket)).toBe(false);
+      expect(getHmacContext).toHaveBeenCalledWith(hmacSocket);
+      expect(hmacAuthenticated).toHaveBeenCalledWith(hmacSocket);
+      expect(getE2EContext).toHaveBeenCalledWith(e2eSocket);
+      expect(e2eAuthenticated).toHaveBeenCalledWith(e2eSocket);
+    });
+  });
+
   describe('cleanup', () => {
     it('calls cleanup on both configured strategies', () => {
       const auth = new DispatchingAuth({

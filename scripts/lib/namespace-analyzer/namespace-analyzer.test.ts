@@ -352,6 +352,42 @@ describe('extractNamespaces', () => {
     ]);
   });
 
+  it('classifies host-local request wrappers as RPC subjects', () => {
+    const root = createTempProject({
+      'namespace.ts': `
+        interface TestSchema<Input, Output> {
+          readonly _input: Input;
+          readonly _output: Output;
+        }
+
+        declare const MakaioBus: {
+          registerNamespace(prefix: string, schemas: unknown): unknown;
+        };
+        declare function hostLocalRequest<T extends { request: unknown; response: unknown }>(schema: T): {
+          readonly __hostLocalRequest: true;
+          readonly schema: T;
+        };
+        declare const RequestSchema: TestSchema<{ attachmentId: string }, never>;
+        declare const ResponseSchema: TestSchema<never, { success: boolean }>;
+
+        export const DemoNamespace = MakaioBus.registerNamespace('demo', {
+          terminalOpen: hostLocalRequest({ request: RequestSchema, response: ResponseSchema }),
+        });
+      `,
+    });
+
+    const namespaces = extractNamespaces(createAnalysisProgram(root), root);
+
+    expect(namespaces[0]?.subjects).toMatchObject([
+      {
+        key: 'terminalOpen',
+        type: 'rpc',
+        request: [{ name: 'attachmentId', type: 'string', required: true }],
+        response: [{ name: 'success', type: 'boolean', required: true }],
+      },
+    ]);
+  });
+
   it('includes fields owned by individual response union variants', () => {
     const root = createTempProject({
       'namespace.ts': `

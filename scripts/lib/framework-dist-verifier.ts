@@ -70,6 +70,7 @@ export const BUNDLED_MIGRATION_CHAINS: readonly string[] = ['dist/drizzle'];
  */
 export const BUNDLED_RUNTIME_ASSETS = [
   'dist/runtime-node/static/model-registry.yaml',
+  'dist/runtime-node/bridge/pty-bridge.cjs',
   'dist/code-execution/worker-entry.mjs',
 ] as const;
 

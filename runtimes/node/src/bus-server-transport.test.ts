@@ -3,6 +3,7 @@ import type { Server as HttpServer } from 'node:http';
 import { EventEmitter } from 'node:events';
 import { createBusInstance } from '@makaio/bus-core';
 import { startBusServer, type BusServer } from '@makaio/bus-server';
+import type { WebSocketLike } from '@makaio/bus-transport-websocket';
 import { BusServerTransportProvider } from './bus-server-transport.js';
 
 const { stopBusServerMock, closeWebSocketServerMock, handleUpgradeMock, WebSocketServerMock } = vi.hoisted(() => {
@@ -66,6 +67,67 @@ describe('BusServerTransportProvider', () => {
 
     await expect(transport.connect(bus, 'machine-1')).resolves.toBeUndefined();
 
+    await transport.disconnect();
+  });
+
+  it('derives a distinct unauthenticated loopback context for every socket when auth is absent', async () => {
+    const bus = createBusInstance();
+    const transport = new BusServerTransportProvider({
+      httpServer: makeMockHttpServer(),
+    });
+
+    await transport.connect(bus, 'machine-1');
+
+    const auth = vi.mocked(startBusServer).mock.calls[0]?.[0]?.auth;
+    expect(auth).toBeDefined();
+    const firstSocket = {} as WebSocketLike;
+    const secondSocket = {} as WebSocketLike;
+    await auth?.authenticateServer(firstSocket, vi.fn());
+    await auth?.authenticateServer(secondSocket, vi.fn());
+
+    const firstContext = auth?.getReceiveContext?.(firstSocket);
+    const secondContext = auth?.getReceiveContext?.(secondSocket);
+    expect(firstContext).toMatchObject({
+      transportName: '',
+      peer: { kind: 'makaio-loopback', authenticated: false },
+    });
+    expect(secondContext).toMatchObject({
+      transportName: '',
+      peer: { kind: 'makaio-loopback', authenticated: false },
+    });
+    expect(firstContext?.connectionId).toEqual(expect.any(String));
+    expect(secondContext?.connectionId).toEqual(expect.any(String));
+    expect(secondContext?.connectionId).not.toBe(firstContext?.connectionId);
+
+    auth?.cleanupSocket(firstSocket);
+    expect(auth?.getReceiveContext?.(firstSocket)).toBeUndefined();
+    await transport.disconnect();
+  });
+
+  it('does not install the loopback context provider for a non-loopback listener', async () => {
+    const bus = createBusInstance();
+    const httpServer = makeMockHttpServer();
+    vi.mocked(httpServer.address).mockReturnValue({ port: 9999, family: 'IPv4', address: '0.0.0.0' });
+    const transport = new BusServerTransportProvider({ httpServer });
+
+    await transport.connect(bus, 'machine-1');
+
+    expect(vi.mocked(startBusServer).mock.calls[0]?.[0]?.auth).toBeUndefined();
+    await transport.disconnect();
+  });
+
+  it('preserves configured auth instead of installing the loopback context provider', async () => {
+    const { HmacAuth } = await import('@makaio/bus-transport-websocket');
+    const bus = createBusInstance();
+    const auth = new HmacAuth({ secret: 'test-secret' });
+    const transport = new BusServerTransportProvider({
+      httpServer: makeMockHttpServer(),
+      auth,
+    });
+
+    await transport.connect(bus, 'machine-1');
+
+    expect(vi.mocked(startBusServer).mock.calls[0]?.[0]?.auth).toBe(auth);
     await transport.disconnect();
   });
 

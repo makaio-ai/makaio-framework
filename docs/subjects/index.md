@@ -12,7 +12,7 @@ next: false
 | Metric | Count |
 |--------|-------|
 | Namespaces | 106 |
-| Subjects | 1020 (408 events, 612 RPCs) |
+| Subjects | 1026 (410 events, 616 RPCs) |
 | framework | 101 |
 | extension | 5 |
 | kind: bus | 74 |
@@ -74,7 +74,7 @@ next: false
 | [`materialization`](./materialization.md) | bus | 6 | 3E / 3R |
 | [`mcp`](./mcp.md) | bus | 9 | 6E / 3R |
 | [`modelRegistry:public`](./modelregistry-public.md) | bus | 1 | 0E / 1R |
-| [`native-session-supervisor`](./native-session-supervisor.md) | bus | 4 | 0E / 4R |
+| [`native-session-supervisor`](./native-session-supervisor.md) | bus | 10 | 2E / 8R |
 | [`platform`](./platform.md) | bus | 3 | 0E / 3R |
 | [`review`](./review.md) | bus | 11 | 5E / 6R |
 | [`runtime`](./runtime.md) | bus | 3 | 0E / 3R |

@@ -20,6 +20,7 @@
  * @packageDocumentation
  */
 
+import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
 import type { Server as HttpServer } from 'node:http';
@@ -111,6 +112,23 @@ const busHandlerCleanups: Array<() => void> = [];
 let trayEntries: readonly TrayMenuListEntry[] = [];
 let refreshTrayMenu: (() => void) | null = null;
 let viteClose: (() => Promise<void>) | null = null;
+
+/**
+ * Select the Node executable delivered with a packaged Electrobun app.
+ *
+ * Bun cannot load the `node-pty` addon itself. The native-session supervisor
+ * therefore starts the framework's Node bridge, which must use the Node binary
+ * and addon closure copied into this app bundle.
+ */
+function configureBundledNodePtyBridge(): void {
+  if (IS_DEV) return;
+
+  const executable = path.join(PKG_ROOT, 'node', process.platform === 'win32' ? 'node.exe' : 'node');
+  if (!existsSync(executable)) {
+    throw new Error(`Bundled Node executable for the native PTY bridge is missing: ${executable}`);
+  }
+  process.env['MAKAIO_NODE_EXECUTABLE'] = executable;
+}
 
 // ── Cleanup ───────────────────────────────────────────────────────────────────
 
@@ -218,6 +236,7 @@ function openDefaultWindow(): number {
     const port = Number.isInteger(rawPort) && rawPort >= 1 && rawPort <= 65_535 ? rawPort : DEFAULT_PORT;
 
     await exitIfExistingProductionInstance(port);
+    configureBundledNodePtyBridge();
 
     const honoApp = new Hono();
 
@@ -303,6 +322,7 @@ function openDefaultWindow(): number {
       const transport = new BunBusServerTransportProvider({
         auth: commonBootOptions.auth,
         loopbackName: commonBootOptions.loopbackName ?? 'bun',
+        loopbackAuthorityHost: '127.0.0.1',
       });
       const websocket = transport.createWebSocketHandler();
 

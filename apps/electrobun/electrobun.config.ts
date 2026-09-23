@@ -12,6 +12,7 @@
  * to `base` for a system-WebView build.
  */
 
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ElectrobunConfig } from 'electrobun';
@@ -70,8 +71,42 @@ function toPackageRelativeCopySource(absolutePath: string): string {
   return path.relative(PACKAGE_ROOT, absolutePath).split(path.sep).join('/');
 }
 
+/**
+ * Resolve a Node executable that can run the bundled native PTY bridge.
+ *
+ * Electrobun packages for the current host only. A Node binary for another
+ * platform or architecture cannot run its matching `node-pty` addon, so fail
+ * while packaging instead of producing a desktop bundle with a broken PTY.
+ * @returns Absolute host-compatible Node executable path.
+ */
+function resolveBundledNodeExecutable(): string {
+  const requested = process.env['MAKAIO_NODE_EXECUTABLE']?.trim() || 'node';
+  let details: string;
+  try {
+    details = execFileSync(requested, ['-p', '`${process.execPath}\n${process.platform}-${process.arch}`'], {
+      encoding: 'utf8',
+    }).trim();
+  } catch (error) {
+    throw new Error(`Unable to resolve the Node executable required for the native PTY bridge: ${requested}`, {
+      cause: error,
+    });
+  }
+
+  const [executable, target] = details.split('\n');
+  const hostTarget = `${process.platform}-${process.arch}`;
+  if (!executable || target !== hostTarget) {
+    throw new Error(
+      `The Node executable required for the native PTY bridge targets ${target ?? 'an unknown platform'}, but Electrobun packages ${hostTarget}. Cross-target native PTY packaging is unsupported.`,
+    );
+  }
+  return executable;
+}
+
+const bundledNodeExecutable = isSourceDevBuild ? undefined : resolveBundledNodeExecutable();
+const bundledNodeBinaryName = process.platform === 'win32' ? 'node.exe' : 'node';
+
 const packageCopyEntries = {
-  './dist/cli.mjs': 'Resources/app/dist/cli.mjs',
+  './dist/cli.mjs': 'dist/cli.mjs',
   './dist/renderer': 'dist/renderer',
   './dist/variant.json': 'Resources/variant.json',
   ...sourceDevCopyEntries,
@@ -81,6 +116,12 @@ const packageCopyEntries = {
     'node_modules/@makaio/framework/package.json',
   [toPackageRelativeCopySource(path.join(WORKSPACE_ROOT, 'node_modules', 'zod'))]: 'node_modules/zod',
   [toPackageRelativeCopySource(path.join(WORKSPACE_ROOT, 'node_modules', 'drizzle-orm'))]: 'node_modules/drizzle-orm',
+  [toPackageRelativeCopySource(path.join(WORKSPACE_ROOT, 'node_modules', 'node-pty'))]: 'node_modules/node-pty',
+  [toPackageRelativeCopySource(path.join(WORKSPACE_ROOT, 'node_modules', 'node-addon-api'))]:
+    'node_modules/node-addon-api',
+  ...(bundledNodeExecutable
+    ? { [toPackageRelativeCopySource(bundledNodeExecutable)]: `node/${bundledNodeBinaryName}` }
+    : {}),
   [toPackageRelativeCopySource(path.join(PACKAGE_SET_ROOT, 'static', 'model-registry.yaml'))]:
     'Resources/app/dist/static/model-registry.yaml',
 } as const;

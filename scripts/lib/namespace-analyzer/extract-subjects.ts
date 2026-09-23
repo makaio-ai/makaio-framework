@@ -163,12 +163,12 @@ function extractSubjectsFromImport(
 }
 
 /**
- * Unwraps a `LocalSubjectSchema` or `ChannelSubjectSchema` wrapper type,
+ * Unwraps a subject schema wrapper type,
  * returning the inner schema type. Returns the original type unchanged if
  * it is not a wrapper.
  *
- * Wrappers are identified by the presence of a `__local` or `__channel`
- * property combined with a `schema` property.
+ * Wrappers are identified by their marker property combined with a `schema`
+ * property.
  * @param type - The TypeScript type to inspect.
  * @param checker - The TypeScript type checker for property resolution.
  * @returns The unwrapped base schema type, or the original type if not wrapped.
@@ -176,8 +176,9 @@ function extractSubjectsFromImport(
 function unwrapSubjectSchema(type: ts.Type, checker: ts.TypeChecker): ts.Type {
   const hasLocalFlag = type.getProperty('__local') !== undefined;
   const hasChannelFlag = type.getProperty('__channel') !== undefined;
+  const hasHostLocalRequestFlag = type.getProperty('__hostLocalRequest') !== undefined;
 
-  if (!hasLocalFlag && !hasChannelFlag) return type;
+  if (!hasLocalFlag && !hasChannelFlag && !hasHostLocalRequestFlag) return type;
 
   const schemaProp = type.getProperty('schema');
   if (!schemaProp) return type;

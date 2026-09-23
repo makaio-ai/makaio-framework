@@ -84,6 +84,7 @@ describe('createStagedPackageJson', () => {
 
     expect(staged.version).toBe('1.0.0-dev-1780000000000');
     expect(staged.engines).toEqual({ node: '>=22.15.0' });
+    expect(staged.dependencies?.['node-pty']).toBe('^1.2.0-beta.8');
     expect(exports['./bus']).toEqual(sourceExports['./bus']);
     expect(exports['./workflow-engine']).toEqual(sourceExports['./workflow-engine']);
     expect(exports['./workflow-engine/testing']).toEqual({

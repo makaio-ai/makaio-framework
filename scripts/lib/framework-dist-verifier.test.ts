@@ -485,7 +485,7 @@ describe('verifyFrameworkDist', () => {
   it('reports a missing required runtime asset', () => {
     const root = makeTempDir();
     writeJson(join(root, 'package.json'), { exports: {} });
-    const missingAsset = 'dist/code-execution/worker-entry.mjs';
+    const missingAsset = 'dist/runtime-node/bridge/pty-bridge.cjs';
     rmSync(join(root, missingAsset));
 
     const result = verifyFrameworkDist(root, { migrationChains: [] });
