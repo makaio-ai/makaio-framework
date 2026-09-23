@@ -175,6 +175,7 @@ export const FRAMEWORK_BUILD_PACKAGE_NAMES = [
   '@makaio/rules',
   '@makaio/expression',
   '@makaio/subsystem-mcp-http-server',
+  '@makaio/subsystem-native-session-supervisor',
   '@makaio/subsystem-workflow-engine',
 ] as const;
 

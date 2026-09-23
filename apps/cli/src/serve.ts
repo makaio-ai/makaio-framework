@@ -14,6 +14,7 @@ import { createAdaptorServer } from '@hono/node-server';
 import {
   DispatchingAuth,
   HmacAuth,
+  registerMakaioLocalCliHmacIdentity,
   resolveHmacIdentityPeer,
   resolveHmacIdentitySecret,
 } from '@makaio/bus-transport-websocket';
@@ -161,13 +162,28 @@ export function resolveHost(options: Pick<ServeOptions, 'host' | 'lanBind'>): st
  * @returns Resolved auth strategy, or `undefined` for dev mode.
  */
 export function resolveAuth(lanBind: boolean): DispatchingAuth | HmacAuth | undefined {
-  let secret: string | undefined;
+  return createAuth(lanBind, resolveConfiguredBusSecret());
+}
+
+/**
+ * Normalize the optional shared bus secret from the process environment.
+ * @returns Normalized secret, or `undefined` when authentication is disabled.
+ */
+function resolveConfiguredBusSecret(): string | undefined {
   try {
-    secret = normalizeBusSecret(process.env['MAKAIO_BUS_SECRET']);
+    return normalizeBusSecret(process.env['MAKAIO_BUS_SECRET']);
   } catch (error) {
     throw new Error('[serve] MAKAIO_BUS_SECRET is set but empty; refusing to initialize HmacAuth', { cause: error });
   }
+}
 
+/**
+ * Create server authentication from a normalized optional bus secret.
+ * @param lanBind - Whether LAN mode is requested.
+ * @param secret - Normalized shared bus secret.
+ * @returns Auth strategy for the server transport.
+ */
+function createAuth(lanBind: boolean, secret: string | undefined): DispatchingAuth | HmacAuth | undefined {
   const hmacAuth = secret
     ? new HmacAuth({ secret, resolveSecret: resolveHmacIdentitySecret, resolvePeer: resolveHmacIdentityPeer })
     : undefined;
@@ -230,7 +246,10 @@ export async function serve(options: ServeOptions): Promise<void> {
   // --- Surface-specific: auth + host resolution ---
   const lanBind = options.lanBind ?? false;
   const host = resolveHost(options);
-  const auth = resolveAuth(lanBind);
+  const busSecret = resolveConfiguredBusSecret();
+  const auth = createAuth(lanBind, busSecret);
+  const unregisterLocalCliIdentity =
+    busSecret === undefined ? undefined : registerMakaioLocalCliHmacIdentity(busSecret);
 
   // Guard: non-loopback hosts without auth are remotely reachable and
   // unauthenticated. Require MAKAIO_BUS_SECRET or --lan-bind for safety.
@@ -276,6 +295,7 @@ export async function serve(options: ServeOptions): Promise<void> {
         console.error('[serve] Runtime shutdown did not complete cleanly:', err);
       } finally {
         await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+        unregisterLocalCliIdentity?.();
       }
     })();
 
@@ -303,6 +323,7 @@ export async function serve(options: ServeOptions): Promise<void> {
   } catch (err) {
     // Boot failed — close the HTTP server we own
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    unregisterLocalCliIdentity?.();
     throw err;
   }
 

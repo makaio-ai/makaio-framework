@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { isHostLocalRequestSchema } from '@makaio/core';
 import {
   NativeSessionSupervisorSubjects,
   NativeSupervisorLaunchSchema,
   NativeSupervisorAttachSchema,
+  NativeSupervisorTerminalCloseSchema,
+  NativeSupervisorTerminalClosedSchema,
+  NativeSupervisorTerminalInputSchema,
+  NativeSupervisorTerminalOpenSchema,
+  NativeSupervisorTerminalOutputSchema,
+  NativeSupervisorTerminalResizeSchema,
   NativeSupervisorStopSchema,
   NativeSupervisorStatusSchema,
   SupervisorSessionStatusSchema,
@@ -61,11 +68,29 @@ describe('NativeSessionSupervisorSubjects', () => {
     expect(NativeSessionSupervisorSubjects.attach.subject).toBe('attach');
     expect(NativeSessionSupervisorSubjects.stop.subject).toBe('stop');
     expect(NativeSessionSupervisorSubjects.status.subject).toBe('status');
+    expect(NativeSessionSupervisorSubjects.terminal.open.subject).toBe('terminal.open');
+    expect(NativeSessionSupervisorSubjects.terminal.output.subject).toBe('terminal.output');
 
     expect(NativeSessionSupervisorSubjects.launch.$meta.namespace).toBe('native-session-supervisor');
     expect(NativeSessionSupervisorSubjects.attach.$meta.namespace).toBe('native-session-supervisor');
     expect(NativeSessionSupervisorSubjects.stop.$meta.namespace).toBe('native-session-supervisor');
     expect(NativeSessionSupervisorSubjects.status.$meta.namespace).toBe('native-session-supervisor');
+  });
+});
+
+describe('NativeSupervisorTerminalSchemas', () => {
+  it('keeps terminal commands host-local while terminal events remain routable', () => {
+    for (const schema of [
+      NativeSupervisorTerminalOpenSchema,
+      NativeSupervisorTerminalInputSchema,
+      NativeSupervisorTerminalResizeSchema,
+      NativeSupervisorTerminalCloseSchema,
+    ]) {
+      expect(isHostLocalRequestSchema(schema)).toBe(true);
+    }
+
+    expect(isHostLocalRequestSchema(NativeSupervisorTerminalOutputSchema)).toBe(false);
+    expect(isHostLocalRequestSchema(NativeSupervisorTerminalClosedSchema)).toBe(false);
   });
 });
 

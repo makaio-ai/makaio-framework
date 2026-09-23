@@ -99,6 +99,15 @@ export interface EmitOptions {
    * Can be provided as a Set or Array of transport names.
    */
   transports?: Set<BusTransportKeys> | Array<BusTransportKeys>;
+
+  /**
+   * Deliver only to this trusted connection on the selected transport.
+   *
+   * This is server-local routing metadata, never a wire field. Each selected
+   * transport must implement connection-scoped delivery; a missing target is
+   * treated as an undelivered event and never widened to a broadcast.
+   */
+  connectionId?: string;
 }
 
 /**
@@ -106,7 +115,7 @@ export interface EmitOptions {
  *
  * Extends EmitOptions with request-specific settings like timeout.
  */
-export interface RequestOptions extends EmitOptions {
+export interface RequestOptions extends Omit<EmitOptions, 'connectionId'> {
   /**
    * Timeout in milliseconds. Defaults to DEFAULT_REQUEST_TIMEOUT_MS (60 seconds) if not specified.
    * Use `0` for no automatic timeout — the request stays open until resolved,

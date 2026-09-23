@@ -121,6 +121,7 @@ export type ClientSubscriptionUpdate = BusSubscribeMessage | BusUnsubscribeMessa
  */
 export class ClientRegistry {
   private readonly clients = new Set<WebSocketLike>();
+  private readonly clientsByConnectionId = new Map<string, WebSocketLike>();
   private readonly authenticatingClients = new Set<WebSocketLike>();
   private readonly clientSubscriptions = new Map<WebSocketLike, Set<string>>();
   private readonly clientSubscriptionState = new Map<WebSocketLike, Map<string, ClientSubscriptionState>>();
@@ -176,10 +177,12 @@ export class ClientRegistry {
 
   /**
    * Add a fully-authenticated socket to the connected clients set.
-   * @param socket - The authenticated socket
+   * @param socket - The authenticated socket.
+   * @param connectionId - Optional server-generated connection identity.
    */
-  public addClient(socket: WebSocketLike): void {
+  public addClient(socket: WebSocketLike, connectionId?: string): void {
     this.clients.add(socket);
+    if (connectionId !== undefined) this.clientsByConnectionId.set(connectionId, socket);
   }
 
   /**
@@ -190,6 +193,9 @@ export class ClientRegistry {
    * @returns Aggregate subscription updates produced by removing the client
    */
   public removeClient(socket: WebSocketLike): ClientSubscriptionUpdate[] {
+    for (const [connectionId, client] of this.clientsByConnectionId) {
+      if (client === socket) this.clientsByConnectionId.delete(connectionId);
+    }
     const affectedSubjects = new Set(this.clientSubscriptionState.get(socket)?.keys() ?? []);
     this.clients.delete(socket);
     this.authenticatingClients.delete(socket);
@@ -325,6 +331,16 @@ export class ClientRegistry {
       }
     }
     return result;
+  }
+
+  /**
+   * Return the connected socket for a server-generated connection ID.
+   * @param connectionId - Server-generated connection identity.
+   * @returns The ready authenticated socket, if it remains connected.
+   */
+  public getClientByConnectionId(connectionId: string): WebSocketLike | undefined {
+    const client = this.clientsByConnectionId.get(connectionId);
+    return client !== undefined && this.isReadyAndAuthenticated(client) ? client : undefined;
   }
 
   /**

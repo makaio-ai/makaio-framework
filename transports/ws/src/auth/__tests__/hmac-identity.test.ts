@@ -9,6 +9,11 @@
 import { describe, expect, it } from 'vitest';
 import { HmacAuth } from '../hmac-auth.js';
 import {
+  MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID,
+  MAKAIO_LOCAL_CLI_PEER_KIND,
+  registerMakaioLocalCliHmacIdentity,
+} from '../local-cli-identity.js';
+import {
   clearHmacIdentitySecretsForTesting,
   registerHmacIdentitySecret,
   resolveHmacIdentityPeer,
@@ -104,6 +109,37 @@ describe('HmacAuth — global-secret mode', () => {
 // ---------------------------------------------------------------------------
 
 describe('HmacAuth — identity-bound mode', () => {
+  it('authenticates the registered local CLI identity as its dedicated peer kind', async () => {
+    clearHmacIdentitySecretsForTesting();
+    const secret = 'local-cli-shared-secret';
+    const cleanup = registerMakaioLocalCliHmacIdentity(secret);
+
+    try {
+      const serverAuth = new HmacAuth({
+        secret,
+        challengeTimeout: 200,
+        resolveSecret: resolveHmacIdentitySecret,
+        resolvePeer: resolveHmacIdentityPeer,
+      });
+      const clientAuth = new HmacAuth({
+        secret,
+        identityId: MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID,
+        challengeTimeout: 200,
+      });
+      const socket = makeSocket();
+
+      await expect(runAuthHandshake(serverAuth, clientAuth, socket)).resolves.toBeUndefined();
+      expect(serverAuth.getReceiveContext(socket)?.peer).toEqual({
+        kind: MAKAIO_LOCAL_CLI_PEER_KIND,
+        id: MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID,
+        authenticated: true,
+      });
+    } finally {
+      cleanup();
+      clearHmacIdentitySecretsForTesting();
+    }
+  });
+
   it('authenticates successfully when resolveSecret returns the correct secret', async () => {
     const executionId = 'exec-abc-123';
     const secret = 'per-execution-secret';

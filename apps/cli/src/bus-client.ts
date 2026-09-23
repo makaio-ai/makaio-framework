@@ -10,7 +10,7 @@
  * via {@link connectBusClient}'s `options.auth` parameter.
  */
 import { createBusInstance } from '@makaio/bus-core';
-import { HmacAuth, WebSocketClientTransport } from '@makaio/bus-transport-websocket';
+import { HmacAuth, MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID, WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import type { TransportAuth, WebSocketClientTransportReconnectOptions } from '@makaio/bus-transport-websocket';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { normalizeBusSecret } from '@makaio/utils';
@@ -217,7 +217,7 @@ export function resolveClientAuth(health: HealthResult): TransportAuth | undefin
   if (!secret) {
     throw new Error('Server requires authentication. Set MAKAIO_BUS_SECRET to connect.');
   }
-  return new HmacAuth({ secret });
+  return new HmacAuth({ secret, identityId: MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID });
 }
 
 // ---------------------------------------------------------------------------

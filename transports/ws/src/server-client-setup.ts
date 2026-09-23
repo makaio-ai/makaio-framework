@@ -65,6 +65,8 @@ export interface ClientSetupDeps {
   sendSafely: (client: WebSocketLike, data: string) => void;
   /** Enable debug logging. */
   debug: boolean;
+  /** Notify the owner after an authenticated connection is no longer routable. */
+  onConnectionClosed: (connectionId: string) => void;
 }
 
 /**
@@ -79,8 +81,19 @@ export interface ClientSetupDeps {
  * @param socket - The newly accepted client WebSocket
  * @param deps - Shared server transport dependencies
  */
+// eslint-disable-next-line max-lines-per-function -- socket setup and close cleanup share one lifecycle boundary
 export async function setupClientConnection(socket: WebSocketLike, deps: ClientSetupDeps): Promise<void> {
-  const { registry, correlations, broadcastAggregator, handlers, auth, serverSubscriptions, sendSafely, debug } = deps;
+  const {
+    registry,
+    correlations,
+    broadcastAggregator,
+    handlers,
+    auth,
+    serverSubscriptions,
+    sendSafely,
+    debug,
+    onConnectionClosed,
+  } = deps;
 
   // Mark the socket as authenticating BEFORE attaching the message listener so
   // that no inbound frame can bypass the auth gate in the message handler.
@@ -103,8 +116,11 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
     void messageHandler(event.data);
   };
   const closeListener = (): void => {
+    // Keep the authenticated owner before cleanup removes its socket context.
+    const connectionId = auth?.getReceiveContext?.(socket)?.connectionId;
     auth?.cleanupSocket(socket);
     const subscriptionUpdates = registry.removeClient(socket);
+    if (connectionId !== undefined) onConnectionClosed(connectionId);
     socket.removeEventListener('message', messageListener);
     socket.removeEventListener('close', closeListener);
     socket.removeEventListener('error', errorListener);
@@ -147,7 +163,7 @@ export async function setupClientConnection(socket: WebSocketLike, deps: ClientS
       return;
     }
 
-    registry.addClient(socket);
+    registry.addClient(socket, auth?.getReceiveContext?.(socket)?.connectionId);
 
     // Replay server-local handler subscriptions so the client can populate
     // its remoteRequestHandlers for priority-based dispatch.

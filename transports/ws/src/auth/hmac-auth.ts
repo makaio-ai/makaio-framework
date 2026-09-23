@@ -153,6 +153,9 @@ export class HmacAuth implements TransportAuth {
    */
   private serverAuthenticatedPeers = new Map<WebSocketLike, string>();
 
+  /** Stable, server-generated connection identities for authenticated sockets. */
+  private serverConnectionIds = new Map<WebSocketLike, string>();
+
   /**
    * Maps each identity-bound socket to the secret it authenticated with.
    *
@@ -262,6 +265,7 @@ export class HmacAuth implements TransportAuth {
         throw error;
       }
       this.serverAuthenticatedSockets.add(socket);
+      this.serverConnectionIds.set(socket, globalThis.crypto.randomUUID());
     } finally {
       clearTimeout(owner.timeoutHandle);
       if (this.serverPendingResponses.get(socket) === owner) this.serverPendingResponses.delete(socket);
@@ -549,6 +553,7 @@ export class HmacAuth implements TransportAuth {
     }
     return {
       transportName: '',
+      connectionId: this.serverConnectionIds.get(socket),
       peer: { ...resolvedPeer, id: resolvedPeer.id ?? identityId, authenticated: true },
     };
   }
@@ -658,6 +663,7 @@ export class HmacAuth implements TransportAuth {
       );
     }
     this.serverAuthenticatedPeers.delete(socket);
+    this.serverConnectionIds.delete(socket);
     this.serverAuthenticatedSecrets.delete(socket);
     this.serverAuthenticatedSockets.delete(socket);
   }
@@ -696,6 +702,7 @@ export class HmacAuth implements TransportAuth {
     }
     this.serverPendingResponses.clear();
     this.serverAuthenticatedPeers.clear();
+    this.serverConnectionIds.clear();
     this.serverAuthenticatedSecrets.clear();
     this.serverAuthenticatedSockets.clear();
   }

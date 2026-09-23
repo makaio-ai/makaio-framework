@@ -11,7 +11,7 @@
  */
 
 import { z } from 'zod';
-import type { SchemaRecord } from '@makaio/core';
+import { hostLocalRequest, type SchemaRecord } from '@makaio/core';
 import { ClientProfileNameSchema } from '../client/profile.js';
 
 // ---------------------------------------------------------------------------
@@ -160,6 +160,72 @@ export type NativeSupervisorAttachRequest = z.infer<typeof NativeSupervisorAttac
 export type NativeSupervisorAttachResponse = z.infer<typeof NativeSupervisorAttachSchema.response>;
 
 // ---------------------------------------------------------------------------
+// terminal attachment
+// ---------------------------------------------------------------------------
+
+/**
+ * Open one interactive terminal attachment to a running supervised runtime.
+ * The attachment ID is a caller-generated routing correlation, never an
+ * authorization credential; the supervisor requires local process authority
+ * or the host-registered authenticated local CLI peer.
+ */
+export const NativeSupervisorTerminalOpenSchema = hostLocalRequest({
+  request: z.object({
+    attachmentId: z.string().uuid(),
+    locator: NativeSupervisorAttachSchema.request,
+  }),
+  response: z.object({
+    success: z.boolean(),
+    supervisorSessionId: z.string().optional(),
+    pid: z.number().int().positive().optional(),
+    bufferedOutput: z.string().optional(),
+    wasTruncated: z.boolean().optional(),
+    lastSeq: z.number().int().nonnegative().optional(),
+  }),
+});
+
+export type NativeSupervisorTerminalOpenRequest = z.infer<typeof NativeSupervisorTerminalOpenSchema.schema.request>;
+export type NativeSupervisorTerminalOpenResponse = z.infer<typeof NativeSupervisorTerminalOpenSchema.schema.response>;
+
+/** Send terminal input to an open attachment. */
+export const NativeSupervisorTerminalInputSchema = hostLocalRequest({
+  request: z.object({ attachmentId: z.string().uuid(), data: z.string().min(1) }),
+  response: z.object({ success: z.boolean() }),
+});
+
+/** Resize the PTY behind an open attachment. */
+export const NativeSupervisorTerminalResizeSchema = hostLocalRequest({
+  request: z.object({
+    attachmentId: z.string().uuid(),
+    cols: z.number().int().positive(),
+    rows: z.number().int().positive(),
+  }),
+  response: z.object({ success: z.boolean() }),
+});
+
+/** Close an interactive terminal attachment without stopping its runtime. */
+export const NativeSupervisorTerminalCloseSchema = hostLocalRequest({
+  request: z.object({ attachmentId: z.string().uuid() }),
+  response: z.object({ success: z.boolean() }),
+});
+
+/** One streamed terminal-output frame for an attachment. */
+export const NativeSupervisorTerminalOutputSchema = z.object({
+  attachmentId: z.string().uuid(),
+  seq: z.number().int().positive(),
+  data: z.string(),
+});
+
+export type NativeSupervisorTerminalOutput = z.infer<typeof NativeSupervisorTerminalOutputSchema>;
+
+/** Signals that the underlying PTY ended and its terminal attachment closed. */
+export const NativeSupervisorTerminalClosedSchema = z.object({
+  attachmentId: z.string().uuid(),
+});
+
+export type NativeSupervisorTerminalClosed = z.infer<typeof NativeSupervisorTerminalClosedSchema>;
+
+// ---------------------------------------------------------------------------
 // stop
 // ---------------------------------------------------------------------------
 
@@ -295,6 +361,12 @@ export type NativeSupervisorStatusResponse = z.infer<typeof NativeSupervisorStat
 export const NativeSessionSupervisorSchemas = {
   launch: NativeSupervisorLaunchSchema,
   attach: NativeSupervisorAttachSchema,
+  'terminal.open': NativeSupervisorTerminalOpenSchema,
+  'terminal.input': NativeSupervisorTerminalInputSchema,
+  'terminal.resize': NativeSupervisorTerminalResizeSchema,
+  'terminal.close': NativeSupervisorTerminalCloseSchema,
+  'terminal.output': NativeSupervisorTerminalOutputSchema,
+  'terminal.closed': NativeSupervisorTerminalClosedSchema,
   stop: NativeSupervisorStopSchema,
   status: NativeSupervisorStatusSchema,
 } satisfies SchemaRecord;

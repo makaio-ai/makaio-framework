@@ -78,6 +78,7 @@ describe('FRAMEWORK_BUILD_PACKAGE_NAMES', () => {
 
   it('includes build-tooling even though it is not in FRAMEWORK_DIST_SUBPATHS', () => {
     expect(FRAMEWORK_BUILD_PACKAGE_NAMES).toContain('@makaio/build-tooling');
+    expect(FRAMEWORK_BUILD_PACKAGE_NAMES).toContain('@makaio/subsystem-native-session-supervisor');
     expect(FRAMEWORK_BUILD_PACKAGE_NAMES).toContain('@makaio/ui-theme');
     const distPackageNames: readonly string[] = FRAMEWORK_DIST_SUBPATHS.map((e) => e.packageName);
     expect(distPackageNames).not.toContain('@makaio/build-tooling');

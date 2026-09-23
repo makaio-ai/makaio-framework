@@ -70,6 +70,7 @@ export class ServerTransport implements BusTransport {
   private readonly correlations = new CorrelationTracker();
 
   private connectionListener: ((socket: WebSocketLike) => void) | null = null;
+  private readonly connectionClosedHandlers = new Set<(connectionId: string) => void>();
 
   /**
    * @param options - Server transport configuration
@@ -137,6 +138,9 @@ export class ServerTransport implements BusTransport {
         serverSubscriptions: this.serverSubscriptions,
         sendSafely: (client, data) => this.sendToClientSafely(client, data),
         debug: this.debug,
+        onConnectionClosed: (connectionId) => {
+          for (const handler of this.connectionClosedHandlers) handler(connectionId);
+        },
       });
     };
     this.wss.on('connection', this.connectionListener);
@@ -283,6 +287,32 @@ export class ServerTransport implements BusTransport {
     }
 
     return sentToAny;
+  }
+
+  /**
+   * Deliver an event to exactly one server-generated WebSocket connection.
+   * @param message - Event to deliver.
+   * @param connectionId - Server-generated connection identity.
+   * @returns Whether the target is still connected and received the event.
+   */
+  public async sendToConnection(
+    message: Extract<BusMessage, { type: 'event' }>,
+    connectionId: string,
+  ): Promise<boolean> {
+    const client = this.registry.getClientByConnectionId(connectionId);
+    if (client === undefined) return false;
+    this.sendToClientSafely(client, JSON.stringify(message));
+    return true;
+  }
+
+  /**
+   * Subscribe to server-owned WebSocket connection teardown.
+   * @param handler - Called after a connection is no longer routable.
+   * @returns Unsubscribe function.
+   */
+  public onConnectionClosed(handler: (connectionId: string) => void): () => void {
+    this.connectionClosedHandlers.add(handler);
+    return () => this.connectionClosedHandlers.delete(handler);
   }
 
   /**

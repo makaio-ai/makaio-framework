@@ -1728,6 +1728,7 @@ export { NativeSessionSupervisorSubjects, SupervisorSessionStatusSchema } from '
 export type {
   NativeSupervisorAttachRequest,
   NativeSupervisorLaunchRequest,
+  NativeSupervisorTerminalOutput,
   NativeSupervisorStatusRequest,
   NativeSupervisorStopRequest,
   SupervisorRuntimeSnapshot,

@@ -80,6 +80,76 @@ function subscribeClient(client: MockWebSocket, subject: string, filter?: Record
 }
 
 describe('Server mode behavior', () => {
+  it('propagates a socket receive context through inbound, targeted outbound, and close paths', async () => {
+    const wss = new MockWebSocketServer();
+    const client = new MockWebSocket();
+    const receiveContext = {
+      transportName: '',
+      connectionId: 'host-loopback-connection',
+      peer: { kind: 'makaio-loopback', authenticated: false },
+    };
+    const auth: TransportAuth = {
+      authenticateClient: async () => undefined,
+      authenticateServer: async () => undefined,
+      handleAuthMessage: () => false,
+      getReceiveContext: (socket) => (socket === client ? receiveContext : undefined),
+      cleanupSocket: () => undefined,
+      cleanup: () => undefined,
+    };
+    const transport = new ServerTransport({ websocket: wss, auth });
+    const inbound = vi.fn();
+    const closed = vi.fn();
+    transport.onReceive(inbound);
+    transport.onConnectionClosed(closed);
+
+    try {
+      await transport.connect();
+      wss.simulateConnection(client);
+      await vi.waitFor(() => expect(transport.getConnectionCount()).toBe(1));
+
+      const inboundMessage: BusEventMessage = {
+        type: 'event',
+        namespace: 'supervisor',
+        subject: 'status',
+        payload: {},
+        messageId: 'loopback-inbound',
+      };
+      client.receiveMessage(JSON.stringify(inboundMessage));
+      await vi.waitFor(() => expect(inbound).toHaveBeenCalledWith(inboundMessage, receiveContext));
+
+      await expect(
+        transport.sendToConnection(
+          {
+            type: 'event',
+            namespace: 'supervisor',
+            subject: 'terminal.output',
+            payload: {},
+            messageId: 'loopback-targeted',
+          },
+          receiveContext.connectionId,
+        ),
+      ).resolves.toBe(true);
+      expect(client.sentMessages).toContainEqual(expect.stringContaining('"messageId":"loopback-targeted"'));
+
+      client.close();
+      await vi.waitFor(() => expect(closed).toHaveBeenCalledWith(receiveContext.connectionId));
+      await expect(
+        transport.sendToConnection(
+          {
+            type: 'event',
+            namespace: 'supervisor',
+            subject: 'terminal.output',
+            payload: {},
+            messageId: 'closed-targeted',
+          },
+          receiveContext.connectionId,
+        ),
+      ).resolves.toBe(false);
+    } finally {
+      await transport.disconnect();
+    }
+  });
+
   it('excludes subject-restricted clients from server-initiated request targets', async () => {
     const identityId = 'restricted-request-target';
     registerHmacIdentitySecret(identityId, 'request-target-secret', {

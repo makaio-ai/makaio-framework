@@ -7,22 +7,24 @@
  * {@link PtyRuntime} (process management).
  * @packageDocumentation
  */
-
 import { randomUUID } from 'node:crypto';
 import { BaseService } from '@makaio/service-base';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ContextForSubjectDefinition } from '@makaio/core';
+import type { BaseMessageContext, ContextForSubjectDefinition } from '@makaio/core';
 import { NativeSessionSupervisorSubjects } from '@makaio/contracts/native-session-supervisor';
-import type { SupervisorRuntimeSnapshot } from '@makaio/contracts/native-session-supervisor';
+import type { NativeSupervisorAttachRequest } from '@makaio/contracts/native-session-supervisor';
 import { ClientSubjects } from '@makaio/contracts';
 import { RuntimeRegistry } from './runtime-registry.js';
 import type { SupervisorRuntime } from './types.js';
+import { toSnapshot } from './runtime-snapshot.js';
 import { PtyRuntime } from './pty/pty-runtime.js';
-import type { IPtyBackend, IPtyProcess, IPtySpawnOptions, PtyExitEvent, PtyOutputEvent } from './pty/types.js';
+import { LazyNodePtyBackend } from './lazy-node-pty-backend.js';
+import { TerminalAttachmentRegistry } from './terminal-attachment-registry.js';
+import type { PtyExitEvent, PtyOutputEvent } from './pty/types.js';
 
-// ---------------------------------------------------------------------------
+export { LazyNodePtyBackend } from './lazy-node-pty-backend.js';
+
 // Public types
-// ---------------------------------------------------------------------------
 
 /**
  * Handlers passed by the service to the {@link PtyRuntimeFactory} when
@@ -55,24 +57,27 @@ export type PtyRuntimeFactory = (handlers: PtyRuntimeHandlers) => PtyRuntime;
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/** Named authenticated peer permitted to control locally supervised PTYs. */
+const LOCAL_CLI_PEER_KIND = 'makaio-cli-local';
+/** Trusted peer claim assigned only by an unauthenticated loopback listener. */
+const LOOPBACK_PEER_KIND = 'makaio-loopback';
+
 /**
- * Convert an in-memory {@link SupervisorRuntime} to a bus-safe
- * {@link SupervisorRuntimeSnapshot} for status responses.
- * @param runtime - Full in-memory runtime record.
- * @returns Snapshot suitable for bus transmission.
+ * Determine whether a request may control a supervised process.
+ *
+ * Direct in-process calls retain their existing local-origin authority. CLI
+ * requests crossing the local WebSocket bus must authenticate as the named
+ * local CLI peer registered by the host composition root.
+ * @param ctx - Trusted request metadata supplied by the bus dispatch path.
+ * @returns Whether the caller may launch, stop, or control a terminal attachment.
  */
-function toSnapshot(runtime: SupervisorRuntime): SupervisorRuntimeSnapshot {
-  return {
-    supervisorSessionId: runtime.supervisorSessionId,
-    clientId: runtime.clientId,
-    pid: runtime.pid,
-    status: runtime.status,
-    cwd: runtime.cwd,
-    ...(runtime.sessionId !== undefined && { sessionId: runtime.sessionId }),
-    ...(runtime.adapterSessionId !== undefined && { adapterSessionId: runtime.adapterSessionId }),
-    startedAt: runtime.startedAt,
-    ...(runtime.stoppedAt !== undefined && { stoppedAt: runtime.stoppedAt }),
-  };
+function isAuthorizedSupervisorControl(ctx: Pick<BaseMessageContext, 'origin' | 'transport'>): boolean {
+  const peer = ctx.transport?.peer;
+  return (
+    ctx.origin.local ||
+    (peer?.authenticated === true && peer.kind === LOCAL_CLI_PEER_KIND) ||
+    (peer?.authenticated === false && peer.kind === LOOPBACK_PEER_KIND && ctx.transport?.connectionId !== undefined)
+  );
 }
 
 /**
@@ -90,72 +95,6 @@ function createSupervisorLaunchEnv(
     // Correlation identifier for the supervised runtime; not an authentication token.
     MAKAIO_SUPERVISOR_SESSION_ID: supervisorSessionId,
   };
-}
-
-/**
- * Lazy production backend that selects the runtime-appropriate PTY backend
- * without loading the `node-pty` native addon in a Bun host.
- */
-export class LazyNodePtyBackend implements IPtyBackend {
-  private backend: IPtyBackend | null = null;
-  private backendPromise: Promise<IPtyBackend> | null = null;
-
-  /**
-   * @param createBackend - Lazy backend factory. Defaults to a Node bridge on Bun and native Node PTY elsewhere.
-   */
-  public constructor(
-    private readonly createBackend: () => Promise<IPtyBackend> = async () => {
-      if (typeof (globalThis as Record<string, unknown>)['Bun'] !== 'undefined') {
-        const { NodeBridgeBackend } = await import('./pty/node-bridge-backend.js');
-        return new NodeBridgeBackend();
-      }
-      const { NodePtyBackend } = await import('./pty/node-pty-backend.js');
-      return new NodePtyBackend();
-    },
-  ) {}
-
-  /**
-   * Spawn a PTY after resolving the native backend.
-   * @param file - Executable path or name.
-   * @param args - Argument list passed to the executable.
-   * @param options - PTY spawn options.
-   * @returns Spawned PTY process handle.
-   */
-  public async spawn(file: string, args: string[], options: IPtySpawnOptions): Promise<IPtyProcess> {
-    const backend = await this.getBackend();
-    return backend.spawn(file, args, options);
-  }
-
-  /**
-   * Dispose the native backend when it has been loaded.
-   */
-  public async dispose(): Promise<void> {
-    try {
-      const backend = this.backend ?? (this.backendPromise ? await this.backendPromise : null);
-      await backend?.dispose?.();
-    } finally {
-      this.backend = null;
-      this.backendPromise = null;
-    }
-  }
-
-  private async getBackend(): Promise<IPtyBackend> {
-    if (this.backend !== null) {
-      return this.backend;
-    }
-
-    this.backendPromise ??= this.createBackend().then((backend) => {
-      this.backend = backend;
-      return backend;
-    });
-
-    try {
-      return await this.backendPromise;
-    } catch (error) {
-      this.backendPromise = null;
-      throw error;
-    }
-  }
 }
 
 /**
@@ -189,6 +128,7 @@ export class SupervisorService extends BaseService {
   private readonly ptyRuntime: PtyRuntime;
   private readonly pendingExits = new Map<string, PtyExitEvent>();
   private readonly sessionConfigBindings = new Map<string, { clientId: string; leaseId: string }>();
+  private readonly terminalAttachments: TerminalAttachmentRegistry;
   #destroyed = false;
 
   /**
@@ -203,8 +143,8 @@ export class SupervisorService extends BaseService {
     this.registry = new RuntimeRegistry(bus);
     const factory = createPtyRuntime ?? defaultPtyRuntimeFactory;
     this.ptyRuntime = factory({
-      onOutput: () => {
-        /* output routing is handled by downstream consumers */
+      onOutput: (evt) => {
+        this.terminalAttachments?.routeOutput(evt);
       },
       onExit: (evt) => {
         void this._handlePtyExit(evt).catch((error: unknown) => {
@@ -216,6 +156,7 @@ export class SupervisorService extends BaseService {
         });
       },
     });
+    this.terminalAttachments = new TerminalAttachmentRegistry(bus, this.ptyRuntime);
   }
 
   /**
@@ -232,12 +173,60 @@ export class SupervisorService extends BaseService {
     await this._markHydratedRunningRuntimesUnknown();
 
     this.registerHandler(NativeSessionSupervisorSubjects.launch, (ctx) => {
-      if (!ctx.origin.local) throw new Error('Unauthorized: supervisor.launch requires a local-origin request');
+      if (!isAuthorizedSupervisorControl(ctx))
+        throw new Error('Unauthorized: supervisor.launch requires local CLI control');
       return this._handleLaunch(ctx);
     });
     this.registerHandler(NativeSessionSupervisorSubjects.attach, (ctx) => this._handleAttach(ctx));
+    this.registerHandler(NativeSessionSupervisorSubjects.terminal.open, (ctx) => {
+      if (!isAuthorizedSupervisorControl(ctx))
+        throw new Error('Unauthorized: supervisor.terminal.open requires local CLI control');
+      ctx.setResult(
+        this.terminalAttachments.open(
+          ctx.payload.attachmentId,
+          this._resolveRunningRuntime(ctx.payload.locator),
+          ctx.transport?.transportName,
+          ctx.transport?.connectionId,
+        ),
+      );
+    });
+    this.registerHandler(NativeSessionSupervisorSubjects.terminal.input, (ctx) => {
+      if (!isAuthorizedSupervisorControl(ctx))
+        throw new Error('Unauthorized: supervisor.terminal.input requires local CLI control');
+      this.terminalAttachments.write(
+        ctx.payload.attachmentId,
+        ctx.payload.data,
+        ctx.transport?.transportName,
+        ctx.transport?.connectionId,
+      );
+      ctx.setResult({ success: true });
+    });
+    this.registerHandler(NativeSessionSupervisorSubjects.terminal.resize, (ctx) => {
+      if (!isAuthorizedSupervisorControl(ctx))
+        throw new Error('Unauthorized: supervisor.terminal.resize requires local CLI control');
+      this.terminalAttachments.resize(
+        ctx.payload.attachmentId,
+        ctx.payload.cols,
+        ctx.payload.rows,
+        ctx.transport?.transportName,
+        ctx.transport?.connectionId,
+      );
+      ctx.setResult({ success: true });
+    });
+    this.registerHandler(NativeSessionSupervisorSubjects.terminal.close, (ctx) => {
+      if (!isAuthorizedSupervisorControl(ctx))
+        throw new Error('Unauthorized: supervisor.terminal.close requires local CLI control');
+      ctx.setResult({
+        success: this.terminalAttachments.close(
+          ctx.payload.attachmentId,
+          ctx.transport?.transportName,
+          ctx.transport?.connectionId,
+        ),
+      });
+    });
     this.registerHandler(NativeSessionSupervisorSubjects.stop, (ctx) => {
-      if (!ctx.origin.local) throw new Error('Unauthorized: supervisor.stop requires a local-origin request');
+      if (!isAuthorizedSupervisorControl(ctx))
+        throw new Error('Unauthorized: supervisor.stop requires local CLI control');
       return this._handleStop(ctx);
     });
     this.registerHandler(NativeSessionSupervisorSubjects.status, (ctx) => this._handleStatus(ctx));
@@ -253,6 +242,7 @@ export class SupervisorService extends BaseService {
       errors.push(new Error('PTY runtime teardown failed'));
     }
     this.pendingExits.clear();
+    this.terminalAttachments.clear();
 
     const bindings = [...this.sessionConfigBindings.keys()];
     const cleanupResults = await Promise.allSettled(bindings.map((id) => this.destroySessionConfig(id)));
@@ -278,9 +268,7 @@ export class SupervisorService extends BaseService {
     return this.registry;
   }
 
-  // -------------------------------------------------------------------------
   // Private handler implementations
-  // -------------------------------------------------------------------------
 
   /**
    * Handle a `launch` request: spawn a PTY process and register the runtime.
@@ -426,6 +414,23 @@ export class SupervisorService extends BaseService {
   }
 
   /**
+   * Resolve a locator to a running in-memory PTY runtime.
+   * @param request - Exactly one runtime locator.
+   * @returns The active runtime or `null` when it has no local PTY.
+   */
+  private _resolveRunningRuntime(request: NativeSupervisorAttachRequest): SupervisorRuntime | null {
+    const supervisorSessionId =
+      'supervisorSessionId' in request
+        ? request.supervisorSessionId
+        : 'sessionId' in request
+          ? this.registry.getBySessionId(request.sessionId)?.supervisorSessionId
+          : this.registry.getByAdapterSessionId(request.adapterSessionId)?.supervisorSessionId;
+    const runtime = this.registry.getBySupervisorId(supervisorSessionId ?? '');
+    if (runtime === undefined || runtime.status !== 'running') return null;
+    return this.ptyRuntime.getSessionStatus(runtime.supervisorSessionId) === null ? null : runtime;
+  }
+
+  /**
    * Handle a `stop` request: kill the PTY process and mark the runtime stopped.
    *
    * Returns `success: false` when no in-memory PTY session exists for the ID.
@@ -518,6 +523,7 @@ export class SupervisorService extends BaseService {
    * @param evt - Exit event carrying the supervisor session ID and exit code.
    */
   private async _recordPtyExit(evt: PtyExitEvent): Promise<void> {
+    this.terminalAttachments.releaseRuntime(evt.supervisorSessionId);
     const runtime = this.registry.getBySupervisorId(evt.supervisorSessionId);
     if (runtime === undefined) {
       this.pendingExits.set(evt.supervisorSessionId, evt);

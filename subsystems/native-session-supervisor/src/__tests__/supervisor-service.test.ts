@@ -9,10 +9,26 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, MakaioBus, waitForSubscriptionPropagation } from '@makaio/bus-core';
+import {
+  HmacAuth,
+  MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID,
+  registerHmacIdentitySecret,
+  registerMakaioLocalCliHmacIdentity,
+  resolveHmacIdentityPeer,
+  resolveHmacIdentitySecret,
+  ServerTransport,
+  type TransportAuth,
+  type WebSocketLike,
+  WebSocketClientTransport,
+} from '@makaio/bus-transport-websocket';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
-import { NativeSessionSupervisorSubjects } from '@makaio/contracts/native-session-supervisor';
+import {
+  NativeSessionSupervisorNamespace,
+  NativeSessionSupervisorSubjects,
+} from '@makaio/contracts/native-session-supervisor';
 import { ClientSubjects } from '@makaio/contracts/client';
+import { WebSocketServer } from 'ws';
 import { LazyNodePtyBackend, SupervisorService } from '../supervisor-service.js';
 import type { PtyRuntimeFactory } from '../supervisor-service.js';
 import { PtyRuntime } from '../pty/pty-runtime.js';
@@ -34,6 +50,7 @@ const execFileAsync = promisify(execFile);
  * @returns A mock PTY process handle.
  */
 function createMockProcess(pid: number): IPtyProcess & {
+  _fireData: (data: string) => void;
   _fireExit: (exitCode: number, signal?: number) => void;
 } {
   const dataListeners: Array<(data: string) => void> = [];
@@ -54,6 +71,9 @@ function createMockProcess(pid: number): IPtyProcess & {
     onExit: (listener) => {
       exitListeners.push(listener);
       return { dispose: () => exitListeners.splice(exitListeners.indexOf(listener), 1) };
+    },
+    _fireData: (data) => {
+      for (const listener of dataListeners) listener(data);
     },
     _fireExit: (exitCode, signal) => {
       for (const l of exitListeners) l({ exitCode, signal });
@@ -734,6 +754,305 @@ describe('SupervisorService', () => {
       });
 
       expect(response.success).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // terminal attachment
+  // -------------------------------------------------------------------------
+
+  describe('terminal attachment', () => {
+    it('accepts the named local CLI peer over a real WebSocket while rejecting global and other HMAC peers', async () => {
+      const secret = 'terminal-attachment-test-secret';
+      const unregisterLocalCli = registerMakaioLocalCliHmacIdentity(secret);
+      const unregisterOtherPeer = registerHmacIdentitySecret('other-peer:v1', secret, { peerKind: 'other-peer' });
+      const websocket = new WebSocketServer({ host: '127.0.0.1', path: '/bus', port: 0 });
+      await new Promise<void>((resolve, reject) => {
+        websocket.once('listening', resolve);
+        websocket.once('error', reject);
+      });
+      const address = websocket.address();
+      if (address === null || typeof address === 'string') throw new Error('Expected a TCP WebSocket address');
+
+      const serverTransport = new ServerTransport({
+        websocket,
+        auth: new HmacAuth({ secret, resolveSecret: resolveHmacIdentitySecret, resolvePeer: resolveHmacIdentityPeer }),
+      });
+      MakaioBus.registerTransport(serverTransport);
+      await serverTransport.connect();
+
+      const clients: Array<ReturnType<typeof createBusInstance>> = [];
+      const connectClient = async (identityId?: string) => {
+        const bus = createBusInstance();
+        bus.registerNamespace(NativeSessionSupervisorNamespace);
+        bus.registerTransport(
+          new WebSocketClientTransport({
+            url: `ws://127.0.0.1:${address.port}/bus`,
+            auth: new HmacAuth({ secret, identityId }),
+            autoReconnect: false,
+            heartbeat: false,
+          }),
+        );
+        clients.push(bus);
+        await bus.connect();
+        return bus;
+      };
+
+      try {
+        const localCli = await connectClient(MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID);
+        const secondLocalCli = await connectClient(MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID);
+        const output: string[] = [];
+        const secondOutput: string[] = [];
+        const unsubscribe = localCli.on(NativeSessionSupervisorSubjects.terminal.output, (ctx) => {
+          output.push(ctx.payload.data);
+        });
+        await waitForSubscriptionPropagation(unsubscribe);
+        const unsubscribeSecond = secondLocalCli.on(NativeSessionSupervisorSubjects.terminal.output, (ctx) => {
+          secondOutput.push(ctx.payload.data);
+        });
+        await waitForSubscriptionPropagation(unsubscribeSecond);
+
+        const { supervisorSessionId } = await localCli.request(NativeSessionSupervisorSubjects.launch, {
+          clientId: 'claude-agent-sdk',
+          cwd: '/tmp',
+          command: 'claude',
+          args: [],
+          adapterSessionId: 'adapter-session-1',
+        });
+        const attachmentId = '18d9f462-48e9-4b96-bc93-37a96d09831c';
+        await expect(
+          localCli.request(NativeSessionSupervisorSubjects.terminal.open, {
+            attachmentId,
+            locator: { adapterSessionId: 'adapter-session-1' },
+          }),
+        ).resolves.toMatchObject({ success: true, supervisorSessionId });
+        const process = getLastProcess();
+        process?._fireData('ready');
+        await vi.waitFor(() => expect(output).toEqual(['ready']));
+        expect(secondOutput).toEqual([]);
+
+        await expect(
+          secondLocalCli.request(NativeSessionSupervisorSubjects.terminal.close, { attachmentId }),
+        ).resolves.toEqual({ success: false });
+        await expect(
+          secondLocalCli.request(NativeSessionSupervisorSubjects.terminal.input, {
+            attachmentId,
+            data: 'foreign-input',
+          }),
+        ).rejects.toThrow(`Terminal attachment '${attachmentId}' is not open`);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(process?.write).not.toHaveBeenCalledWith('foreign-input');
+
+        await localCli.request(NativeSessionSupervisorSubjects.terminal.input, { attachmentId, data: '/compact' });
+        await localCli.request(NativeSessionSupervisorSubjects.terminal.resize, { attachmentId, cols: 120, rows: 40 });
+        await vi.waitFor(() => {
+          expect(process?.write).toHaveBeenCalledWith('/compact');
+          expect(process?.resize).toHaveBeenCalledWith(120, 40);
+        });
+        await expect(
+          localCli.request(NativeSessionSupervisorSubjects.terminal.close, { attachmentId }),
+        ).resolves.toEqual({
+          success: true,
+        });
+        const localAttachmentId = 'c8dd005d-f036-44c2-8148-3e2607128e1c';
+        await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.open, {
+          attachmentId: localAttachmentId,
+          locator: { supervisorSessionId },
+        });
+        process?._fireData('local-only');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(output).toEqual(['ready']);
+        await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.close, { attachmentId: localAttachmentId });
+        expect(process?.kill).not.toHaveBeenCalled();
+        unsubscribe();
+        unsubscribeSecond();
+
+        const globalPeer = await connectClient();
+        await expect(
+          globalPeer.request(NativeSessionSupervisorSubjects.terminal.open, {
+            attachmentId: 'a45877ca-0d39-4f92-bc98-682d7210c2e2',
+            locator: { supervisorSessionId },
+          }),
+        ).rejects.toThrow('Unauthorized: supervisor.terminal.open requires local CLI control');
+
+        const otherPeer = await connectClient('other-peer:v1');
+        await expect(otherPeer.request(NativeSessionSupervisorSubjects.stop, { supervisorSessionId })).rejects.toThrow(
+          'Unauthorized: supervisor.stop requires local CLI control',
+        );
+      } finally {
+        for (const client of clients.reverse()) await client.disconnect();
+        MakaioBus.unregisterTransport(serverTransport.name);
+        await serverTransport.disconnect();
+        unregisterOtherPeer();
+        unregisterLocalCli();
+      }
+    });
+
+    it('accepts only the exact host-derived unauthenticated loopback context', async () => {
+      const websocket = new WebSocketServer({ host: '127.0.0.1', path: '/bus', port: 0 });
+      await new Promise<void>((resolve, reject) => {
+        websocket.once('listening', resolve);
+        websocket.once('error', reject);
+      });
+      const address = websocket.address();
+      if (address === null || typeof address === 'string') throw new Error('Expected a TCP WebSocket address');
+
+      let connectedSockets = 0;
+      const contexts = new Map<
+        WebSocketLike,
+        { transportName: string; connectionId?: string; peer?: { kind: string; authenticated?: boolean } }
+      >();
+      const auth: TransportAuth = {
+        authenticateClient: async () => undefined,
+        authenticateServer: async (socket) => {
+          connectedSockets += 1;
+          if (connectedSockets === 1) {
+            contexts.set(socket, {
+              transportName: '',
+              connectionId: 'host-loopback-connection',
+              peer: { kind: 'makaio-loopback', authenticated: false },
+            });
+          } else if (connectedSockets === 2) {
+            contexts.set(socket, {
+              transportName: '',
+              connectionId: 'forged-loopback-connection',
+              peer: { kind: 'makaio-loopback', authenticated: true },
+            });
+          } else {
+            contexts.set(socket, { transportName: '' });
+          }
+        },
+        handleAuthMessage: () => false,
+        getReceiveContext: (socket) => (socket ? contexts.get(socket) : undefined),
+        cleanupSocket: (socket) => contexts.delete(socket),
+        cleanup: () => contexts.clear(),
+      };
+      const serverTransport = new ServerTransport({ websocket, auth });
+      MakaioBus.registerTransport(serverTransport);
+      await serverTransport.connect();
+
+      const clients: Array<ReturnType<typeof createBusInstance>> = [];
+      const connectClient = async () => {
+        const bus = createBusInstance();
+        bus.registerNamespace(NativeSessionSupervisorNamespace);
+        bus.registerTransport(
+          new WebSocketClientTransport({
+            url: `ws://127.0.0.1:${address.port}/bus`,
+            autoReconnect: false,
+            heartbeat: false,
+          }),
+        );
+        clients.push(bus);
+        await bus.connect();
+        return bus;
+      };
+
+      try {
+        const loopbackClient = await connectClient();
+        const { supervisorSessionId } = await loopbackClient.request(NativeSessionSupervisorSubjects.launch, {
+          clientId: 'claude-agent-sdk',
+          cwd: '/tmp',
+          command: 'claude',
+          args: [],
+        });
+        expect(supervisorSessionId).toEqual(expect.any(String));
+
+        const forgedClient = await connectClient();
+        await expect(
+          forgedClient.request(NativeSessionSupervisorSubjects.stop, { supervisorSessionId }),
+        ).rejects.toThrow('Unauthorized: supervisor.stop requires local CLI control');
+
+        const claimlessClient = await connectClient();
+        await expect(
+          claimlessClient.request(NativeSessionSupervisorSubjects.stop, { supervisorSessionId }),
+        ).rejects.toThrow('Unauthorized: supervisor.stop requires local CLI control');
+      } finally {
+        for (const client of clients.reverse()) await client.disconnect();
+        MakaioBus.unregisterTransport(serverTransport.name);
+        await serverTransport.disconnect();
+      }
+    });
+
+    it('routes output, forwards input and resize, and detaches without stopping the PTY', async () => {
+      const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+        clientId: 'codex',
+        cwd: '/tmp',
+        command: 'codex',
+        args: [],
+      });
+      const attachmentId = '18d9f462-48e9-4b96-bc93-37a96d09831c';
+      const output: Array<{ attachmentId: string; seq: number; data: string }> = [];
+      const unsubscribe = MakaioBus.on(NativeSessionSupervisorSubjects.terminal.output, (ctx) => {
+        output.push(ctx.payload);
+      });
+      expect(
+        await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.open, {
+          attachmentId,
+          locator: { supervisorSessionId },
+        }),
+      ).toMatchObject({ success: true, supervisorSessionId, lastSeq: 0 });
+      const process = getLastProcess();
+      process?._fireData('ready');
+      await vi.waitFor(() => expect(output).toStrictEqual([{ attachmentId, seq: 1, data: 'ready' }]));
+      await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.input, { attachmentId, data: '/compact' });
+      await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.resize, { attachmentId, cols: 120, rows: 40 });
+      expect(process?.write).toHaveBeenCalledWith('/compact');
+      expect(process?.resize).toHaveBeenCalledWith(120, 40);
+      expect(await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.close, { attachmentId })).toStrictEqual({
+        success: true,
+      });
+      expect(process?.kill).not.toHaveBeenCalled();
+      unsubscribe();
+    });
+
+    it('keeps a second attachment live when the first detaches', async () => {
+      const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+        clientId: 'codex',
+        cwd: '/tmp',
+        command: 'codex',
+        args: [],
+      });
+      const first = 'a45877ca-0d39-4f92-bc98-682d7210c2e2';
+      const second = '42f879e3-0aa3-45e9-a7ce-1e446bdb8e2a';
+      const output: string[] = [];
+      const unsubscribe = MakaioBus.on(NativeSessionSupervisorSubjects.terminal.output, (ctx) => {
+        output.push(`${ctx.payload.attachmentId}:${ctx.payload.data}`);
+      });
+      await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.open, {
+        attachmentId: first,
+        locator: { supervisorSessionId },
+      });
+      await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.open, {
+        attachmentId: second,
+        locator: { supervisorSessionId },
+      });
+      await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.close, { attachmentId: first });
+      getLastProcess()?._fireData('still-running');
+      await vi.waitFor(() => expect(output).toStrictEqual([`${second}:still-running`]));
+      expect(getLastProcess()?.kill).not.toHaveBeenCalled();
+      unsubscribe();
+    });
+
+    it('rejects input and resize after an attachment closes', async () => {
+      const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+        clientId: 'codex',
+        cwd: '/tmp',
+        command: 'codex',
+        args: [],
+      });
+      const attachmentId = 'c8dd005d-f036-44c2-8148-3e2607128e1c';
+      await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.open, {
+        attachmentId,
+        locator: { supervisorSessionId },
+      });
+      await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.close, { attachmentId });
+
+      await expect(
+        MakaioBus.request(NativeSessionSupervisorSubjects.terminal.input, { attachmentId, data: 'late-input' }),
+      ).rejects.toThrow(`Terminal attachment '${attachmentId}' is not open`);
+      await expect(
+        MakaioBus.request(NativeSessionSupervisorSubjects.terminal.resize, { attachmentId, cols: 120, rows: 40 }),
+      ).rejects.toThrow(`Terminal attachment '${attachmentId}' is not open`);
     });
   });
 

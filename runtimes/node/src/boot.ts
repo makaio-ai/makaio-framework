@@ -78,6 +78,7 @@ import {
 } from '@makaio/services-core/materialization';
 import { createLogImportContributionProcessor, logImportRegistryPackage } from '@makaio/services-log-import';
 import { createWorkflowEnginePackage, WorkflowEngineToken } from '@makaio/subsystem-workflow-engine/package';
+import { nativeSessionSupervisorPackage } from '@makaio/subsystem-native-session-supervisor/package';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
 import { createInstalledExtensionCatalogSource } from './installed-extension-catalog-source.js';
 import { createHttpContributionProcessor } from './http-contribution-processor.js';
@@ -470,6 +471,7 @@ export async function bootMakaioRuntimeCore(
       ClientsCoreToken.name,
       ...(options.enablePackageManager !== false ? [createPackageManagerPackage().name] : []),
       AdapterSubsystemToken.name,
+      nativeSessionSupervisorPackage.name,
       ...frameworkCorePackages.map((pkg) => pkg.name),
       WorkflowEngineToken.name,
       ModelRegistryToken.name,
@@ -619,6 +621,7 @@ export async function bootMakaioRuntimeCore(
 
     frameworkPackages.push(
       adapterSubsystemPackage,
+      nativeSessionSupervisorPackage,
       ...selectFrameworkCorePackages(effectiveEnabledBootPackages),
       createWorkflowEnginePackage(workflowRunnerPackageOptions),
       createModelRegistryPackage(modelRegistryFetcher),

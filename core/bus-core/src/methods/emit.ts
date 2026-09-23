@@ -214,8 +214,13 @@ export async function emit<T extends SubjectDefinition>(
     const transportPromises: Promise<unknown>[] = [];
 
     for (const transport of transportTargets) {
+      const send =
+        options?.connectionId === undefined
+          ? transport.send(eventMessage)
+          : (transport.sendToConnection?.(eventMessage, options.connectionId) ??
+            Promise.reject(new Error(`Transport '${transport.name}' does not support connection-scoped delivery`)));
       transportPromises.push(
-        transport.send(eventMessage).catch((error: unknown) => {
+        send.catch((error: unknown) => {
           // Log errors but don't fail the whole emission
           const logPrefix = correlationId ? `[${correlationId}][${messageId}]` : `[${messageId}]`;
           console.error(`${logPrefix} Error sending event "${subject}" to transport:`, error);

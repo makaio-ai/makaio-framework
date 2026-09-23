@@ -9,6 +9,11 @@ export type { TransportAuth } from './interface.js';
 export { HmacAuth } from './hmac-auth.js';
 export type { HmacAuthOptions } from './hmac-auth.js';
 export {
+  MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID,
+  MAKAIO_LOCAL_CLI_PEER_KIND,
+  registerMakaioLocalCliHmacIdentity,
+} from './local-cli-identity.js';
+export {
   captureHmacIdentitySecretCleanup,
   clearHmacIdentitySecretsForTesting,
   registerHmacIdentitySecret,

@@ -257,6 +257,25 @@ export class DispatchingAuth implements TransportAuth {
   }
 
   /**
+   * Return trusted receive context from the strategy selected for this socket.
+   * Single-strategy dispatchers delegate directly because no per-socket route is recorded.
+   * @param socket - Optional server-side socket.
+   * @returns Trusted receive context, or undefined when the selected strategy has none.
+   */
+  public getReceiveContext(socket?: WebSocketLike) {
+    return this.resolveSocketStrategy(socket)?.getReceiveContext?.(socket);
+  }
+
+  /**
+   * Return whether the strategy selected for a socket still authorizes it.
+   * @param socket - Server-side socket whose authorization should be checked.
+   * @returns True when no selected strategy provides a liveness check, otherwise its result.
+   */
+  public isSocketAuthenticated(socket: WebSocketLike): boolean {
+    return this.resolveSocketStrategy(socket)?.isSocketAuthenticated?.(socket) ?? true;
+  }
+
+  /**
    * Clean up authentication resources for a specific socket.
    *
    * Delegates to the resolved strategy if one was selected, then removes
@@ -323,6 +342,17 @@ export class DispatchingAuth implements TransportAuth {
     if (this.hmac && !this.e2e) return this.hmac;
     if (this.e2e && !this.hmac) return this.e2e;
     return undefined;
+  }
+
+  /**
+   * Resolve a socket's selected strategy, with direct fallback for single-strategy dispatchers.
+   * @param socket - Optional server-side socket.
+   * @returns The selected or sole strategy, or undefined when no route is available.
+   */
+  private resolveSocketStrategy(socket?: WebSocketLike): TransportAuth | undefined {
+    return socket === undefined
+      ? this.resolveSingleStrategy()
+      : (this.socketStrategy.get(socket) ?? this.resolveSingleStrategy());
   }
 
   /**

@@ -8,11 +8,13 @@
  * This provider owns only the WebSocket bus transport layer.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Duplex } from 'node:stream';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { startBusServer, type BusServer, type TransportAuth } from '@makaio/bus-server';
-import { DispatchingAuth } from '@makaio/bus-transport-websocket';
+import { DispatchingAuth, type WebSocketLike } from '@makaio/bus-transport-websocket';
+import type { TransportReceiveContext } from '@makaio/core';
 import type { TransportProvider } from '@makaio/kernel';
 import { WebSocketServer } from 'ws';
 
@@ -84,6 +86,57 @@ export interface BusServerTransportOptions {
 }
 
 const DEFAULT_LOOPBACK_NAME = 'node';
+const LOOPBACK_PEER_KIND = 'makaio-loopback';
+
+/**
+ * Whether the HTTP server is listening only on a loopback address.
+ *
+ * The address is read from the already-bound server rather than configuration,
+ * so a host cannot accidentally grant local control after binding a LAN socket.
+ * @param httpServer - Listening HTTP server that owns the WebSocket upgrades.
+ * @returns Whether the server is bound to a loopback TCP address.
+ */
+function isLoopbackListener(httpServer: HttpServer): boolean {
+  const address = httpServer.address();
+  if (address === null || typeof address === 'string') return false;
+  return address.address === '127.0.0.1' || address.address === '::1' || address.address === '::ffff:127.0.0.1';
+}
+
+/**
+ * Supplies trusted host-local receive context for an unauthenticated loopback
+ * listener. It intentionally does not authenticate the socket: the peer claim
+ * records how the server accepted the connection, while `authenticated` stays
+ * false for downstream policy checks.
+ */
+class LoopbackReceiveContextAuth implements TransportAuth {
+  private readonly contexts = new Map<WebSocketLike, TransportReceiveContext>();
+
+  public async authenticateClient(_send: (message: unknown) => void): Promise<void> {}
+
+  public async authenticateServer(socket: WebSocketLike, _send: (message: unknown) => void): Promise<void> {
+    this.contexts.set(socket, {
+      transportName: '',
+      connectionId: randomUUID(),
+      peer: { kind: LOOPBACK_PEER_KIND, authenticated: false },
+    });
+  }
+
+  public handleAuthMessage(_message: unknown, _socket?: WebSocketLike): boolean {
+    return false;
+  }
+
+  public getReceiveContext(socket?: WebSocketLike): TransportReceiveContext | undefined {
+    return socket === undefined ? undefined : this.contexts.get(socket);
+  }
+
+  public cleanupSocket(socket: WebSocketLike): void {
+    this.contexts.delete(socket);
+  }
+
+  public cleanup(): void {
+    this.contexts.clear();
+  }
+}
 
 /**
  * Platform-specific bus server transport provider for Node.js.
@@ -160,10 +213,13 @@ export class BusServerTransportProvider implements TransportProvider {
       this.upgradeHandlerServer = this.options.httpServer;
       this.upgradeHandler = upgradeHandler;
 
+      const auth =
+        this.options.auth ??
+        (isLoopbackListener(this.options.httpServer) ? new LoopbackReceiveContextAuth() : undefined);
       this.busServer = await startBusServer({
         websocket: websocketServer,
         bus,
-        auth: this.options.auth,
+        auth,
         loopbackName: this.options.loopbackName ?? DEFAULT_LOOPBACK_NAME,
       });
       this.busReady = true;

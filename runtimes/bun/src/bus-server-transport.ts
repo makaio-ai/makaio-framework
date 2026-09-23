@@ -28,6 +28,8 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import { randomUUID } from 'node:crypto';
+import type { TransportReceiveContext } from '@makaio/core';
 import { startBusServer, HonoWebSocketBridge, type BusServer } from '@makaio/bus-server';
 import { createWebSocketCloseEvent, DispatchingAuth } from '@makaio/bus-transport-websocket';
 import type { TransportAuth, WebSocketCloseEvent, WebSocketLike } from '@makaio/bus-transport-websocket';
@@ -52,9 +54,49 @@ export interface BunBusServerTransportOptions {
    * Defaults to `'bun'`.
    */
   loopbackName?: string;
+  /**
+   * Host-confirmed listener address that permits unauthenticated loopback authority.
+   * Only exact loopback literals are accepted.
+   */
+  loopbackAuthorityHost?: string;
 }
 
 const DEFAULT_LOOPBACK_NAME = 'bun';
+const LOOPBACK_PEER_KIND = 'makaio-loopback';
+
+/**
+ * Whether a host-confirmed listener is restricted to a loopback literal.
+ * @param host - Listener host confirmed by the composition root.
+ * @returns Whether the host is an accepted loopback literal.
+ */
+function isLoopbackAuthorityHost(host: string | undefined): boolean {
+  return host === '127.0.0.1' || host === '::1' || host === '::ffff:127.0.0.1';
+}
+
+/** Provides trusted local context for the Bun host's loopback-only listener. */
+class LoopbackReceiveContextAuth implements TransportAuth {
+  private readonly contexts = new Map<WebSocketLike, TransportReceiveContext>();
+  public async authenticateClient(_send: (message: unknown) => void): Promise<void> {}
+  public async authenticateServer(socket: WebSocketLike, _send: (message: unknown) => void): Promise<void> {
+    this.contexts.set(socket, {
+      transportName: '',
+      connectionId: randomUUID(),
+      peer: { kind: LOOPBACK_PEER_KIND, authenticated: false },
+    });
+  }
+  public handleAuthMessage(_message: unknown, _socket?: WebSocketLike): boolean {
+    return false;
+  }
+  public getReceiveContext(socket?: WebSocketLike): TransportReceiveContext | undefined {
+    return socket === undefined ? undefined : this.contexts.get(socket);
+  }
+  public cleanupSocket(socket: WebSocketLike): void {
+    this.contexts.delete(socket);
+  }
+  public cleanup(): void {
+    this.contexts.clear();
+  }
+}
 
 // ── ServerWebSocket → WebSocketLike adapter ──────────────────────────────────
 
@@ -361,7 +403,9 @@ export class BunBusServerTransportProvider implements ServerTransportProvider {
       this.busServer = await startBusServer({
         websocket: this.bridge,
         bus,
-        auth: this.options.auth,
+        auth:
+          this.options.auth ??
+          (isLoopbackAuthorityHost(this.options.loopbackAuthorityHost) ? new LoopbackReceiveContextAuth() : undefined),
         loopbackName: this.options.loopbackName ?? DEFAULT_LOOPBACK_NAME,
       });
       this.busReady = true;

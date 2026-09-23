@@ -8,6 +8,7 @@ interface RuntimeNodePackageJson {
   readonly scripts?: Record<string, string>;
   readonly files?: string[];
   readonly exports?: Record<string, unknown>;
+  readonly dependencies?: Record<string, string>;
   readonly peerDependencies?: Record<string, string>;
   readonly publishConfig?: {
     readonly access?: string;
@@ -33,6 +34,10 @@ describe('@makaio/runtime-node public package contract', () => {
 
   it('publishes dist output and required metadata only', () => {
     expect(manifest.files).toEqual(['dist', 'LICENSE', 'README.md', 'package.json']);
+  });
+
+  it('declares the Node PTY native addon for installed bridge processes', () => {
+    expect(manifest.dependencies?.['node-pty']).toBe('^1.2.0-beta.8');
   });
 
   it('has publish exports for every source export', () => {

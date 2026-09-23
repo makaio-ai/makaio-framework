@@ -753,6 +753,26 @@ describe('BunBusServerTransportProvider', () => {
   });
 
   describe('loopbackName option', () => {
+    it('installs local receive context only for an explicit loopback authority host', async () => {
+      const { startBusServer } = await import('@makaio/bus-server');
+      const transport = createTrackedTransport({ loopbackAuthorityHost: '127.0.0.1' });
+
+      await transport.connect(createBusInstance(), 'machine-1');
+
+      expect(startBusServer).toHaveBeenCalledWith(expect.objectContaining({ auth: expect.any(Object) }));
+      await transport.disconnect();
+    });
+
+    it('does not grant local authority for a non-loopback host', async () => {
+      const { startBusServer } = await import('@makaio/bus-server');
+      const transport = createTrackedTransport({ loopbackAuthorityHost: '0.0.0.0' });
+
+      await transport.connect(createBusInstance(), 'machine-1');
+
+      expect(startBusServer).toHaveBeenCalledWith(expect.objectContaining({ auth: undefined }));
+      await transport.disconnect();
+    });
+
     it('passes the default loopback name "bun" to startBusServer', async () => {
       const { startBusServer } = await import('@makaio/bus-server');
       const transport = createTrackedTransport();

@@ -71,9 +71,12 @@ describe('electrobun.config.ts', () => {
 
     expect(config.build?.bun?.entrypoint).toBe('./dist/index.js');
     expect(config.build?.copy).toMatchObject({
-      './dist/cli.mjs': 'Resources/app/dist/cli.mjs',
+      './dist/cli.mjs': 'dist/cli.mjs',
       './dist/renderer': 'dist/renderer',
       './dist/variant.json': 'Resources/variant.json',
     });
+    expect(Object.values(config.build?.copy ?? {})).toContain('node/node');
+    expect(Object.values(config.build?.copy ?? {})).toContain('node_modules/node-pty');
+    expect(Object.values(config.build?.copy ?? {})).toContain('node_modules/node-addon-api');
   });
 });

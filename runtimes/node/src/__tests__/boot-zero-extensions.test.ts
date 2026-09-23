@@ -39,6 +39,7 @@ import {
 import { localAutomationCronSchedulerPackage } from '@makaio/services-core/automation-trigger';
 import { AdapterSubsystemToken } from '@makaio/subsystem-adapter';
 import { ClientsCoreToken } from '@makaio/subsystem-client';
+import { nativeSessionSupervisorPackage } from '@makaio/subsystem-native-session-supervisor/package';
 import { LogImportRegistryToken } from '@makaio/services-log-import';
 import { WorkflowEngineToken } from '@makaio/subsystem-workflow-engine';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
@@ -70,6 +71,7 @@ const EXPECTED_FRAMEWORK_BOOT_PACKAGE_NAMES = new Set([
   ClientsCoreToken.name,
   createPackageManagerPackage().name,
   AdapterSubsystemToken.name,
+  nativeSessionSupervisorPackage.name,
   ...frameworkCorePackages.filter(isHeadlessPackage).map((pkg) => pkg.name),
   // Framework-only boot has no host-supplied cron provider, so `makaio.cron`
   // bindings fall back to the framework's local in-process scheduler.
