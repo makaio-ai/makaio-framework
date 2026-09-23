@@ -177,6 +177,53 @@ describe('ClientRuntimeService — runtime.resolveBySupervisorSessionId', () => 
     }
   });
 
+  it('rejects a stale selected observe handler after destroy and re-init', async () => {
+    const dispatchEntered = Promise.withResolvers<void>();
+    const releaseDispatch = Promise.withResolvers<void>();
+    const gateCleanup = bus.on(
+      ClientSubjects.runtime.observe,
+      async (ctx) => {
+        dispatchEntered.resolve();
+        await releaseDispatch.promise;
+        await ctx.next();
+      },
+      { priority: 100 },
+    );
+
+    try {
+      const staleRequest = bus.request(ClientSubjects.runtime.observe, {
+        clientId: 'codex',
+        source: { layer: 'supervisor', producer: 'test-supervisor' },
+        observedAt: 1_700_000_004_500,
+        supervisorSessionId: 'sup-stale-selected-handler',
+      });
+      await dispatchEntered.promise;
+
+      await service.destroy();
+      await service.init();
+      releaseDispatch.resolve();
+
+      await expect(staleRequest).rejects.toThrow('client.runtime.observe: service is stopping');
+      expect(registry.size).toBe(0);
+
+      await expect(
+        bus.request(ClientSubjects.runtime.observe, {
+          clientId: 'codex',
+          source: { layer: 'supervisor', producer: 'test-supervisor' },
+          observedAt: 1_700_000_005_000,
+          supervisorSessionId: 'sup-current-handler',
+        }),
+      ).resolves.toEqual({
+        clientRuntimeId: expect.any(String),
+        created: true,
+        promoted: false,
+      });
+      expect(registry.size).toBe(1);
+    } finally {
+      gateCleanup();
+    }
+  });
+
   it('does not block the observe response when an observed listener waits for service teardown', async () => {
     const started: ClientRuntimeStarted[] = [];
     const teardownFinished = Promise.withResolvers<void>();

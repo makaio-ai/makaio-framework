@@ -1,6 +1,15 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import { createBusNamespace } from '@makaio/core';
+import { z } from 'zod';
 import { BaseService } from '../base-service.js';
+
+const handlerCleanupNamespace = createBusNamespace('baseServiceHandlerCleanup', {
+  ping: {
+    request: z.object({}),
+    response: z.object({ handled: z.literal(true) }),
+  },
+});
 
 class InitFailureService extends BaseService {
   public readonly steps: string[] = [];
@@ -160,6 +169,42 @@ class InitDestroyRaceService extends BaseService {
 
   public finishInit(): void {
     this.initReady.resolve();
+  }
+}
+
+class HandlerCleanupOrderingService extends BaseService {
+  public readonly destroyEntered = Promise.withResolvers<void>();
+  private readonly allowDestroy = Promise.withResolvers<void>();
+  public readonly steps: string[] = [];
+  public readonly subjects;
+  public readonly testBus;
+
+  public constructor() {
+    const bus = createBusInstance();
+    super(bus);
+    this.testBus = bus;
+    this.subjects = bus.registerNamespace(handlerCleanupNamespace).subjects;
+  }
+
+  protected override onInit(): void {
+    this.addHandlerCleanup(
+      this.bus.on(this.subjects.ping, (ctx) => {
+        ctx.setResult({ handled: true });
+      }),
+    );
+    this.addCleanup(() => {
+      this.steps.push('resource-cleanup');
+    });
+  }
+
+  protected override async onDestroy(): Promise<void> {
+    this.destroyEntered.resolve();
+    await this.allowDestroy.promise;
+    this.steps.push('on-destroy');
+  }
+
+  public finishDestroy(): void {
+    this.allowDestroy.resolve();
   }
 }
 
@@ -335,5 +380,20 @@ describe('BaseService lifecycle', () => {
 
     expect(service.steps).toEqual(['init-start', 'init-finish', 'destroy', 'cleanup']);
     expect(service.initialized).toBe(false);
+  });
+
+  it('unregisters handler cleanups before onDestroy while retaining resource cleanup until after it', async () => {
+    const service = new HandlerCleanupOrderingService();
+    await service.init();
+
+    const destroying = service.destroy();
+    await service.destroyEntered.promise;
+
+    await expect(service.testBus.requestOptional(service.subjects.ping, {})).resolves.toEqual({ handled: false });
+    expect(service.steps).toEqual([]);
+
+    service.finishDestroy();
+    await destroying;
+    expect(service.steps).toEqual(['on-destroy', 'resource-cleanup']);
   });
 });

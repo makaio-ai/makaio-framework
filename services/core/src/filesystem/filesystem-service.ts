@@ -61,7 +61,7 @@ export class FileSystemService extends BaseService {
     });
 
     // listDirectory handler (machine-scoped via filter)
-    this.addCleanup(
+    this.addHandlerCleanup(
       this.bus.on(
         FileSystemSubjects.listDirectory,
         async (ctx) => {
@@ -74,7 +74,7 @@ export class FileSystemService extends BaseService {
     );
 
     // getHomeDir handler (machine-scoped via filter)
-    this.addCleanup(
+    this.addHandlerCleanup(
       this.bus.on(
         FileSystemSubjects.getHomeDir,
         (ctx) => {
