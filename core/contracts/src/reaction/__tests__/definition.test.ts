@@ -186,11 +186,12 @@ describe('ReactionOutcomeSchema', () => {
   });
 
   it('accepts the failure variant with an error message', () => {
-    const outcome = { success: false, error: { message: 'boom' } };
+    const outcome = { success: false, error: { code: 'handler-failed', message: 'boom' } };
     expect(ReactionOutcomeSchema.parse(outcome)).toEqual(outcome);
   });
 
-  it('rejects a failure variant without error details', () => {
+  it('rejects a failure variant without a stable error code', () => {
+    expect(ReactionOutcomeSchema.safeParse({ success: false, error: { message: 'boom' } }).success).toBe(false);
     expect(ReactionOutcomeSchema.safeParse({ success: false }).success).toBe(false);
   });
 });
