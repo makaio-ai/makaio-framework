@@ -1,4 +1,4 @@
-import type { ArtifactContextRenderHint } from './context-selectors.js';
+import type { ArtifactContextRelationDirection, ArtifactContextRenderHint } from './context-selectors.js';
 import type { ArtifactContextUnresolvedReason } from './context-resolution.js';
 import type { ArtifactRef, ArtifactRelationTarget, ArtifactRevision } from './schemas.js';
 
@@ -30,7 +30,7 @@ export interface ResolvedArtifactContextNodeBase {
   readonly artifact: ArtifactRevision;
   /** Render hint applied to this node. */
   readonly hint: ArtifactContextRenderHint;
-  /** Child nodes from this artifact's outbound relations. */
+  /** Child nodes reached through this artifact's selected relations. */
   readonly children: readonly ArtifactContextNode[];
 }
 
@@ -41,8 +41,14 @@ export type ArtifactContextRootNode = ResolvedArtifactContextNodeBase;
 export interface ResolvedArtifactContextNode extends ResolvedArtifactContextNodeBase {
   /** Relation type that led to this node from its parent. */
   readonly relation: string;
-  /** Optional local identifier of the parent part that owns this relation. */
+  /** Optional local identifier of the part that owns the stored relation. */
   readonly sourceLocalId?: string;
+  /**
+   * Direction of the stored relation relative to the parent; absent means outbound.
+   * Producers omit the field for outbound edges; readers must treat an absent
+   * value and `'outbound'` alike.
+   */
+  readonly direction?: ArtifactContextRelationDirection;
 }
 
 /** An unresolved node representing a relation that could not be followed. */
@@ -52,8 +58,14 @@ export interface UnresolvedArtifactContextNode {
   readonly target: ArtifactRelationTarget;
   /** Relation type that led to this node from its parent. */
   readonly relation: string;
-  /** Optional local identifier of the parent part that owns this relation. */
+  /** Optional local identifier of the part that owns the stored relation. */
   readonly sourceLocalId?: string;
+  /**
+   * Direction of the stored relation relative to the parent; absent means outbound.
+   * Producers omit the field for outbound edges; readers must treat an absent
+   * value and `'outbound'` alike.
+   */
+  readonly direction?: ArtifactContextRelationDirection;
   /** Render hint applied to this node. */
   readonly hint: ArtifactContextRenderHint;
   /** Reason the target was not resolved. */

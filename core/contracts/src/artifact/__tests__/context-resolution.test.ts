@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { ArtifactContextSelectorSchema } from '../context-selectors.js';
-import { ArtifactContextRefEntrySchema, ResolvedArtifactContextWireSchema } from '../context-resolution.js';
+import {
+  ArtifactContextRefEntrySchema,
+  ResolvedArtifactContextWireSchema,
+  artifactRevisionKey,
+} from '../context-resolution.js';
 
 const actor = { kind: 'agent', id: 'agent-1' };
 const rootRef = { refClass: 'artifact' as const, kind: 'system', id: 'system-1', revision: 'rev-system' };
@@ -34,6 +38,41 @@ describe('artifact context resolution schemas', () => {
 
     expect(parsed.contains?.kinds).toEqual(['repo']);
     expect(parsed.contains?.nested?.contains?.hint).toBe('summary');
+  });
+
+  it('accepts an inbound direction on relation selectors and context entries', () => {
+    const selectors = ArtifactContextSelectorSchema.parse({ contains: { direction: 'inbound', hint: 'link' } });
+    expect(selectors.contains?.direction).toBe('inbound');
+    expect(() => ArtifactContextSelectorSchema.parse({ contains: { direction: 'sideways' } })).toThrow();
+
+    const entry = ArtifactContextRefEntrySchema.parse({
+      sourceRef: rootRef,
+      target: repoRef,
+      relationType: 'contains',
+      direction: 'inbound',
+      hint: 'link',
+      status: 'resolved',
+    });
+    expect(entry.direction).toBe('inbound');
+  });
+
+  it('accepts an explicit outbound direction and preserves it on resolved and unresolved entries', () => {
+    const base = { sourceRef: rootRef, target: repoRef, relationType: 'contains', direction: 'outbound', hint: 'link' };
+
+    expect(ArtifactContextRefEntrySchema.parse({ ...base, status: 'resolved' }).direction).toBe('outbound');
+    expect(
+      ArtifactContextRefEntrySchema.parse({ ...base, status: 'unresolved', reason: 'not-selected' }).direction,
+    ).toBe('outbound');
+    expect(
+      ArtifactContextRefEntrySchema.parse({ ...base, direction: undefined, status: 'resolved' }).direction,
+    ).toBeUndefined();
+  });
+
+  it('keys artifact revisions by the JSON-encoded kind, id, and revision tuple', () => {
+    expect(artifactRevisionKey(repoRef)).toBe(JSON.stringify(['repo', 'repo-1', 'rev-repo']));
+    expect(artifactRevisionKey({ kind: 'a","b', id: 'c', revision: 'd' })).not.toBe(
+      artifactRevisionKey({ kind: 'a', id: 'b","c', revision: 'd' }),
+    );
   });
 
   it('allows runtime render hint strings while preserving the known initial vocabulary', () => {

@@ -1,7 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
   ArtifactSubjects,
-  type ArtifactContextRefEntry,
   type ArtifactContextRelationSelector,
   type ArtifactContextSelector,
   type ArtifactRef,
@@ -10,6 +9,8 @@ import {
   type ArtifactRevision,
   type ResolvedArtifactContextWire,
 } from '@makaio/contracts';
+import { artifactRevisionKey } from '@makaio/contracts/artifact';
+import { recordRef, refEntry, type ContextEdgeFields, type ContextRefLedger } from './context-ref-ledger.js';
 
 /**
  * Options for {@link resolveArtifactContext}.
@@ -28,23 +29,22 @@ export interface ResolveArtifactContextOptions {
   readonly maxDepth?: number;
 }
 
-interface ResolverState {
+interface ResolverState extends ContextRefLedger {
   readonly bus: IMakaioBus;
   readonly maxDepth: number;
   readonly resolvedByKey: Map<string, ArtifactRevision | null>;
   readonly walkedByKey: Set<string>;
-  readonly refIndexByKey: Map<string, number>;
-  readonly refMetadataByKey: Map<string, RefMetadata>;
+  /** Inbound query results keyed by `[relationType, kind, id]`, including empty results. */
+  readonly inboundByKey: Map<string, readonly ArtifactRevision[]>;
   readonly resolved: ArtifactRevision[];
-  readonly refs: ArtifactContextRefEntry[];
-}
-
-interface RefMetadata {
-  readonly resolvedViaBackEdge: boolean;
 }
 
 /**
- * Resolve a selector-driven outbound artifact context graph.
+ * Resolve a selector-driven artifact context graph.
+ *
+ * Selectors follow stored relations outbound by default. A selector with
+ * `direction: 'inbound'` instead selects the current revisions of artifacts
+ * whose relations of that type point at the walked artifact's identity.
  * @param options - Bus, root ref, and explicit relation selectors.
  * @returns Normalized wire context with all encountered refs visible.
  */
@@ -57,6 +57,7 @@ export async function resolveArtifactContext(
     maxDepth,
     resolvedByKey: new Map(),
     walkedByKey: new Set(),
+    inboundByKey: new Map(),
     refIndexByKey: new Map(),
     refMetadataByKey: new Map(),
     resolved: [],
@@ -71,7 +72,7 @@ export async function resolveArtifactContext(
   }
 
   state.resolved.push(root);
-  await walkArtifact(state, root, options.selectors, 0, new Set([artifactRefKey(options.ref)]));
+  await walkArtifact(state, root, options.selectors, 0, new Set([artifactRevisionKey(options.ref)]));
 
   return {
     rootRef: options.ref,
@@ -81,7 +82,20 @@ export async function resolveArtifactContext(
 }
 
 /**
- * Walk an artifact's outbound relations using the merged selectors.
+ * One artifact-targeted traversal edge ready for resolution, independent of the stored relation's direction.
+ */
+interface EdgeCandidate extends ContextEdgeFields {
+  /** Artifact revision the edge points at. */
+  readonly target: ArtifactRef;
+  /** Loads the target revision through the per-call cache. */
+  readonly load: () => Promise<ArtifactRevision | null>;
+}
+
+/**
+ * Walk an artifact's relations using the merged selectors.
+ *
+ * Stored (outbound) relations are visited first; inbound selectors then
+ * query the store for artifacts pointing back at this artifact.
  * @param state - Resolver state accumulator.
  * @param artifact - Current artifact to walk.
  * @param selectors - Merged selectors for this artifact's relations.
@@ -96,14 +110,17 @@ async function walkArtifact(
   path: ReadonlySet<string>,
 ): Promise<void> {
   const walkKey = artifactWalkKey(artifact, selectors, depth, path);
-  if (state.walkedByKey.has(walkKey)) {
-    return;
-  }
+  if (state.walkedByKey.has(walkKey)) return;
   state.walkedByKey.add(walkKey);
 
   const sourceRef = artifactToRef(artifact);
   for (const relation of artifact.relations) {
     await resolveRelation(state, sourceRef, relation, selectors, depth, path);
+  }
+  for (const [relationType, selector] of Object.entries(selectors ?? {})) {
+    if (selector.direction === 'inbound') {
+      await resolveInboundRelations(state, sourceRef, relationType, selector, depth, path);
+    }
   }
 }
 
@@ -124,85 +141,169 @@ async function resolveRelation(
   depth: number,
   path: ReadonlySet<string>,
 ): Promise<void> {
-  const selector = selectors?.[relation.type];
-  if (selector?.hint === 'omit') {
+  // `omit` suppresses the relation type in both directions. Otherwise an
+  // inbound selector never selects the stored relation of the same type; the
+  // inbound walk records its own edges from the query result.
+  const declared = selectors?.[relation.type];
+  if (declared?.hint === 'omit') return;
+  const selector = declared?.direction === 'inbound' ? undefined : declared;
+
+  const { target } = relation;
+  const edge = { sourceRef, relationType: relation.type, sourceLocalId: relation.sourceLocalId, selector };
+  if (target.refClass !== 'artifact') {
+    // Kind filters apply before the ref-class check, so an unselected evidence ref stays `not-selected`.
+    const reason = selectorMatches(selector, target) ? 'unsupported-ref-class' : 'not-selected';
+    recordRef(state, refEntry({ ...edge, target }, { status: 'unresolved', reason }));
     return;
   }
-  const hint = selector?.hint ?? 'link';
+  await resolveEdge(state, { ...edge, target, load: () => resolveRef(state, target) }, depth, path);
+}
 
-  if (!selectorMatches(selector, relation.target)) {
-    recordRef(state, unresolved(sourceRef, relation, hint, 'not-selected'));
+/**
+ * Resolve the artifacts whose relations of one type point at the walked artifact.
+ *
+ * Only whole-artifact targets count: a stored relation matches when it is an
+ * `artifact` ref with the walked artifact's kind and id, so relations pinned
+ * to an earlier revision still count, while relations targeting a `local`
+ * part of the walked artifact do not. Each match becomes a context edge from
+ * the walked artifact to the matching artifact's current revision, marked
+ * `direction: 'inbound'`. Query results are cached per relation type and
+ * identity for the whole call.
+ * @param state - Resolver state accumulator.
+ * @param sourceRef - Walked artifact the inbound relations point at.
+ * @param relationType - Relation type declared by the inbound selector.
+ * @param selector - Inbound selector for this relation type.
+ * @param depth - Current traversal depth.
+ * @param path - Ancestor ref keys for cycle detection.
+ */
+async function resolveInboundRelations(
+  state: ResolverState,
+  sourceRef: ArtifactRef,
+  relationType: string,
+  selector: ArtifactContextRelationSelector,
+  depth: number,
+  path: ReadonlySet<string>,
+): Promise<void> {
+  if (selector.hint === 'omit') return;
+  const queryKey = JSON.stringify([relationType, sourceRef.kind, sourceRef.id]);
+  let sources = state.inboundByKey.get(queryKey);
+  if (!sources) {
+    const { artifacts } = await state.bus.request(ArtifactSubjects.query, {
+      relation: { type: relationType, target: { refClass: 'artifact', kind: sourceRef.kind, id: sourceRef.id } },
+      currentOnly: true,
+    });
+    sources = artifacts;
+    state.inboundByKey.set(queryKey, sources);
+  }
+
+  for (const source of sources) {
+    const target = artifactToRef(source);
+    for (const relation of source.relations) {
+      if (relation.type !== relationType || !relationTargetsIdentity(relation.target, sourceRef)) {
+        continue;
+      }
+      const candidate: EdgeCandidate = {
+        sourceRef,
+        target,
+        relationType,
+        sourceLocalId: relation.sourceLocalId,
+        direction: 'inbound',
+        selector,
+        load: () => resolveRef(state, target, async () => source),
+      };
+      await resolveEdge(state, candidate, depth, path);
+    }
+  }
+}
+
+/**
+ * Resolve one artifact-targeted edge, record it, and continue the walk through its target.
+ *
+ * Checks run in a fixed order: selector match (`not-selected`), depth limit
+ * (`depth-exceeded`, skipped for back-edges), then loading (`not-found`). A
+ * back-edge is recorded as resolved but not walked again.
+ * @param state - Resolver state accumulator.
+ * @param candidate - Edge to resolve.
+ * @param depth - Current traversal depth.
+ * @param path - Ancestor ref keys for cycle detection.
+ */
+async function resolveEdge(
+  state: ResolverState,
+  candidate: EdgeCandidate,
+  depth: number,
+  path: ReadonlySet<string>,
+): Promise<void> {
+  const { selector, target } = candidate;
+  if (!selectorMatches(selector, target)) {
+    recordRef(state, refEntry(candidate, { status: 'unresolved', reason: 'not-selected' }));
     return;
   }
 
-  if (relation.target.refClass !== 'artifact') {
-    recordRef(state, unresolved(sourceRef, relation, hint, 'unsupported-ref-class'));
-    return;
-  }
-
-  const targetKey = artifactRefKey(relation.target);
+  const targetKey = artifactRevisionKey(target);
   const isBackEdge = path.has(targetKey);
   if (depth >= state.maxDepth && !isBackEdge) {
-    recordRef(state, unresolved(sourceRef, relation, hint, 'depth-exceeded'));
+    recordRef(state, refEntry(candidate, { status: 'unresolved', reason: 'depth-exceeded' }));
     return;
   }
 
   const alreadyResolved = state.resolvedByKey.has(targetKey);
-  const target = await resolveRef(state, relation.target);
-  if (!target) {
-    recordRef(state, unresolved(sourceRef, relation, hint, 'not-found'));
+  const next = await candidate.load();
+  if (!next) {
+    recordRef(state, refEntry(candidate, { status: 'unresolved', reason: 'not-found' }));
     return;
   }
 
-  recordRef(
-    state,
-    {
-      sourceRef,
-      target: relation.target,
-      relationType: relation.type,
-      sourceLocalId: relation.sourceLocalId,
-      hint,
-      status: 'resolved',
-    },
-    { resolvedViaBackEdge: isBackEdge },
-  );
-  if (!alreadyResolved) {
-    state.resolved.push(target);
-  }
-  if (isBackEdge) {
-    return;
-  }
+  recordRef(state, refEntry(candidate, { status: 'resolved' }), { resolvedViaBackEdge: isBackEdge });
+  if (!alreadyResolved) state.resolved.push(next);
+  if (isBackEdge) return;
 
+  await continueWalk(state, next, targetKey, candidate.relationType, selector, depth, path);
+}
+
+/**
+ * Continue the walk into a resolved artifact with the selector's remaining depth and nested overrides.
+ * @param state - Resolver state accumulator.
+ * @param next - Resolved artifact to walk next.
+ * @param nextKey - Revision key of `next`, added to the ancestor path.
+ * @param relationType - Relation type that led to `next`.
+ * @param selector - Selector that resolved the edge.
+ * @param depth - Depth of the artifact the edge started from.
+ * @param path - Ancestor ref keys up to and excluding `next`.
+ */
+async function continueWalk(
+  state: ResolverState,
+  next: ArtifactRevision,
+  nextKey: string,
+  relationType: string,
+  selector: ArtifactContextRelationSelector,
+  depth: number,
+  path: ReadonlySet<string>,
+): Promise<void> {
   const remainingDepth = (selector.depth ?? 1) - 1;
-  const continuedSelector =
-    remainingDepth > 0
-      ? ({
-          [relation.type]: {
-            ...selector,
-            depth: remainingDepth,
-          },
-        } satisfies ArtifactContextSelector)
-      : undefined;
-  const nestedSelectors = mergeSelectors(continuedSelector, selector.nested);
-  const nextPath = new Set(path);
-  nextPath.add(targetKey);
-  await walkArtifact(state, target, nestedSelectors, depth + 1, nextPath);
+  const continued: ArtifactContextSelector | undefined =
+    remainingDepth > 0 ? { [relationType]: { ...selector, depth: remainingDepth } } : undefined;
+  await walkArtifact(state, next, mergeSelectors(continued, selector.nested), depth + 1, new Set([...path, nextKey]));
 }
 
 /**
  * Resolve an artifact ref using the per-call cache.
+ *
+ * The cache is the single admission path: a cached entry (including a cached
+ * `null`) wins over `fetch`, and whatever `fetch` returns is cached.
  * @param state - Resolver state with cache.
  * @param ref - Artifact reference to resolve.
+ * @param fetch - Loader for a cache miss; defaults to the `artifact.resolve` RPC.
  * @returns Resolved artifact revision, or `null` if not found.
  */
-async function resolveRef(state: ResolverState, ref: ArtifactRef): Promise<ArtifactRevision | null> {
-  const key = artifactRefKey(ref);
-  if (state.resolvedByKey.has(key)) {
-    return state.resolvedByKey.get(key) ?? null;
-  }
-  const { artifact } = await state.bus.request(ArtifactSubjects.resolve, {
-    ref,
-  });
+async function resolveRef(
+  state: ResolverState,
+  ref: ArtifactRef,
+  fetch: () => Promise<ArtifactRevision | null> = async () =>
+    (await state.bus.request(ArtifactSubjects.resolve, { ref })).artifact,
+): Promise<ArtifactRevision | null> {
+  const key = artifactRevisionKey(ref);
+  if (state.resolvedByKey.has(key)) return state.resolvedByKey.get(key) ?? null;
+  const artifact = await fetch();
   state.resolvedByKey.set(key, artifact);
   return artifact;
 }
@@ -221,18 +322,8 @@ function mergeSelectors(
   continued: ArtifactContextSelector | undefined,
   callerOverride: ArtifactContextSelector | undefined,
 ): ArtifactContextSelector | undefined {
-  if (!callerOverride) return continued;
-  if (!continued) {
-    return callerOverride;
-  }
-
-  const result: Record<string, ArtifactContextRelationSelector> = {
-    ...continued,
-  };
-  for (const [relationType, selector] of Object.entries(callerOverride)) {
-    result[relationType] = selector;
-  }
-  return result;
+  if (!callerOverride || !continued) return callerOverride ?? continued;
+  return { ...continued, ...callerOverride };
 }
 
 /**
@@ -252,6 +343,18 @@ function selectorMatches(
 }
 
 /**
+ * Check whether a stored relation target is a whole-artifact ref to an identity, ignoring the pinned revision.
+ *
+ * `local` targets (parts of an artifact) never match.
+ * @param target - Stored relation target to inspect.
+ * @param identity - Artifact identity to match.
+ * @returns Whether the target is an `artifact` ref with the identity's kind and id.
+ */
+function relationTargetsIdentity(target: ArtifactRelationTarget, identity: ArtifactRef): boolean {
+  return target.refClass === 'artifact' && target.kind === identity.kind && target.id === identity.id;
+}
+
+/**
  * Resolve the kind discriminator used by selector kind filters.
  * @param target - Relation target to inspect.
  * @returns Kind string, or undefined for a separately managed entity.
@@ -262,259 +365,12 @@ function relationTargetKind(target: ArtifactRelationTarget): string | undefined 
 }
 
 /**
- * Create an unresolved context ref entry.
- * @param sourceRef - Source artifact reference.
- * @param relation - The outbound relation.
- * @param hint - Render hint for the entry.
- * @param reason - Reason the target was not resolved.
- * @returns Unresolved ref entry.
- */
-function unresolved(
-  sourceRef: ArtifactRef,
-  relation: ArtifactRelation,
-  hint: string,
-  reason: ArtifactContextRefEntry['reason'],
-): ArtifactContextRefEntry {
-  return {
-    sourceRef,
-    target: relation.target,
-    relationType: relation.type,
-    sourceLocalId: relation.sourceLocalId,
-    hint,
-    status: 'unresolved',
-    reason,
-  };
-}
-
-/**
- * Record a relation entry once in the pathless wire graph.
- * @param state - Resolver state accumulator.
- * @param entry - Relation entry to record.
- * @param metadata - Internal provenance for precedence decisions.
- */
-function recordRef(state: ResolverState, entry: ArtifactContextRefEntry, metadata?: RefMetadata): void {
-  const key = refEntryKey(entry);
-  const existingIndex = state.refIndexByKey.get(key);
-  if (existingIndex === undefined) {
-    state.refIndexByKey.set(key, state.refs.length);
-    setEntryMetadata(state, key, entry, metadata);
-    state.refs.push(entry);
-    return;
-  }
-
-  const existing = state.refs[existingIndex];
-  if (!existing) return;
-
-  if (entry.status === 'unresolved' && entry.reason === 'depth-exceeded') {
-    // Depth-exceeded only wins over a resolved entry when that entry came from
-    // a path-local back-edge. A normally resolved source relation must remain
-    // resolved, and a precise unresolved reason must remain precise, if a later,
-    // longer path encounters the same pathless relation at the depth limit.
-    if (!canDepthExceededReplaceExisting(existing, resolvedViaBackEdge(state, key))) {
-      return;
-    }
-    replaceRefEntry(state, existingIndex, key, entry, metadata);
-    return;
-  }
-
-  if (existing.status === 'unresolved' && existing.reason === 'depth-exceeded') {
-    if (
-      (entry.status === 'resolved' && isResolvedViaBackEdge(metadata)) ||
-      (entry.status === 'unresolved' && !canUnresolvedReplaceExisting(entry.reason, existing.reason))
-    ) {
-      return;
-    }
-    replaceRefEntry(state, existingIndex, key, entry, metadata);
-    return;
-  }
-
-  if (entry.status === 'unresolved' && existing.status === 'unresolved') {
-    if (canUnresolvedReplaceExisting(entry.reason, existing.reason)) {
-      replaceRefEntry(state, existingIndex, key, entry, metadata);
-    }
-    return;
-  }
-
-  if (entry.status === 'resolved' && existing.status === 'unresolved') {
-    replaceRefEntry(state, existingIndex, key, entry, metadata);
-    return;
-  }
-
-  if (entry.status === 'resolved' && !isResolvedViaBackEdge(metadata)) {
-    setResolvedMetadata(state, key, metadata);
-  }
-}
-
-/**
- * Decide whether a new depth miss can replace a known pathless relation.
- * @param existing - Existing relation entry for the same source/target.
- * @param existingResolvedViaBackEdge - Whether the existing resolved entry came from a back-edge.
- * @returns Whether the depth-exceeded entry may replace the existing entry.
- */
-function canDepthExceededReplaceExisting(
-  existing: ArtifactContextRefEntry,
-  existingResolvedViaBackEdge: boolean,
-): boolean {
-  if (existing.status === 'resolved') {
-    return existingResolvedViaBackEdge;
-  }
-  return canUnresolvedReplaceExisting('depth-exceeded', existing.reason);
-}
-
-/**
- * Decide whether an unresolved reason is more informative for a pathless relation.
- * @param incomingReason - New unresolved reason for the relation.
- * @param existingReason - Existing unresolved reason for the relation.
- * @returns Whether the incoming reason should replace the existing reason.
- */
-function canUnresolvedReplaceExisting(
-  incomingReason: ArtifactContextRefEntry['reason'],
-  existingReason: ArtifactContextRefEntry['reason'],
-): boolean {
-  return unresolvedReasonPrecedence(incomingReason) > unresolvedReasonPrecedence(existingReason);
-}
-
-/**
- * Rank unresolved relation reasons by how much traversal information they carry.
- * @param reason - Unresolved reason to rank.
- * @returns Precedence rank; larger values preserve more information.
- */
-function unresolvedReasonPrecedence(reason: ArtifactContextRefEntry['reason']): number {
-  if (reason === 'not-selected') return 0;
-  if (reason === 'depth-exceeded') return 1;
-  return 2;
-}
-
-/**
- * Replace a pathless relation entry and keep provenance metadata aligned.
- * @param state - Resolver state accumulator.
- * @param existingIndex - Index of the relation entry to replace.
- * @param key - Pathless relation key being replaced.
- * @param entry - New relation entry.
- * @param metadata - Provenance for resolved entries.
- */
-function replaceRefEntry(
-  state: ResolverState,
-  existingIndex: number,
-  key: string,
-  entry: ArtifactContextRefEntry,
-  metadata: RefMetadata | undefined,
-): void {
-  setEntryMetadata(state, key, entry, metadata);
-  state.refs[existingIndex] = entry;
-}
-
-/**
- * Keep relation provenance aligned with a relation entry.
- * @param state - Resolver state accumulator.
- * @param key - Pathless relation key being recorded.
- * @param entry - Relation entry whose provenance is being recorded.
- * @param metadata - Provenance for resolved entries.
- */
-function setEntryMetadata(
-  state: ResolverState,
-  key: string,
-  entry: ArtifactContextRefEntry,
-  metadata: RefMetadata | undefined,
-): void {
-  if (entry.status === 'resolved') {
-    setResolvedMetadata(state, key, metadata);
-    return;
-  }
-  clearRefMetadata(state, key);
-}
-
-/**
- * Store resolved-entry provenance with a conservative default for missing metadata.
- * @param state - Resolver state accumulator.
- * @param key - Pathless relation key being recorded.
- * @param metadata - Provenance for the resolved entry.
- */
-function setResolvedMetadata(state: ResolverState, key: string, metadata: RefMetadata | undefined): void {
-  state.refMetadataByKey.set(key, metadata ?? { resolvedViaBackEdge: false });
-}
-
-/**
- * Remove provenance when a relation is no longer recorded as resolved.
- * @param state - Resolver state accumulator.
- * @param key - Pathless relation key being cleared.
- */
-function clearRefMetadata(state: ResolverState, key: string): void {
-  state.refMetadataByKey.delete(key);
-}
-
-/**
- * Check whether stored provenance marks a relation as resolved through a back-edge.
- * @param state - Resolver state accumulator.
- * @param key - Pathless relation key to inspect.
- * @returns Whether the stored resolved entry came from a path-local back-edge.
- */
-function resolvedViaBackEdge(state: ResolverState, key: string): boolean {
-  return isResolvedViaBackEdge(state.refMetadataByKey.get(key));
-}
-
-/**
- * Check whether explicit provenance marks a resolved entry as a back-edge.
- * @param metadata - Provenance to inspect.
- * @returns Whether the provenance represents a path-local back-edge.
- */
-function isResolvedViaBackEdge(metadata: RefMetadata | undefined): boolean {
-  return metadata?.resolvedViaBackEdge === true;
-}
-
-/**
  * Convert an artifact revision to an artifact ref.
  * @param artifact - Artifact revision.
  * @returns Artifact reference.
  */
 function artifactToRef(artifact: ArtifactRevision): ArtifactRef {
-  return {
-    refClass: 'artifact',
-    kind: artifact.kind,
-    id: artifact.id,
-    revision: artifact.revision,
-  };
-}
-
-/**
- * Build a cache key from an artifact reference.
- * @param ref - Artifact reference.
- * @returns Composite cache key.
- */
-function artifactRefKey(ref: ArtifactRef): string {
-  return JSON.stringify([ref.kind, ref.id, ref.revision]);
-}
-
-/**
- * Build a key for a source relation in the pathless wire graph.
- * @param entry - Context relation entry to key.
- * @returns Stable relation identity key.
- */
-function refEntryKey(entry: ArtifactContextRefEntry): string {
-  return JSON.stringify([
-    artifactRefKey(entry.sourceRef),
-    entry.sourceLocalId ?? null,
-    entry.relationType,
-    relationTargetKey(entry.target),
-  ]);
-}
-
-/**
- * Build a key for an artifact relation target.
- * @param target - Relation target to key.
- * @returns Stable target identity key.
- */
-function relationTargetKey(target: ArtifactRelationTarget): string {
-  if (target.refClass === 'entity') {
-    return JSON.stringify(['entity', target.entityType, target.id]);
-  }
-  if (target.refClass === 'artifact') {
-    return JSON.stringify(['artifact', target.kind, target.id, target.revision]);
-  }
-  if (target.refClass === 'local') {
-    return JSON.stringify(['local', artifactRefKey(target.artifact), target.localId]);
-  }
-  return JSON.stringify(['evidence', target.kind, target.id, target.revision ?? null, target.locator ?? null]);
+  return { refClass: 'artifact', kind: artifact.kind, id: artifact.id, revision: artifact.revision };
 }
 
 /**
