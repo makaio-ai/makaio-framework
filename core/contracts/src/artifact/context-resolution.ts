@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ArtifactContextRenderHintSchema } from './context-selectors.js';
+import { ArtifactContextRelationDirectionSchema, ArtifactContextRenderHintSchema } from './context-selectors.js';
 import {
   ArtifactRefSchema,
   ArtifactRelationSchema,
@@ -17,11 +17,17 @@ interface ArtifactRevisionKeyFields {
 }
 
 /**
- * Creates a collision-safe key for matching artifact refs to revision payloads.
- * @param ref - Artifact reference or revision fields to identify.
+ * Creates a collision-safe key identifying one artifact revision.
+ *
+ * The key is the JSON encoding of the `[kind, id, revision]` tuple, so field
+ * values containing separator characters cannot collide. Use it wherever
+ * artifact refs must be matched against revision payloads (for example the
+ * `resolved` pool of a {@link ResolvedArtifactContextWire}) so producers and
+ * readers of the context wire format agree on revision identity.
+ * @param ref - Artifact reference or revision fields to identify; only `kind`, `id`, and `revision` are read.
  * @returns Stable key for the artifact revision identity.
  */
-function artifactRevisionKey(ref: ArtifactRevisionKeyFields): string {
+export function artifactRevisionKey(ref: ArtifactRevisionKeyFields): string {
   return JSON.stringify([ref.kind, ref.id, ref.revision]);
 }
 
@@ -44,19 +50,28 @@ export type ArtifactContextUnresolvedReason = z.infer<typeof ArtifactContextUnre
 /**
  * A single entry in the normalized artifact context wire format.
  *
- * Each entry records one outbound relation from a source artifact to a
- * target, along with resolution status and the render hint used.
+ * Each entry records one traversal edge from the walked artifact
+ * (`sourceRef`) to a `target`, along with resolution status and the render
+ * hint used. For the default outbound direction the edge is the stored
+ * relation itself. For an inbound edge the stored relation lives on the
+ * target and points back at `sourceRef`'s identity; `direction` marks this.
  */
 export const ArtifactContextRefEntrySchema = z
   .object({
     /** The relation target reference. */
     target: ArtifactRelationTargetSchema,
-    /** The source artifact that owns this relation. */
+    /** The walked artifact this edge starts from. */
     sourceRef: ArtifactRefSchema,
     /** The relation type string. */
     relationType: z.string().min(1),
-    /** Optional local identifier of the source part within `sourceRef`. */
+    /** Optional local identifier of the part that owns the stored relation. */
     sourceLocalId: ArtifactRelationSchema.shape.sourceLocalId,
+    /**
+     * Direction of the stored relation relative to the edge; absent means outbound.
+     * Producers omit the field for outbound edges; readers must treat an absent
+     * value and `'outbound'` alike.
+     */
+    direction: ArtifactContextRelationDirectionSchema.optional(),
     /** The render hint applied to this entry. */
     hint: ArtifactContextRenderHintSchema,
     /** Whether the target was successfully resolved. */

@@ -6,11 +6,12 @@ import type {
   UnresolvedArtifactContextNode,
 } from './context-tree.js';
 import {
+  artifactRevisionKey,
   ResolvedArtifactContextWireSchema,
   type ArtifactContextRefEntry,
   type ResolvedArtifactContextWire,
 } from './context-resolution.js';
-import type { ArtifactContextRenderHint } from './context-selectors.js';
+import type { ArtifactContextRelationDirection, ArtifactContextRenderHint } from './context-selectors.js';
 import type { ArtifactRef, ArtifactRevision } from './schemas.js';
 
 /**
@@ -21,11 +22,11 @@ import type { ArtifactRef, ArtifactRevision } from './schemas.js';
 export function hydrateArtifactContextTree(wire: ResolvedArtifactContextWire): ArtifactContextTree {
   const normalizedWire = ResolvedArtifactContextWireSchema.parse(wire);
   const artifactByKey = new Map(
-    normalizedWire.resolved.map((artifact) => [artifactRefKey(artifact), artifact] as const),
+    normalizedWire.resolved.map((artifact) => [artifactRevisionKey(artifact), artifact] as const),
   );
   const refsBySource = new Map<string, ArtifactContextRefEntry[]>();
   for (const entry of normalizedWire.refs) {
-    const key = artifactRefKey(entry.sourceRef);
+    const key = artifactRevisionKey(entry.sourceRef);
     let entries = refsBySource.get(key);
     if (!entries) {
       entries = [];
@@ -34,9 +35,11 @@ export function hydrateArtifactContextTree(wire: ResolvedArtifactContextWire): A
     entries.push(entry);
   }
 
-  const rootArtifact = artifactByKey.get(artifactRefKey(normalizedWire.rootRef));
+  const rootArtifact = artifactByKey.get(artifactRevisionKey(normalizedWire.rootRef));
   if (!rootArtifact) {
-    throw new Error(`Resolved artifact context is missing root artifact '${artifactRefKey(normalizedWire.rootRef)}'`);
+    throw new Error(
+      `Resolved artifact context is missing root artifact '${artifactRevisionKey(normalizedWire.rootRef)}'`,
+    );
   }
 
   const root = buildRootNode(normalizedWire.rootRef, rootArtifact, 'inline', refsBySource, artifactByKey);
@@ -72,7 +75,7 @@ function buildRootNode(
     ref,
     artifact,
     hint,
-    children: buildChildren(ref, refsBySource, artifactByKey, new Set([artifactRefKey(ref)])),
+    children: buildChildren(ref, refsBySource, artifactByKey, new Set([artifactRevisionKey(ref)])),
   };
 }
 
@@ -81,7 +84,8 @@ function buildRootNode(
  * @param ref - Artifact reference for this node.
  * @param artifact - Full artifact revision data.
  * @param relation - Relation type from parent.
- * @param sourceLocalId - Optional local identifier of the parent part that owns this relation.
+ * @param sourceLocalId - Optional local identifier of the part that owns the stored relation.
+ * @param direction - Direction of the stored relation relative to the parent.
  * @param hint - Render hint for this node.
  * @param refsBySource - Lookup of ref entries by source key.
  * @param artifactByKey - Lookup of resolved artifacts by key.
@@ -93,22 +97,23 @@ function buildResolvedNode(
   artifact: ArtifactRevision,
   relation: string,
   sourceLocalId: string | undefined,
+  direction: ArtifactContextRelationDirection | undefined,
   hint: ArtifactContextRenderHint,
   refsBySource: ReadonlyMap<string, readonly ArtifactContextRefEntry[]>,
   artifactByKey: ReadonlyMap<string, ArtifactRevision>,
   path: ReadonlySet<string>,
 ): ResolvedArtifactContextNode {
-  const key = artifactRefKey(ref);
+  const key = artifactRevisionKey(ref);
   const nextPath = new Set(path);
   nextPath.add(key);
   const children = buildChildren(ref, refsBySource, artifactByKey, nextPath);
 
-  return { status: 'resolved', ref, artifact, relation, sourceLocalId, hint, children };
+  return { status: 'resolved', ref, artifact, relation, sourceLocalId, direction, hint, children };
 }
 
 /**
  * Build child nodes for an artifact reference.
- * @param sourceRef - Artifact whose outgoing relation entries are hydrated.
+ * @param sourceRef - Artifact whose traversal edges are hydrated.
  * @param refsBySource - Lookup of ref entries by source key.
  * @param artifactByKey - Lookup of resolved artifacts by key.
  * @param path - Ancestor keys for cycle detection.
@@ -120,13 +125,14 @@ function buildChildren(
   artifactByKey: ReadonlyMap<string, ArtifactRevision>,
   path: ReadonlySet<string>,
 ): readonly ArtifactContextNode[] {
-  return (refsBySource.get(artifactRefKey(sourceRef)) ?? []).map((entry): ArtifactContextNode => {
+  return (refsBySource.get(artifactRevisionKey(sourceRef)) ?? []).map((entry): ArtifactContextNode => {
     if (entry.status === 'unresolved') {
       return {
         status: 'unresolved',
         target: entry.target,
         relation: entry.relationType,
         sourceLocalId: entry.sourceLocalId,
+        direction: entry.direction,
         hint: entry.hint,
         reason: entry.reason!,
       } satisfies UnresolvedArtifactContextNode;
@@ -136,7 +142,7 @@ function buildChildren(
       throw new Error('Resolved artifact context refs must target an artifact revision');
     }
 
-    const childKey = artifactRefKey(entry.target);
+    const childKey = artifactRevisionKey(entry.target);
     const childArtifact = artifactByKey.get(childKey);
     if (!childArtifact) {
       throw new Error(`Resolved artifact context is missing target artifact '${childKey}'`);
@@ -147,6 +153,7 @@ function buildChildren(
         target: entry.target,
         relation: entry.relationType,
         sourceLocalId: entry.sourceLocalId,
+        direction: entry.direction,
         hint: entry.hint,
         reason: 'cycle-detected',
       } satisfies UnresolvedArtifactContextNode;
@@ -157,6 +164,7 @@ function buildChildren(
       childArtifact,
       entry.relationType,
       entry.sourceLocalId,
+      entry.direction,
       entry.hint,
       refsBySource,
       artifactByKey,
@@ -176,13 +184,4 @@ function collectResolved(node: ArtifactContextNode | ArtifactContextRootNode, ar
   for (const child of node.children) {
     collectResolved(child, artifacts);
   }
-}
-
-/**
- * Build a cache key from any artifact-identifying object.
- * @param ref - Object with kind, id, and revision fields.
- * @returns Composite cache key.
- */
-function artifactRefKey(ref: { kind: string; id: string; revision: string }): string {
-  return JSON.stringify([ref.kind, ref.id, ref.revision]);
 }

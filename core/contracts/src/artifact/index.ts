@@ -78,13 +78,16 @@ export type {
   BeforeArtifactHookRegistration,
 } from './lifecycle-hooks.js';
 export {
+  ARTIFACT_CONTEXT_RELATION_DIRECTIONS,
   ARTIFACT_CONTEXT_RENDER_HINTS,
+  ArtifactContextRelationDirectionSchema,
   ArtifactContextRelationSelectorSchema,
   ArtifactContextRenderHintSchema,
   ArtifactContextSelectorSchema,
 } from './context-selectors.js';
 export type {
   ArtifactContextKnownRenderHint,
+  ArtifactContextRelationDirection,
   ArtifactContextRelationSelector,
   ArtifactContextRenderHint,
   ArtifactContextSelector,
@@ -93,6 +96,7 @@ export {
   ArtifactContextRefEntrySchema,
   ArtifactContextUnresolvedReasonSchema,
   ResolvedArtifactContextWireSchema,
+  artifactRevisionKey,
 } from './context-resolution.js';
 export type {
   ArtifactContextRefEntry,

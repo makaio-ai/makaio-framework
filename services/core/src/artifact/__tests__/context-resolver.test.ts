@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { ArtifactSubjects, type ArtifactRef, type ArtifactRevision } from '@makaio/contracts';
+import {
+  ArtifactSubjects,
+  hydrateArtifactContextTree,
+  type ArtifactRef,
+  type ArtifactRevision,
+  type ResolvedArtifactContextWire,
+} from '@makaio/contracts';
+import { ArtifactRelationQueryTargetSchema } from '@makaio/contracts/artifact';
 import { resolveArtifactContext } from '../context-resolver.js';
 
 /**
@@ -51,6 +58,56 @@ function artifact(
     actor: { kind: 'agent', id: 'agent-1' },
     timestamp: 1700000000000,
   };
+}
+
+/**
+ * Serve a fixture artifact store on the bus: `resolve` by exact revision and
+ * `query` by relation type and target identity (whole-artifact or part targets).
+ * @param bus - Bus to register the handlers on.
+ * @param revisions - Revisions held by the fixture store.
+ * @returns Unsubscribe callbacks and the log of received query payloads.
+ */
+function serveStore(
+  bus: IMakaioBus,
+  revisions: readonly ArtifactRevision[],
+): { readonly cleanups: Array<() => void>; readonly queries: unknown[] } {
+  const byKey = new Map(revisions.map((entry) => [refKey(entry), entry]));
+  const queries: unknown[] = [];
+  const cleanups = [
+    bus.on(ArtifactSubjects.resolve, (ctx) => {
+      ctx.setResult({ artifact: byKey.get(refKey(ctx.payload.ref)) ?? null });
+    }),
+    bus.on(ArtifactSubjects.query, (ctx) => {
+      queries.push(ctx.payload);
+      const wanted = ctx.payload.relation;
+      const target = wanted ? ArtifactRelationQueryTargetSchema.parse(wanted.target) : undefined;
+      ctx.setResult({
+        artifacts: revisions.filter((entry) =>
+          entry.relations.some((relation) => {
+            if (relation.type !== wanted?.type || target?.refClass !== 'artifact') return false;
+            const identity = relation.target.refClass === 'local' ? relation.target.artifact : relation.target;
+            return identity.refClass === 'artifact' && identity.kind === target.kind && identity.id === target.id;
+          }),
+        ),
+      });
+    }),
+  ];
+  return { cleanups, queries };
+}
+
+/**
+ * Project wire entries onto the fields the inbound traversal tests assert.
+ * @param refs - Wire entries to project.
+ * @returns Tuples of source id, target id, direction, status, and reason.
+ */
+function edges(refs: ResolvedArtifactContextWire['refs']): Array<Array<string | null>> {
+  return refs.map((entry) => [
+    entry.sourceRef.id,
+    entry.target.refClass === 'artifact' ? entry.target.id : null,
+    entry.direction ?? 'outbound',
+    entry.status,
+    entry.reason ?? null,
+  ]);
 }
 
 describe('resolveArtifactContext', () => {
@@ -1204,5 +1261,319 @@ describe('resolveArtifactContext', () => {
         ref: ref('system', 'missing', 'rev-missing'),
       }),
     ).rejects.toThrow("root artifact 'system:missing:rev-missing' not found");
+  });
+
+  it('selects artifacts whose relations point at the walked artifact when the selector is inbound', async () => {
+    const parent = artifact('knowledge-document', 'parent-1', 'rev-2');
+    const childA = artifact('knowledge-document', 'child-a', 'rev-1', [
+      { type: 'part_of', target: ref('knowledge-document', 'parent-1', 'rev-1') },
+    ]);
+    const childB = artifact('knowledge-document', 'child-b', 'rev-3', [
+      { type: 'part_of', target: ref('knowledge-document', 'parent-1', 'rev-2'), sourceLocalId: 'section-2' },
+    ]);
+    const other = artifact('note', 'note-1', 'rev-1', [
+      { type: 'part_of', target: ref('knowledge-document', 'parent-1', 'rev-2') },
+    ]);
+    const artifacts = new Map(
+      [parent, childA, childB, other].map((entry) => [`${entry.kind}:${entry.id}:${entry.revision}`, entry]),
+    );
+    const queries: unknown[] = [];
+    cleanups.push(
+      bus.on(ArtifactSubjects.resolve, (ctx) => {
+        const target = ctx.payload.ref;
+        ctx.setResult({ artifact: artifacts.get(`${target.kind}:${target.id}:${target.revision}`) ?? null });
+      }),
+      bus.on(ArtifactSubjects.query, (ctx) => {
+        queries.push(ctx.payload);
+        ctx.setResult({ artifacts: [childA, childB, other] });
+      }),
+    );
+
+    const context = await resolveArtifactContext({
+      bus,
+      ref: ref('knowledge-document', 'parent-1', 'rev-2'),
+      selectors: { part_of: { direction: 'inbound', kinds: ['knowledge-document'], hint: 'section' } },
+    });
+
+    expect(queries).toEqual([
+      {
+        relation: { type: 'part_of', target: { refClass: 'artifact', kind: 'knowledge-document', id: 'parent-1' } },
+        currentOnly: true,
+      },
+    ]);
+    expect(context.resolved.map((entry) => entry.id)).toEqual(['parent-1', 'child-a', 'child-b']);
+    expect(
+      context.refs.map((entry) => [
+        entry.sourceRef.id,
+        entry.target.refClass === 'artifact' ? entry.target.id : null,
+        entry.direction,
+        entry.sourceLocalId ?? null,
+        entry.hint,
+        entry.status,
+        entry.reason ?? null,
+      ]),
+    ).toEqual([
+      ['parent-1', 'child-a', 'inbound', null, 'section', 'resolved', null],
+      // The child's own stored relation back to the parent is walked outbound and stays unselected.
+      ['child-a', 'parent-1', undefined, null, 'link', 'unresolved', 'not-selected'],
+      ['parent-1', 'child-b', 'inbound', 'section-2', 'section', 'resolved', null],
+      ['child-b', 'parent-1', undefined, 'section-2', 'link', 'unresolved', 'not-selected'],
+      ['parent-1', 'note-1', 'inbound', null, 'section', 'unresolved', 'not-selected'],
+    ]);
+
+    const tree = hydrateArtifactContextTree(context);
+    expect(
+      tree.root.children.map((node) => [
+        node.status,
+        node.relation,
+        node.direction,
+        node.status === 'resolved' ? node.ref.id : null,
+      ]),
+    ).toEqual([
+      ['resolved', 'part_of', 'inbound', 'child-a'],
+      ['resolved', 'part_of', 'inbound', 'child-b'],
+      ['unresolved', 'part_of', 'inbound', null],
+    ]);
+  });
+
+  it('does not select the stored outbound relation of a type declared inbound', async () => {
+    const referenced = artifact('repo', 'repo-1', 'rev-repo');
+    const root = artifact('system', 'system-1', 'rev-system', [
+      { type: 'contains', target: ref('repo', 'repo-1', 'rev-repo') },
+    ]);
+    const artifacts = new Map(
+      [root, referenced].map((entry) => [`${entry.kind}:${entry.id}:${entry.revision}`, entry]),
+    );
+    cleanups.push(
+      bus.on(ArtifactSubjects.resolve, (ctx) => {
+        const target = ctx.payload.ref;
+        ctx.setResult({ artifact: artifacts.get(`${target.kind}:${target.id}:${target.revision}`) ?? null });
+      }),
+      bus.on(ArtifactSubjects.query, (ctx) => {
+        ctx.setResult({ artifacts: [] });
+      }),
+    );
+
+    const context = await resolveArtifactContext({
+      bus,
+      ref: ref('system', 'system-1', 'rev-system'),
+      selectors: { contains: { direction: 'inbound' } },
+    });
+
+    expect(context.resolved.map((entry) => entry.id)).toEqual(['system-1']);
+    expect(context.refs.map((entry) => [entry.direction ?? 'outbound', entry.status, entry.reason])).toEqual([
+      ['outbound', 'unresolved', 'not-selected'],
+    ]);
+  });
+
+  it('ignores inbound relations that target a part of the walked artifact', async () => {
+    const parent = artifact('knowledge-document', 'parent-1', 'rev-1');
+    const partSource = artifact('note', 'note-1', 'rev-1', [
+      {
+        type: 'part_of',
+        target: { refClass: 'local', artifact: ref('knowledge-document', 'parent-1', 'rev-1'), localId: 'section-1' },
+      },
+    ]);
+    const store = serveStore(bus, [parent, partSource]);
+    cleanups.push(...store.cleanups);
+
+    const context = await resolveArtifactContext({
+      bus,
+      ref: ref('knowledge-document', 'parent-1', 'rev-1'),
+      selectors: { part_of: { direction: 'inbound' } },
+    });
+
+    expect(store.queries).toHaveLength(1);
+    expect(context.refs).toEqual([]);
+    expect(context.resolved.map((entry) => entry.id)).toEqual(['parent-1']);
+  });
+
+  it('issues one inbound query per relation type and identity across a diamond graph', async () => {
+    const detail = artifact('note', 'd', 'rev-d', [{ type: 'part_of', target: ref('doc', 'c', 'rev-c') }]);
+    const shared = artifact('doc', 'c', 'rev-c');
+    const left = artifact('doc', 'a', 'rev-a', [{ type: 'contains', target: ref('doc', 'c', 'rev-c') }]);
+    const right = artifact('doc', 'b', 'rev-b', [{ type: 'contains', target: ref('doc', 'c', 'rev-c') }]);
+    const root = artifact('doc', 'root', 'rev-root', [
+      { type: 'contains', target: ref('doc', 'a', 'rev-a') },
+      { type: 'contains', target: ref('doc', 'b', 'rev-b') },
+    ]);
+    const store = serveStore(bus, [root, left, right, shared, detail]);
+    cleanups.push(...store.cleanups);
+
+    const context = await resolveArtifactContext({
+      bus,
+      ref: ref('doc', 'root', 'rev-root'),
+      selectors: { contains: { nested: { contains: { nested: { part_of: { direction: 'inbound' } } } } } },
+    });
+
+    expect(store.queries).toHaveLength(1);
+    expect(context.resolved.map((entry) => entry.id)).toEqual(['root', 'a', 'c', 'd', 'b']);
+    expect(edges(context.refs)).toEqual([
+      ['root', 'a', 'outbound', 'resolved', null],
+      ['a', 'c', 'outbound', 'resolved', null],
+      ['c', 'd', 'inbound', 'resolved', null],
+      ['d', 'c', 'outbound', 'unresolved', 'not-selected'],
+      ['root', 'b', 'outbound', 'resolved', null],
+      ['b', 'c', 'outbound', 'resolved', null],
+    ]);
+  });
+
+  it('follows inbound relations of inbound sources when the inbound selector has depth 2', async () => {
+    const root = artifact('doc', 'root', 'rev-root');
+    const child = artifact('doc', 'child', 'rev-child', [{ type: 'part_of', target: ref('doc', 'root', 'rev-root') }]);
+    const grandchild = artifact('doc', 'grandchild', 'rev-grandchild', [
+      { type: 'part_of', target: ref('doc', 'child', 'rev-child') },
+    ]);
+    const store = serveStore(bus, [root, child, grandchild]);
+    cleanups.push(...store.cleanups);
+
+    const context = await resolveArtifactContext({
+      bus,
+      ref: ref('doc', 'root', 'rev-root'),
+      selectors: { part_of: { direction: 'inbound', depth: 2 } },
+    });
+
+    expect(context.resolved.map((entry) => entry.id)).toEqual(['root', 'child', 'grandchild']);
+    expect(edges(context.refs)).toEqual([
+      ['root', 'child', 'inbound', 'resolved', null],
+      ['child', 'root', 'outbound', 'unresolved', 'not-selected'],
+      ['child', 'grandchild', 'inbound', 'resolved', null],
+      ['grandchild', 'child', 'outbound', 'unresolved', 'not-selected'],
+    ]);
+    const tree = hydrateArtifactContextTree(context);
+    const [childNode] = tree.root.children;
+    expect(childNode?.status === 'resolved' ? childNode.ref.id : null).toBe('child');
+    expect(
+      childNode?.status === 'resolved'
+        ? childNode.children.map((node) => [node.direction, node.status === 'resolved' ? node.ref.id : null])
+        : null,
+    ).toEqual([
+      [undefined, null],
+      ['inbound', 'grandchild'],
+    ]);
+  });
+
+  it('applies nested outbound selectors to an inbound source', async () => {
+    const root = artifact('doc', 'root', 'rev-root');
+    const tool = artifact('tool', 'tool-1', 'rev-tool');
+    const child = artifact('doc', 'child', 'rev-child', [
+      { type: 'part_of', target: ref('doc', 'root', 'rev-root') },
+      { type: 'uses', target: ref('tool', 'tool-1', 'rev-tool') },
+    ]);
+    const store = serveStore(bus, [root, child, tool]);
+    cleanups.push(...store.cleanups);
+
+    const context = await resolveArtifactContext({
+      bus,
+      ref: ref('doc', 'root', 'rev-root'),
+      selectors: { part_of: { direction: 'inbound', nested: { uses: { hint: 'inline' } } } },
+    });
+
+    expect(context.resolved.map((entry) => entry.id)).toEqual(['root', 'child', 'tool-1']);
+    expect(edges(context.refs)).toEqual([
+      ['root', 'child', 'inbound', 'resolved', null],
+      ['child', 'root', 'outbound', 'unresolved', 'not-selected'],
+      ['child', 'tool-1', 'outbound', 'resolved', null],
+    ]);
+    expect(context.refs[2]?.hint).toBe('inline');
+  });
+
+  it('records an inbound edge back to the root as resolved without walking the root again', async () => {
+    const root = artifact('doc', 'root', 'rev-root', [{ type: 'part_of', target: ref('doc', 'child', 'rev-child') }]);
+    const child = artifact('doc', 'child', 'rev-child', [{ type: 'part_of', target: ref('doc', 'root', 'rev-root') }]);
+    const store = serveStore(bus, [root, child]);
+    cleanups.push(...store.cleanups);
+
+    const context = await resolveArtifactContext({
+      bus,
+      ref: ref('doc', 'root', 'rev-root'),
+      selectors: { part_of: { direction: 'inbound', depth: 5 } },
+    });
+
+    expect(store.queries).toHaveLength(2);
+    expect(context.resolved.map((entry) => entry.id)).toEqual(['root', 'child']);
+    expect(edges(context.refs)).toEqual([
+      ['root', 'child', 'outbound', 'unresolved', 'not-selected'],
+      ['root', 'child', 'inbound', 'resolved', null],
+      ['child', 'root', 'outbound', 'unresolved', 'not-selected'],
+      ['child', 'root', 'inbound', 'resolved', null],
+    ]);
+  });
+
+  it('keeps the unselected outbound edge beside the resolved inbound edge of a mutual pair', async () => {
+    const parent = artifact('doc', 'p', 'rev-p', [{ type: 'contains', target: ref('doc', 'c', 'rev-c') }]);
+    const child = artifact('doc', 'c', 'rev-c', [{ type: 'contains', target: ref('doc', 'p', 'rev-p') }]);
+    const store = serveStore(bus, [parent, child]);
+    cleanups.push(...store.cleanups);
+
+    const context = await resolveArtifactContext({
+      bus,
+      ref: ref('doc', 'p', 'rev-p'),
+      selectors: { contains: { direction: 'inbound' } },
+    });
+
+    expect(context.resolved.map((entry) => entry.id)).toEqual(['p', 'c']);
+    expect(edges(context.refs)).toEqual([
+      ['p', 'c', 'outbound', 'unresolved', 'not-selected'],
+      ['p', 'c', 'inbound', 'resolved', null],
+      ['c', 'p', 'outbound', 'unresolved', 'not-selected'],
+    ]);
+    const tree = hydrateArtifactContextTree(context);
+    expect(tree.root.children.map((node) => [node.direction, node.status])).toEqual([
+      [undefined, 'unresolved'],
+      ['inbound', 'resolved'],
+    ]);
+  });
+
+  it('marks inbound edges as depth-exceeded when maxDepth is reached', async () => {
+    const root = artifact('doc', 'root', 'rev-root');
+    const child = artifact('doc', 'child', 'rev-child', [{ type: 'part_of', target: ref('doc', 'root', 'rev-root') }]);
+    const grandchild = artifact('doc', 'grandchild', 'rev-grandchild', [
+      { type: 'part_of', target: ref('doc', 'child', 'rev-child') },
+    ]);
+    const store = serveStore(bus, [root, child, grandchild]);
+    cleanups.push(...store.cleanups);
+
+    const context = await resolveArtifactContext({
+      bus,
+      ref: ref('doc', 'root', 'rev-root'),
+      selectors: { part_of: { direction: 'inbound', depth: 2 } },
+      maxDepth: 1,
+    });
+
+    expect(context.resolved.map((entry) => entry.id)).toEqual(['root', 'child']);
+    expect(edges(context.refs)).toEqual([
+      ['root', 'child', 'inbound', 'resolved', null],
+      ['child', 'root', 'outbound', 'unresolved', 'not-selected'],
+      ['child', 'grandchild', 'inbound', 'unresolved', 'depth-exceeded'],
+    ]);
+  });
+
+  it('suppresses the stored outbound relation when the inbound selector of that type is omit', async () => {
+    const referenced = artifact('repo', 'repo-1', 'rev-repo');
+    const root = artifact('system', 'system-1', 'rev-system', [
+      { type: 'contains', target: ref('repo', 'repo-1', 'rev-repo') },
+    ]);
+    const artifacts = new Map(
+      [root, referenced].map((entry) => [`${entry.kind}:${entry.id}:${entry.revision}`, entry]),
+    );
+    cleanups.push(
+      bus.on(ArtifactSubjects.resolve, (ctx) => {
+        const target = ctx.payload.ref;
+        ctx.setResult({ artifact: artifacts.get(`${target.kind}:${target.id}:${target.revision}`) ?? null });
+      }),
+      bus.on(ArtifactSubjects.query, (ctx) => {
+        ctx.setResult({ artifacts: [] });
+      }),
+    );
+
+    const context = await resolveArtifactContext({
+      bus,
+      ref: ref('system', 'system-1', 'rev-system'),
+      selectors: { contains: { direction: 'inbound', hint: 'omit' } },
+    });
+
+    expect(context.refs).toEqual([]);
+    expect(context.resolved.map((entry) => entry.id)).toEqual(['system-1']);
   });
 });

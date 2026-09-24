@@ -70,6 +70,8 @@ export type {
   ArtifactViewTableSection,
   ArtifactViewSurfaceLinks,
 } from './view-model.js';
+export { ARTIFACT_VIEW_MARKDOWN_RENDERER_VERSION, renderArtifactViewMarkdown } from './artifact-view-markdown.js';
+export type { ArtifactViewMarkdownOptions } from './artifact-view-markdown.js';
 export {
   ArtifactViewAffordanceDeclarationSchema,
   ArtifactViewAffordanceRequestSchema,
