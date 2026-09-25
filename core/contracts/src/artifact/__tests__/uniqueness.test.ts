@@ -2,8 +2,24 @@ import { describe, expect, it } from 'vitest';
 
 import { ArtifactRelationSchema } from '../schemas.js';
 import { assessUniquenessSupport, buildUniquenessKeys, describeUniquenessKey } from '../uniqueness.js';
+import { serializeArtifactRelationTargetIdentity } from '../relation-target-identity.js';
 import type { ArtifactUniquenessRule } from '../kind-registration.js';
-import type { UniquenessSelectorCapability } from '../uniqueness.js';
+import type {
+  UniquenessKeyPart,
+  UniquenessRelationTargetKeyPart,
+  UniquenessSelectorCapability,
+} from '../uniqueness.js';
+
+/**
+ * Narrow a {@link UniquenessKeyPart} to its `relation-target` variant for
+ * tests that assert on `.type`/`.target`.
+ * @param part - A resolved key part expected to be a relation-target part.
+ * @returns The part narrowed to {@link UniquenessRelationTargetKeyPart}.
+ */
+function asRelationTargetPart(part: UniquenessKeyPart): UniquenessRelationTargetKeyPart {
+  if (!('target' in part)) throw new Error('expected a relation-target key part');
+  return part;
+}
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -117,8 +133,9 @@ const aboutEvidence = ArtifactRelationSchema.parse({
   },
 });
 
-// 'data' is not in UniquenessSelectorCapability; the full derivable set is:
-const allCapabilities: readonly UniquenessSelectorCapability[] = ['relation-target', 'lifecycle-states'];
+const allCapabilities: readonly UniquenessSelectorCapability[] = ['relation-target', 'data', 'lifecycle-states'];
+
+const dataWithSlug = { slug: 'my-slug' };
 
 // ── assessUniquenessSupport ───────────────────────────────────────────────────
 
@@ -189,18 +206,17 @@ describe('assessUniquenessSupport', () => {
     }
   });
 
-  it('reports data capability even when supported contains all derivable capabilities (F22)', () => {
-    // data-path selectors are never derivable from relations; DERIVABLE_SELECTOR_KINDS excludes them.
-    // assessUniquenessSupport must report capability:'data' regardless of the supported set.
-    const result = assessUniquenessSupport([dataRule], ['relation-target', 'lifecycle-states']);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues[0]).toMatchObject({
-        ruleIndex: 0,
-        selectorIndex: 0,
-        capability: 'data',
-      });
+  it('returns ok for a data rule when the data capability is declared supported (FACT-141)', () => {
+    const result = assessUniquenessSupport([dataRule], ['data']);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.rules).toHaveLength(1);
     }
+  });
+
+  it('returns ok for a mixed rule when both relation-target and data are supported (FACT-141)', () => {
+    const result = assessUniquenessSupport([mixedRule], ['relation-target', 'data']);
+    expect(result.ok).toBe(true);
   });
 });
 
@@ -220,7 +236,7 @@ describe('buildUniquenessKeys', () => {
 
   it('does not include revision pin in the part target', () => {
     const { keys } = buildUniquenessKeys([relationTargetRule], [aboutArtifact1RevA]);
-    expect(keys[0].parts[0].target).not.toHaveProperty('revision');
+    expect(asRelationTargetPart(keys[0].parts[0]).target).not.toHaveProperty('revision');
   });
 
   it('carries ruleIndex on the derived key', () => {
@@ -232,7 +248,7 @@ describe('buildUniquenessKeys', () => {
     const { keys, issues } = buildUniquenessKeys([relationTargetRule], [aboutArtifact1RevA, aboutArtifact1RevB]);
     expect(issues).toHaveLength(0);
     expect(keys).toHaveLength(1);
-    expect(keys[0].parts[0].target).toEqual({
+    expect(asRelationTargetPart(keys[0].parts[0]).target).toEqual({
       refClass: 'artifact',
       kind: 'concept',
       id: 'artifact-1',
@@ -277,7 +293,7 @@ describe('buildUniquenessKeys', () => {
     const { keys, issues } = buildUniquenessKeys([relationTargetRule], [aboutArtifact1RevA, aboutArtifact2FromQ3]);
     expect(issues).toHaveLength(0);
     expect(keys).toHaveLength(1);
-    expect(keys[0].parts[0].target).toEqual({
+    expect(asRelationTargetPart(keys[0].parts[0]).target).toEqual({
       refClass: 'artifact',
       kind: 'concept',
       id: 'artifact-1',
@@ -314,24 +330,97 @@ describe('buildUniquenessKeys', () => {
     });
   });
 
-  it('produces an unsupported-selector issue for a data selector', () => {
-    const { keys, issues } = buildUniquenessKeys([dataRule], [aboutArtifact1RevA]);
-    expect(keys).toHaveLength(0);
-    expect(issues).toHaveLength(1);
-    expect(issues[0]).toMatchObject({
-      ruleIndex: 0,
-      selectorIndex: 0,
-      reason: 'unsupported-selector',
-    });
-    expect(issues[0].relationType).toBeUndefined();
-  });
-
   it('produces parts in declaration order for a two-selector rule', () => {
     const { keys, issues } = buildUniquenessKeys([twoSelectorRule], [aboutArtifact1RevA, ownedByEntity]);
     expect(issues).toHaveLength(0);
     expect(keys).toHaveLength(1);
-    expect(keys[0].parts[0].type).toBe('about');
-    expect(keys[0].parts[1].type).toBe('owned-by');
+    expect(asRelationTargetPart(keys[0].parts[0]).type).toBe('about');
+    expect(asRelationTargetPart(keys[0].parts[1]).type).toBe('owned-by');
+  });
+
+  // ── data selectors (FACT-141) ─────────────────────────────────────────────
+
+  it('produces one key with one data part for a single data rule', () => {
+    const { keys, issues } = buildUniquenessKeys([dataRule], [], dataWithSlug);
+    expect(issues).toHaveLength(0);
+    expect(keys).toHaveLength(1);
+    expect(keys[0].parts).toEqual([{ path: 'slug', value: 'my-slug' }]);
+  });
+
+  it('resolves a nested dot-separated data path', () => {
+    const nestedRule: ArtifactUniquenessRule = { by: [{ kind: 'data', path: 'meta.slug' }] };
+    const { keys, issues } = buildUniquenessKeys([nestedRule], [], { meta: { slug: 'nested-slug' } });
+    expect(issues).toHaveLength(0);
+    expect(keys[0].parts).toEqual([{ path: 'meta.slug', value: 'nested-slug' }]);
+  });
+
+  it('accepts number and boolean scalar values', () => {
+    const numberRule: ArtifactUniquenessRule = { by: [{ kind: 'data', path: 'count' }] };
+    const { keys: numberKeys, issues: numberIssues } = buildUniquenessKeys([numberRule], [], { count: 42 });
+    expect(numberIssues).toHaveLength(0);
+    expect(numberKeys[0].parts).toEqual([{ path: 'count', value: 42 }]);
+
+    const boolRule: ArtifactUniquenessRule = { by: [{ kind: 'data', path: 'active' }] };
+    const { keys: boolKeys, issues: boolIssues } = buildUniquenessKeys([boolRule], [], { active: false });
+    expect(boolIssues).toHaveLength(0);
+    expect(boolKeys[0].parts).toEqual([{ path: 'active', value: false }]);
+  });
+
+  it('produces a mixed key composing a relation-target part and a data part in declaration order', () => {
+    const { keys, issues } = buildUniquenessKeys([mixedRule], [aboutArtifact1RevA], dataWithSlug);
+    expect(issues).toHaveLength(0);
+    expect(keys).toHaveLength(1);
+    expect(keys[0].parts).toEqual([
+      { type: 'about', target: { refClass: 'artifact', kind: 'concept', id: 'artifact-1' } },
+      { path: 'slug', value: 'my-slug' },
+    ]);
+  });
+
+  it('produces a missing-value issue when no artifact data is supplied at all', () => {
+    const { keys, issues } = buildUniquenessKeys([dataRule], []);
+    expect(keys).toHaveLength(0);
+    expect(issues[0]).toMatchObject({ ruleIndex: 0, selectorIndex: 0, reason: 'missing-value', dataPath: 'slug' });
+  });
+
+  it('produces a missing-value issue when the data path is absent from the supplied data', () => {
+    const { keys, issues } = buildUniquenessKeys([dataRule], [], {});
+    expect(keys).toHaveLength(0);
+    expect(issues[0]).toMatchObject({ reason: 'missing-value', dataPath: 'slug' });
+  });
+
+  it('produces a missing-value issue when the data path resolves to null', () => {
+    const { keys, issues } = buildUniquenessKeys([dataRule], [], { slug: null });
+    expect(keys).toHaveLength(0);
+    expect(issues[0]).toMatchObject({ reason: 'missing-value', dataPath: 'slug' });
+  });
+
+  it('produces an unsupported-value-type issue when the data path resolves to an object', () => {
+    const { keys, issues } = buildUniquenessKeys([dataRule], [], { slug: { nested: true } });
+    expect(keys).toHaveLength(0);
+    expect(issues[0]).toMatchObject({ reason: 'unsupported-value-type', dataPath: 'slug' });
+  });
+
+  it('produces an unsupported-value-type issue when the data path resolves to an array', () => {
+    const { keys, issues } = buildUniquenessKeys([dataRule], [], { slug: ['a'] });
+    expect(keys).toHaveLength(0);
+    expect(issues[0]).toMatchObject({ reason: 'unsupported-value-type', dataPath: 'slug' });
+  });
+
+  it('compares data values by exact equality: different casing produces different serialized keys', () => {
+    const { keys: keysUpper } = buildUniquenessKeys([dataRule], [], { slug: 'A' });
+    const { keys: keysLower } = buildUniquenessKeys([dataRule], [], { slug: 'a' });
+    expect(keysUpper[0].serialized).not.toBe(keysLower[0].serialized);
+  });
+
+  it('produces equal serialized values for an identical data value', () => {
+    const { keys: keys1 } = buildUniquenessKeys([dataRule], [], { slug: 'same' });
+    const { keys: keys2 } = buildUniquenessKeys([dataRule], [], { slug: 'same' });
+    expect(keys1[0].serialized).toBe(keys2[0].serialized);
+  });
+
+  it('describeUniquenessKey renders a data part as path → JSON-quoted value', () => {
+    const { keys } = buildUniquenessKeys([dataRule], [], dataWithSlug);
+    expect(describeUniquenessKey(keys[0])).toBe('slug → "my-slug"');
   });
 
   it('produces equal serialized values for identical parts regardless of input key order', () => {
@@ -347,11 +436,20 @@ describe('buildUniquenessKeys', () => {
     expect(keysA[0].serialized).not.toBe(keysB[0].serialized);
   });
 
-  it('reports unsupported-selector for a data rule regardless of what assessUniquenessSupport receives (F22)', () => {
-    // Both functions must agree: data selectors are never derivable.
-    const { keys, issues } = buildUniquenessKeys([dataRule], []);
-    expect(keys).toHaveLength(0);
-    expect(issues[0]).toMatchObject({ reason: 'unsupported-selector', ruleIndex: 0, selectorIndex: 0 });
+  it('serialized never collides between a data part and a relation-target part with the same effective payload', () => {
+    // A `data` selector at path 'about' whose value happens to equal the
+    // serialized identity of a `relation-target` selector's resolved target
+    // must not produce the same `serialized` string as that relation-target
+    // key — the branch tag in serializeUniquenessKeyPart guards this.
+    const collidingValue = serializeArtifactRelationTargetIdentity({
+      refClass: 'artifact',
+      kind: 'concept',
+      id: 'artifact-1',
+    });
+    const collidingDataRule: ArtifactUniquenessRule = { by: [{ kind: 'data', path: 'about' }] };
+    const { keys: dataKeys } = buildUniquenessKeys([collidingDataRule], [], { about: collidingValue });
+    const { keys: relationKeys } = buildUniquenessKeys([relationTargetRule], [aboutArtifact1RevA]);
+    expect(dataKeys[0].serialized).not.toBe(relationKeys[0].serialized);
   });
 
   it('keys carry ruleIndex matching rule position even when an earlier rule produced only issues (F22)', () => {
