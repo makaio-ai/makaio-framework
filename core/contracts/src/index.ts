@@ -258,6 +258,8 @@ export type {
   UniquenessSupportIssue,
   UniquenessKey,
   UniquenessKeyPart,
+  UniquenessRelationTargetKeyPart,
+  UniquenessDataKeyPart,
   UniquenessKeyIssue,
   UniquenessKeyIssueReason,
   BuildUniquenessKeysResult,
