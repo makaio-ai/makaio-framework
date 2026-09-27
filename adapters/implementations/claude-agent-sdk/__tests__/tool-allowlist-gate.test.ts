@@ -2,7 +2,8 @@ import os from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 import type { CanUseTool, PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { MakaioBus } from '@makaio/bus-core';
-import { ToolNameError } from '@makaio/contracts';
+import { resolveToolPolicy, ToolNameError } from '@makaio/contracts';
+import type { ResolvedToolPolicy } from '@makaio/contracts';
 import { clientDefinition as claudeClientDefinition } from '@makaio/client-claude-code';
 import { ClaudeSdkConnector } from '../src/connector.js';
 import { ClaudeCodeConnectorNamespace } from '../src/namespace/index.js';
@@ -19,7 +20,7 @@ type GateLists = Pick<ClaudeAgentConfig, 'allowedTools' | 'disallowedTools'>;
  * the connector's real `canUseTool` handler, is left untouched.
  * @param lists - Caller allow/deny lists, written with Makaio tool names.
  * @returns The connector's `canUseTool` handler and the central approval spy.
- * @throws {@link ToolNameError} when a list entry is invalid, mirroring handler creation.
+ * @throws {@link ToolNameError} when a list entry is invalid, mirroring query option building.
  */
 async function makeGate(lists: GateLists): Promise<{
   canUseTool: CanUseTool;
@@ -41,8 +42,10 @@ async function makeGate(lists: GateLists): Promise<{
   });
   const centralApproval = vi.fn().mockResolvedValue({ action: 'allow' });
   Object.defineProperty(connector, 'requestToolApproval', { value: centralApproval });
-  const createHandler = Reflect.get(connector, 'createToolApprovalHandler') as () => CanUseTool;
-  return { canUseTool: createHandler.call(connector), centralApproval };
+  const createHandler = Reflect.get(connector, 'createToolApprovalHandler') as (
+    policy: ResolvedToolPolicy,
+  ) => CanUseTool;
+  return { canUseTool: createHandler.call(connector, resolveToolPolicy('claude', lists)), centralApproval };
 }
 
 /**

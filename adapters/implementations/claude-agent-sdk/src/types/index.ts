@@ -13,6 +13,7 @@ import type {
   McpRuntimeSessionContext,
   McpSessionContext,
   NativeForkDirective,
+  ResolvedToolPolicy,
   SystemPrompt,
 } from '@makaio/contracts';
 
@@ -90,8 +91,11 @@ export type ClaudeAgentConfig = Omit<
   nativeFork?: NativeForkDirective;
 };
 
-/** Factory type for creating tool approval handlers */
-export type CreateToolApprovalHandler = () => Options['canUseTool'];
+/**
+ * Factory type for creating tool approval handlers.
+ * @param policy - Caller tool policy resolved once for the query being built.
+ */
+export type CreateToolApprovalHandler = (policy: ResolvedToolPolicy) => Options['canUseTool'];
 
 /**
  * Callback type for emitting SDK events with connector metadata.
@@ -176,23 +180,26 @@ export interface ClaudeSessionConfig extends ConnectorSessionConfig<ClaudeCodeCo
    * when the query is built.
    *
    * When set, the SDK query exposes only the granted native built-in tools (SDK `tools`,
-   * base names, e.g. `Bash` for `shell_exec(git status)`), and the `canUseTool` handler
-   * denies every tool call (built-in or MCP) the list does not cover, including shell
-   * commands outside a granted rule. Listed tools are not auto-approved: their calls still
-   * go through the central tool approval service. While this list or `disallowedTools` is
-   * set, provider-config `queryOptions.allowedTools` auto-approvals are dropped,
+   * base names, e.g. `Bash` for `shell_exec(git status)`), and an adapter-owned PreToolUse
+   * hook denies every tool call (built-in, MCP, or `Skill`) the list does not cover,
+   * including shell commands outside a granted rule; the `canUseTool` handler checks the
+   * lists again. Listed tools are not auto-approved: their calls still go through the
+   * central tool approval service. While this list or `disallowedTools` is set,
+   * provider-config `queryOptions.allowedTools` auto-approvals are dropped,
    * `queryOptions.permissionMode` is reset to `'default'`, and approval-granted
-   * `updatedPermissions` are not forwarded, since each would skip `canUseTool`, the only
-   * per-call gate for the caller lists; an approver-rewritten input is re-checked against
-   * the lists. An empty array denies every tool. `undefined` (with no
-   * `disallowedTools`) leaves tool availability and approval unchanged.
+   * `updatedPermissions` are not forwarded, since each would skip `canUseTool` and
+   * central approval. The SDK still auto-approves `Skill` calls derived from the `skills`
+   * option; the hook denies them when the lists do not cover `Skill`. An
+   * approver-rewritten input is re-checked against the lists. An empty array denies every
+   * tool. `undefined` (with no `disallowedTools`) leaves tool availability and approval
+   * unchanged.
    */
   allowedTools?: string[];
   /**
    * Tool denylist using Makaio tool names or MCP names, same entry syntax as
    * `allowedTools` (e.g. `shell_exec(rm -rf:*)`). Translated to native entries with
    * rules kept (`Bash(rm -rf:*)`) for SDK `disallowedTools`, and enforced per call by the
-   * `canUseTool` handler; takes precedence over `allowedTools`.
+   * PreToolUse hook and the `canUseTool` handler; takes precedence over `allowedTools`.
    */
   disallowedTools?: string[];
 

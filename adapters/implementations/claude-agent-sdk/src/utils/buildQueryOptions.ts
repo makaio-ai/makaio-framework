@@ -1,5 +1,7 @@
 import { parseReasoningLevel, buildSystemPrompt } from '@makaio/ai-adapters-claude-process-shared';
 import type {
+  HookCallback,
+  HookCallbackMatcher,
   McpHttpServerConfig,
   McpSSEServerConfig,
   McpServerConfig,
@@ -7,8 +9,13 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { Options } from '@anthropic-ai/claude-agent-sdk';
 import { resolveToolPolicy } from '@makaio/contracts';
-import type { McpResolvedServer, NativeForkDirective, ResponseSchemaDescriptor } from '@makaio/contracts';
-import { ClaudeSessionConfig } from '../types/index.js';
+import type {
+  McpResolvedServer,
+  NativeForkDirective,
+  ResolvedToolPolicy,
+  ResponseSchemaDescriptor,
+} from '@makaio/contracts';
+import { ClaudeSessionConfig, CreateToolApprovalHandler } from '../types/index.js';
 import { SessionLifecycle, type AIReasoningLevel } from '@makaio/ai-adapters-core';
 
 /**
@@ -19,8 +26,8 @@ interface BuildQueryOptionsArgs {
   config: ClaudeSessionConfig;
   /** Session lifecycle for abort handling */
   lifecycle: SessionLifecycle;
-  /** Factory for tool approval handler */
-  createToolApprovalHandler: () => Options['canUseTool'];
+  /** Factory for the tool approval handler; receives the query's resolved tool policy. */
+  createToolApprovalHandler: CreateToolApprovalHandler;
   /** Session ID for the query */
   sessionId: string;
   /** Previous adapter session ID for resume attempts. */
@@ -205,51 +212,97 @@ function resolveSessionIdentityOptions(
  * - `disallowedTools` removes tools from the model's context.
  *
  * The caller lists use Makaio tool names (`read_file`, `shell_exec(git status)`, MCP
- * `mcp__…`) and are resolved with `resolveToolPolicy('claude', …)`; an invalid entry
- * throws a `ToolNameError`. An allowlist maps to `tools` as an availability filter for
- * the granted native built-ins (`policy.nativeAvailableTools`: base names, MCP excluded,
- * so `shell_exec(git status)` makes `Bash` available). Command rules and MCP tools are
- * enforced per call by the connector's `canUseTool` handler through the same policy.
+ * `mcp__…`) and arrive resolved with `resolveToolPolicy('claude', …)`. An allowlist maps
+ * to `tools` as an availability filter for the granted native built-ins
+ * (`policy.nativeAvailableTools`: base names, MCP excluded, so `shell_exec(git status)`
+ * makes `Bash` available). Command rules, MCP tools, and every tool `tools` does not
+ * remove are enforced per call by the adapter-owned PreToolUse hook
+ * ({@link createToolPolicyHook}) and again by the connector's `canUseTool` handler.
  * The allowlist is deliberately NOT mapped to SDK `allowedTools`: auto-allowed tools
- * skip `canUseTool`, which is this connector's only path into the tool policy gate and
- * the central tool approval service (session policy overrides, harness policy,
- * `.makaioignore` deny rules). Every call of an allowlisted tool therefore still goes
- * through `canUseTool`.
- * Provider-config `queryOptions.allowedTools` (operator auto-approvals) would bypass
- * that gate as well, so whenever the caller passes an allowlist or a denylist, SDK
- * `allowedTools` is `[]`: every provider auto-approval is dropped and each call reaches
- * `canUseTool`, where the caller lists are enforced. This overrides the provider value
- * because the caller spreads these options after the provider-config query options.
- * Provider-config `queryOptions.permissionMode` can bypass the gate too, so with caller
- * lists it is forced to `'default'`, the only mode that routes every non-auto-approved
- * call to `canUseTool` (SDK `PermissionMode`): `'bypassPermissions'` skips all checks,
- * `'acceptEdits'` auto-accepts file edits, `'auto'` lets a model classifier decide,
- * `'dontAsk'` denies whatever is not pre-approved without asking, and `'plan'` executes
- * no tools. Without caller lists the provider values stay untouched.
+ * skip `canUseTool`, this connector's path into the central tool approval service
+ * (session policy overrides, harness policy, `.makaioignore` deny rules).
+ * The overrides below are the second layer behind the hook, so that `canUseTool` sees
+ * as many calls as possible. With caller lists, SDK `allowedTools` is set to `[]` so
+ * provider-config `queryOptions.allowedTools` (operator auto-approvals) are dropped;
+ * this overrides the provider value because the caller spreads these options after the
+ * provider-config query options. The SDK still appends `Skill` entries derived from the
+ * `skills` option to `allowedTools` before spawning the CLI, so those calls skip
+ * `canUseTool`; the hook denies them when the lists do not cover `Skill`.
+ * Provider-config `queryOptions.permissionMode` can bypass `canUseTool` too, so with
+ * caller lists it is forced to `'default'`, the only mode that routes every
+ * non-auto-approved call to `canUseTool` (SDK `PermissionMode`): `'bypassPermissions'`
+ * skips all checks, `'acceptEdits'` auto-accepts file edits, `'auto'` lets a model
+ * classifier decide, `'dontAsk'` denies whatever is not pre-approved without asking, and
+ * `'plan'` executes no tools. Without caller lists the provider values stay untouched.
  * The denylist is translated to native entries with rules kept (`Bash(rm -rf:*)`), since
  * SDK `disallowedTools` accepts permission rules. Absent policies emit no fields, so
  * provider-config query options stay untouched.
- * @param allowedTools - Makaio-named tool allowlist, or `undefined` when unrestricted.
- * @param disallowedTools - Makaio-named tool denylist, or `undefined` when none is given.
+ * @param policy - Caller tool policy resolved for this query.
  * @returns Partial SDK Options carrying only the fields the policy defines.
- * @throws {@link ToolNameError} When a list entry is malformed, names no Makaio or MCP tool, or
- * carries a command rule on a tool other than `shell_exec`.
  */
-function resolveToolPolicyOptions(
-  allowedTools: string[] | undefined,
-  disallowedTools: string[] | undefined,
-): Partial<Options> {
-  const { nativeAvailableTools, nativeDisallowedTools } = resolveToolPolicy('claude', {
-    allowedTools,
-    disallowedTools,
-  });
-  const hasCallerLists = allowedTools !== undefined || disallowedTools !== undefined;
+function resolveToolPolicyOptions(policy: ResolvedToolPolicy): Partial<Options> {
+  const { nativeAvailableTools, nativeDisallowedTools, restricts } = policy;
   return {
     ...(nativeAvailableTools !== undefined && { tools: [...nativeAvailableTools] }),
-    // Auto-approved tools and non-default permission modes skip `canUseTool`, the only
-    // per-call gate for the caller lists.
-    ...(hasCallerLists && { allowedTools: [], permissionMode: 'default' as const }),
+    // Second layer behind the PreToolUse hook: auto-approved tools and non-default
+    // permission modes skip `canUseTool`.
+    ...(restricts && { allowedTools: [], permissionMode: 'default' as const }),
     ...(nativeDisallowedTools !== undefined && { disallowedTools: [...nativeDisallowedTools] }),
+  };
+}
+
+/**
+ * Create the adapter-owned PreToolUse hook that enforces the caller tool lists.
+ *
+ * Invariant: this hook is the authoritative gate for the caller lists. The SDK evaluates
+ * PreToolUse hooks before settings permission rules, the permission mode, SDK
+ * `allowedTools` (including the `Skill` entries the `skills` option adds), and
+ * `canUseTool`, and a hook `deny` wins over any other hook's `allow` regardless of
+ * order. The hook registers without a matcher, so it runs for every tool: `tools` does
+ * not remove account-level MCP connectors, which load even with `settingSources: []`.
+ * On pass it returns `{}` and never `'allow'`: a hook `allow` would skip `canUseTool` and
+ * with it central approval.
+ * Residual gaps: policy-level `disableAllHooks` settings and `CLAUDE_CODE_SIMPLE`
+ * disable hooks (the `canUseTool` check and the option overrides remain); a parallel
+ * provider PreToolUse hook may rewrite the input without a permission decision, so the
+ * input that runs can differ from the input checked here.
+ * @param policy - Caller tool policy resolved for this query.
+ * @returns PreToolUse hook callback.
+ */
+function createToolPolicyHook(policy: ResolvedToolPolicy): HookCallback {
+  return async (input) => {
+    if (input.hook_event_name !== 'PreToolUse') return {};
+    const toolInput =
+      typeof input.tool_input === 'object' && input.tool_input !== null
+        ? (input.tool_input as Record<string, unknown>)
+        : {};
+    const decision = policy.checkToolCall(input.tool_name, toolInput);
+    if (decision.allowed) return {};
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: decision.reason,
+      },
+    };
+  };
+}
+
+/**
+ * Merge the adapter-owned tool policy hook into the provider-config hooks.
+ *
+ * The policy hook is appended after any provider PreToolUse matchers; hooks for other
+ * events stay untouched. Without caller lists the provider hooks are returned as is.
+ * @param providerHooks - Provider-config `queryOptions.hooks`, if any.
+ * @param policy - Caller tool policy resolved for this query.
+ * @returns Hooks for the SDK query, or `undefined` when there are none.
+ */
+function resolveHooks(providerHooks: Options['hooks'], policy: ResolvedToolPolicy): Options['hooks'] {
+  if (!policy.restricts) return providerHooks;
+  const policyMatcher: HookCallbackMatcher = { hooks: [createToolPolicyHook(policy)] };
+  return {
+    ...providerHooks,
+    PreToolUse: [...(providerHooks?.PreToolUse ?? []), policyMatcher],
   };
 }
 
@@ -258,6 +311,8 @@ function resolveToolPolicyOptions(
  * Extracted to avoid duplication between initialize() and createQuery().
  * @param args - Arguments for building query options
  * @returns SDK query options
+ * @throws {@link ToolNameError} When a caller tool list entry is malformed, names no Makaio
+ * or MCP tool, or carries a command rule on a tool other than `shell_exec`.
  */
 export function buildQueryOptions({
   lifecycle,
@@ -290,6 +345,14 @@ export function buildQueryOptions({
 
   const sessionIdentity = resolveSessionIdentityOptions(sessionId, resumeAdapterSessionId, nativeFork);
 
+  // Resolved once per query; the options, the PreToolUse hook, and `canUseTool` share it.
+  // Invalid list entries throw a ToolNameError here.
+  const toolPolicy = resolveToolPolicy('claude', {
+    allowedTools: config.allowedTools,
+    disallowedTools: config.disallowedTools,
+  });
+  const hooks = resolveHooks(config.providerConfig?.queryOptions?.hooks, toolPolicy);
+
   return {
     ...(config.providerConfig?.queryOptions ?? {}),
     cwd: config.cwd,
@@ -302,10 +365,11 @@ export function buildQueryOptions({
     persistSession: config.ephemeral ? false : (config.providerConfig?.queryOptions?.persistSession ?? true),
     stderr: (data) => console.warn(data),
     // Must stay after the provider-config spread: with caller tool lists it overrides
-    // provider `tools`/`disallowedTools`, clears provider `allowedTools` auto-approvals
-    // and resets provider `permissionMode` to `'default'`.
-    ...resolveToolPolicyOptions(config.allowedTools, config.disallowedTools),
-    canUseTool: createToolApprovalHandler(),
+    // provider `tools`/`disallowedTools`, clears provider `allowedTools` auto-approvals,
+    // resets provider `permissionMode` to `'default'`, and appends the policy hook.
+    ...resolveToolPolicyOptions(toolPolicy),
+    ...(hooks !== undefined && { hooks }),
+    canUseTool: createToolApprovalHandler(toolPolicy),
     abortController,
     systemPrompt,
     ...(responseSchema !== undefined && {
