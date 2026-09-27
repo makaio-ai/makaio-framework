@@ -16,6 +16,10 @@ import { resolvePointer } from './kind-paths.js';
  * payload carries the name all the same. Resolved `$ref` targets are treated as
  * variants of the root; the walker does not descend into nested object
  * properties: a reserved envelope name is only reserved at the top level of `data`.
+ * `$ref` is the only reference keyword the walker needs: the registration
+ * profile rejects `$dynamicRef`, `$dynamicAnchor`, `$recursiveRef` and
+ * `$recursiveAnchor` (and named `$anchor`s), so no other reference can smuggle a
+ * reserved property past it.
  */
 
 /**

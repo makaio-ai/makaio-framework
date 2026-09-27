@@ -411,13 +411,16 @@ export function isArtifactDataPathDeclared(dataSchema: Record<string, unknown>, 
   return inspectArtifactDataLocation(dataSchema, path.split('.')) !== undefined;
 }
 
+/** A child schema node with its diagnostic path relative to the parent. */
+type SchemaChild = { node: Record<string, unknown>; path: (string | number)[] };
+
 /**
  * Enumerate child schemas without treating defaults/examples as declarations.
  * @param node - Parent schema.
  * @returns Child schema nodes and their relative diagnostic paths.
  */
-function childSchemas(node: Record<string, unknown>): { node: Record<string, unknown>; path: (string | number)[] }[] {
-  const children: { node: Record<string, unknown>; path: (string | number)[] }[] = [];
+export function childSchemas(node: Record<string, unknown>): SchemaChild[] {
+  const children: SchemaChild[] = [];
   const append = (value: unknown, path: (string | number)[]): void => {
     const child = schemaObject(value);
     if (child) children.push({ node: child, path });

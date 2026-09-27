@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { JsonObjectContractSchema } from '../shared/json-value.js';
 import { validateKindDataPaths } from './kind-paths.js';
+import { validateSchemaDialect } from './kind-schema-dialect.js';
 import { mayArtifactDataCarryProperty } from './kind-reserved-fields.js';
 import { ARTIFACT_SLUG_FIELD } from './slug.js';
 import { validateArtifactPartAreas } from './artifact-parts.js';
@@ -132,6 +133,7 @@ export const ArtifactKindRegistrationSchema = z
         message: `Data field ${ARTIFACT_SLUG_FIELD} is reserved: the artifact envelope owns the slug`,
       });
     }
+    validateSchemaDialect(value.dataSchema, ctx);
     validateKindDataPaths(value, ctx);
     validateArtifactPartAreas(value, ctx);
   });

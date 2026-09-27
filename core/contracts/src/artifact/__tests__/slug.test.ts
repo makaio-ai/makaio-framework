@@ -213,6 +213,27 @@ describe('kind registration', () => {
     ).toThrow(/reserved/);
   });
 
+  it('rejects a slug requirement hidden behind a dynamic reference', () => {
+    const result = ArtifactKindRegistrationSchema.safeParse({
+      kind: 'system',
+      description: 'A system.',
+      schemaVersion: 1,
+      category: 'knowledge',
+      titlePath: 'name',
+      dataSchema: {
+        type: 'object',
+        properties: { name: { type: 'string' } },
+        required: ['name'],
+        allOf: [{ $dynamicRef: '#slugNode' }],
+        $defs: { slugNode: { $dynamicAnchor: 'slugNode', required: ['slug'] } },
+      },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.message)).toContain(
+      'Unsupported dynamic reference: use a plain local $ref',
+    );
+  });
+
   it('accepts a kind without a slug data field', () => {
     const definition = defineArtifactKind({
       kind: 'system',
