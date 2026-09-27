@@ -167,6 +167,25 @@ export interface ClaudeSessionConfig extends ConnectorSessionConfig<ClaudeCodeCo
   mcpUpstreamServers?: McpResolvedServer[];
 
   /**
+   * Exact tool allowlist granted by the caller (e.g. a workflow delegate's `allowedTools`).
+   *
+   * Names use the Claude Code tool-name form and are passed through verbatim:
+   * built-in names such as `Read`, `Edit`, `Bash`, or MCP names such as `mcp__server__tool`.
+   * When set, the SDK query exposes only these built-in tools (SDK `tools`) and
+   * auto-approves them (SDK `allowedTools`), so they bypass the `canUseTool`
+   * approval round-trip — the allowlist itself is the approval. An empty array
+   * disables all built-in tools. `undefined` leaves the SDK tool set and the
+   * approval flow unchanged.
+   */
+  allowedTools?: string[];
+  /**
+   * Tool denylist in the Claude Code tool-name form (see {@link ClaudeSessionConfig.allowedTools}).
+   * Forwarded verbatim to SDK `disallowedTools`, which removes these tools from the
+   * model's context; takes precedence over `allowedTools`.
+   */
+  disallowedTools?: string[];
+
+  /**
    * When true, the session is ephemeral and must not persist its transcript.
    *
    * Ephemeral one-shot agents are by contract never resume/fork targets, so

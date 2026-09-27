@@ -194,6 +194,40 @@ function resolveSessionIdentityOptions(
   return { sessionId };
 }
 
+/** Claude Code name prefix for MCP-provided tools (`mcp__<server>__<tool>`). */
+const MCP_TOOL_NAME_PREFIX = 'mcp__';
+
+/**
+ * Map the caller-granted tool policy onto the SDK tool options.
+ *
+ * SDK semantics (`@anthropic-ai/claude-agent-sdk` `Options`):
+ * - `tools` specifies the base set of available built-in tools; `[]` disables all.
+ * - `allowedTools` lists tools that are auto-allowed without prompting, i.e. they
+ *   never reach `canUseTool`.
+ * - `disallowedTools` removes tools from the model's context.
+ *
+ * An allowlist therefore maps to both `tools` (restrict availability) and
+ * `allowedTools` (the allowlist is the approval). `tools` only names built-in
+ * tools, so MCP entries (`mcp__…`) are kept out of it and only auto-approved.
+ * Absent policies emit no fields, so provider-config query options and the
+ * approval flow stay untouched.
+ * @param allowedTools - Exact tool allowlist, or `undefined` when unrestricted.
+ * @param disallowedTools - Tool denylist, or `undefined` when none is given.
+ * @returns Partial SDK Options carrying only the fields the policy defines.
+ */
+function resolveToolPolicyOptions(
+  allowedTools: string[] | undefined,
+  disallowedTools: string[] | undefined,
+): Partial<Options> {
+  return {
+    ...(allowedTools !== undefined && {
+      tools: allowedTools.filter((name) => !name.startsWith(MCP_TOOL_NAME_PREFIX)),
+      allowedTools: [...allowedTools],
+    }),
+    ...(disallowedTools !== undefined && { disallowedTools: [...disallowedTools] }),
+  };
+}
+
 /**
  * Build query options for SDK query() call.
  * Extracted to avoid duplication between initialize() and createQuery().
@@ -242,6 +276,7 @@ export function buildQueryOptions({
     includePartialMessages: true,
     persistSession: config.ephemeral ? false : (config.providerConfig?.queryOptions?.persistSession ?? true),
     stderr: (data) => console.warn(data),
+    ...resolveToolPolicyOptions(config.allowedTools, config.disallowedTools),
     canUseTool: createToolApprovalHandler(),
     abortController,
     systemPrompt,

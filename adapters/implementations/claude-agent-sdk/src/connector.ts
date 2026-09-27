@@ -159,6 +159,8 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
       nativeFork: agentConfig.nativeFork,
       predeterminedSessionId: this.config.adapterSessionId,
       mcpUpstreamServers: agentConfig.mcpUpstreamServers,
+      allowedTools: agentConfig.allowedTools,
+      disallowedTools: agentConfig.disallowedTools,
       ephemeral: agentConfig.ephemeral,
       // Emit SDK events through connector for proper metadata injection
       emitSdkEvent: async (msg) => {

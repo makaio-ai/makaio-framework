@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildQueryOptions } from '../src/utils/buildQueryOptions.js';
 import type { ClaudeSessionConfig } from '../src/types/index.js';
 import { SessionLifecycle } from '@makaio/ai-adapters-core';
+import type { Options } from '@anthropic-ai/claude-agent-sdk';
 
 /**
  * Minimal `ClaudeSessionConfig` fixture for `buildQueryOptions` unit tests.
@@ -223,5 +224,91 @@ describe('buildQueryOptions — maxThinkingTokens behaviour', () => {
     });
 
     expect(options.maxThinkingTokens).toBe(expectedTokens);
+  });
+});
+
+describe('buildQueryOptions — tool policy behaviour', () => {
+  /**
+   * Build SDK options for a config carrying the given tool policy.
+   * @param overrides - Tool policy fields (and any other config overrides).
+   * @returns SDK query options.
+   */
+  function buildWithToolPolicy(overrides: Partial<ClaudeSessionConfig>) {
+    return buildQueryOptions({
+      config: makeMinimalConfig(overrides),
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler: () => undefined,
+      sessionId: 'session-test',
+    });
+  }
+
+  it('leaves tools, allowedTools and disallowedTools unset when no policy is given', () => {
+    const options = buildWithToolPolicy({});
+
+    expect(options).not.toHaveProperty('tools');
+    expect(options).not.toHaveProperty('allowedTools');
+    expect(options).not.toHaveProperty('disallowedTools');
+  });
+
+  it('keeps provider-config tool options when no policy is given', () => {
+    const options = buildWithToolPolicy({
+      providerConfig: { queryOptions: { tools: ['Read'], allowedTools: ['Read'] } },
+    });
+
+    expect(options.tools).toEqual(['Read']);
+    expect(options.allowedTools).toEqual(['Read']);
+  });
+
+  it('restricts available tools and auto-approves them when an allowlist is given', () => {
+    const allowlist = ['Read', 'Edit', 'Write', 'Glob', 'Grep'];
+    const options = buildWithToolPolicy({ allowedTools: allowlist });
+
+    expect(options.tools).toEqual(allowlist);
+    expect(options.allowedTools).toEqual(allowlist);
+    expect(options).not.toHaveProperty('disallowedTools');
+  });
+
+  it('auto-approves MCP allowlist entries without listing them as built-in tools', () => {
+    const options = buildWithToolPolicy({ allowedTools: ['Read', 'mcp__makaio__search'] });
+
+    expect(options.tools).toEqual(['Read']);
+    expect(options.allowedTools).toEqual(['Read', 'mcp__makaio__search']);
+  });
+
+  it('overrides provider-config tool options with the caller allowlist', () => {
+    const options = buildWithToolPolicy({
+      allowedTools: ['Read'],
+      providerConfig: { queryOptions: { tools: ['Bash', 'Read'], allowedTools: ['Bash'] } },
+    });
+
+    expect(options.tools).toEqual(['Read']);
+    expect(options.allowedTools).toEqual(['Read']);
+  });
+
+  it('disables all built-in tools for an explicitly empty allowlist', () => {
+    const options = buildWithToolPolicy({ allowedTools: [] });
+
+    expect(options.tools).toEqual([]);
+    expect(options.allowedTools).toEqual([]);
+  });
+
+  it('forwards disallowedTools without restricting the available tool set', () => {
+    const options = buildWithToolPolicy({ disallowedTools: ['Bash', 'WebFetch'] });
+
+    expect(options.disallowedTools).toEqual(['Bash', 'WebFetch']);
+    expect(options).not.toHaveProperty('tools');
+    expect(options).not.toHaveProperty('allowedTools');
+  });
+
+  it('keeps the canUseTool approval handler for tools outside the allowlist', () => {
+    const approvalHandler: NonNullable<Options['canUseTool']> = async () => ({ behavior: 'deny', message: 'no' });
+    const options = buildQueryOptions({
+      config: makeMinimalConfig({ allowedTools: ['Read'] }),
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler: () => approvalHandler,
+      sessionId: 'session-test',
+    });
+
+    expect(options.canUseTool).toBe(approvalHandler);
   });
 });
