@@ -8,7 +8,6 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { SessionLifecycle } from '@makaio/ai-adapters-core';
 import { toNativeToolName } from '@makaio/contracts';
-import type { ToolVocabulary } from '@makaio/contracts';
 import { buildQueryOptions } from '../utils/buildQueryOptions.js';
 import { createGateConnector, preToolUseInput } from './gate-test-helpers.js';
 import type { GateConnectorLists } from './gate-test-helpers.js';
@@ -26,23 +25,40 @@ export interface ToolListProbeOptions {
    */
   readonly withBypassingProviderConfig?: boolean;
   /**
-   * Provider-config PreToolUse hook answering every call (claude: one
-   * `queryOptions.hooks.PreToolUse` matcher without `matcher`, whose callback returns
-   * `permissionDecision` and `updatedInput` as given).
+   * Provider-config PreToolUse hook answering every call with `allow`, optionally
+   * rewriting a shell call's command (claude: one `queryOptions.hooks.PreToolUse` matcher
+   * without `matcher`, whose callback returns `permissionDecision: 'allow'` and, with
+   * `rewriteCommand`, `updatedInput: { command }`).
    */
   readonly providerPreToolUseHook?: {
-    readonly decision?: 'allow' | 'deny' | 'ask';
-    readonly updatedInput?: Record<string, unknown>;
+    readonly decision: 'allow';
+    readonly rewriteCommand?: string;
   };
-  /** Provider-config skill enablement (claude: `queryOptions.skills`). */
-  readonly providerSkills?: 'all' | readonly string[];
+  /** Provider-config enablement of every skill (claude: `queryOptions.skills: 'all'`). */
+  readonly providerSkills?: 'all';
+}
+
+/** One tool call in the adapter's native shape. */
+export interface ToolListProbeCall {
+  /** Native tool name as the SDK reports it. */
+  readonly name: string;
+  /** Native tool call input. */
+  readonly input: Record<string, unknown>;
+}
+
+/** Central approval answer for one probed call, stated semantically. */
+export interface ToolListProbeApproval {
+  /** Replace the shell call's command (claude: `updatedInput: { command }`). */
+  readonly rewriteCommand?: string;
+  /** Ask to always allow the tool (claude: `updatedPermissions` adding a session allow rule). */
+  readonly alwaysAllow?: true;
 }
 
 /** Outcome of one probed tool call through the adapter's per-call gate. */
 export interface ToolListProbeGateResult {
   /** Whether the SDK was told to run the call. */
   allowed: boolean;
-  /** Deny message, when denied. */
+  /** Deny message, when denied; diagnostic only, never part of the contract's assertions. */
   reason?: string;
   /** Whether the central tool approval was asked for this call. */
   centralApprovalCalled: boolean;
@@ -52,32 +68,39 @@ export interface ToolListProbeGateResult {
 
 /** Adapter view of a resolved tool list, as consumed by the tool-list conformance suite. */
 export interface ToolListProbe {
-  /** Native tool vocabulary of the adapter. */
-  readonly vocabulary: ToolVocabulary;
   /**
    * Translate a Makaio or MCP tool name into the adapter's native name.
    * @param makaioOrMcpName - Makaio tool name or `mcp__<server>__<tool>`.
    * @returns The native tool name.
    */
   nativeName(makaioOrMcpName: string): string;
-  /** Native name of the skill tool, when the adapter has one (claude: `Skill`); it has no Makaio name. */
-  readonly skillToolName?: string;
   /** Built-in tools offered to the model (SDK `Options.tools`), `'all'` when unrestricted. */
   readonly availableBuiltIns: readonly string[] | 'all';
-  /** Settings that would skip the per-call gate (claude: SDK `allowedTools` plus `skills`-derived `Skill` rules). */
-  readonly bypass: { autoApproved: readonly string[]; permissionModeBypasses: boolean };
+  /**
+   * Build a shell call (claude: `Bash` with `{ command }`).
+   * @param command - Shell command line.
+   * @returns The native call.
+   */
+  shellCall(command: string): ToolListProbeCall;
+  /**
+   * Build a file read call (claude: `Read` with `{ file_path }`).
+   * @param path - File path to read.
+   * @returns The native call.
+   */
+  readCall(path: string): ToolListProbeCall;
+  /**
+   * Build a skill call (claude: `Skill` with `{ skill }`); the skill tool has no Makaio name.
+   * @param skill - Skill name.
+   * @returns The native call.
+   */
+  skillCall?(skill: string): ToolListProbeCall;
   /**
    * Run one tool call through the gate the SDK receives.
-   * @param nativeName - Native tool name as the SDK reports it.
-   * @param input - Tool call input.
-   * @param approval - Central approval answer overrides for this call.
+   * @param call - Native tool call.
+   * @param approval - Central approval answer for this call; plain `allow` when omitted.
    * @returns The gate outcome.
    */
-  gate(
-    nativeName: string,
-    input: Record<string, unknown>,
-    approval?: { updatedInput?: Record<string, unknown>; updatedPermissions?: unknown[] },
-  ): Promise<ToolListProbeGateResult>;
+  gate(call: ToolListProbeCall, approval?: ToolListProbeApproval): Promise<ToolListProbeGateResult>;
 }
 
 /**
@@ -129,11 +152,9 @@ function buildProviderQueryOptions(options: ToolListProbeOptions): Options | und
           Promise.resolve({
             hookSpecificOutput: {
               hookEventName: 'PreToolUse',
-              ...(hookAnswer.decision !== undefined && {
-                permissionDecision: hookAnswer.decision,
-                permissionDecisionReason: `provider hook: ${hookAnswer.decision}`,
-              }),
-              ...(hookAnswer.updatedInput !== undefined && { updatedInput: { ...hookAnswer.updatedInput } }),
+              permissionDecision: hookAnswer.decision,
+              permissionDecisionReason: `provider hook: ${hookAnswer.decision}`,
+              ...(hookAnswer.rewriteCommand !== undefined && { updatedInput: { command: hookAnswer.rewriteCommand } }),
             },
           });
   const queryOptions: Options = {
@@ -143,9 +164,7 @@ function buildProviderQueryOptions(options: ToolListProbeOptions): Options | und
       allowDangerouslySkipPermissions: true,
     }),
     ...(hook !== undefined && { hooks: { PreToolUse: [{ hooks: [hook] }] } }),
-    ...(providerSkills !== undefined && {
-      skills: providerSkills === 'all' ? ('all' as const) : [...providerSkills],
-    }),
+    ...(providerSkills !== undefined && { skills: providerSkills }),
   };
   return Object.keys(queryOptions).length > 0 ? queryOptions : undefined;
 }
@@ -212,32 +231,29 @@ async function runPreToolUseHooks(
 }
 
 /**
- * SDK auto-approval rules for the query: `allowedTools` plus the `Skill` entries the SDK
- * appends from the `skills` option before spawning the CLI (`'all'` adds `Skill`, a list
- * adds `Skill(<name>)` per name).
+ * SDK auto-approval rules for the query: `allowedTools` plus the `Skill` entry the SDK
+ * appends from `skills: 'all'` before spawning the CLI. A skill list (the SDK appends
+ * `Skill(<name>)` per name) is not used by the suite and throws.
  * @param queryOptions - The built query options.
  * @returns Auto-approval rules; calls matching one skip `canUseTool`.
  */
 function sdkAutoApprovedRules(queryOptions: Options): readonly string[] {
   const { skills } = queryOptions;
-  const skillRules = skills === undefined ? [] : skills === 'all' ? ['Skill'] : skills.map((name) => `Skill(${name})`);
-  return [...(queryOptions.allowedTools ?? []), ...skillRules];
+  if (Array.isArray(skills)) notModelled('skills list');
+  return [...(queryOptions.allowedTools ?? []), ...(skills === 'all' ? ['Skill'] : [])];
 }
 
 /**
- * Whether an SDK auto-approval rule covers a call. Models a bare tool name and
- * `Skill(<name>)` against the `skill` input; other rule contents throw.
+ * Whether an SDK auto-approval rule covers a call. Models bare tool names only; rule
+ * contents such as `Bash(git status)` throw.
  * @param rules - Auto-approval rules from {@link sdkAutoApprovedRules}.
  * @param toolName - Native tool name.
- * @param input - Tool call input after hook rewrites.
  * @returns Whether the call skips `canUseTool`.
  */
-function isAutoApproved(rules: readonly string[], toolName: string, input: Record<string, unknown>): boolean {
+function isAutoApproved(rules: readonly string[], toolName: string): boolean {
   return rules.some((rule) => {
-    if (rule === toolName) return true;
-    if (/^Skill\(.+\)$/.test(rule)) return toolName === 'Skill' && rule === `Skill(${String(input.skill)})`;
     if (rule.includes('(')) notModelled(`auto-approval rule content '${rule}'`);
-    return false;
+    return rule === toolName;
   });
 }
 
@@ -275,7 +291,7 @@ type GateVerdict = Pick<ToolListProbeGateResult, 'allowed' | 'reason'> & { persi
  */
 export async function createToolListProbe(options: ToolListProbeOptions): Promise<ToolListProbe> {
   assertModelledSdkVersion();
-  const vocabulary: ToolVocabulary = 'claude';
+  const vocabulary = 'claude';
   const providerQueryOptions = buildProviderQueryOptions(options);
   const lists: GateConnectorLists = {
     ...(options.allowedTools !== undefined && { allowedTools: [...options.allowedTools] }),
@@ -289,6 +305,25 @@ export async function createToolListProbe(options: ToolListProbeOptions): Promis
     centralCalls += 1;
     return Promise.resolve({ action: 'allow', ...pendingApproval });
   };
+  /**
+   * Map a semantic approval answer onto the central approval payload for one call.
+   * @param call - The probed call.
+   * @param approval - Semantic approval answer.
+   * @returns The native `updatedInput` / `updatedPermissions` overrides.
+   */
+  const toNativeApproval = (
+    call: ToolListProbeCall,
+    approval: ToolListProbeApproval | undefined,
+  ): typeof pendingApproval => ({
+    ...(approval?.rewriteCommand !== undefined && {
+      updatedInput: { ...call.input, command: approval.rewriteCommand },
+    }),
+    ...(approval?.alwaysAllow === true && {
+      updatedPermissions: [
+        { type: 'addRules', rules: [{ toolName: call.name }], behavior: 'allow', destination: 'session' },
+      ],
+    }),
+  });
   const { createToolApprovalHandler, buildSessionConfig } = await createGateConnector(lists, centralApproval);
 
   const queryOptions = buildQueryOptions({
@@ -320,9 +355,7 @@ export async function createToolListProbe(options: ToolListProbeOptions): Promis
     const hooked = await runPreToolUseHooks(preToolUseMatchers, nativeName, input, permissionMode);
     if (hooked.decision === 'deny') return { allowed: false, reason: hooked.reason };
     const skipsCanUseTool =
-      hooked.decision === 'allow' ||
-      isAutoApproved(autoApproved, nativeName, hooked.input) ||
-      permissionMode === 'bypassPermissions';
+      hooked.decision === 'allow' || isAutoApproved(autoApproved, nativeName) || permissionMode === 'bypassPermissions';
     if (skipsCanUseTool) {
       if (hasDenyRules) notModelled('canUseTool skip next to disallowedTools deny rules');
       return { allowed: true };
@@ -337,18 +370,15 @@ export async function createToolListProbe(options: ToolListProbeOptions): Promis
   };
 
   return {
-    vocabulary,
     nativeName: (name) => toNativeToolName(vocabulary, name),
-    skillToolName: 'Skill',
     availableBuiltIns: queryOptions.tools === undefined ? 'all' : (queryOptions.tools as readonly string[]),
-    bypass: {
-      autoApproved,
-      permissionModeBypasses: permissionMode !== 'default',
-    },
-    async gate(nativeName, input, approval) {
-      pendingApproval = approval;
+    shellCall: (command) => ({ name: toNativeToolName(vocabulary, 'shell_exec'), input: { command } }),
+    readCall: (path) => ({ name: toNativeToolName(vocabulary, 'read_file'), input: { file_path: path } }),
+    skillCall: (skill) => ({ name: 'Skill', input: { skill } }),
+    async gate(call, approval) {
+      pendingApproval = toNativeApproval(call, approval);
       const before = centralCalls;
-      const { persistsRules = false, ...verdict } = await decide(nativeName, input);
+      const { persistsRules = false, ...verdict } = await decide(call.name, call.input);
       return { ...verdict, centralApprovalCalled: centralCalls > before, persistsRules };
     },
   };
