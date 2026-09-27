@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { JsonObjectContractSchema } from '../shared/json-value.js';
-import { isArtifactDataPathDeclared, validateKindDataPaths } from './kind-paths.js';
+import { validateKindDataPaths } from './kind-paths.js';
+import { mayArtifactDataCarryProperty } from './kind-reserved-fields.js';
 import { ARTIFACT_SLUG_FIELD } from './slug.js';
 import { validateArtifactPartAreas } from './artifact-parts.js';
 
@@ -124,7 +125,7 @@ export const ArtifactKindRegistrationSchema = z
         });
       }
     });
-    if (isArtifactDataPathDeclared(value.dataSchema, ARTIFACT_SLUG_FIELD)) {
+    if (mayArtifactDataCarryProperty(value.dataSchema, ARTIFACT_SLUG_FIELD)) {
       ctx.addIssue({
         code: 'custom',
         path: ['dataSchema', 'properties', ARTIFACT_SLUG_FIELD],

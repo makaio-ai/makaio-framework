@@ -4,7 +4,8 @@ import { ArtifactKindRegistrationSchema } from '../kind-registration.js';
 import { defineArtifactKind } from '../kind-definition.js';
 import { ArtifactSchemas } from '../namespace.js';
 import { ArtifactQueryRequestSchema, ArtifactRevisionSchema } from '../schemas.js';
-import { ARTIFACT_SLUG_PATTERN, ArtifactSlugSchema, slugify } from '../slug.js';
+import { ARTIFACT_SLUG_PATTERN, ArtifactSlugSchema, deriveArtifactSlug, slugify } from '../slug.js';
+import { mayArtifactDataCarryProperty } from '../kind-reserved-fields.js';
 
 const actor = { kind: 'agent', id: 'planner' } as const;
 
@@ -43,11 +44,16 @@ describe('ArtifactSlugSchema', () => {
 
 describe('slugify', () => {
   it('derives a valid slug from a title with diacritics, punctuation, and casing', () => {
-    expect(slugify('Stationen & Workflows: Übersicht (v2)')).toBe('stationen-workflows-ubersicht-v2');
+    expect(slugify('Stationen & Workflows: Übersicht (v2)')).toBe('stationen-workflows-uebersicht-v2');
   });
 
   it('collapses separator runs and trims the ends', () => {
     expect(slugify('  --Hello___World--  ')).toBe('hello-world');
+  });
+
+  it('transliterates German umlauts and sharp s instead of dropping them', () => {
+    expect(slugify('Maßnahmen für Größe')).toBe('massnahmen-fuer-groesse');
+    expect(slugify('Ähnliche Übersicht')).toBe('aehnliche-uebersicht');
   });
 
   it('returns null when nothing usable remains', () => {
@@ -61,6 +67,54 @@ describe('slugify', () => {
       expect(slug).not.toBeNull();
       expect(ArtifactSlugSchema.safeParse(slug).success).toBe(true);
     }
+  });
+});
+
+describe('deriveArtifactSlug', () => {
+  it('derives from the title selected by titlePath', () => {
+    expect(deriveArtifactSlug({ meta: { title: 'AI Factory' } }, 'meta.title', 'ignored')).toBe('ai-factory');
+  });
+
+  it('falls back to the artifact identity when the title yields nothing', () => {
+    expect(deriveArtifactSlug({ title: '???' }, 'title', '5d2c0a1e-1f2b-4c3d-9e8f-0a1b2c3d4e5f')).toBe(
+      '5d2c0a1e-1f2b-4c3d-9e8f-0a1b2c3d4e5f',
+    );
+  });
+
+  it('throws when neither title nor identity yields a slug', () => {
+    expect(() => deriveArtifactSlug({ title: '???' }, 'title', '!!!')).toThrow(/yields no slug/);
+  });
+});
+
+describe('mayArtifactDataCarryProperty', () => {
+  const string = { type: 'string' };
+  it.each([
+    ['plain properties', { type: 'object', properties: { slug: string } }],
+    [
+      'one union branch',
+      {
+        oneOf: [
+          { type: 'object', properties: { a: string } },
+          { type: 'object', properties: { slug: string } },
+        ],
+      },
+    ],
+    ['anyOf inside allOf', { allOf: [{ anyOf: [{ type: 'object', properties: { slug: string } }] }] }],
+    ['patternProperties', { type: 'object', patternProperties: { '^s': string } }],
+    ['a local $ref', { $ref: '#/$defs/v', $defs: { v: { type: 'object', properties: { slug: string } } } }],
+    ['a then branch', { if: { required: ['a'] }, then: { properties: { slug: string } } }],
+  ])('finds the property in %s', (_label, schema) => {
+    expect(mayArtifactDataCarryProperty(schema, 'slug')).toBe(true);
+  });
+
+  it('ignores nested object properties and unrelated names', () => {
+    expect(
+      mayArtifactDataCarryProperty(
+        { type: 'object', properties: { meta: { type: 'object', properties: { slug: string } } } },
+        'slug',
+      ),
+    ).toBe(false);
+    expect(mayArtifactDataCarryProperty({ type: 'object', properties: { name: string } }, 'slug')).toBe(false);
   });
 });
 
@@ -104,6 +158,22 @@ describe('kind registration', () => {
     });
     expect(result.success).toBe(false);
     expect(result.error?.issues.map((issue) => issue.path.join('.'))).toContain('dataSchema.properties.slug');
+  });
+
+  it('rejects a slug data field declared in only one union variant', () => {
+    expect(() =>
+      defineArtifactKind({
+        kind: 'system',
+        description: 'A system.',
+        schemaVersion: 1,
+        category: 'knowledge',
+        titlePath: 'name',
+        dataSchema: z.union([
+          z.strictObject({ name: z.string(), variant: z.literal('a') }),
+          z.strictObject({ name: z.string(), variant: z.literal('b'), slug: z.string() }),
+        ]),
+      }),
+    ).toThrow(/reserved/);
   });
 
   it('rejects a live kind definition that declares a slug data field', () => {

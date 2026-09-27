@@ -20,6 +20,7 @@ function makeArtifact(
   return {
     kind,
     id,
+    // Fixture ids such as `b:c` are not valid slugs; the envelope slug is derived like a store would.
     slug: slugify(id) ?? 'fixture',
     revision,
     schemaVersion: 1,

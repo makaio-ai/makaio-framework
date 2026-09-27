@@ -371,7 +371,7 @@ export function buildUniquenessKeys(
  * Human-readable one-liner for a key.
  * @example `about → artifact:concept/abc`
  * @example `owned-by → entity:workpiece/W-1; about → artifact:concept/abc`
- * @example `slug → "my-slug"`
+ * @example `key → "my-key"`
  * @param key - A fully resolved uniqueness key.
  * @returns A string describing each part in `selector → value` form, joined by `'; '`.
  */

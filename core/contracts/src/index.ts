@@ -95,6 +95,8 @@ export {
   ArtifactSlugSchema,
   ARTIFACT_SLUG_FIELD,
   ARTIFACT_SLUG_PATTERN,
+  deriveArtifactSlug,
+  mayArtifactDataCarryProperty,
   slugify,
   ArtifactScopeSchema,
   ArtifactStatusPathSchema,
