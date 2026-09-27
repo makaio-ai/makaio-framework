@@ -28,16 +28,16 @@ function fakeRevision(n: number): string {
   return `rev-${String(n).padStart(3, '0')}`;
 }
 
-/**
- * Build a minimal initial artifact revision for the review workflow.
- * @param data - Initial artifact data.
- * @returns A fake artifact revision for injection into `ArtifactBindingState`.
- */
 /** Envelope slug of the seeded review artifact; distinct from its id so id/slug mix-ups surface. */
 const REVIEW_SEED_SLUG = 'checkout-review';
 /** Envelope slug of the seeded overlap note, likewise distinct from its id. */
 const OVERLAP_SEED_SLUG = 'overlap-note';
 
+/**
+ * Build a minimal initial artifact revision for the review workflow.
+ * @param data - Initial artifact data.
+ * @returns A fake artifact revision for injection into `ArtifactBindingState`.
+ */
 function makeInitialRevision(data: ReviewArtifactData): ArtifactRevision<ReviewArtifactData> {
   return {
     kind: 'code-review',
