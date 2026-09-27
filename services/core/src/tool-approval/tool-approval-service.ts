@@ -99,6 +99,11 @@ export class ToolApprovalService extends BaseService {
       }
 
       // The agent's tool lists deny unlisted calls ahead of any allowing policy.
+      // When the agent row cannot be read (`agent` is null, e.g. a storage error), this
+      // layer yields `none` and the cascade decides: the adapters enforce the same lists
+      // themselves (claude-agent-sdk PreToolUse hook, claude-code-cli --disallowedTools),
+      // and failing closed here would block interactive sessions on a storage hiccup.
+      // TODO(FACT-75): revisit once every vocabulary adapter carries its own gate.
       const toolGrant = evaluateToolGrant(agent, ctx.payload.toolName, ctx.payload.args);
       if (toolGrant.kind === 'deny') {
         ctx.setResult({ action: 'deny', message: toolGrant.message, shouldAbort: false });
