@@ -12,15 +12,11 @@ import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, HarnessSubjects } from '@makaio/contracts';
 import type { FileAccessRuleProvider } from '@makaio/tools-core';
 import { ToolApprovalService } from '../tool-approval-service.js';
-import { AgentStorageSubjects } from '../../session/index.js';
 import {
   createToolApprovePayload,
+  registerAgentStub,
   registerDefaultHarnessHandler,
   registerSessionStorageHandler,
-  TEST_ADAPTER_ID,
-  TEST_ADAPTER_SESSION_ID,
-  TEST_AGENT_ID,
-  TEST_SESSION_ID,
 } from './test-utils.js';
 
 const CLAUDE_ADAPTER = 'claude-code';
@@ -33,38 +29,8 @@ const testProvider: FileAccessRuleProvider = async (_cwd, allowedDirs) => ({
   isDenied: (p) => p.endsWith('.env'),
 });
 
-/**
- * Register an AgentStorageSubjects.listBySession handler returning one agent row
- * with the given tool lists.
- * @param cleanups - Array to collect cleanup functions
- * @param row - Agent row overrides (tool lists, adapterName)
- */
-function registerAgentRow(
-  cleanups: Array<() => void>,
-  row: Partial<{ adapterName: string; allowedTools: string[]; disallowedTools: string[] }> = {},
-): void {
-  cleanups.push(
-    MakaioBus.on(AgentStorageSubjects.listBySession, (ctx) => {
-      ctx.setResult({
-        agents: [
-          {
-            agentId: TEST_AGENT_ID,
-            adapterId: TEST_ADAPTER_ID,
-            adapterName: CLAUDE_ADAPTER,
-            sessionId: TEST_SESSION_ID,
-            adapterSessionId: TEST_ADAPTER_SESSION_ID,
-            role: 'lead',
-            status: 'active',
-            cwd: TEST_CWD,
-            createdAt: Date.now(),
-            lastActivityAt: Date.now(),
-            ...row,
-          },
-        ],
-      });
-    }),
-  );
-}
+/** Agent row fields shared by every claude-code agent stub in this file. */
+const CLAUDE_AGENT = { adapterName: CLAUDE_ADAPTER, cwd: TEST_CWD };
 
 /**
  * Send a toolApprove request as the claude-code adapter.
@@ -97,7 +63,7 @@ describe('ToolApprovalService - headless tool-list grant', () => {
 
   describe("allowlist ['read_file', 'edit_file']", () => {
     beforeEach(() => {
-      registerAgentRow(cleanups, { allowedTools: ['read_file', 'edit_file'] });
+      registerAgentStub(cleanups, { ...CLAUDE_AGENT, allowedTools: ['read_file', 'edit_file'] });
     });
 
     it('allows Read and Edit without any approval handler', async () => {
@@ -139,6 +105,17 @@ describe('ToolApprovalService - headless tool-list grant', () => {
       }
     });
 
+    it('lets a session always-ask override win over the allowlist', async () => {
+      registerSessionStorageHandler(cleanups, 'always-ask');
+
+      const result = await approve('Read', { file_path: `${TEST_CWD}/readme.txt` });
+
+      expect(result.action).toBe('deny');
+      if (result.action === 'deny') {
+        expect(result.message).toBe(NO_HANDLER);
+      }
+    });
+
     it('lets a harness per-tool reject win over the allowlist', async () => {
       cleanups.push(
         MakaioBus.on(
@@ -177,7 +154,7 @@ describe('ToolApprovalService - headless tool-list grant', () => {
 
   describe('command rules and MCP entries', () => {
     it("allows Bash 'git status' and denies 'git push' for shell_exec(git status)", async () => {
-      registerAgentRow(cleanups, { allowedTools: ['shell_exec(git status)'] });
+      registerAgentStub(cleanups, { ...CLAUDE_AGENT, allowedTools: ['shell_exec(git status)'] });
 
       const status = await approve('Bash', { command: 'git status' });
       const push = await approve('Bash', { command: 'git push' });
@@ -190,7 +167,7 @@ describe('ToolApprovalService - headless tool-list grant', () => {
     });
 
     it('allows a listed MCP tool', async () => {
-      registerAgentRow(cleanups, { allowedTools: ['mcp__s__t'] });
+      registerAgentStub(cleanups, { ...CLAUDE_AGENT, allowedTools: ['mcp__s__t'] });
 
       const result = await approve('mcp__s__t', { q: 'x' });
 
@@ -200,7 +177,7 @@ describe('ToolApprovalService - headless tool-list grant', () => {
 
   describe('no grant applies', () => {
     it('falls through to the approval request when the agent has no lists', async () => {
-      registerAgentRow(cleanups);
+      registerAgentStub(cleanups, CLAUDE_AGENT);
 
       const result = await approve('Read', { file_path: `${TEST_CWD}/readme.txt` });
 
@@ -211,7 +188,7 @@ describe('ToolApprovalService - headless tool-list grant', () => {
     });
 
     it('falls through for an adapter without a tool vocabulary (codex-app-server)', async () => {
-      registerAgentRow(cleanups, { adapterName: 'codex-app-server', allowedTools: ['read_file'] });
+      registerAgentStub(cleanups, { cwd: TEST_CWD, adapterName: 'codex-app-server', allowedTools: ['read_file'] });
 
       const result = await approve('Read', { file_path: `${TEST_CWD}/readme.txt` }, 'codex-app-server');
 
@@ -222,7 +199,7 @@ describe('ToolApprovalService - headless tool-list grant', () => {
     });
 
     it("denylist-only ['shell_exec'] denies Bash and lets Read fall through", async () => {
-      registerAgentRow(cleanups, { disallowedTools: ['shell_exec'] });
+      registerAgentStub(cleanups, { ...CLAUDE_AGENT, disallowedTools: ['shell_exec'] });
 
       const bash = await approve('Bash', { command: 'ls' });
       const read = await approve('Read', { file_path: `${TEST_CWD}/readme.txt` });
@@ -239,7 +216,7 @@ describe('ToolApprovalService - headless tool-list grant', () => {
   });
 
   it('denies with the ToolNameError message for an invalid stored entry', async () => {
-    registerAgentRow(cleanups, { allowedTools: ['Read'] });
+    registerAgentStub(cleanups, { ...CLAUDE_AGENT, allowedTools: ['Read'] });
 
     const result = await approve('Read', { file_path: `${TEST_CWD}/readme.txt` });
 

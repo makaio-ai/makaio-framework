@@ -100,6 +100,8 @@ export function registerAgentStub(
     personaId: string;
     profileId: string;
     harnessId: string;
+    allowedTools: string[];
+    disallowedTools: string[];
   }> = {},
 ): void {
   cleanups.push(

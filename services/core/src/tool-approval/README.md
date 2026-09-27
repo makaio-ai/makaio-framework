@@ -19,14 +19,13 @@ agent.toolApprove request
 │     c. Harness base policy (approvalPolicy)                      │
 │     d. Capability overrides (most-restrictive-wins)              │
 │     e. System default: 'always-ask'                              │
+│     A tool-list grant turns a cascade 'always-ask' into allow.   │
 │     A session 'always-ask' override replaces the cascade result. │
 └──────────────────────────────────────────────────────────────────┘
          │
          ├─ full-access → allow
          ├─ reject      → deny
-         └─ always-ask  → allow if the tool lists granted the call
-                          (not under a session 'always-ask' override),
-                          otherwise request approval.request RPC
+         └─ always-ask  → request approval.request RPC
                           (wait for user; auto-cancelled on
                           agent.session.closed)
 ```
@@ -35,14 +34,14 @@ agent.toolApprove request
 
 `evaluateToolGrant` reads `allowedTools` / `disallowedTools` from the agent record
 (Makaio tool names, see `@makaio/contracts` `tool-names`) and checks the call in the
-adapter's tool vocabulary (`toolVocabularyForAdapter`, adapter from the agent record,
-else the request). Verdicts:
+adapter's tool vocabulary (`toolVocabularyForAdapter`, adapter from the agent record).
+Verdicts:
 
 - `deny` — an invalid list entry, a denylist match, or a call not on the allowlist
   (`[]` allows nothing).
-- `granted` — an allowlist exists and covers the call. It only replaces `always-ask`,
-  so a listed tool runs headless; a cascade `reject` and a session `always-ask`
-  override still win.
+- `granted` — an allowlist exists and covers the call. It turns a cascade `always-ask`
+  into `full-access` before the session override is merged, so a listed tool runs
+  headless; a cascade `reject` and a session `always-ask` override still win.
 - `none` — no lists, no vocabulary for the adapter (e.g. `codex-app-server`), or a
   denylist-only pass. The cascade decides unchanged.
 

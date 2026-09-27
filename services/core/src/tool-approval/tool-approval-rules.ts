@@ -200,30 +200,26 @@ export type ToolGrantVerdict = { kind: 'deny'; message: string } | { kind: 'gran
  * - `deny` — a list entry is invalid ({@link ToolNameError}) or the lists reject the call.
  * - `granted` — an allowlist exists and covers the call. The service uses this to replace
  *   an `always-ask` policy only; a `reject` policy still wins.
- * @param agent - Pre-fetched agent metadata, or null if unavailable
- * @param adapterName - Adapter name that selects the tool vocabulary of `toolName`
+ * @param agent - Pre-fetched agent metadata, or null if unavailable; its `adapterName`
+ *   selects the tool vocabulary of `toolName`
  * @param toolName - Native tool name of the call
  * @param args - Tool call input; `args.command` is matched against command rules
  * @returns Grant verdict for the call
  */
 export function evaluateToolGrant(
   agent: MakaioSessionAgent | null,
-  adapterName: string,
   toolName: string | undefined,
   args: Record<string, unknown> | undefined,
 ): ToolGrantVerdict {
   if (!toolName || !agent) return { kind: 'none' };
   const { allowedTools, disallowedTools } = agent;
   if (allowedTools === undefined && disallowedTools === undefined) return { kind: 'none' };
-  const vocabulary = toolVocabularyForAdapter(adapterName);
+  const vocabulary = toolVocabularyForAdapter(agent.adapterName);
   if (vocabulary === undefined) return { kind: 'none' };
 
   let policy: ResolvedToolPolicy;
   try {
-    policy = resolveToolPolicy(vocabulary, {
-      ...(allowedTools !== undefined && { allowedTools }),
-      ...(disallowedTools !== undefined && { disallowedTools }),
-    });
+    policy = resolveToolPolicy(vocabulary, { allowedTools, disallowedTools });
   } catch (error) {
     if (error instanceof ToolNameError) return { kind: 'deny', message: error.message };
     throw error;

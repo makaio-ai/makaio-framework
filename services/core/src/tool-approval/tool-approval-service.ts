@@ -99,12 +99,7 @@ export class ToolApprovalService extends BaseService {
       }
 
       // The agent's tool lists deny unlisted calls ahead of any allowing policy.
-      const toolGrant = evaluateToolGrant(
-        agent,
-        agent?.adapterName ?? ctx.payload.adapterName,
-        ctx.payload.toolName,
-        ctx.payload.args,
-      );
+      const toolGrant = evaluateToolGrant(agent, ctx.payload.toolName, ctx.payload.args);
       if (toolGrant.kind === 'deny') {
         ctx.setResult({ action: 'deny', message: toolGrant.message, shouldAbort: false });
         return;
@@ -121,8 +116,11 @@ export class ToolApprovalService extends BaseService {
         rawEnrichedPolicy,
       );
 
-      // 'always-ask' override wins; otherwise use the resolved cascade policy and cached UI context.
-      const effectivePolicy = sessionOverride === 'always-ask' ? 'always-ask' : resolved.policy;
+      // A tool-list grant replaces a cascade 'always-ask' (headless); a cascade 'reject' still wins.
+      const cascadePolicy =
+        toolGrant.kind === 'granted' && resolved.policy === 'always-ask' ? 'full-access' : resolved.policy;
+      // A session 'always-ask' override wins over the cascade, a tool-list grant included.
+      const effectivePolicy = sessionOverride === 'always-ask' ? 'always-ask' : cascadePolicy;
 
       switch (effectivePolicy) {
         case 'full-access':
@@ -138,11 +136,6 @@ export class ToolApprovalService extends BaseService {
           return;
 
         case 'always-ask':
-          // A tool-list grant replaces a cascade 'always-ask' (headless), never a session 'always-ask' override.
-          if (toolGrant.kind === 'granted' && sessionOverride !== 'always-ask') {
-            ctx.setResult({ action: 'allow' });
-            return;
-          }
           await this.dispatchAlwaysAskApproval(ctx.payload, ctx.setResult.bind(ctx), resolved);
           return;
       }
