@@ -11,6 +11,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, HarnessSubjects } from '@makaio/contracts';
 import type { FileAccessRuleProvider } from '@makaio/tools-core';
+import { AgentStorageSubjects } from '../../session/index.js';
 import { ToolApprovalService } from '../tool-approval-service.js';
 import {
   createToolApprovePayload,
@@ -283,6 +284,84 @@ describe('ToolApprovalService - headless tool-list grant', () => {
 
       expect(result).toEqual({ action: 'allow' });
     });
+  });
+
+  describe('agent row lookup fails', () => {
+    beforeEach(() => {
+      cleanups.push(
+        MakaioBus.on(AgentStorageSubjects.listBySession, () => {
+          throw new Error('agent storage unavailable');
+        }),
+      );
+    });
+
+    it('asks the approval handler despite a session full-access override', async () => {
+      registerSessionStorageHandler(cleanups, 'full-access');
+      const approval = registerApprovalRequestHandler(cleanups, { action: 'allow' });
+
+      const result = await approve('Bash', { command: 'ls' });
+
+      expect(approval.called).toBe(true);
+      expect(result).toEqual({ action: 'allow' });
+    });
+
+    it('denies headless under a session full-access override for lack of an approval handler', async () => {
+      registerSessionStorageHandler(cleanups, 'full-access');
+
+      const result = await approve('Bash', { command: 'ls' });
+
+      expect(result.action).toBe('deny');
+      if (result.action === 'deny') {
+        expect(result.message).toBe(NO_HANDLER);
+      }
+    });
+
+    it('keeps a cascade reject', async () => {
+      registerSessionStorageHandler(cleanups, 'full-access');
+      cleanups.push(
+        MakaioBus.on(
+          HarnessSubjects.resolve,
+          (ctx) => {
+            ctx.setResult({
+              id: 'reject-harness',
+              name: 'reject',
+              description: 'Harness rejecting everything',
+              adapterName: CLAUDE_ADAPTER,
+              approvalPolicy: 'reject',
+              nativeTools: { enabled: [], disabled: [] },
+              registryTools: { enabled: [], disabled: [] },
+              isDefault: true,
+              enabled: true,
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            });
+          },
+          { priority: 1 },
+        ),
+      );
+      const approval = registerApprovalRequestHandler(cleanups, { action: 'allow' });
+
+      const result = await approve('Bash', { command: 'ls' });
+
+      expect(approval.called).toBe(false);
+      expect(result.action).toBe('deny');
+      if (result.action === 'deny') {
+        expect(result.message).toBe('Tool use rejected by approval policy');
+      }
+    });
+  });
+
+  it('keeps a session full-access override when no agent row exists', async () => {
+    cleanups.push(
+      MakaioBus.on(AgentStorageSubjects.listBySession, (ctx) => {
+        ctx.setResult({ agents: [] });
+      }),
+    );
+    registerSessionStorageHandler(cleanups, 'full-access');
+
+    const result = await approve('Bash', { command: 'ls' });
+
+    expect(result).toEqual({ action: 'allow' });
   });
 
   it('denies with the ToolNameError message for an invalid stored entry', async () => {

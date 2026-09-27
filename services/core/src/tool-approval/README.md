@@ -48,6 +48,11 @@ Verdicts:
 - `none` — no lists, no vocabulary for the adapter (e.g. `codex-app-server`), or a
   denylist-only pass. The cascade decides unchanged.
 
+When the agent row lookup fails (a thrown storage request, not a missing row or an
+unregistered storage handler), the call is decided as `always-ask`: the session
+`full-access` override and any allowing cascade result do not apply, and only a cascade
+`reject` still wins.
+
 ## Exports
 
 **`index.ts`** re-exports:

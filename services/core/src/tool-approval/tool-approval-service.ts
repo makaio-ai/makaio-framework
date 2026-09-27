@@ -18,6 +18,7 @@ import {
   resolveEnrichedBasePolicy,
   resolveFileAccessContext,
   resolveHarnessLevelPolicy,
+  type ToolGrantVerdict,
 } from './tool-approval-rules.js';
 import {
   type FileAccessContext,
@@ -28,6 +29,32 @@ import {
 } from './tool-approval-types.js';
 
 export type { ToolApprovalServiceOptions };
+
+/** Outcome of the agent row lookup: a lookup `error` is distinct from a missing row. */
+type AgentLookupResult = { kind: 'found'; agent: MakaioSessionAgent } | { kind: 'absent' } | { kind: 'error' };
+
+/**
+ * Merge the cascade policy with the tool-list grant, the session override, and the agent lookup outcome.
+ * @param cascadePolicy - Policy resolved by the persona/profile → harness → default cascade
+ * @param toolGrant - Tool-list verdict (a `deny` verdict never reaches this merge)
+ * @param sessionOverride - Session-level override, if any
+ * @param agentLookupFailed - Whether the agent row lookup threw
+ * @returns Effective policy to apply
+ */
+function mergeEffectivePolicy(
+  cascadePolicy: ApprovalPolicy,
+  toolGrant: ToolGrantVerdict,
+  sessionOverride: ApprovalPolicy | undefined,
+  agentLookupFailed: boolean,
+): ApprovalPolicy {
+  // A session 'always-ask' override replaces the cascade result, a tool-list grant included.
+  if (sessionOverride === 'always-ask') return 'always-ask';
+  if (cascadePolicy === 'reject') return 'reject';
+  // A failed agent lookup forces 'always-ask' unless the cascade rejects.
+  if (agentLookupFailed) return 'always-ask';
+  // A tool-list grant replaces a cascade 'always-ask' (headless).
+  return toolGrant.kind === 'granted' ? 'full-access' : cascadePolicy;
+}
 
 /**
  * Resolves and applies tool approval policies based on the
@@ -68,7 +95,9 @@ export class ToolApprovalService extends BaseService {
       // Fetch agent metadata and the enriched-policy RPC result once here so both
       // the file-access check and the policy cascade share the same data without
       // a redundant bus hop.
-      const agent = await this.getAgentMetadata(ctx.payload.agentId, ctx.payload.sessionId);
+      const lookup = await this.getAgentMetadata(ctx.payload.agentId, ctx.payload.sessionId);
+      const agent = lookup.kind === 'found' ? lookup.agent : null;
+      const agentLookupFailed = lookup.kind === 'error';
       const hasPersonaOrProfile = Boolean(agent?.personaId || agent?.profileId);
       const rawEnrichedPolicy =
         hasPersonaOrProfile && ctx.payload.toolName
@@ -99,18 +128,19 @@ export class ToolApprovalService extends BaseService {
       }
 
       // The agent's tool lists deny unlisted calls ahead of any allowing policy.
-      // When the agent row cannot be read (`agent` is null, e.g. a storage error), this
-      // layer yields `none` and the cascade decides: the adapters enforce the same lists
-      // themselves (claude-agent-sdk PreToolUse hook, claude-code-cli --disallowedTools),
-      // and failing closed here would block interactive sessions on a storage hiccup.
-      // TODO(FACT-75): revisit once every vocabulary adapter carries its own gate.
+      // When the agent row lookup fails, the lists are unknown and this layer yields `none`.
+      // Only claude-agent-sdk carries its own allowlist gate; claude-code-cli enforces only
+      // the denylist and claude-code-tmux neither, so an allowing policy would run an unlisted
+      // call unchecked. A lookup error therefore falls back to asking (see below): interactive
+      // sessions ask a human, headless calls are denied for lack of an approval handler.
+      // TODO(FACT-75): adapter-side availability limit (`--tools <nativeAvailableTools>`) for CLI/tmux.
       const toolGrant = evaluateToolGrant(agent, ctx.payload.toolName, ctx.payload.args, rawEnrichedPolicy);
       if (toolGrant.kind === 'deny') {
         ctx.setResult({ action: 'deny', message: toolGrant.message, shouldAbort: false });
         return;
       }
 
-      if (sessionOverride === 'full-access') {
+      if (sessionOverride === 'full-access' && !agentLookupFailed) {
         ctx.setResult({ action: 'allow' });
         return;
       }
@@ -121,13 +151,7 @@ export class ToolApprovalService extends BaseService {
         rawEnrichedPolicy,
       );
 
-      // A tool-list grant replaces a cascade 'always-ask' (headless); a cascade 'reject' still wins.
-      const cascadePolicy =
-        toolGrant.kind === 'granted' && resolved.policy === 'always-ask' ? 'full-access' : resolved.policy;
-      // A session 'always-ask' override wins over the cascade, a tool-list grant included.
-      const effectivePolicy = sessionOverride === 'always-ask' ? 'always-ask' : cascadePolicy;
-
-      switch (effectivePolicy) {
+      switch (mergeEffectivePolicy(resolved.policy, toolGrant, sessionOverride, agentLookupFailed)) {
         case 'full-access':
           ctx.setResult({ action: 'allow' });
           return;
@@ -320,22 +344,29 @@ export class ToolApprovalService extends BaseService {
 
   /**
    * Look up agent metadata from storage by agentId.
+   *
+   * An unhandled storage request (no agent storage registered, e.g. lightweight runtimes
+   * and tests) counts as `absent`: without a storage handler no agent rows exist. Only a
+   * thrown request (storage or transport failure) is an `error`.
    * @param agentId - The agent identifier
    * @param sessionId - Optional session ID for scoped lookup
-   * @returns Agent metadata, or null if not found
+   * @returns `found` with the agent row, `absent` when no row exists, or `error` when the lookup failed
    */
-  private async getAgentMetadata(agentId: string, sessionId?: string): Promise<MakaioSessionAgent | null> {
+  private async getAgentMetadata(agentId: string, sessionId?: string): Promise<AgentLookupResult> {
     try {
+      let agent: MakaioSessionAgent | null | undefined;
       if (sessionId) {
-        const { agents } = await this.bus.request(AgentStorageSubjects.listBySession, { sessionId });
-        return agents.find((a) => a.agentId === agentId) ?? null;
+        const result = await this.bus.requestOptional(AgentStorageSubjects.listBySession, { sessionId });
+        agent = result.handled ? result.data.agents.find((a) => a.agentId === agentId) : undefined;
+      } else {
+        // Fallback: direct lookup
+        const result = await this.bus.requestOptional(AgentStorageSubjects.get, { agentId });
+        agent = result.handled ? result.data.agent : undefined;
       }
-
-      // Fallback: direct lookup
-      const result = await this.bus.requestOptional(AgentStorageSubjects.get, { agentId });
-      return result.handled ? result.data.agent : null;
-    } catch {
-      return null;
+      return agent ? { kind: 'found', agent } : { kind: 'absent' };
+    } catch (error) {
+      this.logger.warn('[ToolApprovalService] agent lookup failed; forcing always-ask', { agentId, sessionId, error });
+      return { kind: 'error' };
     }
   }
 
