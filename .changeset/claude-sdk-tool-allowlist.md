@@ -2,14 +2,16 @@
 "@makaio/adapter-claude-agent-sdk": patch
 ---
 
-Forward the caller's tool allowlist and denylist to the Claude Agent SDK.
+Enforce the caller's tool allowlist and forward the denylist to the Claude Agent SDK.
 
 `allowedTools` / `disallowedTools` on the connector config (for example from a
 workflow `delegateToRole({ allowedTools })`) previously never reached the SDK
-query options, so a delegate saw every built-in tool. An allowlist now maps to
-SDK `tools` as an availability filter: entries are reduced to base built-in names
-(`Bash(git status)` becomes `Bash`, duplicates removed, `mcp__*` entries
-excluded). Allowlisted tools are not auto-approved; every call still goes through
-`canUseTool` and the central tool approval service. `disallowedTools` is
-forwarded verbatim. Without a policy the query options are unchanged; an empty
-allowlist disables all built-in tools.
+query, so a delegate could use every tool. With an allowlist, the SDK query now
+exposes only the listed built-in tools (SDK `tools`), and the `canUseTool`
+handler denies any tool call, built-in or `mcp__*`, whose name is not on the
+list before central approval is asked. Listed tools are not auto-approved; they
+still go through the central tool approval service. An empty allowlist denies
+every tool. Allowlist entries must be plain tool names: command-specific
+permission rules such as `Bash(git status)` are rejected with a configuration
+error instead of being widened to the base tool. `disallowedTools` is forwarded
+verbatim, rules included. Without a policy nothing changes.

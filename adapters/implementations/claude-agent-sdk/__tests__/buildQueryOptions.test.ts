@@ -275,13 +275,16 @@ describe('buildQueryOptions — tool policy behaviour', () => {
     expect(options).not.toHaveProperty('allowedTools');
   });
 
-  it('reduces permission rules to deduplicated base tool names', () => {
-    const options = buildWithToolPolicy({
-      allowedTools: ['Bash(git status)', 'Bash(git diff:*)', 'Edit', 'mcp__makaio__approve'],
-    });
+  it('rejects command-specific permission rules in the allowlist instead of widening them', () => {
+    expect(() => buildWithToolPolicy({ allowedTools: ['Edit', 'Bash(git status)'] })).toThrow(
+      /Command-specific permission rules in allowedTools are not supported yet; use base tool names/,
+    );
+  });
 
-    expect(options.tools).toEqual(['Bash', 'Edit']);
-    expect(options).not.toHaveProperty('allowedTools');
+  it('deduplicates allowlist entries', () => {
+    const options = buildWithToolPolicy({ allowedTools: ['Read', 'Edit', 'Read'] });
+
+    expect(options.tools).toEqual(['Read', 'Edit']);
   });
 
   it('replaces provider-config tools with the caller allowlist and keeps provider-config auto-approvals', () => {
@@ -301,7 +304,7 @@ describe('buildQueryOptions — tool policy behaviour', () => {
     expect(options).not.toHaveProperty('allowedTools');
   });
 
-  it('forwards disallowedTools verbatim without restricting the available tool set', () => {
+  it('forwards disallowedTools permission rules verbatim without restricting the available tool set', () => {
     const options = buildWithToolPolicy({ disallowedTools: ['WebFetch', 'Bash(rm *)'] });
 
     expect(options.disallowedTools).toEqual(['WebFetch', 'Bash(rm *)']);

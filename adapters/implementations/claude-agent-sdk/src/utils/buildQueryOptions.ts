@@ -198,22 +198,25 @@ function resolveSessionIdentityOptions(
 const MCP_TOOL_NAME_PREFIX = 'mcp__';
 
 /**
- * Reduce Claude permission rules to their base tool names.
+ * Validate the caller allowlist and return its entries deduplicated in first-seen order.
  *
- * Callers may pass permission rules such as `Bash(git status)`; the base tool name
- * is the text before the first `(`. The result is deduplicated in first-seen order.
- * @param rules - Tool names or Claude permission rules.
- * @returns Unique base tool names.
+ * Entries must be plain tool names (`Read`, `Bash`, `mcp__server__tool`). A Claude
+ * permission rule such as `Bash(git status)` is rejected: this adapter would have to
+ * widen it to its base tool (`Bash`) for SDK `tools` and for the `canUseTool`
+ * allowlist gate, which would grant commands the caller never granted. Shared
+ * permission-rule matching across adapters is tracked separately (FACT-72).
+ * @param allowedTools - Caller-granted tool allowlist.
+ * @returns Unique tool names.
+ * @throws When an entry is a command-specific permission rule.
  */
-function toBaseToolNames(rules: readonly string[]): string[] {
-  return [
-    ...new Set(
-      rules.map((rule) => {
-        const ruleStart = rule.indexOf('(');
-        return (ruleStart === -1 ? rule : rule.slice(0, ruleStart)).trim();
-      }),
-    ),
-  ];
+function toAllowlistToolNames(allowedTools: readonly string[]): string[] {
+  const rule = allowedTools.find((entry) => entry.includes('('));
+  if (rule !== undefined) {
+    throw new Error(
+      `Command-specific permission rules in allowedTools are not supported yet; use base tool names (got "${rule}")`,
+    );
+  }
+  return [...new Set(allowedTools)];
 }
 
 /**
@@ -225,18 +228,21 @@ function toBaseToolNames(rules: readonly string[]): string[] {
  *   never reach `canUseTool`.
  * - `disallowedTools` removes tools from the model's context.
  *
- * An allowlist is an availability filter only: it maps to `tools`, reduced to base
- * built-in names (permission rules like `Bash(git status)` become `Bash`; MCP entries
- * `mcp__…` are dropped because `tools` only names built-ins). It is deliberately
- * NOT mapped to SDK `allowedTools`: auto-allowed tools skip `canUseTool`, which is
- * this connector's only path into the central tool approval service (session policy
- * overrides, harness policy, `.makaioignore` deny rules). Every call of an available
- * tool therefore still goes through `canUseTool`.
+ * An allowlist maps to `tools` as an availability filter for built-ins (MCP entries
+ * `mcp__…` are dropped because `tools` only names built-ins; MCP tools are gated by
+ * the connector's `canUseTool` handler, which denies any tool not on the allowlist).
+ * Permission-rule entries (`Bash(git status)`) are rejected, see
+ * {@link toAllowlistToolNames}. The allowlist is deliberately NOT mapped to SDK
+ * `allowedTools`: auto-allowed tools skip `canUseTool`, which is this connector's only
+ * path into the central tool approval service (session policy overrides, harness
+ * policy, `.makaioignore` deny rules). Every call of an allowlisted tool therefore
+ * still goes through `canUseTool`.
  * The denylist is forwarded verbatim, since SDK `disallowedTools` accepts permission
  * rules. Absent policies emit no fields, so provider-config query options stay untouched.
  * @param allowedTools - Exact tool allowlist, or `undefined` when unrestricted.
  * @param disallowedTools - Tool denylist, or `undefined` when none is given.
  * @returns Partial SDK Options carrying only the fields the policy defines.
+ * @throws When the allowlist contains a command-specific permission rule.
  */
 function resolveToolPolicyOptions(
   allowedTools: string[] | undefined,
@@ -244,7 +250,7 @@ function resolveToolPolicyOptions(
 ): Partial<Options> {
   return {
     ...(allowedTools !== undefined && {
-      tools: toBaseToolNames(allowedTools).filter((name) => !name.startsWith(MCP_TOOL_NAME_PREFIX)),
+      tools: toAllowlistToolNames(allowedTools).filter((name) => !name.startsWith(MCP_TOOL_NAME_PREFIX)),
     }),
     ...(disallowedTools !== undefined && { disallowedTools: [...disallowedTools] }),
   };

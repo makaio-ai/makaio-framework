@@ -169,19 +169,22 @@ export interface ClaudeSessionConfig extends ConnectorSessionConfig<ClaudeCodeCo
   /**
    * Exact tool allowlist granted by the caller (e.g. a workflow delegate's `allowedTools`).
    *
-   * Entries use the Claude Code tool-name form: built-in names such as `Read`, `Edit`,
-   * `Bash`, Claude permission rules such as `Bash(git status)`, or MCP names such as
-   * `mcp__server__tool`. When set, the SDK query exposes only the named built-in tools
-   * (SDK `tools`, reduced to base names). The allowlist is an availability filter, not
-   * an approval: every call still goes through `canUseTool` and the central tool
-   * approval service. An empty array disables all built-in tools. `undefined` leaves
-   * the SDK tool set unchanged.
+   * Entries are plain Claude Code tool names, matched verbatim: built-in names such as
+   * `Read`, `Edit`, `Bash`, or MCP names such as `mcp__server__tool`. Command-specific
+   * permission rules such as `Bash(git status)` are rejected with a configuration error
+   * when the query is built (no widening to the base tool).
+   *
+   * When set, the SDK query exposes only the named built-in tools (SDK `tools`), and the
+   * `canUseTool` handler denies every tool call (built-in or MCP) whose name is not on
+   * the list. Listed tools are not auto-approved: their calls still go through the
+   * central tool approval service. An empty array denies every tool. `undefined` leaves
+   * tool availability and approval unchanged.
    */
   allowedTools?: string[];
   /**
-   * Tool denylist in the Claude Code tool-name form (see {@link ClaudeSessionConfig.allowedTools}).
-   * Forwarded verbatim to SDK `disallowedTools`, which removes these tools from the
-   * model's context; takes precedence over `allowedTools`.
+   * Tool denylist in the Claude Code tool-name form; unlike `allowedTools`, entries may be
+   * permission rules such as `Bash(rm *)`. Forwarded verbatim to SDK `disallowedTools`,
+   * which removes these tools from the model's context; takes precedence over `allowedTools`.
    */
   disallowedTools?: string[];
 
