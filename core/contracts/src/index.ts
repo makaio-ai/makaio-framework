@@ -689,6 +689,28 @@ export type {
   HarnessDefinitionCreate,
   ProfileToolCapabilitiesConfig,
 } from './harness/index.js';
+export {
+  isMakaioToolName,
+  isMcpToolName,
+  MAKAIO_TOOL_NAMES,
+  matchesCommandRule,
+  NATIVE_TOOL_NAMES,
+  parseToolListEntry,
+  resolveToolPolicy,
+  toMakaioToolName,
+  toNativeToolName,
+  ToolNameError,
+} from './tool-names/index.js';
+export type {
+  CommandRule,
+  MakaioToolName,
+  ResolvedToolPolicy,
+  ToolGateDecision,
+  ToolListEntry,
+  ToolLists,
+  ToolNameErrorReason,
+  ToolVocabulary,
+} from './tool-names/index.js';
 export { HostNamespace, HostSchemas, HostSubjects, WindowStateSchema } from './host/index.js';
 export type {
   TrayActivateRequest,

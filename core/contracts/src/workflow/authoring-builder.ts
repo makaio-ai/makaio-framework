@@ -41,7 +41,14 @@ export type DelegateToRoleOptions = NodeOptions & {
   readonly timeoutMs?: number;
   /** Completion behavior requested from the spawned role subagent. */
   readonly completion?: CompletionMode;
-  /** Exact tool allowlist selected for this delegation. */
+  /**
+   * Exact tool allowlist selected for this delegation, using Makaio tool names
+   * (`read_file`, `write_file`, `edit_file`, `glob_files`, `grep_files`, `shell_exec`,
+   * `shell_kill`, `spawn_subagent`, `send_to_subagent`) or MCP tools (`mcp__<server>__<tool>`).
+   * `shell_exec` entries may carry a command rule, e.g. `shell_exec(git status)` (exact) or
+   * `shell_exec(git log:*)` (prefix; never matches commands containing shell operators).
+   * See `@makaio/contracts` `tool-names` (`resolveToolPolicy`).
+   */
   readonly allowedTools?: string[];
   /** Authority-owned finalizer applied to the successful delegate result. */
   readonly resultFinalizerId?: string;
@@ -62,7 +69,10 @@ export interface AgentConfig {
    * JSON Schema for the expected agent output.
    */
   readonly outputSchema?: Record<string, JsonValue>;
-  /** Exact tool allowlist selected for this delegation. */
+  /**
+   * Exact tool allowlist selected for this delegation, same Makaio tool names, MCP naming,
+   * and `shell_exec` rule syntax as {@link DelegateToRoleOptions.allowedTools}.
+   */
   readonly allowedTools?: string[];
   /** Completion contract for the spawned subagent. Defaults to tool completion. */
   readonly completion?: CompletionMode;
