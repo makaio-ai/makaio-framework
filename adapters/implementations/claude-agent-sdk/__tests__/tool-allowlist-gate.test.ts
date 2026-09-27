@@ -8,14 +8,10 @@ import { ClaudeSdkConnector } from '../src/connector.js';
 import { ClaudeCodeConnectorNamespace } from '../src/namespace/index.js';
 import { ClaudeCodeAdapterName } from '../src/constants.js';
 import { createSessionAccountObservationRequester } from '../src/account-observation-requester.js';
+import type { ClaudeAgentConfig } from '../src/types/index.js';
 
 /** Tool list options for {@link makeGate}, written with Makaio tool names. */
-interface GateLists {
-  /** Allowlist entries, or `undefined` for none. */
-  allowedTools?: string[];
-  /** Denylist entries. */
-  disallowedTools?: string[];
-}
+type GateLists = Pick<ClaudeAgentConfig, 'allowedTools' | 'disallowedTools'>;
 
 /**
  * Build a connector whose central tool approval request (the bus round trip to
@@ -142,6 +138,66 @@ describe('ClaudeSdkConnector canUseTool — caller allowlist gate', () => {
       message: "Tool Bash is not on the step's allowlist",
     });
     expect(centralApproval).not.toHaveBeenCalled();
+  });
+
+  it('denies a shell_exec command chained with a shell operator under an exact allow rule', async () => {
+    const { canUseTool, centralApproval } = await makeGate({ allowedTools: ['shell_exec(git status)'] });
+
+    const result = await callTool(canUseTool, 'Bash', { command: 'git status; git push' });
+
+    expect(result).toMatchObject({
+      behavior: 'deny',
+      message: "Tool Bash is not on the step's allowlist",
+    });
+    expect(centralApproval).not.toHaveBeenCalled();
+  });
+
+  it('denies an approver-rewritten input that falls outside the allowed command rule', async () => {
+    const { canUseTool, centralApproval } = await makeGate({ allowedTools: ['shell_exec(git status)'] });
+    centralApproval.mockResolvedValueOnce({ action: 'allow', updatedInput: { command: 'git push' } });
+
+    const result = await callTool(canUseTool, 'Bash', { command: 'git status' });
+
+    expect(result).toMatchObject({
+      behavior: 'deny',
+      message: "Tool Bash is not on the step's allowlist",
+    });
+    expect(centralApproval).toHaveBeenCalledOnce();
+  });
+
+  it('allows an approver-rewritten input that still satisfies the allowed command rule', async () => {
+    const { canUseTool, centralApproval } = await makeGate({ allowedTools: ['shell_exec(git status)'] });
+    centralApproval.mockResolvedValueOnce({
+      action: 'allow',
+      updatedInput: { command: 'git status', extra: true },
+    });
+
+    const result = await callTool(canUseTool, 'Bash', { command: 'git status' });
+
+    expect(result).toMatchObject({ behavior: 'allow', updatedInput: { command: 'git status', extra: true } });
+  });
+
+  it('does not forward updatedPermissions from central approval while a caller tool list exists', async () => {
+    const { canUseTool, centralApproval } = await makeGate({ allowedTools: ['read_file'] });
+    centralApproval.mockResolvedValueOnce({
+      action: 'allow',
+      updatedPermissions: [{ type: 'addRules', rules: [{ toolName: 'Read' }], behavior: 'allow' }],
+    });
+
+    const result = await callTool(canUseTool, 'Read');
+
+    expect(result).toMatchObject({ behavior: 'allow' });
+    expect(result).not.toHaveProperty('updatedPermissions');
+  });
+
+  it('forwards updatedPermissions from central approval when no caller tool list is given', async () => {
+    const { canUseTool, centralApproval } = await makeGate({});
+    const updatedPermissions = [{ type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'allow' }];
+    centralApproval.mockResolvedValueOnce({ action: 'allow', updatedPermissions });
+
+    const result = await callTool(canUseTool, 'Bash');
+
+    expect(result).toMatchObject({ behavior: 'allow', updatedPermissions });
   });
 
   it('lets a shell_exec denylist rule beat a plain shell_exec allowlist entry', async () => {

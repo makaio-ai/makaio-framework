@@ -264,7 +264,8 @@ describe('buildQueryOptions — tool policy behaviour', () => {
     const options = buildWithToolPolicy({ allowedTools: ['read_file'] });
 
     expect(options.tools).toEqual(['Read']);
-    expect(options).not.toHaveProperty('allowedTools');
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
   });
 
   it('restricts available tools without auto-approving them when an allowlist is given', () => {
@@ -272,7 +273,8 @@ describe('buildQueryOptions — tool policy behaviour', () => {
     const options = buildWithToolPolicy({ allowedTools: allowlist });
 
     expect(options.tools).toEqual(['Read', 'Edit', 'Write', 'Glob', 'Grep']);
-    expect(options).not.toHaveProperty('allowedTools');
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
     expect(options).not.toHaveProperty('disallowedTools');
   });
 
@@ -280,14 +282,16 @@ describe('buildQueryOptions — tool policy behaviour', () => {
     const options = buildWithToolPolicy({ allowedTools: ['read_file', 'mcp__makaio__search'] });
 
     expect(options.tools).toEqual(['Read']);
-    expect(options).not.toHaveProperty('allowedTools');
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
   });
 
   it('accepts a command-specific permission rule on shell_exec and makes its base tool available, without auto-approving it', () => {
     const options = buildWithToolPolicy({ allowedTools: ['shell_exec(git status)'] });
 
     expect(options.tools).toEqual(['Bash']);
-    expect(options).not.toHaveProperty('allowedTools');
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
   });
 
   it('rejects native Claude tool names in the allowlist', () => {
@@ -318,53 +322,6 @@ describe('buildQueryOptions — tool policy behaviour', () => {
     expect(options.allowedTools).toEqual([]);
   });
 
-  it('intersects provider-config auto-approvals with the caller allowlist', () => {
-    const options = buildWithToolPolicy({
-      allowedTools: ['read_file', 'mcp__makaio__search'],
-      providerConfig: {
-        queryOptions: { allowedTools: ['Bash', 'Read', 'mcp__makaio__search', 'mcp__other__tool', 'Write'] },
-      },
-    });
-
-    expect(options.allowedTools).toEqual(['Read', 'mcp__makaio__search']);
-  });
-
-  it('keeps a provider permission-rule auto-approval only when its base tool is on the caller allowlist', () => {
-    const options = buildWithToolPolicy({
-      allowedTools: ['shell_exec'],
-      providerConfig: { queryOptions: { allowedTools: ['Bash(git status)', 'Edit(src/**)', 'Read'] } },
-    });
-
-    expect(options.allowedTools).toEqual(['Bash(git status)']);
-  });
-
-  it('keeps a provider plain grant when the caller plainly grants the same base tool', () => {
-    const options = buildWithToolPolicy({
-      allowedTools: ['shell_exec'],
-      providerConfig: { queryOptions: { allowedTools: ['Bash', 'Read'] } },
-    });
-
-    expect(options.allowedTools).toEqual(['Bash']);
-  });
-
-  it('drops a provider plain grant when the caller only grants a command rule for that base tool', () => {
-    const options = buildWithToolPolicy({
-      allowedTools: ['shell_exec(git status)'],
-      providerConfig: { queryOptions: { allowedTools: ['Bash'] } },
-    });
-
-    expect(options.allowedTools).toEqual([]);
-  });
-
-  it('keeps a provider permission-rule auto-approval identical to the caller rule entry', () => {
-    const options = buildWithToolPolicy({
-      allowedTools: ['shell_exec(git status)'],
-      providerConfig: { queryOptions: { allowedTools: ['Bash(git status)'] } },
-    });
-
-    expect(options.allowedTools).toEqual(['Bash(git status)']);
-  });
-
   it('clears all provider-config auto-approvals for an explicitly empty allowlist', () => {
     const options = buildWithToolPolicy({
       allowedTools: [],
@@ -373,30 +330,63 @@ describe('buildQueryOptions — tool policy behaviour', () => {
 
     expect(options.tools).toEqual([]);
     expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
   });
 
-  it('keeps provider-config auto-approvals untouched when only a denylist is given', () => {
+  it('clears provider-config auto-approvals when only a denylist is given', () => {
     const options = buildWithToolPolicy({
       disallowedTools: ['write_file'],
       providerConfig: { queryOptions: { allowedTools: ['Bash', 'Read'] } },
     });
 
-    expect(options.allowedTools).toEqual(['Bash', 'Read']);
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
   });
 
   it('disables all built-in tools for an explicitly empty allowlist', () => {
     const options = buildWithToolPolicy({ allowedTools: [] });
 
     expect(options.tools).toEqual([]);
-    expect(options).not.toHaveProperty('allowedTools');
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
+  });
+
+  it('forces permissionMode to default when the provider config sets bypassPermissions and the caller passes a list', () => {
+    const options = buildWithToolPolicy({
+      allowedTools: ['read_file'],
+      providerConfig: { queryOptions: { permissionMode: 'bypassPermissions' } },
+    });
+
+    expect(options.permissionMode).toBe('default');
+    expect(options.allowedTools).toEqual([]);
+  });
+
+  it('forces permissionMode to default when the provider config sets acceptEdits and the caller passes a denylist', () => {
+    const options = buildWithToolPolicy({
+      disallowedTools: ['write_file'],
+      providerConfig: { queryOptions: { permissionMode: 'acceptEdits' } },
+    });
+
+    expect(options.permissionMode).toBe('default');
+    expect(options.allowedTools).toEqual([]);
+  });
+
+  it('leaves provider-config permissionMode and allowedTools untouched without caller lists', () => {
+    const options = buildWithToolPolicy({
+      providerConfig: { queryOptions: { permissionMode: 'bypassPermissions', allowedTools: ['Read'] } },
+    });
+
+    expect(options.permissionMode).toBe('bypassPermissions');
+    expect(options.allowedTools).toEqual(['Read']);
   });
 
   it('forwards disallowedTools permission rules verbatim without restricting the available tool set', () => {
-    const options = buildWithToolPolicy({ disallowedTools: ['write_file', 'shell_exec(rm *)'] });
+    const options = buildWithToolPolicy({ disallowedTools: ['write_file', 'shell_exec(rm:*)'] });
 
-    expect(options.disallowedTools).toEqual(['Write', 'Bash(rm *)']);
+    expect(options.disallowedTools).toEqual(['Write', 'Bash(rm:*)']);
     expect(options).not.toHaveProperty('tools');
-    expect(options).not.toHaveProperty('allowedTools');
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
   });
 
   it('translates a denylist prefix rule to a native permission rule', () => {
