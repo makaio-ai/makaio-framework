@@ -93,6 +93,7 @@ export {
   ArtifactRevisionSchema,
   ArtifactSchemas,
   ArtifactSlugSchema,
+  ARTIFACT_DERIVED_SLUG_MAX_LENGTH,
   ARTIFACT_SLUG_FIELD,
   ARTIFACT_SLUG_PATTERN,
   deriveArtifactSlug,
