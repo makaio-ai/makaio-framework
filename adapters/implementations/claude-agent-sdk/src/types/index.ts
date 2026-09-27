@@ -46,7 +46,10 @@ export type ClaudeQueryOptions = Omit<Options, 'abortController'>;
  * how the SDK processes messages and queries.
  */
 export interface ClaudeSpecificConfig {
-  /** SDK query options (excluding cwd/model which are handled at base level) */
+  /**
+   * SDK query options (excluding cwd/model which are handled at base level). Operator-trusted
+   * input: it can deliberately widen the caller tool lists (see `ToolLists` trust boundary).
+   */
   queryOptions?: Omit<ClaudeQueryOptions, 'cwd' | 'model'>;
   /** Use SDK immediate message mode for faster streaming responses */
   useSdkImmediateMessageMode?: boolean;

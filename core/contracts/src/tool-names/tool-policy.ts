@@ -46,6 +46,11 @@ export type ToolGateDecision = { allowed: true } | { allowed: false; reason: str
  * a Makaio name is on no list, so an allowlist denies it. The lists only restrict;
  * central approval still runs afterwards.
  *
+ * **Trust boundary.** The lists restrict the model / agent step, not the operator.
+ * Operator-controlled adapter and provider configuration is trusted input and can
+ * deliberately widen what runs. Adapters guard against an ordinary config accidentally
+ * weakening the lists, not against a hostile operator.
+ *
  * **Errors.** Resolution throws {@link ToolNameError} on the first invalid entry:
  * `malformed-entry` (syntax, empty or `*`-carrying rule, malformed MCP name),
  * `unknown-tool` (not a Makaio or MCP name), `unsupported-by-adapter` (no native

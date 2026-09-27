@@ -44,7 +44,11 @@ clears the provider's own auto-approved tools, resets `queryOptions.permissionMo
 the approval response, so a persistent SDK-side rule can no longer skip `canUseTool` for
 later calls. After central tool approval allows a call, the adapter re-runs the tool
 policy against the input that will run (the approver-modified `updatedInput`, or the
-original input) and denies the call if it now fails.
+original input) and denies the call if it now fails. Trust boundary: the tool lists bound
+the model, not the operator; provider config (`providerConfig.queryOptions`, including
+`extraArgs`, `sandbox`, `agents`, and `spawnClaudeCodeProcess`) is trusted operator input
+that can deliberately widen what runs, and these overrides only guard against an ordinary
+config accidentally weakening the lists.
 
 **Breaking:** the adapter no longer accepts Claude Code tool names (`Read`, `Bash`, ...)
 in `allowedTools`/`disallowedTools`; unknown names are rejected with a `ToolNameError`.

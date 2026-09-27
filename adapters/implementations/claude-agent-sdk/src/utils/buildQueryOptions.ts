@@ -187,6 +187,9 @@ function resolveSessionIdentityOptions(
   resumeAdapterSessionId: string | undefined,
   nativeFork: NativeForkDirective | undefined,
 ): Partial<Options> {
+  // Resumed and forked sessions may carry SDK permission rules persisted before this
+  // query; that session history is operator-trusted and not filtered here. While caller
+  // tool lists are set, new `updatedPermissions` are not persisted (see connector).
   if (nativeFork !== undefined) {
     const { sourceAdapterSessionId, forkPointMessageId } = nativeFork;
     if (forkPointMessageId !== undefined) {
@@ -239,6 +242,9 @@ function resolveSessionIdentityOptions(
  * The denylist is translated to native entries with rules kept (`Bash(rm -rf:*)`), since
  * SDK `disallowedTools` accepts permission rules. Absent policies emit no fields, so
  * provider-config query options stay untouched.
+ * Trust boundary (see `ToolLists` in `@makaio/contracts`): the lists bound the model, not
+ * the operator; these overrides stop an ordinary provider config from accidentally
+ * weakening them, while trusted operator input can still deliberately widen what runs.
  * @param policy - Caller tool policy resolved for this query.
  * @returns Partial SDK Options carrying only the fields the policy defines.
  */
@@ -395,6 +401,9 @@ export function buildQueryOptions({
 }: BuildQueryOptionsArgs): Options {
   const maxThinkingTokens = resolveMaxThinkingTokens(config.reasoningEffort);
 
+  // Provider `extraArgs` become CLI flags and can carry `--permission-mode`,
+  // `--dangerously-skip-permissions`, `--allowedTools`, or `--settings`. They are trusted
+  // operator input (see `ToolLists` trust boundary) and deliberately not filtered.
   const extraArgs = {
     ...(config.providerConfig?.queryOptions?.extraArgs ?? {}),
     'replay-user-messages': null,
@@ -423,6 +432,11 @@ export function buildQueryOptions({
   const hooks = resolveHooks(config.providerConfig?.queryOptions?.hooks, toolPolicy);
 
   return {
+    // Trusted operator input (see `ToolLists` trust boundary), passed through unfiltered:
+    // `sandbox` (`autoAllowBashIfSandboxed` lets Bash skip `canUseTool`; the PreToolUse
+    // hook still enforces the lists), `agents`/`agent` with their own `permissionMode`, and
+    // `spawnClaudeCodeProcess`/`executableArgs`, which can launch any process and so lie
+    // outside what any in-process gate can constrain.
     ...(config.providerConfig?.queryOptions ?? {}),
     cwd: config.cwd,
     model: config.model,
