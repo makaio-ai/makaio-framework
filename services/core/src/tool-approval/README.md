@@ -42,6 +42,9 @@ Verdicts:
 - `granted` — an allowlist exists and covers the call. It turns a cascade `always-ask`
   into `full-access` before the session override is merged, so a listed tool runs
   headless; a cascade `reject` and a session `always-ask` override still win.
+  Under a directory allowlist (`agent.allowedDirectories`, else the profile's) the grant
+  applies only to a call whose target path (`Glob`/`Grep` without `path`: the cwd) lies
+  inside it; any other call gets `none`.
 - `none` — no lists, no vocabulary for the adapter (e.g. `codex-app-server`), or a
   denylist-only pass. The cascade decides unchanged.
 

@@ -1,3 +1,4 @@
+import path from 'node:path';
 import {
   computeMetaTags,
   resolveToolPolicy,
@@ -8,7 +9,7 @@ import {
   type ResolvedToolPolicy,
   type ToolCapability,
 } from '@makaio/contracts';
-import type { FileAccessRuleProvider } from '@makaio/tools-core';
+import { extractToolFilePath, type FileAccessRuleProvider } from '@makaio/tools-core';
 import {
   type EnrichedApprovalRequest,
   type EnrichedBasePolicyResult,
@@ -199,17 +200,22 @@ export type ToolGrantVerdict = { kind: 'deny'; message: string } | { kind: 'gran
  *   adapter, or the call passes a denylist-only policy. The approval cascade decides.
  * - `deny` — a list entry is invalid ({@link ToolNameError}) or the lists reject the call.
  * - `granted` — an allowlist exists and covers the call. The service uses this to replace
- *   an `always-ask` policy only; a `reject` policy still wins.
+ *   an `always-ask` policy only; a `reject` policy still wins. Under a directory allowlist
+ *   (`agent.allowedDirectories`, else the profile's) a covered call is granted only when its
+ *   target path lies inside it; otherwise the verdict is `none` and the cascade decides.
  * @param agent - Pre-fetched agent metadata, or null if unavailable; its `adapterName`
  *   selects the tool vocabulary of `toolName`
  * @param toolName - Native tool name of the call
  * @param args - Tool call input; `args.command` is matched against command rules
+ * @param rawEnrichedPolicy - Pre-fetched enriched-policy RPC result; supplies the profile
+ *   directory allowlist when the agent row carries none
  * @returns Grant verdict for the call
  */
 export function evaluateToolGrant(
   agent: MakaioSessionAgent | null,
   toolName: string | undefined,
   args: Record<string, unknown> | undefined,
+  rawEnrichedPolicy?: RawEnrichedPolicyResult,
 ): ToolGrantVerdict {
   if (!toolName || !agent) return { kind: 'none' };
   const { allowedTools, disallowedTools } = agent;
@@ -227,7 +233,66 @@ export function evaluateToolGrant(
 
   const decision = policy.checkToolCall(toolName, args ?? {});
   if (!decision.allowed) return { kind: 'deny', message: decision.reason };
-  return allowedTools === undefined ? { kind: 'none' } : { kind: 'granted' };
+  if (allowedTools === undefined) return { kind: 'none' };
+  // A grant must not widen a directory allowlist: the cascade decides calls outside it.
+  // TODO(FACT-75): Bash and other non-path tools get no grant under a directory allowlist,
+  // and this check is lexical — the symlink-aware check lives only in the filesystem extension.
+  const allowedDirectories = resolveEffectiveAllowedDirectories(agent, rawEnrichedPolicy);
+  if (allowedDirectories !== undefined && !isGrantTargetWithin(allowedDirectories, toolName, args, agent.cwd)) {
+    return { kind: 'none' };
+  }
+  return { kind: 'granted' };
+}
+
+/** Claude search tools whose optional `path` argument defaults to the cwd. */
+const CWD_DEFAULT_PATH_TOOLS: ReadonlySet<string> = new Set(['Glob', 'Grep']);
+
+/**
+ * Resolve the directory allowlist that bounds a tool-list grant.
+ * @param agent - Agent metadata; its `allowedDirectories` take precedence
+ * @param rawEnrichedPolicy - Pre-fetched enriched-policy RPC result for the profile fallback
+ * @returns Directory allowlist (`[]` allows nothing), or undefined when unrestricted
+ */
+function resolveEffectiveAllowedDirectories(
+  agent: MakaioSessionAgent,
+  rawEnrichedPolicy: RawEnrichedPolicyResult | undefined,
+): readonly string[] | undefined {
+  if (agent.allowedDirectories !== undefined) return agent.allowedDirectories;
+  if ((agent.personaId || agent.profileId) && rawEnrichedPolicy) {
+    return resolveProfileAllowedDirectories(agent.personaId, agent.profileId, rawEnrichedPolicy);
+  }
+  return undefined;
+}
+
+/**
+ * Check whether a call's target path lies inside a directory allowlist. Lexical containment
+ * (resolve, then relative-path check), matching `isWithinRoot` in the filesystem extension's
+ * path validator without its realpath canonicalization.
+ * @param allowedDirectories - Directory allowlist; `[]` contains nothing
+ * @param toolName - Native tool name of the call
+ * @param args - Tool call input
+ * @param cwd - Agent working directory; without it no path can be resolved
+ * @returns True only when a target path resolves and lies inside one of the directories
+ */
+function isGrantTargetWithin(
+  allowedDirectories: readonly string[],
+  toolName: string,
+  args: Record<string, unknown> | undefined,
+  cwd: string | undefined,
+): boolean {
+  if (!cwd) return false;
+  const searchPath = args?.path;
+  const target = CWD_DEFAULT_PATH_TOOLS.has(toolName)
+    ? path.resolve(cwd, typeof searchPath === 'string' && searchPath.length > 0 ? searchPath : '.')
+    : extractToolFilePath(toolName, args, cwd);
+  if (target === null) return false;
+  return allowedDirectories.some((directory) => {
+    const relativePath = path.relative(path.resolve(cwd, directory), target);
+    return (
+      relativePath === '' ||
+      (relativePath !== '..' && !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath))
+    );
+  });
 }
 
 /**

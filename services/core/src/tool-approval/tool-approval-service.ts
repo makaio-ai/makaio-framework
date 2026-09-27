@@ -104,7 +104,7 @@ export class ToolApprovalService extends BaseService {
       // themselves (claude-agent-sdk PreToolUse hook, claude-code-cli --disallowedTools),
       // and failing closed here would block interactive sessions on a storage hiccup.
       // TODO(FACT-75): revisit once every vocabulary adapter carries its own gate.
-      const toolGrant = evaluateToolGrant(agent, ctx.payload.toolName, ctx.payload.args);
+      const toolGrant = evaluateToolGrant(agent, ctx.payload.toolName, ctx.payload.args, rawEnrichedPolicy);
       if (toolGrant.kind === 'deny') {
         ctx.setResult({ action: 'deny', message: toolGrant.message, shouldAbort: false });
         return;

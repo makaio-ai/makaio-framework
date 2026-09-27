@@ -15,6 +15,7 @@ import { ToolApprovalService } from '../tool-approval-service.js';
 import {
   createToolApprovePayload,
   registerAgentStub,
+  registerApprovalRequestHandler,
   registerDefaultHarnessHandler,
   registerSessionStorageHandler,
 } from './test-utils.js';
@@ -212,6 +213,75 @@ describe('ToolApprovalService - headless tool-list grant', () => {
       if (read.action === 'deny') {
         expect(read.message).toBe(NO_HANDLER);
       }
+    });
+  });
+
+  describe('directory allowlist bounds the grant', () => {
+    const LISTED = ['read_file', 'glob_files', 'grep_files'];
+
+    it('grants a listed Read inside allowedDirectories without any approval handler', async () => {
+      registerAgentStub(cleanups, { ...CLAUDE_AGENT, allowedTools: LISTED, allowedDirectories: [TEST_CWD] });
+
+      const result = await approve('Read', { file_path: `${TEST_CWD}/src/a.ts` });
+
+      expect(result).toEqual({ action: 'allow' });
+    });
+
+    it('sends a listed Read outside allowedDirectories to the always-ask cascade', async () => {
+      registerAgentStub(cleanups, { ...CLAUDE_AGENT, allowedTools: LISTED, allowedDirectories: [TEST_CWD] });
+
+      const headless = await approve('Read', { file_path: '/etc/passwd' });
+      expect(headless.action).toBe('deny');
+      if (headless.action === 'deny') {
+        expect(headless.message).toBe(NO_HANDLER);
+      }
+
+      const approval = registerApprovalRequestHandler(cleanups, { action: 'allow' });
+      const sibling = await approve('Read', { file_path: '/home/user/project-other/a.ts' });
+      expect(approval.called).toBe(true);
+      expect(sibling).toEqual({ action: 'allow' });
+    });
+
+    it('grants Glob without a path when the cwd lies inside allowedDirectories', async () => {
+      registerAgentStub(cleanups, { ...CLAUDE_AGENT, allowedTools: LISTED, allowedDirectories: ['/home/user'] });
+
+      const result = await approve('Glob', { pattern: '**/*.ts' });
+
+      expect(result).toEqual({ action: 'allow' });
+    });
+
+    it('sends a listed Grep with a path outside allowedDirectories to the cascade', async () => {
+      registerAgentStub(cleanups, { ...CLAUDE_AGENT, allowedTools: LISTED, allowedDirectories: [TEST_CWD] });
+
+      const result = await approve('Grep', { pattern: 'x', path: '/etc' });
+
+      expect(result.action).toBe('deny');
+      if (result.action === 'deny') {
+        expect(result.message).toBe(NO_HANDLER);
+      }
+    });
+
+    it('sends a listed non-path tool to the cascade under allowedDirectories', async () => {
+      registerAgentStub(cleanups, {
+        ...CLAUDE_AGENT,
+        allowedTools: ['shell_exec(git status)'],
+        allowedDirectories: [TEST_CWD],
+      });
+
+      const result = await approve('Bash', { command: 'git status' });
+
+      expect(result.action).toBe('deny');
+      if (result.action === 'deny') {
+        expect(result.message).toBe(NO_HANDLER);
+      }
+    });
+
+    it('grants a listed Read outside the cwd when no allowedDirectories are set', async () => {
+      registerAgentStub(cleanups, { ...CLAUDE_AGENT, allowedTools: LISTED });
+
+      const result = await approve('Read', { file_path: '/etc/hosts' });
+
+      expect(result).toEqual({ action: 'allow' });
     });
   });
 
