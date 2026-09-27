@@ -1,9 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildQueryOptions } from '../src/utils/buildQueryOptions.js';
 import type { ClaudeSessionConfig } from '../src/types/index.js';
 import { SessionLifecycle } from '@makaio/ai-adapters-core';
 import { ToolNameError } from '@makaio/contracts';
-import type { Options } from '@anthropic-ai/claude-agent-sdk';
+import type { ResolvedToolPolicy } from '@makaio/contracts';
+import type {
+  HookCallback,
+  HookCallbackMatcher,
+  HookJSONOutput,
+  Options,
+  PreToolUseHookInput,
+} from '@anthropic-ai/claude-agent-sdk';
 
 /**
  * Minimal `ClaudeSessionConfig` fixture for `buildQueryOptions` unit tests.
@@ -405,5 +412,180 @@ describe('buildQueryOptions — tool policy behaviour', () => {
     });
 
     expect(options.canUseTool).toBe(approvalHandler);
+  });
+});
+
+describe('buildQueryOptions — tool policy PreToolUse hook', () => {
+  /** Provider PreToolUse hook that never decides. */
+  const providerPreToolUseHook: HookCallback = async () => ({});
+  /** Provider PostToolUse hook that never decides. */
+  const providerPostToolUseHook: HookCallback = async () => ({});
+
+  /**
+   * Build SDK options for the given config overrides.
+   * @param overrides - Config overrides (tool lists, provider config).
+   * @returns SDK query options.
+   */
+  function build(overrides: Partial<ClaudeSessionConfig>): Options {
+    return buildQueryOptions({
+      config: makeMinimalConfig(overrides),
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler: () => undefined,
+      sessionId: 'session-test',
+    });
+  }
+
+  /**
+   * Extract the adapter-owned policy hook: the single callback of the last PreToolUse matcher.
+   * @param options - SDK query options built with caller tool lists.
+   * @returns The policy hook callback.
+   */
+  function policyHookOf(options: Options): HookCallback {
+    const matchers = options.hooks?.PreToolUse ?? [];
+    const policyMatcher = matchers.at(-1);
+    expect(policyMatcher?.hooks).toHaveLength(1);
+    const hook = policyMatcher?.hooks[0];
+    if (hook === undefined) throw new Error('policy hook missing');
+    return hook;
+  }
+
+  /**
+   * Invoke a PreToolUse hook the way the SDK does.
+   * @param hook - Hook callback under test.
+   * @param toolName - Native tool name of the call.
+   * @param toolInput - Tool call input.
+   * @returns The hook output.
+   */
+  function callPreToolUse(hook: HookCallback, toolName: string, toolInput: unknown): Promise<HookJSONOutput> {
+    const input: PreToolUseHookInput = {
+      session_id: 'session-test',
+      transcript_path: '/tmp/transcript.jsonl',
+      cwd: '/tmp',
+      permission_mode: 'default',
+      hook_event_name: 'PreToolUse',
+      tool_name: toolName,
+      tool_input: toolInput,
+      tool_use_id: 'toolu-test',
+    };
+    return hook(input, 'toolu-test', { signal: new AbortController().signal });
+  }
+
+  /**
+   * Assert a hook output is a PreToolUse deny with a non-empty reason.
+   * @param output - Hook output.
+   */
+  function expectDeny(output: HookJSONOutput): void {
+    expect(output).toMatchObject({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny' },
+    });
+    const reason = (output as { hookSpecificOutput?: { permissionDecisionReason?: unknown } }).hookSpecificOutput
+      ?.permissionDecisionReason;
+    expect(typeof reason).toBe('string');
+    expect(reason).not.toBe('');
+  }
+
+  it('leaves provider hooks untouched without caller lists', () => {
+    const providerHooks: Options['hooks'] = {
+      PreToolUse: [{ matcher: 'Bash', hooks: [providerPreToolUseHook] }],
+      PostToolUse: [{ hooks: [providerPostToolUseHook] }],
+    };
+    const options = build({ providerConfig: { queryOptions: { hooks: providerHooks } } });
+
+    expect(options.hooks).toBe(providerHooks);
+    expect(options.hooks?.PreToolUse).toHaveLength(1);
+  });
+
+  it('emits no hooks without caller lists when the provider config has none', () => {
+    const options = build({});
+
+    expect(options).not.toHaveProperty('hooks');
+  });
+
+  it('appends the matcherless policy matcher after provider PreToolUse matchers and keeps other events', () => {
+    const firstProviderMatcher: HookCallbackMatcher = { matcher: 'Bash', hooks: [providerPreToolUseHook] };
+    const secondProviderMatcher: HookCallbackMatcher = { hooks: [providerPreToolUseHook] };
+    const postToolUse: HookCallbackMatcher[] = [{ hooks: [providerPostToolUseHook] }];
+    const options = build({
+      allowedTools: ['read_file'],
+      providerConfig: {
+        queryOptions: {
+          hooks: { PreToolUse: [firstProviderMatcher, secondProviderMatcher], PostToolUse: postToolUse },
+        },
+      },
+    });
+
+    const preToolUse = options.hooks?.PreToolUse ?? [];
+    expect(preToolUse).toHaveLength(3);
+    expect(preToolUse[0]).toBe(firstProviderMatcher);
+    expect(preToolUse[1]).toBe(secondProviderMatcher);
+    expect(preToolUse[2]).not.toHaveProperty('matcher');
+    expect(preToolUse[2]?.hooks[0]).not.toBe(providerPreToolUseHook);
+    expect(options.hooks?.PostToolUse).toBe(postToolUse);
+  });
+
+  it('denies an MCP tool outside the allowlist and passes an allowlisted built-in with an empty output', async () => {
+    const hook = policyHookOf(build({ allowedTools: ['read_file'] }));
+
+    expectDeny(await callPreToolUse(hook, 'mcp__claude_ai_Foo__bar', {}));
+
+    const passOutput = await callPreToolUse(hook, 'Read', { file_path: '/tmp/a.txt' });
+    expect(passOutput).toEqual({});
+    expect(passOutput).not.toHaveProperty('hookSpecificOutput');
+  });
+
+  it('denies a Skill call the allowlist does not cover', async () => {
+    const hook = policyHookOf(build({ allowedTools: ['read_file'] }));
+
+    expectDeny(await callPreToolUse(hook, 'Skill', { skill: 'x' }));
+  });
+
+  it('enforces a denylist command rule even with provider skills enabled', async () => {
+    const options = build({
+      disallowedTools: ['shell_exec(git push:*)'],
+      providerConfig: { queryOptions: { skills: 'all' } },
+    });
+    const hook = policyHookOf(options);
+
+    expectDeny(await callPreToolUse(hook, 'Bash', { command: 'git push origin' }));
+    expect(await callPreToolUse(hook, 'Bash', { command: 'git status' })).toEqual({});
+  });
+
+  it('denies a Bash call with a non-object input when a denylist command rule targets Bash', async () => {
+    const hook = policyHookOf(build({ disallowedTools: ['shell_exec(rm -rf:*)'] }));
+
+    expectDeny(await callPreToolUse(hook, 'Bash', 'rm -rf /'));
+  });
+
+  it('hands the resolved policy to createToolApprovalHandler and overrides provider bypasses with caller lists', () => {
+    const createToolApprovalHandler = vi.fn((_policy: ResolvedToolPolicy): Options['canUseTool'] => undefined);
+    const options = buildQueryOptions({
+      config: makeMinimalConfig({
+        allowedTools: ['read_file'],
+        providerConfig: { queryOptions: { permissionMode: 'bypassPermissions', allowedTools: ['Bash'] } },
+      }),
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler,
+      sessionId: 'session-test',
+    });
+
+    expect(createToolApprovalHandler).toHaveBeenCalledTimes(1);
+    const policy = createToolApprovalHandler.mock.calls[0]?.[0];
+    expect(policy?.restricts).toBe(true);
+    expect(policy?.checkToolCall('Read', {})).toEqual({ allowed: true });
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
+  });
+
+  it('hands a non-restricting policy to createToolApprovalHandler without caller lists', () => {
+    const createToolApprovalHandler = vi.fn((_policy: ResolvedToolPolicy): Options['canUseTool'] => undefined);
+    buildQueryOptions({
+      config: makeMinimalConfig(),
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler,
+      sessionId: 'session-test',
+    });
+
+    expect(createToolApprovalHandler).toHaveBeenCalledTimes(1);
+    expect(createToolApprovalHandler.mock.calls[0]?.[0]?.restricts).toBe(false);
   });
 });
