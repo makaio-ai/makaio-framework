@@ -52,14 +52,29 @@ describe('Prompt Extension Contract', () => {
 
     const result = subcommand?.schema.safeParse({
       model: 'sonnet',
-      allowedTools: 'Read,Edit Bash',
-      disallowedTools: 'Delete',
+      allowedTools: 'read_file, write_file, shell_exec(git status)',
+      disallowedTools: 'glob_files',
     });
 
     expect(result?.success).toBe(true);
     expect(result?.data).toMatchObject({
-      allowedTools: ['Read', 'Edit', 'Bash'],
-      disallowedTools: ['Delete'],
+      allowedTools: ['read_file', 'write_file', 'shell_exec(git status)'],
+      disallowedTools: ['glob_files'],
+    });
+  });
+
+  it('subcommand schema preserves shell_exec command rules', () => {
+    const contribution = promptCli;
+    const subcommand = contribution.subcommands[0];
+
+    const result = subcommand?.schema.safeParse({
+      model: 'sonnet',
+      allowedTools: 'read_file, shell_exec(git status)',
+    });
+
+    expect(result?.success).toBe(true);
+    expect(result?.data).toMatchObject({
+      allowedTools: ['read_file', 'shell_exec(git status)'],
     });
   });
 });

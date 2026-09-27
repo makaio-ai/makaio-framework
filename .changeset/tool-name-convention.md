@@ -28,10 +28,12 @@ vocabulary.
 `@makaio/adapter-claude-agent-sdk` now translates Makaio tool names to Claude Code's
 native tool names, and supports `shell_exec(...)` command rules on its `Bash` tool.
 Whenever the caller passes an allowlist or a denylist, the adapter clears the provider's
-own auto-approved tools and does not forward `updatedPermissions` from the approval
-response, so a persistent SDK-side rule can no longer skip `canUseTool` for later calls.
-When central tool approval returns an approver-modified `updatedInput`, the adapter
-re-runs the tool policy against that modified input and denies the call if it now fails.
+own auto-approved tools, resets `queryOptions.permissionMode` to `'default'` (permission
+modes like `bypassPermissions`, `acceptEdits`, `auto`, or `dontAsk` would skip `canUseTool`
+checks), and does not forward `updatedPermissions` from the approval response, so a
+persistent SDK-side rule can no longer skip `canUseTool` for later calls. When central
+tool approval returns an approver-modified `updatedInput`, the adapter re-runs the tool
+policy against that modified input and denies the call if it now fails.
 
 **Breaking:** the adapter no longer accepts Claude Code tool names (`Read`, `Bash`, ...)
 in `allowedTools`/`disallowedTools`; unknown names are rejected with a `ToolNameError`.
@@ -42,4 +44,6 @@ Callers must migrate their tool lists to Makaio tool names.
 
 **Breaking:** Claude Code tool names without a Makaio equivalent (e.g. `WebFetch`,
 `WebSearch`, `TodoWrite`) are no longer silently forwarded; they now throw a
-`ToolNameError` when passed in `allowedTools`/`disallowedTools`.
+`ToolNameError` when passed in `allowedTools`/`disallowedTools`. Malformed entries
+(e.g. `Bash(npm run *)`, `mcp__github`, `mcp__s__*`) now throw `malformed-entry`; use
+`Bash(npm run:*)` for prefix-match rules instead.
