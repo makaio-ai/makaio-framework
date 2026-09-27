@@ -1,4 +1,5 @@
 import type { AIReasoningLevel } from '@makaio/ai-adapters-core';
+import { resolveToolPolicy } from '@makaio/contracts';
 import type { NativeForkDirective } from '@makaio/contracts';
 import type { ClaudeCliSessionConfig } from '../types.js';
 
@@ -18,10 +19,10 @@ function toCliEffortValue(level: AIReasoningLevel): string | undefined {
 
 /**
  * Serialize Claude CLI tool policy lists into one deterministic flag value.
- * @param tools - Tool names or patterns in caller-provided order
+ * @param tools - Native tool entries in caller-provided order
  * @returns Comma-separated CLI flag value
  */
-function toCliToolPolicyValue(tools: string[]): string {
+function toCliToolPolicyValue(tools: readonly string[]): string {
   return tools.join(',');
 }
 
@@ -78,13 +79,17 @@ interface BuildCliArgsOptions {
  * - `--append-system-prompt` — optional runtime system prompt (append mode)
  * - `--max-budget-usd` — optional spend cap
  * - `--effort` — reasoning effort level (`low | medium | high | max`); omitted when `none`
- * - `--allowedTools` — optional comma-separated allow-list from `config.allowedTools`
- * - `--disallowedTools` — optional comma-separated deny-list from `config.disallowedTools`
+ * - `--allowedTools` — optional comma-separated allow-list from `config.allowedTools`, translated
+ *   from Makaio tool names to Claude-native entries (`shell_exec(git status)` → `Bash(git status)`)
+ * - `--disallowedTools` — optional comma-separated deny-list from `config.disallowedTools`, translated
+ *   the same way
  * - `--mcp-config` — optional inline JSON MCP config string (or path to a JSON file)
  * - `--permission-prompt-tool` — optional MCP tool to handle permission prompts
  * - `--json-schema` — JSON-serialized schema from `config.responseSchema`; constrains model output to valid JSON
  * @param options - Arguments for building CLI args
  * @returns Array of CLI arguments to pass to spawn()
+ * @throws {@link ToolNameError} When a tool list entry is malformed, names no Makaio or MCP tool
+ * (Claude-native names such as `Read` included), or has no Claude equivalent.
  */
 export function buildCliArgs({
   config,
@@ -139,14 +144,18 @@ export function buildCliArgs({
     }
   }
 
-  // TODO(FACT-75): translate Makaio tool names via resolveToolPolicy('claude', …) before
-  // building CLI flags; until then this adapter still expects Claude names.
-  if (config.allowedTools !== undefined) {
-    args.push('--allowedTools', toCliToolPolicyValue(config.allowedTools));
-  }
-
-  if (config.disallowedTools !== undefined) {
-    args.push('--disallowedTools', toCliToolPolicyValue(config.disallowedTools));
+  // TODO(FACT-75): restrict availability (--tools) and gate per call; until then an allowlist here only pre-approves, it does not restrict.
+  if (config.allowedTools !== undefined || config.disallowedTools !== undefined) {
+    const { nativeAllowedEntries, nativeDisallowedTools } = resolveToolPolicy('claude', {
+      allowedTools: config.allowedTools,
+      disallowedTools: config.disallowedTools,
+    });
+    if (nativeAllowedEntries !== undefined) {
+      args.push('--allowedTools', toCliToolPolicyValue(nativeAllowedEntries));
+    }
+    if (nativeDisallowedTools !== undefined) {
+      args.push('--disallowedTools', toCliToolPolicyValue(nativeDisallowedTools));
+    }
   }
 
   if (mcpConfig) {

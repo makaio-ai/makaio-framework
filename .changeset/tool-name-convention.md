@@ -1,5 +1,6 @@
 ---
 '@makaio/adapter-claude-agent-sdk': major
+'@makaio/adapter-claude-code-cli': major
 '@makaio/contracts': minor
 '@makaio/framework': minor
 '@makaio/agent-sdk': major
@@ -38,6 +39,11 @@ policy against that modified input and denies the call if it now fails.
 **Breaking:** the adapter no longer accepts Claude Code tool names (`Read`, `Bash`, ...)
 in `allowedTools`/`disallowedTools`; unknown names are rejected with a `ToolNameError`.
 Callers must migrate their tool lists to Makaio tool names.
+
+`@makaio/adapter-claude-code-cli` now translates Makaio tool names to Claude Code's native
+entries for `--allowedTools`/`--disallowedTools` (`shell_exec(git log:*)` becomes
+`Bash(git log:*)`); Claude Code tool names are rejected with a `ToolNameError`
+(**breaking**). Its allowlist still only pre-approves tools and does not restrict availability.
 
 `@makaio/agent-sdk` keeps accepting Claude Code tool names at its Claude-compatible
 `query()` surface and translates them to Makaio tool names internally.
