@@ -63,6 +63,7 @@ function makeArtifactRevision(
   return {
     kind: ref.kind,
     id: ref.id,
+    slug: ref.id,
     revision,
     schemaVersion: 1,
     scope: { level: 'global' },

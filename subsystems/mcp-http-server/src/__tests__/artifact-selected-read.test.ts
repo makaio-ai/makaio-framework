@@ -52,6 +52,7 @@ function decision(id: string, revision: string, data: Record<string, unknown>): 
   return ArtifactRevisionSchema.parse({
     kind: 'decision',
     id,
+    slug: id,
     revision,
     schemaVersion: 1,
     scope: { level: 'global' },

@@ -30,6 +30,7 @@ function makeArtifact(overrides: Partial<ArtifactRevision> = {}): ArtifactRevisi
   return {
     kind: 'implementation-plan',
     id: 'artifact-1',
+    slug: 'artifact-1',
     revision: 'rev-1',
     schemaVersion: 1,
     scope: { level: 'global' },

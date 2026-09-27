@@ -9,6 +9,7 @@ import {
 const baseArtifact: ArtifactRevision = {
   kind: 'implementation-plan',
   id: 'artifact-1',
+  slug: 'artifact-1',
   revision: 'rev-1',
   schemaVersion: 1,
   scope: { level: 'project', ids: { projectId: 'project-1' } },

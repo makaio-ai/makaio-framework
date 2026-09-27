@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { hydrateArtifactContextTree } from '../hydrate-context.js';
 import type { ArtifactRevision, ResolvedArtifactContextWire } from '../index.js';
+import { slugify } from '../slug.js';
 
 /**
  * Create a minimal artifact revision fixture.
@@ -19,6 +20,7 @@ function makeArtifact(
   return {
     kind,
     id,
+    slug: slugify(id) ?? 'fixture',
     revision,
     schemaVersion: 1,
     scope: { level: 'global' },

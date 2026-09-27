@@ -47,6 +47,7 @@ function artifact(
   return {
     kind,
     id,
+    slug: id,
     revision,
     schemaVersion: 1,
     scope: {

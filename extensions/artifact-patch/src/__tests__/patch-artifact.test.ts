@@ -922,6 +922,7 @@ describe('intersected kind schemas', () => {
     const current = ArtifactRevisionSchema.parse({
       kind: 'intersected-plan',
       id: 'plan-2',
+      slug: 'plan-2',
       revision: 'rev-1',
       schemaVersion: 1,
       scope: { level: 'global' },

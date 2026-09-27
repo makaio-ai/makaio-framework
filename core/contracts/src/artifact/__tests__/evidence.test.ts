@@ -319,6 +319,7 @@ describe('EvidenceValueSchema', () => {
     const artifact = {
       ...revision,
       id: 'review-1',
+      slug: 'review-1',
       revision: 'revision-1',
       timestamp: 1700000000000,
     };
@@ -353,6 +354,7 @@ describe('EvidenceValueSchema', () => {
     const artifact = {
       ...revision,
       id: 'review-1',
+      slug: 'review-1',
       revision: 'revision-1',
       timestamp: 1700000000000,
     };

@@ -64,7 +64,7 @@ export const ArtifactSchemas = {
 
   /** Create a new artifact and its first revision (RPC). */
   create: {
-    request: ArtifactRevisionSchema.omit({ id: true, revision: true, timestamp: true }).extend({
+    request: ArtifactRevisionSchema.omit({ id: true, slug: true, revision: true, timestamp: true }).extend({
       /**
        * Optional caller-assigned identity for a repeatable creation operation.
        * Use a stable operation-scoped identity; collisions reject the create and
@@ -72,6 +72,12 @@ export const ArtifactSchemas = {
        * to the service. Identity follows the same nonempty-string contract as refs.
        */
       id: ArtifactRefSchema.shape.id.optional(),
+      /**
+       * Optional caller-assigned envelope slug. Omission lets the service derive
+       * it from the kind's `titlePath`. A slug already taken in the same kind and
+       * scope rejects the create; it is never changed after creation.
+       */
+      slug: ArtifactRevisionSchema.shape.slug.optional(),
     }),
     response: z.object({ artifact: ArtifactRevisionSchema }),
   },
@@ -87,7 +93,7 @@ export const ArtifactSchemas = {
        * old/new values. This metadata is never stored in the artifact revision.
        */
       statusPath: ArtifactStatusPathSchema.optional(),
-      revision: ArtifactRevisionSchema.omit({ id: true, revision: true, timestamp: true }),
+      revision: ArtifactRevisionSchema.omit({ id: true, slug: true, revision: true, timestamp: true }),
     }),
     response: z.object({ artifact: ArtifactRevisionSchema }),
   },

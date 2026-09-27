@@ -68,6 +68,7 @@ describe('WorkflowRunResult', () => {
       artifact: {
         kind: 'workflow-report',
         id: 'artifact-1',
+        slug: 'artifact-1',
         revision: 'rev-1',
         schemaVersion: 1,
         scope: { level: 'global' },
@@ -200,6 +201,7 @@ describe('WorkflowRunResultSchema', () => {
       artifact: {
         kind: 'workflow-report',
         id: 'artifact-1',
+        slug: 'artifact-1',
         revision: 'rev-1',
         schemaVersion: 1,
         scope: { level: 'global' },

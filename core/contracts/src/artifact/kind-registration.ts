@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { JsonObjectContractSchema } from '../shared/json-value.js';
-import { validateKindDataPaths } from './kind-paths.js';
+import { isArtifactDataPathDeclared, validateKindDataPaths } from './kind-paths.js';
+import { ARTIFACT_SLUG_FIELD } from './slug.js';
 import { validateArtifactPartAreas } from './artifact-parts.js';
 
 /** Positive schema generation; Zod 4 int() enforces safe integers. Revision identifiers remain strings. */
@@ -123,6 +124,13 @@ export const ArtifactKindRegistrationSchema = z
         });
       }
     });
+    if (isArtifactDataPathDeclared(value.dataSchema, ARTIFACT_SLUG_FIELD)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['dataSchema', 'properties', ARTIFACT_SLUG_FIELD],
+        message: `Data field ${ARTIFACT_SLUG_FIELD} is reserved: the artifact envelope owns the slug`,
+      });
+    }
     validateKindDataPaths(value, ctx);
     validateArtifactPartAreas(value, ctx);
   });

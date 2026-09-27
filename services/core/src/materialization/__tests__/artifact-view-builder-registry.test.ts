@@ -422,6 +422,7 @@ describe('ArtifactViewBuilderRegistry', () => {
         artifact: {
           kind: 'review-report',
           id: 'a-1',
+          slug: 'a-1',
           revision: 'r-1',
           schemaVersion: 1,
           scope: { level: 'global' },
@@ -451,6 +452,7 @@ describe('ArtifactViewBuilderRegistry', () => {
         artifact: {
           kind: 'review-report',
           id: 'a-1',
+          slug: 'a-1',
           revision: 'r-1',
           schemaVersion: 1,
           scope: { level: 'global' },
@@ -479,6 +481,7 @@ describe('ArtifactViewBuilderRegistry', () => {
         artifact: {
           kind: 'review-report',
           id: 'a-1',
+          slug: 'a-1',
           revision: 'r-1',
           schemaVersion: 1,
           scope: { level: 'global' },

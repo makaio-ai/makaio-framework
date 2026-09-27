@@ -277,6 +277,7 @@ describe('WorkLog projection service', () => {
     const artifact: ArtifactRevision = {
       kind: 'implementation-plan',
       id: 'artifact-1',
+      slug: 'artifact-1',
       revision: 'rev-1',
       schemaVersion: 2,
       scope: { level: 'project', ids: { projectId: 'project-1' } },

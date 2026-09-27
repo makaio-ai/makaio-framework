@@ -37,6 +37,7 @@ function makeInitialRevision(data: ReviewArtifactData): ArtifactRevision<ReviewA
   return {
     kind: 'code-review',
     id: 'artifact-review-1',
+    slug: 'artifact-review-1',
     revision: fakeRevision(0),
     schemaVersion: 1,
     scope: { level: 'global' },
@@ -77,6 +78,7 @@ function registerArtifactReviseStub(
     const newRevision: ArtifactRevision<ReviewArtifactData> = {
       kind: ctx.payload.revision.kind,
       id: ctx.payload.previous.id,
+      slug: ctx.payload.previous.id,
       revision: fakeRevision(revisionCounter++),
       schemaVersion: ctx.payload.revision.schemaVersion,
       scope: ctx.payload.revision.scope,
@@ -796,6 +798,7 @@ describe('review workflow fixture — functional updateArtifact', () => {
       const newRevision: ArtifactRevision<Record<string, unknown>> = {
         kind: ctx.payload.revision.kind,
         id: ctx.payload.previous.id,
+        slug: ctx.payload.previous.id,
         revision,
         schemaVersion: ctx.payload.revision.schemaVersion,
         scope: ctx.payload.revision.scope,
@@ -812,6 +815,7 @@ describe('review workflow fixture — functional updateArtifact', () => {
       current: {
         kind: 'note',
         id: 'artifact-overlap-1',
+        slug: 'artifact-overlap-1',
         revision: fakeRevision(0),
         schemaVersion: 1,
         scope: { level: 'global' },

@@ -144,6 +144,7 @@ describe('Artifact core schemas', () => {
     const parsed = ArtifactRevisionSchema.parse({
       kind: 'implementation-plan',
       id: 'artifact-1',
+      slug: 'artifact-1',
       revision: 'rev-1',
       scope,
       schemaVersion: 1,

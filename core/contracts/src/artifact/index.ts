@@ -22,6 +22,8 @@ export {
   RelationTypeRegistrationSchema,
 } from './schemas.js';
 export { ARTIFACT_VALUE_TYPE_KEYWORD, EVIDENCE_VALUE_TYPE, EvidenceValueSchema } from './evidence.js';
+export { ARTIFACT_SLUG_FIELD, ARTIFACT_SLUG_PATTERN, ArtifactSlugSchema, slugify } from './slug.js';
+export type { ArtifactSlug } from './slug.js';
 export type {
   ArtifactActor,
   ArtifactCompareRequest,

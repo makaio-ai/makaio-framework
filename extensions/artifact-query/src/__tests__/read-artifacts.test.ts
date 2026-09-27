@@ -49,6 +49,7 @@ function artifact(
   return ArtifactRevisionSchema.parse({
     kind: options.kind ?? 'decision',
     id,
+    slug: id,
     revision,
     schemaVersion: options.schemaVersion ?? 1,
     scope: { level: 'global' },

@@ -25,6 +25,7 @@ describe('defineArtifactKind', () => {
       kind: definition.kind,
       schemaVersion: 1,
       id: 'plan',
+      slug: 'plan',
       revision: 'r1',
       data,
       scope: { level: 'global' },
