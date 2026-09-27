@@ -72,7 +72,7 @@ function applyBooleanReferenceSiblings(target: boolean, siblings: Record<string,
  * @param ref - Fragment reference.
  * @returns The immediate target, or undefined when the pointer cannot be resolved.
  */
-function resolvePointer(root: Record<string, unknown>, ref: string): unknown {
+export function resolvePointer(root: Record<string, unknown>, ref: string): unknown {
   if (ref === '#') return root;
   if (!ref.startsWith('#/')) return undefined;
   let node: unknown = root;

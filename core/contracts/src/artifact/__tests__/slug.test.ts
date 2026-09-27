@@ -108,6 +108,17 @@ describe('mayArtifactDataCarryProperty', () => {
       { type: 'object', properties: { name: string }, required: ['name', 'slug'] },
     ],
     ['required in one union branch', { oneOf: [{ required: ['a'] }, { required: ['slug'] }] }],
+    ['dependentRequired', { type: 'object', dependentRequired: { marker: ['slug'] } }],
+    ['draft-7 dependencies array form', { type: 'object', dependencies: { marker: ['other', 'slug'] } }],
+    [
+      'draft-7 dependencies object form',
+      { type: 'object', dependencies: { marker: { properties: { slug: string } } } },
+    ],
+    [
+      'a nested $defs pointer',
+      { $ref: '#/$defs/group/$defs/v', $defs: { group: { $defs: { v: { properties: { slug: string } } } } } },
+    ],
+    ['an escaped pointer segment', { $ref: '#/$defs/a~1b', $defs: { 'a/b': { required: ['slug'] } } }],
   ])('finds the property in %s', (_label, schema) => {
     expect(mayArtifactDataCarryProperty(schema, 'slug')).toBe(true);
   });
@@ -120,6 +131,14 @@ describe('mayArtifactDataCarryProperty', () => {
       ),
     ).toBe(false);
     expect(mayArtifactDataCarryProperty({ type: 'object', properties: { name: string } }, 'slug')).toBe(false);
+  });
+
+  it('ignores a nested $ref target that does not carry the property', () => {
+    const schema = {
+      $ref: '#/$defs/group/$defs/v',
+      $defs: { group: { $defs: { v: { properties: { name: string } }, w: { properties: { slug: string } } } } },
+    };
+    expect(mayArtifactDataCarryProperty(schema, 'slug')).toBe(false);
   });
 });
 
