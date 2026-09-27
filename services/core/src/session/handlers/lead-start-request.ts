@@ -134,7 +134,10 @@ export interface CallerOwnedAgentRow {
    * Read off the composed `startAgent` payload wherever the caller has one, so
    * the row and the dispatch cannot drift apart field by field.
    */
-  readonly runtime: Pick<StartAgentRequest, 'model' | 'cwd' | 'allowedDirectories' | 'clientId' | 'harnessId'>;
+  readonly runtime: Pick<
+    StartAgentRequest,
+    'model' | 'cwd' | 'allowedDirectories' | 'clientId' | 'harnessId' | 'allowedTools' | 'disallowedTools'
+  >;
   /** Provider config the runtime row is stamped with. */
   readonly providerConfigId?: string;
   /** Persona the agent was resolved from, when it was. */
@@ -151,9 +154,9 @@ export interface CallerOwnedAgentRow {
  * This is the **only** whole-record write for such a start: supplying `agentId`
  * transfers row ownership, and the adapter suppresses its own. So the row has to
  * carry what that suppressed write would have carried — the runtime facts the
- * request names (model, working directory, allowed directories, client and
- * harness) — or they simply never reach storage, and every reader of
- * `session.agents` sees an agent with no model and no cwd.
+ * request names (model, working directory, allowed directories, client,
+ * harness, and tool lists) — or they simply never reach storage, and every
+ * reader of `session.agents` sees an agent with no model and no cwd.
  *
  * One field is deliberately not mirrored: the adapter resolves an absent `cwd`
  * against its own platform defaults, which the service cannot see. A
@@ -164,7 +167,7 @@ export interface CallerOwnedAgentRow {
  */
 export function buildCallerOwnedAgentRow(input: CallerOwnedAgentRow): MakaioSessionAgent {
   const now = Date.now();
-  const { model, cwd, allowedDirectories, clientId, harnessId } = input.runtime;
+  const { model, cwd, allowedDirectories, clientId, harnessId, allowedTools, disallowedTools } = input.runtime;
   return {
     agentId: input.agentId,
     adapterId: input.instance.adapterId,
@@ -186,6 +189,8 @@ export function buildCallerOwnedAgentRow(input: CallerOwnedAgentRow): MakaioSess
     ...(allowedDirectories !== undefined && { allowedDirectories }),
     ...(clientId !== undefined && { clientId }),
     ...(harnessId !== undefined && { harnessId }),
+    ...(allowedTools !== undefined && { allowedTools }),
+    ...(disallowedTools !== undefined && { disallowedTools }),
     ...(input.providerConfigId !== undefined && { providerConfigId: input.providerConfigId }),
     ...(input.personaId !== undefined && { personaId: input.personaId }),
     ...(input.profileId !== undefined && { profileId: input.profileId }),
