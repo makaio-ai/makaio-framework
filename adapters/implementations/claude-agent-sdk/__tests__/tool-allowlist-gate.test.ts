@@ -2,20 +2,30 @@ import os from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 import type { CanUseTool, PermissionResult } from '@anthropic-ai/claude-agent-sdk';
 import { MakaioBus } from '@makaio/bus-core';
+import { ToolNameError } from '@makaio/contracts';
 import { clientDefinition as claudeClientDefinition } from '@makaio/client-claude-code';
 import { ClaudeSdkConnector } from '../src/connector.js';
 import { ClaudeCodeConnectorNamespace } from '../src/namespace/index.js';
 import { ClaudeCodeAdapterName } from '../src/constants.js';
 import { createSessionAccountObservationRequester } from '../src/account-observation-requester.js';
 
+/** Tool list options for {@link makeGate}, written with Makaio tool names. */
+interface GateLists {
+  /** Allowlist entries, or `undefined` for none. */
+  allowedTools?: string[];
+  /** Denylist entries. */
+  disallowedTools?: string[];
+}
+
 /**
  * Build a connector whose central tool approval request (the bus round trip to
  * `ToolApprovalService`) is replaced by a spy that always allows. The unit under test,
  * the connector's real `canUseTool` handler, is left untouched.
- * @param allowedTools - Caller allowlist, or `undefined` for none.
+ * @param lists - Caller allow/deny lists, written with Makaio tool names.
  * @returns The connector's `canUseTool` handler and the central approval spy.
+ * @throws {@link ToolNameError} when a list entry is invalid, mirroring handler creation.
  */
-async function makeGate(allowedTools: string[] | undefined): Promise<{
+async function makeGate(lists: GateLists): Promise<{
   canUseTool: CanUseTool;
   centralApproval: ReturnType<typeof vi.fn>;
 }> {
@@ -30,7 +40,8 @@ async function makeGate(allowedTools: string[] | undefined): Promise<{
     env: {},
     clientId: claudeClientDefinition.id,
     requestSessionAccountObservation: createSessionAccountObservationRequester(MakaioBus),
-    ...(allowedTools !== undefined && { allowedTools }),
+    ...(lists.allowedTools !== undefined && { allowedTools: lists.allowedTools }),
+    ...(lists.disallowedTools !== undefined && { disallowedTools: lists.disallowedTools }),
   });
   const centralApproval = vi.fn().mockResolvedValue({ action: 'allow' });
   Object.defineProperty(connector, 'requestToolApproval', { value: centralApproval });
@@ -41,11 +52,16 @@ async function makeGate(allowedTools: string[] | undefined): Promise<{
 /**
  * Invoke a `canUseTool` handler the way the SDK does for one tool call.
  * @param canUseTool - Handler under test.
- * @param toolName - Tool name as the SDK reports it.
+ * @param toolName - Tool name as the SDK reports it (native Claude vocabulary).
+ * @param input - Tool call input the SDK would report.
  * @returns The permission decision.
  */
-function callTool(canUseTool: CanUseTool, toolName: string): Promise<PermissionResult> {
-  return canUseTool(toolName, { any: 'input' }, {
+function callTool(
+  canUseTool: CanUseTool,
+  toolName: string,
+  input: Record<string, unknown> = {},
+): Promise<PermissionResult> {
+  return canUseTool(toolName, input, {
     signal: new AbortController().signal,
     toolUseID: `tool-use-${toolName}`,
   } as Parameters<CanUseTool>[2]);
@@ -53,7 +69,7 @@ function callTool(canUseTool: CanUseTool, toolName: string): Promise<PermissionR
 
 describe('ClaudeSdkConnector canUseTool — caller allowlist gate', () => {
   it('denies a built-in tool that is not on the allowlist without asking central approval', async () => {
-    const { canUseTool, centralApproval } = await makeGate(['Read', 'Edit']);
+    const { canUseTool, centralApproval } = await makeGate({ allowedTools: ['read_file', 'edit_file'] });
 
     const result = await callTool(canUseTool, 'Bash');
 
@@ -66,7 +82,9 @@ describe('ClaudeSdkConnector canUseTool — caller allowlist gate', () => {
   });
 
   it('denies an MCP tool that is not on the allowlist without asking central approval', async () => {
-    const { canUseTool, centralApproval } = await makeGate(['Read', 'mcp__github__get_issue']);
+    const { canUseTool, centralApproval } = await makeGate({
+      allowedTools: ['read_file', 'mcp__github__get_issue'],
+    });
 
     const result = await callTool(canUseTool, 'mcp__github__create_issue');
 
@@ -75,7 +93,7 @@ describe('ClaudeSdkConnector canUseTool — caller allowlist gate', () => {
   });
 
   it('denies every tool, built-in and MCP, for an empty allowlist', async () => {
-    const { canUseTool, centralApproval } = await makeGate([]);
+    const { canUseTool, centralApproval } = await makeGate({ allowedTools: [] });
 
     expect(await callTool(canUseTool, 'Read')).toMatchObject({ behavior: 'deny' });
     expect(await callTool(canUseTool, 'mcp__makaio__search')).toMatchObject({ behavior: 'deny' });
@@ -83,7 +101,9 @@ describe('ClaudeSdkConnector canUseTool — caller allowlist gate', () => {
   });
 
   it('passes allowlisted built-in and MCP tools on to central approval', async () => {
-    const { canUseTool, centralApproval } = await makeGate(['Read', 'mcp__github__get_issue']);
+    const { canUseTool, centralApproval } = await makeGate({
+      allowedTools: ['read_file', 'mcp__github__get_issue'],
+    });
 
     expect(await callTool(canUseTool, 'Read')).toMatchObject({ behavior: 'allow' });
     expect(await callTool(canUseTool, 'mcp__github__get_issue')).toMatchObject({ behavior: 'allow' });
@@ -95,9 +115,51 @@ describe('ClaudeSdkConnector canUseTool — caller allowlist gate', () => {
   });
 
   it('leaves approval unchanged when no allowlist is given', async () => {
-    const { canUseTool, centralApproval } = await makeGate(undefined);
+    const { canUseTool, centralApproval } = await makeGate({});
 
     expect(await callTool(canUseTool, 'Bash')).toMatchObject({ behavior: 'allow' });
     expect(centralApproval).toHaveBeenCalledOnce();
+  });
+
+  it('allows an exact shell_exec command rule and denies a different command', async () => {
+    const { canUseTool, centralApproval } = await makeGate({ allowedTools: ['shell_exec(git status)'] });
+
+    expect(await callTool(canUseTool, 'Bash', { command: 'git status' })).toMatchObject({ behavior: 'allow' });
+    expect(await callTool(canUseTool, 'Bash', { command: 'git push' })).toMatchObject({
+      behavior: 'deny',
+      message: "Tool Bash is not on the step's allowlist",
+    });
+    expect(centralApproval).toHaveBeenCalledOnce();
+  });
+
+  it('denies a shell_exec prefix rule command chained with a shell operator', async () => {
+    const { canUseTool, centralApproval } = await makeGate({ allowedTools: ['shell_exec(git log:*)'] });
+
+    const result = await callTool(canUseTool, 'Bash', { command: 'git log && rm -rf /' });
+
+    expect(result).toMatchObject({
+      behavior: 'deny',
+      message: "Tool Bash is not on the step's allowlist",
+    });
+    expect(centralApproval).not.toHaveBeenCalled();
+  });
+
+  it('lets a shell_exec denylist rule beat a plain shell_exec allowlist entry', async () => {
+    const { canUseTool, centralApproval } = await makeGate({
+      allowedTools: ['shell_exec'],
+      disallowedTools: ['shell_exec(git push:*)'],
+    });
+
+    expect(await callTool(canUseTool, 'Bash', { command: 'git status' })).toMatchObject({ behavior: 'allow' });
+    const denied = await callTool(canUseTool, 'Bash', { command: 'git push' });
+    expect(denied).toMatchObject({
+      behavior: 'deny',
+      message: "Tool Bash is denied by the step's denylist entry shell_exec(git push:*)",
+    });
+    expect(centralApproval).toHaveBeenCalledOnce();
+  });
+
+  it('throws ToolNameError when the allowlist carries a native Claude name instead of a Makaio name', async () => {
+    await expect(makeGate({ allowedTools: ['Read'] })).rejects.toThrow(ToolNameError);
   });
 });

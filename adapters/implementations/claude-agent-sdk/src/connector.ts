@@ -20,6 +20,7 @@ import { type SDKMessage } from '@makaio/ai-adapters-claude-shared';
 import { MakaioBus, NoHandlerError, RequestError } from '@makaio/bus-core';
 import {
   McpSubjects,
+  resolveToolPolicy,
   type ConnectorTeardownResult,
   type McpSessionContext,
   type SystemPrompt,
@@ -326,17 +327,20 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
    * @returns The canUseTool callback function for SDK query options
    */
   private createToolApprovalHandler(): Options['canUseTool'] {
-    const { allowedTools } = this.config as ClaudeAgentConfig;
-    const allowlist = allowedTools === undefined ? undefined : new Set(allowedTools);
+    const { allowedTools, disallowedTools } = this.config as ClaudeAgentConfig;
+    // Resolved once per handler (i.e. per query), not per tool call. Invalid entries
+    // throw a ToolNameError here, same as in buildQueryOptions.
+    const toolPolicy = resolveToolPolicy('claude', { allowedTools, disallowedTools });
     return async (toolName, input, options) => {
-      // Caller allowlist gate. SDK `tools` only filters built-ins, so MCP tools
-      // (`mcp__<server>__<tool>`) are only restricted here. Names match verbatim;
-      // permission-rule entries are rejected earlier in buildQueryOptions. Denied
-      // calls never reach central approval; `[]` denies every tool.
-      if (allowlist !== undefined && !allowlist.has(toolName)) {
+      // Caller tool policy gate (Makaio-named allow/deny lists). SDK `tools` only
+      // filters built-ins by base name, so MCP tools (`mcp__<server>__<tool>`) and
+      // `shell_exec` command rules are only enforced here. Denied calls never reach
+      // central approval; `[]` denies every tool.
+      const decision = toolPolicy.checkToolCall(toolName, input);
+      if (!decision.allowed) {
         return {
           behavior: 'deny',
-          message: `Tool ${toolName} is not on the step's allowlist`,
+          message: decision.reason,
           interrupt: false,
         } satisfies PermissionResult;
       }

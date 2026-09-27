@@ -6,6 +6,7 @@ import type {
   McpStdioServerConfig,
 } from '@anthropic-ai/claude-agent-sdk';
 import { Options } from '@anthropic-ai/claude-agent-sdk';
+import { resolveToolPolicy } from '@makaio/contracts';
 import type { McpResolvedServer, NativeForkDirective, ResponseSchemaDescriptor } from '@makaio/contracts';
 import { ClaudeSessionConfig } from '../types/index.js';
 import { SessionLifecycle, type AIReasoningLevel } from '@makaio/ai-adapters-core';
@@ -194,53 +195,39 @@ function resolveSessionIdentityOptions(
   return { sessionId };
 }
 
-/** Claude Code name prefix for MCP-provided tools (`mcp__<server>__<tool>`). */
-const MCP_TOOL_NAME_PREFIX = 'mcp__';
-
 /**
- * Validate the caller allowlist and return its entries deduplicated in first-seen order.
- *
- * Entries must be plain tool names (`Read`, `Bash`, `mcp__server__tool`). A Claude
- * permission rule such as `Bash(git status)` is rejected: this adapter would have to
- * widen it to its base tool (`Bash`) for SDK `tools` and for the `canUseTool`
- * allowlist gate, which would grant commands the caller never granted. Shared
- * permission-rule matching across adapters is tracked separately (FACT-72).
- * @param allowedTools - Caller-granted tool allowlist.
- * @returns Unique tool names.
- * @throws When an entry is a command-specific permission rule.
+ * Returns the tool-name part of a native permission entry (`Bash(git:*)` → `Bash`).
+ * @param entry - Native tool name or permission rule.
+ * @returns The native base tool name.
  */
-function toAllowlistToolNames(allowedTools: readonly string[]): string[] {
-  const rule = allowedTools.find((entry) => entry.includes('('));
-  if (rule !== undefined) {
-    throw new Error(
-      `Command-specific permission rules in allowedTools are not supported yet; use base tool names (got "${rule}")`,
-    );
-  }
-  return [...new Set(allowedTools)];
+function toNativeBaseName(entry: string): string {
+  const ruleStart = entry.indexOf('(');
+  return ruleStart === -1 ? entry : entry.slice(0, ruleStart);
 }
 
 /**
  * Restrict provider-config SDK `allowedTools` auto-approvals to the caller allowlist.
  *
- * Auto-approved tools skip `canUseTool` and with it the allowlist gate, so a provider
+ * Auto-approved tools skip `canUseTool` and with it the tool policy gate, so a provider
  * auto-approval outside the caller allowlist would grant a tool the caller never
- * granted. A plain entry is kept only when the caller allowlist names it exactly. A
- * permission-rule entry (`Bash(git status)`) is kept when the caller allowlist names its
- * base tool (`Bash`): the rule is narrower than the caller's grant. An empty caller
- * allowlist therefore yields no auto-approvals.
+ * granted. Provider entries are native Claude entries (`Bash`, `Bash(git:*)`,
+ * `mcp__server__tool`). An entry is kept when the caller allowlist plainly grants its
+ * base tool (provider `Bash` or `Bash(git:*)` with caller `shell_exec`), or when it is
+ * identical to one of the caller's translated rule entries (provider `Bash(git status)`
+ * with caller `shell_exec(git status)`). Anything else is dropped, e.g. provider `Bash`
+ * when the caller only grants `shell_exec(git status)`. An empty caller allowlist
+ * therefore yields no auto-approvals.
  * @param providerAllowedTools - Provider-config SDK `allowedTools` entries.
- * @param allowlist - Validated caller allowlist (plain tool names).
+ * @param nativeAllowedEntries - Caller allowlist translated to native entries, rules kept.
  * @returns Provider auto-approvals covered by the caller allowlist, in provider order.
  */
 function intersectProviderAutoApprovals(
   providerAllowedTools: readonly string[],
-  allowlist: readonly string[],
+  nativeAllowedEntries: readonly string[],
 ): string[] {
-  const granted = new Set(allowlist);
-  return providerAllowedTools.filter((entry) => {
-    const ruleStart = entry.indexOf('(');
-    return granted.has(ruleStart === -1 ? entry : entry.slice(0, ruleStart));
-  });
+  const exactEntries = new Set(nativeAllowedEntries);
+  const plainGrants = new Set(nativeAllowedEntries.filter((entry) => !entry.includes('(')));
+  return providerAllowedTools.filter((entry) => plainGrants.has(toNativeBaseName(entry)) || exactEntries.has(entry));
 }
 
 /**
@@ -252,42 +239,47 @@ function intersectProviderAutoApprovals(
  *   never reach `canUseTool`.
  * - `disallowedTools` removes tools from the model's context.
  *
- * An allowlist maps to `tools` as an availability filter for built-ins (MCP entries
- * `mcp__…` are dropped because `tools` only names built-ins; MCP tools are gated by
- * the connector's `canUseTool` handler, which denies any tool not on the allowlist).
- * Permission-rule entries (`Bash(git status)`) are rejected, see
- * {@link toAllowlistToolNames}. The allowlist is deliberately NOT mapped to SDK
- * `allowedTools`: auto-allowed tools skip `canUseTool`, which is this connector's only
- * path into the central tool approval service (session policy overrides, harness
- * policy, `.makaioignore` deny rules). Every call of an allowlisted tool therefore
- * still goes through `canUseTool`.
+ * The caller lists use Makaio tool names (`read_file`, `shell_exec(git status)`, MCP
+ * `mcp__…`) and are resolved with `resolveToolPolicy('claude', …)`; an invalid entry
+ * throws a `ToolNameError`. An allowlist maps to `tools` as an availability filter for
+ * the granted native built-ins (`policy.nativeAvailableTools`: base names, MCP excluded,
+ * so `shell_exec(git status)` makes `Bash` available). Command rules and MCP tools are
+ * enforced per call by the connector's `canUseTool` handler through the same policy.
+ * The allowlist is deliberately NOT mapped to SDK `allowedTools`: auto-allowed tools
+ * skip `canUseTool`, which is this connector's only path into the tool policy gate and
+ * the central tool approval service (session policy overrides, harness policy,
+ * `.makaioignore` deny rules). Every call of an allowlisted tool therefore still goes
+ * through `canUseTool`.
  * Provider-config `queryOptions.allowedTools` (operator auto-approvals) would bypass
  * that gate, so with a caller allowlist they are intersected with it, see
  * {@link intersectProviderAutoApprovals}; the intersection overrides the provider value
  * because the caller spreads these options after the provider-config query options.
- * The denylist is forwarded verbatim, since SDK `disallowedTools` accepts permission
- * rules. Absent policies emit no fields, so provider-config query options stay untouched.
- * @param allowedTools - Exact tool allowlist, or `undefined` when unrestricted.
- * @param disallowedTools - Tool denylist, or `undefined` when none is given.
+ * The denylist is translated to native entries with rules kept (`Bash(rm -rf:*)`), since
+ * SDK `disallowedTools` accepts permission rules. Absent policies emit no fields, so
+ * provider-config query options stay untouched.
+ * @param allowedTools - Makaio-named tool allowlist, or `undefined` when unrestricted.
+ * @param disallowedTools - Makaio-named tool denylist, or `undefined` when none is given.
  * @param providerAllowedTools - Provider-config SDK `allowedTools` auto-approvals, if any.
  * @returns Partial SDK Options carrying only the fields the policy defines.
- * @throws When the allowlist contains a command-specific permission rule.
+ * @throws {@link ToolNameError} When a list entry is malformed, names no Makaio or MCP tool, or
+ * carries a command rule on a tool other than `shell_exec`.
  */
 function resolveToolPolicyOptions(
   allowedTools: string[] | undefined,
   disallowedTools: string[] | undefined,
   providerAllowedTools: readonly string[] | undefined,
 ): Partial<Options> {
-  const allowlist = allowedTools === undefined ? undefined : toAllowlistToolNames(allowedTools);
+  const { nativeAvailableTools, nativeAllowedEntries, nativeDisallowedTools } = resolveToolPolicy('claude', {
+    allowedTools,
+    disallowedTools,
+  });
   return {
-    ...(allowlist !== undefined && {
-      tools: allowlist.filter((name) => !name.startsWith(MCP_TOOL_NAME_PREFIX)),
-    }),
-    ...(allowlist !== undefined &&
+    ...(nativeAvailableTools !== undefined && { tools: [...nativeAvailableTools] }),
+    ...(nativeAllowedEntries !== undefined &&
       providerAllowedTools !== undefined && {
-        allowedTools: intersectProviderAutoApprovals(providerAllowedTools, allowlist),
+        allowedTools: intersectProviderAutoApprovals(providerAllowedTools, nativeAllowedEntries),
       }),
-    ...(disallowedTools !== undefined && { disallowedTools: [...disallowedTools] }),
+    ...(nativeDisallowedTools !== undefined && { disallowedTools: [...nativeDisallowedTools] }),
   };
 }
 

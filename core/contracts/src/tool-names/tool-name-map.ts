@@ -32,8 +32,9 @@ export type ToolVocabulary = 'claude';
  * adapter family has no native equivalent for that Makaio tool.
  */
 export const NATIVE_TOOL_NAMES: Readonly<Record<ToolVocabulary, Readonly<Partial<Record<MakaioToolName, string>>>>> = {
-  // Verified against live Claude Code transcripts (2026-05-19), same table as
-  // sdks/agent-sdk/src/shared/messages.ts.
+  // Verified against live Claude Code transcripts (2026-05-19). This is the
+  // source table; sdks/agent-sdk/src/shared/messages.ts derives its output
+  // normalisation from it.
   claude: {
     read_file: 'Read',
     write_file: 'Write',
