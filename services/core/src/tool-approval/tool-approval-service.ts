@@ -14,6 +14,7 @@ import { extractToolFilePath } from '@makaio/tools-core';
 import {
   applyCapabilityOverrides,
   enrichApprovalRequest,
+  evaluateToolGrant,
   resolveEnrichedBasePolicy,
   resolveFileAccessContext,
   resolveHarnessLevelPolicy,
@@ -38,6 +39,11 @@ export type { ToolApprovalServiceOptions };
  * When a file access rule provider is configured,
  * `.makaioignore` rules are evaluated before the policy cascade as an absolute
  * deny layer — no policy (not even `full-access`) can bypass them.
+ *
+ * The agent's stored tool lists (`allowedTools` / `disallowedTools`) deny unlisted
+ * calls and grant listed ones without a human, but a grant only replaces an
+ * `always-ask` cascade policy — a `reject` policy or a session `always-ask`
+ * override still wins. See the package README for the full check order.
  */
 export class ToolApprovalService extends BaseService {
   /** Minimal logger seam so policy-resolution failures are observable in tests and production. */
@@ -83,16 +89,29 @@ export class ToolApprovalService extends BaseService {
 
       // Check session-level override (highest-precedence policy layer).
       const sessionOverride = await this.resolveSessionOverride(ctx.payload.sessionId);
-      if (sessionOverride === 'full-access') {
-        ctx.setResult({ action: 'allow' });
-        return;
-      }
       if (sessionOverride === 'reject') {
         ctx.setResult({
           action: 'deny',
           message: 'Tool use rejected by session approval policy override',
           shouldAbort: false,
         });
+        return;
+      }
+
+      // The agent's tool lists deny unlisted calls ahead of any allowing policy.
+      const toolGrant = evaluateToolGrant(
+        agent,
+        agent?.adapterName ?? ctx.payload.adapterName,
+        ctx.payload.toolName,
+        ctx.payload.args,
+      );
+      if (toolGrant.kind === 'deny') {
+        ctx.setResult({ action: 'deny', message: toolGrant.message, shouldAbort: false });
+        return;
+      }
+
+      if (sessionOverride === 'full-access') {
+        ctx.setResult({ action: 'allow' });
         return;
       }
 
@@ -119,6 +138,11 @@ export class ToolApprovalService extends BaseService {
           return;
 
         case 'always-ask':
+          // A tool-list grant replaces a cascade 'always-ask' (headless), never a session 'always-ask' override.
+          if (toolGrant.kind === 'granted' && sessionOverride !== 'always-ask') {
+            ctx.setResult({ action: 'allow' });
+            return;
+          }
           await this.dispatchAlwaysAskApproval(ctx.payload, ctx.setResult.bind(ctx), resolved);
           return;
       }

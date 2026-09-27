@@ -1,4 +1,13 @@
-import { computeMetaTags, type ApprovalPolicy, type MakaioSessionAgent, type ToolCapability } from '@makaio/contracts';
+import {
+  computeMetaTags,
+  resolveToolPolicy,
+  ToolNameError,
+  toolVocabularyForAdapter,
+  type ApprovalPolicy,
+  type MakaioSessionAgent,
+  type ResolvedToolPolicy,
+  type ToolCapability,
+} from '@makaio/contracts';
 import type { FileAccessRuleProvider } from '@makaio/tools-core';
 import {
   type EnrichedApprovalRequest,
@@ -178,6 +187,51 @@ export function resolveEnrichedBasePolicy(
     ...(rawResult.data.personaName && { personaName: rawResult.data.personaName }),
     ...(rawResult.data.profileName && { profileName: rawResult.data.profileName }),
   };
+}
+
+/** Outcome of the agent's tool lists for one tool call. */
+export type ToolGrantVerdict = { kind: 'deny'; message: string } | { kind: 'granted' } | { kind: 'none' };
+
+/**
+ * Evaluate the agent's stored tool lists (`allowedTools` / `disallowedTools`) for one tool call.
+ *
+ * - `none` — no tool name, no agent, no lists on the agent, no tool vocabulary for the
+ *   adapter, or the call passes a denylist-only policy. The approval cascade decides.
+ * - `deny` — a list entry is invalid ({@link ToolNameError}) or the lists reject the call.
+ * - `granted` — an allowlist exists and covers the call. The service uses this to replace
+ *   an `always-ask` policy only; a `reject` policy still wins.
+ * @param agent - Pre-fetched agent metadata, or null if unavailable
+ * @param adapterName - Adapter name that selects the tool vocabulary of `toolName`
+ * @param toolName - Native tool name of the call
+ * @param args - Tool call input; `args.command` is matched against command rules
+ * @returns Grant verdict for the call
+ */
+export function evaluateToolGrant(
+  agent: MakaioSessionAgent | null,
+  adapterName: string,
+  toolName: string | undefined,
+  args: Record<string, unknown> | undefined,
+): ToolGrantVerdict {
+  if (!toolName || !agent) return { kind: 'none' };
+  const { allowedTools, disallowedTools } = agent;
+  if (allowedTools === undefined && disallowedTools === undefined) return { kind: 'none' };
+  const vocabulary = toolVocabularyForAdapter(adapterName);
+  if (vocabulary === undefined) return { kind: 'none' };
+
+  let policy: ResolvedToolPolicy;
+  try {
+    policy = resolveToolPolicy(vocabulary, {
+      ...(allowedTools !== undefined && { allowedTools }),
+      ...(disallowedTools !== undefined && { disallowedTools }),
+    });
+  } catch (error) {
+    if (error instanceof ToolNameError) return { kind: 'deny', message: error.message };
+    throw error;
+  }
+
+  const decision = policy.checkToolCall(toolName, args ?? {});
+  if (!decision.allowed) return { kind: 'deny', message: decision.reason };
+  return allowedTools === undefined ? { kind: 'none' } : { kind: 'granted' };
 }
 
 /**

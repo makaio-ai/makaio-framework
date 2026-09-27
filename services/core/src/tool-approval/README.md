@@ -2,7 +2,7 @@
 
 Tool approval policy resolution service. Handles `agent.toolApprove` RPC requests and resolves an effective policy through a multi-layer cascade, optionally gated by `.makaioignore` file-access rules.
 
-## Policy Cascade
+## Check Order
 
 ```
 agent.toolApprove request
@@ -10,19 +10,41 @@ agent.toolApprove request
          ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │  1. .makaioignore file-access deny (absolute floor)              │
-│  2. Session-level override (full-access / reject / always-ask)   │
-│  3. Enriched policy RPC (persona / profile per-tool policy)      │
-│  4. Harness per-tool override (toolApprovalOverrides[toolName])  │
-│  5. Harness base policy (approvalPolicy)                         │
-│  6. Capability overrides (most-restrictive-wins)                 │
-│  7. System default: 'always-ask'                                 │
+│  2. Session override 'reject'           → deny                   │
+│  3. Agent tool lists (evaluateToolGrant): deny → deny            │
+│  4. Session override 'full-access'      → allow                  │
+│  5. Policy cascade:                                              │
+│     a. Enriched policy RPC (persona / profile per-tool policy)   │
+│     b. Harness per-tool override (toolApprovalOverrides[tool])   │
+│     c. Harness base policy (approvalPolicy)                      │
+│     d. Capability overrides (most-restrictive-wins)              │
+│     e. System default: 'always-ask'                              │
+│     A session 'always-ask' override replaces the cascade result. │
 └──────────────────────────────────────────────────────────────────┘
          │
          ├─ full-access → allow
          ├─ reject      → deny
-         └─ always-ask  → request approval.request RPC (wait for user)
-                          auto-cancelled on agent.session.closed
+         └─ always-ask  → allow if the tool lists granted the call
+                          (not under a session 'always-ask' override),
+                          otherwise request approval.request RPC
+                          (wait for user; auto-cancelled on
+                          agent.session.closed)
 ```
+
+### Tool-list grant
+
+`evaluateToolGrant` reads `allowedTools` / `disallowedTools` from the agent record
+(Makaio tool names, see `@makaio/contracts` `tool-names`) and checks the call in the
+adapter's tool vocabulary (`toolVocabularyForAdapter`, adapter from the agent record,
+else the request). Verdicts:
+
+- `deny` — an invalid list entry, a denylist match, or a call not on the allowlist
+  (`[]` allows nothing).
+- `granted` — an allowlist exists and covers the call. It only replaces `always-ask`,
+  so a listed tool runs headless; a cascade `reject` and a session `always-ask`
+  override still win.
+- `none` — no lists, no vocabulary for the adapter (e.g. `codex-app-server`), or a
+  denylist-only pass. The cascade decides unchanged.
 
 ## Exports
 
@@ -53,6 +75,7 @@ Supporting types and helpers consumed internally or by tests:
 - `resolveFileAccessContext` — builds CWD/directory context for ignore rules
 - `resolveEnrichedBasePolicy` — extracts policy from enriched-policy RPC result
 - `resolveProfileAllowedDirectories` — directory allowlist from profile RPC
+- `evaluateToolGrant` — agent tool lists to a `ToolGrantVerdict` (`deny` / `granted` / `none`)
 - `enrichApprovalRequest` — builds the display-enriched request payload
 
 ## Usage
@@ -72,7 +95,7 @@ await service.init();
 |---------|---------|
 | `@makaio/bus-core` | `IMakaioBus` for request/subscribe |
 | `@makaio/service-base` | `BaseService` lifecycle and handler registration |
-| `@makaio/contracts` | Bus subjects (`AgentSubjects`, `ApprovalSubjects`, `HarnessSubjects`), policy types, capability meta-tags |
+| `@makaio/contracts` | Bus subjects (`AgentSubjects`, `ApprovalSubjects`, `HarnessSubjects`), policy types, capability meta-tags, tool-name policy (`resolveToolPolicy`, `toolVocabularyForAdapter`) |
 | `@makaio/tools-core` | `extractToolFilePath`, `FileAccessRuleProvider` type |
 
 Internal sibling import: `../session` for `AgentStorageSubjects` and `SessionStorageSubjects`.
