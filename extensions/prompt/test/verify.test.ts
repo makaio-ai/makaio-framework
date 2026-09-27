@@ -77,4 +77,31 @@ describe('Prompt Extension Contract', () => {
       allowedTools: ['read_file', 'shell_exec(git status)'],
     });
   });
+
+  it.each([
+    ['comma inside a rule stays one entry', 'shell_exec(printf "%s,%s" a b)', ['shell_exec(printf "%s,%s" a b)']],
+    ['two plain entries split', 'read_file,write_file', ['read_file', 'write_file']],
+    [
+      'rule followed by a plain entry splits',
+      'shell_exec(printf "%s,%s" a b),read_file',
+      ['shell_exec(printf "%s,%s" a b)', 'read_file'],
+    ],
+    [
+      'nested parentheses stay one entry',
+      'shell_exec(echo $(date), x),glob_files',
+      ['shell_exec(echo $(date), x)', 'glob_files'],
+    ],
+    [
+      'whitespace is trimmed and empty entries dropped',
+      '  read_file ,, shell_exec(git status) , ',
+      ['read_file', 'shell_exec(git status)'],
+    ],
+  ])('subcommand schema splits tool lists on top-level commas: %s', (_label, input, expected) => {
+    const subcommand = promptCli.subcommands[0];
+
+    const result = subcommand?.schema.safeParse({ allowedTools: input, disallowedTools: input });
+
+    expect(result?.success).toBe(true);
+    expect(result?.data).toMatchObject({ allowedTools: expected, disallowedTools: expected });
+  });
 });

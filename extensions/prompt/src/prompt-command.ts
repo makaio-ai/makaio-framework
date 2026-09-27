@@ -33,18 +33,37 @@ import type { OutputFormat, OutputFormatter, OutputWriter, TurnResult } from './
  * The current CLI schema adapter provides option values as strings. Accepting
  * a string here keeps the Zod schema as the single source of truth while still
  * normalizing a comma-separated Makaio tool list into the agent-selection
- * contract's `string[]`. Splitting on commas only (not whitespace) keeps
- * `shell_exec` rule entries like `shell_exec(git status)` intact.
+ * contract's `string[]`. Splitting only on top-level commas (not whitespace, not
+ * commas inside a `(...)` command rule) keeps entries like `shell_exec(git status)`
+ * and `shell_exec(printf "%s,%s" a b)` intact.
  */
-const ToolListSchema = z
-  .string()
-  .transform((value) =>
-    value
-      .split(',')
-      .map((toolName) => toolName.trim())
-      .filter((toolName) => toolName.length > 0),
-  )
-  .optional();
+const ToolListSchema = z.string().transform(splitToolList).optional();
+
+/**
+ * Splits a tool list on commas outside parentheses, trimming entries and dropping
+ * empty ones. Parenthesis depth is tracked so nested rule text such as
+ * `shell_exec(echo $(date))` stays one entry, matching `parseToolListEntry`, which
+ * takes the rule as everything between the first `(` and the final `)`. Unbalanced
+ * input is passed through for policy resolution to reject.
+ * @param value - Raw comma-separated tool list.
+ * @returns The tool list entries.
+ */
+function splitToolList(value: string): string[] {
+  const entries: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === '(') depth += 1;
+    else if (char === ')') depth -= 1;
+    else if (char === ',' && depth === 0) {
+      entries.push(value.slice(start, index));
+      start = index + 1;
+    }
+  }
+  entries.push(value.slice(start));
+  return entries.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+}
 
 /**
  * Zod schema for the `send` subcommand arguments.
