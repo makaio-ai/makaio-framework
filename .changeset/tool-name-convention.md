@@ -1,9 +1,10 @@
 ---
 '@makaio/adapter-claude-agent-sdk': major
 '@makaio/adapter-claude-code-cli': major
-'@makaio/contracts': minor
-'@makaio/framework': minor
+'@makaio/contracts': major
+'@makaio/framework': major
 '@makaio/agent-sdk': major
+'@makaio/extension-prompt': major
 ---
 
 Tool allow/deny lists (`allowedTools`, `disallowedTools`) now name tools with the Makaio
@@ -20,6 +21,10 @@ malformed. Allow-prefix rules never match a command that contains a shell metach
 on those same metacharacters into segments, and a deny rule (exact or prefix) denies the
 call if *any* segment matches; this does not recognise indirection through `env`,
 `bash -c`, or absolute paths.
+
+**Breaking:** the documented vocabulary of `allowedTools`/`disallowedTools` in the
+contracts changes from adapter-native names to Makaio tool names; existing lists such as
+`['Read', 'Bash']` are rejected by the adapters with a `ToolNameError`.
 
 `@makaio/contracts` adds a new `tool-names` module (`resolveToolPolicy`,
 `parseToolListEntry`, `matchesCommandRule`, `toNativeToolName`, `toMakaioToolName`,
@@ -69,3 +74,8 @@ entries for `--allowedTools`/`--disallowedTools` (`shell_exec(git log:*)` become
 
 **Breaking:** the Claude glob form for command rules, such as `Bash(npm run *)`, now
 throws `malformed-entry`; use the prefix form `Bash(npm run:*)` instead.
+
+`@makaio/extension-prompt` (**breaking**): `--allowed-tools`/`--disallowed-tools` take
+Makaio tool names separated by commas only (commas inside a `(...)` rule do not split);
+whitespace no longer separates entries, so `--allowed-tools "Read Edit"` must become
+`--allowed-tools read_file,edit_file`.
