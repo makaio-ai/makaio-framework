@@ -59,6 +59,15 @@ describe('toolVocabularyForAdapter', () => {
   it('returns undefined for an adapter with no vocabulary entry', () => {
     expect(toolVocabularyForAdapter('codex-app-server')).toBeUndefined();
   });
+
+  it.each([
+    'toString',
+    'constructor',
+    '__proto__',
+    'hasOwnProperty',
+  ])('returns undefined for the inherited object member %s', (adapterName) => {
+    expect(toolVocabularyForAdapter(adapterName)).toBeUndefined();
+  });
 });
 
 describe('isMcpToolName', () => {
