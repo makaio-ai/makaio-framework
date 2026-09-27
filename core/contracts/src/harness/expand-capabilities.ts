@@ -177,6 +177,9 @@ export async function expandProfileToolCapabilities(
     return emptyCapabilityResult(allowedTools, disallowedTools);
   }
 
+  // TODO(FACT-76): expanded names come from harness.nativeTools (native vocabulary, e.g.
+  // codex bash/patch); translate them to Makaio names with toMakaioToolName before the
+  // union once the codex vocabulary exists.
   const expanded = expandCapabilities({
     registeredTools: harness.nativeTools.enabled,
     allowedCapabilities: allowedCapabilities ?? [],

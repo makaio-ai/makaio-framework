@@ -196,41 +196,6 @@ function resolveSessionIdentityOptions(
 }
 
 /**
- * Returns the tool-name part of a native permission entry (`Bash(git:*)` → `Bash`).
- * @param entry - Native tool name or permission rule.
- * @returns The native base tool name.
- */
-function toNativeBaseName(entry: string): string {
-  const ruleStart = entry.indexOf('(');
-  return ruleStart === -1 ? entry : entry.slice(0, ruleStart);
-}
-
-/**
- * Restrict provider-config SDK `allowedTools` auto-approvals to the caller allowlist.
- *
- * Auto-approved tools skip `canUseTool` and with it the tool policy gate, so a provider
- * auto-approval outside the caller allowlist would grant a tool the caller never
- * granted. Provider entries are native Claude entries (`Bash`, `Bash(git:*)`,
- * `mcp__server__tool`). An entry is kept when the caller allowlist plainly grants its
- * base tool (provider `Bash` or `Bash(git:*)` with caller `shell_exec`), or when it is
- * identical to one of the caller's translated rule entries (provider `Bash(git status)`
- * with caller `shell_exec(git status)`). Anything else is dropped, e.g. provider `Bash`
- * when the caller only grants `shell_exec(git status)`. An empty caller allowlist
- * therefore yields no auto-approvals.
- * @param providerAllowedTools - Provider-config SDK `allowedTools` entries.
- * @param nativeAllowedEntries - Caller allowlist translated to native entries, rules kept.
- * @returns Provider auto-approvals covered by the caller allowlist, in provider order.
- */
-function intersectProviderAutoApprovals(
-  providerAllowedTools: readonly string[],
-  nativeAllowedEntries: readonly string[],
-): string[] {
-  const exactEntries = new Set(nativeAllowedEntries);
-  const plainGrants = new Set(nativeAllowedEntries.filter((entry) => !entry.includes('(')));
-  return providerAllowedTools.filter((entry) => plainGrants.has(toNativeBaseName(entry)) || exactEntries.has(entry));
-}
-
-/**
  * Map the caller-granted tool policy onto the SDK tool options.
  *
  * SDK semantics (`@anthropic-ai/claude-agent-sdk` `Options`):
@@ -251,15 +216,21 @@ function intersectProviderAutoApprovals(
  * `.makaioignore` deny rules). Every call of an allowlisted tool therefore still goes
  * through `canUseTool`.
  * Provider-config `queryOptions.allowedTools` (operator auto-approvals) would bypass
- * that gate, so with a caller allowlist they are intersected with it, see
- * {@link intersectProviderAutoApprovals}; the intersection overrides the provider value
+ * that gate as well, so whenever the caller passes an allowlist or a denylist, SDK
+ * `allowedTools` is `[]`: every provider auto-approval is dropped and each call reaches
+ * `canUseTool`, where the caller lists are enforced. This overrides the provider value
  * because the caller spreads these options after the provider-config query options.
+ * Provider-config `queryOptions.permissionMode` can bypass the gate too, so with caller
+ * lists it is forced to `'default'`, the only mode that routes every non-auto-approved
+ * call to `canUseTool` (SDK `PermissionMode`): `'bypassPermissions'` skips all checks,
+ * `'acceptEdits'` auto-accepts file edits, `'auto'` lets a model classifier decide,
+ * `'dontAsk'` denies whatever is not pre-approved without asking, and `'plan'` executes
+ * no tools. Without caller lists the provider values stay untouched.
  * The denylist is translated to native entries with rules kept (`Bash(rm -rf:*)`), since
  * SDK `disallowedTools` accepts permission rules. Absent policies emit no fields, so
  * provider-config query options stay untouched.
  * @param allowedTools - Makaio-named tool allowlist, or `undefined` when unrestricted.
  * @param disallowedTools - Makaio-named tool denylist, or `undefined` when none is given.
- * @param providerAllowedTools - Provider-config SDK `allowedTools` auto-approvals, if any.
  * @returns Partial SDK Options carrying only the fields the policy defines.
  * @throws {@link ToolNameError} When a list entry is malformed, names no Makaio or MCP tool, or
  * carries a command rule on a tool other than `shell_exec`.
@@ -267,18 +238,17 @@ function intersectProviderAutoApprovals(
 function resolveToolPolicyOptions(
   allowedTools: string[] | undefined,
   disallowedTools: string[] | undefined,
-  providerAllowedTools: readonly string[] | undefined,
 ): Partial<Options> {
-  const { nativeAvailableTools, nativeAllowedEntries, nativeDisallowedTools } = resolveToolPolicy('claude', {
+  const { nativeAvailableTools, nativeDisallowedTools } = resolveToolPolicy('claude', {
     allowedTools,
     disallowedTools,
   });
+  const hasCallerLists = allowedTools !== undefined || disallowedTools !== undefined;
   return {
     ...(nativeAvailableTools !== undefined && { tools: [...nativeAvailableTools] }),
-    ...(nativeAllowedEntries !== undefined &&
-      providerAllowedTools !== undefined && {
-        allowedTools: intersectProviderAutoApprovals(providerAllowedTools, nativeAllowedEntries),
-      }),
+    // Auto-approved tools and non-default permission modes skip `canUseTool`, the only
+    // per-call gate for the caller lists.
+    ...(hasCallerLists && { allowedTools: [], permissionMode: 'default' as const }),
     ...(nativeDisallowedTools !== undefined && { disallowedTools: [...nativeDisallowedTools] }),
   };
 }
@@ -331,13 +301,10 @@ export function buildQueryOptions({
     includePartialMessages: true,
     persistSession: config.ephemeral ? false : (config.providerConfig?.queryOptions?.persistSession ?? true),
     stderr: (data) => console.warn(data),
-    // Must stay after the provider-config spread: it overrides provider `tools` and
-    // `allowedTools` whenever a caller allowlist is given.
-    ...resolveToolPolicyOptions(
-      config.allowedTools,
-      config.disallowedTools,
-      config.providerConfig?.queryOptions?.allowedTools,
-    ),
+    // Must stay after the provider-config spread: with caller tool lists it overrides
+    // provider `tools`/`disallowedTools`, clears provider `allowedTools` auto-approvals
+    // and resets provider `permissionMode` to `'default'`.
+    ...resolveToolPolicyOptions(config.allowedTools, config.disallowedTools),
     canUseTool: createToolApprovalHandler(),
     abortController,
     systemPrompt,

@@ -694,6 +694,7 @@ export {
   isMcpToolName,
   MAKAIO_TOOL_NAMES,
   matchesCommandRule,
+  matchesDenyCommandRule,
   NATIVE_TOOL_NAMES,
   parseToolListEntry,
   resolveToolPolicy,

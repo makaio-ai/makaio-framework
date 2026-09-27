@@ -1,10 +1,8 @@
 /**
  * Makaio framework tool names and their adapter-native equivalents.
  *
- * Tool allow/deny lists name tools with the Makaio framework tool names
- * (`read_file`, `shell_exec`, ...). MCP tools keep their `mcp__<server>__<tool>`
- * form. Adapters translate to their native vocabulary through this table;
- * native names (`Read`, `Bash`) are not valid list input.
+ * Adapters translate tool list names (format: `ToolLists` in `tool-policy.ts`) to
+ * their native vocabulary through this table.
  * @packageDocumentation
  */
 
@@ -48,8 +46,11 @@ export const NATIVE_TOOL_NAMES: Readonly<Record<ToolVocabulary, Readonly<Partial
   },
 };
 
-/** Name prefix of MCP-provided tools (`mcp__<server>__<tool>`). */
-const MCP_TOOL_NAME_PREFIX = 'mcp__';
+/** Name prefix of MCP-provided tools (`mcp__<server>__<tool>`). Package-internal. */
+export const MCP_TOOL_NAME_PREFIX = 'mcp__';
+
+/** Separator between the server and tool part of an MCP tool name. */
+const MCP_TOOL_NAME_SEPARATOR = '__';
 
 /** Why a tool name or tool list entry was rejected. */
 export type ToolNameErrorReason = 'malformed-entry' | 'unknown-tool' | 'unsupported-by-adapter' | 'rule-not-supported';
@@ -86,22 +87,28 @@ export function isMakaioToolName(name: string): name is MakaioToolName {
 /**
  * Checks whether a name is an MCP tool name (`mcp__<server>__<tool>`).
  * @param name - Tool name to check.
- * @returns True when `name` carries the MCP tool name prefix.
+ * @returns True when `name` carries the MCP prefix followed by a non-empty server part,
+ * `__`, and a non-empty tool part (`mcp__`, `mcp____tool`, `mcp__github` are not).
  */
 export function isMcpToolName(name: string): boolean {
-  return name.startsWith(MCP_TOOL_NAME_PREFIX);
+  if (!name.startsWith(MCP_TOOL_NAME_PREFIX)) return false;
+  const rest = name.slice(MCP_TOOL_NAME_PREFIX.length);
+  const separator = rest.indexOf(MCP_TOOL_NAME_SEPARATOR);
+  return separator > 0 && separator + MCP_TOOL_NAME_SEPARATOR.length < rest.length;
 }
 
 /**
- * Translates a Makaio (or MCP) tool name to the native name, attributing any error
- * to `entry`. Package-internal: lets list resolution report the full list entry.
+ * Translates a Makaio (or MCP) tool name to the native name of a vocabulary.
+ * MCP names pass through unchanged.
  * @param vocabulary - Target native vocabulary.
  * @param name - Makaio or MCP tool name.
- * @param entry - Entry reported on a {@link ToolNameError}.
+ * @param entry - Entry reported on a {@link ToolNameError}; list resolution passes the
+ * full list entry. Defaults to `name`.
  * @returns The native tool name.
- * @throws {@link ToolNameError} `unknown-tool` or `unsupported-by-adapter`.
+ * @throws {@link ToolNameError} `unknown-tool` when `name` is not a Makaio name,
+ * `unsupported-by-adapter` when the vocabulary has no entry for it.
  */
-export function resolveNativeToolName(vocabulary: ToolVocabulary, name: string, entry: string): string {
+export function toNativeToolName(vocabulary: ToolVocabulary, name: string, entry: string = name): string {
   if (isMcpToolName(name)) return name;
   if (!isMakaioToolName(name)) {
     throw new ToolNameError(
@@ -119,19 +126,6 @@ export function resolveNativeToolName(vocabulary: ToolVocabulary, name: string, 
     );
   }
   return nativeName;
-}
-
-/**
- * Translates a Makaio (or MCP) tool name to the native name of a vocabulary.
- * MCP names pass through unchanged.
- * @param vocabulary - Target native vocabulary.
- * @param name - Makaio or MCP tool name.
- * @returns The native tool name.
- * @throws {@link ToolNameError} `unknown-tool` when `name` is not a Makaio name,
- * `unsupported-by-adapter` when the vocabulary has no entry for it.
- */
-export function toNativeToolName(vocabulary: ToolVocabulary, name: string): string {
-  return resolveNativeToolName(vocabulary, name, name);
 }
 
 /**

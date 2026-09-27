@@ -179,13 +179,13 @@ export interface ClaudeSessionConfig extends ConnectorSessionConfig<ClaudeCodeCo
    * base names, e.g. `Bash` for `shell_exec(git status)`), and the `canUseTool` handler
    * denies every tool call (built-in or MCP) the list does not cover, including shell
    * commands outside a granted rule. Listed tools are not auto-approved: their calls still
-   * go through the central tool approval service. Provider-config
-   * `queryOptions.allowedTools` auto-approvals (native Claude entries) are intersected with
-   * the list: an entry stays when the list plainly grants its base tool (`Bash` or
-   * `Bash(git:*)` with `shell_exec`) or when it equals a translated rule entry of the list
-   * (`Bash(git status)` with `shell_exec(git status)`). An empty array denies every tool
-   * and clears all auto-approvals. `undefined` leaves tool availability and approval
-   * unchanged.
+   * go through the central tool approval service. While this list or `disallowedTools` is
+   * set, provider-config `queryOptions.allowedTools` auto-approvals are dropped,
+   * `queryOptions.permissionMode` is reset to `'default'`, and approval-granted
+   * `updatedPermissions` are not forwarded, since each would skip `canUseTool`, the only
+   * per-call gate for the caller lists; an approver-rewritten input is re-checked against
+   * the lists. An empty array denies every tool. `undefined` (with no
+   * `disallowedTools`) leaves tool availability and approval unchanged.
    */
   allowedTools?: string[];
   /**

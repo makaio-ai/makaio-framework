@@ -1,5 +1,4 @@
 import {
-  isMcpToolName,
   NATIVE_TOOL_NAMES,
   parseCanonicalModel,
   parseToolListEntry,
@@ -51,7 +50,6 @@ export interface ResolvedQueryConfig {
  */
 export function toMakaioToolListEntry(entry: string): string {
   const { name } = parseToolListEntry(entry);
-  if (isMcpToolName(name)) return entry;
   const makaioName = toMakaioToolName('claude', name);
   if (makaioName === undefined) {
     const supported = Object.values(NATIVE_TOOL_NAMES.claude).join(', ');

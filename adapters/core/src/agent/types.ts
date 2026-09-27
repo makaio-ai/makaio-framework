@@ -60,20 +60,9 @@ export interface AgentRuntimeInput {
   env?: Record<string, string>;
   /** Reasoning effort for supporting adapters */
   reasoningEffort?: AIReasoningLevel;
-  /**
-   * Allowed tool names, using Makaio tool names (`read_file`, `write_file`, `edit_file`,
-   * `glob_files`, `grep_files`, `shell_exec`, `shell_kill`, `spawn_subagent`,
-   * `send_to_subagent`) or MCP tools (`mcp__<server>__<tool>`). `shell_exec` entries may carry
-   * a command rule, e.g. `shell_exec(git status)` (exact) or `shell_exec(git log:*)` (prefix;
-   * never matches commands containing shell operators). Empty array disables all
-   * adapter-visible tools, including MCP. See `@makaio/contracts` `tool-names`
-   * (`resolveToolPolicy`).
-   */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   allowedTools?: string[];
-  /**
-   * Disallowed tool names, same naming and rule syntax as `allowedTools`. The denylist wins
-   * over the allowlist.
-   */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   disallowedTools?: string[];
 }
 
@@ -304,19 +293,9 @@ export interface AIAgentConfig<
   definitionProviders?: readonly AdapterProviderDefinition[];
 
   // Runtime options from StartAgentRequest
-  /**
-   * Allowed tool names, using Makaio tool names (`read_file`, `write_file`, `edit_file`,
-   * `glob_files`, `grep_files`, `shell_exec`, `shell_kill`, `spawn_subagent`,
-   * `send_to_subagent`) or MCP tools (`mcp__<server>__<tool>`). `shell_exec` entries may carry
-   * a command rule, e.g. `shell_exec(git status)` (exact) or `shell_exec(git log:*)` (prefix;
-   * never matches commands containing shell operators). Empty array = disable all tools,
-   * including MCP. See `@makaio/contracts` `tool-names` (`resolveToolPolicy`).
-   */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   allowedTools?: string[];
-  /**
-   * Disallowed tool names, same naming and rule syntax as `allowedTools`. The denylist wins
-   * over the allowlist.
-   */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   disallowedTools?: string[];
   /** Directory restrictions for file-system tool execution. */
   allowedDirectories?: string[];

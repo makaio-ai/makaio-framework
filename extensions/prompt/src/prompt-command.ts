@@ -32,14 +32,15 @@ import type { OutputFormat, OutputFormatter, OutputWriter, TurnResult } from './
  *
  * The current CLI schema adapter provides option values as strings. Accepting
  * a string here keeps the Zod schema as the single source of truth while still
- * normalizing quoted space-separated and comma-separated tool lists into the
- * agent-selection contract's `string[]`.
+ * normalizing a comma-separated Makaio tool list into the agent-selection
+ * contract's `string[]`. Splitting on commas only (not whitespace) keeps
+ * `shell_exec` rule entries like `shell_exec(git status)` intact.
  */
 const ToolListSchema = z
   .string()
   .transform((value) =>
     value
-      .split(/[,\s]+/)
+      .split(',')
       .map((toolName) => toolName.trim())
       .filter((toolName) => toolName.length > 0),
   )
@@ -76,11 +77,11 @@ export const PromptArgsSchema = z.object({
     placeholder: '<text>',
   }),
   allowedTools: ToolListSchema.meta({
-    description: 'Tool allowlist (comma-separated or quoted space-separated)',
+    description: 'Tool allowlist, comma-separated Makaio tool names (e.g. read_file,shell_exec(git status))',
     placeholder: '<tools>',
   }),
   disallowedTools: ToolListSchema.meta({
-    description: 'Tool denylist (comma-separated or quoted space-separated)',
+    description: 'Tool denylist, comma-separated Makaio tool names (e.g. read_file,shell_exec(git status))',
     placeholder: '<tools>',
   }),
   dangerouslySkipPermissions: z.boolean().optional().meta({

@@ -139,6 +139,8 @@ export function buildCliArgs({
     }
   }
 
+  // TODO(FACT-75): translate Makaio tool names via resolveToolPolicy('claude', …) before
+  // building CLI flags; until then this adapter still expects Claude names.
   if (config.allowedTools !== undefined) {
     args.push('--allowedTools', toCliToolPolicyValue(config.allowedTools));
   }

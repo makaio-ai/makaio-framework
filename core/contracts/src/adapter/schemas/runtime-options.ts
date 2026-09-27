@@ -4,13 +4,8 @@ import { SystemPromptSchema } from '../../shared/index.js';
 /**
  * Runtime options for agent execution.
  *
- * `allowedTools`/`disallowedTools` name tools with the Makaio framework tool names
- * (`read_file`, `write_file`, `edit_file`, `glob_files`, `grep_files`, `shell_exec`,
- * `shell_kill`, `spawn_subagent`, `send_to_subagent`), not adapter-native names. MCP tools
- * use `mcp__<server>__<tool>`. `shell_exec` entries may carry a command rule, e.g.
- * `shell_exec(git status)` (exact) or `shell_exec(git log:*)` (prefix; never matches
- * commands containing shell operators). See `@makaio/contracts` `tool-names`
- * (`resolveToolPolicy`).
+ * `allowedTools`/`disallowedTools`: Makaio tool names; format and semantics: `ToolLists`
+ * in `@makaio/contracts` tool-names.
  * @example
  * ```typescript
  * runtimeOptions: {
@@ -26,17 +21,10 @@ export const AdapterRuntimeOptionsSchema = z.object({
    */
   cwd: z.string().optional(),
 
-  /**
-   * Allowed tool names (Makaio tool names, or `mcp__<server>__<tool>` for MCP tools).
-   * Empty array = disable all tools, including MCP.
-   * Undefined = use adapter defaults.
-   */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   allowedTools: z.array(z.string()).optional(),
 
-  /**
-   * Disallowed tool names, same naming as allowedTools.
-   * Takes precedence over allowedTools.
-   */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   disallowedTools: z.array(z.string()).optional(),
 
   /**

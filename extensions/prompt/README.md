@@ -22,7 +22,7 @@ echo "Summarize this file" | makaio prompt send --model gpt-5.2
 # With tool access (auto-approve all tool calls)
 makaio prompt send "List all TypeScript files in src/" \
   --model sonnet \
-  --allowed-tools "Read,Bash" \
+  --allowed-tools "glob_files,shell_exec" \
   --dangerously-skip-permissions
 
 # JSON output for scripting
@@ -51,8 +51,8 @@ The `--model` flag accepts canonical model references. Makaio resolves them to t
 | `--output-format <fmt>` | | `text` (default), `json`, `stream-json` |
 | `--system-prompt <text>` | | Replace the default system prompt |
 | `--append-system-prompt <text>` | | Append to the default system prompt |
-| `--allowed-tools <list>` | | Tool allowlist (comma or space-separated) |
-| `--disallowed-tools <list>` | | Tool denylist (comma or space-separated) |
+| `--allowed-tools <list>` | | Tool allowlist, comma-separated Makaio tool names |
+| `--disallowed-tools <list>` | | Tool denylist, comma-separated Makaio tool names |
 | `--dangerously-skip-permissions` | | Auto-approve all tool calls |
 | `--reasoning-effort <level>` | | `low`, `medium`, `high` |
 | `--cwd <dir>` | | Working directory for the agent |
@@ -106,14 +106,15 @@ Without `--dangerously-skip-permissions`, tool calls require interactive approva
 
 ## Migrating from `claude -p`
 
-Most flags map directly:
-
 ```bash
 # Before
-claude -p "Review this code" --model sonnet --allowedTools "Read Edit"
+claude -p "Review this code" --model sonnet --allowedTools "Read,Edit"
 
 # After
-makaio prompt send "Review this code" --model sonnet --allowed-tools "Read Edit"
+makaio prompt send "Review this code" --model sonnet --allowed-tools "read_file,edit_file"
 ```
 
-Key differences: `--allowedTools` becomes `--allowed-tools` (kebab-case), and `--effort` becomes `--reasoning-effort`.
+Key differences: `--allowedTools` becomes `--allowed-tools` (kebab-case), tool names are
+Makaio tool names (`read_file`, `write_file`, `edit_file`, `glob_files`, `grep_files`,
+`shell_exec`, `shell_kill`, `spawn_subagent`, `send_to_subagent`, or `mcp__<server>__<tool>`)
+rather than Claude-native names, and `--effort` becomes `--reasoning-effort`.
