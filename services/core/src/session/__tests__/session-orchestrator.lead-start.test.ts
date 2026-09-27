@@ -51,6 +51,10 @@ interface LeadStartRuntimeFields {
   clientId?: string;
   /** Harness the tool policy is resolved against. */
   harnessId?: string;
+  /** Makaio tool names the agent is granted without asking. */
+  allowedTools?: string[];
+  /** Makaio tool names the agent is refused without asking. */
+  disallowedTools?: string[];
 }
 
 const MACHINE_ID = 'lead-start-machine';
@@ -1335,6 +1339,8 @@ describe('reserved fresh lead start', () => {
       allowedDirectories: ['/repo/worktree', '/tmp'],
       clientId: 'client-under-test',
       harnessId: 'harness-under-test',
+      allowedTools: ['read_file', 'edit_file'],
+      disallowedTools: ['shell_exec'],
     });
 
     expect(result.outcome).toBe('started');
@@ -1346,6 +1352,8 @@ describe('reserved fresh lead start', () => {
       allowedDirectories: ['/repo/worktree', '/tmp'],
       clientId: 'client-under-test',
       harnessId: 'harness-under-test',
+      allowedTools: ['read_file', 'edit_file'],
+      disallowedTools: ['shell_exec'],
       // The origin identity still arrives after the dispatch reports one.
       adapterSessionId: 'provider-runtime-fields',
       status: 'idle',
