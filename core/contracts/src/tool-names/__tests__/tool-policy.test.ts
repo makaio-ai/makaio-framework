@@ -1,25 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { resolveToolPolicy, ToolNameError } from '../index.js';
-import type { ToolLists, ToolNameErrorReason } from '../index.js';
+import { resolveToolPolicy } from '../index.js';
+import type { ToolNameErrorReason } from '../index.js';
+import { captureToolNameError } from './tool-name-error.test-support.js';
 
 const NOT_ON_ALLOWLIST = (nativeName: string): string => `Tool ${nativeName} is not on the step's allowlist`;
 
-/**
- * Resolve the given lists and capture the thrown ToolNameError.
- * @param lists - Tool lists passed to resolveToolPolicy
- * @returns The thrown ToolNameError
- */
-function captureToolNameError(lists: ToolLists): ToolNameError {
-  try {
-    resolveToolPolicy('claude', lists);
-  } catch (error) {
-    expect(error).toBeInstanceOf(ToolNameError);
-    return error as ToolNameError;
-  }
-  throw new Error('expected resolveToolPolicy to throw a ToolNameError');
-}
-
 describe('resolveToolPolicy', () => {
+  describe('restricts', () => {
+    it('is false without lists and true once either list is passed, empty lists included', () => {
+      expect(resolveToolPolicy('claude', {}).restricts).toBe(false);
+      expect(resolveToolPolicy('claude', { allowedTools: [] }).restricts).toBe(true);
+      expect(resolveToolPolicy('claude', { disallowedTools: [] }).restricts).toBe(true);
+      expect(resolveToolPolicy('claude', { allowedTools: ['read_file'] }).restricts).toBe(true);
+      expect(resolveToolPolicy('claude', { disallowedTools: ['write_file'] }).restricts).toBe(true);
+    });
+  });
+
   describe('no lists', () => {
     it('leaves every translated field undefined', () => {
       const policy = resolveToolPolicy('claude', {});
@@ -247,8 +243,21 @@ describe('resolveToolPolicy', () => {
       expect(policy.checkToolCall('Bash', { command: 'git status' }).allowed).toBe(false);
     });
 
-    it('a rule deny never matches a missing or non-string command', () => {
-      const policy = resolveToolPolicy('claude', { disallowedTools: ['shell_exec(rm -rf:*)'] });
+    it('a rule deny fails closed on a missing or non-string command', () => {
+      const policy = resolveToolPolicy('claude', {
+        allowedTools: ['shell_exec', 'read_file'],
+        disallowedTools: ['shell_exec(rm -rf:*)'],
+      });
+      for (const input of [{}, { command: 7 }, { command: ['rm', '-rf', '/'] }]) {
+        const decision = policy.checkToolCall('Bash', input);
+        expect(decision.allowed).toBe(false);
+        if (!decision.allowed) expect(decision.reason).toContain('shell_exec(rm -rf:*)');
+      }
+      expect(policy.checkToolCall('Read', {})).toEqual({ allowed: true });
+    });
+
+    it('a plain allow without deny rules still allows a missing command', () => {
+      const policy = resolveToolPolicy('claude', { allowedTools: ['shell_exec'], disallowedTools: ['write_file'] });
       expect(policy.checkToolCall('Bash', {})).toEqual({ allowed: true });
       expect(policy.checkToolCall('Bash', { command: 7 })).toEqual({ allowed: true });
     });
@@ -339,7 +348,7 @@ describe('resolveToolPolicy', () => {
     for (const listKey of ['allowedTools', 'disallowedTools'] as const) {
       for (const { entry, reason } of cases) {
         it(`${listKey}: '${entry}' throws ToolNameError '${reason}'`, () => {
-          const error = captureToolNameError({ [listKey]: [entry] });
+          const error = captureToolNameError(() => resolveToolPolicy('claude', { [listKey]: [entry] }));
           expect(error.reason).toBe(reason);
           expect(error.entry).toBe(entry);
           expect(error.message).toContain(entry);
@@ -348,13 +357,15 @@ describe('resolveToolPolicy', () => {
     }
 
     it('validates eagerly even when the bad entry follows valid ones', () => {
-      const error = captureToolNameError({ allowedTools: ['read_file', 'shell_exec(git status)', 'Bash'] });
+      const error = captureToolNameError(() =>
+        resolveToolPolicy('claude', { allowedTools: ['read_file', 'shell_exec(git status)', 'Bash'] }),
+      );
       expect(error.reason).toBe('unknown-tool');
       expect(error.entry).toBe('Bash');
     });
 
     it('unknown-tool messages list the valid Makaio names', () => {
-      const error = captureToolNameError({ allowedTools: ['Read'] });
+      const error = captureToolNameError(() => resolveToolPolicy('claude', { allowedTools: ['Read'] }));
       expect(error.message).toContain('read_file');
       expect(error.message).toContain('shell_exec');
     });

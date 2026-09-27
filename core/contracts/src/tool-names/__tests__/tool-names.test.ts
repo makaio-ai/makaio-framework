@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   MAKAIO_TOOL_NAMES,
   NATIVE_TOOL_NAMES,
-  ToolNameError,
   isMakaioToolName,
   isMcpToolName,
   matchesCommandRule,
@@ -12,6 +11,7 @@ import {
   toNativeToolName,
 } from '../index.js';
 import type { CommandRule } from '../index.js';
+import { captureToolNameError } from './tool-name-error.test-support.js';
 
 /**
  * Expected claude column, verified against live Claude Code transcripts (2026-05-19).
@@ -27,21 +27,6 @@ const claudePairs: ReadonlyArray<readonly [string, string]> = [
   ['spawn_subagent', 'Agent'],
   ['send_to_subagent', 'SendMessage'],
 ];
-
-/**
- * Runs `fn` and returns the thrown ToolNameError, failing the test if nothing
- * (or something else) is thrown.
- * @param fn - Callback expected to throw a ToolNameError
- */
-function captureToolNameError(fn: () => unknown): ToolNameError {
-  try {
-    fn();
-  } catch (error) {
-    expect(error).toBeInstanceOf(ToolNameError);
-    return error as ToolNameError;
-  }
-  throw new Error('expected a ToolNameError to be thrown');
-}
 
 describe('MAKAIO_TOOL_NAMES / NATIVE_TOOL_NAMES', () => {
   it('lists exactly the nine Makaio framework tool names', () => {

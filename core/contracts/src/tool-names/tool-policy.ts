@@ -38,7 +38,8 @@ export type ToolGateDecision = { allowed: true } | { allowed: false; reason: str
  * same metacharacters and a rule denies the call when ANY segment matches it
  * (`git status && git push` hits `shell_exec(git push:*)`). Quoting, escapes,
  * wrappers (`env`, `bash -c`, `xargs`), and absolute paths (`/usr/bin/git`) are not
- * recognised; a denylist rule is not a sandbox.
+ * recognised; a denylist rule is not a sandbox. A call to a tool with a denylist rule
+ * whose input carries no string `command` is denied (fails closed).
  *
  * **Evaluation.** The denylist wins over the allowlist. An absent allowlist allows
  * every tool not denied; `[]` allows nothing, MCP tools included. A native tool without
@@ -60,6 +61,12 @@ export interface ToolLists {
 
 /** Tool lists validated and translated to one native vocabulary. */
 export interface ResolvedToolPolicy {
+  /**
+   * True when the caller passed an allowlist or a denylist (`[]` included). Adapters use
+   * it to decide whether bypass overrides (permission-mode, hook, and approval shortcuts
+   * that would skip `checkToolCall`) apply.
+   */
+  readonly restricts: boolean;
   /** Native built-in base names granted by the allowlist (deduped, MCP excluded). undefined = no allowlist. */
   readonly nativeAvailableTools?: readonly string[];
   /** Allowlist translated to native entries, rules kept: e.g. 'Bash(git status)', 'Read', 'mcp__s__t'. undefined = no allowlist. */
@@ -69,7 +76,8 @@ export interface ResolvedToolPolicy {
   /**
    * Gate for one tool call, native name + tool input.
    * @param nativeName - Native tool name of the call.
-   * @param input - Tool call input; `input.command` is matched against command rules.
+   * @param input - Tool call input; `input.command` is matched against command rules. A
+   * call without a string `command` is denied when a denylist rule targets its tool.
    * @returns Whether the lists allow the call.
    */
   checkToolCall(nativeName: string, input: Record<string, unknown>): ToolGateDecision;
@@ -155,6 +163,7 @@ export function resolveToolPolicy(vocabulary: ToolVocabulary, lists: ToolLists):
   const disallowed = lists.disallowedTools?.map((entry) => resolveEntry(vocabulary, entry));
 
   return {
+    restricts: lists.allowedTools !== undefined || lists.disallowedTools !== undefined,
     ...(allowed !== undefined && {
       nativeAvailableTools: [
         ...new Set(allowed.filter((entry) => !isMcpToolName(entry.name)).map((entry) => entry.nativeName)),
@@ -166,7 +175,18 @@ export function resolveToolPolicy(vocabulary: ToolVocabulary, lists: ToolLists):
     }),
     checkToolCall(nativeName: string, input: Record<string, unknown>): ToolGateDecision {
       const name = toMakaioToolName(vocabulary, nativeName);
+      // TODO(FACT-76): per-vocabulary command extraction (codex sends an argv array) before admitting other vocabularies.
       const command = typeof input.command === 'string' ? input.command : undefined;
+
+      if (command === undefined) {
+        const ruleDenyEntry = disallowed?.find((entry) => entry.name === name && entry.rule !== undefined);
+        if (ruleDenyEntry !== undefined) {
+          return {
+            allowed: false,
+            reason: `Tool ${nativeName} is denied: the step's denylist entry ${ruleDenyEntry.entry} needs a string command input, and the call has none`,
+          };
+        }
+      }
 
       const denyEntry = disallowed?.find((entry) => coversCall(entry, name, command, matchesDenyCommandRule));
       if (denyEntry !== undefined) {
