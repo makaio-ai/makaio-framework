@@ -36,6 +36,9 @@ export type ArtifactSlug = z.infer<typeof ArtifactSlugSchema>;
 /** Name of the reserved envelope field that kinds may not declare in `data`. */
 export const ARTIFACT_SLUG_FIELD = 'slug';
 
+/** Rejection reason both payload validators report for a top-level `data.slug`. */
+export const ARTIFACT_SLUG_RESERVED_MESSAGE = 'Data field slug is reserved: the artifact envelope owns the slug';
+
 /** Letters that NFKD does not decompose into a base letter, transliterated the German way. */
 const TRANSLITERATIONS: readonly (readonly [RegExp, string])[] = [
   [/ä/g, 'ae'],

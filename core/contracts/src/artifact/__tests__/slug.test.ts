@@ -6,6 +6,7 @@ import { ArtifactSchemas } from '../namespace.js';
 import { ArtifactQueryRequestSchema, ArtifactRevisionSchema } from '../schemas.js';
 import { ARTIFACT_SLUG_PATTERN, ArtifactSlugSchema, deriveArtifactSlug, slugify } from '../slug.js';
 import { mayArtifactDataCarryProperty } from '../kind-reserved-fields.js';
+import { compileArtifactDataChecker, compileArtifactDataSchema } from '../data-schema-validator.js';
 
 const actor = { kind: 'agent', id: 'planner' } as const;
 
@@ -119,6 +120,7 @@ describe('mayArtifactDataCarryProperty', () => {
       { $ref: '#/$defs/group/$defs/v', $defs: { group: { $defs: { v: { properties: { slug: string } } } } } },
     ],
     ['an escaped pointer segment', { $ref: '#/$defs/a~1b', $defs: { 'a/b': { required: ['slug'] } } }],
+    ['a Unicode property pattern', { type: 'object', patternProperties: { '^\\p{Ll}+$': string } }],
   ])('finds the property in %s', (_label, schema) => {
     expect(mayArtifactDataCarryProperty(schema, 'slug')).toBe(true);
   });
@@ -244,5 +246,44 @@ describe('kind registration', () => {
       dataSchema: z.strictObject({ name: z.string() }),
     });
     expect(ArtifactKindRegistrationSchema.safeParse(definition.toRegistration()).success).toBe(true);
+  });
+});
+
+describe('payload-time slug guard', () => {
+  const reserved = 'Data field slug is reserved: the artifact envelope owns the slug';
+
+  it('rejects data.slug on a live kind whose schema passes unknown keys through', () => {
+    const definition = defineArtifactKind({
+      kind: 'system',
+      description: 'A system.',
+      schemaVersion: 1,
+      category: 'knowledge',
+      titlePath: 'name',
+      dataSchema: z.looseObject({ name: z.string() }),
+    });
+    expect(definition.dataSchema.parse({ name: 'x' })).toEqual({ name: 'x' });
+    const result = definition.dataSchema.safeParse({ name: 'x', slug: 'legacy' });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toContainEqual(expect.objectContaining({ path: ['slug'], message: reserved }));
+  });
+
+  it('rejects data.slug in the Ajv validators for an open object schema', () => {
+    const registration = ArtifactKindRegistrationSchema.parse({
+      kind: 'system',
+      description: 'A system.',
+      schemaVersion: 1,
+      category: 'knowledge',
+      titlePath: 'name',
+      dataSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] },
+    });
+    const check = compileArtifactDataChecker(registration);
+    expect(check({ name: 'x' })).toEqual({ valid: true });
+    expect(check({ name: 'x', slug: 'legacy' })).toEqual({
+      valid: false,
+      issues: [{ path: 'slug', reason: reserved }],
+    });
+    const validate = compileArtifactDataSchema(registration);
+    expect(validate({ name: 'x' })).toBe(true);
+    expect(validate({ name: 'x', slug: 'legacy' })).toBe(false);
   });
 });

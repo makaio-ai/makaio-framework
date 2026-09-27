@@ -3,6 +3,14 @@ import { resolvePointer } from './kind-paths.js';
 /**
  * Existential check for a top-level data property across every schema variant.
  *
+ * This is the early, authoring-time signal for reserved envelope names. It is
+ * best-effort: an open object schema (no `additionalProperties: false`)
+ * declares nothing about a name, so the walker cannot see that its payloads may
+ * carry it. The authoritative check runs at payload time in both validators —
+ * the live-schema refinement of `defineArtifactKind` and the compiled checker
+ * of `compileArtifactDataChecker`/`compileArtifactDataSchema` — which reject a
+ * top-level own `slug` property whatever the schema shape.
+ *
  * `isArtifactDataPathDeclared` answers "is this path declared in every
  * variant" — the right question for a title or an index. A reserved name needs
  * the opposite: "could any variant carry this property". This walker follows
@@ -10,8 +18,8 @@ import { resolvePointer } from './kind-paths.js';
  * same lookup the registration profile validates against), `allOf`/`anyOf`/
  * `oneOf`, `if`/`then`/`else`, `dependentSchemas` and object-valued draft-7
  * `dependencies` at the top level. It reports a property declared in
- * `properties`, matched by `patternProperties`, listed in `required`, or listed
- * in a property-name array under `dependentRequired` or array-valued draft-7
+ * `properties`, matched by `patternProperties` (compiled with the `u` flag, as
+ * Ajv does), listed in `required`, or listed in a property-name array under `dependentRequired` or array-valued draft-7
  * `dependencies` — a schema can demand a property it never describes, and that
  * payload carries the name all the same. Resolved `$ref` targets are treated as
  * variants of the root; the walker does not descend into nested object
@@ -69,7 +77,7 @@ function declaresProperty(node: Record<string, unknown>, name: string): boolean 
   if (!isSchemaObject(patterns)) return false;
   return Object.keys(patterns).some((pattern) => {
     try {
-      return new RegExp(pattern).test(name);
+      return new RegExp(pattern, 'u').test(name);
     } catch {
       return false;
     }

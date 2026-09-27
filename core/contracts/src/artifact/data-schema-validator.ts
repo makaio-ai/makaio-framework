@@ -4,6 +4,7 @@ import addFormats from 'ajv-formats';
 import { JsonValueSchema, type JsonValue } from '../shared/json-value.js';
 import { ARTIFACT_VALUE_TYPE_KEYWORD } from './evidence.js';
 import type { ArtifactKindRegistration } from './kind-registration.js';
+import { ARTIFACT_SLUG_FIELD, ARTIFACT_SLUG_RESERVED_MESSAGE } from './slug.js';
 
 /** Validates one artifact payload against its registered JSON Schema. */
 export type ArtifactDataValidator = (data: unknown) => boolean;
@@ -121,6 +122,21 @@ function toIssues(errors: ErrorObject[] | null | undefined): ArtifactDataIssue[]
 }
 
 /**
+ * Whether a payload carries the envelope-owned `slug` at its top level.
+ *
+ * Checked at payload time because an open object schema declares nothing about
+ * `slug`, so the registration-time walker cannot reject the kind.
+ * @param data - Candidate artifact payload.
+ * @returns `true` when the payload is an object with an own `slug` property.
+ */
+function carriesReservedSlug(data: unknown): boolean {
+  return typeof data === 'object' && data !== null && Object.hasOwn(data, ARTIFACT_SLUG_FIELD);
+}
+
+/** Issue reported for a top-level `data.slug`, in the same shape as a schema rejection. */
+const RESERVED_SLUG_ISSUE: ArtifactDataIssue = { path: ARTIFACT_SLUG_FIELD, reason: ARTIFACT_SLUG_RESERVED_MESSAGE };
+
+/**
  * Compile a predicate for complete artifact payload validation.
  *
  * The predicate hides the compiled function's mutable `errors`, so a caller
@@ -131,7 +147,8 @@ function toIssues(errors: ErrorObject[] | null | undefined): ArtifactDataIssue[]
  * @throws When the declared data schema cannot be compiled by its supported dialect.
  */
 export function compileArtifactDataSchema(registration: ArtifactKindRegistration): ArtifactDataValidator {
-  return compile(registration);
+  const validate = compile(registration);
+  return (data: unknown): boolean => validate(data) && !carriesReservedSlug(data);
 }
 
 /**
@@ -149,6 +166,9 @@ export function compileArtifactDataSchema(registration: ArtifactKindRegistration
  */
 export function compileArtifactDataChecker(registration: ArtifactKindRegistration): ArtifactDataChecker {
   const validate = compile(registration);
-  return (data: unknown): ArtifactDataCheck =>
-    validate(data) ? { valid: true } : { valid: false, issues: toIssues(validate.errors) };
+  return (data: unknown): ArtifactDataCheck => {
+    const issues = validate(data) ? [] : toIssues(validate.errors);
+    if (carriesReservedSlug(data)) issues.push(RESERVED_SLUG_ISSUE);
+    return issues.length === 0 ? { valid: true } : { valid: false, issues };
+  };
 }

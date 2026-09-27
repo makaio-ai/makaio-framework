@@ -4,6 +4,7 @@ import { ArtifactKindRegistrationSchema, type ArtifactKindRegistration } from '.
 import type { ArtifactLifecycleHookDefinition } from './lifecycle-hooks.js';
 import { zodSchemaToJsonRecord } from '../shared/zod-json-schema.js';
 import { assertSupportedKindSerialization, readArtifactTitle } from './kind-paths.js';
+import { ARTIFACT_SLUG_FIELD, ARTIFACT_SLUG_RESERVED_MESSAGE } from './slug.js';
 
 /**
  * Authoring contract with a live data schema. Scope remains a shared revision envelope.
@@ -54,7 +55,7 @@ type DefineArtifactKindOptions<
  * Raw input first passes the serialized canonical payload schema, preventing live
  * object schemas from silently stripping undeclared fields. The original input
  * then passes through the live Zod schema so dynamic defaults and refinements
- * retain their authoring semantics, followed by title validation. Serialized registrations
+ * retain their authoring semantics, followed by the reserved-slug and title checks. Serialized registrations
  * retain titlePath so hosts can enforce the same invariant via readArtifactTitle.
  * Hooks remain live-only; each registration call returns an independent snapshot.
  * @param options - Current kind contract, live schema and optional lifecycle hooks.
@@ -85,6 +86,10 @@ export function defineArtifactKind<
     }
   });
   const validatedSchema = rawInputSchema.pipe(dataSchema).superRefine((data, ctx) => {
+    // Payload-time guard: a passthrough or catchall schema would otherwise keep a data-level slug.
+    if (Object.hasOwn(data, ARTIFACT_SLUG_FIELD)) {
+      ctx.addIssue({ code: 'custom', path: [ARTIFACT_SLUG_FIELD], message: ARTIFACT_SLUG_RESERVED_MESSAGE });
+    }
     try {
       readArtifactTitle(data, registration.titlePath);
     } catch (error) {
