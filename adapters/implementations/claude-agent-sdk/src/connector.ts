@@ -22,6 +22,7 @@ import {
   McpSubjects,
   type ConnectorTeardownResult,
   type McpSessionContext,
+  type ResolvedToolPolicy,
   type SystemPrompt,
 } from '@makaio/contracts';
 import { type ClaudeCodeConnectorBus, ClaudeCodeConnectorSubjects } from './namespace/index.js';
@@ -210,7 +211,7 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
     this.userMessageQueue = new UserMessageQueue();
 
     // Initialize session with tool approval handler
-    await this.session.initialize(() => this.createToolApprovalHandler(), responseSchema);
+    await this.session.initialize((toolPolicy) => this.createToolApprovalHandler(toolPolicy), responseSchema);
 
     // Wire turn events for state updates
     this.wireSessionEvents();
@@ -323,20 +324,20 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
   /**
    * Create the tool approval handler for SDK query options.
    * Extracted to allow reuse when creating new query instances.
+   * @param toolPolicy - Caller tool policy resolved once per query by `buildQueryOptions`.
    * @returns The canUseTool callback function for SDK query options
    */
-  private createToolApprovalHandler(): Options['canUseTool'] {
-    const { allowedTools } = this.config as ClaudeAgentConfig;
-    const allowlist = allowedTools === undefined ? undefined : new Set(allowedTools);
+  private createToolApprovalHandler(toolPolicy: ResolvedToolPolicy): Options['canUseTool'] {
     return async (toolName, input, options) => {
-      // Caller allowlist gate. SDK `tools` only filters built-ins, so MCP tools
-      // (`mcp__<server>__<tool>`) are only restricted here. Names match verbatim;
-      // permission-rule entries are rejected earlier in buildQueryOptions. Denied
-      // calls never reach central approval; `[]` denies every tool.
-      if (allowlist !== undefined && !allowlist.has(toolName)) {
+      // Caller tool policy gate (Makaio-named allow/deny lists), second layer behind the
+      // adapter-owned PreToolUse hook: it covers hook-disabled setups and must hold for the
+      // approver-rewritten input below. Denied calls never reach central approval; `[]`
+      // denies every tool.
+      const decision = toolPolicy.checkToolCall(toolName, input);
+      if (!decision.allowed) {
         return {
           behavior: 'deny',
-          message: `Tool ${toolName} is not on the step's allowlist`,
+          message: decision.reason,
           interrupt: false,
         } satisfies PermissionResult;
       }
@@ -361,12 +362,23 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
 
       // Map core schema to Claude SDK's PermissionResult
       if (response.action === 'allow') {
+        // The approver may rewrite the input; the gate must hold for the input that
+        // actually runs, so re-check it (e.g. a rewritten `command` outside a granted rule).
+        const approvedInput = (response.updatedInput as Record<string, unknown> | undefined) ?? input;
+        const approvedDecision = toolPolicy.checkToolCall(toolName, approvedInput);
+        if (!approvedDecision.allowed) {
+          return {
+            behavior: 'deny',
+            message: approvedDecision.reason,
+            interrupt: false,
+          } satisfies PermissionResult;
+        }
+
         // Record mcp_call invocations in the session tool ledger after a successful
         // approval. Uses post-approval args so that when an approval handler rewrites
         // the `tool` field the ledger records the target the model actually called.
         if (this.config.toolLedger && isMcpCallTool(toolName)) {
-          const approvedArgs = (response.updatedInput as Record<string, unknown> | undefined) ?? input;
-          const targetTool = extractMcpCallTarget(approvedArgs);
+          const targetTool = extractMcpCallTarget(approvedInput);
           if (targetTool !== undefined) {
             this.config.toolLedger.recordCall(targetTool, this.currentTurnNumber);
           }
@@ -374,9 +386,13 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
 
         return {
           behavior: 'allow',
-          updatedInput: response.updatedInput ?? input,
-          // Cast unknown[] to PermissionUpdate[] - core schema uses unknown for flexibility
-          updatedPermissions: response.updatedPermissions as PermissionUpdate[] | undefined,
+          updatedInput: approvedInput,
+          // Not forwarded while caller tool lists exist: SDK `updatedPermissions` become
+          // persistent session rules that skip `canUseTool` (the second gate layer and
+          // central approval). Cast unknown[] to PermissionUpdate[] - core schema uses unknown.
+          ...(!toolPolicy.restricts && {
+            updatedPermissions: response.updatedPermissions as PermissionUpdate[] | undefined,
+          }),
         } satisfies PermissionResult;
       } else {
         // For abort decision, mark error SYNCHRONOUSLY before returning to SDK.

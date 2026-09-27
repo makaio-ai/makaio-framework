@@ -76,13 +76,13 @@ export const ResolveAgentConfigSchema = {
        */
       systemPrompt: SystemPromptSchema.optional(),
       /**
-       * Allowed tool names (adapter-specific).
+       * Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names.
        * Inherited from the selection source (e.g., a persona's tool policy).
        */
       allowedTools: z.array(z.string()).optional(),
       /**
-       * Disallowed tool names (adapter-specific).
-       * Takes precedence over `allowedTools`.
+       * Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names.
+       * Inherited from the selection source (e.g., a persona's tool policy).
        */
       disallowedTools: z.array(z.string()).optional(),
       /**

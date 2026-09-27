@@ -46,9 +46,9 @@ export type ClaudeCliAgentConfig = BaseAgentConnectorConfig<ClaudeCodeCliConnect
    * (servers + direct/discoverable tools) for the CLI adapter's native-passthrough mode.
    */
   mcpSessionContext?: McpSessionContext;
-  /** Allowed Claude tool names or patterns to pass via `--allowedTools`. */
+  /** Allowlist in Makaio tool names (see `ToolLists` in `@makaio/contracts` tool-names), translated to `--allowedTools`. */
   allowedTools?: string[];
-  /** Disallowed Claude tool names or patterns to pass via `--disallowedTools`. */
+  /** Denylist in Makaio tool names (see `ToolLists` in `@makaio/contracts` tool-names), translated to `--disallowedTools`. */
   disallowedTools?: string[];
   /**
    * Native fork directive from the session orchestrator.
@@ -116,9 +116,9 @@ export interface ClaudeCliSessionConfig extends ConnectorSessionConfig<ClaudeCod
    * except `'extra-high'` which maps to `'max'` (the CLI's accepted value).
    */
   reasoningEffort?: AIReasoningLevel;
-  /** Allowed Claude tool names or patterns to pass via `--allowedTools`. */
+  /** Allowlist in Makaio tool names (see `ToolLists` in `@makaio/contracts` tool-names), translated to `--allowedTools`. */
   allowedTools?: string[];
-  /** Disallowed Claude tool names or patterns to pass via `--disallowedTools`. */
+  /** Denylist in Makaio tool names (see `ToolLists` in `@makaio/contracts` tool-names), translated to `--disallowedTools`. */
   disallowedTools?: string[];
   /**
    * Absolute path to the `claude` CLI binary.

@@ -1,3 +1,4 @@
+import { NATIVE_TOOL_NAMES } from '@makaio/contracts';
 import type {
   SDKAssistantMessage,
   SDKCompactBoundaryMessage,
@@ -16,24 +17,17 @@ import type {
 //
 // Consumers written for the Claude Agent SDK expect PascalCase tool names
 // (Read, Bash, Edit, etc.) in tool_use content blocks. Makaio's framework
-// tools use snake_case (read_file, shell_exec, etc.). This table normalizes
+// tools use snake_case (read_file, shell_exec, etc.). This lookup normalizes
 // at the SDK boundary so consumers see identical names regardless of backend.
 // Unknown tool names (MCP tools, user-defined tools) pass through unchanged.
 // ---------------------------------------------------------------------------
 
-const TOOL_NAME_MAP: ReadonlyMap<string, string> = new Map([
-  // Verified against live Claude Code sessions (JSONL transcripts, 2026-05-19).
-  // Fixtures: __tests__/fixtures/claude-tool-use-blocks.json
-  ['read_file', 'Read'],
-  ['write_file', 'Write'],
-  ['edit_file', 'Edit'],
-  ['glob_files', 'Glob'],
-  ['grep_files', 'Grep'],
-  ['shell_exec', 'Bash'],
-  ['shell_kill', 'TaskStop'],
-  ['spawn_subagent', 'Agent'],
-  ['send_to_subagent', 'SendMessage'],
-]);
+// Built from the single Makaio -> Claude table in @makaio/contracts
+// (NATIVE_TOOL_NAMES.claude), verified against live Claude Code sessions.
+// Fixtures: __tests__/fixtures/claude-tool-use-blocks.json
+const TOOL_NAME_MAP: ReadonlyMap<string, string> = new Map(
+  Object.entries(NATIVE_TOOL_NAMES.claude).filter((entry): entry is [string, string] => entry[1] !== undefined),
+);
 
 /**
  * Normalize a Makaio tool name to its Claude-compatible equivalent.

@@ -1,8 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildQueryOptions } from '../src/utils/buildQueryOptions.js';
 import type { ClaudeSessionConfig } from '../src/types/index.js';
 import { SessionLifecycle } from '@makaio/ai-adapters-core';
-import type { Options } from '@anthropic-ai/claude-agent-sdk';
+import { ToolNameError } from '@makaio/contracts';
+import type { ResolvedToolPolicy } from '@makaio/contracts';
+import type {
+  HookCallback,
+  HookCallbackMatcher,
+  HookJSONOutput,
+  Options,
+  PreToolUseHookInput,
+} from '@anthropic-ai/claude-agent-sdk';
 
 /**
  * Minimal `ClaudeSessionConfig` fixture for `buildQueryOptions` unit tests.
@@ -259,62 +267,66 @@ describe('buildQueryOptions — tool policy behaviour', () => {
     expect(options.allowedTools).toEqual(['Read']);
   });
 
+  it('maps a Makaio allowlist entry to the native built-in tool', () => {
+    const options = buildWithToolPolicy({ allowedTools: ['read_file'] });
+
+    expect(options.tools).toEqual(['Read']);
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
+  });
+
   it('restricts available tools without auto-approving them when an allowlist is given', () => {
-    const allowlist = ['Read', 'Edit', 'Write', 'Glob', 'Grep'];
+    const allowlist = ['read_file', 'edit_file', 'write_file', 'glob_files', 'grep_files'];
     const options = buildWithToolPolicy({ allowedTools: allowlist });
 
-    expect(options.tools).toEqual(allowlist);
-    expect(options).not.toHaveProperty('allowedTools');
+    expect(options.tools).toEqual(['Read', 'Edit', 'Write', 'Glob', 'Grep']);
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
     expect(options).not.toHaveProperty('disallowedTools');
   });
 
   it('keeps MCP allowlist entries out of the built-in tool set', () => {
-    const options = buildWithToolPolicy({ allowedTools: ['Read', 'mcp__makaio__search'] });
+    const options = buildWithToolPolicy({ allowedTools: ['read_file', 'mcp__makaio__search'] });
 
     expect(options.tools).toEqual(['Read']);
-    expect(options).not.toHaveProperty('allowedTools');
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
   });
 
-  it('rejects command-specific permission rules in the allowlist instead of widening them', () => {
-    expect(() => buildWithToolPolicy({ allowedTools: ['Edit', 'Bash(git status)'] })).toThrow(
-      /Command-specific permission rules in allowedTools are not supported yet; use base tool names/,
-    );
+  it('accepts a command-specific permission rule on shell_exec and makes its base tool available, without auto-approving it', () => {
+    const options = buildWithToolPolicy({ allowedTools: ['shell_exec(git status)'] });
+
+    expect(options.tools).toEqual(['Bash']);
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
+  });
+
+  it('rejects native Claude tool names in the allowlist', () => {
+    expect(() => buildWithToolPolicy({ allowedTools: ['Read'] })).toThrow(ToolNameError);
+  });
+
+  it('rejects WebFetch in the allowlist', () => {
+    expect(() => buildWithToolPolicy({ allowedTools: ['WebFetch'] })).toThrow(ToolNameError);
+  });
+
+  it('rejects command-specific permission rules on tools other than shell_exec', () => {
+    expect(() => buildWithToolPolicy({ allowedTools: ['read_file(x)'] })).toThrow(ToolNameError);
   });
 
   it('deduplicates allowlist entries', () => {
-    const options = buildWithToolPolicy({ allowedTools: ['Read', 'Edit', 'Read'] });
+    const options = buildWithToolPolicy({ allowedTools: ['read_file', 'edit_file', 'read_file'] });
 
     expect(options.tools).toEqual(['Read', 'Edit']);
   });
 
   it('replaces provider-config tools with the caller allowlist and drops provider auto-approvals outside it', () => {
     const options = buildWithToolPolicy({
-      allowedTools: ['Read'],
+      allowedTools: ['read_file'],
       providerConfig: { queryOptions: { tools: ['Bash', 'Read'], allowedTools: ['Bash'] } },
     });
 
     expect(options.tools).toEqual(['Read']);
     expect(options.allowedTools).toEqual([]);
-  });
-
-  it('intersects provider-config auto-approvals with the caller allowlist', () => {
-    const options = buildWithToolPolicy({
-      allowedTools: ['Read', 'mcp__makaio__search'],
-      providerConfig: {
-        queryOptions: { allowedTools: ['Bash', 'Read', 'mcp__makaio__search', 'mcp__other__tool', 'Write'] },
-      },
-    });
-
-    expect(options.allowedTools).toEqual(['Read', 'mcp__makaio__search']);
-  });
-
-  it('keeps a provider permission-rule auto-approval only when its base tool is on the caller allowlist', () => {
-    const options = buildWithToolPolicy({
-      allowedTools: ['Bash'],
-      providerConfig: { queryOptions: { allowedTools: ['Bash(git status)', 'Edit(src/**)', 'Read'] } },
-    });
-
-    expect(options.allowedTools).toEqual(['Bash(git status)']);
   });
 
   it('clears all provider-config auto-approvals for an explicitly empty allowlist', () => {
@@ -325,41 +337,258 @@ describe('buildQueryOptions — tool policy behaviour', () => {
 
     expect(options.tools).toEqual([]);
     expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
   });
 
-  it('keeps provider-config auto-approvals untouched when only a denylist is given', () => {
+  it('clears provider-config auto-approvals when only a denylist is given', () => {
     const options = buildWithToolPolicy({
-      disallowedTools: ['WebFetch'],
+      disallowedTools: ['write_file'],
       providerConfig: { queryOptions: { allowedTools: ['Bash', 'Read'] } },
     });
 
-    expect(options.allowedTools).toEqual(['Bash', 'Read']);
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
   });
 
   it('disables all built-in tools for an explicitly empty allowlist', () => {
     const options = buildWithToolPolicy({ allowedTools: [] });
 
     expect(options.tools).toEqual([]);
-    expect(options).not.toHaveProperty('allowedTools');
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
+  });
+
+  it('forces permissionMode to default when the provider config sets bypassPermissions and the caller passes a list', () => {
+    const options = buildWithToolPolicy({
+      allowedTools: ['read_file'],
+      providerConfig: { queryOptions: { permissionMode: 'bypassPermissions' } },
+    });
+
+    expect(options.permissionMode).toBe('default');
+    expect(options.allowedTools).toEqual([]);
+  });
+
+  it('forces permissionMode to default when the provider config sets acceptEdits and the caller passes a denylist', () => {
+    const options = buildWithToolPolicy({
+      disallowedTools: ['write_file'],
+      providerConfig: { queryOptions: { permissionMode: 'acceptEdits' } },
+    });
+
+    expect(options.permissionMode).toBe('default');
+    expect(options.allowedTools).toEqual([]);
+  });
+
+  it('leaves provider-config permissionMode and allowedTools untouched without caller lists', () => {
+    const options = buildWithToolPolicy({
+      providerConfig: { queryOptions: { permissionMode: 'bypassPermissions', allowedTools: ['Read'] } },
+    });
+
+    expect(options.permissionMode).toBe('bypassPermissions');
+    expect(options.allowedTools).toEqual(['Read']);
   });
 
   it('forwards disallowedTools permission rules verbatim without restricting the available tool set', () => {
-    const options = buildWithToolPolicy({ disallowedTools: ['WebFetch', 'Bash(rm *)'] });
+    const options = buildWithToolPolicy({ disallowedTools: ['write_file', 'shell_exec(rm:*)'] });
 
-    expect(options.disallowedTools).toEqual(['WebFetch', 'Bash(rm *)']);
+    expect(options.disallowedTools).toEqual(['Write', 'Bash(rm:*)']);
     expect(options).not.toHaveProperty('tools');
-    expect(options).not.toHaveProperty('allowedTools');
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
+  });
+
+  it('translates a denylist prefix rule to a native permission rule', () => {
+    const options = buildWithToolPolicy({ disallowedTools: ['shell_exec(rm -rf:*)'] });
+
+    expect(options.disallowedTools).toEqual(['Bash(rm -rf:*)']);
   });
 
   it('routes allowlisted tools through the canUseTool approval handler', () => {
     const approvalHandler: NonNullable<Options['canUseTool']> = async () => ({ behavior: 'deny', message: 'no' });
     const options = buildQueryOptions({
-      config: makeMinimalConfig({ allowedTools: ['Read'] }),
+      config: makeMinimalConfig({ allowedTools: ['read_file'] }),
       lifecycle: makeLifecycleStub(),
       createToolApprovalHandler: () => approvalHandler,
       sessionId: 'session-test',
     });
 
     expect(options.canUseTool).toBe(approvalHandler);
+  });
+});
+
+describe('buildQueryOptions — tool policy PreToolUse hook', () => {
+  /** Provider PreToolUse hook that never decides. */
+  const providerPreToolUseHook: HookCallback = async () => ({});
+  /** Provider PostToolUse hook that never decides. */
+  const providerPostToolUseHook: HookCallback = async () => ({});
+
+  /**
+   * Build SDK options for the given config overrides.
+   * @param overrides - Config overrides (tool lists, provider config).
+   * @returns SDK query options.
+   */
+  function build(overrides: Partial<ClaudeSessionConfig>): Options {
+    return buildQueryOptions({
+      config: makeMinimalConfig(overrides),
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler: () => undefined,
+      sessionId: 'session-test',
+    });
+  }
+
+  /**
+   * Extract the adapter-owned policy hook: the single callback of the last PreToolUse matcher.
+   * @param options - SDK query options built with caller tool lists.
+   * @returns The policy hook callback.
+   */
+  function policyHookOf(options: Options): HookCallback {
+    const matchers = options.hooks?.PreToolUse ?? [];
+    const policyMatcher = matchers.at(-1);
+    expect(policyMatcher?.hooks).toHaveLength(1);
+    const hook = policyMatcher?.hooks[0];
+    if (hook === undefined) throw new Error('policy hook missing');
+    return hook;
+  }
+
+  /**
+   * Invoke a PreToolUse hook the way the SDK does.
+   * @param hook - Hook callback under test.
+   * @param toolName - Native tool name of the call.
+   * @param toolInput - Tool call input.
+   * @returns The hook output.
+   */
+  function callPreToolUse(hook: HookCallback, toolName: string, toolInput: unknown): Promise<HookJSONOutput> {
+    const input: PreToolUseHookInput = {
+      session_id: 'session-test',
+      transcript_path: '/tmp/transcript.jsonl',
+      cwd: '/tmp',
+      permission_mode: 'default',
+      hook_event_name: 'PreToolUse',
+      tool_name: toolName,
+      tool_input: toolInput,
+      tool_use_id: 'toolu-test',
+    };
+    return hook(input, 'toolu-test', { signal: new AbortController().signal });
+  }
+
+  /**
+   * Assert a hook output is a PreToolUse deny with a non-empty reason.
+   * @param output - Hook output.
+   */
+  function expectDeny(output: HookJSONOutput): void {
+    expect(output).toMatchObject({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny' },
+    });
+    const reason = (output as { hookSpecificOutput?: { permissionDecisionReason?: unknown } }).hookSpecificOutput
+      ?.permissionDecisionReason;
+    expect(typeof reason).toBe('string');
+    expect(reason).not.toBe('');
+  }
+
+  it('leaves provider hooks untouched without caller lists', () => {
+    const providerHooks: Options['hooks'] = {
+      PreToolUse: [{ matcher: 'Bash', hooks: [providerPreToolUseHook] }],
+      PostToolUse: [{ hooks: [providerPostToolUseHook] }],
+    };
+    const options = build({ providerConfig: { queryOptions: { hooks: providerHooks } } });
+
+    expect(options.hooks).toBe(providerHooks);
+    expect(options.hooks?.PreToolUse).toHaveLength(1);
+  });
+
+  it('emits no hooks without caller lists when the provider config has none', () => {
+    const options = build({});
+
+    expect(options).not.toHaveProperty('hooks');
+  });
+
+  it('appends the matcherless policy matcher after provider PreToolUse matchers and keeps other events', () => {
+    const firstProviderMatcher: HookCallbackMatcher = { matcher: 'Bash', hooks: [providerPreToolUseHook] };
+    const secondProviderMatcher: HookCallbackMatcher = { hooks: [providerPreToolUseHook] };
+    const postToolUse: HookCallbackMatcher[] = [{ hooks: [providerPostToolUseHook] }];
+    const options = build({
+      allowedTools: ['read_file'],
+      providerConfig: {
+        queryOptions: {
+          hooks: { PreToolUse: [firstProviderMatcher, secondProviderMatcher], PostToolUse: postToolUse },
+        },
+      },
+    });
+
+    const preToolUse = options.hooks?.PreToolUse ?? [];
+    expect(preToolUse).toHaveLength(3);
+    // Provider matchers are wrapped copies (see buildQueryOptions.provider-hooks.test.ts).
+    expect(preToolUse[0]).toMatchObject({ matcher: 'Bash' });
+    expect(preToolUse[0]?.hooks).toHaveLength(1);
+    expect(preToolUse[1]).not.toHaveProperty('matcher');
+    expect(preToolUse[1]?.hooks).toHaveLength(1);
+    expect(preToolUse[2]).not.toHaveProperty('matcher');
+    expect(preToolUse[2]?.hooks[0]).not.toBe(providerPreToolUseHook);
+    expect(options.hooks?.PostToolUse).toBe(postToolUse);
+  });
+
+  it('denies an MCP tool outside the allowlist and passes an allowlisted built-in with an empty output', async () => {
+    const hook = policyHookOf(build({ allowedTools: ['read_file'] }));
+
+    expectDeny(await callPreToolUse(hook, 'mcp__claude_ai_Foo__bar', {}));
+
+    const passOutput = await callPreToolUse(hook, 'Read', { file_path: '/tmp/a.txt' });
+    expect(passOutput).toEqual({});
+    expect(passOutput).not.toHaveProperty('hookSpecificOutput');
+  });
+
+  it('denies a Skill call the allowlist does not cover', async () => {
+    const hook = policyHookOf(build({ allowedTools: ['read_file'] }));
+
+    expectDeny(await callPreToolUse(hook, 'Skill', { skill: 'x' }));
+  });
+
+  it('enforces a denylist command rule even with provider skills enabled', async () => {
+    const options = build({
+      disallowedTools: ['shell_exec(git push:*)'],
+      providerConfig: { queryOptions: { skills: 'all' } },
+    });
+    const hook = policyHookOf(options);
+
+    expectDeny(await callPreToolUse(hook, 'Bash', { command: 'git push origin' }));
+    expect(await callPreToolUse(hook, 'Bash', { command: 'git status' })).toEqual({});
+  });
+
+  it('denies a Bash call with a non-object input when a denylist command rule targets Bash', async () => {
+    const hook = policyHookOf(build({ disallowedTools: ['shell_exec(rm -rf:*)'] }));
+
+    expectDeny(await callPreToolUse(hook, 'Bash', 'rm -rf /'));
+  });
+
+  it('hands the resolved policy to createToolApprovalHandler and overrides provider bypasses with caller lists', () => {
+    const createToolApprovalHandler = vi.fn((_policy: ResolvedToolPolicy): Options['canUseTool'] => undefined);
+    const options = buildQueryOptions({
+      config: makeMinimalConfig({
+        allowedTools: ['read_file'],
+        providerConfig: { queryOptions: { permissionMode: 'bypassPermissions', allowedTools: ['Bash'] } },
+      }),
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler,
+      sessionId: 'session-test',
+    });
+
+    expect(createToolApprovalHandler).toHaveBeenCalledTimes(1);
+    const policy = createToolApprovalHandler.mock.calls[0]?.[0];
+    expect(policy?.restricts).toBe(true);
+    expect(policy?.checkToolCall('Read', {})).toEqual({ allowed: true });
+    expect(options.allowedTools).toEqual([]);
+    expect(options.permissionMode).toBe('default');
+  });
+
+  it('hands a non-restricting policy to createToolApprovalHandler without caller lists', () => {
+    const createToolApprovalHandler = vi.fn((_policy: ResolvedToolPolicy): Options['canUseTool'] => undefined);
+    buildQueryOptions({
+      config: makeMinimalConfig(),
+      lifecycle: makeLifecycleStub(),
+      createToolApprovalHandler,
+      sessionId: 'session-test',
+    });
+
+    expect(createToolApprovalHandler).toHaveBeenCalledTimes(1);
+    expect(createToolApprovalHandler.mock.calls[0]?.[0]?.restricts).toBe(false);
   });
 });

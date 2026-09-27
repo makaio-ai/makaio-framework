@@ -75,10 +75,10 @@ export const AgentSelectionBaseSchema = z.looseObject({
    */
   systemPrompt: SystemPromptSchema.optional(),
 
-  /** Allowed tool names (adapter-specific). Empty array = disable all tools. */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   allowedTools: z.array(z.string()).optional(),
 
-  /** Disallowed tool names (adapter-specific). Takes precedence over allowedTools. */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   disallowedTools: z.array(z.string()).optional(),
 
   /** Environment variables to pass to agent execution. */

@@ -4,19 +4,13 @@ import { SystemPromptSchema } from '../../shared/index.js';
 /**
  * Runtime options for agent execution.
  *
- * SEAM: Tool naming is adapter-specific and not yet normalized.
- * Use `allowedTools`/`disallowedTools` with provider-specific tool names.
+ * `allowedTools`/`disallowedTools`: Makaio tool names; format and semantics: `ToolLists`
+ * in `@makaio/contracts` tool-names.
  * @example
  * ```typescript
- * // Claude Code adapter
  * runtimeOptions: {
  *   cwd: '/path/to/project',
- *   allowedTools: ['Read', 'WebSearch'],  // Claude Code tool names
- * }
- *
- * // Future: Other adapters will have different tool names
- * runtimeOptions: {
- *   allowedTools: ['file_read', 'web_search'],  // Hypothetical OpenAI adapter
+ *   allowedTools: ['read_file', 'shell_exec(git status)'],  // Makaio tool names
  * }
  * ```
  */
@@ -27,17 +21,10 @@ export const AdapterRuntimeOptionsSchema = z.object({
    */
   cwd: z.string().optional(),
 
-  /**
-   * Allowed tool names (adapter-specific).
-   * Empty array = disable all tools.
-   * Undefined = use adapter defaults.
-   */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   allowedTools: z.array(z.string()).optional(),
 
-  /**
-   * Disallowed tool names (adapter-specific).
-   * Takes precedence over allowedTools.
-   */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   disallowedTools: z.array(z.string()).optional(),
 
   /**

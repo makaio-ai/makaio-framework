@@ -71,9 +71,9 @@ export interface ConfigFactoryInput<TBus extends ScopedBus<string> = ScopedBus<s
   errorHandler?: (error: Error, terminate: boolean) => void;
 
   // Runtime options from StartAgentRequest (flow through to connector)
-  /** Allowed tool names (adapter-specific). Empty array = disable all tools. */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   allowedTools?: string[];
-  /** Disallowed tool names (adapter-specific). Takes precedence over allowedTools. */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   disallowedTools?: string[];
   /** Directory restrictions for file-system tool execution. */
   allowedDirectories?: string[];

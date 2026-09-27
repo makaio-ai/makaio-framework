@@ -13,6 +13,7 @@ import type {
   McpRuntimeSessionContext,
   McpSessionContext,
   NativeForkDirective,
+  ResolvedToolPolicy,
   SystemPrompt,
 } from '@makaio/contracts';
 
@@ -45,7 +46,10 @@ export type ClaudeQueryOptions = Omit<Options, 'abortController'>;
  * how the SDK processes messages and queries.
  */
 export interface ClaudeSpecificConfig {
-  /** SDK query options (excluding cwd/model which are handled at base level) */
+  /**
+   * SDK query options (excluding cwd/model which are handled at base level). Operator-trusted
+   * input: it can deliberately widen the caller tool lists (see `ToolLists` trust boundary).
+   */
   queryOptions?: Omit<ClaudeQueryOptions, 'cwd' | 'model'>;
   /** Use SDK immediate message mode for faster streaming responses */
   useSdkImmediateMessageMode?: boolean;
@@ -90,8 +94,11 @@ export type ClaudeAgentConfig = Omit<
   nativeFork?: NativeForkDirective;
 };
 
-/** Factory type for creating tool approval handlers */
-export type CreateToolApprovalHandler = () => Options['canUseTool'];
+/**
+ * Factory type for creating tool approval handlers.
+ * @param policy - Caller tool policy resolved once for the query being built.
+ */
+export type CreateToolApprovalHandler = (policy: ResolvedToolPolicy) => Options['canUseTool'];
 
 /**
  * Callback type for emitting SDK events with connector metadata.
@@ -167,27 +174,35 @@ export interface ClaudeSessionConfig extends ConnectorSessionConfig<ClaudeCodeCo
   mcpUpstreamServers?: McpResolvedServer[];
 
   /**
-   * Exact tool allowlist granted by the caller (e.g. a workflow delegate's `allowedTools`).
+   * Tool allowlist granted by the caller (e.g. a workflow delegate's `allowedTools`).
    *
-   * Entries are plain Claude Code tool names, matched verbatim: built-in names such as
-   * `Read`, `Edit`, `Bash`, or MCP names such as `mcp__server__tool`. Command-specific
-   * permission rules such as `Bash(git status)` are rejected with a configuration error
-   * when the query is built (no widening to the base tool).
+   * Entries use Makaio tool names (`read_file`, `edit_file`, `shell_exec`, ...) or MCP
+   * names (`mcp__server__tool`); Claude Code names such as `Read` or `Bash` are rejected.
+   * `shell_exec` accepts command rules: `shell_exec(git status)` (exact command) or
+   * `shell_exec(git log:*)` (command prefix). Invalid entries throw a `ToolNameError`
+   * when the query is built.
    *
-   * When set, the SDK query exposes only the named built-in tools (SDK `tools`), and the
-   * `canUseTool` handler denies every tool call (built-in or MCP) whose name is not on
-   * the list. Listed tools are not auto-approved: their calls still go through the
-   * central tool approval service. Provider-config `queryOptions.allowedTools`
-   * auto-approvals are intersected with the list (an entry stays when the list names it,
-   * a permission rule `Name(...)` when the list names `Name`). An empty array denies every
-   * tool and clears all auto-approvals. `undefined` leaves tool availability and approval
+   * When set, the SDK query exposes only the granted native built-in tools (SDK `tools`,
+   * base names, e.g. `Bash` for `shell_exec(git status)`), and an adapter-owned PreToolUse
+   * hook denies every tool call (built-in, MCP, or `Skill`) the list does not cover,
+   * including shell commands outside a granted rule; the `canUseTool` handler checks the
+   * lists again. Listed tools are not auto-approved: their calls still go through the
+   * central tool approval service. While this list or `disallowedTools` is set,
+   * provider-config `queryOptions.allowedTools` auto-approvals are dropped,
+   * `queryOptions.permissionMode` is reset to `'default'`, and approval-granted
+   * `updatedPermissions` are not forwarded, since each would skip `canUseTool` and
+   * central approval. The SDK still auto-approves `Skill` calls derived from the `skills`
+   * option; the hook denies them when the lists do not cover `Skill`. An
+   * approver-rewritten input is re-checked against the lists. An empty array denies every
+   * tool. `undefined` (with no `disallowedTools`) leaves tool availability and approval
    * unchanged.
    */
   allowedTools?: string[];
   /**
-   * Tool denylist in the Claude Code tool-name form; unlike `allowedTools`, entries may be
-   * permission rules such as `Bash(rm *)`. Forwarded verbatim to SDK `disallowedTools`,
-   * which removes these tools from the model's context; takes precedence over `allowedTools`.
+   * Tool denylist using Makaio tool names or MCP names, same entry syntax as
+   * `allowedTools` (e.g. `shell_exec(rm -rf:*)`). Translated to native entries with
+   * rules kept (`Bash(rm -rf:*)`) for SDK `disallowedTools`, and enforced per call by the
+   * PreToolUse hook and the `canUseTool` handler; takes precedence over `allowedTools`.
    */
   disallowedTools?: string[];
 

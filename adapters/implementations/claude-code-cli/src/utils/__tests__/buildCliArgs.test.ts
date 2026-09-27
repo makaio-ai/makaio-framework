@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { ToolNameError } from '@makaio/contracts';
 import { buildCliArgs } from '../buildCliArgs.js';
 import type { ClaudeCliSessionConfig } from '../../types.js';
 
@@ -100,30 +101,69 @@ describe('buildCliArgs', () => {
   });
 
   describe('tool policy', () => {
-    it('passes allowedTools as a deterministic comma-separated allow-list', () => {
+    /**
+     * Reads the value following a CLI flag.
+     * @param args - Built CLI args
+     * @param flag - Flag name
+     * @returns The flag value, or undefined when the flag is absent
+     */
+    function flagValue(args: string[], flag: string): string | undefined {
+      const idx = args.indexOf(flag);
+      return idx === -1 ? undefined : args[idx + 1];
+    }
+
+    it('translates a Makaio allowlist to Claude-native --allowedTools entries in caller order', () => {
       const args = buildCliArgs({
-        config: makeConfig({ allowedTools: ['Bash(git status)', 'Edit', 'mcp__makaio__approve'] }),
+        config: makeConfig({ allowedTools: ['shell_exec(git status)', 'edit_file', 'mcp__makaio__approve'] }),
         prompt: 'hi',
         sessionId: 'sid',
       });
 
-      const idx = args.indexOf('--allowedTools');
-      expect(idx).toBeGreaterThan(-1);
-      expect(args[idx + 1]).toBe('Bash(git status),Edit,mcp__makaio__approve');
+      expect(flagValue(args, '--allowedTools')).toBe('Bash(git status),Edit,mcp__makaio__approve');
       expect(args).not.toContain('--disallowedTools');
     });
 
-    it('passes disallowedTools as a deterministic comma-separated deny-list', () => {
+    it('renders a shell_exec prefix rule in the native Bash(prefix:*) form', () => {
       const args = buildCliArgs({
-        config: makeConfig({ disallowedTools: ['WebSearch', 'Bash(rm *)'] }),
+        config: makeConfig({ allowedTools: ['shell_exec(git log:*)'] }),
         prompt: 'hi',
         sessionId: 'sid',
       });
 
-      const idx = args.indexOf('--disallowedTools');
-      expect(idx).toBeGreaterThan(-1);
-      expect(args[idx + 1]).toBe('WebSearch,Bash(rm *)');
+      expect(flagValue(args, '--allowedTools')).toBe('Bash(git log:*)');
+    });
+
+    it('passes MCP tool names through unchanged', () => {
+      const args = buildCliArgs({
+        config: makeConfig({ allowedTools: ['mcp__s__t'], disallowedTools: ['mcp__github__push'] }),
+        prompt: 'hi',
+        sessionId: 'sid',
+      });
+
+      expect(flagValue(args, '--allowedTools')).toBe('mcp__s__t');
+      expect(flagValue(args, '--disallowedTools')).toBe('mcp__github__push');
+    });
+
+    it('translates a Makaio denylist to Claude-native --disallowedTools entries', () => {
+      const args = buildCliArgs({
+        config: makeConfig({ disallowedTools: ['write_file', 'shell_exec(rm -rf:*)'] }),
+        prompt: 'hi',
+        sessionId: 'sid',
+      });
+
+      expect(flagValue(args, '--disallowedTools')).toBe('Write,Bash(rm -rf:*)');
       expect(args).not.toContain('--allowedTools');
+    });
+
+    it('emits both flags when both lists are set', () => {
+      const args = buildCliArgs({
+        config: makeConfig({ allowedTools: ['read_file'], disallowedTools: ['shell_exec'] }),
+        prompt: 'hi',
+        sessionId: 'sid',
+      });
+
+      expect(flagValue(args, '--allowedTools')).toBe('Read');
+      expect(flagValue(args, '--disallowedTools')).toBe('Bash');
     });
 
     it('preserves an empty allowedTools list as an explicit empty allow-list', () => {
@@ -133,9 +173,26 @@ describe('buildCliArgs', () => {
         sessionId: 'sid',
       });
 
-      const idx = args.indexOf('--allowedTools');
-      expect(idx).toBeGreaterThan(-1);
-      expect(args[idx + 1]).toBe('');
+      expect(flagValue(args, '--allowedTools')).toBe('');
+    });
+
+    it('omits both flags when no list is set', () => {
+      const args = buildCliArgs({ config: makeConfig(), prompt: 'hi', sessionId: 'sid' });
+
+      expect(args).not.toContain('--allowedTools');
+      expect(args).not.toContain('--disallowedTools');
+    });
+
+    it('rejects Claude-native names in the allowlist with a ToolNameError', () => {
+      expect(() =>
+        buildCliArgs({ config: makeConfig({ allowedTools: ['Read'] }), prompt: 'hi', sessionId: 'sid' }),
+      ).toThrow(expect.objectContaining({ name: 'ToolNameError', entry: 'Read', reason: 'unknown-tool' }));
+    });
+
+    it('rejects Claude-native names in the denylist with a ToolNameError', () => {
+      expect(() =>
+        buildCliArgs({ config: makeConfig({ disallowedTools: ['Bash(rm:*)'] }), prompt: 'hi', sessionId: 'sid' }),
+      ).toThrow(ToolNameError);
     });
   });
 

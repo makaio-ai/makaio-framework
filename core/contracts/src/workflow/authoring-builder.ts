@@ -41,7 +41,10 @@ export type DelegateToRoleOptions = NodeOptions & {
   readonly timeoutMs?: number;
   /** Completion behavior requested from the spawned role subagent. */
   readonly completion?: CompletionMode;
-  /** Exact tool allowlist selected for this delegation. */
+  /**
+   * Exact tool allowlist selected for this delegation. Makaio tool names; format and
+   * semantics: `ToolLists` in `@makaio/contracts` tool-names.
+   */
   readonly allowedTools?: string[];
   /** Authority-owned finalizer applied to the successful delegate result. */
   readonly resultFinalizerId?: string;
@@ -62,7 +65,10 @@ export interface AgentConfig {
    * JSON Schema for the expected agent output.
    */
   readonly outputSchema?: Record<string, JsonValue>;
-  /** Exact tool allowlist selected for this delegation. */
+  /**
+   * Exact tool allowlist selected for this delegation, same Makaio tool names and rule
+   * syntax as {@link DelegateToRoleOptions.allowedTools}.
+   */
   readonly allowedTools?: string[];
   /** Completion contract for the spawned subagent. Defaults to tool completion. */
   readonly completion?: CompletionMode;

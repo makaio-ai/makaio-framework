@@ -1,4 +1,10 @@
-import { parseCanonicalModel } from '@makaio/contracts';
+import {
+  NATIVE_TOOL_NAMES,
+  parseCanonicalModel,
+  parseToolListEntry,
+  toMakaioToolName,
+  ToolNameError,
+} from '@makaio/contracts';
 import type { JsonValue, ResolvableCanonicalModel } from '@makaio/contracts';
 import type { TransportAuth } from '@makaio/bus-transport-websocket';
 import type { CanUseToolCallback, MakaioOptions, MakaioToolDefinition, McpServerConfig } from './types.js';
@@ -30,10 +36,38 @@ export interface ResolvedQueryConfig {
 }
 
 /**
+ * Translates one Claude-vocabulary tool list entry to the Makaio vocabulary.
+ *
+ * This is the input contract of the Claude-Agent-SDK-compatible surface: callers
+ * name tools as the Claude Agent SDK does (`Read`, `Bash(git status)`), Makaio
+ * adapters expect Makaio names (`read_file`, `shell_exec(git status)`). The base
+ * name is translated; a rule suffix (`(git status)`, `(git log:*)`) is kept
+ * verbatim; `mcp__<server>__<tool>` entries pass through unchanged.
+ * @param entry - Tool list entry in the Claude vocabulary.
+ * @returns The equivalent entry in the Makaio vocabulary.
+ * @throws {@link ToolNameError} `malformed-entry` for an unparseable entry,
+ * `unknown-tool` when the Claude name has no Makaio equivalent (e.g. `WebFetch`).
+ */
+export function toMakaioToolListEntry(entry: string): string {
+  const { name } = parseToolListEntry(entry);
+  const makaioName = toMakaioToolName('claude', name);
+  if (makaioName === undefined) {
+    const supported = Object.values(NATIVE_TOOL_NAMES.claude).join(', ');
+    throw new ToolNameError(
+      entry,
+      'unknown-tool',
+      `"${name}" has no Makaio equivalent; supported tool names are ${supported} or mcp__<server>__<tool>`,
+    );
+  }
+  return `${makaioName}${entry.slice(name.length)}`;
+}
+
+/**
  * Normalize user-provided MakaioOptions into internal config.
  * @param options - User-provided query options.
  * @returns Resolved query config with a parsed canonical model.
  * @throws MakaioModelError on invalid or unsupported model string.
+ * @throws {@link ToolNameError} when an `allowedTools`/`disallowedTools` entry has no Makaio equivalent.
  */
 export function normalizeOptions(options: MakaioOptions): ResolvedQueryConfig {
   if (options.resume !== undefined) {
@@ -63,8 +97,11 @@ export function normalizeOptions(options: MakaioOptions): ResolvedQueryConfig {
     cwd: options.cwd ?? process.cwd(),
     systemPrompt: options.systemPrompt,
     tools: options.tools ?? [],
-    allowedTools: options.allowedTools,
-    disallowedTools: options.disallowedTools,
+    // Claude-compatible drop-in `query()` surface: it takes Claude tool names and translates
+    // them here, mirroring the output normalisation in messages.ts (same NATIVE_TOOL_NAMES
+    // table). Framework-level tool lists stay Makaio-named and reject Claude names.
+    allowedTools: options.allowedTools?.map(toMakaioToolListEntry),
+    disallowedTools: options.disallowedTools?.map(toMakaioToolListEntry),
     canUseTool: options.canUseTool,
     mcpServers: options.mcpServers,
     maxTurns: options.maxTurns,

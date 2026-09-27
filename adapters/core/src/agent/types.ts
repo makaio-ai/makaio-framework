@@ -60,9 +60,9 @@ export interface AgentRuntimeInput {
   env?: Record<string, string>;
   /** Reasoning effort for supporting adapters */
   reasoningEffort?: AIReasoningLevel;
-  /** Allowed tool names. Empty array disables all adapter-visible tools. */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   allowedTools?: string[];
-  /** Disallowed tool names. Takes precedence over allowedTools. */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   disallowedTools?: string[];
 }
 
@@ -293,9 +293,9 @@ export interface AIAgentConfig<
   definitionProviders?: readonly AdapterProviderDefinition[];
 
   // Runtime options from StartAgentRequest
-  /** Allowed tool names (adapter-specific). Empty array = disable all tools. */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   allowedTools?: string[];
-  /** Disallowed tool names (adapter-specific). Takes precedence over allowedTools. */
+  /** Makaio tool names; format and semantics: `ToolLists` in `@makaio/contracts` tool-names. */
   disallowedTools?: string[];
   /** Directory restrictions for file-system tool execution. */
   allowedDirectories?: string[];

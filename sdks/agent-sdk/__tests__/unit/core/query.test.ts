@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
+import { AgentSubjects, SessionSubjects, ToolNameError } from '@makaio/contracts';
 import type { AgentComplete, AgentStarted } from '@makaio/contracts';
 import type { TransportAuth } from '@makaio/bus-transport-websocket';
 import type { SDKUserMessage } from '../../../src/shared/types.js';
@@ -161,8 +161,8 @@ describe('query()', () => {
         model: 'sonnet',
         cwd: '/tmp/project',
         systemPrompt: 'Be concise',
-        allowedTools: ['Read'],
-        disallowedTools: ['Write'],
+        allowedTools: ['read_file'],
+        disallowedTools: ['write_file'],
         reasoningEffort: 'high',
         env: { FOO: 'bar' },
         mcpSessionContext: {
@@ -176,6 +176,39 @@ describe('query()', () => {
         },
       },
     });
+  });
+
+  it('forwards a rule entry with the base name translated and the rule kept verbatim', async () => {
+    const gen = query({
+      prompt: 'Hello',
+      options: {
+        model: 'sonnet',
+        sessionId: SESSION_ID,
+        allowedTools: ['Bash(git status)'],
+      },
+    });
+    closeWhenReady(gen, cleanups);
+
+    await vi.waitFor(() => expect(sendMessagePayloads).toHaveLength(1));
+
+    expect(sendMessagePayloads[0]).toMatchObject({
+      agent: {
+        allowedTools: ['shell_exec(git status)'],
+      },
+    });
+  });
+
+  it('rejects an allowedTools entry with no Makaio equivalent', () => {
+    expect(() =>
+      query({
+        prompt: 'Hello',
+        options: {
+          model: 'sonnet',
+          sessionId: SESSION_ID,
+          allowedTools: ['WebFetch'],
+        },
+      }),
+    ).toThrow(ToolNameError);
   });
 
   it('converts SDK MCP server instances to HTTP transports before dispatch', async () => {
