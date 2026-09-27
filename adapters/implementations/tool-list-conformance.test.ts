@@ -2,11 +2,13 @@
  * Case 205's counterpart for §3.4 — the tool-list conformance suite (FACT-86).
  *
  * Every adapter that resolves a caller's Makaio tool list into its own native
- * gate has to answer the same seven questions: what the model is offered, what
+ * gate has to answer the same questions: what the model is offered, what
  * a per-call gate does with an empty or restricted list, whether a bypassing
  * provider config still gets defeated, and whether shell command rules and a
- * central-approval rewrite are honoured. This file asks all seven of an adapter
- * through one structural probe contract, so a new adapter proves the same
+ * central-approval rewrite are honoured. Three more ask whether trusted provider
+ * config (a pre-tool hook answering `allow`, possibly with an input rewrite, and
+ * provider-enabled skills) stays bounded by the caller lists. This file asks all of
+ * them of an adapter through one structural probe contract, so a new adapter proves the same
  * properties the moment it exposes a probe — no adapter-specific test file.
  *
  * **Why it lives here and not beside the per-adapter unit tests, or in
@@ -55,6 +57,16 @@ interface ToolListProbeOptions {
    * `permissionMode: 'bypassPermissions'`).
    */
   readonly withBypassingProviderConfig?: boolean;
+  /**
+   * Provider-config pre-tool hook answering every call with this decision and input
+   * rewrite (claude: one `queryOptions.hooks.PreToolUse` matcher without `matcher`).
+   */
+  readonly providerPreToolUseHook?: {
+    readonly decision?: 'allow' | 'deny' | 'ask';
+    readonly updatedInput?: Record<string, unknown>;
+  };
+  /** Provider-config skill enablement (claude: `queryOptions.skills`). */
+  readonly providerSkills?: 'all' | readonly string[];
 }
 
 /** Outcome of one probed tool call through the adapter's per-call gate. */
@@ -79,6 +91,8 @@ interface ToolListProbe {
    * @returns The native tool name.
    */
   nativeName(makaioOrMcpName: string): string;
+  /** Native name of the skill tool, when the adapter has one (claude: `Skill`); it has no Makaio name. */
+  readonly skillToolName?: string;
   /** Built-in tools offered to the model, `'all'` when unrestricted. */
   readonly availableBuiltIns: readonly string[] | 'all';
   /** Settings that would skip the per-call gate. */
@@ -100,8 +114,23 @@ interface ToolListProbe {
 /** Builds a {@link ToolListProbe} for one adapter. */
 type CreateToolListProbe = (options: ToolListProbeOptions) => Promise<ToolListProbe>;
 
-/** One registry entry: a probe-bearing adapter, or a pending one naming its Jira issue. */
-type RegistryEntry = { readonly probe: CreateToolListProbe } | { readonly pending: string };
+/** Probe options an adapter may be unable to express, keyed by the case group that needs them. */
+type ProviderCapability = 'provider-hooks' | 'provider-skills';
+
+/**
+ * One registry entry: a probe-bearing adapter, or a pending one naming its Jira issue. A
+ * probe-bearing adapter lists the provider capabilities it cannot express in
+ * `unsupported`, with the Jira issue (or reason) as value; those cases are skipped with it.
+ */
+type RegistryEntry =
+  | {
+      readonly probe: CreateToolListProbe;
+      readonly unsupported?: Readonly<Partial<Record<ProviderCapability, string>>>;
+    }
+  | { readonly pending: string };
+
+/** A registry entry that carries a probe. */
+type ProbeEntry = Extract<RegistryEntry, { probe: CreateToolListProbe }>;
 
 /**
  * Adapter directory this suite has not yet reached; value is the Jira issue that adds its probe.
@@ -128,10 +157,29 @@ const REGISTRY: Readonly<Record<string, RegistryEntry>> = {
   'qwen-acp': PENDING('FACT-81'),
 };
 
-/** Adapter entries that carry a probe, as `[adapterDir, probe]` pairs for `it.each`. */
-const PROBE_ADAPTERS: readonly (readonly [string, CreateToolListProbe])[] = Object.entries(REGISTRY)
-  .filter((entry): entry is [string, { probe: CreateToolListProbe }] => 'probe' in entry[1])
-  .map(([adapterDir, entry]) => [adapterDir, entry.probe] as const);
+/** Adapter entries that carry a probe, as `[adapterDir, entry]` pairs for `describe.each`. */
+const PROBE_ADAPTERS: readonly (readonly [string, ProbeEntry])[] = Object.entries(REGISTRY).filter(
+  (entry): entry is [string, ProbeEntry] => 'probe' in entry[1],
+);
+
+/**
+ * Register a case that needs a provider capability: runs when the adapter can express it,
+ * otherwise is skipped with the registry's reason in its name.
+ * @param entry - The adapter's registry entry.
+ * @param capability - Provider capability the case needs.
+ * @param name - Case name.
+ * @param fn - Case body.
+ */
+function itWithCapability(
+  entry: ProbeEntry,
+  capability: ProviderCapability,
+  name: string,
+  fn: () => Promise<void>,
+): void {
+  const reason = entry.unsupported?.[capability];
+  if (reason === undefined) it(name, fn);
+  else it.skip(`${name} (not supported: ${capability}, pending ${reason})`, fn);
+}
 
 /** Adapter entries still pending a probe, as `[adapterDir, issue]` pairs. */
 const PENDING_ADAPTERS: readonly (readonly [string, string])[] = Object.entries(REGISTRY)
@@ -145,7 +193,9 @@ const MCP_PROBE_TOOL_NAME = 'mcp__s__t';
 const IMPLEMENTATIONS_DIR = fileURLToPath(new URL('.', import.meta.url));
 
 describe('tool-list conformance suite (FACT-86)', () => {
-  describe.each(PROBE_ADAPTERS)('%s', (_adapterDir, createProbe) => {
+  describe.each(PROBE_ADAPTERS)('%s', (_adapterDir, entry) => {
+    const createProbe = entry.probe;
+
     it('case 1: an empty allowlist offers no built-ins and denies everything without asking central approval', async () => {
       const probe = await createProbe({ allowedTools: [] });
 
@@ -214,6 +264,52 @@ describe('tool-list conformance suite (FACT-86)', () => {
       expect(persisted.allowed).toBe(true);
       expect(persisted.persistsRules).toBe(false);
     });
+
+    // Settings-file allow rules and hooks (`settingSources`) are not probe-expressible; their
+    // live check lives in FACT-72 (Jira) and is not part of this deterministic suite.
+
+    itWithCapability(
+      entry,
+      'provider-hooks',
+      'case 8: a provider pre-tool hook answering allow for an allowlisted tool still reaches central approval',
+      async () => {
+        const probe = await createProbe({ allowedTools: ['read_file'], providerPreToolUseHook: { decision: 'allow' } });
+
+        const readResult = await probe.gate(probe.nativeName('read_file'), { file_path: '/tmp/probe.txt' });
+        expect(readResult.allowed).toBe(true);
+        expect(readResult.centralApprovalCalled).toBe(true);
+      },
+    );
+
+    itWithCapability(
+      entry,
+      'provider-hooks',
+      'case 9: a provider pre-tool hook cannot allow a rewritten command past a shell_exec command rule',
+      async () => {
+        const probe = await createProbe({
+          allowedTools: ['shell_exec(git status)'],
+          providerPreToolUseHook: { decision: 'allow', updatedInput: { command: 'git push' } },
+        });
+
+        const result = await probe.gate(probe.nativeName('shell_exec'), { command: 'git status' });
+        expect(result.allowed).toBe(false);
+        expect(result.centralApprovalCalled).toBe(false);
+      },
+    );
+
+    itWithCapability(
+      entry,
+      'provider-skills',
+      'case 10: provider-enabled skills do not open the skill tool past an allowlist that omits it',
+      async () => {
+        const probe = await createProbe({ allowedTools: ['read_file'], providerSkills: 'all' });
+
+        expect(probe.skillToolName).toBeDefined();
+        const result = await probe.gate(probe.skillToolName ?? '', { skill: 'probe-skill' });
+        expect(result.allowed).toBe(false);
+        expect(result.centralApprovalCalled).toBe(false);
+      },
+    );
   });
 
   describe('case 7: adapters without a probe yet', () => {
