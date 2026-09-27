@@ -34,7 +34,9 @@ deny rule with a command applies to a call and the call carries no readable stri
 native tool names, and supports `shell_exec(...)` command rules on its `Bash` tool.
 The tool lists are enforced in an adapter-owned PreToolUse hook, which Claude Code runs
 before settings allow rules, SDK auto-approvals (including provider `skills`), permission
-modes, and other hooks; provider PreToolUse hooks still run. The `canUseTool` check stays
+modes, and other hooks; provider PreToolUse hooks still run. With caller lists, provider
+PreToolUse hooks cannot approve a call (an `allow` decision is removed so central approval
+still runs) and their `updatedInput` is rechecked against the lists. The `canUseTool` check stays
 as a second layer: whenever the caller passes an allowlist or a denylist, the adapter
 clears the provider's own auto-approved tools, resets `queryOptions.permissionMode` to
 `'default'` (permission modes like `bypassPermissions`, `acceptEdits`, `auto`, or

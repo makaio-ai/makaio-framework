@@ -516,8 +516,11 @@ describe('buildQueryOptions — tool policy PreToolUse hook', () => {
 
     const preToolUse = options.hooks?.PreToolUse ?? [];
     expect(preToolUse).toHaveLength(3);
-    expect(preToolUse[0]).toBe(firstProviderMatcher);
-    expect(preToolUse[1]).toBe(secondProviderMatcher);
+    // Provider matchers are wrapped copies (see buildQueryOptions.provider-hooks.test.ts).
+    expect(preToolUse[0]).toMatchObject({ matcher: 'Bash' });
+    expect(preToolUse[0]?.hooks).toHaveLength(1);
+    expect(preToolUse[1]).not.toHaveProperty('matcher');
+    expect(preToolUse[1]?.hooks).toHaveLength(1);
     expect(preToolUse[2]).not.toHaveProperty('matcher');
     expect(preToolUse[2]?.hooks[0]).not.toBe(providerPreToolUseHook);
     expect(options.hooks?.PostToolUse).toBe(postToolUse);

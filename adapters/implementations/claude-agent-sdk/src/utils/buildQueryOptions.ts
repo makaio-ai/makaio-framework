@@ -6,6 +6,8 @@ import type {
   McpSSEServerConfig,
   McpServerConfig,
   McpStdioServerConfig,
+  PreToolUseHookSpecificOutput,
+  SyncHookJSONOutput,
 } from '@anthropic-ai/claude-agent-sdk';
 import { Options } from '@anthropic-ai/claude-agent-sdk';
 import { resolveToolPolicy } from '@makaio/contracts';
@@ -252,6 +254,21 @@ function resolveToolPolicyOptions(policy: ResolvedToolPolicy): Partial<Options> 
 }
 
 /**
+ * Build the PreToolUse deny output for a call the caller tool lists reject.
+ * @param reason - Why the tool policy denied the call.
+ * @returns PreToolUse hook output carrying a `deny` decision.
+ */
+function toolPolicyDenyOutput(reason: string): SyncHookJSONOutput {
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
+    },
+  };
+}
+
+/**
  * Create the adapter-owned PreToolUse hook that enforces the caller tool lists.
  *
  * Invariant: this hook is the authoritative gate for the caller lists. The SDK evaluates
@@ -261,11 +278,16 @@ function resolveToolPolicyOptions(policy: ResolvedToolPolicy): Partial<Options> 
  * order. The hook registers without a matcher, so it runs for every tool: `tools` does
  * not remove account-level MCP connectors, which load even with `settingSources: []`.
  * On pass it returns `{}` and never `'allow'`: a hook `allow` would skip `canUseTool` and
- * with it central approval.
+ * with it central approval. Provider-config PreToolUse hooks are wrapped by
+ * {@link wrapProviderPreToolUseHook}, so with caller lists none of them can skip
+ * `canUseTool` or rewrite the input past the lists.
  * Residual gaps: policy-level `disableAllHooks` settings and `CLAUDE_CODE_SIMPLE`
- * disable hooks (the `canUseTool` check and the option overrides remain); a parallel
- * provider PreToolUse hook may rewrite the input without a permission decision, so the
- * input that runs can differ from the input checked here.
+ * disable hooks (the `canUseTool` check and the option overrides remain). Hooks loaded
+ * from settings files (`settingSources`) are not part of the query options and cannot be
+ * wrapped: such a hook can still return `'allow'`, which skips `canUseTool` and with it
+ * central approval (the lists stay enforced, since this hook's `deny` wins), or rewrite
+ * the input without a decision, so the input that runs can differ from the input checked
+ * here.
  * @param policy - Caller tool policy resolved for this query.
  * @returns PreToolUse hook callback.
  */
@@ -278,31 +300,78 @@ function createToolPolicyHook(policy: ResolvedToolPolicy): HookCallback {
         : {};
     const decision = policy.checkToolCall(input.tool_name, toolInput);
     if (decision.allowed) return {};
-    return {
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: decision.reason,
-      },
-    };
+    return toolPolicyDenyOutput(decision.reason);
+  };
+}
+
+/**
+ * Wrap a provider-config PreToolUse hook so it cannot bypass the caller tool lists or
+ * central approval.
+ *
+ * The provider hook runs unchanged; its output is then adjusted:
+ * - A PreToolUse `updatedInput` is checked against the policy (the adapter-owned hook
+ *   only saw the original input); a failing input turns the output into a `deny`.
+ * - A PreToolUse `permissionDecision: 'allow'` (with its reason) is removed, and so is a
+ *   legacy top-level `decision: 'approve'` (with its `reason`), so the call still reaches
+ *   `canUseTool`. A checked `updatedInput` and all other fields are kept.
+ * - `deny`, `ask`, `defer`, or no decision pass through unchanged.
+ * Async outputs (`{ async: true }`) pass through unchanged: they carry no decision and no
+ * `updatedInput` (SDK `AsyncHookJSONOutput`).
+ * @param hook - Provider PreToolUse hook callback.
+ * @param policy - Caller tool policy resolved for this query.
+ * @returns Wrapped hook callback.
+ */
+function wrapProviderPreToolUseHook(hook: HookCallback, policy: ResolvedToolPolicy): HookCallback {
+  return async (input, toolUseID, options) => {
+    const output = await hook(input, toolUseID, options);
+    if (input.hook_event_name !== 'PreToolUse' || 'async' in output) return output;
+
+    let result: SyncHookJSONOutput = output;
+    if (result.decision === 'approve') {
+      result = { ...result };
+      delete result.decision;
+      delete result.reason;
+    }
+
+    const specific = result.hookSpecificOutput;
+    if (specific?.hookEventName !== 'PreToolUse') return result;
+    if (specific.updatedInput !== undefined) {
+      const decision = policy.checkToolCall(input.tool_name, specific.updatedInput);
+      if (!decision.allowed) return toolPolicyDenyOutput(decision.reason);
+    }
+    if (specific.permissionDecision !== 'allow') return result;
+
+    const withoutAllow: PreToolUseHookSpecificOutput = { ...specific };
+    delete withoutAllow.permissionDecision;
+    delete withoutAllow.permissionDecisionReason;
+    return { ...result, hookSpecificOutput: withoutAllow };
   };
 }
 
 /**
  * Merge the adapter-owned tool policy hook into the provider-config hooks.
  *
- * The policy hook is appended after any provider PreToolUse matchers; hooks for other
- * events stay untouched. Without caller lists the provider hooks are returned as is.
+ * With caller lists, every provider PreToolUse callback is wrapped by
+ * {@link wrapProviderPreToolUseHook} (matcher fields such as `matcher` and `timeout` are
+ * kept), and the policy hook is appended after the provider PreToolUse matchers; hooks
+ * for other events stay untouched. Without caller lists the provider hooks are returned
+ * as is.
  * @param providerHooks - Provider-config `queryOptions.hooks`, if any.
  * @param policy - Caller tool policy resolved for this query.
  * @returns Hooks for the SDK query, or `undefined` when there are none.
  */
 function resolveHooks(providerHooks: Options['hooks'], policy: ResolvedToolPolicy): Options['hooks'] {
   if (!policy.restricts) return providerHooks;
+  const providerMatchers = (providerHooks?.PreToolUse ?? []).map(
+    (matcher): HookCallbackMatcher => ({
+      ...matcher,
+      hooks: matcher.hooks.map((hook) => wrapProviderPreToolUseHook(hook, policy)),
+    }),
+  );
   const policyMatcher: HookCallbackMatcher = { hooks: [createToolPolicyHook(policy)] };
   return {
     ...providerHooks,
-    PreToolUse: [...(providerHooks?.PreToolUse ?? []), policyMatcher],
+    PreToolUse: [...providerMatchers, policyMatcher],
   };
 }
 
@@ -366,7 +435,8 @@ export function buildQueryOptions({
     stderr: (data) => console.warn(data),
     // Must stay after the provider-config spread: with caller tool lists it overrides
     // provider `tools`/`disallowedTools`, clears provider `allowedTools` auto-approvals,
-    // resets provider `permissionMode` to `'default'`, and appends the policy hook.
+    // resets provider `permissionMode` to `'default'`, wraps provider PreToolUse hooks,
+    // and appends the policy hook.
     ...resolveToolPolicyOptions(toolPolicy),
     ...(hooks !== undefined && { hooks }),
     canUseTool: createToolApprovalHandler(toolPolicy),
