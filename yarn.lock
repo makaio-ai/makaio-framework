@@ -3943,7 +3943,7 @@ __metadata:
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
     "@types/node": "npm:^24.3.0"
-    nanoid: "npm:5.1.11"
+    nanoid: "npm:6.0.1"
     p-timeout: "npm:6.1.2"
     tsdown: "npm:0.22.0"
     tsx: "npm:^4.23.1"
@@ -4592,7 +4592,7 @@ __metadata:
     "@types/node": "npm:^24.3.0"
     drizzle-kit: "npm:^0.31.8"
     drizzle-orm: "npm:0.45.2"
-    nanoid: "npm:5.1.11"
+    nanoid: "npm:6.0.1"
     tsdown: "npm:0.22.0"
     tsx: "npm:^4.23.1"
     typescript: "npm:^6.0.3"
@@ -19160,12 +19160,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"nanoid@npm:5.1.11":
-  version: 5.1.11
-  resolution: "nanoid@npm:5.1.11"
+"nanoid@npm:6.0.1":
+  version: 6.0.1
+  resolution: "nanoid@npm:6.0.1"
   bin:
     nanoid: bin/nanoid.js
-  checksum: 10c0/91580d18c29263ac0e871734f0d86e7f906f523f974d3c30fc65354ccf387ccffd606c2a6c28acc2977a3950146347e790ce9e3f514133a48995af5ccdb308ce
+  checksum: 10c0/5b362ad9822388dfebdf655849c76d3539e074d1003fbe6eb5dff8687faf93a9abbb19bdc5d134b9b8599f875f9b091feacfd7099b34b5fef23bc3f5be41dd10
   languageName: node
   linkType: hard
 
