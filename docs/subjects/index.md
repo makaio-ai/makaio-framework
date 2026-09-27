@@ -11,12 +11,12 @@ next: false
 
 | Metric | Count |
 |--------|-------|
-| Namespaces | 106 |
-| Subjects | 1026 (410 events, 616 RPCs) |
-| framework | 101 |
+| Namespaces | 104 |
+| Subjects | 981 (367 events, 614 RPCs) |
+| framework | 99 |
 | extension | 5 |
 | kind: bus | 74 |
-| kind: adapter | 9 |
+| kind: adapter | 7 |
 | kind: client | 2 |
 | kind: extension | 3 |
 | kind: storage | 16 |
@@ -41,8 +41,6 @@ next: false
 | [`adapter:claude-code-tmux`](./adapter-claude-code-tmux.md) | adapter | 9 | 8E / 1R |
 | [`adapter:codex-app-server`](./adapter-codex-app-server.md) | adapter | 23 | 20E / 3R |
 | [`adapter:cursorSdk`](./adapter-cursorsdk.md) | adapter | 23 | 22E / 1R |
-| [`adapter:geminiSDK`](./adapter-geminisdk.md) | adapter | 15 | 14E / 1R |
-| [`adapter:github-copilot`](./adapter-github-copilot.md) | adapter | 30 | 29E / 1R |
 | [`adapter:openai-node`](./adapter-openai-node.md) | adapter | 19 | 18E / 1R |
 | [`adapter:piSdk`](./adapter-pisdk.md) | adapter | 23 | 22E / 1R |
 | [`adapter:qwen-acp`](./adapter-qwen-acp.md) | adapter | 13 | 12E / 1R |

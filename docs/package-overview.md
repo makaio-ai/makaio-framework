@@ -238,7 +238,7 @@ contracts, lifecycle, generated metadata, and host integration.
 
 ### `adapters/`
 
-AI adapter implementations. Each wraps a vendor client (Claude Code, Codex, Gemini, etc.).
+AI adapter implementations. Each wraps a vendor client (Claude Code, Codex, Cursor, etc.).
 
 Read [`.agents/policies/adapters.md`](../.agents/policies/adapters.md) and
 [`docs/creating-adapters.md`](creating-adapters.md) before editing adapter contracts or provider turn behavior.
@@ -256,8 +256,6 @@ Read [`.agents/policies/adapters.md`](../.agents/policies/adapters.md) and
 | `adapters/implementations/claude-code-tmux`   | `@makaio/adapter-claude-code-tmux`          | Claude Code tmux adapter.                                            |
 | `adapters/implementations/codex-app-server`   | `@makaio/adapter-codex-app-server`          | OpenAI Codex App-Server adapter.                                     |
 | `adapters/implementations/cursor-sdk`         | `@makaio/adapter-cursor-sdk`                | Cursor SDK adapter.                                                  |
-| `adapters/implementations/gemini-sdk`         | `@makaio/adapter-gemini-sdk`                | Gemini SDK adapter.                                                  |
-| `adapters/implementations/github-copilot-sdk` | `@makaio/adapter-github-copilot-sdk`        | GitHub Copilot SDK adapter.                                          |
 | `adapters/implementations/openai-node`        | `@makaio/adapter-openai-node`               | OpenAI Node SDK adapter.                                             |
 | `adapters/implementations/pi-sdk`             | `@makaio/adapter-pi-sdk`                    | Pi SDK adapter.                                                      |
 | `adapters/implementations/qwen-acp`           | `@makaio/adapter-qwen-acp`                  | Qwen ACP adapter.                                                    |
@@ -274,8 +272,6 @@ Clients model external installed tools and runtime binaries. Provider identity a
 | `clients/claude-code`    | `@makaio/client-claude-code`    | Claude Code client integration.    |
 | `clients/codex`          | `@makaio/client-codex`          | OpenAI Codex client integration.   |
 | `clients/cursor`         | `@makaio/client-cursor`         | Cursor client integration.         |
-| `clients/gemini`         | `@makaio/client-gemini`         | Gemini client integration.         |
-| `clients/github-copilot` | `@makaio/client-github-copilot` | GitHub Copilot client integration. |
 | `clients/qwen`           | `@makaio/client-qwen`           | Qwen client integration.           |
 
 ### `providers/`
@@ -290,8 +286,6 @@ should stay metadata-focused and avoid runtime orchestration.
 | `providers/alibaba`        | `@makaio/provider-alibaba`        | Alibaba Cloud provider.  |
 | `providers/anthropic`      | `@makaio/provider-anthropic`      | Anthropic provider.      |
 | `providers/cursor`         | `@makaio/provider-cursor`         | Cursor provider.         |
-| `providers/github-copilot` | `@makaio/provider-github-copilot` | GitHub Copilot provider. |
-| `providers/google`         | `@makaio/provider-google`         | Google provider.         |
 | `providers/kimi`           | `@makaio/provider-kimi`           | Kimi provider.           |
 | `providers/nanogpt`        | `@makaio/provider-nanogpt`        | NanoGPT provider.        |
 | `providers/openai`         | `@makaio/provider-openai`         | OpenAI provider.         |

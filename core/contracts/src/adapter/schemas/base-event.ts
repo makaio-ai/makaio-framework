@@ -8,7 +8,7 @@ export const BaseAdapterEventSchema = z.object({
   /** Adapter instance identifier (required) */
   adapterId: z.string(),
 
-  /** Adapter type name (e.g., 'claude-code', 'copilot') (required) */
+  /** Adapter type name (e.g., 'claude-code', 'codex') (required) */
   adapterName: z.string(),
 });
 

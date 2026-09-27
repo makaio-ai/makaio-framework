@@ -14,7 +14,7 @@ framework.
 The Claude Agent SDK locks you into a single provider with API-token billing.
 This package gives you the same programmatic surface with two extras:
 
-1. **Any provider** — route to Claude, Gemini, Codex, or any other
+1. **Any provider** — route to Claude, Codex, or any other
    Makaio adapter through canonical model names.
 2. **Subscription-powered Claude** — combine with the
    [`claude-code-tmux`](../../adapters/implementations/claude-code-tmux/README.md)
@@ -73,7 +73,6 @@ Canonical model names route to the right adapter automatically:
 | `"anthropic-sdk::sonnet"` | Explicit adapter + model |
 | `"openai-node::gpt-4o"` | OpenAI via API |
 | `"claude-code-tmux::sonnet"` | Claude Code via subscription (tmux adapter) |
-| `"gemini-sdk::gemini-2.5-pro"` | Gemini via API |
 | `"openai-node/openrouter::deepseek/deepseek-r1"` | Adapter + provider config + model |
 
 ## Query API
@@ -291,7 +290,6 @@ await startup();
 | `MAKAIO_BUS_SECRET` | HMAC shared secret when the bus server requires authentication |
 | `ANTHROPIC_API_KEY` | API key for Anthropic adapters |
 | `OPENAI_API_KEY` | API key for OpenAI adapters |
-| `GOOGLE_API_KEY` | API key for Gemini adapter |
 
 ## Migrating from Claude Agent SDK
 

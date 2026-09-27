@@ -144,12 +144,12 @@ export type TokenPricing = z.infer<typeof TokenPricingSchema>;
 /**
  * Per-request pricing in provider-defined units.
  *
- * Used by subscription-based providers (GitHub Copilot premium requests, etc.).
+ * Used by subscription-based providers (premium-request quotas, etc.).
  * The multiplier expresses cost relative to one billing unit:
  * - `0` — free (no premium request consumed)
  * - `0.33` — costs 1/3 of a premium request
  * - `1` — costs one full premium request
- * @example GitHub Copilot Haiku
+ * @example Premium-request Haiku
  * ```ts
  * { multiplier: 0.33 }  // 300 premium requests → 900 Haiku prompts
  * ```
@@ -174,7 +174,7 @@ export type RequestPricing = z.infer<typeof RequestPricingSchema>;
 export const AIModelPricingSchema = z.object({
   /** Per-token pricing (Anthropic direct, OpenAI direct, etc.). */
   token: TokenPricingSchema.optional(),
-  /** Per-request pricing (GitHub Copilot premium requests, etc.). */
+  /** Per-request pricing (premium-request quotas, etc.). */
   request: RequestPricingSchema.optional(),
 });
 
@@ -270,7 +270,7 @@ export const ProviderAIModelSchema = AIModelSchema;
  * Model descriptor returned by live provider fetchers.
  *
  * Like {@link AIModel} but with `labId` optional — fetchers for multi-lab
- * aggregators (GitHub Copilot, OpenRouter) cannot always determine the
+ * aggregators (e.g. OpenRouter) cannot always determine the
  * originating lab. The registry generation script resolves lab assignment
  * during the merge phase.
  */

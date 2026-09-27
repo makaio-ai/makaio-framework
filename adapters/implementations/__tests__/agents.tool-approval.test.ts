@@ -103,8 +103,8 @@ describe('Tool Approvals', async () => {
       expect(error.message).toBeDefined();
 
       // Different adapters produce different error messages:
-      // - claude-code, copilot, codex: "Tool approval request failed, make sure that there's a handler registered: ..."
-      // - openai-node, gemini-sdk: "Request to \"..._approval\" failed: Handler completed without setting a result"
+      // - claude-code, codex: "Tool approval request failed, make sure that there's a handler registered: ..."
+      // - openai-node: "Request to \"..._approval\" failed: Handler completed without setting a result"
       // Common indicator is the word "handler" (case-insensitive)
       expect(error.message.toLowerCase()).toContain('handler');
     });

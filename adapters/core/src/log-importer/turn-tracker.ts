@@ -41,7 +41,7 @@ export interface TurnEvent {
  * Adapters provide detection functions specific to their log format:
  * - Claude Code: `detectTurnStart` triggers on user messages,
  *   `detectTurnComplete` triggers on final text content blocks
- * - Copilot: Explicit `turn_start`/`turn_end` events, may bypass this tracker
+ * - Formats with explicit `turn_start`/`turn_end` events may bypass this tracker
  * @typeParam TRecord - The adapter's native log record type
  * @see {@link TurnTracker} - Uses these options
  */

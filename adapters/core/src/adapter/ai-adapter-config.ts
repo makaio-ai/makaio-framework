@@ -89,7 +89,7 @@ export interface ConfigFactoryInput<TBus extends ScopedBus<string> = ScopedBus<s
 
   runtimeTimeouts?: TimeoutConfig;
 
-  /** Client identifier for the application this adapter belongs to (e.g., 'claude-code', 'gemini'). */
+  /** Client identifier for the application this adapter belongs to (e.g., 'claude-code', 'codex'). */
   clientId?: string;
 
   /** Client profile name for session-scoped config isolation. */

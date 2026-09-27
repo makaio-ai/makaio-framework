@@ -62,8 +62,6 @@ const packages: PackageEntry[] = [
   { readme: 'adapters/implementations/claude-agent-sdk/README.md' },
   { readme: 'adapters/implementations/claude-code-cli/README.md' },
   { readme: 'adapters/implementations/codex-app-server/README.md' },
-  { readme: 'adapters/implementations/gemini-sdk/README.md' },
-  { readme: 'adapters/implementations/github-copilot-sdk/README.md' },
   { readme: 'adapters/implementations/openai-node/README.md' },
 
   { readme: 'transports/ws/README.md' },

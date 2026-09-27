@@ -27,7 +27,7 @@ import type { SetupController, SetupState } from '../types.js';
 
 let tempDir: string | null = null;
 
-const expectedProductiveClientIds = ['claude-code', 'codex', 'gemini', 'github-copilot'] as const;
+const expectedProductiveClientIds = ['claude-code', 'codex'] as const;
 
 async function makeTempDir(): Promise<string> {
   tempDir = await mkdtemp(join(tmpdir(), 'makaio-setup-ctrl-test-'));

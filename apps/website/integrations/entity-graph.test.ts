@@ -11,12 +11,10 @@ describe('buildEntityGraph', () => {
   it('discovers all clients', () => {
     const ids = graph.clients.map((c) => c.id);
     expect(ids).toContain('claude-code');
-    expect(ids).toContain('gemini');
     expect(ids).toContain('codex');
     expect(ids).toContain('cursor');
     expect(ids).toContain('qwen');
-    expect(ids).toContain('github-copilot');
-    expect(ids).toHaveLength(6);
+    expect(ids).toHaveLength(4);
   });
 
   it('discovers all adapters', () => {
@@ -28,11 +26,9 @@ describe('buildEntityGraph', () => {
     expect(names).toContain('claude-code-tmux');
     expect(names).toContain('codex-app-server');
     expect(names).toContain('cursor-sdk');
-    expect(names).toContain('gemini-sdk');
-    expect(names).toContain('github-copilot-sdk');
     expect(names).toContain('pi-sdk');
     expect(names).not.toContain('qwen-acp');
-    expect(names).toHaveLength(10);
+    expect(names).toHaveLength(8);
   });
 
   it('discovers all providers', () => {
@@ -41,9 +37,6 @@ describe('buildEntityGraph', () => {
     expect(ids).toContain('anthropic-oauth');
     expect(ids).toContain('openai');
     expect(ids).toContain('openai-codex');
-    expect(ids).toContain('google');
-    expect(ids).not.toContain('google-oauth');
-    expect(ids).toContain('github-copilot');
     expect(ids).toContain('openrouter');
     expect(ids).toContain('nanogpt');
     expect(ids).toContain('kimi');
@@ -84,9 +77,6 @@ describe('buildEntityGraph', () => {
     expect(ids).toContain('opencode-go');
     // requiredClient providers excluded from generic openai-node
     expect(ids).not.toContain('openai-codex');
-    expect(ids).not.toContain('github-copilot');
-    expect(ids).not.toContain('google');
-    expect(ids).not.toContain('google-oauth');
     expect(ids).not.toContain('qwen-oauth');
   });
 
@@ -110,8 +100,6 @@ describe('buildEntityGraph', () => {
 
   it.each([
     ['cursor-sdk', ['cursor']],
-    ['gemini-sdk', ['google']],
-    ['github-copilot-sdk', ['github-copilot']],
   ] as const)('matches SDK-native %s through its exact provider extension dependency', (adapterName, expectedProviderIds) => {
     const providers = graph.adapterToProviders.get(adapterName);
     expect(providers).toBeDefined();
@@ -140,8 +128,6 @@ describe('buildEntityGraph', () => {
     const names = adapters!.map((a) => a.name);
     expect(names).toContain('openai-node');
     expect(names).toContain('codex-app-server');
-    expect(names).not.toContain('gemini-sdk');
-    expect(names).not.toContain('github-copilot-sdk');
     expect(names).toContain('pi-sdk');
     expect(names).not.toContain('qwen-acp');
   });
@@ -181,14 +167,6 @@ describe('buildEntityGraph', () => {
     const providers = graph.clientToProviders.get('codex');
     expect(providers).toBeDefined();
     expect(providers!.map((p) => p.id)).toContain('openai-codex');
-  });
-
-  it('makes only the startable Google API-key provider reachable from the Gemini client', () => {
-    const providers = graph.clientToProviders.get('gemini');
-    expect(providers).toBeDefined();
-    const ids = providers!.map((p) => p.id);
-    expect(ids).toContain('google');
-    expect(ids).not.toContain('google-oauth');
   });
 
   // -------------------------------------------------------------------------

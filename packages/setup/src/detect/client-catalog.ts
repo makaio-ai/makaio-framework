@@ -19,22 +19,4 @@ export const CLIENT_CATALOG: readonly SetupClientEntry[] = [
     detectPaths: ['~/.codex'],
     extensionPackages: ['@makaio/client-codex', '@makaio/provider-openai', '@makaio/adapter-codex-app-server'],
   },
-  {
-    clientId: 'gemini',
-    displayName: 'Gemini',
-    binaryName: 'gemini',
-    detectPaths: ['~/.gemini'],
-    extensionPackages: ['@makaio/client-gemini', '@makaio/provider-google', '@makaio/adapter-gemini-sdk'],
-  },
-  {
-    clientId: 'github-copilot',
-    displayName: 'GitHub Copilot',
-    binaryName: 'copilot',
-    detectPaths: ['~/.config/github-copilot'],
-    extensionPackages: [
-      '@makaio/client-github-copilot',
-      '@makaio/provider-github-copilot',
-      '@makaio/adapter-github-copilot-sdk',
-    ],
-  },
 ];

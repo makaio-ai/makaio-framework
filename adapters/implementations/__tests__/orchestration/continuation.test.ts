@@ -45,11 +45,7 @@ describe('Orchestration: continuation', async () => {
     const ctx = await getOrchestrationTestContext(adapterName);
     cleanup = async () => await ctx.adapter.close?.();
 
-    let systemPrompt = 'You are naturally continuing a conversation with user.';
-
-    if (adapterName.includes('gemini')) {
-      systemPrompt += ' Do not use any tools.';
-    }
+    const systemPrompt = 'You are naturally continuing a conversation with user.';
 
     // Start agent with sessionContext containing prior context
     const response = await MakaioBus.request(AdapterSubjects.startAgent, {
@@ -97,11 +93,7 @@ describe('Orchestration: continuation', async () => {
     const ctx = await getOrchestrationTestContext(adapterName);
     cleanup = async () => await ctx.adapter.close?.();
 
-    let systemPrompt = 'You are naturally continuing a conversation with user.';
-
-    if (adapterName.includes('gemini')) {
-      systemPrompt += ' Do not use any tools.';
-    }
+    const systemPrompt = 'You are naturally continuing a conversation with user.';
 
     // Start agent with sessionContext containing multiple facts
     const response = await MakaioBus.request(AdapterSubjects.startAgent, {

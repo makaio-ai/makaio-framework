@@ -30,8 +30,8 @@ export function extractMcpCallTarget(args: Record<string, unknown>): string | un
  * stays in sync with the toolset definition automatically.
  *
  * Callers are responsible for stripping provider-specific prefixes before
- * calling this function (e.g., Gemini's `default_api.` prefix must be
- * removed at the call site — see `execute-tool-calls.ts` normalizedToolName).
+ * calling this function (e.g., an SDK-added `default_api.` prefix must be
+ * removed at the call site).
  * @param toolName - Normalized tool name from the tool call
  * @returns `true` if this is an `mcp_call` invocation
  */

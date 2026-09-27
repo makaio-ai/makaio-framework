@@ -88,7 +88,7 @@ fs.mkdirSync(logPath, { recursive: true });
 /**
  * Minimal system prompt used by all conformance and orchestration tests.
  *
- * SDK default system prompts (Gemini, Copilot, etc.) condition the model as a
+ * SDK default system prompts (e.g. CLI-agent SDKs) condition the model as a
  * full CLI agent with tool instructions, guardrails, and memory features. This
  * inflates token usage and can trigger context overflow on multi-message tests.
  * Overriding with this minimal prompt keeps tests focused on protocol mechanics.

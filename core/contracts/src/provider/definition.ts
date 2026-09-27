@@ -72,7 +72,7 @@ export type ProviderCapabilities = z.infer<typeof ProviderCapabilitiesSchema>;
  * The runtime layer (storage, sync service, model registry) derives parsed
  * provider definitions and per-user provider records from those declarations.
  *
- * Providers that do not communicate over a network (e.g., GitHub Copilot,
+ * Providers that do not communicate over a network (e.g., Cursor,
  * which uses its own SDK transport) omit `endpoints`.
  * @example Anthropic provider definition
  * ```ts
@@ -124,7 +124,7 @@ export const ProviderDefinitionSchema = z
      * Wire protocol endpoints for this provider.
      *
      * Maps each supported protocol to a base URL. Omit for SDK-only providers
-     * (e.g., GitHub Copilot) that communicate through a proprietary transport.
+     * (e.g., Cursor) that communicate through a proprietary transport.
      */
     endpoints: ProtocolEndpointsSchema.optional(),
 

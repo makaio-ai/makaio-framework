@@ -410,7 +410,7 @@ export interface DiscoveryMetadata {
  * Contract for log importers (adapters and extensions).
  *
  * Importers implement this interface to import external session logs
- * into Makaio's event system. Both AI adapters (Claude Code, Codex, Gemini)
+ * into Makaio's event system. Both AI adapters (Claude Code, Codex)
  * and extensions can provide log importers.
  * @remarks
  * The importer is responsible for:
@@ -446,7 +446,6 @@ export interface LogImporter<TRecord, TState = unknown> {
    * Example implementations:
    * - Claude Code: Check for `type` field in `['started', 'message', 'tool_use']`
    * - Codex: Check for `event` field matching Codex schema patterns
-   * - Gemini: Check for Gemini-specific log structure
    *
    * Return `{ confidence: 0.95 }` for high confidence matches,
    * `{ confidence: 0.5 }` for ambiguous formats, or `false` for incompatible.
@@ -460,7 +459,6 @@ export interface LogImporter<TRecord, TState = unknown> {
    * Examples of log directories:
    * - Claude Code: `~/.claude/projects/` (contains `session.jsonl` files)
    * - Codex: `~/.codex/sessions/` (date-organized subdirectories)
-   * - Gemini: `~/.gemini/tmp/` (hash-organized project directories)
    */
   getLogDirectory(): string;
 
@@ -593,7 +591,7 @@ export interface LogImportTestConfig<TRecord = unknown, TState = unknown> {
    * Fixture file name for conformance tests.
    *
    * Relative to the conformance harness fixture directory.
-   * @example 'codex-session.jsonl' or 'gemini-session.json'
+   * @example 'codex-session.jsonl' or 'claude-session.jsonl'
    */
   fixtureFile: string;
 

@@ -90,7 +90,7 @@ export interface PlatformDefaults {
  *
  * Examples:
  * - `@makaio/ai-adapters-claude-code` → `'claude-code'`
- * - `@scope/ai-adapters-gemini` → `'gemini'`
+ * - `@scope/ai-adapters-openai-node` → `'openai-node'`
  * - `some-package` → `'some-package'` (fallback: full name)
  * @param packageName - NPM package name for the adapter.
  * @returns Non-empty stable identifier used for deterministic routing.

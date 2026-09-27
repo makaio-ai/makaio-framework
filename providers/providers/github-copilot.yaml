@@ -1,4 +1,0 @@
-name: GitHub Copilot
-models:
-  gpt-5.1-codex-mini: {}
-  gpt-5.4-mini: {}

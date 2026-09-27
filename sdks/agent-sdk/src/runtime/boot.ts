@@ -35,8 +35,6 @@ const moduleRequire = createRequire(import.meta.url);
 const bundledRuntimePackages = [
   '@makaio/provider-alibaba',
   '@makaio/provider-anthropic',
-  '@makaio/provider-github-copilot',
-  '@makaio/provider-google',
   '@makaio/provider-kimi',
   '@makaio/provider-nanogpt',
   '@makaio/provider-opencode-go',
@@ -48,8 +46,6 @@ const bundledRuntimePackages = [
   '@makaio/adapter-claude-agent-sdk',
   '@makaio/adapter-claude-code-cli',
   '@makaio/adapter-codex-app-server',
-  '@makaio/adapter-gemini-sdk',
-  '@makaio/adapter-github-copilot-sdk',
   '@makaio/adapter-openai-node',
   '@makaio/adapter-pi-sdk',
   '@makaio/extension-filesystem',

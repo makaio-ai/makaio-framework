@@ -185,8 +185,8 @@ export async function runBestEffortStage(
  * class: what a fully accounted teardown may claim differs per connector (an
  * observed process exit, a `released` in-process object, a `detached` SDK handle)
  * and only the connector knows which. So the caller keeps that decision and this
- * only takes the branch the four of them shared.
- * @param subject - The teardown, named for the report ("Copilot close").
+ * only takes the branch they all share.
+ * @param subject - The teardown, named for the report ("Pi session close").
  * @param failures - Stages named by {@link runBestEffortStage} or {@link stageFailure}.
  * @returns The `unknown` report, or `undefined` when nothing went unaccounted for.
  */

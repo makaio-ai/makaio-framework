@@ -194,8 +194,7 @@ type SpecialTurnContextTag = (typeof SPECIAL_KEYS)[number];
  * Each adapter converts these blocks to its wire format:
  * - Claude SDK: each block → prependContextBlock(msg, tag, content)
  * - Anthropic/OpenAI: join and prepend to user message
- * - Gemini: push as requestPart
- * - CLI/Copilot: prepend to prompt string
+ * - CLI: prepend to prompt string
  * - Codex: push as userInput
  * @param turnContext - The context record from MessageHandle.turnContext
  * @returns Ordered blocks: skillCatalog, skills, contextRules, then remaining keys alphabetical.

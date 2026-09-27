@@ -5,8 +5,6 @@
 '@makaio/adapter-claude-code-tmux': major
 '@makaio/adapter-codex-app-server': major
 '@makaio/adapter-cursor-sdk': major
-'@makaio/adapter-gemini-sdk': major
-'@makaio/adapter-github-copilot-sdk': major
 '@makaio/adapter-openai-node': major
 '@makaio/adapter-pi-sdk': major
 '@makaio/adapter-qwen-acp': major

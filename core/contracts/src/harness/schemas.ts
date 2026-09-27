@@ -39,7 +39,7 @@ export const HarnessDefinitionBaseSchema = z.object({
   /** Human-readable description. */
   description: z.string().optional(),
   /**
-   * Adapter driver name (e.g. openai-node, gemini-sdk).
+   * Adapter driver name (e.g. openai-node, anthropic-sdk).
    * Optional when `clientId` is set; required for API-only adapters.
    */
   adapterName: z.string().min(1).optional(),

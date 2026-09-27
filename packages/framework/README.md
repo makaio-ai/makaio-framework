@@ -13,7 +13,7 @@
 
 Makaio Framework is runtime infrastructure for AI agent systems. It provides a typed event bus where agents, services, tools, and storage communicate through events and RPC — across threads, processes, or machines.
 
-- **8 provider adapters** (Anthropic, OpenAI, Gemini, Codex, Qwen, GitHub Copilot, and more)
+- **9 provider adapters** (Anthropic, OpenAI, Claude Code, Codex, Cursor, Qwen, and more)
 - **Typed event bus** with pub/sub, RPC, namespaces, and cross-process transports
 - **Extension system** — capabilities load at runtime, not compile time
 - **Bus-mediated storage** — swap backends without touching service code
@@ -39,7 +39,7 @@ const { messageId } = await MakaioBus.request(SessionSubjects.sendMessage, {
   sessionId,
   agent: {
     kind: 'adapter',
-    adapterName: 'anthropic-sdk', // or 'openai-node', 'gemini-sdk', etc.
+    adapterName: 'anthropic-sdk', // or 'openai-node', 'pi-sdk', etc.
     systemPrompt: 'You are a security reviewer. Be concise.',
   },
   message: 'Review the changes in src/ for security issues',

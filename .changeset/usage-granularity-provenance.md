@@ -7,8 +7,6 @@
 "@makaio/adapter-anthropic-sdk": minor
 "@makaio/adapter-codex-app-server": minor
 "@makaio/adapter-cursor-sdk": minor
-"@makaio/adapter-gemini-sdk": minor
-"@makaio/adapter-github-copilot-sdk": minor
 "@makaio/adapter-pi-sdk": minor
 "@makaio/adapter-qwen-acp": minor
 "@makaio/adapter-claude-agent-sdk": minor

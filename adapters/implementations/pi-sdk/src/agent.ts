@@ -217,7 +217,7 @@ export class PiAgent extends AIAgent<PiSdkBus, PiConnector> {
       await this.emitStepStarted('text', { type: 'text' });
       await this.emitStepFinished('text', { type: 'text', content: text });
       // AgentSubjects.message is emitted once at agent_complete (turn end), not per
-      // text block — aligned with qwen-acp and gemini-sdk which emit it only at turn completion.
+      // text block — aligned with qwen-acp, which emits it only at turn completion.
     });
 
     // --- Reasoning streaming ---

@@ -10,8 +10,6 @@ import { clientDefinition as codexClientDefinition } from '../../clients/codex/s
 import { providerDefinition as alibabaProviderDefinition } from '../../providers/alibaba/src/definition.js';
 import { providerDefinition as anthropicProviderDefinition } from '../../providers/anthropic/src/definition.js';
 import { providerDefinition as cursorProviderDefinition } from '../../providers/cursor/src/definition.js';
-import { providerDefinition as githubCopilotProviderDefinition } from '../../providers/github-copilot/src/definition.js';
-import { providerDefinition as googleProviderDefinition } from '../../providers/google/src/definition.js';
 import { providerDefinition as kimiProviderDefinition } from '../../providers/kimi/src/definition.js';
 import { providerDefinition as nanogptProviderDefinition } from '../../providers/nanogpt/src/definition.js';
 import {
@@ -28,9 +26,6 @@ import { adapterDefinition as claudeCodeCli } from './claude-code-cli/src/defini
 import { adapterDefinition as claudeCodeTmux } from './claude-code-tmux/src/definition.js';
 import { adapterDefinition as codexAppServer } from './codex-app-server/src/definition.js';
 import { adapterDefinition as cursorSdk } from './cursor-sdk/src/definition.js';
-import { adapterDefinition as geminiSdk } from './gemini-sdk/src/definition.js';
-import { GEMINI_SDK_SENSITIVE_ENV_VARS } from './gemini-sdk/src/gemini-sdk-environment.js';
-import { adapterDefinition as githubCopilotSdk } from './github-copilot-sdk/src/definition.js';
 import { adapterDefinition as openaiNode } from './openai-node/src/definition.js';
 import { adapterDefinition as piSdk } from './pi-sdk/src/definition.js';
 
@@ -55,8 +50,6 @@ const adapterDefinitions: readonly DefinitionWithProviderAuth[] = [
   claudeCodeTmux,
   codexAppServer,
   cursorSdk,
-  geminiSdk,
-  githubCopilotSdk,
   piSdk,
 ];
 
@@ -64,8 +57,6 @@ const providerAuthCatalogDefinitions: readonly AuthCatalogDefinition[] = [
   alibabaProviderDefinition,
   anthropicProviderDefinition,
   cursorProviderDefinition,
-  githubCopilotProviderDefinition,
-  googleProviderDefinition,
   kimiProviderDefinition,
   nanogptProviderDefinition,
   opencodeGoAnthropicProviderDefinition,
@@ -278,24 +269,9 @@ describe('adapter provider auth declarations', () => {
     ]);
   });
 
-  it('targets the concrete Cursor, Gemini, Copilot, Pi, and native OAuth operations', () => {
+  it('targets the concrete Cursor, Pi, and native OAuth operations', () => {
     expect(getAuth(cursorSdk, 'cursor').bindings).toEqual([
       connectorApiKeyBinding('cursor', 'cursor-sdk.agent-create'),
-    ]);
-    expect(getAuth(geminiSdk, 'google').bindings).toEqual([
-      connectorApiKeyBinding('google', 'gemini-sdk.refresh-auth'),
-    ]);
-    expect(getAuth(githubCopilotSdk, 'github-copilot').bindings).toEqual([
-      {
-        method: { owner: 'provider', providerDefinitionId: 'github-copilot', methodId: 'token' },
-        deliveries: [
-          {
-            kind: 'connector',
-            target: 'github-copilot-sdk.constructor',
-            fields: { token: 'githubToken' },
-          },
-        ],
-      },
     ]);
     for (const providerDefinitionId of ['anthropic', 'openai', 'opencode-go']) {
       expect(getAuth(piSdk, providerDefinitionId).bindings).toEqual([
@@ -329,13 +305,5 @@ describe('adapter provider auth declarations', () => {
     expect(getAuth(codexAppServer, 'openai-codex').scrubEnvVars).toEqual(
       expect.arrayContaining(['OPENAI_API_KEY', 'CODEX_API_KEY', 'CODEX_ACCESS_TOKEN']),
     );
-  });
-
-  it('scrubs the complete Gemini ambient credential set', () => {
-    for (const provider of geminiSdk.providers) {
-      expect([...getAuth(geminiSdk, provider.definitionId).scrubEnvVars].sort()).toEqual(
-        [...GEMINI_SDK_SENSITIVE_ENV_VARS].sort(),
-      );
-    }
   });
 });

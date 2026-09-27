@@ -26,7 +26,7 @@ Makaio Framework is a typed runtime for building and hosting AI agent systems. I
 ### Connect your AI tools
 
 > [!NOTE]
-> Makaio normalizes the infrastructure beneath your AI tools — adapters, credentials, streaming, storage. Build a usage tracker, session viewer, or approval workflow once, and it works across Claude Code, Codex, Gemini, and more. Already built something for one provider? Move it to Makaio and it works with all of them.
+> Makaio normalizes the infrastructure beneath your AI tools — adapters, credentials, streaming, storage. Build a usage tracker, session viewer, or approval workflow once, and it works across Claude Code, Codex, Qwen, and more. Already built something for one provider? Move it to Makaio and it works with all of them.
 >
 > → [Connect your tooling](docs/connect.md) · [Shipped extensions](extensions/index.md)
 
@@ -132,7 +132,7 @@ const { messageId } = await MakaioBus.request(SessionSubjects.sendMessage, {
   sessionId,
   agent: {
     kind: 'adapter',
-    adapterName: 'anthropic-sdk', // swap to 'openai-node', 'gemini-sdk', etc.
+    adapterName: 'anthropic-sdk', // swap to 'openai-node', 'pi-sdk', etc.
     systemPrompt: 'You are a security reviewer. Be concise.',
     // Omit model to use the provider default, or pass an adapter-specific ID from the model registry.
   },
@@ -162,7 +162,7 @@ console.info(completed.payload.message);
 unsub();
 ```
 
-Switch `adapterName` and the same session orchestration code runs against Claude, Codex, Gemini, or Qwen. Keep `model` omitted for provider defaults unless you have resolved a concrete adapter-specific model ID from the model registry. The [adapter conformance test suite](adapters/implementations/__tests__/) guarantees consistent behavior across all of them.
+Switch `adapterName` and the same session orchestration code runs against Claude, Codex, or Qwen. Keep `model` omitted for provider defaults unless you have resolved a concrete adapter-specific model ID from the model registry. The [adapter conformance test suite](adapters/implementations/__tests__/) guarantees consistent behavior across all of them.
 
 ### Architecture
 
@@ -208,12 +208,10 @@ Each adapter implements the 3-layer contract (Adapter → Agent → Connector) a
 |---------|----------|----------|--------|
 | `anthropic-sdk` | Anthropic (Claude) | API SDK | Stable |
 | `openai-node` | OpenAI (GPT) | API SDK | Stable |
-| `gemini-sdk` | Google (Gemini) | API SDK | Stable |
 | `claude-code-cli` | Anthropic (Claude Code) | CLI subprocess | Stable |
 | `claude-code` | Anthropic (Claude Agent SDK implementation) | API SDK | Stable |
 | `codex-app-server` | OpenAI (Codex) | ACP | Experimental |
 | `qwen-acp` | Alibaba (Qwen) | ACP | Experimental |
-| `github-copilot-sdk` | GitHub (Copilot) | API SDK | [ABANDONED](https://github.blog/news-insights/company-news/github-copilot-is-moving-to-usage-based-billing/) |
 
 **Status definitions:**
 
@@ -293,7 +291,7 @@ Representative high-level tree for the framework distribution. It lists the main
 │   ├── host-shared/           Shared desktop host boot/rendering logic
 │   └── mcp-server/            MCP server bridge
 ├── build-tooling/             Shared Vite/tsdown configs for packages and extensions
-├── clients/                   External tool client integrations (Claude Code, Codex, Gemini, Copilot, Qwen)
+├── clients/                   External tool client integrations (Claude Code, Codex, Cursor, Qwen)
 ├── core/
 │   ├── bus-core/              Typed event bus — pub/sub, RPC, namespaces, scoped/filtered buses
 │   ├── contracts/             Zod schemas, subject taxonomy, wire format

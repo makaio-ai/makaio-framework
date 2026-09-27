@@ -26,7 +26,7 @@ import { z } from 'zod';
 export interface ToolApprovalContext {
   /** Adapter instance ID */
   adapterId: string;
-  /** Adapter type name (e.g., 'gemini-sdk', 'openai-node') */
+  /** Adapter type name (e.g., 'openai-node', 'anthropic-sdk') */
   adapterName: string;
   /** Agent ID within the adapter */
   agentId: string;
@@ -193,7 +193,7 @@ export function mergeScopedToolApproval(
  * (or equivalent) injects `sessionId` from its own context before forwarding
  * to the global `AgentSubjects.toolApprove` subject, where `sessionId` is required.
  *
- * Adapters with a genuinely different wire format (e.g., gemini-sdk's callId/name)
+ * Adapters with a genuinely different wire format (e.g., a callId/name pair)
  * should define their own schema rather than extending this one.
  */
 export const ScopedToolApprovalSchema = {
@@ -271,9 +271,9 @@ interface IToolApprovalBus<TPayload, TResponse> {
  * @returns Handler registration function
  * @example
  * ```typescript
- * // In gemini-sdk/src/tool-handling.ts
+ * // In <adapter>/src/tool-handling.ts
  * export const registerToolApprovalHandler = createToolApprovalHandler(
- *   GeminiConnectorSubjects.acp.tool_approval,
+ *   AdapterConnectorSubjects.tool_approval,
  *   toGlobalToolApproval,
  *   fromGlobalToolApproval,
  * );

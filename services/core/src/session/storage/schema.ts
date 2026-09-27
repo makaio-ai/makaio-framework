@@ -384,7 +384,7 @@ export const agentsDual = defineDualTable(
     /** Adapter instance that owns this agent */
     adapterId: c.text('adapter_id').notNull(),
 
-    /** Adapter type name (e.g., 'claude-code', 'gemini-sdk') */
+    /** Adapter type name (e.g., 'claude-code', 'openai-node') */
     adapterName: c.text('adapter_name').notNull(),
 
     /** Makaio session this agent belongs to */

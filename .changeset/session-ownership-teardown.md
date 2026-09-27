@@ -13,8 +13,6 @@
 '@makaio/adapter-qwen-acp': minor
 '@makaio/adapter-claude-agent-sdk': minor
 '@makaio/adapter-cursor-sdk': minor
-'@makaio/adapter-github-copilot-sdk': minor
-'@makaio/adapter-gemini-sdk': minor
 '@makaio/adapter-pi-sdk': minor
 '@makaio/runtime-node': patch
 '@makaio/cli': patch

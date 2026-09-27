@@ -36,8 +36,6 @@ AIAdapter           — lifecycle owner, bus integration, agent registry
 | `claude-code` | `@makaio/ai-adapters-claude-agent-sdk` | `@anthropic-ai/claude-agent-sdk` | `anthropic` | `tools`, `vision`, `structuredOutput`, `chat:inTurnMessages`, `systemPrompt:override` |
 | `claude-code-cli` | `@makaio/ai-adapters-claude-code-cli` | Claude Code CLI (subprocess) | `anthropic` | `tools`, `chat:inTurnMessages`, `systemPrompt:override`, `systemPrompt:append` |
 | `codex-app-server` | `@makaio/ai-adapters-codex-app-server` | Codex CLI (JSON-RPC over JSONL) | `openai` | `tools`, `streaming`, `systemPrompt:override`, `systemPrompt:append` |
-| `gemini-sdk` | `@makaio/ai-adapters-gemini-sdk` | `@google/genai` | `openai` | `tools`, `streaming`, `systemPrompt:override`, `systemPrompt:append` |
-| `github-copilot-sdk` | `@makaio/ai-adapters-github-copilot-sdk` | `@github/copilot-sdk` | `openai` | `tools`, `systemPrompt:override`, `systemPrompt:append` |
 | `openai-node` | `@makaio/ai-adapters-openai-node` | `openai` | `openai` | `tools`, `streaming`, `systemPrompt:override`, `systemPrompt:append` |
 | `pi-sdk` | `@makaio/ai-adapters-pi-sdk` | `@mariozechner/pi-coding-agent` | `anthropic` | `tools`, `streaming`, `systemPrompt:override`, `systemPrompt:append`, `modelSwitchInSession` |
 | `qwen-acp` | `@makaio/ai-adapters-qwen-acp` | `@agentclientprotocol/sdk` (ACP) | `openai` | `tools`, `streaming`, `systemPrompt:override` |

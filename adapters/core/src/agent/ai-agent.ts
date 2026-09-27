@@ -146,7 +146,7 @@ export abstract class AIAgent<
    * Start mode for the next `emitStart()` call (consume-on-read).
    *
    * Set before dispatch; {@link emitStart} reads and clears the slot so
-   * subsequent calls within the same dispatch (e.g. Copilot SDK sub-turns)
+   * subsequent calls within the same dispatch (e.g. SDK sub-turns)
    * fall back to `'rotation'`. The `undefined` initial value is safe —
    * every first-start path sets the mode before the connector fires.
    */
@@ -284,7 +284,7 @@ export abstract class AIAgent<
   public get adapterId(): string {
     return this.config.adapterId;
   }
-  /** @returns Adapter type name (e.g., 'claude-code', 'gemini-sdk') */
+  /** @returns Adapter type name (e.g., 'claude-code', 'openai-node') */
   public get adapterName(): string {
     return this.config.adapterName;
   }

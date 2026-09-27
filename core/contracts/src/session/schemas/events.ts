@@ -65,7 +65,7 @@ export const EventSchemas = {
     agentId: z.string(),
     /** Adapter instance that owns this agent */
     adapterId: z.string(),
-    /** Adapter type name (e.g., 'claude-code', 'copilot') */
+    /** Adapter type name (e.g., 'claude-code', 'codex') */
     adapterName: z.string(),
     /** Agent role. If omitted, first agent becomes 'lead', others 'member'. */
     role: AgentRoleSchema.optional(),

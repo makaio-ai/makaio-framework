@@ -16,7 +16,7 @@ export const SESSION_CLOSED_QUEUE_ERROR = 'Session closed before queued message 
 /**
  * Minimal turn interface required by processQueue orchestration.
  *
- * Any turn implementation (Claude, Gemini, OpenAI, Copilot) that exposes
+ * Any turn implementation (Claude, OpenAI, Anthropic, Pi) that exposes
  * these methods can participate in the shared processQueue flow.
  */
 export interface QueueableTurn {
@@ -30,14 +30,14 @@ export interface QueueableTurn {
  * Result of processing an immediate message merge.
  *
  * Returned by the `extractMergeContent` callback so that adapters
- * can collect adapter-specific content (e.g., Gemini collects non-text parts).
+ * can collect adapter-specific content (e.g., non-text message parts).
  * The `mergedContent` array is always present; `extra` is an opaque bag
  * for adapter-specific data that flows through to `startNewTurn`.
  */
 export interface MergeResult {
   /** Text content collected from superseded/merged messages */
   mergedContent: string[];
-  /** Adapter-specific merge data (e.g., non-text parts for Gemini) */
+  /** Adapter-specific merge data (e.g., non-text message parts) */
   extra?: unknown;
 }
 
@@ -62,7 +62,7 @@ export interface ProcessQueueCallbacks<TExtra = unknown> {
 
   /**
    * Called after merge content is collected from superseded/enqueued messages.
-   * Allows adapters to collect additional content (e.g., Gemini's non-text parts).
+   * Allows adapters to collect additional content (e.g., non-text message parts).
    *
    * If not provided, only text content is collected using `extractContent`.
    * @param currentHandle - The in-flight message handle being superseded (or undefined)

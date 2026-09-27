@@ -5,8 +5,8 @@ import type { ProviderDefinitionInput } from '@makaio/contracts';
  *
  * SDK-only provider — Cursor communicates through its own proprietary
  * transport and does not expose a standard Anthropic or OpenAI HTTP endpoint.
- * The `endpoints` field is intentionally omitted. This follows the same
- * pattern as the GitHub Copilot SDK-only provider reference implementation.
+ * The `endpoints` field is intentionally omitted. This is the reference
+ * implementation for SDK-only providers.
  *
  * Credentials are resolved from `CURSOR_API_KEY`.
  */

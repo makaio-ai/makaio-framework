@@ -1,6 +1,6 @@
 # Makaio Prompt
 
-Provider-agnostic CLI for sending prompts to any AI provider through the Makaio bus. Drop-in replacement for `claude -p` that works with Claude, GPT, Gemini, Codex, Qwen, and any other adapter.
+Provider-agnostic CLI for sending prompts to any AI provider through the Makaio bus. Drop-in replacement for `claude -p` that works with Claude, GPT, Codex, Qwen, and any other adapter.
 
 ## Prerequisites
 
@@ -40,7 +40,6 @@ The `--model` flag accepts canonical model references. Makaio resolves them to t
 |-----------|-------------|
 | `sonnet` | Default Anthropic adapter |
 | `gpt-5.2` | Default OpenAI adapter |
-| `gemini-2.5-pro` | Gemini adapter |
 | `anthropic::sonnet` | Explicit provider routing |
 | `openai-node/openai::gpt-5.2` | Explicit adapter + provider |
 

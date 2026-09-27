@@ -54,7 +54,6 @@ export { extractRootConfigArg } from './runtime-config.js';
 const NATIVE_CLIENTS: readonly NativeClientCliDefinition[] = [
   { clientId: 'claude-code', command: 'claude', displayName: 'Claude Code' },
   { clientId: 'codex', command: 'codex', displayName: 'Codex' },
-  { clientId: 'gemini', command: 'gemini', displayName: 'Gemini' },
   { clientId: 'qwen', command: 'qwen', displayName: 'Qwen Code' },
 ];
 

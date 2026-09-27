@@ -20,7 +20,6 @@
   "type": "module",
   "resolutions": {
     "@anthropic-ai/sdk": "0.98.0",
-    "@github/copilot": "1.0.45",
     "@opentelemetry/exporter-prometheus": "0.217.0",
     "@opentelemetry/sdk-node": "0.217.0",
     "@tootallnate/once": "3.0.1",

@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { clientDefinition as claudeCodeDefinition } from '../claude-code/src/definition.js';
 import { clientDefinition as codexDefinition } from '../codex/src/definition.js';
 import { clientDefinition as cursorDefinition } from '../cursor/src/definition.js';
-import { clientDefinition as geminiDefinition } from '../gemini/src/definition.js';
-import { clientDefinition as githubCopilotDefinition } from '../github-copilot/src/definition.js';
 import { clientDefinition as qwenDefinition } from '../qwen/src/definition.js';
 
 describe('first-party client auth declarations', () => {
@@ -55,12 +53,7 @@ describe('first-party client auth declarations', () => {
     });
   });
 
-  it.each([
-    cursorDefinition,
-    geminiDefinition,
-    githubCopilotDefinition,
-    qwenDefinition,
-  ])('$id explicitly declares no client-owned auth methods', (definition) => {
+  it.each([cursorDefinition, qwenDefinition])('$id explicitly declares no client-owned auth methods', (definition) => {
     expect(definition.authMethods).toEqual([]);
     expect(definition.defaultAuth).toBeUndefined();
   });

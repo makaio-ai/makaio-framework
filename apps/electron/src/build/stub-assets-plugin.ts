@@ -12,8 +12,8 @@
  * stub, which is safe because the main process never uses these assets:
  *
  * - `.css`, `.scss` — CSS Modules (`styles.foo` → `undefined`, harmless)
- * - `.wasm`, `.wasm?binary` — WebAssembly binaries (e.g. tree-sitter from
- *   `@google/gemini-cli-core`) that are only loaded in the renderer or CLI
+ * - `.wasm`, `.wasm?binary` — WebAssembly binaries (e.g. tree-sitter grammars
+ *   from transitive dependencies) that are only loaded in the renderer or CLI
  *
  * @example
  * ```ts

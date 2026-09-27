@@ -6,10 +6,10 @@ import { BaseAdapterEventSchema } from './base-event.js';
  *
  * Subject: `adapter.quota`
  * Type: Event (fire-and-forget)
- * Emitted when: Quota information is available from the provider (e.g., GitHub Copilot)
+ * Emitted when: Quota information is available from the provider
  *
  * This tracks account-wide usage limits across all sessions in the billing period.
- * Only applicable to providers with quota systems (currently GitHub Copilot).
+ * Only applicable to providers with quota systems.
  */
 export const QuotaSchema = BaseAdapterEventSchema.extend({
   provider: z.string(),

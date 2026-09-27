@@ -267,7 +267,7 @@ export interface ConformanceTestConfig<
      * @defaultValue 2 (when not specified)
      * @example
      * ```typescript
-     * // Rate-limited API (e.g., Gemini free tier)
+     * // Rate-limited API (e.g., a free-tier API key)
      * concurrency: 1  // Run test files sequentially
      *
      * // High-throughput API
@@ -283,7 +283,6 @@ export interface ConformanceTestConfig<
      * Derived from the default provider preset's `fastModel` (or `defaultModel` as fallback).
      *
      * **Claude**: `{ definitionId: 'anthropic', modelName: 'haiku' }`
-     * **Gemini**: `{ definitionId: 'gemini', modelName: 'gemini-2.5-flash' }`
      * @example
      * ```typescript
      * primaryModel: { definitionId: 'anthropic', modelName: 'haiku' }
@@ -298,7 +297,6 @@ export interface ConformanceTestConfig<
      * Derived from the default provider preset's `defaultModel`.
      *
      * **Claude**: `{ definitionId: 'anthropic', modelName: 'sonnet' }`
-     * **Gemini**: `{ definitionId: 'gemini', modelName: 'gemini-2.5-pro' }`
      * @example
      * ```typescript
      * secondaryModel: { definitionId: 'anthropic', modelName: 'sonnet' }
@@ -324,7 +322,7 @@ export interface ConformanceTestConfig<
      *
      * When set, test infrastructure serializes context creation and key
      * operations through a per-adapter queue. Useful for adapters with
-     * aggressive rate limits (e.g., Gemini free tier).
+     * aggressive rate limits (e.g., free-tier API keys).
      *
      * **Default**: undefined (no throttling - tests run fully concurrent)
      * @example

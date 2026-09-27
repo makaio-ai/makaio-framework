@@ -5,16 +5,12 @@
 '@makaio/adapter-claude-code-tmux': patch
 '@makaio/adapter-codex-app-server': patch
 '@makaio/adapter-cursor-sdk': patch
-'@makaio/adapter-gemini-sdk': patch
-'@makaio/adapter-github-copilot-sdk': patch
 '@makaio/adapter-openai-node': patch
 '@makaio/adapter-pi-sdk': patch
 '@makaio/adapter-qwen-acp': patch
 '@makaio/client-claude-code': patch
 '@makaio/client-codex': patch
 '@makaio/client-cursor': patch
-'@makaio/client-gemini': patch
-'@makaio/client-github-copilot': patch
 '@makaio/client-qwen': patch
 '@makaio/contracts': patch
 '@makaio/extension-account-manager': patch
@@ -37,8 +33,6 @@
 '@makaio/provider-alibaba': patch
 '@makaio/provider-anthropic': patch
 '@makaio/provider-cursor': patch
-'@makaio/provider-github-copilot': patch
-'@makaio/provider-google': patch
 '@makaio/provider-kimi': patch
 '@makaio/provider-nanogpt': patch
 '@makaio/provider-openai': patch

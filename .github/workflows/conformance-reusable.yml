@@ -103,14 +103,6 @@ jobs:
                 primary_model: '',
                 secondary_model: '',
               },
-              'gemini-sdk': {
-                adapter: 'gemini-sdk',
-                provider_env_var: 'GEMINI_API_KEY',
-                provider_secret_name: 'GEMINI_API_KEY',
-                conformance_provider: '',
-                primary_model: '',
-                secondary_model: '',
-              },
               'pi-sdk': {
                 adapter: 'pi-sdk',
                 provider_env_var: 'OPENCODE_GO_API_KEY',

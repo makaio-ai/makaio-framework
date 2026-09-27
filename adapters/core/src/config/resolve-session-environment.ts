@@ -11,7 +11,7 @@ export interface SessionEnvironmentOptions {
   globalBus?: IMakaioBus;
   /**
    * Stable client identifier passed to `resolveClientBinary`
-   * (e.g. `'claude-code'`, `'qwen'`, `'github-copilot'`). Omit for
+   * (e.g. `'claude-code'`, `'qwen'`, `'codex'`). Omit for
    * connector-only SDK adapters with no managed binary.
    */
   clientId?: string;

@@ -52,7 +52,7 @@
  * A subsequent `SessionStart` hook for the same `adapterSessionId` is then
  * silently dropped — the adapter path already owns the canonical emission.
  * Sessions whose `adapterSessionId` is absent or not yet registered emit as
- * before (fail-open).  Events from other clients (e.g. `'codex'`, `'gemini'`)
+ * before (fail-open).  Events from other clients (e.g. `'codex'`, `'qwen'`)
  * are ignored unconditionally — their adapter sessions must not suppress Claude
  * Code hook emissions.
  *
@@ -606,7 +606,7 @@ export class ClaudeCodeClientService extends BaseService {
    * Called for every `client.runtime.started` event.  Only events whose
    * `clientId` equals `'claude-code'`, whose `source.layer` is `'adapter'`, and
    * that carry a non-empty `adapterSessionId` update the managed-sessions gate.
-   * Events from other clients (e.g. `'codex'`, `'gemini'`) are ignored
+   * Events from other clients (e.g. `'codex'`, `'qwen'`) are ignored
    * unconditionally — their adapter sessions must not suppress Claude Code hook
    * emissions.  Non-adapter sources (e.g. `'supervisor'`, `'statusline'`) are
    * also ignored to prevent accidental suppression of native hook paths.

@@ -1,6 +1,6 @@
 ---
 title: Connect Your AI Tools
-description: How Makaio normalizes infrastructure across Claude Code, Codex, Gemini, and other AI tools through adapters, the bus, and shipped extensions.
+description: How Makaio normalizes infrastructure across Claude Code, Codex, Qwen, and other AI tools through adapters, the bus, and shipped extensions.
 ---
 
 <!-- web:hide -->
@@ -9,7 +9,7 @@ description: How Makaio normalizes infrastructure across Claude Code, Codex, Gem
 
 <!-- /web:hide -->
 
-You use Claude Code, Codex, or Gemini every day — probably several at once. Each
+You use Claude Code, Codex, or Qwen every day — probably several at once. Each
 tool has its own credentials, its own session history, its own usage limits. When
 you switch between them, context stays behind. When you build something on top of
 one, it only works with that one.
@@ -20,7 +20,7 @@ the bus. Storage, credentials, and streaming work the same regardless of which
 provider sits behind them.
 
 The result: build once, works everywhere. A usage tracker you write for Claude
-Code also works with Codex and Gemini — same bus events, same storage, different
+Code also works with Codex and Qwen — same bus events, same storage, different
 adapter.
 
 ## What ships out of the box
@@ -74,7 +74,7 @@ for one provider, you don't have to start over. The migration path:
 2. **Replace your API calls** with bus subscriptions. Instead of polling the
    Anthropic API for usage, subscribe to `agent.usage` events on the bus.
 3. **Gain every provider** the framework supports. Your Claude-only tool now
-   also works with Codex, Gemini and Qwen — through the same events.
+   also works with Codex and Qwen — through the same events.
 
 The [account-manager](../extensions/account-manager/) extension is a good
 reference for how a full-featured extension composes credential discovery, usage

@@ -153,7 +153,7 @@ export abstract class AIAgentConnector<
 
   /**
    * Store runtime system prompt for session creation.
-   * Subclasses may override to apply SDK-specific side effects (e.g., Gemini's setSystemInstruction).
+   * Subclasses may override to apply SDK-specific side effects (e.g., forwarding it to the SDK's system-instruction setter).
    * @param prompt - System prompt from start/initialize options
    */
   protected captureSystemPrompt(prompt: SystemPrompt | undefined): void {
@@ -366,7 +366,7 @@ export abstract class AIAgentConnector<
    * **Mutation contract:** Implementations MUST NOT mutate `this.model` directly.
    * The caller (AIAgent.handleModelChange) owns the `this.model` field update after
    * a successful in-place change. Implementations only configure the SDK-internal model
-   * (e.g., `query.setModel()`, `geminiConfig.setModel()`).
+   * (e.g., `query.setModel()`).
    * @param _newModel - The model identifier to switch to
    * @returns true if changed in-place, false if swap needed. Exceptions are caught by the
    * caller and treated as false (automatic swap fallback), so implementations need not guard.

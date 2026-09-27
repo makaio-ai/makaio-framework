@@ -82,19 +82,9 @@ export const CLAUDE_CODE_REGISTRY_HARNESS: DefaultHarnessDefinition = createRegi
   clientId: 'claude-code',
 });
 
-/** Default harness for gemini-sdk adapter using registry tools only. */
-export const GEMINI_SDK_REGISTRY_HARNESS: DefaultHarnessDefinition = createRegistryHarness({
-  id: 'harness-gemini-sdk-registry',
-  name: 'Gemini SDK Registry',
-  description: 'Gemini SDK adapter with registry-managed tools',
-  adapterName: 'gemini-sdk',
-  clientId: 'gemini',
-});
-
 /** Shipped default harnesses registered during service initialization. */
 export const DEFAULT_HARNESSES: DefaultHarnessDefinition[] = [
   CODEX_APP_SERVER_NATIVE_HARNESS,
   OPENAI_NODE_REGISTRY_HARNESS,
   CLAUDE_CODE_REGISTRY_HARNESS,
-  GEMINI_SDK_REGISTRY_HARNESS,
 ];
