@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import {
   INSTALLED_PACKAGE_CONSUMER_INSTALL_ARGUMENTS,
   prepareInstalledPackageConsumer,
@@ -15,22 +15,16 @@ import { stagePackageForNpmPublish } from '../../scripts/lib/npm-publish-staging
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
-const FRAMEWORK_BUILD_TIMEOUT_MS = 270_000;
 const STORAGE_PG_BUILD_TIMEOUT_MS = 270_000;
 const PACK_TIMEOUT_MS = 60_000;
 const INSTALL_TIMEOUT_MS = 120_000;
 const ASSERTION_TIMEOUT_MS = 30_000;
-// `prepareInstalledPackageConsumer` owns framework build, pack, and its initial
-// installation. The pair is then reinstalled together because npm otherwise
-// prunes the first tarball while installing the second one.
+// The Packages global setup builds the framework tarball once per run;
+// `prepareInstalledPackageConsumer` owns its initial installation. The pair is
+// then reinstalled together because npm otherwise prunes the first tarball
+// while installing the second one.
 const SETUP_OPERATIONS_TIMEOUT_MS =
-  FRAMEWORK_BUILD_TIMEOUT_MS +
-  PACK_TIMEOUT_MS +
-  INSTALL_TIMEOUT_MS +
-  STORAGE_PG_BUILD_TIMEOUT_MS +
-  PACK_TIMEOUT_MS +
-  INSTALL_TIMEOUT_MS +
-  ASSERTION_TIMEOUT_MS;
+  INSTALL_TIMEOUT_MS + STORAGE_PG_BUILD_TIMEOUT_MS + PACK_TIMEOUT_MS + INSTALL_TIMEOUT_MS + ASSERTION_TIMEOUT_MS;
 const SETUP_TIMEOUT_MS = SETUP_OPERATIONS_TIMEOUT_MS + 5_000;
 const STORAGE_PG_PACKAGE_DIR = join(import.meta.dirname, '../../storage/pg');
 
@@ -43,17 +37,16 @@ let stagedStorageManifest: {
 };
 
 /**
- * Build, stage, pack, and install the public framework/storage-pg pair.
- * @param root - Isolated temporary root for both package tarballs and their consumer.
+ * Install the shared framework tarball, then build, stage, pack, and install storage-pg beside it.
+ * @param root - Isolated temporary root for the storage-pg tarball and the consumer.
  * @param signal - Cancellation signal shared by the package preparation subprocesses.
  */
 async function prepareConsumer(root: string, signal: AbortSignal): Promise<void> {
   const framework = await prepareInstalledPackageConsumer({
     root,
     consumerName: 'postgres-attempt-package-consumer',
+    tarball: inject('installedFrameworkTarball'),
     signal,
-    buildTimeoutMs: FRAMEWORK_BUILD_TIMEOUT_MS,
-    packTimeoutMs: PACK_TIMEOUT_MS,
     installTimeoutMs: INSTALL_TIMEOUT_MS,
   });
   consumerRoot = framework.consumerRoot;

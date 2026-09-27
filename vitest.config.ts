@@ -73,6 +73,15 @@ if (!enabledCategories.has('integration')) {
 /** Re-export for the test runner script and CI. */
 export { shards };
 
+/**
+ * Per-shard global setups. The Packages setup builds the declaration-bearing
+ * framework tarball once per run, and only when an installed-package suite is
+ * selected, instead of once per parallel suite.
+ */
+const shardGlobalSetup: Record<string, string[]> = {
+  Packages: [resolve(root, 'packages/framework/installed-package-tarball.global-setup.ts')],
+};
+
 export default defineConfig({
   test: {
     globals: true,
@@ -89,6 +98,7 @@ export default defineConfig({
           extends: true,
           test: {
             name,
+            globalSetup: shardGlobalSetup[name] ?? [],
             exclude: [...exclude, ...FORKS_REQUIRED_FILES, ...GIT_SERIAL_TEST_GLOBS],
             include: categoryIncludes(dirs, enabledCategories, ADAPTER_DIRS),
           },
