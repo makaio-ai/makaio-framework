@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import {
   prepareInstalledPackageConsumer,
   runInstalledPackageSetupStage,
@@ -13,14 +13,13 @@ import { HEADLESS_GIT_CONSUMER, TYPES_CONSUMER } from './local-git-workspace-pre
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
-const BUILD_TIMEOUT_MS = 270_000;
-const PACK_TIMEOUT_MS = 60_000;
 const INSTALL_TIMEOUT_MS = 120_000;
 const ASSERTION_TIMEOUT_MS = 60_000;
-// The build, pack, installation and runtime consumer execute sequentially.
-// Preserve each child's hard timeout without spending its allowance on an
-// earlier phase; the outer hook retains five seconds of cleanup headroom.
-const SETUP_OPERATIONS_TIMEOUT_MS = BUILD_TIMEOUT_MS + PACK_TIMEOUT_MS + INSTALL_TIMEOUT_MS + ASSERTION_TIMEOUT_MS;
+// The installation and runtime consumer execute sequentially; the framework
+// tarball is built once per run by the Packages global setup. Preserve each
+// child's hard timeout without spending its allowance on an earlier phase; the
+// outer hook retains five seconds of cleanup headroom.
+const SETUP_OPERATIONS_TIMEOUT_MS = INSTALL_TIMEOUT_MS + ASSERTION_TIMEOUT_MS;
 const SETUP_TIMEOUT_MS = SETUP_OPERATIONS_TIMEOUT_MS + 5_000;
 
 let temporaryRoot: string | undefined;
@@ -28,7 +27,7 @@ let consumerRoot: string;
 let result: unknown;
 
 /**
- * Build and install the umbrella package into an isolated consumer directory.
+ * Install the shared umbrella package tarball into an isolated consumer directory.
  * @param root - Temporary directory owned by this suite.
  * @param signal - Deadline shared by setup's bounded child processes.
  */
@@ -36,9 +35,8 @@ async function prepareConsumer(root: string, signal: AbortSignal): Promise<void>
   const installed = await prepareInstalledPackageConsumer({
     root,
     consumerName: 'headless-git-preparation-consumer',
+    tarball: inject('installedFrameworkTarball'),
     signal,
-    buildTimeoutMs: BUILD_TIMEOUT_MS,
-    packTimeoutMs: PACK_TIMEOUT_MS,
     installTimeoutMs: INSTALL_TIMEOUT_MS,
   });
   consumerRoot = installed.consumerRoot;

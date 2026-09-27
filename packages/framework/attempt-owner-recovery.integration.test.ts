@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, inject, it } from 'vitest';
 import { CONFORMANCE_CONSUMER, RECOVERY_CONSUMER, TYPES_CONSUMER } from './attempt-owner-recovery.fixture.js';
 import {
   INSTALLED_PACKAGE_CONSUMER_INSTALL_ARGUMENTS,
@@ -13,16 +13,14 @@ import {
 
 const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
-const BUILD_TIMEOUT_MS = 270_000;
-const PACK_TIMEOUT_MS = 60_000;
 const INSTALL_TIMEOUT_MS = 120_000;
 const ASSERTION_TIMEOUT_MS = 30_000;
 const CONFORMANCE_TIMEOUT_MS = 60_000;
-// Setup owns six sequential child operations. Its aggregate deadline must not
-// spend a later operation's allowance on the earlier declaration-bearing build.
-// Each child retains its own hard timeout; the hook adds only cleanup headroom.
-const SETUP_OPERATIONS_TIMEOUT_MS =
-  BUILD_TIMEOUT_MS + PACK_TIMEOUT_MS + INSTALL_TIMEOUT_MS + 2 * ASSERTION_TIMEOUT_MS + INSTALL_TIMEOUT_MS;
+// Setup owns four sequential child operations; the framework tarball is built
+// once per run by the Packages global setup. The aggregate deadline must not
+// spend a later operation's allowance on an earlier one. Each child retains its
+// own hard timeout; the hook adds only cleanup headroom.
+const SETUP_OPERATIONS_TIMEOUT_MS = INSTALL_TIMEOUT_MS + 2 * ASSERTION_TIMEOUT_MS + INSTALL_TIMEOUT_MS;
 const SETUP_TIMEOUT_MS = SETUP_OPERATIONS_TIMEOUT_MS + 5_000;
 
 let temporaryRoot: string | undefined;
@@ -39,9 +37,8 @@ async function prepareConsumer(root: string, signal: AbortSignal): Promise<void>
   const installed = await prepareInstalledPackageConsumer({
     root,
     consumerName: 'attempt-recovery-consumer',
+    tarball: inject('installedFrameworkTarball'),
     signal,
-    buildTimeoutMs: BUILD_TIMEOUT_MS,
-    packTimeoutMs: PACK_TIMEOUT_MS,
     installTimeoutMs: INSTALL_TIMEOUT_MS,
   });
   consumerRoot = installed.consumerRoot;

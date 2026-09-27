@@ -81,7 +81,15 @@ export const INSTALLED_PACKAGE_CONSUMER_INSTALL_ARGUMENTS = [
   '--legacy-peer-deps',
 ];
 
-/** One isolated package consumer built by a single integration suite. */
+declare module 'vitest' {
+  /** Values the Packages project's global setup hands to its test workers. */
+  export interface ProvidedContext {
+    /** Immutable framework tarball built once per run; present only when an installed-package suite runs. */
+    installedFrameworkTarball: string;
+  }
+}
+
+/** One isolated package consumer owned by a single integration suite. */
 export interface InstalledPackageConsumer {
   /** Consumer directory containing the installed tarball. */
   readonly consumerRoot: string;
@@ -89,39 +97,27 @@ export interface InstalledPackageConsumer {
   readonly tarball: string;
 }
 
-/** Options for one independently owned installed-package proof. */
-export interface PrepareInstalledPackageConsumerOptions {
-  /** Temporary root whose lifecycle is owned by the calling test suite. */
+/** Options for the single declaration-bearing framework build of a test run. */
+export interface BuildInstalledFrameworkTarballOptions {
+  /** Temporary root whose lifecycle is owned by the global setup. */
   readonly root: string;
-  /** Private package name written into the isolated consumer manifest. */
-  readonly consumerName: string;
-  /** Deadline shared by the suite's build, pack, and initial installation. */
+  /** Deadline shared by the build and pack commands. */
   readonly signal: AbortSignal;
   /** Maximum duration of the declaration-bearing umbrella build. */
   readonly buildTimeoutMs: number;
   /** Maximum duration of npm pack. */
   readonly packTimeoutMs: number;
-  /** Maximum duration of the initial tarball installation. */
-  readonly installTimeoutMs: number;
 }
 
 /**
- * Build and install a declaration-bearing framework tarball for one suite.
- *
- * Each caller supplies an independently owned temporary root. Keeping the
- * artifacts separate avoids sharing partially built output or cleanup
- * lifetimes between concurrent package proofs; the deliberate repeated build
- * is the isolation boundary, not a cache opportunity.
- * @param options - Suite-owned root, package identity, and bounded commands.
- * @returns Installed consumer root and the exact tarball it received.
+ * Build and pack the declaration-bearing framework umbrella package.
+ * @param options - Owned root and bounded build/pack commands.
+ * @returns Absolute path of the packed tarball.
  */
-export async function prepareInstalledPackageConsumer(
-  options: PrepareInstalledPackageConsumerOptions,
-): Promise<InstalledPackageConsumer> {
+export async function buildInstalledFrameworkTarball(options: BuildInstalledFrameworkTarballOptions): Promise<string> {
   const buildRoot = join(options.root, 'package');
   const packRoot = join(options.root, 'pack');
-  const consumerRoot = join(options.root, 'consumer');
-  await Promise.all([mkdir(packRoot), mkdir(consumerRoot)]);
+  await mkdir(packRoot);
   // tsdown and rolldown-plugin-dts support Node; Bun can leave eager DTS builds pending at the bus stage.
   // The declaration-heavy core stage exceeds Node's default 4 GiB V8 heap.
   await runInstalledPackageSetupStage('build', () =>
@@ -145,7 +141,46 @@ export async function prepareInstalledPackageConsumer(
       signal: options.signal,
     }),
   );
-  const tarball = join(packRoot, stdout.trim());
+  return join(packRoot, stdout.trim());
+}
+
+/** Options for one independently owned installed-package proof. */
+export interface PrepareInstalledPackageConsumerOptions {
+  /** Temporary root whose lifecycle is owned by the calling test suite. */
+  readonly root: string;
+  /** Private package name written into the isolated consumer manifest. */
+  readonly consumerName: string;
+  /** Shared tarball injected from the global setup (`inject('installedFrameworkTarball')`). */
+  readonly tarball: string | undefined;
+  /** Deadline shared by the suite's initial installation. */
+  readonly signal: AbortSignal;
+  /** Maximum duration of the initial tarball installation. */
+  readonly installTimeoutMs: number;
+}
+
+/**
+ * Install the run's shared framework tarball into one suite's own consumer.
+ *
+ * The Packages project's global setup builds and packs the framework once per
+ * run; the resulting tarball is immutable and shared read-only by every
+ * installed-package suite. The isolation boundary is the per-suite npm
+ * installation into a consumer root under the caller's own temporary
+ * directory: suites never share an installed `node_modules`, consumer files,
+ * or cleanup lifetimes.
+ * @param options - Suite-owned root, package identity, shared tarball, and bounded install.
+ * @returns Installed consumer root and the exact tarball it received.
+ */
+export async function prepareInstalledPackageConsumer(
+  options: PrepareInstalledPackageConsumerOptions,
+): Promise<InstalledPackageConsumer> {
+  const { tarball } = options;
+  if (!tarball) {
+    throw new Error(
+      'No framework tarball was provided. Add this suite to INSTALLED_PACKAGE_SUITES in installed-package-tarball.global-setup.ts.',
+    );
+  }
+  const consumerRoot = join(options.root, 'consumer');
+  await mkdir(consumerRoot);
   await writeFile(
     join(consumerRoot, 'package.json'),
     JSON.stringify({ name: options.consumerName, private: true, type: 'module' }),
