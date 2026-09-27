@@ -702,6 +702,8 @@ export {
   toMakaioToolName,
   toNativeToolName,
   ToolNameError,
+  TOOL_VOCABULARY_BY_ADAPTER,
+  toolVocabularyForAdapter,
 } from './tool-names/index.js';
 export type {
   CommandRule,

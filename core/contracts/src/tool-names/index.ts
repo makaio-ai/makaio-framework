@@ -6,6 +6,8 @@ export {
   toMakaioToolName,
   toNativeToolName,
   ToolNameError,
+  TOOL_VOCABULARY_BY_ADAPTER,
+  toolVocabularyForAdapter,
 } from './tool-name-map.js';
 export type { MakaioToolName, ToolNameErrorReason, ToolVocabulary } from './tool-name-map.js';
 export { matchesCommandRule, matchesDenyCommandRule, parseToolListEntry } from './tool-list-entry.js';
