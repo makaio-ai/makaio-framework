@@ -1,14 +1,8 @@
-import os from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
 import type { CanUseTool, PermissionResult } from '@anthropic-ai/claude-agent-sdk';
-import { MakaioBus } from '@makaio/bus-core';
 import { resolveToolPolicy, ToolNameError } from '@makaio/contracts';
 import type { ResolvedToolPolicy } from '@makaio/contracts';
-import { clientDefinition as claudeClientDefinition } from '@makaio/client-claude-code';
-import { ClaudeSdkConnector } from '../src/connector.js';
-import { ClaudeCodeConnectorNamespace } from '../src/namespace/index.js';
-import { ClaudeCodeAdapterName } from '../src/constants.js';
-import { createSessionAccountObservationRequester } from '../src/account-observation-requester.js';
+import { createGateConnector } from '../src/test/gate-test-helpers.js';
 import type { ClaudeAgentConfig } from '../src/types/index.js';
 
 /** Tool list options for {@link makeGate}, written with Makaio tool names. */
@@ -30,25 +24,9 @@ async function makeGate(
   canUseTool: CanUseTool;
   centralApproval: ReturnType<typeof vi.fn>;
 }> {
-  const bus = await ClaudeCodeConnectorNamespace.scopedBus();
-  const connector = new ClaudeSdkConnector({
-    bus,
-    adapterId: 'adapter-test',
-    adapterName: ClaudeCodeAdapterName,
-    agentId: 'agent-test',
-    model: 'claude-sonnet-4-20250514',
-    cwd: os.tmpdir(),
-    env: {},
-    clientId: claudeClientDefinition.id,
-    requestSessionAccountObservation: createSessionAccountObservationRequester(MakaioBus),
-    ...lists,
-  });
   const centralApproval = vi.fn().mockResolvedValue({ action: 'allow' });
-  Object.defineProperty(connector, 'requestToolApproval', { value: centralApproval });
-  const createHandler = Reflect.get(connector, 'createToolApprovalHandler') as (
-    policy: ResolvedToolPolicy,
-  ) => CanUseTool;
-  return { canUseTool: createHandler.call(connector, policy), centralApproval };
+  const { createToolApprovalHandler } = await createGateConnector(lists, centralApproval);
+  return { canUseTool: createToolApprovalHandler(policy), centralApproval };
 }
 
 /**

@@ -118,7 +118,23 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
       throw new InvalidModelError('Model is required but was not provided');
     }
 
-    // Create session config
+    this.session = new ClaudeConnectorSession(this.buildSessionConfig());
+    this.userMessageQueue = new UserMessageQueue();
+
+    // Initialize session with tool approval handler
+    await this.session.initialize((toolPolicy) => this.createToolApprovalHandler(toolPolicy), responseSchema);
+
+    // Wire turn events for state updates
+    this.wireSessionEvents();
+  }
+
+  /**
+   * Build the session config for {@link ClaudeConnectorSession} from the connector's
+   * agent config: resolved provider config (central client executable), process env,
+   * caller tool lists, and the emit/turn callbacks bound to this connector.
+   * @returns The session config the SDK query is built from.
+   */
+  private buildSessionConfig(): ClaudeSessionConfig {
     const agentConfig = this.config as ClaudeAgentConfig;
 
     // Central client resolution is authoritative whenever it selected an
@@ -142,7 +158,7 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
       baseUrl: readClaudeProviderBaseUrl(resolvedProviderConfig),
     });
 
-    const sessionConfig: ClaudeSessionConfig = {
+    return {
       bus: this.config.bus as ClaudeCodeConnectorBus,
       adapterId: this.adapterId,
       adapterName: this.adapterName,
@@ -206,15 +222,6 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
         void this.emitCompletedTurnAccountObservation(result).catch(() => undefined);
       },
     };
-
-    this.session = new ClaudeConnectorSession(sessionConfig);
-    this.userMessageQueue = new UserMessageQueue();
-
-    // Initialize session with tool approval handler
-    await this.session.initialize((toolPolicy) => this.createToolApprovalHandler(toolPolicy), responseSchema);
-
-    // Wire turn events for state updates
-    this.wireSessionEvents();
   }
 
   /**
