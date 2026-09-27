@@ -350,12 +350,8 @@
           "name": "message_routing_message_id_messages_message_id_fk",
           "tableFrom": "message_routing",
           "tableTo": "messages",
-          "columnsFrom": [
-            "message_id"
-          ],
-          "columnsTo": [
-            "message_id"
-          ],
+          "columnsFrom": ["message_id"],
+          "columnsTo": ["message_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -363,11 +359,7 @@
       "compositePrimaryKeys": {
         "message_routing_message_id_agent_id_status_pk": {
           "name": "message_routing_message_id_agent_id_status_pk",
-          "columns": [
-            "message_id",
-            "agent_id",
-            "status"
-          ]
+          "columns": ["message_id", "agent_id", "status"]
         }
       },
       "uniqueConstraints": {},
@@ -569,12 +561,8 @@
           "name": "messages_turn_id_turns_turn_id_fk",
           "tableFrom": "messages",
           "tableTo": "turns",
-          "columnsFrom": [
-            "turn_id"
-          ],
-          "columnsTo": [
-            "turn_id"
-          ],
+          "columnsFrom": ["turn_id"],
+          "columnsTo": ["turn_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -582,12 +570,8 @@
           "name": "messages_session_id_sessions_session_id_fk",
           "tableFrom": "messages",
           "tableTo": "sessions",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "session_id"
-          ],
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["session_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -595,12 +579,8 @@
           "name": "messages_edit_of_messages_message_id_fk",
           "tableFrom": "messages",
           "tableTo": "messages",
-          "columnsFrom": [
-            "edit_of"
-          ],
-          "columnsTo": [
-            "message_id"
-          ],
+          "columnsFrom": ["edit_of"],
+          "columnsTo": ["message_id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -778,12 +758,8 @@
           "name": "session_events_session_id_sessions_session_id_fk",
           "tableFrom": "session_events",
           "tableTo": "sessions",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "session_id"
-          ],
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["session_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -791,12 +767,8 @@
           "name": "session_events_message_id_messages_message_id_fk",
           "tableFrom": "session_events",
           "tableTo": "messages",
-          "columnsFrom": [
-            "message_id"
-          ],
-          "columnsTo": [
-            "message_id"
-          ],
+          "columnsFrom": ["message_id"],
+          "columnsTo": ["message_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -806,9 +778,7 @@
         "session_events_event_id_unique": {
           "name": "session_events_event_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "event_id"
-          ]
+          "columns": ["event_id"]
         }
       },
       "policies": {},
@@ -999,12 +969,8 @@
           "name": "adapter_session_claims_session_id_sessions_session_id_fk",
           "tableFrom": "adapter_session_claims",
           "tableTo": "sessions",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "session_id"
-          ],
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["session_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1012,12 +978,8 @@
           "name": "adapter_session_claims_agent_id_agents_agent_id_fk",
           "tableFrom": "adapter_session_claims",
           "tableTo": "agents",
-          "columnsFrom": [
-            "agent_id"
-          ],
-          "columnsTo": [
-            "agent_id"
-          ],
+          "columnsFrom": ["agent_id"],
+          "columnsTo": ["agent_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -1025,14 +987,8 @@
           "name": "adapter_session_claims_owner_instance_id_machine_id_runtime_instances_instance_id_machine_id_fk",
           "tableFrom": "adapter_session_claims",
           "tableTo": "runtime_instances",
-          "columnsFrom": [
-            "owner_instance_id",
-            "machine_id"
-          ],
-          "columnsTo": [
-            "instance_id",
-            "machine_id"
-          ],
+          "columnsFrom": ["owner_instance_id", "machine_id"],
+          "columnsTo": ["instance_id", "machine_id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -1289,12 +1245,8 @@
           "name": "agents_session_id_sessions_session_id_fk",
           "tableFrom": "agents",
           "tableTo": "sessions",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "session_id"
-          ],
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["session_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -1405,10 +1357,7 @@
       "compositePrimaryKeys": {
         "runtime_instances_instance_id_machine_id_pk": {
           "name": "runtime_instances_instance_id_machine_id_pk",
-          "columns": [
-            "instance_id",
-            "machine_id"
-          ]
+          "columns": ["instance_id", "machine_id"]
         }
       },
       "uniqueConstraints": {},
@@ -1906,12 +1855,8 @@
           "name": "turns_session_id_sessions_session_id_fk",
           "tableFrom": "turns",
           "tableTo": "sessions",
-          "columnsFrom": [
-            "session_id"
-          ],
-          "columnsTo": [
-            "session_id"
-          ],
+          "columnsFrom": ["session_id"],
+          "columnsTo": ["session_id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -2039,10 +1984,7 @@
         "uq_client_binary_versions_client_version": {
           "name": "uq_client_binary_versions_client_version",
           "nullsNotDistinct": false,
-          "columns": [
-            "client_id",
-            "version"
-          ]
+          "columns": ["client_id", "version"]
         }
       },
       "policies": {},
@@ -2464,12 +2406,8 @@
           "name": "active_execution_attempt_execution_attempt_id_execution_attempt_execution_attempt_id_fk",
           "tableFrom": "active_execution_attempt",
           "tableTo": "execution_attempt",
-          "columnsFrom": [
-            "execution_attempt_id"
-          ],
-          "columnsTo": [
-            "execution_attempt_id"
-          ],
+          "columnsFrom": ["execution_attempt_id"],
+          "columnsTo": ["execution_attempt_id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2563,11 +2501,7 @@
       "compositePrimaryKeys": {
         "execution_attempt_control_evidence_execution_attempt_id_control_revision_runtime_generation_pk": {
           "name": "execution_attempt_control_evidence_execution_attempt_id_control_revision_runtime_generation_pk",
-          "columns": [
-            "execution_attempt_id",
-            "control_revision",
-            "runtime_generation"
-          ]
+          "columns": ["execution_attempt_id", "control_revision", "runtime_generation"]
         }
       },
       "uniqueConstraints": {},
@@ -2604,12 +2538,8 @@
           "name": "execution_attempt_request_execution_attempt_id_execution_attempt_execution_attempt_id_fk",
           "tableFrom": "execution_attempt_request",
           "tableTo": "execution_attempt",
-          "columnsFrom": [
-            "execution_attempt_id"
-          ],
-          "columnsTo": [
-            "execution_attempt_id"
-          ],
+          "columnsFrom": ["execution_attempt_id"],
+          "columnsTo": ["execution_attempt_id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -2617,10 +2547,7 @@
       "compositePrimaryKeys": {
         "execution_attempt_request_execution_id_request_key_pk": {
           "name": "execution_attempt_request_execution_id_request_key_pk",
-          "columns": [
-            "execution_id",
-            "request_key"
-          ]
+          "columns": ["execution_id", "request_key"]
         }
       },
       "uniqueConstraints": {},
@@ -2895,12 +2822,8 @@
           "name": "provider_operation_execution_attempt_id_execution_attempt_execution_attempt_id_fk",
           "tableFrom": "provider_operation",
           "tableTo": "execution_attempt",
-          "columnsFrom": [
-            "execution_attempt_id"
-          ],
-          "columnsTo": [
-            "execution_attempt_id"
-          ],
+          "columnsFrom": ["execution_attempt_id"],
+          "columnsTo": ["execution_attempt_id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -3242,12 +3165,8 @@
           "name": "workflow_execution_frames_execution_id_workflow_executions_id_fk",
           "tableFrom": "workflow_execution_frames",
           "tableTo": "workflow_executions",
-          "columnsFrom": [
-            "execution_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["execution_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3309,12 +3228,8 @@
           "name": "workflow_execution_links_source_execution_id_workflow_executions_id_fk",
           "tableFrom": "workflow_execution_links",
           "tableTo": "workflow_executions",
-          "columnsFrom": [
-            "source_execution_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["source_execution_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         },
@@ -3322,12 +3237,8 @@
           "name": "workflow_execution_links_target_execution_id_workflow_executions_id_fk",
           "tableFrom": "workflow_execution_links",
           "tableTo": "workflow_executions",
-          "columnsFrom": [
-            "target_execution_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["target_execution_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3335,10 +3246,7 @@
       "compositePrimaryKeys": {
         "workflow_execution_links_source_execution_id_target_execution_id_pk": {
           "name": "workflow_execution_links_source_execution_id_target_execution_id_pk",
-          "columns": [
-            "source_execution_id",
-            "target_execution_id"
-          ]
+          "columns": ["source_execution_id", "target_execution_id"]
         }
       },
       "uniqueConstraints": {},
@@ -3382,12 +3290,8 @@
           "name": "workflow_execution_state_execution_id_workflow_executions_id_fk",
           "tableFrom": "workflow_execution_state",
           "tableTo": "workflow_executions",
-          "columnsFrom": [
-            "execution_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["execution_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3439,12 +3343,8 @@
           "name": "workflow_execution_state_events_execution_id_workflow_executions_id_fk",
           "tableFrom": "workflow_execution_state_events",
           "tableTo": "workflow_executions",
-          "columnsFrom": [
-            "execution_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["execution_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3452,10 +3352,7 @@
       "compositePrimaryKeys": {
         "workflow_execution_state_events_execution_id_sequence_pk": {
           "name": "workflow_execution_state_events_execution_id_sequence_pk",
-          "columns": [
-            "execution_id",
-            "sequence"
-          ]
+          "columns": ["execution_id", "sequence"]
         }
       },
       "uniqueConstraints": {},
@@ -3791,12 +3688,8 @@
           "name": "workflow_finalizations_execution_id_workflow_executions_id_fk",
           "tableFrom": "workflow_finalizations",
           "tableTo": "workflow_executions",
-          "columnsFrom": [
-            "execution_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["execution_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -3942,12 +3835,8 @@
           "name": "workflow_gate_instances_execution_id_workflow_executions_id_fk",
           "tableFrom": "workflow_gate_instances",
           "tableTo": "workflow_executions",
-          "columnsFrom": [
-            "execution_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["execution_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4134,12 +4023,8 @@
           "name": "workflow_run_contexts_execution_id_workflow_executions_id_fk",
           "tableFrom": "workflow_run_contexts",
           "tableTo": "workflow_executions",
-          "columnsFrom": [
-            "execution_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["execution_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4261,12 +4146,8 @@
           "name": "workflow_step_spans_execution_id_workflow_executions_id_fk",
           "tableFrom": "workflow_step_spans",
           "tableTo": "workflow_executions",
-          "columnsFrom": [
-            "execution_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["execution_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4274,10 +4155,7 @@
       "compositePrimaryKeys": {
         "workflow_step_spans_execution_id_frame_id_pk": {
           "name": "workflow_step_spans_execution_id_frame_id_pk",
-          "columns": [
-            "execution_id",
-            "frame_id"
-          ]
+          "columns": ["execution_id", "frame_id"]
         }
       },
       "uniqueConstraints": {},
@@ -4354,12 +4232,8 @@
           "name": "worklog_artifact_writes_execution_id_workflow_executions_id_fk",
           "tableFrom": "worklog_artifact_writes",
           "tableTo": "workflow_executions",
-          "columnsFrom": [
-            "execution_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["execution_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4494,12 +4368,8 @@
           "name": "worklog_frame_entries_execution_id_workflow_executions_id_fk",
           "tableFrom": "worklog_frame_entries",
           "tableTo": "workflow_executions",
-          "columnsFrom": [
-            "execution_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["execution_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4606,12 +4476,8 @@
           "name": "worklog_gate_events_execution_id_workflow_executions_id_fk",
           "tableFrom": "worklog_gate_events",
           "tableTo": "workflow_executions",
-          "columnsFrom": [
-            "execution_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["execution_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
@@ -4742,12 +4608,8 @@
           "name": "worklog_summaries_execution_id_workflow_executions_id_fk",
           "tableFrom": "worklog_summaries",
           "tableTo": "workflow_executions",
-          "columnsFrom": [
-            "execution_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["execution_id"],
+          "columnsTo": ["id"],
           "onDelete": "cascade",
           "onUpdate": "no action"
         }
