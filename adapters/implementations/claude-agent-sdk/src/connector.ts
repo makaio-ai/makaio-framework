@@ -159,6 +159,8 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
       nativeFork: agentConfig.nativeFork,
       predeterminedSessionId: this.config.adapterSessionId,
       mcpUpstreamServers: agentConfig.mcpUpstreamServers,
+      allowedTools: agentConfig.allowedTools,
+      disallowedTools: agentConfig.disallowedTools,
       ephemeral: agentConfig.ephemeral,
       // Emit SDK events through connector for proper metadata injection
       emitSdkEvent: async (msg) => {
@@ -324,7 +326,21 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
    * @returns The canUseTool callback function for SDK query options
    */
   private createToolApprovalHandler(): Options['canUseTool'] {
+    const { allowedTools } = this.config as ClaudeAgentConfig;
+    const allowlist = allowedTools === undefined ? undefined : new Set(allowedTools);
     return async (toolName, input, options) => {
+      // Caller allowlist gate. SDK `tools` only filters built-ins, so MCP tools
+      // (`mcp__<server>__<tool>`) are only restricted here. Names match verbatim;
+      // permission-rule entries are rejected earlier in buildQueryOptions. Denied
+      // calls never reach central approval; `[]` denies every tool.
+      if (allowlist !== undefined && !allowlist.has(toolName)) {
+        return {
+          behavior: 'deny',
+          message: `Tool ${toolName} is not on the step's allowlist`,
+          interrupt: false,
+        } satisfies PermissionResult;
+      }
+
       // Request approval via scoped bus (agent.ts wires to global AgentSubjects.toolApprove)
       const response = await this.requestToolApproval(ClaudeCodeConnectorSubjects.can_use_tool, {
         toolName,
