@@ -16,15 +16,15 @@
     "@makaio/build-tooling": "workspace:*",
     "@makaio/storage-migrations": "workspace:*",
     "@types/node": "^24.3.0",
-    "tsdown": "0.22.0"
+    "tsdown": "0.23.0"
   },
   "dependencies": {
-    "@libsql/client": "^0.17.4",
+    "@libsql/client": "^0.18.0",
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/storage-core": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "drizzle-orm": "0.45.2"
+    "drizzle-orm": "0.45.3"
   },
   "scripts": {
     "build": "tsdown",
