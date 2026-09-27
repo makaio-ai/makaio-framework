@@ -1,6 +1,6 @@
 ---
-"@makaio/contracts": minor
-"@makaio/framework": minor
+"@makaio/contracts": major
+"@makaio/framework": major
 "@makaio/extension-artifact-query": minor
 ---
 

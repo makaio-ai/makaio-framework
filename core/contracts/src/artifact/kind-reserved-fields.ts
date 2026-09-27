@@ -5,9 +5,11 @@
  * variant" — the right question for a title or an index. A reserved name needs
  * the opposite: "could any variant carry this property". This walker follows
  * `$ref`, `allOf`/`anyOf`/`oneOf`, `if`/`then`/`else` and `dependentSchemas` at
- * the top level and reports a property declared in `properties` or matched by
- * `patternProperties`. It does not descend into nested object properties: a
- * reserved envelope name is only reserved at the top level of `data`.
+ * the top level and reports a property declared in `properties`, matched by
+ * `patternProperties`, or listed in `required` — a schema can demand a
+ * property it never describes, and that payload carries the name all the same.
+ * It does not descend into nested object properties: a reserved envelope name
+ * is only reserved at the top level of `data`.
  */
 
 const REF_PREFIXES = ['#/$defs/', '#/definitions/'] as const;
@@ -39,14 +41,15 @@ function resolveLocalRef(root: Record<string, unknown>, ref: unknown): Record<st
 }
 
 /**
- * Whether one schema node declares or pattern-matches a property name.
+ * Whether one schema node declares, requires, or pattern-matches a property name.
  * @param node - Schema node to inspect.
  * @param name - Property name to look for.
- * @returns `true` when `properties` names it or a `patternProperties` key matches it.
+ * @returns `true` when `properties` or `required` names it or a `patternProperties` key matches it.
  */
 function declaresProperty(node: Record<string, unknown>, name: string): boolean {
   const properties = node.properties;
   if (isSchemaObject(properties) && Object.hasOwn(properties, name)) return true;
+  if (Array.isArray(node.required) && node.required.includes(name)) return true;
   const patterns = node.patternProperties;
   if (!isSchemaObject(patterns)) return false;
   return Object.keys(patterns).some((pattern) => {

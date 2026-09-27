@@ -103,6 +103,11 @@ describe('mayArtifactDataCarryProperty', () => {
     ['patternProperties', { type: 'object', patternProperties: { '^s': string } }],
     ['a local $ref', { $ref: '#/$defs/v', $defs: { v: { type: 'object', properties: { slug: string } } } }],
     ['a then branch', { if: { required: ['a'] }, then: { properties: { slug: string } } }],
+    [
+      'required without a properties entry',
+      { type: 'object', properties: { name: string }, required: ['name', 'slug'] },
+    ],
+    ['required in one union branch', { oneOf: [{ required: ['a'] }, { required: ['slug'] }] }],
   ])('finds the property in %s', (_label, schema) => {
     expect(mayArtifactDataCarryProperty(schema, 'slug')).toBe(true);
   });
