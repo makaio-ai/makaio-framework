@@ -169,13 +169,13 @@ export interface ClaudeSessionConfig extends ConnectorSessionConfig<ClaudeCodeCo
   /**
    * Exact tool allowlist granted by the caller (e.g. a workflow delegate's `allowedTools`).
    *
-   * Names use the Claude Code tool-name form and are passed through verbatim:
-   * built-in names such as `Read`, `Edit`, `Bash`, or MCP names such as `mcp__server__tool`.
-   * When set, the SDK query exposes only these built-in tools (SDK `tools`) and
-   * auto-approves them (SDK `allowedTools`), so they bypass the `canUseTool`
-   * approval round-trip — the allowlist itself is the approval. An empty array
-   * disables all built-in tools. `undefined` leaves the SDK tool set and the
-   * approval flow unchanged.
+   * Entries use the Claude Code tool-name form: built-in names such as `Read`, `Edit`,
+   * `Bash`, Claude permission rules such as `Bash(git status)`, or MCP names such as
+   * `mcp__server__tool`. When set, the SDK query exposes only the named built-in tools
+   * (SDK `tools`, reduced to base names). The allowlist is an availability filter, not
+   * an approval: every call still goes through `canUseTool` and the central tool
+   * approval service. An empty array disables all built-in tools. `undefined` leaves
+   * the SDK tool set unchanged.
    */
   allowedTools?: string[];
   /**

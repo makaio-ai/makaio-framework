@@ -198,6 +198,25 @@ function resolveSessionIdentityOptions(
 const MCP_TOOL_NAME_PREFIX = 'mcp__';
 
 /**
+ * Reduce Claude permission rules to their base tool names.
+ *
+ * Callers may pass permission rules such as `Bash(git status)`; the base tool name
+ * is the text before the first `(`. The result is deduplicated in first-seen order.
+ * @param rules - Tool names or Claude permission rules.
+ * @returns Unique base tool names.
+ */
+function toBaseToolNames(rules: readonly string[]): string[] {
+  return [
+    ...new Set(
+      rules.map((rule) => {
+        const ruleStart = rule.indexOf('(');
+        return (ruleStart === -1 ? rule : rule.slice(0, ruleStart)).trim();
+      }),
+    ),
+  ];
+}
+
+/**
  * Map the caller-granted tool policy onto the SDK tool options.
  *
  * SDK semantics (`@anthropic-ai/claude-agent-sdk` `Options`):
@@ -206,11 +225,15 @@ const MCP_TOOL_NAME_PREFIX = 'mcp__';
  *   never reach `canUseTool`.
  * - `disallowedTools` removes tools from the model's context.
  *
- * An allowlist therefore maps to both `tools` (restrict availability) and
- * `allowedTools` (the allowlist is the approval). `tools` only names built-in
- * tools, so MCP entries (`mcp__…`) are kept out of it and only auto-approved.
- * Absent policies emit no fields, so provider-config query options and the
- * approval flow stay untouched.
+ * An allowlist is an availability filter only: it maps to `tools`, reduced to base
+ * built-in names (permission rules like `Bash(git status)` become `Bash`; MCP entries
+ * `mcp__…` are dropped because `tools` only names built-ins). It is deliberately
+ * NOT mapped to SDK `allowedTools`: auto-allowed tools skip `canUseTool`, which is
+ * this connector's only path into the central tool approval service (session policy
+ * overrides, harness policy, `.makaioignore` deny rules). Every call of an available
+ * tool therefore still goes through `canUseTool`.
+ * The denylist is forwarded verbatim, since SDK `disallowedTools` accepts permission
+ * rules. Absent policies emit no fields, so provider-config query options stay untouched.
  * @param allowedTools - Exact tool allowlist, or `undefined` when unrestricted.
  * @param disallowedTools - Tool denylist, or `undefined` when none is given.
  * @returns Partial SDK Options carrying only the fields the policy defines.
@@ -221,8 +244,7 @@ function resolveToolPolicyOptions(
 ): Partial<Options> {
   return {
     ...(allowedTools !== undefined && {
-      tools: allowedTools.filter((name) => !name.startsWith(MCP_TOOL_NAME_PREFIX)),
-      allowedTools: [...allowedTools],
+      tools: toBaseToolNames(allowedTools).filter((name) => !name.startsWith(MCP_TOOL_NAME_PREFIX)),
     }),
     ...(disallowedTools !== undefined && { disallowedTools: [...disallowedTools] }),
   };

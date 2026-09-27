@@ -259,48 +259,57 @@ describe('buildQueryOptions — tool policy behaviour', () => {
     expect(options.allowedTools).toEqual(['Read']);
   });
 
-  it('restricts available tools and auto-approves them when an allowlist is given', () => {
+  it('restricts available tools without auto-approving them when an allowlist is given', () => {
     const allowlist = ['Read', 'Edit', 'Write', 'Glob', 'Grep'];
     const options = buildWithToolPolicy({ allowedTools: allowlist });
 
     expect(options.tools).toEqual(allowlist);
-    expect(options.allowedTools).toEqual(allowlist);
+    expect(options).not.toHaveProperty('allowedTools');
     expect(options).not.toHaveProperty('disallowedTools');
   });
 
-  it('auto-approves MCP allowlist entries without listing them as built-in tools', () => {
+  it('keeps MCP allowlist entries out of the built-in tool set', () => {
     const options = buildWithToolPolicy({ allowedTools: ['Read', 'mcp__makaio__search'] });
 
     expect(options.tools).toEqual(['Read']);
-    expect(options.allowedTools).toEqual(['Read', 'mcp__makaio__search']);
+    expect(options).not.toHaveProperty('allowedTools');
   });
 
-  it('overrides provider-config tool options with the caller allowlist', () => {
+  it('reduces permission rules to deduplicated base tool names', () => {
+    const options = buildWithToolPolicy({
+      allowedTools: ['Bash(git status)', 'Bash(git diff:*)', 'Edit', 'mcp__makaio__approve'],
+    });
+
+    expect(options.tools).toEqual(['Bash', 'Edit']);
+    expect(options).not.toHaveProperty('allowedTools');
+  });
+
+  it('replaces provider-config tools with the caller allowlist and keeps provider-config auto-approvals', () => {
     const options = buildWithToolPolicy({
       allowedTools: ['Read'],
       providerConfig: { queryOptions: { tools: ['Bash', 'Read'], allowedTools: ['Bash'] } },
     });
 
     expect(options.tools).toEqual(['Read']);
-    expect(options.allowedTools).toEqual(['Read']);
+    expect(options.allowedTools).toEqual(['Bash']);
   });
 
   it('disables all built-in tools for an explicitly empty allowlist', () => {
     const options = buildWithToolPolicy({ allowedTools: [] });
 
     expect(options.tools).toEqual([]);
-    expect(options.allowedTools).toEqual([]);
+    expect(options).not.toHaveProperty('allowedTools');
   });
 
-  it('forwards disallowedTools without restricting the available tool set', () => {
-    const options = buildWithToolPolicy({ disallowedTools: ['Bash', 'WebFetch'] });
+  it('forwards disallowedTools verbatim without restricting the available tool set', () => {
+    const options = buildWithToolPolicy({ disallowedTools: ['WebFetch', 'Bash(rm *)'] });
 
-    expect(options.disallowedTools).toEqual(['Bash', 'WebFetch']);
+    expect(options.disallowedTools).toEqual(['WebFetch', 'Bash(rm *)']);
     expect(options).not.toHaveProperty('tools');
     expect(options).not.toHaveProperty('allowedTools');
   });
 
-  it('keeps the canUseTool approval handler for tools outside the allowlist', () => {
+  it('routes allowlisted tools through the canUseTool approval handler', () => {
     const approvalHandler: NonNullable<Options['canUseTool']> = async () => ({ behavior: 'deny', message: 'no' });
     const options = buildQueryOptions({
       config: makeMinimalConfig({ allowedTools: ['Read'] }),
