@@ -13,7 +13,7 @@ export type ModelVisibility = z.infer<typeof ModelVisibilitySchema>;
 /**
  * Determines the default visibility state for models without explicit overrides.
  *
- * - `show-all` — All models default to `visible`. Suitable for curated providers (Anthropic, Gemini).
+ * - `show-all` — All models default to `visible`. Suitable for curated providers (Anthropic, OpenAI).
  * - `allowlist` — All models default to `disabled`. Suitable for firehose providers (NanoGPT, OpenRouter).
  */
 export const ModelFilterModeSchema = z.enum(['allowlist', 'show-all']);

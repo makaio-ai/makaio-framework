@@ -20,8 +20,6 @@ implementations/
 ├── claude-code-cli/        # Claude Code CLI subprocess adapter
 ├── claude-code-tmux/       # Claude Code interactive tmux adapter
 ├── codex-app-server/       # OpenAI Codex app-server JSON-RPC/JSONL adapter
-├── gemini-sdk/             # Google Gemini adapter
-├── github-copilot-sdk/     # GitHub Copilot SDK adapter
 ├── openai-node/            # OpenAI API adapter
 ├── pi-sdk/                 # Pi coding agent SDK adapter
 ├── qwen-acp/               # Alibaba Qwen (ACP) adapter

@@ -36,13 +36,13 @@ export interface LogImporterRegistration {
 
   /**
    * Adapter name used for session lookup and provenance tracking.
-   * @example 'claude-code-cli', 'codex-app-server', 'github-copilot-sdk'
+   * @example 'claude-code-cli', 'codex-app-server'
    */
   adapterName: string;
 
   /**
    * Human-readable name.
-   * @example 'Claude Code', 'GitHub Copilot SDK'
+   * @example 'Claude Code', 'Codex'
    */
   displayName: string;
 

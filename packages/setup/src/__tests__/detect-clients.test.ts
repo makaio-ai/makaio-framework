@@ -46,8 +46,8 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe('CLIENT_CATALOG', () => {
-  it('has exactly 4 runnable entries', () => {
-    expect(CLIENT_CATALOG).toHaveLength(4);
+  it('has exactly 2 runnable entries', () => {
+    expect(CLIENT_CATALOG).toHaveLength(2);
   });
 
   it('each entry has required fields with non-empty values', () => {
@@ -69,8 +69,6 @@ describe('CLIENT_CATALOG', () => {
     const ids = CLIENT_CATALOG.map((e) => e.clientId);
     expect(ids).toContain('claude-code');
     expect(ids).toContain('codex');
-    expect(ids).toContain('gemini');
-    expect(ids).toContain('github-copilot');
     expect(ids).not.toContain('qwen');
   });
 });

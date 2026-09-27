@@ -10,7 +10,7 @@ describe('conformance discovery', () => {
   it('discovers only adapters declared by their real package descriptors', () => {
     const adapters = discoverAdapters();
 
-    expect(adapters).toContain('gemini-sdk');
+    expect(adapters).toContain('openai-node');
     expect(adapters).not.toContain('qwen-acp');
   });
 

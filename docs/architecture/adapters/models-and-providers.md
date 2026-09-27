@@ -39,7 +39,6 @@ virtual_model_name := [a-z0-9][a-z0-9_-]*
 More examples:
 
 - `gpt-5.2` — default OpenAI adapter
-- `gemini-2.5-pro` — Google AI adapter
 - `anthropic::sonnet` — explicit Anthropic provider
 - `openai-node/openai::gpt-5.2` — explicit adapter and provider
 
@@ -158,22 +157,22 @@ Example — Z.AI (dual-protocol provider exposing both wire formats):
 }
 ```
 
-Example — GitHub Copilot (SDK-only provider, no HTTP endpoints):
+Example — Cursor (SDK-only provider, no HTTP endpoints):
 
 ```ts
 {
-  id: 'github-copilot',
-  name: 'GitHub Copilot',
+  id: 'cursor',
+  name: 'Cursor',
   authMethods: [{
-    id: 'token',
+    id: 'api-key',
     mode: 'explicit',
-    label: 'Token',
+    label: 'API key',
     fields: [{
-      id: 'token',
-      label: 'Token',
+      id: 'apiKey',
+      label: 'API key',
       required: true,
       secret: true,
-      sourceHints: [{ kind: 'environment', variable: 'COPILOT_TOKEN' }],
+      sourceHints: [{ kind: 'environment', variable: 'CURSOR_API_KEY' }],
     }],
   }],
   // endpoints intentionally omitted — uses proprietary SDK transport

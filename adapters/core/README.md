@@ -1,7 +1,7 @@
 # @makaio/ai-adapters-core
 
 Base classes, factory utilities, and shared infrastructure for Makaio AI adapter
-implementations. Each AI provider (Claude, Gemini, OpenAI, …) extends the
+implementations. Each AI provider (Claude, OpenAI, Codex, …) extends the
 abstractions here rather than re-implementing bus wiring, session lifecycle,
 tool approval, and agent tracking from scratch.
 

@@ -40,7 +40,7 @@ export const MakaioSessionAgentSchema = z.object({
   agentId: z.string(),
   /** Adapter instance that owns this agent */
   adapterId: z.string(),
-  /** Adapter type name (e.g., 'claude-code', 'copilot') */
+  /** Adapter type name (e.g., 'claude-code', 'codex') */
   adapterName: z.string(),
   /** Makaio session this agent belongs to */
   sessionId: z.string(),

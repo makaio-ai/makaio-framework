@@ -10,7 +10,7 @@ function makeHarness(overrides: Partial<HarnessDefinition> = {}): HarnessDefinit
   return {
     id: 'h1',
     name: 'Test Harness',
-    adapterName: 'gemini-sdk',
+    adapterName: 'openai-node',
     approvalPolicy: 'always-ask',
     nativeTools: { enabled: [], disabled: ['patch', 'bash'] },
     registryTools: { enabled: [], disabled: [] },
@@ -53,11 +53,11 @@ describe('resolveDisabledNativeTools', () => {
       getDefault: { handled: true, data: makeHarness() },
     });
 
-    const disabled = await resolveDisabledNativeTools(requester, 'gemini-sdk');
+    const disabled = await resolveDisabledNativeTools(requester, 'openai-node');
 
     expect(disabled).toEqual(['patch', 'bash']);
     expect(requester.requestOptional).toHaveBeenCalledWith(HarnessSubjects.getDefault, {
-      adapterName: 'gemini-sdk',
+      adapterName: 'openai-node',
     });
   });
 
@@ -77,7 +77,7 @@ describe('resolveDisabledNativeTools', () => {
       get: { handled: true, data: makeHarness({ nativeTools: { enabled: [], disabled: ['shell'] } }) },
     });
 
-    const disabled = await resolveDisabledNativeTools(requester, 'gemini-sdk', 'h-explicit');
+    const disabled = await resolveDisabledNativeTools(requester, 'openai-node', 'h-explicit');
 
     expect(disabled).toEqual(['shell']);
     expect(requester.requestOptional).toHaveBeenCalledWith(HarnessSubjects.get, { id: 'h-explicit' });
@@ -87,7 +87,7 @@ describe('resolveDisabledNativeTools', () => {
   it('returns an empty array when harness service is not registered (explicit harnessId)', async () => {
     const requester = makeMockRequester({ get: { handled: false } });
 
-    const disabled = await resolveDisabledNativeTools(requester, 'gemini-sdk', 'h-explicit');
+    const disabled = await resolveDisabledNativeTools(requester, 'openai-node', 'h-explicit');
 
     expect(disabled).toEqual([]);
     expect(requester.requestOptional).toHaveBeenCalledWith(HarnessSubjects.get, { id: 'h-explicit' });
@@ -99,7 +99,7 @@ describe('resolveDisabledNativeTools', () => {
       getDefault: { handled: true, data: makeHarness({ nativeTools: { enabled: [], disabled: ['patch'] } }) },
     });
 
-    const disabled = await resolveDisabledNativeTools(requester, 'gemini-sdk', 'h-explicit', 'claude-code');
+    const disabled = await resolveDisabledNativeTools(requester, 'openai-node', 'h-explicit', 'claude-code');
 
     expect(disabled).toEqual(['shell']);
     expect(requester.requestOptional).toHaveBeenCalledWith(HarnessSubjects.get, { id: 'h-explicit' });
@@ -111,10 +111,10 @@ describe('resolveDisabledNativeTools', () => {
       getDefault: { handled: true, data: makeHarness() },
     });
 
-    await resolveDisabledNativeTools(requester, 'gemini-sdk', undefined, 'claude-code');
+    await resolveDisabledNativeTools(requester, 'openai-node', undefined, 'claude-code');
 
     expect(requester.requestOptional).toHaveBeenCalledWith(HarnessSubjects.getDefault, {
-      adapterName: 'gemini-sdk',
+      adapterName: 'openai-node',
       clientId: 'claude-code',
     });
   });

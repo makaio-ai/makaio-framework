@@ -197,12 +197,12 @@ describe('AdapterSubsystemService derived reads', () => {
           },
         ],
         [
-          'copilot',
+          'openai-node',
           {
             $schema: 'makaio/adapter-config/v1',
             enabled: false,
-            displayName: 'Copilot',
-            clientId: 'github-copilot-sdk',
+            displayName: 'OpenAI',
+            clientId: 'openai-node',
             protocol: 'openai',
             providerDefinitionIds: ['openai'],
             bindings: [{ providerConfigId: 'openai.team', isDefault: true }],
@@ -305,7 +305,7 @@ describe('AdapterSubsystemService derived reads', () => {
       expect(adapterConfigs).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ name: 'claude-code', bindings: expect.arrayContaining([expect.any(Object)]) }),
-          expect.objectContaining({ name: 'copilot' }),
+          expect.objectContaining({ name: 'openai-node' }),
         ]),
       );
       expect(bindingsByConfig).toEqual([
@@ -336,7 +336,7 @@ describe('AdapterSubsystemService derived reads', () => {
             supportsLogImport: true,
           }),
           expect.objectContaining({
-            name: 'copilot',
+            name: 'openai-node',
             configCount: 1,
             readiness: 'needs-setup',
             supportsLogImport: false,

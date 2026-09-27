@@ -16,7 +16,7 @@
  *
  * await client.request(SessionSubjects.sendMessage, {
  *   sessionId: crypto.randomUUID(),
- *   agent: { kind: 'canonical-model', model: 'gemini-2.5-pro' },
+ *   agent: { kind: 'canonical-model', model: 'claude-sonnet-4-6' },
  *   message: 'Hello from the SDK!',
  * });
  *

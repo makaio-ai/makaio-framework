@@ -205,7 +205,7 @@ before the agent layer has enriched it. The agent's `wireToolApprovalRpc`
 (or equivalent) injects `sessionId` from its own context before forwarding
 to the global `AgentSubjects.toolApprove` subject, where `sessionId` is required.
 
-Adapters with a genuinely different wire format (e.g., gemini-sdk's callId/name)
+Adapters with a genuinely different wire format (e.g., a callId/name pair)
 should define their own schema rather than extending this one.
 
 Subject: `adapter:openai-node.tool_approval`

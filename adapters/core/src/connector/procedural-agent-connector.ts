@@ -10,7 +10,7 @@ import type { UserMessageQueue } from '../session/user-message-queue.js';
 /**
  * Minimal session interface required by ProceduralAgentConnector.
  *
- * Any session implementation (OpenAI, Copilot, Gemini) that exposes
+ * Any session implementation (OpenAI, Anthropic, Cursor, Pi) that exposes
  * these methods can be used with ProceduralAgentConnector's default
  * wireSessionEvents / processUserMessages / acceptsImmediate.
  */
@@ -68,7 +68,7 @@ export interface WireSessionConfig {
 /**
  * Abstract base class for procedural (non-event-driven) agent connectors.
  *
- * Procedural adapters (OpenAI, Copilot, Gemini) share common patterns:
+ * Procedural adapters (OpenAI, Anthropic, Cursor, Pi) share common patterns:
  * - wireSessionEvents: subscribe to turn lifecycle events and update processing state
  * - processUserMessages: initialize session, enqueue, transition to active, process queue
  * - complete: poll processing state until idle/paused
@@ -82,7 +82,7 @@ export interface WireSessionConfig {
  * - `sendMessage()`, `abort()`, `close()`, `interrupt()`, `getAdapterSessionId()`
  *
  * Subclasses may override:
- * - `getWireSessionConfig()` for custom turn_finished behavior (e.g., Copilot multi-turn)
+ * - `getWireSessionConfig()` for custom turn lifecycle behavior (e.g., Pi's turn-start hook)
  * @typeParam TBus - Scoped bus type for adapter namespace
  * @typeParam TConfig - Configuration type extending BaseAgentConnectorConfig
  */
@@ -140,7 +140,7 @@ export abstract class ProceduralAgentConnector<
   /**
    * Get optional wire session configuration for custom turn_finished behavior.
    * Override in subclasses that need non-standard turn_finished handling
-   * (e.g., Copilot multi-turn message completion).
+   * (e.g., Pi's turn-start hook).
    * @returns Wire session configuration, or undefined for default behavior
    */
   protected getWireSessionConfig(): WireSessionConfig | undefined {

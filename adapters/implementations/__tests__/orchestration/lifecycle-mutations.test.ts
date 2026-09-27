@@ -17,25 +17,6 @@ const now = Date.now();
 const adapterName = getAdapterUnderTest();
 
 /**
- * Check whether adapter under test is Gemini-based.
- * @param resolvedAdapterName - Adapter name from test harness
- * @returns True when adapter name indicates Gemini
- */
-function isGeminiAdapter(resolvedAdapterName: string): boolean {
-  return resolvedAdapterName.includes('gemini');
-}
-
-/**
- * Build the system prompt for an adapter.
- * @param basePrompt - Base prompt text
- * @param resolvedAdapterName - Adapter name used for conditional tweaks
- * @returns Final prompt string with Gemini-specific tool-avoidance suffix when needed
- */
-function buildSystemPrompt(basePrompt: string, resolvedAdapterName: string): string {
-  return isGeminiAdapter(resolvedAdapterName) ? `${basePrompt} Do not use any tools.` : basePrompt;
-}
-
-/**
  * Orchestration conformance tests for Plan C: lifecycle mutations and recovery.
  *
  * Two consolidated sessions cover:
@@ -88,7 +69,7 @@ describe('Orchestration: lifecycle mutations', async () => {
     const ctx = await getOrchestrationTestContext(adapterName);
     cleanup = async () => await ctx.adapter.close?.();
 
-    const systemPrompt = buildSystemPrompt('You are naturally continuing a conversation with user.', adapterName);
+    const systemPrompt = 'You are naturally continuing a conversation with user.';
 
     // Collect cwd.changed and model.changed events
     const mutationEvents: Array<{ subject: string; payload: unknown }> = [];
@@ -284,7 +265,7 @@ describe('Orchestration: recovery rehydration', async () => {
     const ctx = await getOrchestrationTestContext(adapterName);
     cleanup = async () => await ctx.adapter.close?.();
 
-    const systemPrompt = buildSystemPrompt('You are a helpful assistant. Keep responses very brief.', adapterName);
+    const systemPrompt = 'You are a helpful assistant. Keep responses very brief.';
 
     // ── Step 1: Start agent normally ──────────────────────────────────
     const response = await MakaioBus.request(AdapterSubjects.startAgent, {
@@ -302,82 +283,69 @@ describe('Orchestration: recovery rehydration', async () => {
     const agentId = response.agentId;
     const adapterId = response.adapterId;
 
-    // Auto-approve tool calls for this agent (Gemini's SDK system prompt
-    // instructs the model to use save_memory for user facts — denying it
-    // poisons the context and causes recall failures)
-    const unsubToolApprove = isGeminiAdapter(adapterName)
-      ? MakaioBus.on(AgentSubjects.toolApprove, (ctx) => ctx.setResult({ action: 'allow' }), {
-          filter: { agentId },
-        })
-      : undefined;
+    // Wait for first message to complete
+    const firstCompleted = await MakaioBus.once(AgentSubjects.complete, {
+      filter: { agentId },
+      timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
+    });
+    assertCompletedTurn(firstCompleted);
 
-    try {
-      // Wait for first message to complete
-      const firstCompleted = await MakaioBus.once(AgentSubjects.complete, {
-        filter: { agentId },
-        timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
-      });
-      assertCompletedTurn(firstCompleted);
+    // ── Step 2: Verify normal follow-up works ─────────────────────────
+    await MakaioBus.request(AgentSubjects.sendMessage, {
+      agentId,
+      adapterId,
+      message: { blocks: [{ type: 'text', content: 'What is my name?' }] },
+    });
 
-      // ── Step 2: Verify normal follow-up works ─────────────────────────
-      await MakaioBus.request(AgentSubjects.sendMessage, {
-        agentId,
-        adapterId,
-        message: { blocks: [{ type: 'text', content: 'What is my name?' }] },
-      });
+    const recallBeforeIdle = MakaioBus.once(AgentSubjects.idle, {
+      filter: { agentId },
+      timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
+    });
+    const recallBefore = await MakaioBus.once(AgentSubjects.complete, {
+      filter: { agentId },
+      timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
+    });
+    assertCompletedTurn(recallBefore);
+    expect(recallBefore.payload.message).toContain('Bob');
 
-      const recallBeforeIdle = MakaioBus.once(AgentSubjects.idle, {
-        filter: { agentId },
-        timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
-      });
-      const recallBefore = await MakaioBus.once(AgentSubjects.complete, {
-        filter: { agentId },
-        timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
-      });
-      assertCompletedTurn(recallBefore);
-      expect(recallBefore.payload.message).toContain('Bob');
+    await recallBeforeIdle;
 
-      await recallBeforeIdle;
+    // ── Step 3: Rehydrate — swap connector (simulates crash recovery) ─
+    await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+      adapterId,
+      agentId,
+    });
 
-      // ── Step 3: Rehydrate — swap connector (simulates crash recovery) ─
-      await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
-        adapterId,
-        agentId,
-      });
+    // ── Step 4: sendMessage with history → recall + identity check ────
+    // Fresh connector has no native history — inject via sessionContext
+    await MakaioBus.request(AgentSubjects.sendMessage, {
+      agentId,
+      adapterId,
+      message: { blocks: [{ type: 'text', content: 'What is my name?' }] },
+      sessionContext: {
+        messageHistory: [
+          {
+            role: 'user' as const,
+            blocks: [{ type: 'text' as const, content: 'My name is Bob. Reply with OK.' }],
+          },
+          {
+            role: 'assistant' as const,
+            blocks: [{ type: 'text' as const, content: 'OK' }],
+          },
+        ],
+        isFirstTurn: true,
+      },
+    });
 
-      // ── Step 4: sendMessage with history → recall + identity check ────
-      // Fresh connector has no native history — inject via sessionContext
-      await MakaioBus.request(AgentSubjects.sendMessage, {
-        agentId,
-        adapterId,
-        message: { blocks: [{ type: 'text', content: 'What is my name?' }] },
-        sessionContext: {
-          messageHistory: [
-            {
-              role: 'user' as const,
-              blocks: [{ type: 'text' as const, content: 'My name is Bob. Reply with OK.' }],
-            },
-            {
-              role: 'assistant' as const,
-              blocks: [{ type: 'text' as const, content: 'OK' }],
-            },
-          ],
-          isFirstTurn: true,
-        },
-      });
+    const postRehydrate = await MakaioBus.once(AgentSubjects.complete, {
+      filter: { agentId },
+      timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
+    });
 
-      const postRehydrate = await MakaioBus.once(AgentSubjects.complete, {
-        filter: { agentId },
-        timeoutMs: adapterOptions?.defaultTimeout ?? 45_000,
-      });
-
-      assertCompletedTurn(postRehydrate);
-      // Identity preserved — same agentId throughout
-      expect(postRehydrate.payload.agentId).toBe(agentId);
-      // LLM recalls injected history
-      expect(postRehydrate.payload.message).toContain('Bob');
-    } finally {
-      unsubToolApprove?.();
-    }
+    assertCompletedTurn(postRehydrate);
+    // Identity preserved — same agentId throughout
+    expect(postRehydrate.payload.agentId).toBe(agentId);
+    // LLM recalls injected history
+    expect(postRehydrate.payload.message).toContain('Bob');
   });
 });

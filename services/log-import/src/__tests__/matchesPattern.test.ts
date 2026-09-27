@@ -37,7 +37,7 @@ describe('matchesPattern', () => {
       expect(matchesPattern('storage/session/abc123/other.json', '**/storage/session/*/session.json')).toBe(false);
     });
 
-    it('should extract filename from **/chats/session-*.json (Gemini)', () => {
+    it('should extract filename from **/chats/session-*.json', () => {
       // Pattern: **/chats/session-*.json should match any nested chats directory
       expect(matchesPattern('chats/session-123.json', '**/chats/session-*.json')).toBe(true);
       expect(matchesPattern('foo/bar/chats/session-abc.json', '**/chats/session-*.json')).toBe(true);
@@ -105,7 +105,7 @@ describe('matchesPattern', () => {
   });
 
   describe('real-world adapter patterns', () => {
-    it('should handle GitHub Copilot pattern', () => {
+    it('should handle flat *.jsonl pattern', () => {
       // Pattern: *.jsonl
       expect(matchesPattern('conversation.jsonl', '*.jsonl')).toBe(true);
       expect(matchesPattern('session.jsonl', '*.jsonl')).toBe(true);
@@ -122,7 +122,7 @@ describe('matchesPattern', () => {
       expect(matchesPattern('storage/session/ses_123/session.json', '**/storage/session/*/session.json')).toBe(true);
     });
 
-    it('should handle Gemini pattern', () => {
+    it('should handle nested chats/session-*.json pattern', () => {
       // Pattern: **/chats/session-*.json
       expect(matchesPattern('chats/session-abc123.json', '**/chats/session-*.json')).toBe(true);
       expect(matchesPattern('tmp/foo/chats/session-20240101.json', '**/chats/session-*.json')).toBe(true);

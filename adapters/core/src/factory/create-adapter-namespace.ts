@@ -50,8 +50,8 @@ export type AdapterNamespace<Domain extends string = string> = Omit<BusNamespace
  * const bus = await ClaudeCodeNamespace.scopedBus();
  * bus.withFilter({ content: 'test' }); // ✅ Type-checked
  *
- * // For adapters with bundled Zod v3 (e.g., @github/copilot-sdk):
- * const CopilotNamespace = createAdapterNamespace('adapter:copilot', schemas, {
+ * // For adapters whose SDK bundles a conflicting Zod version:
+ * const LegacyNamespace = createAdapterNamespace('adapter:legacy', schemas, {
  *   busValidationMode: 'skip', // Skip validation due to Zod version conflict
  * });
  *

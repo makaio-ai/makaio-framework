@@ -45,7 +45,7 @@ interface FactorySpec {
  * Registry mapping each factory function name to its prefix and schema strategy.
  *
  * `createAdapterNamespace` passes the domain as-is (no prefix added) — callers
- * already supply the full domain string (e.g. `'adapter:gemini'`).
+ * already supply the full domain string (e.g. `'adapter:openai-node'`).
  */
 const FACTORY_REGISTRY: Record<string, FactorySpec> = {
   createBusNamespace: {

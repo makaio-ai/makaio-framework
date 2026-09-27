@@ -42,7 +42,7 @@ export interface AgentIdentity {
   agentId: string;
   /** Adapter instance identifier */
   adapterId: string;
-  /** Adapter type name (e.g., 'claude-code', 'gemini-sdk') */
+  /** Adapter type name (e.g., 'claude-code', 'openai-node') */
   adapterName: string;
   /** Session identifier for multi-turn conversations */
   adapterSessionId?: string;
@@ -153,7 +153,7 @@ export interface BaseAgentConnectorConfig<
   /** Resolved harness ID for tool policy lookup. */
   harnessId?: string;
 
-  /** Client identifier for the application this adapter belongs to (e.g., 'claude-code', 'gemini'). */
+  /** Client identifier for the application this adapter belongs to (e.g., 'claude-code', 'codex'). */
   clientId?: string;
 
   /** Client profile name for session-scoped config isolation. */
@@ -261,7 +261,7 @@ export interface AIAgentConfig<
   resumeAdapterSessionId?: string;
   /** Resolved harness ID for tool policy lookup. */
   harnessId?: string;
-  /** Client identifier for the application this adapter belongs to (e.g., 'claude-code', 'gemini'). */
+  /** Client identifier for the application this adapter belongs to (e.g., 'claude-code', 'codex'). */
   clientId?: string;
   /** Client profile name for session-scoped config isolation. */
   clientProfileName?: string;

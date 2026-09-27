@@ -16,9 +16,7 @@ describe.sequential('Queue & State Transitions', async () => {
       const stateTransitions: string[] = [];
 
       beforeAll(async () => {
-        const initialMessage = adapterName.includes('gemini')
-          ? "Say the single word - don't use any tools: HI"
-          : 'Say the single word: HI';
+        const initialMessage = 'Say the single word: HI';
         context = await getAgentTestContext(adapterName, true, initialMessage);
         agent = context.agent;
 

@@ -29,7 +29,7 @@
  * silently dropped — the adapter path already owns the canonical emission.
  * Sessions whose `adapterSessionId` is absent or not yet registered emit as
  * before (fail-open).  Events from other clients (e.g. `'claude-code'`,
- * `'gemini'`) are ignored unconditionally — their adapter sessions must not
+ * `'qwen'`) are ignored unconditionally — their adapter sessions must not
  * suppress Codex hook emissions.
  *
  * The managed-session set is bounded at {@link MANAGED_SESSION_CAP} entries to
@@ -429,7 +429,7 @@ export class CodexClientSessionService extends BaseService {
    * Called for every `client.runtime.started` event.  Only events whose
    * `clientId` equals `'codex'`, whose `source.layer` is `'adapter'`, and
    * that carry a non-empty `adapterSessionId` update the managed-sessions gate.
-   * Events from other clients (e.g. `'claude-code'`, `'gemini'`) are ignored
+   * Events from other clients (e.g. `'claude-code'`, `'qwen'`) are ignored
    * unconditionally — their adapter sessions must not suppress Codex hook
    * emissions.  Non-adapter sources (e.g. `'supervisor'`, `'statusline'`) are
    * also ignored to prevent accidental suppression of native hook paths.

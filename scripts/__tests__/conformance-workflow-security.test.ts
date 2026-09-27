@@ -121,7 +121,6 @@ describe('conformance workflow security', () => {
     expect(workflowText).toContain('MAKAIO_CONFORMANCE_PROVIDER: ${{ matrix.conformance_provider }}');
     expect(workflowText).toContain('MAKAIO_CONFORMANCE_PRIMARY_MODEL: ${{ matrix.primary_model }}');
     expect(workflowText).toContain('MAKAIO_CONFORMANCE_SECONDARY_MODEL: ${{ matrix.secondary_model }}');
-    expect(workflowText).not.toContain('github-copilot-sdk');
   });
 
   it('fails adapter workflow jobs before exporting a missing provider secret', () => {

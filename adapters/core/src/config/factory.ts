@@ -21,7 +21,7 @@ export type AdapterDefaults<TConfig extends BaseAgentConnectorConfig = BaseAgent
  * @typeParam TConfig - The adapter's full config type for type-safe defaults
  */
 export interface CreateAdapterConfigFactoryOptions<TConfig extends BaseAgentConnectorConfig> {
-  /** Adapter type name (e.g., 'claude-code', 'gemini-sdk') */
+  /** Adapter type name (e.g., 'claude-code', 'openai-node') */
   adapterName: string;
   /** Adapter-level defaults (model required, others optional including providerConfig) */
   adapterDefaults: AdapterDefaults<TConfig>;
@@ -119,10 +119,10 @@ type AdapterConfigFactory<TConfig extends BaseAgentConnectorConfig, TProviderCon
  * @returns Factory with getConfig method
  * @example
  * ```typescript
- * export const GeminiSdkConfig = createAdapterConfigFactory<GeminiConnectorConfig>(() => ({
- *   adapterName: GeminiSdkAdapterName,
- *   adapterDefaults: { model: 'gemini-2.5-pro' },
- *   schema: null,
+ * export const OpenAINodeConfig = createAdapterConfigFactory<OpenAINodeAgentConfig>(() => ({
+ *   adapterName: OpenAINodeAdapterName,
+ *   adapterDefaults: { reasoningEffort: 'low' },
+ *   schema: OpenAINodeProviderConfigSchema,
  *   adapterDefinition: { defaultTimeouts: DEFAULT_TIMEOUTS },
  * }));
  * ```

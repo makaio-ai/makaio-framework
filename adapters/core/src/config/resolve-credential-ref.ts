@@ -39,7 +39,7 @@ export async function resolveCredentialRef(
     }
     const readEnv = deps.readEnv ?? ((key) => process.env[key]);
     // Use || (not ??) so empty strings resolve to null — prevents silent
-    // fallback failures when an env var is set but blank (e.g. Gemini OAuth).
+    // fallback failures when an env var is set but blank (e.g. an exported-but-empty OAuth token).
     return readEnv(name) || null;
   }
 

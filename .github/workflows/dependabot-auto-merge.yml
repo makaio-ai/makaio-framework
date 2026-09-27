@@ -37,11 +37,8 @@ jobs:
               | (.dependencyName // .dependency_name // .["dependency-name"] // empty)
               | select(
                   . == "openai" or
-                  . == "@google/genai" or
                   startswith("@agentclientprotocol/") or
                   startswith("@anthropic-ai/") or
-                  startswith("@github/copilot") or
-                  startswith("@google/gemini") or
                   startswith("@mariozechner/pi-") or
                   startswith("@modelcontextprotocol/")
                 )

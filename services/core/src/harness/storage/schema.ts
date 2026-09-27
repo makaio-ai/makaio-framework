@@ -14,7 +14,7 @@ export const harnessDefinitionsDual = defineDualTable('harness_definitions', (c)
   name: c.text('name').notNull(),
   description: c.text('description'),
   /**
-   * Adapter driver name (e.g. openai-node, gemini-sdk).
+   * Adapter driver name (e.g. openai-node, anthropic-sdk).
    * Optional when `clientId` is set; required for API-only adapters.
    */
   adapterName: c.text('adapter_name'),

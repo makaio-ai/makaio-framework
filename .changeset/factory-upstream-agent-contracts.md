@@ -8,8 +8,6 @@
 "@makaio/client-claude-code": patch
 "@makaio/client-codex": patch
 "@makaio/client-cursor": patch
-"@makaio/client-gemini": patch
-"@makaio/client-github-copilot": patch
 "@makaio/client-qwen": patch
 ---
 

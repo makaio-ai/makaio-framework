@@ -22,7 +22,7 @@ export interface TurnSubjects<TSubject = ScopedSubjectDefinition> {
 /**
  * Standard turn state type for procedural adapters.
  *
- * Procedural adapters (Gemini, OpenAI, Copilot) use abort+restart
+ * Procedural adapters (OpenAI, Anthropic, Cursor, Pi) use abort+restart
  * rather than true pause/resume. Their state machine is:
  * idle to turn_started to step_started to step_finished to turn_finished
  */
@@ -43,16 +43,14 @@ export interface ProceduralTurnConfig<TBus extends ScopedBus<string>, TSubject> 
 }
 
 /**
- * Base turn implementation for procedural adapters (Gemini, OpenAI, Copilot).
+ * Base turn implementation for procedural adapters (OpenAI, Anthropic, Cursor, Pi).
  *
  * These adapters share an abort+restart pattern rather than true pause/resume.
  * This class extracts the common state machine, lifecycle methods, and
- * message handle delegation that was duplicated across all three.
+ * message handle delegation shared across them.
  *
- * Subclasses only need to add adapter-specific behavior:
- * - Gemini: AbortController for SDK cancellation
- * - OpenAI: AbortController for SDK cancellation
- * - Copilot: SDK event handling (handleSdkEvent)
+ * Subclasses only need to add adapter-specific behavior, e.g. an
+ * AbortController for SDK cancellation.
  * @typeParam TState - Turn state type (defaults to ProceduralTurnState)
  * @typeParam TBus - Scoped bus type for the adapter
  * @typeParam TSubject - Subject definition type for emit calls
