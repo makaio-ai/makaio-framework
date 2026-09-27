@@ -220,6 +220,30 @@ function toAllowlistToolNames(allowedTools: readonly string[]): string[] {
 }
 
 /**
+ * Restrict provider-config SDK `allowedTools` auto-approvals to the caller allowlist.
+ *
+ * Auto-approved tools skip `canUseTool` and with it the allowlist gate, so a provider
+ * auto-approval outside the caller allowlist would grant a tool the caller never
+ * granted. A plain entry is kept only when the caller allowlist names it exactly. A
+ * permission-rule entry (`Bash(git status)`) is kept when the caller allowlist names its
+ * base tool (`Bash`): the rule is narrower than the caller's grant. An empty caller
+ * allowlist therefore yields no auto-approvals.
+ * @param providerAllowedTools - Provider-config SDK `allowedTools` entries.
+ * @param allowlist - Validated caller allowlist (plain tool names).
+ * @returns Provider auto-approvals covered by the caller allowlist, in provider order.
+ */
+function intersectProviderAutoApprovals(
+  providerAllowedTools: readonly string[],
+  allowlist: readonly string[],
+): string[] {
+  const granted = new Set(allowlist);
+  return providerAllowedTools.filter((entry) => {
+    const ruleStart = entry.indexOf('(');
+    return granted.has(ruleStart === -1 ? entry : entry.slice(0, ruleStart));
+  });
+}
+
+/**
  * Map the caller-granted tool policy onto the SDK tool options.
  *
  * SDK semantics (`@anthropic-ai/claude-agent-sdk` `Options`):
@@ -237,21 +261,32 @@ function toAllowlistToolNames(allowedTools: readonly string[]): string[] {
  * path into the central tool approval service (session policy overrides, harness
  * policy, `.makaioignore` deny rules). Every call of an allowlisted tool therefore
  * still goes through `canUseTool`.
+ * Provider-config `queryOptions.allowedTools` (operator auto-approvals) would bypass
+ * that gate, so with a caller allowlist they are intersected with it, see
+ * {@link intersectProviderAutoApprovals}; the intersection overrides the provider value
+ * because the caller spreads these options after the provider-config query options.
  * The denylist is forwarded verbatim, since SDK `disallowedTools` accepts permission
  * rules. Absent policies emit no fields, so provider-config query options stay untouched.
  * @param allowedTools - Exact tool allowlist, or `undefined` when unrestricted.
  * @param disallowedTools - Tool denylist, or `undefined` when none is given.
+ * @param providerAllowedTools - Provider-config SDK `allowedTools` auto-approvals, if any.
  * @returns Partial SDK Options carrying only the fields the policy defines.
  * @throws When the allowlist contains a command-specific permission rule.
  */
 function resolveToolPolicyOptions(
   allowedTools: string[] | undefined,
   disallowedTools: string[] | undefined,
+  providerAllowedTools: readonly string[] | undefined,
 ): Partial<Options> {
+  const allowlist = allowedTools === undefined ? undefined : toAllowlistToolNames(allowedTools);
   return {
-    ...(allowedTools !== undefined && {
-      tools: toAllowlistToolNames(allowedTools).filter((name) => !name.startsWith(MCP_TOOL_NAME_PREFIX)),
+    ...(allowlist !== undefined && {
+      tools: allowlist.filter((name) => !name.startsWith(MCP_TOOL_NAME_PREFIX)),
     }),
+    ...(allowlist !== undefined &&
+      providerAllowedTools !== undefined && {
+        allowedTools: intersectProviderAutoApprovals(providerAllowedTools, allowlist),
+      }),
     ...(disallowedTools !== undefined && { disallowedTools: [...disallowedTools] }),
   };
 }
@@ -304,7 +339,13 @@ export function buildQueryOptions({
     includePartialMessages: true,
     persistSession: config.ephemeral ? false : (config.providerConfig?.queryOptions?.persistSession ?? true),
     stderr: (data) => console.warn(data),
-    ...resolveToolPolicyOptions(config.allowedTools, config.disallowedTools),
+    // Must stay after the provider-config spread: it overrides provider `tools` and
+    // `allowedTools` whenever a caller allowlist is given.
+    ...resolveToolPolicyOptions(
+      config.allowedTools,
+      config.disallowedTools,
+      config.providerConfig?.queryOptions?.allowedTools,
+    ),
     canUseTool: createToolApprovalHandler(),
     abortController,
     systemPrompt,

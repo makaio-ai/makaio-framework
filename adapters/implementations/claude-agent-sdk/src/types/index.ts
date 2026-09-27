@@ -177,8 +177,11 @@ export interface ClaudeSessionConfig extends ConnectorSessionConfig<ClaudeCodeCo
    * When set, the SDK query exposes only the named built-in tools (SDK `tools`), and the
    * `canUseTool` handler denies every tool call (built-in or MCP) whose name is not on
    * the list. Listed tools are not auto-approved: their calls still go through the
-   * central tool approval service. An empty array denies every tool. `undefined` leaves
-   * tool availability and approval unchanged.
+   * central tool approval service. Provider-config `queryOptions.allowedTools`
+   * auto-approvals are intersected with the list (an entry stays when the list names it,
+   * a permission rule `Name(...)` when the list names `Name`). An empty array denies every
+   * tool and clears all auto-approvals. `undefined` leaves tool availability and approval
+   * unchanged.
    */
   allowedTools?: string[];
   /**
