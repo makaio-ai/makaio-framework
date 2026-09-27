@@ -6,6 +6,7 @@ import {
   isMakaioToolName,
   isMcpToolName,
   matchesCommandRule,
+  matchesDenyCommandRule,
   parseToolListEntry,
   toMakaioToolName,
   toNativeToolName,
@@ -74,6 +75,10 @@ describe('isMcpToolName', () => {
     expect(isMcpToolName('Read')).toBe(false);
     expect(isMcpToolName('mcp_s_t')).toBe(false);
   });
+
+  it.each(['mcp__', 'mcp____tool', 'mcp__github'])('rejects %j (empty server or tool part)', (name) => {
+    expect(isMcpToolName(name)).toBe(false);
+  });
 });
 
 describe('toNativeToolName', () => {
@@ -98,6 +103,17 @@ describe('toNativeToolName', () => {
     for (const makaio of MAKAIO_TOOL_NAMES) {
       expect(error.message).toContain(makaio);
     }
+  });
+
+  it('names the full list entry on the error, not just the bare tool name', () => {
+    const error = captureToolNameError(() => toNativeToolName('claude', 'WebFetch', 'WebFetch(git status)'));
+    expect(error.entry).toBe('WebFetch(git status)');
+    expect(error.message).toContain('WebFetch(git status)');
+  });
+
+  it('defaults the error entry to the name when no entry is given', () => {
+    const error = captureToolNameError(() => toNativeToolName('claude', 'WebFetch'));
+    expect(error.entry).toBe('WebFetch');
   });
 
   it('produces an Error subclass', () => {
@@ -134,14 +150,12 @@ describe('toMakaioToolName', () => {
 describe('parseToolListEntry', () => {
   it('parses a plain Makaio name without a rule', () => {
     const parsed = parseToolListEntry('read_file');
-    expect(parsed.entry).toBe('read_file');
     expect(parsed.name).toBe('read_file');
     expect(parsed.rule).toBeUndefined();
   });
 
   it('parses an MCP name without a rule', () => {
     const parsed = parseToolListEntry('mcp__s__t');
-    expect(parsed.entry).toBe('mcp__s__t');
     expect(parsed.name).toBe('mcp__s__t');
     expect(parsed.rule).toBeUndefined();
   });
@@ -154,7 +168,6 @@ describe('parseToolListEntry', () => {
 
   it('parses an exact command rule', () => {
     const parsed = parseToolListEntry('shell_exec(git status)');
-    expect(parsed.entry).toBe('shell_exec(git status)');
     expect(parsed.name).toBe('shell_exec');
     expect(parsed.rule).toEqual({ kind: 'exact', command: 'git status' });
   });
@@ -167,7 +180,12 @@ describe('parseToolListEntry', () => {
 
   it('parses a prefix command rule', () => {
     const parsed = parseToolListEntry('shell_exec(git log:*)');
-    expect(parsed.entry).toBe('shell_exec(git log:*)');
+    expect(parsed.name).toBe('shell_exec');
+    expect(parsed.rule).toEqual({ kind: 'prefix', prefix: 'git log' });
+  });
+
+  it('normalizes blank runs in a prefix rule', () => {
+    const parsed = parseToolListEntry('shell_exec(git  log :*)');
     expect(parsed.name).toBe('shell_exec');
     expect(parsed.rule).toEqual({ kind: 'prefix', prefix: 'git log' });
   });
@@ -177,6 +195,13 @@ describe('parseToolListEntry', () => {
     'shell_exec()',
     '(x)',
     'shell_exec(a)b',
+    'mcp__',
+    'mcp____tool',
+    'mcp__github',
+    'mcp__s__*',
+    'shell_exec(rm *)',
+    'shell_exec(npm run *)',
+    'shell_exec(*)',
   ])('rejects %j with reason malformed-entry', (entry) => {
     const error = captureToolNameError(() => parseToolListEntry(entry));
     expect(error.reason).toBe('malformed-entry');
@@ -239,8 +264,74 @@ describe('matchesCommandRule', () => {
       ['>', 'git log > out.txt'],
       ['<', 'git log < in.txt'],
       ['newline', 'git log\nrm -rf /'],
+      ['lone &', 'git log --oneline &'],
+      ['${', 'git log ${X}'],
+      ['{ }', 'git log {a,b}'],
+      ['( )', 'git log (arg)'],
+      ['carriage return', 'git log\rrm -rf /'],
     ])('never matches when the command contains %s', (_operator, command) => {
       expect(matchesCommandRule(rule, command)).toBe(false);
+    });
+  });
+});
+
+describe('matchesDenyCommandRule', () => {
+  describe('prefix rule', () => {
+    const rule: CommandRule = { kind: 'prefix', prefix: 'git push' };
+
+    it('matches the bare command', () => {
+      expect(matchesDenyCommandRule(rule, 'git push')).toBe(true);
+    });
+
+    it('matches the prefix followed by arguments', () => {
+      expect(matchesDenyCommandRule(rule, 'git push origin')).toBe(true);
+    });
+
+    it.each([
+      ['extra blanks between words', 'git   push  origin'],
+      ['a tab between words', 'git\tpush'],
+    ])('normalizes %s before comparing', (_label, command) => {
+      expect(matchesDenyCommandRule(rule, command)).toBe(true);
+    });
+
+    it.each([
+      [';', 'true; git push'],
+      ['&&', 'x && git push'],
+      ['single &', 'x & git push'],
+      ['|', 'x | git push'],
+      ['newline', 'x\ngit push'],
+      ['CRLF', 'x\r\ngit push'],
+      ['$(...)', '$(git push)'],
+      ['backticks', '`git push`'],
+      ['{ ; }', '{ git push; }'],
+      ['(...)', '(git push)'],
+      ['redirection', 'git push >out'],
+    ])('matches the segment split on %s', (_label, command) => {
+      expect(matchesDenyCommandRule(rule, command)).toBe(true);
+    });
+
+    it('matches across a backslash-newline continuation, removed before splitting', () => {
+      expect(matchesDenyCommandRule(rule, 'git \\\npush')).toBe(true);
+    });
+
+    it('does not match a longer word sharing the prefix', () => {
+      expect(matchesDenyCommandRule(rule, 'git pushx')).toBe(false);
+    });
+
+    it('does not match a segment where the prefix is not at the start', () => {
+      expect(matchesDenyCommandRule(rule, 'echo git push')).toBe(false);
+    });
+  });
+
+  describe('exact rule', () => {
+    const rule: CommandRule = { kind: 'exact', command: 'rm -rf /' };
+
+    it('matches an exact segment among chained commands', () => {
+      expect(matchesDenyCommandRule(rule, 'ls; rm -rf / ; echo done')).toBe(true);
+    });
+
+    it('does not match a segment that only shares the exact command as a prefix', () => {
+      expect(matchesDenyCommandRule(rule, 'ls; rm -rf /tmp/x')).toBe(false);
     });
   });
 });

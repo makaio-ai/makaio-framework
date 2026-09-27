@@ -161,6 +161,14 @@ describe('resolveToolPolicy', () => {
       });
     });
 
+    it('exact rule denies a command with a trailing chained command', () => {
+      const policy = resolveToolPolicy('claude', { allowedTools: ['shell_exec(git status)'] });
+      expect(policy.checkToolCall('Bash', { command: 'git status\nrm' })).toEqual({
+        allowed: false,
+        reason: NOT_ON_ALLOWLIST('Bash'),
+      });
+    });
+
     it('exact rule denies a missing or non-string command', () => {
       const policy = resolveToolPolicy('claude', { allowedTools: ['shell_exec(git status)'] });
       expect(policy.checkToolCall('Bash', {})).toEqual({ allowed: false, reason: NOT_ON_ALLOWLIST('Bash') });
@@ -183,6 +191,14 @@ describe('resolveToolPolicy', () => {
     it('prefix rule denies chained commands and non-word-boundary matches', () => {
       const policy = resolveToolPolicy('claude', { allowedTools: ['shell_exec(git log:*)'] });
       expect(policy.checkToolCall('Bash', { command: 'git log && rm -rf /' })).toEqual({
+        allowed: false,
+        reason: NOT_ON_ALLOWLIST('Bash'),
+      });
+      expect(policy.checkToolCall('Bash', { command: 'git log & rm -rf /' })).toEqual({
+        allowed: false,
+        reason: NOT_ON_ALLOWLIST('Bash'),
+      });
+      expect(policy.checkToolCall('Bash', { command: 'git log; rm -rf /' })).toEqual({
         allowed: false,
         reason: NOT_ON_ALLOWLIST('Bash'),
       });
@@ -269,6 +285,31 @@ describe('resolveToolPolicy', () => {
       const policy = resolveToolPolicy('claude', { disallowedTools: [] });
       expect(policy.nativeDisallowedTools).toEqual([]);
       expect(policy.checkToolCall('Bash', { command: 'rm -rf /' })).toEqual({ allowed: true });
+    });
+
+    it('a deny prefix rule denies chained forms of the denied command, alongside a plain allow', () => {
+      const policy = resolveToolPolicy('claude', {
+        allowedTools: ['shell_exec'],
+        disallowedTools: ['shell_exec(git push:*)'],
+      });
+      for (const command of [
+        'git push',
+        'true; git push',
+        'x && git push',
+        'x & git push',
+        'x | git push',
+        'x\ngit push',
+        'x\r\ngit push',
+        '$(git push)',
+        '`git push`',
+        '{ git push; }',
+        '(git push)',
+        'git push >out',
+        'git\tpush',
+      ]) {
+        expect(policy.checkToolCall('Bash', { command }).allowed).toBe(false);
+      }
+      expect(policy.checkToolCall('Bash', { command: 'git status' })).toEqual({ allowed: true });
     });
   });
 
