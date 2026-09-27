@@ -7,7 +7,10 @@
  * a human, an unlisted one is denied, and everything else still falls through to
  * "No approval handler available". Real bus handlers — no mocks.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, HarnessSubjects } from '@makaio/contracts';
 import type { FileAccessRuleProvider } from '@makaio/tools-core';
@@ -283,6 +286,92 @@ describe('ToolApprovalService - headless tool-list grant', () => {
       const result = await approve('Read', { file_path: '/etc/hosts' });
 
       expect(result).toEqual({ action: 'allow' });
+    });
+  });
+
+  describe('directory allowlist bound follows symlinks', () => {
+    let root: string;
+    let allowed: string;
+    let outside: string;
+    let symlinksSupported = true;
+
+    beforeAll(() => {
+      root = mkdtempSync(path.join(os.tmpdir(), 'tool-grant-'));
+      allowed = path.join(root, 'allowed');
+      outside = path.join(root, 'outside');
+      mkdirSync(path.join(allowed, 'sub'), { recursive: true });
+      mkdirSync(outside);
+      writeFileSync(path.join(allowed, 'a.txt'), 'a');
+      writeFileSync(path.join(outside, 'secret.txt'), 's');
+      try {
+        symlinkSync(path.join(outside, 'secret.txt'), path.join(allowed, 'link.txt'));
+        symlinkSync(outside, path.join(allowed, 'linkdir'), 'dir');
+        symlinkSync(path.join(outside, 'missing.txt'), path.join(allowed, 'dangling.txt'));
+      } catch (error) {
+        if (process.platform !== 'win32') throw error;
+        symlinksSupported = false;
+      }
+    });
+
+    afterAll(() => {
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    beforeEach(() => {
+      registerAgentStub(cleanups, {
+        adapterName: CLAUDE_ADAPTER,
+        cwd: allowed,
+        allowedTools: ['read_file', 'write_file'],
+        allowedDirectories: [allowed],
+      });
+    });
+
+    it('grants a Read of a regular file inside the allowed directory', async () => {
+      const result = await approve('Read', { file_path: path.join(allowed, 'a.txt') });
+
+      expect(result).toEqual({ action: 'allow' });
+    });
+
+    it('grants a Write of a new file in an existing allowed subdirectory', async () => {
+      const result = await approve('Write', { file_path: path.join(allowed, 'sub', 'new.txt'), content: 'x' });
+
+      expect(result).toEqual({ action: 'allow' });
+    });
+
+    it('sends a Read through an in-tree symlink to an outside file to the cascade', async (context) => {
+      if (!symlinksSupported) context.skip();
+
+      const headless = await approve('Read', { file_path: path.join(allowed, 'link.txt') });
+      expect(headless.action).toBe('deny');
+      if (headless.action === 'deny') {
+        expect(headless.message).toBe(NO_HANDLER);
+      }
+
+      const approval = registerApprovalRequestHandler(cleanups, { action: 'deny' });
+      await approve('Read', { file_path: path.join(allowed, 'link.txt') });
+      expect(approval.called).toBe(true);
+    });
+
+    it('sends a Write of a new file under a symlinked outside directory to the cascade', async (context) => {
+      if (!symlinksSupported) context.skip();
+
+      const result = await approve('Write', { file_path: path.join(allowed, 'linkdir', 'new.txt'), content: 'x' });
+
+      expect(result.action).toBe('deny');
+      if (result.action === 'deny') {
+        expect(result.message).toBe(NO_HANDLER);
+      }
+    });
+
+    it('sends a Write through a dangling in-tree symlink to the cascade', async (context) => {
+      if (!symlinksSupported) context.skip();
+
+      const result = await approve('Write', { file_path: path.join(allowed, 'dangling.txt'), content: 'x' });
+
+      expect(result.action).toBe('deny');
+      if (result.action === 'deny') {
+        expect(result.message).toBe(NO_HANDLER);
+      }
     });
   });
 

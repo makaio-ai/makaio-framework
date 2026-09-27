@@ -1,3 +1,4 @@
+import { lstatSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import {
   computeMetaTags,
@@ -235,8 +236,7 @@ export function evaluateToolGrant(
   if (!decision.allowed) return { kind: 'deny', message: decision.reason };
   if (allowedTools === undefined) return { kind: 'none' };
   // A grant must not widen a directory allowlist: the cascade decides calls outside it.
-  // TODO(FACT-75): Bash and other non-path tools get no grant under a directory allowlist,
-  // and this check is lexical — the symlink-aware check lives only in the filesystem extension.
+  // TODO(FACT-75): Bash and other non-path tools get no grant under a directory allowlist.
   const allowedDirectories = resolveEffectiveAllowedDirectories(agent, rawEnrichedPolicy);
   if (allowedDirectories !== undefined && !isGrantTargetWithin(allowedDirectories, toolName, args, agent.cwd)) {
     return { kind: 'none' };
@@ -265,9 +265,34 @@ function resolveEffectiveAllowedDirectories(
 }
 
 /**
- * Check whether a call's target path lies inside a directory allowlist. Lexical containment
- * (resolve, then relative-path check), matching `isWithinRoot` in the filesystem extension's
- * path validator without its realpath canonicalization.
+ * Resolve an absolute path, or its nearest existing ancestor, to its canonical path so a
+ * symlink or junction inside an allowed directory cannot alias a target outside it.
+ * Minimal copy of `canonicalizePath` in `extensions/filesystem/src/utils/path-utils.ts`
+ * (services/core cannot import that extension), stricter in two ways: only a missing path
+ * (`ENOENT`) walks up to its parent, and a dangling symlink yields undefined because a write
+ * through it would land at the link target.
+ * @param targetPath - Absolute path to canonicalize
+ * @returns Canonical absolute path, or undefined when it cannot be resolved safely
+ */
+function canonicalizePath(targetPath: string): string | undefined {
+  let existingPath = targetPath;
+  while (true) {
+    try {
+      return path.resolve(realpathSync(existingPath), path.relative(existingPath, targetPath));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return undefined;
+      if (lstatSync(existingPath, { throwIfNoEntry: false }) !== undefined) return undefined;
+      const parentPath = path.dirname(existingPath);
+      if (parentPath === existingPath) return undefined;
+      existingPath = parentPath;
+    }
+  }
+}
+
+/**
+ * Check whether a call's target path lies inside a directory allowlist. Roots and target are
+ * canonicalized ({@link canonicalizePath}) before the containment check, matching
+ * `createPathValidator` / `isWithinRoot` in the filesystem extension's path validator.
  * @param allowedDirectories - Directory allowlist; `[]` contains nothing
  * @param toolName - Native tool name of the call
  * @param args - Tool call input
@@ -286,8 +311,13 @@ function isGrantTargetWithin(
     ? path.resolve(cwd, typeof searchPath === 'string' && searchPath.length > 0 ? searchPath : '.')
     : extractToolFilePath(toolName, args, cwd);
   if (target === null) return false;
+  const canonicalTarget = canonicalizePath(target);
+  if (canonicalTarget === undefined) return false;
+  const fold = (value: string): string => (process.platform === 'win32' ? value.toLowerCase() : value);
   return allowedDirectories.some((directory) => {
-    const relativePath = path.relative(path.resolve(cwd, directory), target);
+    const canonicalRoot = canonicalizePath(path.resolve(cwd, directory));
+    if (canonicalRoot === undefined) return false;
+    const relativePath = path.relative(fold(canonicalRoot), fold(canonicalTarget));
     return (
       relativePath === '' ||
       (relativePath !== '..' && !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath))
