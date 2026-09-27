@@ -19,10 +19,14 @@ type GateLists = Pick<ClaudeAgentConfig, 'allowedTools' | 'disallowedTools'>;
  * `ToolApprovalService`) is replaced by a spy that always allows. The unit under test,
  * the connector's real `canUseTool` handler, is left untouched.
  * @param lists - Caller allow/deny lists, written with Makaio tool names.
+ * @param policy - Tool policy handed to the handler; defaults to `lists` resolved for Claude.
  * @returns The connector's `canUseTool` handler and the central approval spy.
  * @throws {@link ToolNameError} when a list entry is invalid, mirroring query option building.
  */
-async function makeGate(lists: GateLists): Promise<{
+async function makeGate(
+  lists: GateLists,
+  policy: ResolvedToolPolicy = resolveToolPolicy('claude', lists),
+): Promise<{
   canUseTool: CanUseTool;
   centralApproval: ReturnType<typeof vi.fn>;
 }> {
@@ -37,15 +41,14 @@ async function makeGate(lists: GateLists): Promise<{
     env: {},
     clientId: claudeClientDefinition.id,
     requestSessionAccountObservation: createSessionAccountObservationRequester(MakaioBus),
-    ...(lists.allowedTools !== undefined && { allowedTools: lists.allowedTools }),
-    ...(lists.disallowedTools !== undefined && { disallowedTools: lists.disallowedTools }),
+    ...lists,
   });
   const centralApproval = vi.fn().mockResolvedValue({ action: 'allow' });
   Object.defineProperty(connector, 'requestToolApproval', { value: centralApproval });
   const createHandler = Reflect.get(connector, 'createToolApprovalHandler') as (
     policy: ResolvedToolPolicy,
   ) => CanUseTool;
-  return { canUseTool: createHandler.call(connector, resolveToolPolicy('claude', lists)), centralApproval };
+  return { canUseTool: createHandler.call(connector, policy), centralApproval };
 }
 
 /**
@@ -180,6 +183,32 @@ describe('ClaudeSdkConnector canUseTool — caller allowlist gate', () => {
     expect(result).toMatchObject({ behavior: 'allow', updatedInput: { command: 'git status', extra: true } });
   });
 
+  it('re-checks the unchanged input when central approval allows without updatedInput', async () => {
+    // A denied input never reaches central approval (the first check returns early), and
+    // checkToolCall is deterministic, so "approver allows a denied input without rewriting
+    // it" is unreachable with a real policy. What the handler can get wrong is skipping the
+    // recheck when updatedInput is absent. This spy delegates the first call to the real
+    // policy and denies the second, so the call is only denied if the recheck runs, on the
+    // same input object.
+    const lists: GateLists = { allowedTools: ['shell_exec(git status)'] };
+    const realPolicy = resolveToolPolicy('claude', lists);
+    const checkToolCall = vi
+      .fn<ResolvedToolPolicy['checkToolCall']>()
+      .mockImplementationOnce((name, toolInput) => realPolicy.checkToolCall(name, toolInput))
+      .mockReturnValueOnce({ allowed: false, reason: 'recheck denied' });
+    const { canUseTool, centralApproval } = await makeGate(lists, { ...realPolicy, checkToolCall });
+    centralApproval.mockResolvedValueOnce({ action: 'allow' });
+    const input = { command: 'git status' };
+
+    const result = await callTool(canUseTool, 'Bash', input);
+
+    expect(result).toEqual({ behavior: 'deny', message: 'recheck denied', interrupt: false });
+    expect(centralApproval).toHaveBeenCalledOnce();
+    expect(checkToolCall).toHaveBeenCalledTimes(2);
+    expect(checkToolCall.mock.calls[1]?.[0]).toBe('Bash');
+    expect(checkToolCall.mock.calls[1]?.[1]).toBe(input);
+  });
+
   it('does not forward updatedPermissions from central approval while a caller tool list exists', async () => {
     const { canUseTool, centralApproval } = await makeGate({ allowedTools: ['read_file'] });
     centralApproval.mockResolvedValueOnce({
@@ -188,6 +217,19 @@ describe('ClaudeSdkConnector canUseTool — caller allowlist gate', () => {
     });
 
     const result = await callTool(canUseTool, 'Read');
+
+    expect(result).toMatchObject({ behavior: 'allow' });
+    expect(result).not.toHaveProperty('updatedPermissions');
+  });
+
+  it('does not forward updatedPermissions from central approval while only a denylist exists', async () => {
+    const { canUseTool, centralApproval } = await makeGate({ disallowedTools: ['shell_exec(git push:*)'] });
+    centralApproval.mockResolvedValueOnce({
+      action: 'allow',
+      updatedPermissions: [{ type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'allow' }],
+    });
+
+    const result = await callTool(canUseTool, 'Bash', { command: 'git status' });
 
     expect(result).toMatchObject({ behavior: 'allow' });
     expect(result).not.toHaveProperty('updatedPermissions');

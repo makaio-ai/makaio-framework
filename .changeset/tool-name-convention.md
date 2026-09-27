@@ -24,17 +24,25 @@ call if *any* segment matches; this does not recognise indirection through `env`
 `@makaio/contracts` adds a new `tool-names` module (`resolveToolPolicy`,
 `parseToolListEntry`, `matchesCommandRule`, `toNativeToolName`, `toMakaioToolName`,
 `ToolNameError`) that parses, validates, and resolves these lists against a native tool
-vocabulary.
+vocabulary. `ResolvedToolPolicy.restricts` is `true` whenever the caller passed an
+allowlist or a denylist (`[]` included), so adapters can decide from the resolved policy
+whether their bypass overrides apply. Shell deny rules fail closed: when a `shell_exec`
+deny rule with a command applies to a call and the call carries no readable string
+`command`, `checkToolCall` denies it.
 
 `@makaio/adapter-claude-agent-sdk` now translates Makaio tool names to Claude Code's
 native tool names, and supports `shell_exec(...)` command rules on its `Bash` tool.
-Whenever the caller passes an allowlist or a denylist, the adapter clears the provider's
-own auto-approved tools, resets `queryOptions.permissionMode` to `'default'` (permission
-modes like `bypassPermissions`, `acceptEdits`, `auto`, or `dontAsk` would skip `canUseTool`
-checks), and does not forward `updatedPermissions` from the approval response, so a
-persistent SDK-side rule can no longer skip `canUseTool` for later calls. When central
-tool approval returns an approver-modified `updatedInput`, the adapter re-runs the tool
-policy against that modified input and denies the call if it now fails.
+The tool lists are enforced in an adapter-owned PreToolUse hook, which Claude Code runs
+before settings allow rules, SDK auto-approvals (including provider `skills`), permission
+modes, and other hooks; provider PreToolUse hooks still run. The `canUseTool` check stays
+as a second layer: whenever the caller passes an allowlist or a denylist, the adapter
+clears the provider's own auto-approved tools, resets `queryOptions.permissionMode` to
+`'default'` (permission modes like `bypassPermissions`, `acceptEdits`, `auto`, or
+`dontAsk` would skip `canUseTool` checks), and does not forward `updatedPermissions` from
+the approval response, so a persistent SDK-side rule can no longer skip `canUseTool` for
+later calls. After central tool approval allows a call, the adapter re-runs the tool
+policy against the input that will run (the approver-modified `updatedInput`, or the
+original input) and denies the call if it now fails.
 
 **Breaking:** the adapter no longer accepts Claude Code tool names (`Read`, `Bash`, ...)
 in `allowedTools`/`disallowedTools`; unknown names are rejected with a `ToolNameError`.
@@ -51,5 +59,7 @@ entries for `--allowedTools`/`--disallowedTools` (`shell_exec(git log:*)` become
 **Breaking:** Claude Code tool names without a Makaio equivalent (e.g. `WebFetch`,
 `WebSearch`, `TodoWrite`) are no longer silently forwarded; they now throw a
 `ToolNameError` when passed in `allowedTools`/`disallowedTools`. Malformed entries
-(e.g. `Bash(npm run *)`, `mcp__github`, `mcp__s__*`) now throw `malformed-entry`; use
-`Bash(npm run:*)` for prefix-match rules instead.
+(e.g. `mcp__github`, `mcp__s__*`) now throw `malformed-entry`.
+
+**Breaking:** the Claude glob form for command rules, such as `Bash(npm run *)`, now
+throws `malformed-entry`; use the prefix form `Bash(npm run:*)` instead.

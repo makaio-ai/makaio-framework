@@ -97,6 +97,9 @@ export function normalizeOptions(options: MakaioOptions): ResolvedQueryConfig {
     cwd: options.cwd ?? process.cwd(),
     systemPrompt: options.systemPrompt,
     tools: options.tools ?? [],
+    // Claude-compatible drop-in `query()` surface: it takes Claude tool names and translates
+    // them here, mirroring the output normalisation in messages.ts (same NATIVE_TOOL_NAMES
+    // table). Framework-level tool lists stay Makaio-named and reject Claude names.
     allowedTools: options.allowedTools?.map(toMakaioToolListEntry),
     disallowedTools: options.disallowedTools?.map(toMakaioToolListEntry),
     canUseTool: options.canUseTool,
