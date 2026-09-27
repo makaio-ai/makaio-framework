@@ -36,6 +36,17 @@ import { ArtifactLifecycleSchemas } from './lifecycle-namespace.js';
  * register a product-owned namespace instead of merging additional
  * subjects into this one.
  */
+/**
+ * Revision payload a caller sends: everything in the envelope except the
+ * identity the service assigns (`id`, `slug`, `revision`) and the write time.
+ */
+const ArtifactRevisionBodySchema = ArtifactRevisionSchema.omit({
+  id: true,
+  slug: true,
+  revision: true,
+  timestamp: true,
+});
+
 export const ArtifactSchemas = {
   ...ArtifactLifecycleSchemas,
   /** Register a new artifact kind with the artifact service (RPC). */
@@ -64,7 +75,7 @@ export const ArtifactSchemas = {
 
   /** Create a new artifact and its first revision (RPC). */
   create: {
-    request: ArtifactRevisionSchema.omit({ id: true, revision: true, timestamp: true }).extend({
+    request: ArtifactRevisionBodySchema.extend({
       /**
        * Optional caller-assigned identity for a repeatable creation operation.
        * Use a stable operation-scoped identity; collisions reject the create and
@@ -72,6 +83,15 @@ export const ArtifactSchemas = {
        * to the service. Identity follows the same nonempty-string contract as refs.
        */
       id: ArtifactRefSchema.shape.id.optional(),
+      /**
+       * Optional caller-assigned envelope slug. A caller-supplied slug that is
+       * already taken in the same kind and scope rejects the create. Omission
+       * lets the service derive the slug from the kind's `titlePath` (see
+       * `deriveArtifactSlug`); a derived slug that collides is disambiguated
+       * with a numeric suffix instead of rejecting. The slug never changes
+       * after creation.
+       */
+      slug: ArtifactRevisionSchema.shape.slug.optional(),
     }),
     response: z.object({ artifact: ArtifactRevisionSchema }),
   },
@@ -87,7 +107,8 @@ export const ArtifactSchemas = {
        * old/new values. This metadata is never stored in the artifact revision.
        */
       statusPath: ArtifactStatusPathSchema.optional(),
-      revision: ArtifactRevisionSchema.omit({ id: true, revision: true, timestamp: true }),
+      /** Envelope identity (`id`, `slug`) is not part of the body: a slug sent here is dropped, never applied. */
+      revision: ArtifactRevisionBodySchema,
     }),
     response: z.object({ artifact: ArtifactRevisionSchema }),
   },

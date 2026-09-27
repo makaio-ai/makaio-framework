@@ -4,6 +4,7 @@ import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.
 import { ArtifactRefSchema } from './artifact-reference.js';
 import { EvidenceValueSchema } from './evidence.js';
 import { ArtifactSchemaVersionSchema } from './kind-registration.js';
+import { ArtifactSlugSchema } from './slug.js';
 export { ArtifactRefSchema } from './artifact-reference.js';
 export type { ArtifactRef } from './artifact-reference.js';
 export {
@@ -376,6 +377,8 @@ export const ArtifactRevisionSchema = z.object({
   kind: ArtifactRefSchema.shape.kind,
   /** Stable artifact identity (unchanged across revisions). */
   id: ArtifactRefSchema.shape.id,
+  /** Human-readable address, unique per kind and scope, assigned at creation and unchanged across revisions. */
+  slug: ArtifactSlugSchema,
   /** Revision identifier (unique within the artifact's history). */
   revision: ArtifactRefSchema.shape.revision,
   /** Scope at which this revision is relevant. */
@@ -442,6 +445,8 @@ export const ArtifactQueryRequestSchema = z.object({
   scope: ArtifactQueryScopeSchema.optional(),
   /** Restrict results to specific artifact identifiers. */
   ids: z.array(z.string().min(1)).optional(),
+  /** Restrict results to one envelope slug; combine with `kind` and `scope` for an exact address. */
+  slug: ArtifactSlugSchema.optional(),
   /** When `true`, return only the latest revision of each artifact. */
   currentOnly: z.boolean().optional(),
   /** Full-text search term matched against `searchableFields`. */

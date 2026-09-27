@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ArtifactDataPathSchema, ArtifactRefSchema } from '@makaio/contracts';
+import { ArtifactDataPathSchema, ArtifactRefSchema, ArtifactSlugSchema } from '@makaio/contracts';
 
 /** Per-invocation bound for artifact selections; this is not a token or payload-size budget. */
 export const MAX_ARTIFACT_READS_PER_REQUEST = 100;
@@ -45,6 +45,8 @@ const ArtifactReadSelectionSchema = z.strictObject({
 const ArtifactReadSuccessSchema = z.strictObject({
   ok: z.literal(true),
   ref: ArtifactRefSchema,
+  /** Envelope slug of the artifact, the human-readable address next to `ref`. */
+  slug: ArtifactSlugSchema,
   title: z.string(),
   data: z.record(z.string(), z.unknown()),
   selection: ArtifactReadSelectionSchema,

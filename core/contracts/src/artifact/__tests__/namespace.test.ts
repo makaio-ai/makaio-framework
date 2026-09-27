@@ -70,6 +70,7 @@ describe('Artifact namespace', () => {
     const artifact = {
       ...request,
       id: 'review-1',
+      slug: 'review-1',
       revision: 'revision-1',
       timestamp: 1700000000000,
     };
@@ -205,6 +206,7 @@ describe('Artifact namespace', () => {
 
     const root = {
       ...rootRef,
+      slug: rootRef.id,
       schemaVersion: 1,
       scope: { level: 'global' },
       data: { name: 'Makaio' },

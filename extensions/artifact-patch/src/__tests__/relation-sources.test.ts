@@ -49,6 +49,7 @@ function revision(sourceLocalId?: string) {
   return ArtifactRevisionSchema.parse({
     kind: questionKind.kind,
     id: 'questionnaire-1',
+    slug: 'questionnaire-1',
     revision: 'rev-1',
     schemaVersion: questionKind.schemaVersion,
     scope: { level: 'global' },

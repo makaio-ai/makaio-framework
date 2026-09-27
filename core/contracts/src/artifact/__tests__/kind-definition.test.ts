@@ -25,6 +25,7 @@ describe('defineArtifactKind', () => {
       kind: definition.kind,
       schemaVersion: 1,
       id: 'plan',
+      slug: 'plan',
       revision: 'r1',
       data,
       scope: { level: 'global' },
@@ -498,6 +499,56 @@ describe('defineArtifactKind', () => {
           path: ['dataSchema', keyword, 0, '$anchor'],
         }),
       );
+  });
+
+  it('rejects a dynamic reference at the root allOf', () => {
+    const registration = defineArtifactKind(options).toRegistration();
+    const result = ArtifactKindRegistrationSchema.safeParse({
+      ...registration,
+      dataSchema: { ...registration.dataSchema, allOf: [{ $dynamicRef: '#/$defs/node' }], $defs: { node: {} } },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success)
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ['dataSchema', 'allOf', 0, '$dynamicRef'],
+          message: 'Unsupported dynamic reference: use a plain local $ref',
+        }),
+      );
+  });
+
+  it.each(['$dynamicAnchor', '$recursiveAnchor', '$recursiveRef'])('rejects %s inside $defs', (keyword) => {
+    const registration = defineArtifactKind(options).toRegistration();
+    const result = ArtifactKindRegistrationSchema.safeParse({
+      ...registration,
+      dataSchema: {
+        ...registration.dataSchema,
+        $defs: { node: { [keyword]: keyword.endsWith('Ref') ? '#' : 'node' } },
+      },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success)
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ['dataSchema', '$defs', 'node', keyword],
+          message: 'Unsupported dynamic reference: use a plain local $ref',
+        }),
+      );
+  });
+
+  it('keeps accepting a plain local $ref in the root allOf', () => {
+    const registration = defineArtifactKind(options).toRegistration();
+    const result = ArtifactKindRegistrationSchema.safeParse({
+      ...registration,
+      dataSchema: {
+        type: 'object',
+        properties: { topic: { type: 'string' } },
+        required: ['topic'],
+        allOf: [{ $ref: '#/$defs/node' }],
+        $defs: { node: { type: 'object', properties: { status: { type: 'string' } } } },
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
   it.each([

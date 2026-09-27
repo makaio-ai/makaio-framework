@@ -52,6 +52,7 @@ function decision(id: string, revision: string, data: Record<string, unknown>): 
   return ArtifactRevisionSchema.parse({
     kind: 'decision',
     id,
+    slug: id,
     revision,
     schemaVersion: 1,
     scope: { level: 'global' },
@@ -236,6 +237,7 @@ describe('artifacts_read through MCP', () => {
           {
             ok: true,
             ref: { refClass: 'artifact', kind: 'decision', id: sharedId, revision: 'rev-2' },
+            slug: sharedId,
             title: 'Checkout buttons',
             data: { subject: 'Checkout buttons', statement: 'Keep checkout buttons blue.' },
             selection: { mode: 'view', view: 'compact', fields: ['subject', 'statement'], omittedAbsentFields: [] },
@@ -243,6 +245,7 @@ describe('artifacts_read through MCP', () => {
           {
             ok: true,
             ref: { refClass: 'artifact', kind: 'decision', id: sharedId, revision: 'rev-1' },
+            slug: sharedId,
             title: 'Checkout buttons',
             data: { rationale: 'The previous approved decision.' },
             selection: {

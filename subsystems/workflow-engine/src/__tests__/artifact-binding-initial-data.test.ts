@@ -31,6 +31,7 @@ function setup(options: { resolve?: string; create?: string; startRef?: boolean;
   const existing: ArtifactRevision = {
     kind: 'report',
     id: 'existing-report',
+    slug: 'existing-report',
     revision: 'existing-revision',
     schemaVersion: 1,
     scope: { level: 'global' },

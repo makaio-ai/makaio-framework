@@ -61,6 +61,7 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
       artifact: {
         kind: 'implementation-plan',
         id: 'artifact-1',
+        slug: 'artifact-1',
         revision: 'rev-1',
         schemaVersion: 1,
         scope: { level: 'project', ids: { projectId: 'project-1' } },
@@ -127,6 +128,7 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
       artifact: {
         kind: 'implementation-plan',
         id: 'artifact-1',
+        slug: 'artifact-1',
         revision: 'rev-1',
         schemaVersion: 1,
         scope: { level: 'project', ids: { projectId: 'project-1' } },
@@ -146,6 +148,7 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
       artifact: {
         kind: 'review-findings',
         id: 'artifact-2',
+        slug: 'artifact-2',
         revision: 'rev-1',
         schemaVersion: 1,
         scope: { level: 'project', ids: { projectId: 'project-1' } },
@@ -184,6 +187,7 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
       artifact: {
         kind: 'implementation-plan',
         id: 'artifact-1',
+        slug: 'artifact-1',
         revision: 'rev-1',
         schemaVersion: 1,
         scope: { level: 'project', ids: { projectId: 'project-1' } },

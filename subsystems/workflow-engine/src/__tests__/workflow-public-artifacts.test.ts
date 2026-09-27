@@ -162,6 +162,7 @@ describe('workflow public artifact subjects', () => {
     const existingArtifact = {
       kind: startArtifactRef.kind,
       id: startArtifactRef.id,
+      slug: startArtifactRef.id,
       revision: 'rev-existing',
       schemaVersion: 1,
       scope: { level: 'global' },

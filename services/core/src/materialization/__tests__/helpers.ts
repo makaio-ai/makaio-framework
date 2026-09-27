@@ -14,6 +14,7 @@ export function makeRevision(overrides: Partial<ArtifactRevision> = {}): Artifac
   return {
     kind: 'test-kind',
     id: 'artifact-1',
+    slug: 'artifact-1',
     revision: 'rev-1',
     scope: { level: 'global' },
     schemaVersion: 1,

@@ -239,6 +239,7 @@ function materializeRead(
     return {
       ok: true,
       ref: { refClass: 'artifact', kind: artifact.kind, id: artifact.id, revision: artifact.revision },
+      slug: artifact.slug,
       title,
       data: structuredClone(artifact.data),
       selection: { mode: 'full', fields: [], omittedAbsentFields: [] },
@@ -248,6 +249,7 @@ function materializeRead(
     return {
       ok: true,
       ref: { refClass: 'artifact', kind: artifact.kind, id: artifact.id, revision: artifact.revision },
+      slug: artifact.slug,
       title,
       data: {},
       selection: {
@@ -263,6 +265,7 @@ function materializeRead(
   return {
     ok: true,
     ref: { refClass: 'artifact', kind: artifact.kind, id: artifact.id, revision: artifact.revision },
+    slug: artifact.slug,
     title,
     data: projected.data,
     selection: {

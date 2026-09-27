@@ -49,6 +49,7 @@ function artifact(
   return ArtifactRevisionSchema.parse({
     kind: options.kind ?? 'decision',
     id,
+    slug: id,
     revision,
     schemaVersion: options.schemaVersion ?? 1,
     scope: { level: 'global' },
@@ -219,6 +220,7 @@ describe('artifacts_read', () => {
       {
         ok: true,
         ref: { refClass: 'artifact', kind: 'decision', id: 'current-id', revision: 'rev-2' },
+        slug: 'current-id',
         title: 'Checkout',
         data: { subject: 'Checkout', statement: 'Keep buttons blue' },
         selection: { mode: 'view', view: 'compact', fields: ['subject', 'statement'], omittedAbsentFields: [] },
@@ -226,6 +228,7 @@ describe('artifacts_read', () => {
       {
         ok: true,
         ref: { refClass: 'artifact', kind: 'decision', id: 'pinned-id', revision: 'rev-1' },
+        slug: 'pinned-id',
         title: 'Payments',
         data: { subject: 'Payments', statement: 'Use provider A' },
         selection: { mode: 'full', fields: [], omittedAbsentFields: [] },
@@ -272,6 +275,7 @@ describe('artifacts_read', () => {
     expect(result.results[1]).toEqual({
       ok: true,
       ref: { refClass: 'artifact', kind: 'decision', id: 'current-id', revision: 'rev-2' },
+      slug: 'current-id',
       title: 'Checkout',
       data: { subject: 'Checkout' },
       selection: {

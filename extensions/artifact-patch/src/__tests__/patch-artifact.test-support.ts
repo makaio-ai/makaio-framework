@@ -84,6 +84,7 @@ export function planRevision(
   return ArtifactRevisionSchema.parse({
     kind: 'implementation-plan',
     id: 'plan-1',
+    slug: 'plan-1',
     revision,
     schemaVersion,
     scope: { level: 'global' },

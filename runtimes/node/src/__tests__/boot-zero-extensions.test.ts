@@ -596,6 +596,7 @@ export default [bootPackage, targetPackage];
       artifact: {
         kind: 'implementation-plan',
         id: 'artifact-1',
+        slug: 'artifact-1',
         revision: 'rev-1',
         schemaVersion: 1,
         scope: { level: 'global' },
@@ -817,6 +818,7 @@ export default {
       artifact: {
         kind: 'test',
         id: 'test-1',
+        slug: 'test-1',
         revision: 'rev-1',
         schemaVersion: 1,
         scope: { level: 'project', ids: { projectId: 'p1' } },

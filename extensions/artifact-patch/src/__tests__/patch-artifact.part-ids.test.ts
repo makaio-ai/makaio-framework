@@ -128,6 +128,7 @@ function makeRevision(
   return ArtifactRevisionSchema.parse({
     kind: reg.kind,
     id,
+    slug: id,
     revision,
     schemaVersion: reg.schemaVersion,
     scope: { level: 'global' },
@@ -322,6 +323,7 @@ describe('addressable-parts: migration uses TARGET registration areas', () => {
     const current = ArtifactRevisionSchema.parse({
       kind: 'migrating-bearer',
       id: 'mig-1',
+      slug: 'mig-1',
       revision: 'rev-1',
       schemaVersion: 1,
       scope: { level: 'global' },
