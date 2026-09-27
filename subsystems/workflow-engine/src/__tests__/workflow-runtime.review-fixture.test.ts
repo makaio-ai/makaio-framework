@@ -33,11 +33,16 @@ function fakeRevision(n: number): string {
  * @param data - Initial artifact data.
  * @returns A fake artifact revision for injection into `ArtifactBindingState`.
  */
+/** Envelope slug of the seeded review artifact; distinct from its id so id/slug mix-ups surface. */
+const REVIEW_SEED_SLUG = 'checkout-review';
+/** Envelope slug of the seeded overlap note, likewise distinct from its id. */
+const OVERLAP_SEED_SLUG = 'overlap-note';
+
 function makeInitialRevision(data: ReviewArtifactData): ArtifactRevision<ReviewArtifactData> {
   return {
     kind: 'code-review',
     id: 'artifact-review-1',
-    slug: 'artifact-review-1',
+    slug: REVIEW_SEED_SLUG,
     revision: fakeRevision(0),
     schemaVersion: 1,
     scope: { level: 'global' },
@@ -75,10 +80,12 @@ function registerArtifactReviseStub(
 ): () => void {
   let revisionCounter = 1;
   return bus.on(ArtifactSubjects.revise, (ctx) => {
+    // A revise request carries only a ref; a store carries the revised artifact's slug forward.
+    const previousSlug = capturedRevisions.findLast((r) => r.id === ctx.payload.previous.id)?.slug ?? REVIEW_SEED_SLUG;
     const newRevision: ArtifactRevision<ReviewArtifactData> = {
       kind: ctx.payload.revision.kind,
       id: ctx.payload.previous.id,
-      slug: ctx.payload.previous.id,
+      slug: previousSlug,
       revision: fakeRevision(revisionCounter++),
       schemaVersion: ctx.payload.revision.schemaVersion,
       scope: ctx.payload.revision.scope,
@@ -798,7 +805,7 @@ describe('review workflow fixture — functional updateArtifact', () => {
       const newRevision: ArtifactRevision<Record<string, unknown>> = {
         kind: ctx.payload.revision.kind,
         id: ctx.payload.previous.id,
-        slug: ctx.payload.previous.id,
+        slug: OVERLAP_SEED_SLUG,
         revision,
         schemaVersion: ctx.payload.revision.schemaVersion,
         scope: ctx.payload.revision.scope,
@@ -815,7 +822,7 @@ describe('review workflow fixture — functional updateArtifact', () => {
       current: {
         kind: 'note',
         id: 'artifact-overlap-1',
-        slug: 'artifact-overlap-1',
+        slug: OVERLAP_SEED_SLUG,
         revision: fakeRevision(0),
         schemaVersion: 1,
         scope: { level: 'global' },

@@ -5,6 +5,11 @@ import { readArtifactTitle } from './kind-paths.js';
  * Lowercase alphanumeric segments joined by single or double hyphens
  * (`my-slug`, `my--slug`); no leading or trailing hyphen, no uppercase, no
  * other characters. Comparison is exact — the store never normalizes a slug.
+ *
+ * Public on purpose: a consumer store validates backfilled slugs and builds
+ * its column check against this pattern, and {@link ARTIFACT_SLUG_FIELD} names
+ * the legacy `data.slug` key a migration strips. Both are contract, not
+ * implementation detail.
  */
 export const ARTIFACT_SLUG_PATTERN = /^[a-z0-9]+(--?[a-z0-9]+)*$/;
 
@@ -14,6 +19,12 @@ export const ARTIFACT_SLUG_PATTERN = /^[a-z0-9]+(--?[a-z0-9]+)*$/;
  * The slug is part of the envelope next to `kind` and `id`: every artifact has
  * one, it is assigned at creation, and it never changes across revisions. A
  * kind must not declare a data field named `slug` — the envelope owns it.
+ *
+ * Uniqueness per kind and scope is a store invariant, not a declared
+ * `ArtifactUniquenessRuleSchema` rule: rules select data paths and
+ * relation targets, and a kind cannot opt out of the envelope address. The
+ * store enforces it structurally (a unique index over kind, scope, and slug)
+ * and reports a collision as a conflict.
  */
 export const ArtifactSlugSchema = z
   .string()
