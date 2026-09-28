@@ -5,7 +5,7 @@
  * bounded I/O wrapper ({@link sniffRolloutFork}) against real temp files.
  *
  * The synthetic rollout fixtures mirror the on-disk shape Codex writes at the
- * pinned `rust-v0.144.1` source: one JSON object per line, the thread's own
+ * pinned `rust-v0.158.0` source: one JSON object per line, the thread's own
  * metadata record first, ancestor records copied in afterwards.
  */
 
@@ -36,7 +36,7 @@ function metaLine(threadId: string, forkedFromId?: string): string {
       timestamp: '2026-09-16T23:09:48.711Z',
       cwd: '/workspace',
       originator: 'codex_cli_rs',
-      cli_version: '0.144.1',
+      cli_version: '0.158.0',
       source: 'cli',
     },
   });

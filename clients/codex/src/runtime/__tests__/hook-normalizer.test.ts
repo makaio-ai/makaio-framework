@@ -213,6 +213,7 @@ describe('normalizeCodexHook', () => {
       ['resume', 'resume'],
       ['clear', 'clear'],
       ['compact', 'compact'],
+      ['fork', 'fork'],
     ] as const)('maps source %s to startMode %s', (source, expected) => {
       const result = normalizeCodexHook(makeRaw('SessionStart', { source }));
 
