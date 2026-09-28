@@ -103,6 +103,14 @@ const EXPECTED_SENTINELS: Record<ProviderId, Readonly<Record<string, string | un
     'post-tool-use-context-append': JSON.stringify({
       hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: CONTEXT },
     }),
+    'post-tool-use-mcp-context-append': JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: CONTEXT },
+    }),
+    // The subagent PostToolUse context is consumed inside the spawned subagent,
+    // so it carries the subagent context like SubagentStart does.
+    'post-tool-use-subagent-context-append': JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: SUBAGENT_CONTEXT },
+    }),
     'post-tool-use-block': JSON.stringify({ decision: 'block', reason: BLOCK_REASON }),
     'stop-block': JSON.stringify({ decision: 'block', reason: BLOCK_REASON }),
     // SubagentStart graduated to 'supported' with context.append in FACT-293:

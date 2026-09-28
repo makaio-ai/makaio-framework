@@ -1,10 +1,6 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { ClientSubjects, type RawClientHookPayload } from '@makaio/subsystem-client';
-import type { ClientRuntimeStarted } from '@makaio/contracts/client';
+import { ClientSubjects } from '@makaio/subsystem-client';
 import { CodexClientSubjects } from '../namespace.js';
 import { CodexClientSessionService, MANAGED_SESSION_CAP } from '../codex-client-session-service.js';
 import { ClientHookProviderContractRegistry, ClientHookResponseRegistry } from '@makaio/subsystem-client';
@@ -12,62 +8,7 @@ import { createSessionTokenEffect } from '@makaio/contracts/client';
 import type { ContributorDefinition } from '@makaio/contracts/client';
 import { vi } from 'vitest';
 import { CODEX_HOOK_SESSION_START } from '../schemas.js';
-
-type CapturedClientSessionSubject =
-  | typeof ClientSubjects.session.started
-  | typeof ClientSubjects.session.userPrompt.submitted
-  | typeof ClientSubjects.session.turn.started
-  | typeof ClientSubjects.session.turn.completed
-  | typeof ClientSubjects.session.tool.pre
-  | typeof ClientSubjects.session.tool.post
-  | typeof ClientSubjects.session.subagent.started
-  | typeof ClientSubjects.session.subagent.completed
-  | typeof ClientSubjects.session.compaction.pre;
-
-/**
- * Capture payloads emitted on one or more client session subjects.
- * @param bus - Test bus instance
- * @param subjects - Client session subjects to observe
- * @returns Captured payloads and a cleanup function
- */
-function capturePayloads(
-  bus: IMakaioBus,
-  ...subjects: CapturedClientSessionSubject[]
-): { received: unknown[]; cleanup: () => void } {
-  const received: unknown[] = [];
-  const cleanups = subjects.map((subject) =>
-    bus.on(subject, (ctx: { payload: unknown }) => {
-      received.push(ctx.payload);
-    }),
-  );
-  return {
-    received,
-    cleanup: () => {
-      cleanups.forEach((cleanup) => cleanup());
-    },
-  };
-}
-
-/**
- * Emit a raw hook event on the test bus and wait for the emission to settle.
- * @param bus - Test bus instance
- * @param eventName - Codex-native hook event name
- * @param payload - Raw payload forwarded by the ingress bridge
- * @param metadata - Optional bridge metadata
- */
-async function emitRawHook(
-  bus: IMakaioBus,
-  eventName: string,
-  payload: RawClientHookPayload['payload'] = {},
-  metadata?: RawClientHookPayload['metadata'],
-): Promise<void> {
-  await bus.emit(CodexClientSubjects.hook.received, {
-    eventName,
-    receivedAt: 1_713_795_200_000,
-    payload,
-    metadata,
-  });
-}
+import { capturePayloads, emitRawHook, emitRuntimeStarted } from './codex-client-session-service.test-support.js';
 
 describe('CodexClientSessionService', () => {
   let bus: IMakaioBus;
@@ -382,28 +323,8 @@ describe('CodexClientSessionService', () => {
   });
 
   describe('adapter-managed session gate', () => {
-    /**
-     * Emits a `client.runtime.started` event on the test bus with sensible
-     * defaults for the adapter-managed session gate tests.
-     * @param overrides - Partial payload merged over the defaults
-     */
-    function emitRuntimeStarted(overrides: Partial<ClientRuntimeStarted> = {}): Promise<void> {
-      const { source: overrideSource, adapterSessionId: overrideAdapterSessionId, ...rest } = overrides;
-      const source = overrideSource ?? { layer: 'adapter', producer: 'codex-app-server' };
-      const adapterSessionId = source.layer === 'adapter' ? (overrideAdapterSessionId ?? 'sess-1') : undefined;
-      return bus.emit(ClientSubjects.runtime.started, {
-        clientRuntimeId: 'rt-default',
-        clientId: 'codex',
-        status: 'started',
-        observedAt: 1_713_795_200_000,
-        ...rest,
-        source,
-        ...(adapterSessionId !== undefined ? { adapterSessionId } : {}),
-      });
-    }
-
     it('suppresses client.session.started when adapterSessionId belongs to an adapter-managed runtime', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-001' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-001' });
 
       const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
 
@@ -414,7 +335,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('emits client.session.started when adapterSessionId is not in the managed set', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-002', adapterSessionId: 'other-session' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-002', adapterSessionId: 'other-session' });
 
       const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
 
@@ -426,7 +347,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('emits client.session.started when SessionStart hook has no adapterSessionId', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-003', adapterSessionId: 'some-managed-session' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-003', adapterSessionId: 'some-managed-session' });
 
       const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
 
@@ -449,7 +370,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('does not suppress hook events for non-adapter runtime.started sources', async () => {
-      await emitRuntimeStarted({
+      await emitRuntimeStarted(bus, {
         clientRuntimeId: 'rt-004',
         source: { layer: 'supervisor', producer: 'test-supervisor' },
         supervisorSessionId: 'sup-session-abc',
@@ -464,7 +385,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('does not suppress client.session.started when runtime.started arrives from a different clientId', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-claude-001', clientId: 'claude-code' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-claude-001', clientId: 'claude-code' });
 
       const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
 
@@ -476,7 +397,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('suppresses all normalized client.session events for adapter-managed sessions', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-005' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-005' });
 
       const { received, cleanup } = capturePayloads(
         bus,
@@ -503,7 +424,7 @@ describe('CodexClientSessionService', () => {
 
     it('evicts the oldest adapter-managed session when the cap is exceeded', async () => {
       for (let index = 0; index <= MANAGED_SESSION_CAP; index++) {
-        await emitRuntimeStarted({
+        await emitRuntimeStarted(bus, {
           clientRuntimeId: `rt-${index}`,
           adapterSessionId: `managed-session-${index}`,
         });
@@ -522,7 +443,7 @@ describe('CodexClientSessionService', () => {
     it('suppresses adapter-emitted subjects for managed sessions but forwards hook-only subjects', async () => {
       // Adapter emits: started, turn.started, turn.completed, userPrompt.submitted, tool.pre, tool.post
       // Hook-only (no adapter equivalent): subagent.started, subagent.completed, compaction.pre
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-gate-selective' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-gate-selective' });
 
       const { received: suppressedReceived, cleanup: suppressedCleanup } = capturePayloads(
         bus,
@@ -569,7 +490,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('forwards session.started with startMode compact for a managed session (compaction signal has no adapter counterpart)', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-compact' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-compact' });
 
       const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
 
@@ -581,7 +502,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('forwards session.started with startMode clear for a managed session (clear restart has no adapter counterpart)', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-clear' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-clear' });
 
       const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
 
@@ -593,7 +514,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('suppresses session.started with source startup for a managed session (adapter owns the initial start)', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-startup' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-startup' });
 
       const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
 
@@ -601,123 +522,6 @@ describe('CodexClientSessionService', () => {
       cleanup();
 
       expect(received).toHaveLength(0);
-    });
-  });
-
-  describe('fork lineage enrichment', () => {
-    const CHILD = '0199b0d1-1111-7000-8000-000000000001';
-    const PARENT = '0199b0d1-2222-7000-8000-000000000002';
-    let dir: string;
-
-    beforeEach(async () => {
-      dir = await mkdtemp(join(tmpdir(), 'codex-service-fork-'));
-    });
-
-    afterEach(async () => {
-      await rm(dir, { recursive: true, force: true });
-    });
-
-    /**
-     * Write a synthetic rollout file whose own metadata record optionally
-     * names a fork source, matching the shape Codex writes on disk.
-     * @param threadId - Thread id of the rollout owner
-     * @param forkedFromId - Parent thread id, omitted for a root thread
-     * @returns Absolute path of the written rollout file
-     */
-    async function writeRollout(threadId: string, forkedFromId?: string): Promise<string> {
-      const path = join(dir, `${threadId}.jsonl`);
-      const meta = JSON.stringify({
-        timestamp: '2026-09-16T23:09:48.711Z',
-        type: 'session_meta',
-        payload: {
-          session_id: threadId,
-          id: threadId,
-          ...(forkedFromId !== undefined && { forked_from_id: forkedFromId }),
-          cwd: '/workspace',
-          originator: 'codex_cli_rs',
-          cli_version: '0.144.1',
-        },
-      });
-      await writeFile(path, `${meta}\n`, 'utf8');
-      return path;
-    }
-
-    it('upgrades a startup session whose rollout names a fork source to startMode fork', async () => {
-      const transcriptPath = await writeRollout(CHILD, PARENT);
-      const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
-
-      await emitRawHook(bus, 'SessionStart', {
-        session_id: CHILD,
-        source: 'startup',
-        transcript_path: transcriptPath,
-      });
-      cleanup();
-
-      expect(received).toHaveLength(1);
-      expect(received[0]).toMatchObject({
-        adapterSessionId: CHILD,
-        startMode: 'fork',
-        parentAdapterSessionId: PARENT,
-        transcriptPath,
-      });
-    });
-
-    it('keeps startMode fresh when the rollout names no fork source', async () => {
-      const transcriptPath = await writeRollout(CHILD);
-      const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
-
-      await emitRawHook(bus, 'SessionStart', {
-        session_id: CHILD,
-        source: 'startup',
-        transcript_path: transcriptPath,
-      });
-      cleanup();
-
-      expect(received[0]).toMatchObject({ startMode: 'fresh' });
-      expect(received[0]).not.toHaveProperty('parentAdapterSessionId');
-    });
-
-    it("does not sniff a resume: the rollout is the thread's own file, already registered", async () => {
-      // A resumed fork child still shows its original fork source; upgrading it
-      // would re-register instead of letting ingestion rebind by session id.
-      const transcriptPath = await writeRollout(CHILD, PARENT);
-      const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
-
-      await emitRawHook(bus, 'SessionStart', {
-        session_id: CHILD,
-        source: 'resume',
-        transcript_path: transcriptPath,
-      });
-      cleanup();
-
-      expect(received[0]).toMatchObject({ startMode: 'resume' });
-      expect(received[0]).not.toHaveProperty('parentAdapterSessionId');
-    });
-
-    it('fails open when transcript_path is null', async () => {
-      const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
-
-      await emitRawHook(bus, 'SessionStart', { session_id: CHILD, source: 'startup', transcript_path: null });
-      cleanup();
-
-      expect(received).toHaveLength(1);
-      expect(received[0]).toMatchObject({ startMode: 'fresh' });
-      expect(received[0]).not.toHaveProperty('transcriptPath');
-      expect(received[0]).not.toHaveProperty('parentAdapterSessionId');
-    });
-
-    it('fails open when the rollout file does not exist', async () => {
-      const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
-
-      await emitRawHook(bus, 'SessionStart', {
-        session_id: CHILD,
-        source: 'startup',
-        transcript_path: join(dir, 'missing.jsonl'),
-      });
-      cleanup();
-
-      expect(received[0]).toMatchObject({ startMode: 'fresh' });
-      expect(received[0]).not.toHaveProperty('parentAdapterSessionId');
     });
   });
 

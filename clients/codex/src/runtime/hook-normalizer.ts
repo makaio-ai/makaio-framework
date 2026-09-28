@@ -23,7 +23,7 @@
  * are never emitted into the global `client.*` namespace.
  *
  * **Source notes:** Event names are verified against the pinned
- * `rust-v0.144.1` Codex source (`codex-rs/hooks/src/lib.rs`). Update this
+ * `rust-v0.158.0` Codex source (`codex-rs/hooks/src/lib.rs`). Update this
  * normalizer when a new binary version changes or adds hook names.
  *
  * **Subagent hooks:** On both `SubagentStart` and `SubagentStop`, the raw
@@ -142,21 +142,20 @@ const COMPACTION_TRIGGERS: ReadonlySet<ClientSessionCompactionTrigger> = new Set
  * Map from the Codex CLI `SessionStart.source` union to the
  * framework-level {@link ClientSessionStartMode}.
  *
- * - `'startup'` → `'fresh'` (brand-new thread — **and a fork child**, see
- *   below; the owning service upgrades the fork case to `'fork'`)
+ * - `'startup'` → `'fresh'` (brand-new thread; never a fork)
  * - `'resume'`  → `'resume'` (thread continued from its own rollout file)
  * - `'clear'`   → `'clear'` (conversation cleared, new thread id)
  * - `'compact'` → `'compact'` (context compacted, same thread id)
+ * - `'fork'`    → `'fork'` (fork child with a new thread id)
  *
- * The vendor union has exactly these four values in the pinned `rust-v0.144.1`
- * source (`codex-rs/hooks/src/events/session_start.rs`, `SessionStartSource`);
- * there is no `'fork'` value. In `codex-rs/core/src/session/session.rs` a fork
- * is classified next to a brand-new thread — the match arm that maps
- * `InitialHistory::New` to `SessionStartSource::Startup` also covers
- * `InitialHistory::Forked` — which is why `'startup'`, not `'resume'`, is the
- * mode that may still turn out to be a fork.
- * Lineage is recovered from the rollout file instead; see the fork sniff in
- * `fork-sniff.ts` and its caller in `codex-client-session-service.ts`.
+ * The vendor union has these five values in the pinned `rust-v0.158.0`
+ * source (`codex-rs/hooks/src/events/session_start.rs`, `SessionStartSource`).
+ * Forks are reported explicitly as `'fork'`; `'startup'` covers only
+ * `InitialHistory::New`, so a `'startup'` session is never a fork.
+ * The hook payload still carries no parent id: the owning service recovers it
+ * from the rollout file and falls back to `'fresh'` when it cannot. See the
+ * fork sniff in `fork-sniff.ts` and its caller in
+ * `codex-client-session-service.ts`.
  *
  * Vendor values not in this map yield `undefined`, leaving `startMode`
  * absent from the normalized payload — safe for forward compatibility when
@@ -167,6 +166,7 @@ const VENDOR_SOURCE_TO_START_MODE: Readonly<Record<string, ClientSessionStartMod
   resume: 'resume',
   clear: 'clear',
   compact: 'compact',
+  fork: 'fork',
 };
 
 /**

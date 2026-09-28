@@ -75,6 +75,11 @@ export type ClientSessionObservedBase = z.infer<typeof ClientSessionObservedBase
  * Maps 1:1 to the Claude Code SDK `SessionStartHookInput.source` union:
  * `'startup'` → `'fresh'`, `'resume'` → `'resume'` or `'fork'` (after
  * transcript sniff), `'clear'` → `'clear'`, `'compact'` → `'compact'`.
+ *
+ * Codex CLI `0.158.0` `SessionStart.source`: `'startup'` → `'fresh'`,
+ * `'resume'` → `'resume'`, `'clear'` → `'clear'`, `'compact'` → `'compact'`,
+ * `'fork'` → `'fork'` with the parent recovered from the rollout file, or
+ * `'fresh'` when the parent cannot be recovered.
  */
 export const CLIENT_SESSION_START_MODES = ['fresh', 'fork', 'resume', 'clear', 'compact'] as const;
 
@@ -117,11 +122,12 @@ export const ClientSessionStartedSchema = ClientSessionObservedBaseSchema.extend
    */
   startMode: observability.attribute(ClientSessionStartModeSchema, 'makaio.session.start_mode').optional(),
   /**
-   * Adapter session id of the parent session, when this session is a fork
-   * child (`startMode === 'fork'`).
+   * Adapter session id of the parent session of a fork child.
    *
-   * Absent for non-fork sessions and when the emitter cannot determine the
-   * parent identity.
+   * Present exactly when `startMode === 'fork'` and absent for every other
+   * start mode. An emitter that cannot determine the parent identity reports
+   * the start as `'fresh'` instead of `'fork'`, so a `'fork'` event never goes
+   * out without its parent.
    */
   parentAdapterSessionId: observability.attribute(z.string(), 'makaio.session.parent_adapter_session_id').optional(),
 });

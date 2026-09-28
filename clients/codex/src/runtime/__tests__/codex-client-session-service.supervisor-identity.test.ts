@@ -7,37 +7,16 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { ClientSubjects, type RawClientHookPayload } from '@makaio/subsystem-client';
+import { ClientSubjects } from '@makaio/subsystem-client';
 import type { ClientRuntimeObserveRequest } from '@makaio/contracts/client';
 import { CodexClientSessionService } from '../codex-client-session-service.js';
-import { CodexClientSubjects } from '../namespace.js';
+import { emitRawHook } from './codex-client-session-service.test-support.js';
 
 const fakeObserveResponse = {
   clientRuntimeId: 'runtime-supervisor-identity',
   created: false,
   promoted: false,
 };
-
-/**
- * Emit a raw Codex hook through the service's real bus ingress.
- * @param bus - Test bus instance hosting the client session service.
- * @param eventName - Codex-native hook event name.
- * @param payload - Native hook payload forwarded by the hook command.
- * @param metadata - Optional ingress metadata.
- */
-function emitRawHook(
-  bus: IMakaioBus,
-  eventName: string,
-  payload: RawClientHookPayload['payload'],
-  metadata?: RawClientHookPayload['metadata'],
-): Promise<void> {
-  return bus.emit(CodexClientSubjects.hook.received, {
-    eventName,
-    receivedAt: 1_713_795_200_000,
-    payload,
-    metadata,
-  });
-}
 
 describe('CodexClientSessionService — supervisor identity correlation', () => {
   let bus: IMakaioBus;

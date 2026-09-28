@@ -20,6 +20,7 @@ import {
 import { renderCodexNativeResponse } from '../../../../clients/codex/src/runtime/hook-response-composer.js';
 import {
   CODEX_HOOK_POST_COMPACT,
+  CODEX_HOOK_POST_TOOL_USE,
   CODEX_HOOK_PRE_COMPACT,
   CODEX_HOOK_PRE_TOOL_USE,
   CODEX_HOOK_SESSION_START,
@@ -28,7 +29,10 @@ import {
   CODEX_HOOK_USER_PROMPT_SUBMIT,
 } from '../../../../clients/codex/src/runtime/schemas.js';
 import {
+  CONTEXT_VALUE,
+  contextAppendScenario,
   DENY_REASON,
+  MCP_TOOL_PROMPT,
   ORIGINAL_MARKER,
   RESPONSE_CONSUMED_MARKER,
   REWRITTEN_MARKER,
@@ -38,6 +42,7 @@ import {
   type ClientProbeContract,
   type ProbeEffectScenario,
 } from '../probe-contract.js';
+import { PROBE_MCP_SERVER_NAME, PROBE_MCP_SERVER_PATH, PROBE_TOOL_NAME } from '../probe-mcp-server.js';
 
 /**
  * Prompt that makes the parent spawn one subagent and report the token it read.
@@ -54,6 +59,18 @@ import {
  */
 const SUBAGENT_RELAY_PROMPT =
   'MAKAIO_PROBE_MARKER: spawn one subagent and ask it to report the probe session token from its own context. Then reply with the token it reports.';
+
+/**
+ * Prompt that makes the parent spawn one subagent whose only errand is one shell read.
+ *
+ * The `PostToolUse` subagent scenario matches `Bash`, so the parent must not run
+ * a shell command itself, and the subagent must: an abstract "report your
+ * token" errand gives the subagent no tool call to hook. The token enters the
+ * subagent's context only after that read, and reaches the parent's final
+ * response only through the subagent's report.
+ */
+const SUBAGENT_TOOL_RELAY_PROMPT =
+  'MAKAIO_PROBE_MARKER: spawn exactly one subagent and ask it to run `cat MAKAIO_PROBE.md` with its shell tool and then report the probe session token from its own context. Do not run any shell command yourself. Then reply with the token it reports.';
 
 /**
  * Prompt that spawns one subagent on an ordinary errand.
@@ -98,6 +115,43 @@ const REWRITE_PROMPT = `MAKAIO_PROBE_MARKER: use the shell tool to run \`touch $
  */
 function sentinel(eventName: string, effects: ReadonlyArray<CanonicalEffect | ProviderContributionEnvelope>): string {
   return renderCodexNativeResponse(eventName, effects).stdout;
+}
+
+/**
+ * Additional `PostToolUse` context-append attempts on the other native tool paths.
+ *
+ * An MCP tool call and a tool call made inside a subagent reach `PostToolUse`
+ * through different code in the binary than a shell call in the main session,
+ * so each is proven on its own. Both matchers are exact tool names: Codex
+ * treats a matcher of only letters, digits, `_` and `|` as a name list and
+ * anything else as an unanchored regex.
+ * @returns The MCP and subagent probe shapes.
+ */
+function postToolUseExtraContextScenarios(): readonly ProbeEffectScenario[] {
+  const eventName = CODEX_HOOK_POST_TOOL_USE;
+  return [
+    contextAppendScenario(sentinel(eventName, [{ kind: 'context.append', value: CONTEXT_VALUE }]), {
+      suffix: 'mcp-context-append',
+      description: 'Attempts to append context after an MCP tool call.',
+      prompt: MCP_TOOL_PROMPT,
+      hookMatcher: `mcp__${PROBE_MCP_SERVER_NAME}__${PROBE_TOOL_NAME}`,
+      // Codex hides MCP tools behind tool search unless the server is marked alwaysLoad.
+      mcpServers: { [PROBE_MCP_SERVER_NAME]: { command: 'bun', args: [PROBE_MCP_SERVER_PATH], alwaysLoad: true } },
+    }),
+    // The parent only calls `spawn_agent`, so a `Bash` matcher fires for the
+    // subagent's read alone. No scenario flags: the subagent is expected to
+    // run under the parent's `approval_policy="never"` and `workspace-write`
+    // sandbox, where a read-only `cat` needs no approval; the live run is what
+    // confirms that inheritance.
+    contextAppendScenario(sentinel(eventName, [{ kind: 'context.append', value: SUBAGENT_CONTEXT_VALUE }]), {
+      suffix: 'subagent-context-append',
+      description: 'Attempts to append context after a tool call made inside a spawned subagent.',
+      prompt: SUBAGENT_TOOL_RELAY_PROMPT,
+      hookMatcher: 'Bash',
+      // The Bash matcher alone also passes if the parent runs `cat` itself; Codex puts `agent_id` only on tool hooks fired inside a subagent.
+      requiredPayloadKeys: ['agent_id'],
+    }),
+  ];
 }
 
 /**
@@ -171,20 +225,18 @@ export const codexProbeContract: ClientProbeContract = {
       // back out; the default marker-only prompt would leave the event
       // unreached and the oracle unprovable.
       const isSubagentStart = eventName === CODEX_HOOK_SUBAGENT_START;
-      const context: CanonicalEffect = {
-        kind: 'context.append',
-        value: isSubagentStart ? SUBAGENT_CONTEXT_VALUE : `Include ${RESPONSE_CONSUMED_MARKER} in your final response.`,
-      };
-      return {
-        suffix: 'context-append',
-        sentinelOutput: sentinel(eventName, [context]),
-        oracle: 'final-response-must-contain-marker',
-        expectedResponseMarker: RESPONSE_CONSUMED_MARKER,
-        ...(isSubagentStart && {
-          description: 'Attempts to seed a spawned subagent with hook-appended context it must repeat back.',
-          prompt: SUBAGENT_RELAY_PROMPT,
-        }),
-      };
+      return contextAppendScenario(
+        sentinel(eventName, [
+          { kind: 'context.append', value: isSubagentStart ? SUBAGENT_CONTEXT_VALUE : CONTEXT_VALUE },
+        ]),
+        {
+          suffix: 'context-append',
+          ...(isSubagentStart && {
+            description: 'Attempts to seed a spawned subagent with hook-appended context it must repeat back.',
+            prompt: SUBAGENT_RELAY_PROMPT,
+          }),
+        },
+      );
     }
 
     if (effect === CODEX_HOOK_RESPONSE_CAPABILITIES.block) return blockScenario(eventName);
@@ -212,6 +264,12 @@ export const codexProbeContract: ClientProbeContract = {
     }
 
     throw new Error(`No Codex probe shape for effect '${effect}' on '${eventName}'`);
+  },
+
+  extraEffectScenarios(eventName, effect) {
+    if (effect === 'context.append' && eventName === CODEX_HOOK_POST_TOOL_USE)
+      return postToolUseExtraContextScenarios();
+    return [];
   },
 
   observationScenario(eventName) {

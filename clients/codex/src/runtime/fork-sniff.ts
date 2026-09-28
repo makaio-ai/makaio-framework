@@ -12,11 +12,13 @@
  *
  * The `SessionStart` hook payload has no lineage field at all: it carries
  * `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `model`,
- * `permission_mode` and `source` — nothing else. A fork also reports
- * `source: 'startup'`, exactly like a brand-new thread, so the hook alone
- * cannot distinguish the two. `transcript_path` points at the rollout file
- * the CLI has just materialized for the starting thread, which makes the
- * rollout head the only lineage source available at session-start time.
+ * `permission_mode` and `source` — nothing else. Since Codex `0.158.0` a fork
+ * reports `source: 'fork'`, so the hook tells *that* a thread is a fork but not
+ * *whose* fork it is. `transcript_path` points at the rollout file the CLI has
+ * just materialized for the starting thread; the sniff confirms the parent from
+ * that rollout's first `session_meta` line, which makes the rollout head the
+ * only lineage source available at session-start time. An ephemeral fork has no
+ * rollout file (`transcript_path: null`), so its parent cannot be recovered.
  *
  * ## Detection invariant
  *
@@ -29,8 +31,10 @@
  * - `forked_from_id` absent (or equal to the own id, which would be a
  *   self-reference and is never a usable parent) → no fork signal.
  * - No parseable `session_meta` inside the window → inconclusive; return
- *   `undefined`. Fork registration is fill-once on the ingestion side, so a
- *   guessed parent would be permanently wrong while deferring is safe.
+ *   `undefined`. The caller then reports the start as `'fresh'` without a
+ *   parent instead of guessing one: fork lineage is existing-wins at
+ *   ingestion, so a guessed parent would stick, while an unset parent can
+ *   still be filled by a later import.
  *
  * Anchoring the window at the start of the file is what makes the rule sound
  * under a byte cap: the decisive record is the first one, so no earlier record

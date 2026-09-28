@@ -1,4 +1,4 @@
-/** Deterministic Codex 0.144.1 hook-response composition. @packageDocumentation */
+/** Deterministic Codex 0.158.0 hook-response composition. @packageDocumentation */
 import { isDeepStrictEqual } from 'node:util';
 import { CANONICAL_HOOK_RESPONSE_CAPABILITIES } from '@makaio/contracts/client';
 import type { CanonicalEffect, ProviderContributionEnvelope } from '@makaio/contracts/client';

@@ -217,6 +217,42 @@ export function buildClaudeCodeCommand(params: {
   };
 }
 
+/** Server names that are safe as one bare segment of a Codex `--config` dotted key. */
+const CODEX_MCP_SERVER_NAME = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Translates the scenario's MCP servers into Codex `--config` overrides.
+ *
+ * Codex has no `--mcp-config` file; each override value is parsed as TOML, and
+ * a JSON string literal is a valid TOML basic string. Every server's tools are
+ * pre-approved (`default_tools_approval_mode = "approve"`): under
+ * `approval_policy = "never"` and a `workspace-write` sandbox, Codex denies
+ * any MCP call that needs approval, which is every tool without a read-only
+ * annotation. `alwaysLoad` maps to `omit_tools_from = ["deferred"]`, which
+ * keeps the tools in the initial tool list instead of behind tool search.
+ * @param scenario - Scenario whose `mcpServers` are translated.
+ * @returns `--config` argument pairs, empty when the scenario declares no servers.
+ */
+function codexMcpServerOverrides(scenario: ProbeScenario): readonly string[] {
+  const overrides: string[] = [];
+  for (const [name, server] of Object.entries(scenario.mcpServers ?? {})) {
+    if (!CODEX_MCP_SERVER_NAME.test(name)) {
+      throw new Error(`Scenario "${scenario.id}" declares MCP server "${name}", which is not a bare Codex config key`);
+    }
+    const key = `mcp_servers.${name}`;
+    overrides.push(
+      '--config',
+      `${key}.command=${JSON.stringify(server.command)}`,
+      '--config',
+      `${key}.args=[${server.args.map((arg) => JSON.stringify(arg)).join(', ')}]`,
+      '--config',
+      `${key}.default_tools_approval_mode="approve"`,
+      ...(server.alwaysLoad === true ? ['--config', `${key}.omit_tools_from=["deferred"]`] : []),
+    );
+  }
+  return overrides;
+}
+
 /**
  * Constructs documented Codex non-interactive invocation arguments.
  * @param params - Isolated executable, project, scenario, and child environment.
@@ -244,6 +280,7 @@ export function buildCodexCommand(params: {
       '--cd',
       projectDir,
       '--skip-git-repo-check',
+      ...codexMcpServerOverrides(scenario),
       // Scenario-owned configuration precedes the positional prompt, which
       // `codex exec` requires last.
       ...scenarioCliArgs(scenario, CODEX_RESERVED_FLAGS),

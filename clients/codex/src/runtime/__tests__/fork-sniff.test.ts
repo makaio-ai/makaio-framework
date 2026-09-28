@@ -5,7 +5,7 @@
  * bounded I/O wrapper ({@link sniffRolloutFork}) against real temp files.
  *
  * The synthetic rollout fixtures mirror the on-disk shape Codex writes at the
- * pinned `rust-v0.144.1` source: one JSON object per line, the thread's own
+ * pinned `rust-v0.158.0` source: one JSON object per line, the thread's own
  * metadata record first, ancestor records copied in afterwards.
  */
 
@@ -14,33 +14,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sniffRolloutFork, sniffRolloutForkLineage, SNIFF_MAX_BYTES } from '../fork-sniff.js';
+import { rolloutMetaLine } from './rollout-fixtures.test-support.js';
 
 const CHILD_THREAD_ID = '0199b0d1-1111-7000-8000-000000000001';
 const PARENT_THREAD_ID = '0199b0d1-2222-7000-8000-000000000002';
 const GRANDPARENT_THREAD_ID = '0199b0d1-3333-7000-8000-000000000003';
-
-/**
- * Build a rollout `session_meta` line as Codex serializes it.
- * @param threadId - Thread id of the record owner
- * @param forkedFromId - Parent thread id, omitted for a root thread
- * @returns Serialized JSONL line
- */
-function metaLine(threadId: string, forkedFromId?: string): string {
-  return JSON.stringify({
-    timestamp: '2026-09-16T23:09:48.711Z',
-    type: 'session_meta',
-    payload: {
-      session_id: threadId,
-      id: threadId,
-      ...(forkedFromId !== undefined && { forked_from_id: forkedFromId }),
-      timestamp: '2026-09-16T23:09:48.711Z',
-      cwd: '/workspace',
-      originator: 'codex_cli_rs',
-      cli_version: '0.144.1',
-      source: 'cli',
-    },
-  });
-}
 
 /**
  * Build a non-metadata rollout line.
@@ -57,7 +35,7 @@ function responseLine(text: string): string {
 
 describe('sniffRolloutForkLineage (pure core)', () => {
   it('reports the parent when the own session_meta names a foreign fork source', () => {
-    const lines = [metaLine(CHILD_THREAD_ID, PARENT_THREAD_ID), responseLine('inherited turn')];
+    const lines = [rolloutMetaLine(CHILD_THREAD_ID, PARENT_THREAD_ID), responseLine('inherited turn')];
 
     expect(sniffRolloutForkLineage(lines, CHILD_THREAD_ID)).toEqual({
       parentAdapterSessionId: PARENT_THREAD_ID,
@@ -65,7 +43,7 @@ describe('sniffRolloutForkLineage (pure core)', () => {
   });
 
   it('returns undefined for a root thread whose session_meta has no fork source', () => {
-    const lines = [metaLine(CHILD_THREAD_ID), responseLine('first turn')];
+    const lines = [rolloutMetaLine(CHILD_THREAD_ID), responseLine('first turn')];
 
     expect(sniffRolloutForkLineage(lines, CHILD_THREAD_ID)).toBeUndefined();
   });
@@ -75,9 +53,9 @@ describe('sniffRolloutForkLineage (pure core)', () => {
     // parent's and grandparent's records follow as copied history and must not
     // change the verdict.
     const lines = [
-      metaLine(CHILD_THREAD_ID, PARENT_THREAD_ID),
-      metaLine(PARENT_THREAD_ID, GRANDPARENT_THREAD_ID),
-      metaLine(GRANDPARENT_THREAD_ID),
+      rolloutMetaLine(CHILD_THREAD_ID, PARENT_THREAD_ID),
+      rolloutMetaLine(PARENT_THREAD_ID, GRANDPARENT_THREAD_ID),
+      rolloutMetaLine(GRANDPARENT_THREAD_ID),
     ];
 
     expect(sniffRolloutForkLineage(lines, CHILD_THREAD_ID)).toEqual({
@@ -88,19 +66,19 @@ describe('sniffRolloutForkLineage (pure core)', () => {
   it('returns undefined when the copied ancestor record is the only fork marker', () => {
     // Own record is root; the ancestor record below it belongs to a different
     // thread and must never be read as this thread's lineage.
-    const lines = [metaLine(CHILD_THREAD_ID), metaLine(PARENT_THREAD_ID, GRANDPARENT_THREAD_ID)];
+    const lines = [rolloutMetaLine(CHILD_THREAD_ID), rolloutMetaLine(PARENT_THREAD_ID, GRANDPARENT_THREAD_ID)];
 
     expect(sniffRolloutForkLineage(lines, CHILD_THREAD_ID)).toBeUndefined();
   });
 
   it('treats a self-referencing fork source as no signal', () => {
-    const lines = [metaLine(CHILD_THREAD_ID, CHILD_THREAD_ID)];
+    const lines = [rolloutMetaLine(CHILD_THREAD_ID, CHILD_THREAD_ID)];
 
     expect(sniffRolloutForkLineage(lines, CHILD_THREAD_ID)).toBeUndefined();
   });
 
   it('skips blank and malformed lines before the metadata record', () => {
-    const lines = ['', '   ', 'not json at all', metaLine(CHILD_THREAD_ID, PARENT_THREAD_ID)];
+    const lines = ['', '   ', 'not json at all', rolloutMetaLine(CHILD_THREAD_ID, PARENT_THREAD_ID)];
 
     expect(sniffRolloutForkLineage(lines, CHILD_THREAD_ID)).toEqual({
       parentAdapterSessionId: PARENT_THREAD_ID,
@@ -157,8 +135,8 @@ describe('sniffRolloutFork (bounded head read)', () => {
 
   it('detects fork lineage from a real rollout file', async () => {
     const path = await writeRollout('fork.jsonl', [
-      metaLine(CHILD_THREAD_ID, PARENT_THREAD_ID),
-      metaLine(PARENT_THREAD_ID),
+      rolloutMetaLine(CHILD_THREAD_ID, PARENT_THREAD_ID),
+      rolloutMetaLine(PARENT_THREAD_ID),
       responseLine('inherited turn'),
     ]);
 
@@ -168,7 +146,7 @@ describe('sniffRolloutFork (bounded head read)', () => {
   });
 
   it('returns undefined for a root rollout file', async () => {
-    const path = await writeRollout('root.jsonl', [metaLine(CHILD_THREAD_ID), responseLine('first turn')]);
+    const path = await writeRollout('root.jsonl', [rolloutMetaLine(CHILD_THREAD_ID), responseLine('first turn')]);
 
     await expect(sniffRolloutFork(path, CHILD_THREAD_ID)).resolves.toBeUndefined();
   });
@@ -186,7 +164,7 @@ describe('sniffRolloutFork (bounded head read)', () => {
 
   it('still finds the metadata record when the file far exceeds the read window', async () => {
     const filler = Array.from({ length: 400 }, (_, i) => responseLine('x'.repeat(512) + String(i)));
-    const path = await writeRollout('large.jsonl', [metaLine(CHILD_THREAD_ID, PARENT_THREAD_ID), ...filler]);
+    const path = await writeRollout('large.jsonl', [rolloutMetaLine(CHILD_THREAD_ID, PARENT_THREAD_ID), ...filler]);
 
     await expect(sniffRolloutFork(path, CHILD_THREAD_ID)).resolves.toEqual({
       parentAdapterSessionId: PARENT_THREAD_ID,

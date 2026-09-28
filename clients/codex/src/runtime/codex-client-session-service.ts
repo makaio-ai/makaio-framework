@@ -332,8 +332,9 @@ export class CodexClientSessionService extends BaseService {
    *
    * The handler receives request-mode hook payloads and returns a
    * {@link ClientHookHandleResponse} composed by
-   * {@link composeCodexHookResponse}. The pinned Codex `0.144.1` source
-   * parses synchronous responses for all five declared events.
+   * {@link composeCodexHookResponse}. The pinned Codex `0.158.0` source
+   * parses synchronous responses for every event the definition declares
+   * with response capabilities.
    *
    * Extracted from {@link onInit} to keep the init method concise.
    */
@@ -648,47 +649,46 @@ export class CodexClientSessionService extends BaseService {
   }
 
   /**
-   * Enrich a `client.session.started` payload with fork lineage when the
-   * normalizer reported `startMode: 'fresh'` and a rollout path is available.
+   * Resolve fork lineage for a `client.session.started` payload the normalizer
+   * reported with `startMode: 'fork'`.
    *
-   * Codex classifies a fork child next to a brand-new thread: both fire
-   * `SessionStart` with `source: 'startup'`, and the payload carries no
-   * lineage field. The child's rollout file, however, opens with its own
-   * `session_meta` record, and that record names `forked_from_id` — the parent
-   * thread id. This method performs a bounded read of the rollout head to
-   * recover it, upgrading `startMode` from `'fresh'` to `'fork'` and
-   * populating `parentAdapterSessionId`.
+   * Codex `0.158.0` reports a fork child explicitly as `SessionStart` with
+   * `source: 'fork'`, but the payload carries no parent id. The child's rollout
+   * file opens with its own `session_meta` record, and that record names
+   * `forked_from_id` — the parent thread id. This method performs a bounded
+   * read of the rollout head to recover it and populates
+   * `parentAdapterSessionId`.
    *
-   * Only `'fresh'` is sniffed. A resume appends to the *existing* rollout file,
-   * so a resumed fork child would still show its original `forked_from_id`;
+   * When the parent cannot be recovered — no rollout path (an ephemeral fork
+   * reports `transcript_path: null`), an unreadable file, or no
+   * `forked_from_id` — the payload is downgraded to `startMode: 'fresh'`, so a
+   * `'fork'` event never goes out without its parent.
+   *
+   * Only `'fork'` is sniffed. `'startup'` (mapped to `'fresh'`) is only ever a
+   * brand-new thread, and a resume appends to the *existing* rollout file, so a
+   * resumed fork child would still show its original `forked_from_id`;
    * upgrading it to `'fork'` would re-register an already known session instead
    * of letting ingestion rebind it by adapter session id.
    *
    * Runs **after** the managed-session suppression gate (so adapter-managed
    * sessions are already filtered out) and **before** bus emission.
    *
-   * On any sniff error the payload is returned unchanged — hook processing must
-   * never be blocked by a sniff failure.
+   * Sniff errors never throw — hook processing must never be blocked by a
+   * sniff failure; they count as "parent not recovered".
    * @param payload - Normalized `client.session.started` payload
-   * @returns The payload, potentially enriched with fork lineage fields
+   * @returns The payload with fork lineage, the payload downgraded to
+   *   `'fresh'`, or the unchanged payload for any other start mode
    */
   private async enrichForkLineage(payload: ClientSessionStarted): Promise<ClientSessionStarted> {
-    if (
-      payload.startMode !== 'fresh' ||
-      payload.transcriptPath === undefined ||
-      payload.adapterSessionId === undefined
-    ) {
-      return payload;
-    }
+    if (payload.startMode !== 'fork') return payload;
 
-    const sniffResult = await sniffRolloutFork(payload.transcriptPath, payload.adapterSessionId);
-    if (sniffResult === undefined) return payload;
+    const sniffResult =
+      payload.transcriptPath === undefined || payload.adapterSessionId === undefined
+        ? undefined
+        : await sniffRolloutFork(payload.transcriptPath, payload.adapterSessionId);
+    if (sniffResult === undefined) return { ...payload, startMode: 'fresh' };
 
-    return {
-      ...payload,
-      startMode: 'fork',
-      parentAdapterSessionId: sniffResult.parentAdapterSessionId,
-    };
+    return { ...payload, parentAdapterSessionId: sniffResult.parentAdapterSessionId };
   }
 }
 

@@ -31,13 +31,23 @@ export interface CandidateHookEventShape {
   readonly mode: 'event' | 'request';
 }
 
-/** One stdio MCP server entry of a scenario's Claude Code `--mcp-config` file. */
+/**
+ * One stdio MCP server a scenario starts.
+ *
+ * Claude Code receives it as an entry of the scenario's `--mcp-config` file;
+ * Codex receives it as `--config mcp_servers.<name>.*` overrides.
+ */
 export interface ProbeMcpServerConfig {
   /** Executable the client spawns for the server. */
   readonly command: string;
   /** Arguments passed to {@link ProbeMcpServerConfig.command}. */
   readonly args: readonly string[];
-  /** Claude Code: load the server's tools up front instead of deferring them behind `ToolSearch`. */
+  /**
+   * Load the server's tools up front instead of deferring them behind tool search.
+   *
+   * Claude Code: written through as `alwaysLoad` (instead of `ToolSearch`).
+   * Codex: mapped to `omit_tools_from = ["deferred"]` for the server.
+   */
   readonly alwaysLoad?: boolean;
 }
 
@@ -62,18 +72,24 @@ export interface ProbeScenario {
   /** Extra provider-native CLI arguments required to reach this scenario's event. */
   readonly cliArgs?: readonly string[];
   /**
-   * Claude Code hook `matcher` for the scenario's hook entry.
+   * Hook `matcher` for the scenario's hook entry, in Claude Code `settings.json`
+   * and Codex `hooks.json` alike.
    *
    * Absent means no matcher: the hook fires on every invocation of the event.
-   * Claude Code only; a Codex scenario carrying one is refused.
+   * Codex treats a value of only letters, digits, `_` and `|` as an exact
+   * `|`-separated name list and anything else as an unanchored regex; its tool
+   * names differ from Claude Code's (`Bash`, `apply_patch`, `spawn_agent`,
+   * `mcp__<server>__<tool>`, with `Write`/`Edit`/`Agent` accepted as aliases).
    */
   readonly hookMatcher?: string;
   /**
-   * MCP servers the harness writes into the scenario's `--mcp-config` file.
+   * MCP servers the scenario starts: written into Claude Code's `--mcp-config`
+   * file, or passed to Codex as `--config mcp_servers.<name>.*` overrides with
+   * the server's tools pre-approved.
    *
    * Keyed by server name, which is also the `mcp__<name>__*` prefix of its
-   * tools in {@link ProbeScenario.allowedTools}. Claude Code only; a Codex
-   * scenario carrying servers is refused.
+   * tools in both clients' hook payloads and in Claude Code's
+   * {@link ProbeScenario.allowedTools}.
    */
   readonly mcpServers?: Readonly<Record<string, ProbeMcpServerConfig>>;
   /** Exactly one declared hook event attempted by this scenario. */

@@ -31,12 +31,12 @@ export const clientDefinition = createClientDefinition({
   description: 'OpenAI Codex CLI — an agentic coding assistant',
   binary: {
     name: 'codex',
-    supportedVersions: '0.144.1',
+    supportedVersions: '0.158.0',
   },
   managedInstall: {
     type: 'npm',
     package: '@openai/codex',
-    version: '0.144.1',
+    version: '0.158.0',
   },
   versionCommand: {
     executable: {
@@ -137,7 +137,7 @@ export const clientDefinition = createClientDefinition({
         name: 'SubagentStart',
         frameworkSubject: 'client.session.subagent.started',
         // `context.append` lands in the *subagent's* context window, not the
-        // parent's — proven live against pinned 0.144.1, see
+        // parent's — proven live against pinned 0.158.0, see
         // `runtime/__tests__/fixtures/hook-contracts/probe/subagent-start-context-append.json`.
         // Subagent creation cannot be refused (`continue: false` is parsed but
         // ignored), so no block capability is declared.
@@ -165,7 +165,7 @@ export const clientDefinition = createClientDefinition({
         name: 'PermissionRequest',
         // No frameworkSubject: fires when Codex requests tool-use permission
         // from the user. Raw ingress only — the response surface is not yet
-        // proven against pinned 0.144.1 source, so no capability is declared.
+        // proven against pinned 0.158.0 source, so no capability is declared.
       },
     ],
   },

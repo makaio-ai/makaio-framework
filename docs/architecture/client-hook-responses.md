@@ -118,7 +118,7 @@ for that event — an existing `observer-only` capture is not counter-evidence.
 - `UserPromptSubmit` is unique in producing two normalized events:
   `client.session.turn.started` followed by `client.session.userPrompt.submitted`.
 
-### Codex (CLI v0.144.1)
+### Codex (CLI v0.158.0)
 
 | Event               | Source Candidate | Capabilities | Expected Stdout | Blocking | Framework Subject                          |
 |---------------------|-----------------|--------------|-----------------|----------|--------------------------------------------|
@@ -135,7 +135,7 @@ for that event — an existing `observer-only` capture is not counter-evidence.
 
 #### Codex Notes
 
-- The pinned upstream source tag `rust-v0.144.1` and the captured live binary
+- The pinned upstream source tag `rust-v0.158.0` and the captured live binary
   probes verify synchronous JSON parsing for all six response-capable events. The
   contract intentionally excludes fields the parser rejects,
   including `PostToolUse.updatedMCPToolOutput`, `PreToolUse.permissionDecision: "ask"`,
@@ -159,11 +159,17 @@ for that event — an existing `observer-only` capture is not counter-evidence.
 - `SessionStart` maps the native `source` field to `startMode`. When Codex fires
   a post-compaction `SessionStart` with `source: 'compact'`, the normalizer maps
   it to `startMode: 'compact'`. The `PostCompact` hook fires first (raw ingress
-  only) and does not carry a `frameworkSubject`.
+  only) and does not carry a `frameworkSubject`. A forked thread arrives as
+  `source: 'fork'` (0.144.1 reported `startup`) and maps to `startMode: 'fork'`
+  when the rollout parent lookup finds a parent, falling back to `'fresh'`
+  otherwise.
+- `SessionEnd` and `Interrupt` exist since 0.156 but are deliberately not
+  declared: they have no consumer and no bus subject, and declaring them would
+  spawn a hook process on every interrupt and every session end.
 - `SubagentStop`, `PreCompact`, `PostCompact`, and `PermissionRequest` have no
   `frameworkSubject` --- they remain in the `client:codex` raw namespace and are
   not normalized into `client.session.*` observations.
-- Codex `0.144.1` uses `tool_use_id` for pre/post tool correlation and carries
+- Codex `0.158.0` uses `tool_use_id` for pre/post tool correlation and carries
   the native result in `tool_response`. The generic observed event therefore
   leaves `success` unset rather than guessing from a provider-native value.
 - Codex extracts session identity from `session_id` with fallback to
@@ -176,7 +182,7 @@ for that event — an existing `observer-only` capture is not counter-evidence.
 | Fixture version   | 0.2.0              |
 | Live probe status | captured            |
 | Claude Code CLI   | 2.1.283            |
-| Codex CLI         | 0.144.1            |
+| Codex CLI         | 0.158.0            |
 
 The provider manifests record their exact capture timestamps and event-level
 observations. Claude confirmed `PreToolUse` response consumption and
@@ -594,7 +600,7 @@ explicit approve or deny):
 
 **Blockability:** `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop` support a blocking outcome. `SessionStart` renders it through the native `continue: false` and `stopReason` fields; the other events use their event-specific block form. `SubagentStart` carries `context.append` only and is non-blockable.
 
-**Response capabilities:** The pinned upstream `rust-v0.144.1` source parses
+**Response capabilities:** The pinned upstream `rust-v0.158.0` source parses
 synchronous JSON responses for all six response-capable events. The composer renders context,
 block, permission-deny, and input-update forms while preserving request
 deadlines. Live CLI probes confirm these effects, and parser-rejected fields

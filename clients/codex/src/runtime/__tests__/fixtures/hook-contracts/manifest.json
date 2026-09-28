@@ -1,15 +1,15 @@
 {
   "version": "0.2.0",
   "clientId": "codex",
-  "cliVersion": "0.144.1",
+  "cliVersion": "0.158.0",
   "sourceEvidence": {
     "kind": "pinned-source",
-    "reference": "https://github.com/openai/codex/tree/rust-v0.144.1/codex-rs/hooks",
-    "verifiedAt": "2026-07-21"
+    "reference": "https://github.com/openai/codex/tree/rust-v0.158.0/codex-rs/hooks",
+    "verifiedAt": "2026-09-28"
   },
   "liveProbe": {
     "status": "captured",
-    "capturedAt": "2026-09-16T23:09:48.711Z"
+    "capturedAt": "2026-09-28T11:58:08.141Z"
   },
   "events": {
     "SessionStart": {
