@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "provider": "claude-code",
-  "cliVersion": "2.1.219",
+  "cliVersion": "2.1.283",
   "scenarioId": "pre-tool-use-deny",
   "events": [
     {
@@ -27,7 +27,6 @@
       "managedCommand": "hook handle claude-code",
       "payloadKeys": [
         "cwd",
-        "effort",
         "hook_event_name",
         "permission_mode",
         "prompt_id",

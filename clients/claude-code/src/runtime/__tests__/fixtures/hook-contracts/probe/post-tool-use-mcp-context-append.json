@@ -2,11 +2,11 @@
   "schemaVersion": 4,
   "provider": "claude-code",
   "cliVersion": "2.1.283",
-  "scenarioId": "user-prompt-submit-context-append",
+  "scenarioId": "post-tool-use-mcp-context-append",
   "events": [
     {
-      "eventName": "UserPromptSubmit",
-      "frameworkSubject": "client.session.userPrompt.submitted",
+      "eventName": "PostToolUse",
+      "frameworkSubject": "client.session.tool.post",
       "responseCapabilities": [
         "context.append"
       ],
@@ -23,11 +23,16 @@
       "managedCommand": "hook handle claude-code",
       "payloadKeys": [
         "cwd",
+        "duration_ms",
         "hook_event_name",
+        "mcp_server",
         "permission_mode",
-        "prompt",
         "prompt_id",
         "session_id",
+        "tool_input",
+        "tool_name",
+        "tool_response",
+        "tool_use_id",
         "transcript_path"
       ],
       "sentinelInjected": true
