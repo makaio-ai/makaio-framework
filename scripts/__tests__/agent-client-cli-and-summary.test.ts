@@ -5,7 +5,7 @@ import { summarizeNativeResult } from '../lib/agent-clients/native-result-summar
 import { writeScenarioHookConfig } from '../lib/agent-clients/runner.js';
 import type { ProbeScenario, ScenarioManifest } from '../lib/agent-clients/types.js';
 import { cleanupProbeWorkspace, createProbeWorkspace } from '../lib/agent-clients/workspace.js';
-import { parseProbeArgs, selectScenarios } from '../test-agent-clients.js';
+import { parseProbeArgs, plannedScenarios, selectScenarios } from '../test-agent-clients.js';
 
 const SCENARIO: ProbeScenario = {
   id: 'post-tool-use',
@@ -211,6 +211,32 @@ describe('selectScenarios', () => {
   it('throws on unknown ids and lists the valid ids', () => {
     expect(() => selectScenarios(manifest, ['alpha', 'delta'])).toThrow(
       'Unknown --scenario for claude-code: delta. Valid ids: alpha, beta, gamma',
+    );
+  });
+});
+
+describe('plannedScenarios', () => {
+  const manifest = getManifest('claude-code');
+  const ids = manifest.scenarios.map((scenario) => scenario.id);
+
+  it('has enough Claude scenarios to filter and cap', () => {
+    expect(ids.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('applies the cap after the filter and keeps manifest order', () => {
+    const requested = [ids[4]!, ids[1]!, ids[3]!];
+    const planned = plannedScenarios(manifest, { scenarioIds: requested, maxScenarios: 2 });
+    expect(planned.map((scenario) => scenario.id)).toEqual([ids[1], ids[3]]);
+  });
+
+  it('returns the first maxScenarios scenarios in manifest order without a filter', () => {
+    const planned = plannedScenarios(manifest, { maxScenarios: 3 });
+    expect(planned.map((scenario) => scenario.id)).toEqual(ids.slice(0, 3));
+  });
+
+  it('throws on an unknown id and lists the valid ids', () => {
+    expect(() => plannedScenarios(manifest, { scenarioIds: [ids[0]!, 'no-such-scenario'], maxScenarios: 1 })).toThrow(
+      `Unknown --scenario for claude-code: no-such-scenario. Valid ids: ${ids.join(', ')}`,
     );
   });
 });
