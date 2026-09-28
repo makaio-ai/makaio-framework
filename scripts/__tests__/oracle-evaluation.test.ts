@@ -1,5 +1,6 @@
 /**
- * Unit tests for the pure `evaluateOracle` helper in runner.ts.
+ * Unit tests for the pure `evaluateOracle` helper in runner.ts and the
+ * `firedWithRequiredPayloadKeys` helper in oracle-signals.ts.
  *
  * The capability-proving branch has two sub-cases (mirroring provesDeclaredEffects):
  * - With sentinelEffect: requires responseConsumed AND terminal === 'ok'.
@@ -8,6 +9,7 @@
  *   refusal that legitimately prevents the model from completing).
  */
 import { describe, expect, it } from 'vitest';
+import { firedWithRequiredPayloadKeys } from '../lib/agent-clients/oracle-signals.js';
 import { evaluateOracle } from '../lib/agent-clients/runner.js';
 
 // Minimal scenario shapes required by evaluateOracle.
@@ -219,5 +221,35 @@ describe('evaluateOracle — capture-only branch (unchanged)', () => {
         responseConsumed: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe('firedWithRequiredPayloadKeys', () => {
+  it('passes when no keys are required and the hook fired', () => {
+    expect(firedWithRequiredPayloadKeys(undefined, [['session_id']])).toBe(true);
+  });
+
+  it('fails when no keys are required but the hook did not fire', () => {
+    expect(firedWithRequiredPayloadKeys(undefined, [])).toBe(false);
+  });
+
+  it('fails when keys are required but the hook did not fire', () => {
+    expect(firedWithRequiredPayloadKeys(['agent_id'], [])).toBe(false);
+  });
+
+  it('passes when the only invocation carries the required key', () => {
+    expect(firedWithRequiredPayloadKeys(['agent_id'], [['agent_id', 'tool_name']])).toBe(true);
+  });
+
+  it('fails when one invocation lacks the required key (the parent ran the tool itself)', () => {
+    expect(firedWithRequiredPayloadKeys(['agent_id'], [['agent_id'], ['tool_name']])).toBe(false);
+  });
+
+  it('fails when an invocation carries only some of the required keys', () => {
+    expect(firedWithRequiredPayloadKeys(['agent_id', 'agent_type'], [['agent_id']])).toBe(false);
+  });
+
+  it('passes when an empty key list is required and the hook fired', () => {
+    expect(firedWithRequiredPayloadKeys([], [['x']])).toBe(true);
   });
 });
