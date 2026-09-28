@@ -36,8 +36,10 @@ import type {
   ScenarioManifest,
 } from './lib/agent-clients/index.js';
 
-const DEFAULT_MAX_SCENARIOS = 16;
-const DEFAULT_MAX_WALL_CLOCK_SECONDS = 300;
+const DEFAULT_MAX_SCENARIOS = 20;
+// 1200 s: the Claude manifest runs 17 scenarios with timeouts of up to 60 s each, which
+// exceeds the former 300 s budget (FACT-88 adds the MCP PostToolUse scenario).
+const DEFAULT_MAX_WALL_CLOCK_SECONDS = 1200;
 const VALID_PROVIDERS = new Set<ProviderId>(['claude-code', 'codex']);
 
 /**
