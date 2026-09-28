@@ -31,7 +31,7 @@ import {
   type BusTransport,
 } from '@makaio/bus-core';
 import { collectContributions, type RegisteredContributor } from '../client-hook-response-collector.js';
-import { ClientHookHandleResponseSchema, RawClientHookPayloadSchema } from '../client-session-observed-semantics.js';
+import { ClientHookHandleResponseSchema, RawClientHookPayloadSchema } from '../hook-subjects.js';
 
 // ---------------------------------------------------------------------------
 // Test namespace — mirrors the real client:* hook.handle registration

@@ -20,11 +20,7 @@
 
 import { MakaioBus } from '@makaio/bus-core';
 import { createBusNamespace, hostLocalRequest, type SchemaRecord } from '@makaio/core';
-import {
-  canonicalizeClientId,
-  ClientHookHandleResponseSchema,
-  RawClientHookPayloadSchema,
-} from './client-session-observed-semantics.js';
+import { canonicalizeClientId, ClientHookHandleResponseSchema, RawClientHookPayloadSchema } from './hook-subjects.js';
 
 const RESERVED_CLIENT_HOOK_SUBJECTS = new Set(['hook.received', 'hook.handle']);
 

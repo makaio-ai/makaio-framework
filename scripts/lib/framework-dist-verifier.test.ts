@@ -2,7 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { BUNDLED_RUNTIME_ASSETS, verifyFrameworkDist } from './framework-dist-verifier.js';
+import {
+  BUNDLED_RUNTIME_ASSETS,
+  LIGHT_DIST_ENTRY_ALLOWED_IMPORTS,
+  verifyFrameworkDist,
+} from './framework-dist-verifier.js';
 
 /**
  * Writes a JSON file.
@@ -512,6 +516,40 @@ describe('verifyFrameworkDist', () => {
         exportKey: BUNDLED_RUNTIME_ASSETS[0],
         kind: 'runtime-asset-not-file',
         target: BUNDLED_RUNTIME_ASSETS[0],
+      }),
+    ]);
+  });
+
+  it('accepts a light entry that imports only its allowed specifiers', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {}, dependencies: { zod: '4.4.3' } });
+    writeBuiltFile(join(root, 'dist/clients/hook-subjects.mjs'), 'import{z as e}from"zod";export{e as z};');
+
+    const result = verifyFrameworkDist(root, { migrationChains: [] });
+
+    expect(Object.keys(LIGHT_DIST_ENTRY_ALLOWED_IMPORTS)).toContain('dist/clients/hook-subjects.mjs');
+    expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
+  });
+
+  it('reports shared-chunk and other imports in a light entry', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {}, dependencies: { zod: '4.4.3' } });
+    writeBuiltFile(join(root, 'dist/shared-chunk.mjs'));
+    writeBuiltFile(
+      join(root, 'dist/light/entry.mjs'),
+      'import{z as e}from"zod";import{fixture as t}from"../shared-chunk.mjs";export{e as z,t};',
+    );
+
+    const result = verifyFrameworkDist(root, {
+      migrationChains: [],
+      lightEntries: { 'dist/light/entry.mjs': ['zod'] },
+    });
+
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: '../shared-chunk.mjs',
+        kind: 'light-entry-import',
+        target: 'dist/light/entry.mjs',
       }),
     ]);
   });

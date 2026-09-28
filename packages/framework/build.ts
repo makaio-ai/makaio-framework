@@ -377,8 +377,10 @@ writeFrameworkDistBuildStamp({
 
 // Fail the build when an exports-map target is missing, a built module
 // self-imports a subpath the exports map does not expose, a built module
-// imports a bare external the manifest does not declare, or a bundled
-// migration chain or required runtime asset is missing or inconsistent.
+// imports a bare external the manifest does not declare, a bundled
+// migration chain or required runtime asset is missing or inconsistent, or a
+// light entry loaded by short-lived CLI hook processes on every call imports
+// more than its allowlist (`LIGHT_DIST_ENTRY_ALLOWED_IMPORTS`, e.g. a shared chunk).
 // These defects only surface at a consumer's boot otherwise. A runtime-only build skips declaration
 // emission, so only exports-map declaration targets are exempted — every
 // runtime check still runs in full.

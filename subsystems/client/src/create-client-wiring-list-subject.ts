@@ -15,7 +15,7 @@
  */
 
 import type { RequestMessagePayload, SubjectDefinition, SubjectRecord } from '@makaio/core';
-import { canonicalizeClientId } from './client-session-observed-semantics.js';
+import { canonicalizeClientId } from './hook-subjects.js';
 import type { ClientWiringEntry } from './wiring-schemas.js';
 
 // ---------------------------------------------------------------------------

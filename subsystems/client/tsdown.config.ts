@@ -6,5 +6,6 @@ export default defineConfig({
   entry: {
     index: './src/index.ts',
     'managed-install': './src/managed-install.ts',
+    'hook-subjects': './src/hook-subjects.ts',
   },
 });
