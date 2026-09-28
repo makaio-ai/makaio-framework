@@ -108,6 +108,7 @@ export { widenTool } from './widen-tool.js';
 export {
   FILE_ACCESS_RULES_KEY,
   extractToolFilePath,
+  extractToolRawFilePath,
   type FileAccessRuleProvider,
   type FileAccessRules,
 } from './file-access.js';

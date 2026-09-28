@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { BaseService } from '@makaio/service-base';
 import {
@@ -10,11 +11,13 @@ import {
   type MakaioSessionAgent,
 } from '@makaio/contracts';
 import { AgentStorageSubjects, SessionStorageSubjects } from '../session/index.js';
-import { extractToolFilePath } from '@makaio/tools-core';
+import { extractToolFilePath, extractToolRawFilePath } from '@makaio/tools-core';
 import {
   applyCapabilityOverrides,
+  canonicalizePath,
   enrichApprovalRequest,
   evaluateToolGrant,
+  isCanonicalPathWithin,
   resolveEnrichedBasePolicy,
   resolveFileAccessContext,
   resolveHarnessLevelPolicy,
@@ -129,8 +132,10 @@ export class ToolApprovalService extends BaseService {
 
       // The agent's tool lists deny unlisted calls ahead of any allowing policy.
       // The lists live only on the agent row: when the lookup fails, or no row exists
-      // (no agent storage, ephemeral start, swallowed best-effort row write, first turn
-      // before the row is written), this layer yields `none`.
+      // (host without agent storage, ephemeral start, swallowed best-effort row write), this
+      // layer yields `none`. Both framework start paths (lead start, attach start) persist the
+      // row before adapter dispatch, so the first turn already finds it; a row may still lack
+      // `cwd` when the caller named none (the file-access check above fails closed on that).
       // Only claude-agent-sdk carries its own allowlist gate; claude-code-cli enforces only
       // the denylist and claude-code-tmux neither, so an allowing policy would run an unlisted
       // call unchecked. A lookup error therefore falls back to asking (see below): interactive
@@ -241,7 +246,29 @@ export class ToolApprovalService extends BaseService {
   }
 
   /**
-   * Evaluate `.makaioignore` file access rules before policy cascade handling.
+   * Evaluate `.makaioignore` file access rules and the directory allowlist before policy
+   * cascade handling.
+   *
+   * The rules are tested against both the lexical and the canonical (symlink-resolved)
+   * target, so an in-tree symlink cannot alias a denied path such as `.git/config`. A
+   * target that cannot be canonicalized safely (dangling symlink, non-`ENOENT` error) is
+   * denied; a missing file canonicalizes through its nearest existing ancestor, so a Write
+   * of a new file stays possible. A symlinked cwd itself is not covered: the rules are
+   * cwd-relative, so a canonical spelling outside the lexical cwd is not matched (same
+   * limit as `createPathValidator` in the filesystem extension).
+   *
+   * A raw path argument with a `..` segment (split on `/` and `\`) is denied outright:
+   * `path.resolve` collapses `..` before symlinks are followed, so `link/../config` with
+   * `link -> .git/subdir` would be checked as `<cwd>/config` while the OS opens
+   * `<cwd>/.git/config`. This also denies harmless spellings such as `src/../README.md`.
+   *
+   * The allowlist is `agent.allowedDirectories`, else the profile's. A target whose
+   * canonical path lies outside every entry is denied, so an empty list denies every
+   * native file-tool call with a path, matching the runtime contract and the filesystem
+   * extension's path validator. An absent list (`undefined`) adds no containment. An
+   * agent with a `profileId` but no own list gets `[]` when the profile RPC is unhandled
+   * or fails, so such a host denies all native file-tool calls with a path; hosts without
+   * a profile service set the agent's `allowedDirectories` or leave `profileId` unset.
    * @param payload - Incoming tool approval payload
    * @param context - CWD and directory constraints for rule evaluation
    * @returns Deny message when access should be blocked, otherwise undefined
@@ -253,23 +280,46 @@ export class ToolApprovalService extends BaseService {
     },
     context: FileAccessContext,
   ): Promise<string | undefined> {
-    // Requires agent cwd to resolve file paths and load .makaioignore hierarchy.
-    // When cwd is unavailable, pre-check is skipped and downstream checks apply.
-    if (!this.options.fileAccessRuleProvider || !context.cwd) {
+    if (!this.options.fileAccessRuleProvider) {
       return undefined;
     }
 
-    const filePath = extractToolFilePath(payload.toolName, payload.args, context.cwd);
+    // The rules hang off the agent cwd. Without one (no agent row, a failed lookup, or a
+    // row whose caller named no cwd) a file-tool call cannot be evaluated and fails closed,
+    // so a later full-access override or tool-list grant cannot allow it. The root base
+    // only detects whether the call names a path; it is never evaluated.
+    const filePath = extractToolFilePath(payload.toolName, payload.args, context.cwd ?? path.sep);
     if (!filePath) {
       return undefined;
     }
+    if (!context.cwd) {
+      return 'Access denied: file access rules could not be evaluated: agent has no working directory';
+    }
+    const rawPath = extractToolRawFilePath(payload.toolName, payload.args);
+    if (rawPath?.split(/[\\/]/).includes('..')) {
+      return `Access denied: '${rawPath}' contains a '..' segment; file access rules need a path without parent references`;
+    }
 
+    const canonicalPath = canonicalizePath(filePath);
     try {
       const rules = await this.options.fileAccessRuleProvider(context.cwd, context.allowedDirectories);
-      return rules.isDenied(filePath) ? `Access denied: '${filePath}' is restricted by .makaioignore rules` : undefined;
+      if (
+        rules.isDenied(filePath) ||
+        (canonicalPath !== undefined && canonicalPath !== filePath && rules.isDenied(canonicalPath))
+      ) {
+        return `Access denied: '${filePath}' is restricted by .makaioignore rules`;
+      }
     } catch {
       return 'Access denied: file access rules could not be evaluated';
     }
+    if (canonicalPath === undefined) {
+      return `Access denied: file access rules could not be evaluated: '${filePath}' cannot be resolved safely`;
+    }
+    const { allowedDirectories } = context;
+    if (allowedDirectories !== undefined && !isCanonicalPathWithin(allowedDirectories, canonicalPath, context.cwd)) {
+      return `Access denied: '${filePath}' is outside the agent's allowed directories`;
+    }
+    return undefined;
   }
 
   /**

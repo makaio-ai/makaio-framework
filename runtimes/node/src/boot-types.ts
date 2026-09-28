@@ -19,6 +19,7 @@ import type {
 } from '@makaio/subsystem-workflow-engine';
 import type { PersistedMachineIdentity } from '@makaio/machine-identity';
 import type { ConfigProvider } from '@makaio/providers';
+import type { FileAccessRuleProvider } from '@makaio/tools-core';
 import type { IAdapterConfigRepository } from '@makaio/services-core/adapter-subsystem';
 import type { PostInstallHandler, StrategyDependencies } from '@makaio/subsystem-client';
 import type {
@@ -321,6 +322,48 @@ export interface CoreBootOptions {
    * `MachineIdentity` shape.
    */
   readonly machineIdentity?: PersistedMachineIdentity;
+
+  /**
+   * Host-provided file-access rule provider (`.makaioignore` hierarchy plus
+   * built-in deny list), for example `createMakaioIgnoreProvider()` from
+   * `@makaio/extension-filesystem`.
+   *
+   * When provided, boot binds it into the framework tool registry, which
+   * injects the resolved rules into every tool execution context, and into the
+   * tool approval service, which denies file tool calls whose path argument
+   * names a restricted path (lexical or symlink-resolved) before any approval
+   * policy applies. When omitted, neither enforces file-access rules.
+   *
+   * Scope:
+   * - The patterns apply inside the agent's working directory. With a provider
+   *   configured, the approval service also denies native file-tool calls
+   *   outside the agent's `allowedDirectories` (else the profile's); an empty
+   *   list denies every native file-tool call with a path. Without
+   *   `allowedDirectories` (`undefined`), paths outside the working directory
+   *   are not restricted by this check. An agent with a `profileId` but no own
+   *   list gets an empty list when the profile RPC is unhandled or fails, so a
+   *   host without a profile service denies all native file tools for such
+   *   agents unless it sets the agent's `allowedDirectories`.
+   * - A path argument with a `..` segment is denied, because resolving it
+   *   before following symlinks could alias a restricted path; harmless
+   *   spellings such as `src/../README.md` are denied too.
+   * - `Glob` and `Grep` are checked on their supplied search root only. Without
+   *   a `path` argument they get no file-access check, and files reached
+   *   recursively are not filtered by the patterns; filtering descendants needs
+   *   OS-level isolation (Cyberport FACT-272).
+   * - A symlinked working directory itself is not resolved: the patterns match
+   *   cwd-relative spellings only.
+   * - Only file tools with a path argument are inspected. Shell commands and
+   *   other tools without a path argument are not.
+   * - A known file-tool call from an agent without a working directory is
+   *   denied (fail-closed), because the rules cannot be resolved without one.
+   * - Boot fails when an extension overrides the framework tool registry or
+   *   tool approval package while a provider is configured, since the
+   *   override would drop the provider.
+   * - Workflow-worker tool registries are not covered: they run in separate
+   *   threads or processes and do not receive this provider.
+   */
+  readonly fileAccessRuleProvider?: FileAccessRuleProvider;
 
   /**
    * Host launcher command embedded into client wiring installed from warning actions.

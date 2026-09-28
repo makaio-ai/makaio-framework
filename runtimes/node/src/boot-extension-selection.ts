@@ -9,7 +9,13 @@ import {
   type ExtensionRuntimeSurface,
   type RuntimeEnvironment,
 } from '@makaio/kernel';
-import { frameworkCorePackages, SessionOrchestratorToken } from '@makaio/services-core';
+import {
+  createFrameworkCorePackages,
+  type FrameworkFileAccessOptions,
+  SessionOrchestratorToken,
+  ToolApprovalToken,
+  ToolRegistryToken,
+} from '@makaio/services-core';
 import type { ShutdownStep } from './boot-phase.js';
 import { isExtensionEnabled } from './extension-enablement-store.js';
 import { getExtensionPackageSource } from './extension-package-provenance.js';
@@ -578,20 +584,53 @@ export function shouldLoadDefaultSessionOrchestrator(
  * `runtimeOwnership.sessionOrchestrator`, and boot fails if more than one
  * loaded extension declares that ownership.
  * @param loadedExtensionPackages - Descriptor-loaded executable extension packages.
+ * @param fileAccessOptions - Host file-access rule provider bound into the tool
+ *   registry and tool approval packages; without one the static core set is used.
  * @returns Framework core packages for this boot.
  */
 export function selectFrameworkCorePackages(
   loadedExtensionPackages: ReadonlyArray<RuntimeOwnershipPackageView> | true,
+  fileAccessOptions: FrameworkFileAccessOptions = {},
 ): ReadonlyArray<KernelMakaioExtension> {
-  if (loadedExtensionPackages === true) {
-    return frameworkCorePackages;
+  const corePackages = createFrameworkCorePackages(fileAccessOptions);
+  if (loadedExtensionPackages === true || shouldLoadDefaultSessionOrchestrator(loadedExtensionPackages)) {
+    return corePackages;
   }
 
-  if (shouldLoadDefaultSessionOrchestrator(loadedExtensionPackages)) {
-    return frameworkCorePackages;
-  }
+  return corePackages.filter((pkg) => pkg.name !== SessionOrchestratorToken.name);
+}
 
-  return frameworkCorePackages.filter((pkg) => pkg.name !== SessionOrchestratorToken.name);
+/**
+ * Fail boot when an extension replaces a framework package the host's
+ * file-access rule provider is bound into.
+ *
+ * Every framework core package name can be overridden by a same-name
+ * extension package. The provider is bound only into the framework tool
+ * registry and tool approval packages, so an override of either would drop
+ * file-access enforcement without any signal.
+ * @param mergeableExtensionPackages - Extension packages that survived collision
+ *   resolution and override a framework package when they share its name.
+ * @param fileAccessOptions - Host file-access options for this boot.
+ * @throws Error when a provider is configured and an extension overrides the
+ *   tool registry or tool approval package.
+ */
+export function assertFileAccessPackagesNotOverridden(
+  mergeableExtensionPackages: ReadonlyArray<KernelMakaioExtension>,
+  fileAccessOptions: FrameworkFileAccessOptions,
+): void {
+  if (!fileAccessOptions.fileAccessRuleProvider) {
+    return;
+  }
+  const override = mergeableExtensionPackages.find(
+    (pkg) => pkg.name === ToolRegistryToken.name || pkg.name === ToolApprovalToken.name,
+  );
+  if (override) {
+    throw new Error(
+      `Extension "${override.displayName}" v${override.version} overrides the framework "${override.name}" package, ` +
+        'but boot was given a fileAccessRuleProvider that is bound into that framework package. ' +
+        'Remove or disable the extension, or boot without fileAccessRuleProvider.',
+    );
+  }
 }
 
 /**

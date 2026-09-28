@@ -131,9 +131,12 @@ export function resolveProfileAllowedDirectories(
  * `full-access`/`reject` overrides can short-circuit without running the
  * full approval cascade.
  *
- * Profile-level `allowedDirectories` are derived from the pre-fetched
- * `approval.resolveEnrichedPolicy` RPC result and enforced here as part of the
- * absolute deny floor — ahead of any policy cascade.
+ * The directory allowlist is the agent's `allowedDirectories`, else the profile's (derived
+ * from the pre-fetched `approval.resolveEnrichedPolicy` RPC result). With a provider
+ * configured, the service denies a native file-tool call whose target lies outside the
+ * allowlist as part of the absolute deny floor, ahead of any policy cascade; an empty list
+ * denies every such call. Without an allowlist (`undefined`), paths outside the cwd are not
+ * restricted by this check.
  * @param agent - Pre-fetched agent metadata, or null if unavailable
  * @param rawEnrichedPolicy - Pre-fetched enriched-policy RPC result, or undefined when toolName was absent or no persona/profile is active
  * @param fileAccessRuleProvider - Rule provider; used only as a truthiness gate to skip resolution when absent
@@ -148,11 +151,7 @@ export function resolveFileAccessContext(
     return {};
   }
 
-  let allowedDirectories: string[] | undefined;
-  if ((agent.personaId || agent.profileId) && rawEnrichedPolicy) {
-    allowedDirectories = resolveProfileAllowedDirectories(agent.personaId, agent.profileId, rawEnrichedPolicy);
-  }
-
+  const allowedDirectories = resolveEffectiveAllowedDirectories(agent, rawEnrichedPolicy);
   return { cwd: agent.cwd, ...(allowedDirectories && { allowedDirectories }) };
 }
 
@@ -248,12 +247,13 @@ export function evaluateToolGrant(
 const CWD_DEFAULT_PATH_TOOLS: ReadonlySet<string> = new Set(['Glob', 'Grep']);
 
 /**
- * Resolve the directory allowlist that bounds a tool-list grant.
+ * Resolve the effective directory allowlist: it bounds a tool-list grant and, with a file
+ * access rule provider configured, the file-access deny floor.
  * @param agent - Agent metadata; its `allowedDirectories` take precedence
  * @param rawEnrichedPolicy - Pre-fetched enriched-policy RPC result for the profile fallback
  * @returns Directory allowlist (`[]` allows nothing), or undefined when unrestricted
  */
-function resolveEffectiveAllowedDirectories(
+export function resolveEffectiveAllowedDirectories(
   agent: MakaioSessionAgent,
   rawEnrichedPolicy: RawEnrichedPolicyResult | undefined,
 ): readonly string[] | undefined {
@@ -274,7 +274,7 @@ function resolveEffectiveAllowedDirectories(
  * @param targetPath - Absolute path to canonicalize
  * @returns Canonical absolute path, or undefined when it cannot be resolved safely
  */
-function canonicalizePath(targetPath: string): string | undefined {
+export function canonicalizePath(targetPath: string): string | undefined {
   let existingPath = targetPath;
   while (true) {
     try {
@@ -290,9 +290,35 @@ function canonicalizePath(targetPath: string): string | undefined {
 }
 
 /**
- * Check whether a call's target path lies inside a directory allowlist. Roots and target are
- * canonicalized ({@link canonicalizePath}) before the containment check, matching
- * `createPathValidator` / `isWithinRoot` in the filesystem extension's path validator.
+ * Check whether a canonical target path lies inside a directory allowlist. Each root is
+ * resolved against the cwd and canonicalized ({@link canonicalizePath}) before the
+ * containment check, matching `createPathValidator` / `isWithinRoot` in the filesystem
+ * extension's path validator.
+ * @param allowedDirectories - Directory allowlist; `[]` contains nothing
+ * @param canonicalTarget - Target path already canonicalized with {@link canonicalizePath}
+ * @param cwd - Agent working directory that relative roots resolve against
+ * @returns True when the target lies inside one of the directories
+ */
+export function isCanonicalPathWithin(
+  allowedDirectories: readonly string[],
+  canonicalTarget: string,
+  cwd: string,
+): boolean {
+  const fold = (value: string): string => (process.platform === 'win32' ? value.toLowerCase() : value);
+  return allowedDirectories.some((directory) => {
+    const canonicalRoot = canonicalizePath(path.resolve(cwd, directory));
+    if (canonicalRoot === undefined) return false;
+    const relativePath = path.relative(fold(canonicalRoot), fold(canonicalTarget));
+    return (
+      relativePath === '' ||
+      (relativePath !== '..' && !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath))
+    );
+  });
+}
+
+/**
+ * Check whether a call's target path lies inside a directory allowlist. The target is
+ * canonicalized ({@link canonicalizePath}) and tested with {@link isCanonicalPathWithin}.
  * @param allowedDirectories - Directory allowlist; `[]` contains nothing
  * @param toolName - Native tool name of the call
  * @param args - Tool call input
@@ -313,16 +339,7 @@ function isGrantTargetWithin(
   if (target === null) return false;
   const canonicalTarget = canonicalizePath(target);
   if (canonicalTarget === undefined) return false;
-  const fold = (value: string): string => (process.platform === 'win32' ? value.toLowerCase() : value);
-  return allowedDirectories.some((directory) => {
-    const canonicalRoot = canonicalizePath(path.resolve(cwd, directory));
-    if (canonicalRoot === undefined) return false;
-    const relativePath = path.relative(fold(canonicalRoot), fold(canonicalTarget));
-    return (
-      relativePath === '' ||
-      (relativePath !== '..' && !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath))
-    );
-  });
+  return isCanonicalPathWithin(allowedDirectories, canonicalTarget, cwd);
 }
 
 /**

@@ -30,7 +30,7 @@ import { SessionBridge } from './session/session-bridge.js';
 import { SessionOrchestrator } from './session/session-orchestrator.js';
 import type { ISessionOrchestrator } from './session/session-orchestrator.js';
 import { MakaioSessionService } from './session/session-service.js';
-import { ToolApprovalService } from './tool-approval/tool-approval-service.js';
+import { ToolApprovalService, type ToolApprovalServiceOptions } from './tool-approval/tool-approval-service.js';
 import { ToolRegistry } from './tools/tool-registry.js';
 import { TrayMenuService } from './tray-menu/tray-menu-service.js';
 import { WorkflowBlockRegistry } from './workflow-blocks/workflow-block-registry.js';
@@ -234,24 +234,52 @@ export const observedSessionIngestionPackage: MakaioNodeExtension<IMakaioBus> = 
   create: (ctx) => new ObservedSessionIngestionService(ctx.bus),
 };
 
-/** Package that starts the framework tool registry. */
-export const toolRegistryPackage: MakaioNodeExtension<IMakaioBus> = {
-  name: ToolRegistryToken.name,
-  displayName: 'Tool Registry',
-  version: '0.1.0',
-  critical: true,
-  create: (ctx) => new ToolRegistry({ bus: ctx.bus }),
-};
+/**
+ * Host-supplied file-access rules for the framework tool packages.
+ *
+ * One provider feeds both the tool registry (rules injected into every tool
+ * execution context) and the tool approval service (absolute deny pre-check
+ * ahead of the policy cascade), so both layers enforce the same rules. When
+ * `fileAccessRuleProvider` is omitted, neither package enforces file-access rules.
+ */
+export type FrameworkFileAccessOptions = Pick<ToolApprovalServiceOptions, 'fileAccessRuleProvider'>;
 
-/** Package that starts the framework tool approval service. */
-export const toolApprovalPackage: MakaioNodeExtension<IMakaioBus> = {
-  name: ToolApprovalToken.name,
-  displayName: 'Tool Approval',
-  version: '0.1.0',
-  dependencies: [dep(ToolRegistryToken.name)],
-  critical: true,
-  create: (ctx) => new ToolApprovalService(ctx.bus),
-};
+/**
+ * Create the tool-registry package, optionally bound to a file-access rule provider.
+ * @param options - Optional file-access rule provider for this host.
+ * @returns Tool-registry package.
+ */
+function createToolRegistryPackage(options: FrameworkFileAccessOptions = {}): MakaioNodeExtension<IMakaioBus> {
+  return {
+    name: ToolRegistryToken.name,
+    displayName: 'Tool Registry',
+    version: '0.1.0',
+    critical: true,
+    create: (ctx) => new ToolRegistry({ ...options, bus: ctx.bus }),
+  };
+}
+
+/** Package that starts the framework tool registry without file-access rules. */
+export const toolRegistryPackage: MakaioNodeExtension<IMakaioBus> = createToolRegistryPackage();
+
+/**
+ * Create the tool-approval package, optionally bound to a file-access rule provider.
+ * @param options - Optional file-access rule provider for this host.
+ * @returns Tool-approval package.
+ */
+function createToolApprovalPackage(options: FrameworkFileAccessOptions = {}): MakaioNodeExtension<IMakaioBus> {
+  return {
+    name: ToolApprovalToken.name,
+    displayName: 'Tool Approval',
+    version: '0.1.0',
+    dependencies: [dep(ToolRegistryToken.name)],
+    critical: true,
+    create: (ctx) => new ToolApprovalService(ctx.bus, options),
+  };
+}
+
+/** Package that starts the framework tool approval service without file-access rules. */
+export const toolApprovalPackage: MakaioNodeExtension<IMakaioBus> = createToolApprovalPackage();
 
 /** Package that starts the framework tray menu service. */
 export const trayMenuPackage: MakaioNodeExtension<IMakaioBus> = {
@@ -331,34 +359,68 @@ export function createModelRegistryPackage(fetcher: IModelRegistryFetcher): Maka
  * packages so the ordering the canonical-model service needs is the
  * coordinator's to satisfy rather than the array order's to preserve.
  */
-export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus>> = [
-  artifactSchemaRegistryPackage,
-  artifactLifecycleHookRegistryPackage,
-  facetNamespaceRegistryPackage,
-  surfaceBindingRegistryPackage,
-  materializationOperationCoordinatorPackage,
-  artifactViewBuilderRegistryPackage,
-  artifactViewServicePackage,
-  sessionStoragePackage,
-  sessionBridgePackage,
-  sessionClientAccountLinkingPackage,
-  sessionPackage,
-  sessionOrchestratorPackage,
-  observedSessionIngestionPackage,
-  subagentServicePackage,
+export const frameworkCorePackages: ReadonlyArray<MakaioNodeExtension<IMakaioBus>> = buildFrameworkCorePackages(
   toolRegistryPackage,
   toolApprovalPackage,
-  trayMenuPackage,
-  capabilityPackage,
-  harnessPackage,
-  canonicalModelPackage,
-  frameworkShellWindowPackage,
-  workflowBlockRegistryPackage,
-  reactionRegistryPackage,
-  automationTriggerRegistryPackage,
-  automationTriggerBindingRuntimePackage,
-  automationTriggerBuiltinsPackage,
-  transitionPipelinePackage,
-  gitPackage,
-  fileSystemPackage,
-];
+);
+
+/**
+ * Framework core packages for a host, with the tool packages bound to the
+ * host's file-access rule provider when one is supplied.
+ *
+ * Without a provider this returns {@link frameworkCorePackages} itself, so the
+ * composition stays identical to the static set.
+ * @param options - Optional file-access rule provider for this host.
+ * @returns Framework core packages in {@link frameworkCorePackages} order.
+ */
+export function createFrameworkCorePackages(
+  options: FrameworkFileAccessOptions = {},
+): ReadonlyArray<MakaioNodeExtension<IMakaioBus>> {
+  if (!options.fileAccessRuleProvider) {
+    return frameworkCorePackages;
+  }
+  return buildFrameworkCorePackages(createToolRegistryPackage(options), createToolApprovalPackage(options));
+}
+
+/**
+ * Assemble the framework core package list around the given tool packages.
+ * @param toolRegistry - Tool-registry package to compose.
+ * @param toolApproval - Tool-approval package to compose.
+ * @returns Framework core packages.
+ */
+function buildFrameworkCorePackages(
+  toolRegistry: MakaioNodeExtension<IMakaioBus>,
+  toolApproval: MakaioNodeExtension<IMakaioBus>,
+): ReadonlyArray<MakaioNodeExtension<IMakaioBus>> {
+  return [
+    artifactSchemaRegistryPackage,
+    artifactLifecycleHookRegistryPackage,
+    facetNamespaceRegistryPackage,
+    surfaceBindingRegistryPackage,
+    materializationOperationCoordinatorPackage,
+    artifactViewBuilderRegistryPackage,
+    artifactViewServicePackage,
+    sessionStoragePackage,
+    sessionBridgePackage,
+    sessionClientAccountLinkingPackage,
+    sessionPackage,
+    sessionOrchestratorPackage,
+    observedSessionIngestionPackage,
+    subagentServicePackage,
+    toolRegistry,
+    toolApproval,
+    trayMenuPackage,
+    capabilityPackage,
+    harnessPackage,
+    canonicalModelPackage,
+    frameworkShellWindowPackage,
+    workflowBlockRegistryPackage,
+    reactionRegistryPackage,
+    automationTriggerRegistryPackage,
+    automationTriggerBindingRuntimePackage,
+    automationTriggerBuiltinsPackage,
+    transitionPipelinePackage,
+    gitPackage,
+    fileSystemPackage,
+  ];
+}

@@ -104,6 +104,7 @@ import { loadExtensionEnablementStore } from './extension-enablement-store.js';
 import { createBootModelRegistryFetcher } from './boot-model-registry.js';
 import { ensureFrameworkPackageLink } from './framework-package-link.js';
 import {
+  assertFileAccessPackagesNotOverridden,
   buildRuntimeEnvironment,
   collectHostCleanups,
   composeBootExtensionSelection,
@@ -491,6 +492,9 @@ export async function bootMakaioRuntimeCore(
       frameworkPackageNames,
     });
     const { effectiveEnabledBootPackages, effectiveEnabledPackageNames, mergeableExtensionPackages } = selection;
+    assertFileAccessPackagesNotOverridden(mergeableExtensionPackages, {
+      fileAccessRuleProvider: options.fileAccessRuleProvider,
+    });
 
     const busUrl = buildLocalBusUrl(boundHost, boundPort);
 
@@ -622,7 +626,9 @@ export async function bootMakaioRuntimeCore(
     frameworkPackages.push(
       adapterSubsystemPackage,
       nativeSessionSupervisorPackage,
-      ...selectFrameworkCorePackages(effectiveEnabledBootPackages),
+      ...selectFrameworkCorePackages(effectiveEnabledBootPackages, {
+        fileAccessRuleProvider: options.fileAccessRuleProvider,
+      }),
       createWorkflowEnginePackage(workflowRunnerPackageOptions),
       createModelRegistryPackage(modelRegistryFetcher),
       logImportRegistryPackage,

@@ -176,7 +176,8 @@ function buildDenyPredicate(
   return (absolutePath: string): boolean => {
     const relFromCwd = path.relative(cwd, absolutePath);
     // rel === '' means absolutePath is exactly cwd — not a file, skip.
-    // outside cwd paths are governed by allowedDirectories only.
+    // Paths outside the cwd never match the patterns; the tool approval service denies native
+    // file-tool calls outside the agent's allowedDirectories, and without them leaves such paths unrestricted.
     if (relFromCwd === '' || isOutsideCwd(relFromCwd)) {
       return false;
     }
