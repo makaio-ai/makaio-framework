@@ -14,8 +14,10 @@ import { AgentStorageSubjects, SessionStorageSubjects } from '../session/index.j
 import { extractToolFilePath } from '@makaio/tools-core';
 import {
   applyCapabilityOverrides,
+  canonicalizePath,
   enrichApprovalRequest,
   evaluateToolGrant,
+  isCanonicalPathWithin,
   resolveEnrichedBasePolicy,
   resolveFileAccessContext,
   resolveHarnessLevelPolicy,
@@ -244,7 +246,23 @@ export class ToolApprovalService extends BaseService {
   }
 
   /**
-   * Evaluate `.makaioignore` file access rules before policy cascade handling.
+   * Evaluate `.makaioignore` file access rules and the directory allowlist before policy
+   * cascade handling.
+   *
+   * The rules are tested against both the lexical and the canonical (symlink-resolved)
+   * target, so an in-tree symlink cannot alias a denied path such as `.git/config`. A
+   * target that cannot be canonicalized safely (dangling symlink, non-`ENOENT` error) is
+   * denied; a missing file canonicalizes through its nearest existing ancestor, so a Write
+   * of a new file stays possible. A symlinked cwd itself is not covered: the rules are
+   * cwd-relative, so a canonical spelling outside the lexical cwd is not matched (same
+   * limit as `createPathValidator` in the filesystem extension).
+   *
+   * With a non-empty allowlist (`agent.allowedDirectories`, else the profile's) a target
+   * whose canonical path lies outside every entry is denied. An absent or empty list adds
+   * no containment here: an empty list is also what an unhandled profile RPC yields, and
+   * treating it as deny-all would remove every native file tool from hosts that configure
+   * a provider without a profile service. Hosts that need the boundary set the agent's
+   * `allowedDirectories` explicitly.
    * @param payload - Incoming tool approval payload
    * @param context - CWD and directory constraints for rule evaluation
    * @returns Deny message when access should be blocked, otherwise undefined
@@ -272,12 +290,26 @@ export class ToolApprovalService extends BaseService {
       return 'Access denied: file access rules could not be evaluated: agent has no working directory';
     }
 
+    const canonicalPath = canonicalizePath(filePath);
     try {
       const rules = await this.options.fileAccessRuleProvider(context.cwd, context.allowedDirectories);
-      return rules.isDenied(filePath) ? `Access denied: '${filePath}' is restricted by .makaioignore rules` : undefined;
+      if (
+        rules.isDenied(filePath) ||
+        (canonicalPath !== undefined && canonicalPath !== filePath && rules.isDenied(canonicalPath))
+      ) {
+        return `Access denied: '${filePath}' is restricted by .makaioignore rules`;
+      }
     } catch {
       return 'Access denied: file access rules could not be evaluated';
     }
+    if (canonicalPath === undefined) {
+      return `Access denied: file access rules could not be evaluated: '${filePath}' cannot be resolved safely`;
+    }
+    const { allowedDirectories } = context;
+    if (allowedDirectories?.length && !isCanonicalPathWithin(allowedDirectories, canonicalPath, context.cwd)) {
+      return `Access denied: '${filePath}' is outside the agent's allowed directories`;
+    }
+    return undefined;
   }
 
   /**

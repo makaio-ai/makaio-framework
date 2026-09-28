@@ -8,7 +8,10 @@
  * Uses a lightweight inline provider so these tests are independent of the real
  * makaioignore file system. Tests use real bus handlers — no mocks.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, ApprovalSubjects, HarnessSubjects } from '@makaio/contracts';
 import { extractToolFilePath, type FileAccessRuleProvider } from '@makaio/tools-core';
@@ -339,6 +342,147 @@ describe('ToolApprovalService - .makaioignore pre-check', () => {
       );
       expect(extractToolFilePath('Grep', { pattern: 'x', path: 'src' }, TEST_CWD)).toBe(`${TEST_CWD}/src`);
       expect(extractToolFilePath('Glob', { pattern: '**/*' }, TEST_CWD)).toBeNull();
+    });
+  });
+
+  describe('real filesystem: symlinks and allowedDirectories', () => {
+    let root: string;
+    let repo: string;
+    let outside: string;
+    let symlinksSupported = true;
+
+    // Mirrors the built-in `.git` deny pattern: cwd-relative, paths outside the cwd never match.
+    const cwdGitProvider: FileAccessRuleProvider = async (cwd) => ({
+      isDenied: (p) => {
+        const rel = path.relative(cwd, p);
+        return rel.split(path.sep)[0] === '.git' && !path.isAbsolute(rel);
+      },
+    });
+
+    beforeAll(() => {
+      // Canonical root: a symlinked cwd itself (macOS /var -> /private/var) is out of scope.
+      root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'file-access-')));
+      repo = path.join(root, 'repo');
+      outside = path.join(root, 'outside');
+      mkdirSync(path.join(repo, '.git'), { recursive: true });
+      mkdirSync(outside);
+      writeFileSync(path.join(repo, '.git', 'config'), '[remote]');
+      writeFileSync(path.join(repo, 'readme.txt'), 'r');
+      writeFileSync(path.join(outside, 'secret.txt'), 's');
+      try {
+        symlinkSync(path.join(repo, '.git', 'config'), path.join(repo, 'config-link'));
+        symlinkSync(path.join(outside, 'secret.txt'), path.join(repo, 'outside-link'));
+        symlinkSync(path.join(repo, 'missing.txt'), path.join(repo, 'dangling'));
+      } catch (error) {
+        if (process.platform !== 'win32') throw error;
+        symlinksSupported = false;
+      }
+    });
+
+    afterAll(() => {
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    beforeEach(async () => {
+      service.destroy();
+      service = new ToolApprovalService(MakaioBus, { fileAccessRuleProvider: cwdGitProvider });
+      await service.init();
+      registerSessionStorageHandler(cleanups, 'full-access');
+    });
+
+    describe('symlinks (canonical spelling is checked too)', () => {
+      beforeEach(() => {
+        registerAgentStub(cleanups, { cwd: repo });
+      });
+
+      it('denies a Read through an in-tree symlink to .git/config under full-access', async (context) => {
+        if (!symlinksSupported) context.skip();
+
+        const result = await approve('Read', { file_path: 'config-link' });
+
+        expect(result).toEqual({
+          action: 'deny',
+          message: `Access denied: '${path.join(repo, 'config-link')}' is restricted by .makaioignore rules`,
+          shouldAbort: false,
+        });
+      });
+
+      it('denies a Write through a dangling symlink (fail-closed)', async (context) => {
+        if (!symlinksSupported) context.skip();
+
+        const result = await approve('Write', { file_path: 'dangling', content: 'x' });
+
+        expect(result.action).toBe('deny');
+        if (result.action === 'deny') expect(result.message).toContain('cannot be resolved safely');
+      });
+
+      it('allows a Write of a new, non-denied file', async () => {
+        const result = await approve('Write', { file_path: path.join('src', 'new.ts'), content: 'x' });
+
+        expect(result).toEqual({ action: 'allow' });
+      });
+    });
+
+    describe('allowedDirectories containment under a full-access session', () => {
+      const outsideReason = (target: string): string =>
+        `Access denied: '${target}' is outside the agent's allowed directories`;
+
+      it('denies a Read outside the agent allowedDirectories', async () => {
+        registerAgentStub(cleanups, { cwd: repo, allowedDirectories: [repo] });
+
+        const target = path.join(outside, 'secret.txt');
+        const result = await approve('Read', { file_path: target });
+
+        expect(result).toEqual({ action: 'deny', message: outsideReason(target), shouldAbort: false });
+      });
+
+      it('denies a Read through an in-tree symlink to a file outside allowedDirectories', async (context) => {
+        if (!symlinksSupported) context.skip();
+        registerAgentStub(cleanups, { cwd: repo, allowedDirectories: [repo] });
+
+        const result = await approve('Read', { file_path: 'outside-link' });
+
+        expect(result).toEqual({
+          action: 'deny',
+          message: outsideReason(path.join(repo, 'outside-link')),
+          shouldAbort: false,
+        });
+      });
+
+      it('allows a Read inside the agent allowedDirectories', async () => {
+        registerAgentStub(cleanups, { cwd: repo, allowedDirectories: [repo] });
+
+        expect(await approve('Read', { file_path: 'readme.txt' })).toEqual({ action: 'allow' });
+      });
+
+      it('prefers the agent allowedDirectories over the profile directories', async () => {
+        registerAgentStub(cleanups, { cwd: repo, profileId: 'profile-with-dirs', allowedDirectories: [repo] });
+        cleanups.push(
+          MakaioBus.on(ApprovalSubjects.resolveEnrichedPolicy, (ctx) => {
+            ctx.setResult({ action: 'allow', allowedDirectories: [root] });
+          }),
+        );
+
+        const target = path.join(outside, 'secret.txt');
+        const result = await approve('Read', { file_path: target });
+
+        expect(result).toEqual({ action: 'deny', message: outsideReason(target), shouldAbort: false });
+      });
+
+      it('does not restrict an outside path when no allowedDirectories are set', async () => {
+        registerAgentStub(cleanups, { cwd: repo });
+
+        expect(await approve('Read', { file_path: path.join(outside, 'secret.txt') })).toEqual({ action: 'allow' });
+      });
+
+      it('leaves an outside path to the cascade when no provider is configured', async () => {
+        service.destroy();
+        service = new ToolApprovalService(MakaioBus);
+        await service.init();
+        registerAgentStub(cleanups, { cwd: repo, allowedDirectories: [repo] });
+
+        expect(await approve('Read', { file_path: path.join(outside, 'secret.txt') })).toEqual({ action: 'allow' });
+      });
     });
   });
 });

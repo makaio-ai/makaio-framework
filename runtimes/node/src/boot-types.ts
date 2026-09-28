@@ -330,13 +330,22 @@ export interface CoreBootOptions {
    *
    * When provided, boot binds it into the framework tool registry, which
    * injects the resolved rules into every tool execution context, and into the
-   * tool approval service, which denies file tool calls on restricted paths
-   * before any approval policy applies. When omitted, neither enforces
-   * file-access rules.
+   * tool approval service, which denies file tool calls whose path argument
+   * names a restricted path (lexical or symlink-resolved) before any approval
+   * policy applies. When omitted, neither enforces file-access rules.
    *
    * Scope:
-   * - The patterns apply inside the agent's working directory. Paths outside
-   *   it are governed by the agent's `allowedDirectories`, not by this provider.
+   * - The patterns apply inside the agent's working directory. With a provider
+   *   configured, the approval service also denies native file-tool calls
+   *   outside the agent's `allowedDirectories` (else the profile's). Without
+   *   `allowedDirectories`, paths outside the working directory are not
+   *   restricted by this check.
+   * - `Glob` and `Grep` are checked on their supplied search root only. Without
+   *   a `path` argument they get no file-access check, and files reached
+   *   recursively are not filtered by the patterns; filtering descendants needs
+   *   OS-level isolation (Cyberport FACT-272).
+   * - A symlinked working directory itself is not resolved: the patterns match
+   *   cwd-relative spellings only.
    * - Only file tools with a path argument are inspected. Shell commands and
    *   other tools without a path argument are not.
    * - A known file-tool call from an agent without a working directory is

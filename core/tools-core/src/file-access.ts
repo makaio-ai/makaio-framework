@@ -40,7 +40,10 @@ const TOOL_PATH_ARGS: ReadonlyMap<string, readonly string[]> = new Map([
   ['Edit', ['path', 'file_path']],
   ['MultiEdit', ['path', 'file_path']],
   ['create_file', ['path', 'file_path']],
-  // Claude search tools: an absent `path` searches the cwd and yields no target here.
+  // Claude search tools: only the supplied search root is checked. An absent `path` searches
+  // the cwd and yields no target here, so the call gets no file-access check, and files the
+  // search reaches recursively are not filtered by `.makaioignore`. Filtering descendants
+  // needs OS-level isolation (Cyberport FACT-272).
   ['Glob', ['path']],
   ['Grep', ['path']],
   ['NotebookEdit', ['notebook_path']],

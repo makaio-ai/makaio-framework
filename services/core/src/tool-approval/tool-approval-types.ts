@@ -46,8 +46,8 @@ export type RawEnrichedPolicyResult = { handled: false } | { handled: true; data
 export interface FileAccessContext {
   /** Working directory of the agent. */
   cwd?: string;
-  /** Profile-constrained directory allowlist for the current request. */
-  allowedDirectories?: string[];
+  /** Effective directory allowlist for the current request (agent's, else the profile's). */
+  allowedDirectories?: readonly string[];
 }
 
 /** Display-enriched approval request payload ready to publish on ApprovalSubjects.request. */

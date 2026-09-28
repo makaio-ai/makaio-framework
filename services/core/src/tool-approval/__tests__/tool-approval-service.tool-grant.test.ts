@@ -48,6 +48,21 @@ function approve(toolName: string, args: Record<string, unknown> = {}, adapterNa
   return MakaioBus.request(AgentSubjects.toolApprove, createToolApprovePayload({ adapterName, toolName, args }));
 }
 
+/**
+ * Replace the service with one without a file access rule provider. With a provider, the
+ * file-access floor denies targets outside `allowedDirectories` before the grant is evaluated
+ * (covered in tool-approval-file-access.test.ts); these suites test the
+ * grant bound itself.
+ * @param current - Service to destroy
+ * @returns Initialized service without a provider
+ */
+async function replaceWithProviderlessService(current: ToolApprovalService): Promise<ToolApprovalService> {
+  current.destroy();
+  const next = new ToolApprovalService(MakaioBus);
+  await next.init();
+  return next;
+}
+
 describe('ToolApprovalService - headless tool-list grant', () => {
   let service: ToolApprovalService;
   const cleanups: Array<() => void> = [];
@@ -223,6 +238,10 @@ describe('ToolApprovalService - headless tool-list grant', () => {
   describe('directory allowlist bounds the grant', () => {
     const LISTED = ['read_file', 'glob_files', 'grep_files'];
 
+    beforeEach(async () => {
+      service = await replaceWithProviderlessService(service);
+    });
+
     it('grants a listed Read inside allowedDirectories without any approval handler', async () => {
       registerAgentStub(cleanups, { ...CLAUDE_AGENT, allowedTools: LISTED, allowedDirectories: [TEST_CWD] });
 
@@ -317,7 +336,8 @@ describe('ToolApprovalService - headless tool-list grant', () => {
       rmSync(root, { recursive: true, force: true });
     });
 
-    beforeEach(() => {
+    beforeEach(async () => {
+      service = await replaceWithProviderlessService(service);
       registerAgentStub(cleanups, {
         adapterName: CLAUDE_ADAPTER,
         cwd: allowed,
