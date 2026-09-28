@@ -37,7 +37,8 @@ import type {
   ScenarioManifest,
 } from './lib/agent-clients/index.js';
 
-const DEFAULT_MAX_SCENARIOS = 20;
+/** Default `--max-scenarios` cap; every provider manifest must fit within it. */
+export const DEFAULT_MAX_SCENARIOS = 20;
 // 1200 s: the Claude manifest runs 17 scenarios with timeouts of up to 60 s each, which
 // exceeds the former 300 s budget (FACT-88 adds the MCP PostToolUse scenario).
 const DEFAULT_MAX_WALL_CLOCK_SECONDS = 1200;
@@ -80,13 +81,27 @@ export function selectScenarios(
 }
 
 /**
+ * Resolves the scenarios a probe run will attempt: the `--scenario` selection capped by `--max-scenarios`.
+ * @param manifest - Provider manifest the selection is resolved against.
+ * @param options - Scenario filter and scenario cap of this run.
+ * @returns The planned scenarios, in manifest order.
+ */
+export function plannedScenarios(
+  manifest: ScenarioManifest,
+  options: Pick<ProbeCliOptions, 'scenarioIds' | 'maxScenarios'>,
+): readonly ProbeScenario[] {
+  return selectScenarios(manifest, options.scenarioIds).slice(0, options.maxScenarios);
+}
+
+/**
  * Finds source-expected event/effect pairs not proven by live behavior fixtures.
- * @param manifest - Complete provider manifest defining the required source surface.
+ * @param manifest - Scenarios defining the required source surface: the complete manifest when
+ * publishing, the planned scenarios of a verify run.
  * @param fixtures - Fresh fixtures from the scenarios executed by this probe.
  * @returns Stable sorted event/effect keys missing behavioral evidence.
  */
 export function findMissingEffectCoverage(
-  manifest: ScenarioManifest,
+  manifest: Pick<ScenarioManifest, 'scenarios'>,
   fixtures: readonly ScenarioFixture[],
 ): readonly string[] {
   const required = new Set<string>();
@@ -186,7 +201,7 @@ export async function runProbe(
   readonly failures: readonly string[];
 }> {
   const manifest = getManifest(options.provider);
-  const scenarios = selectScenarios(manifest, options.scenarioIds).slice(0, options.maxScenarios);
+  const scenarios = plannedScenarios(manifest, options);
   if (options.updateFixtures && scenarios.length < manifest.scenarios.length) {
     return {
       passed: false,
@@ -263,7 +278,10 @@ export async function runProbe(
       }
       failures.push(...result.fixtureDiffs.map((diff) => `${scenario.id}: ${diff}`));
     }
-    for (const missing of findMissingEffectCoverage(manifest, fixtures))
+    // Publishing must prove the whole manifest; a verify run only owes evidence for the scenarios it
+    // planned, so a --scenario or --max-scenarios subset is not failed for scenarios it skipped.
+    const coverageScope = options.updateFixtures ? manifest : { scenarios };
+    for (const missing of findMissingEffectCoverage(coverageScope, fixtures))
       failures.push(`Missing live behavior evidence for ${missing}`);
     if (options.updateFixtures && failures.length === 0 && scenariosExecuted === manifest.scenarios.length) {
       await publishProbeEvidence({
@@ -297,7 +315,7 @@ async function main(): Promise<void> {
   try {
     const options = parseProbeArgs(args);
     const manifest = getManifest(options.provider);
-    const scenarioCount = selectScenarios(manifest, options.scenarioIds).slice(0, options.maxScenarios).length;
+    const scenarioCount = plannedScenarios(manifest, options).length;
     console.warn('WARNING: test:agent-clients makes credentialed, networked, potentially billable requests.');
     console.log(
       `provider=${options.provider} pinned=${manifest.pinnedVersion} scenarios=${String(scenarioCount)} mode=${options.updateFixtures ? 'update' : 'verify'}`,
