@@ -37,7 +37,9 @@ const EXPECTED_SENTINELS: Record<ProviderId, Readonly<Record<string, string | un
     'pre-tool-use-context-append': JSON.stringify({
       hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: CONTEXT },
     }),
-    'pre-tool-use-unapproved-tool-negative-control': undefined,
+    'pre-tool-use-unapproved-tool-negative-control': JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: CONTEXT },
+    }),
     // SessionStart has no permission decision to make, so its sentinel carries
     // appended context alone — the same shape Codex renders for this event.
     'session-start-context-append': JSON.stringify({
