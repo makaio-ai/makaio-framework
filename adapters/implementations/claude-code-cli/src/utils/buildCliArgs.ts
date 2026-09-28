@@ -79,10 +79,10 @@ interface BuildCliArgsOptions {
  * - `--append-system-prompt` — optional runtime system prompt (append mode)
  * - `--max-budget-usd` — optional spend cap
  * - `--effort` — reasoning effort level (`low | medium | high | max`); omitted when `none`
- * - `--allowedTools` — optional comma-separated allow-list from `config.allowedTools`, translated
- *   from Makaio tool names to Claude-native entries (`shell_exec(git status)` → `Bash(git status)`)
  * - `--disallowedTools` — optional comma-separated deny-list from `config.disallowedTools`, translated
- *   the same way
+ *   from Makaio tool names to Claude-native entries (`shell_exec(rm -rf:*)` → `Bash(rm -rf:*)`).
+ *   `config.allowedTools` is validated but emits no flag: `--allowedTools` would pre-approve the
+ *   listed calls past the permission prompt tool, so they reach central approval instead
  * - `--mcp-config` — optional inline JSON MCP config string (or path to a JSON file)
  * - `--permission-prompt-tool` — optional MCP tool to handle permission prompts
  * - `--json-schema` — JSON-serialized schema from `config.responseSchema`; constrains model output to valid JSON
@@ -144,15 +144,17 @@ export function buildCliArgs({
     }
   }
 
-  // TODO(FACT-75): restrict availability (--tools) and gate per call; until then an allowlist here only pre-approves, it does not restrict.
+  // No --allowedTools: it pre-approves listed calls, so they would skip the permission prompt
+  // tool (--permission-prompt-tool below) and with it ToolApprovalService (.makaioignore,
+  // session reject). Every call the CLI does not allow on its own reaches that bridge, where
+  // ToolApprovalService grants listed tools and denies unlisted ones (FACT-73).
+  // TODO(FACT-75): restrict availability (--tools) and add an adapter-side per-call gate; until then the lists are enforced centrally by ToolApprovalService (FACT-73).
   if (config.allowedTools !== undefined || config.disallowedTools !== undefined) {
-    const { nativeAllowedEntries, nativeDisallowedTools } = resolveToolPolicy('claude', {
+    // Resolving validates both lists: invalid entries throw a ToolNameError.
+    const { nativeDisallowedTools } = resolveToolPolicy('claude', {
       allowedTools: config.allowedTools,
       disallowedTools: config.disallowedTools,
     });
-    if (nativeAllowedEntries !== undefined) {
-      args.push('--allowedTools', toCliToolPolicyValue(nativeAllowedEntries));
-    }
     if (nativeDisallowedTools !== undefined) {
       args.push('--disallowedTools', toCliToolPolicyValue(nativeDisallowedTools));
     }

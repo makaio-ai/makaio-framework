@@ -114,6 +114,18 @@ export const MakaioSessionAgentSchema = z.object({
   cwd: z.string().optional(),
   /** Directory restrictions for file-system tool execution. */
   allowedDirectories: z.array(z.string()).optional(),
+  /**
+   * Tool allowlist, written with Makaio tool names (see `tool-names`). `[]`
+   * allows nothing. Written from the merged start options — the same lists
+   * passed to `AdapterSubjects.startAgent` — and read by ToolApprovalService.
+   */
+  allowedTools: z.array(z.string()).optional(),
+  /**
+   * Tool denylist, written with Makaio tool names (see `tool-names`). Written
+   * from the merged start options — the same lists passed to
+   * `AdapterSubjects.startAgent` — and read by ToolApprovalService.
+   */
+  disallowedTools: z.array(z.string()).optional(),
   /** Provider config UUID for credential/endpoint resolution */
   providerConfigId: z.string().optional(),
   /** Persona used to configure this agent (if any). */

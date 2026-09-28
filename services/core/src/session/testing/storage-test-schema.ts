@@ -88,6 +88,8 @@ export const SESSION_STORAGE_TEST_SCHEMA_SQL: SQL[] = [
       model TEXT,
       cwd TEXT,
       allowed_directories TEXT,
+      allowed_tools TEXT,
+      disallowed_tools TEXT,
       provider_config_id TEXT,
       persona_id TEXT,
       profile_id TEXT,

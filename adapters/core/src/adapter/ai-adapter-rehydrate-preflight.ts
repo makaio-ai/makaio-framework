@@ -133,6 +133,11 @@ export async function prepareColdRehydrate(
       model: model ?? persisted.model,
       cwd: cwd ?? persisted.cwd,
       allowedDirectories: persisted.allowedDirectories,
+      // The row carries the merged tool lists the original start ran with; a
+      // replacement connector without them would re-expose denylisted tools.
+      // `[]` is a real list (nothing allowed), so only an absent list is omitted.
+      ...(persisted.allowedTools !== undefined && { allowedTools: persisted.allowedTools }),
+      ...(persisted.disallowedTools !== undefined && { disallowedTools: persisted.disallowedTools }),
       ...(rpcResumeId !== undefined && {
         adapterSessionId: rpcResumeId,
         resumeAdapterSessionId: rpcResumeId,

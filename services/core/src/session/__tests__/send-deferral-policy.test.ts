@@ -105,6 +105,33 @@ describe('deferred agents in a send', () => {
     expect(replacement?.providerConfigId).toBe('provider-config-abc');
   });
 
+  it.each([
+    { label: 'allowlist and denylist', allowedTools: ['read_file', 'edit_file'], disallowedTools: ['shell_exec'] },
+    { label: 'an empty allowlist and no denylist', allowedTools: [], disallowedTools: undefined },
+  ])('keeps the deferred lead’s tool lists on its replacement ($label)', async (lists) => {
+    const sessionId = `session-lead-tool-lists-${lists.allowedTools.length}`;
+    const [lead] = await harness.seedSession(sessionId, ['agent-lead-tools'], {
+      agentOverrides: {
+        'agent-lead-tools': {
+          allowedTools: lists.allowedTools,
+          ...(lists.disallowedTools !== undefined && { disallowedTools: lists.disallowedTools }),
+        },
+      },
+    });
+    harness.occupyAgentKey(lead as MakaioSessionAgent);
+
+    await MakaioBus.request(SessionSubjects.sendMessage, { sessionId, message: 'continue please' });
+
+    // The tool grant and refusal are containment like the directories: a
+    // replacement without them runs under a policy nobody chose. `[]` stays
+    // `[]` and an absent list stays absent.
+    expect(routed).toHaveLength(1);
+    const { agent: replacement } = await MakaioBus.request(AgentStorageSubjects.get, { agentId: routed[0] as string });
+    expect(replacement?.agentId).not.toBe('agent-lead-tools');
+    expect(replacement?.allowedTools).toEqual(lists.allowedTools);
+    expect(replacement?.disallowedTools).toEqual(lists.disallowedTools);
+  });
+
   it('retargets a legacy ownerless lead without probing or recovering it', async () => {
     const sessionId = 'session-legacy-lead-default';
     const [legacyLead] = await harness.seedSession(sessionId, ['legacy-lead'], { legacy: true });

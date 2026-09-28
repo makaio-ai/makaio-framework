@@ -147,6 +147,10 @@ function buildAgentRecord(params: {
     model: payload.model,
     cwd: resolvedCwd,
     allowedDirectories: payload.allowedDirectories,
+    // Same tool lists the connector gets, so the service-side tool grant sees
+    // them too. `[]` is kept: it means "nothing allowed", not "no list".
+    ...(payload.allowedTools !== undefined && { allowedTools: payload.allowedTools }),
+    ...(payload.disallowedTools !== undefined && { disallowedTools: payload.disallowedTools }),
     role: payload.role,
     status,
     createdAt,
