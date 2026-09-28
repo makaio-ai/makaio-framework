@@ -22,39 +22,98 @@ import {
   publishProbeEvidence,
   preparePinnedProbeBinary,
   prepareNativeLoginLease,
-  redactStringValue,
   resolveCredentialMode,
   runScenario,
   validateBinaryVersion,
 } from './lib/agent-clients/index.js';
+import { summarizeNativeResult } from './lib/agent-clients/native-result-summary.js';
 import type {
   NativeLoginLeaseFactory,
   PreparedProbeBinary,
   ProbeOptions,
+  ProbeScenario,
   ProviderId,
   ScenarioFixture,
   ScenarioManifest,
 } from './lib/agent-clients/index.js';
 
-const DEFAULT_MAX_SCENARIOS = 16;
-const DEFAULT_MAX_WALL_CLOCK_SECONDS = 300;
+/** Default `--max-scenarios` cap; every provider manifest must fit within it. */
+export const DEFAULT_MAX_SCENARIOS = 20;
+// 1200 s: the Claude manifest runs 17 scenarios with timeouts of up to 60 s each, which
+// exceeds the former 300 s budget (FACT-88 adds the MCP PostToolUse scenario).
+const DEFAULT_MAX_WALL_CLOCK_SECONDS = 1200;
 const VALID_PROVIDERS = new Set<ProviderId>(['claude-code', 'codex']);
+const USAGE = `Usage: yarn test:agent-clients --provider <claude-code|codex> [options]
+
+Options:
+  --scenario <id>          Run only this scenario; repeat to run several (verify mode only)
+  --max-scenarios <n>      Run at most n scenarios (default ${String(DEFAULT_MAX_SCENARIOS)})
+  --max-wall-clock <s>     Stop starting scenarios after s seconds (default ${String(DEFAULT_MAX_WALL_CLOCK_SECONDS)})
+  --update-fixtures        Record and publish fixtures; requires every scenario (no --scenario filter)
+  --help                   Show this help`;
+
+/** Probe options plus the optional CLI scenario filter. */
+export type ProbeCliOptions = ProbeOptions & {
+  /** Scenario ids to run, in manifest order; absent runs every scenario. */
+  readonly scenarioIds?: readonly string[];
+};
+
+/**
+ * Selects the manifest scenarios named by a `--scenario` filter, in manifest order.
+ * @param manifest - Provider manifest the ids are resolved against.
+ * @param scenarioIds - Requested ids; absent selects every scenario.
+ * @returns The selected scenarios.
+ */
+export function selectScenarios(
+  manifest: ScenarioManifest,
+  scenarioIds: readonly string[] | undefined,
+): readonly ProbeScenario[] {
+  if (scenarioIds === undefined) return manifest.scenarios;
+  const valid = manifest.scenarios.map((scenario) => scenario.id);
+  const unknown = scenarioIds.filter((id) => !valid.includes(id));
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown --scenario for ${manifest.provider}: ${unknown.join(', ')}. Valid ids: ${valid.join(', ')}`,
+    );
+  }
+  const requested = new Set(scenarioIds);
+  return manifest.scenarios.filter((scenario) => requested.has(scenario.id));
+}
+
+/**
+ * Resolves the scenarios a probe run will attempt: the `--scenario` selection capped by `--max-scenarios`.
+ * @param manifest - Provider manifest the selection is resolved against.
+ * @param options - Scenario filter and scenario cap of this run.
+ * @returns The planned scenarios, in manifest order.
+ */
+export function plannedScenarios(
+  manifest: ScenarioManifest,
+  options: Pick<ProbeCliOptions, 'scenarioIds' | 'maxScenarios'>,
+): readonly ProbeScenario[] {
+  return selectScenarios(manifest, options.scenarioIds).slice(0, options.maxScenarios);
+}
 
 /**
  * Finds source-expected event/effect pairs not proven by live behavior fixtures.
- * @param manifest - Complete provider manifest defining the required source surface.
+ * @param manifest - Scenarios defining the required source surface; used for publishing, where the
+ * complete manifest must prove every source-expected effect of every event.
  * @param fixtures - Fresh fixtures from the scenarios executed by this probe.
+ * @param requiredKeys - Explicit `<event>:<effect>` keys to require instead of the manifest's
+ * source-expected effects (see {@link verifyRequiredEffectKeys}).
  * @returns Stable sorted event/effect keys missing behavioral evidence.
  */
 export function findMissingEffectCoverage(
-  manifest: ScenarioManifest,
+  manifest: Pick<ScenarioManifest, 'scenarios'>,
   fixtures: readonly ScenarioFixture[],
+  requiredKeys?: Iterable<string>,
 ): readonly string[] {
-  const required = new Set<string>();
-  for (const scenario of manifest.scenarios) {
-    const event = scenario.expectedEvents[0];
-    if (!event) continue;
-    for (const effect of scenario.sourceExpectedEffects) required.add(`${event.eventName}:${effect}`);
+  const required = new Set<string>(requiredKeys);
+  if (requiredKeys === undefined) {
+    for (const scenario of manifest.scenarios) {
+      const event = scenario.expectedEvents[0];
+      if (!event) continue;
+      for (const effect of scenario.sourceExpectedEffects) required.add(`${event.eventName}:${effect}`);
+    }
   }
   const observed = new Set<string>();
   for (const fixture of fixtures) {
@@ -63,6 +122,25 @@ export function findMissingEffectCoverage(
     }
   }
   return [...required].filter((key) => !observed.has(key)).sort();
+}
+
+/**
+ * Event/effect keys a verify run owes: exactly the sentinel effect each planned scenario exercises.
+ * `sourceExpectedEffects` lists every effect of the event, shared across sibling scenarios, so it
+ * would make a `--scenario`/`--max-scenarios` subset owe evidence of scenarios it skipped.
+ * Native-deny scenarios are excluded: they prove the client's own denial and record no effect.
+ * @param scenarios - Scenarios planned for this verify run.
+ * @returns The required `<event>:<sentinelEffect>` keys.
+ */
+export function verifyRequiredEffectKeys(scenarios: readonly ProbeScenario[]): ReadonlySet<string> {
+  const required = new Set<string>();
+  for (const scenario of scenarios) {
+    const event = scenario.expectedEvents[0];
+    if (!event || scenario.sentinelEffect === undefined) continue;
+    if (scenario.oracle === 'native-must-deny-unapproved-tool') continue;
+    required.add(`${event.eventName}:${scenario.sentinelEffect}`);
+  }
+  return required;
 }
 
 /**
@@ -81,9 +159,10 @@ export function resolveDefaultFixturesDir(scriptPath: string): string {
  * @param env - Process environment used only for credential selection.
  * @returns Validated, bounded probe options.
  */
-export function parseProbeArgs(args: readonly string[], env: NodeJS.ProcessEnv = process.env): ProbeOptions {
+export function parseProbeArgs(args: readonly string[], env: NodeJS.ProcessEnv = process.env): ProbeCliOptions {
   let provider: ProviderId | undefined;
   let updateFixtures = false;
+  const scenarioIds: string[] = [];
   let maxScenarios = DEFAULT_MAX_SCENARIOS;
   let maxWallClockSeconds = DEFAULT_MAX_WALL_CLOCK_SECONDS;
   for (let index = 0; index < args.length; index += 1) {
@@ -93,6 +172,10 @@ export function parseProbeArgs(args: readonly string[], env: NodeJS.ProcessEnv =
       if (!value || !VALID_PROVIDERS.has(value as ProviderId))
         throw new Error('--provider must be claude-code or codex');
       provider = value as ProviderId;
+    } else if (arg === '--scenario') {
+      const value = args[++index];
+      if (!value || value.startsWith('--')) throw new Error('--scenario requires a scenario id');
+      scenarioIds.push(value);
     } else if (arg === '--update-fixtures') {
       updateFixtures = true;
     } else if (arg === '--max-scenarios' || arg === '--max-wall-clock') {
@@ -105,9 +188,18 @@ export function parseProbeArgs(args: readonly string[], env: NodeJS.ProcessEnv =
     }
   }
   if (!provider) throw new Error('--provider is required');
+  // Fails fast on an unknown id, before any credential or binary work.
+  if (scenarioIds.length > 0) selectScenarios(getManifest(provider), scenarioIds);
   const credentials = resolveCredentialMode({ provider, env });
   if (!credentials.mode) throw new Error(credentials.error);
-  return { provider, credentialMode: credentials.mode, updateFixtures, maxScenarios, maxWallClockSeconds };
+  return {
+    provider,
+    credentialMode: credentials.mode,
+    updateFixtures,
+    maxScenarios,
+    maxWallClockSeconds,
+    ...(scenarioIds.length > 0 && { scenarioIds }),
+  };
 }
 
 /**
@@ -117,7 +209,7 @@ export function parseProbeArgs(args: readonly string[], env: NodeJS.ProcessEnv =
  * @returns Aggregate result without changing process exit state.
  */
 export async function runProbe(
-  options: ProbeOptions,
+  options: ProbeCliOptions,
   params?: {
     /** Exact executable override reserved for injected tests. */
     executablePath?: string;
@@ -133,12 +225,13 @@ export async function runProbe(
   readonly failures: readonly string[];
 }> {
   const manifest = getManifest(options.provider);
-  if (options.updateFixtures && options.maxScenarios < manifest.scenarios.length) {
+  const scenarios = plannedScenarios(manifest, options);
+  if (options.updateFixtures && scenarios.length < manifest.scenarios.length) {
     return {
       passed: false,
       scenariosExecuted: 0,
       failures: [
-        `Refusing to publish partial evidence: --max-scenarios must cover all ${String(manifest.scenarios.length)} scenarios`,
+        `Refusing to publish partial evidence: --update-fixtures must cover all ${String(manifest.scenarios.length)} scenarios (no --scenario filter, --max-scenarios >= ${String(manifest.scenarios.length)})`,
       ],
     };
   }
@@ -181,7 +274,7 @@ export async function runProbe(
       tempConfigDir: workspace.configDir,
       ...(nativeLoginLease ? { nativeAuthEnv: nativeLoginLease.env } : {}),
     });
-    for (const scenario of manifest.scenarios.slice(0, options.maxScenarios)) {
+    for (const scenario of scenarios) {
       const remainingMs = options.maxWallClockSeconds * 1000 - (Date.now() - startedAt);
       if (remainingMs <= 0) {
         failures.push(`Wall-clock cap reached after ${String(scenariosExecuted)} scenario(s)`);
@@ -204,16 +297,18 @@ export async function runProbe(
       scenariosExecuted += 1;
       fixtures.push(result.fixture);
       if (!result.fixture.oraclePassed) {
-        const diagnostic = redactStringValue([result.stdout, result.stderr].filter(Boolean).join(' '))
-          .trim()
-          .replace(/\s+/g, ' ')
-          .slice(0, 800);
+        const diagnostic = summarizeNativeResult(result.stdout, result.stderr);
         failures.push(`${scenario.id}: native oracle failed${diagnostic ? ` (${diagnostic})` : ''}`);
       }
       failures.push(...result.fixtureDiffs.map((diff) => `${scenario.id}: ${diff}`));
     }
-    for (const missing of findMissingEffectCoverage(manifest, fixtures))
-      failures.push(`Missing live behavior evidence for ${missing}`);
+    // Publishing must prove every source-expected effect of the whole manifest; a verify run only
+    // owes the sentinel effects of the scenarios it planned, so a --scenario or --max-scenarios
+    // subset is not failed for effects that only skipped scenarios exercise.
+    const missingEffects = options.updateFixtures
+      ? findMissingEffectCoverage(manifest, fixtures)
+      : findMissingEffectCoverage({ scenarios }, fixtures, verifyRequiredEffectKeys(scenarios));
+    for (const missing of missingEffects) failures.push(`Missing live behavior evidence for ${missing}`);
     if (options.updateFixtures && failures.length === 0 && scenariosExecuted === manifest.scenarios.length) {
       await publishProbeEvidence({
         baseDir: fixturesDir,
@@ -238,12 +333,18 @@ export async function runProbe(
 }
 
 async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(USAGE);
+    return;
+  }
   try {
-    const options = parseProbeArgs(process.argv.slice(2));
+    const options = parseProbeArgs(args);
     const manifest = getManifest(options.provider);
+    const scenarioCount = plannedScenarios(manifest, options).length;
     console.warn('WARNING: test:agent-clients makes credentialed, networked, potentially billable requests.');
     console.log(
-      `provider=${options.provider} pinned=${manifest.pinnedVersion} scenarios=${String(Math.min(manifest.scenarios.length, options.maxScenarios))} mode=${options.updateFixtures ? 'update' : 'verify'}`,
+      `provider=${options.provider} pinned=${manifest.pinnedVersion} scenarios=${String(scenarioCount)} mode=${options.updateFixtures ? 'update' : 'verify'}`,
     );
     const result = await runProbe(options);
     if (!result.passed) throw new Error(result.failures.join('\n'));

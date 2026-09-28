@@ -1,7 +1,7 @@
 {
   "version": "0.2.0",
   "clientId": "claude-code",
-  "cliVersion": "2.1.219",
+  "cliVersion": "2.1.283",
   "sourceEvidence": {
     "kind": "official-documentation",
     "reference": "https://docs.anthropic.com/en/docs/claude-code/hooks",
@@ -9,7 +9,7 @@
   },
   "liveProbe": {
     "status": "captured",
-    "capturedAt": "2026-09-17T02:43:05.380Z"
+    "capturedAt": "2026-09-28T10:49:51.841Z"
   },
   "events": {
     "SessionStart": {
@@ -55,15 +55,17 @@
       "outputFixture": "pre-tool-use-output.json"
     },
     "PostToolUse": {
-      "candidateEvidenceStatus": "unobserved",
-      "observedEvidenceStatus": "observer-only",
+      "candidateEvidenceStatus": "supported",
+      "observedEvidenceStatus": "supported",
       "hookFired": true,
-      "expectedStdoutConsumed": false,
+      "expectedStdoutConsumed": true,
       "expectedBlockingCapable": false,
-      "managedCommand": "hook received claude-code",
-      "responseCapabilities": [],
-      "inputFixture": null,
-      "outputFixture": null
+      "managedCommand": "hook handle claude-code",
+      "responseCapabilities": [
+        "context.append"
+      ],
+      "inputFixture": "post-tool-use-input.json",
+      "outputFixture": "post-tool-use-output.json"
     },
     "Stop": {
       "candidateEvidenceStatus": "unobserved",

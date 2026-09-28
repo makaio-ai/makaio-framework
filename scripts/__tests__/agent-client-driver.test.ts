@@ -10,7 +10,12 @@ import { getManifest } from '../lib/agent-clients/manifests.js';
 import { runCommand, runScenario, writeScenarioHookConfig } from '../lib/agent-clients/runner.js';
 import type { ProbeScenario, ScenarioFixture, ScenarioManifest } from '../lib/agent-clients/types.js';
 import { cleanupProbeWorkspace, createProbeWorkspace } from '../lib/agent-clients/workspace.js';
-import { findMissingEffectCoverage, resolveDefaultFixturesDir, runProbe } from '../test-agent-clients.js';
+import {
+  DEFAULT_MAX_SCENARIOS,
+  findMissingEffectCoverage,
+  resolveDefaultFixturesDir,
+  runProbe,
+} from '../test-agent-clients.js';
 
 const REQUEST_SCENARIO: ProbeScenario = {
   id: 'pre-tool-use',
@@ -132,7 +137,7 @@ describe('native probe driver', () => {
     'codex',
   ] as const)('%s manifest covers every source effect with a bounded scenario', (provider) => {
     const providerManifest = getManifest(provider);
-    expect(providerManifest.scenarios.length).toBeLessThanOrEqual(16);
+    expect(providerManifest.scenarios.length).toBeLessThanOrEqual(DEFAULT_MAX_SCENARIOS);
     const scenarioEffects = new Set(
       providerManifest.scenarios.flatMap((scenario) =>
         scenario.sentinelEffect ? [`${scenario.expectedEvents[0]!.eventName}:${scenario.sentinelEffect}`] : [],
@@ -186,7 +191,10 @@ describe('native probe driver', () => {
       oracle: 'native-must-deny-unapproved-tool',
       expectedAbsentMarker: 'MAKAIO_PROBE_TOOL_MARKER',
     });
-    expect(negativeControl?.sentinelOutput).toBeUndefined();
+    // Context-only sentinel: the hook answers, but makes no permission decision of its own.
+    expect(JSON.parse(negativeControl?.sentinelOutput ?? 'null')).toEqual({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: expect.stringContaining('MAKAIO_PROBE') },
+    });
     expect(negativeControl?.allowedTools).not.toContain('Bash(touch MAKAIO_PROBE_TOOL_MARKER)');
   });
 
@@ -288,7 +296,10 @@ describe('native probe driver', () => {
     }
   });
 
-  it('accepts a fired hook without a sentinel only when dontAsk leaves the unapproved marker absent', async () => {
+  it.each([
+    ['passes with', true],
+    ['fails without', false],
+  ] as const)('negative control %s its injected context-only sentinel while dontAsk leaves the marker absent', async (_label, injected) => {
     const scenario = getManifest('claude-code').scenarios.find(
       (candidate) => candidate.id === 'pre-tool-use-unapproved-tool-negative-control',
     );
@@ -298,7 +309,8 @@ describe('native probe driver', () => {
     try {
       const result = await runScenario({
         provider: 'claude-code',
-        scenario: scenario!,
+        // An empty sentinel file makes the shim fire the hook without injecting anything.
+        scenario: injected ? scenario! : { ...scenario!, sentinelOutput: undefined },
         cliVersion: '0.0.0',
         executablePath: await fakeCli(root, 'native-denies-unapproved-tool'),
         env: { PATH: process.env.PATH!, CLAUDE_CONFIG_DIR: workspace.configDir, ANTHROPIC_API_KEY: 'test' },
@@ -307,8 +319,8 @@ describe('native probe driver', () => {
         updateFixtures: true,
       });
 
-      expect(result.fixture.oraclePassed).toBe(true);
-      expect(result.fixture.events[0]).toMatchObject({ sentinelInjected: false });
+      expect(result.fixture.oraclePassed).toBe(injected);
+      expect(result.fixture.events[0]).toMatchObject({ sentinelInjected: injected, observedEffects: [] });
       await expect(fs.access(path.join(workspace.projectDir, 'MAKAIO_PROBE_TOOL_MARKER'))).rejects.toThrow();
     } finally {
       await cleanupProbeWorkspace(workspace);

@@ -43,7 +43,11 @@ export const clientDefinition = createClientDefinition({
     // SessionStart shipped in 1.0.62; `additionalContext` arrived per event —
     // UserPromptSubmit 1.0.59, PreToolUse 2.1.9, Stop/SubagentStop 2.1.163 —
     // and no such entry exists for SessionStart in 2.x because injecting startup
-    // context is the hook's purpose. Likewise SubagentStart (2.0.43).
+    // context is the hook's purpose. Likewise SubagentStart (2.0.43). PostToolUse
+    // `hookSpecificOutput.additionalContext` ("String added to Claude's context
+    // alongside the tool result", per the hook docs) has no changelog entry, so
+    // the floor is 2.1.283 by maintainer decision: the probes that prove it were
+    // recaptured against 2.1.283, the managed pin below.
     //
     // An *event* first supported above the floor declares `minimumVersion` on
     // its hook-event entry instead of raising the floor (see PostCompact at
@@ -51,11 +55,11 @@ export const clientDefinition = createClientDefinition({
     // an event still has no per-capability gate — only per-event — so that case
     // still requires raising this floor or adding a separate event declaration
     // for the newer capability.
-    supportedVersions: '^2.1.0',
+    supportedVersions: '^2.1.283',
   },
   managedInstall: {
     type: 'signed-binary-bucket',
-    version: '2.1.219',
+    version: '2.1.283',
     config: {
       baseUrl: 'https://downloads.claude.ai/claude-code-releases',
       manifestPathTemplate: '{version}/manifest.json',
@@ -181,7 +185,11 @@ export const clientDefinition = createClientDefinition({
           'context.append',
         ],
       },
-      { name: 'PostToolUse', frameworkSubject: 'client.session.tool.post' },
+      {
+        name: 'PostToolUse',
+        frameworkSubject: 'client.session.tool.post',
+        responseCapabilities: ['context.append'],
+      },
       { name: 'Stop', frameworkSubject: 'client.session.turn.completed' },
       {
         name: 'SubagentStart',

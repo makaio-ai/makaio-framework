@@ -35,13 +35,11 @@ const EXPECTED_SENTINELS: Record<ProviderId, Readonly<Record<string, string | un
       },
     }),
     'pre-tool-use-context-append': JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'allow',
-        additionalContext: CONTEXT,
-      },
+      hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: CONTEXT },
     }),
-    'pre-tool-use-unapproved-tool-negative-control': undefined,
+    'pre-tool-use-unapproved-tool-negative-control': JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: CONTEXT },
+    }),
     // SessionStart has no permission decision to make, so its sentinel carries
     // appended context alone — the same shape Codex renders for this event.
     'session-start-context-append': JSON.stringify({
@@ -51,7 +49,17 @@ const EXPECTED_SENTINELS: Record<ProviderId, Readonly<Record<string, string | un
     'user-prompt-submit-context-append': JSON.stringify({
       hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: CONTEXT },
     }),
-    'post-tool-use-observation': undefined,
+    'post-tool-use-context-append': JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: CONTEXT },
+    }),
+    'post-tool-use-mcp-context-append': JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: CONTEXT },
+    }),
+    // The subagent PostToolUse context is consumed inside the spawned subagent,
+    // so it carries the subagent context like SubagentStart does.
+    'post-tool-use-subagent-context-append': JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: SUBAGENT_CONTEXT },
+    }),
     'stop-observation': undefined,
     // SubagentStart graduated to 'supported' with context.append in FACT-293:
     // the appended context is consumed by the spawned subagent, not the parent.

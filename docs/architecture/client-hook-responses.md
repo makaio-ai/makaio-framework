@@ -33,14 +33,14 @@ that injects no sentinel and asserts nothing beyond the event firing. An
 refused response. Widening a contract starts by revisiting the source evidence
 for that event — an existing `observer-only` capture is not counter-evidence.
 
-### Claude Code (CLI v2.1.219)
+### Claude Code (CLI v2.1.283)
 
 | Event             | Source Candidate | Capabilities             | Expected Stdout | Blocking | Framework Subject                          |
 |-------------------|-----------------|--------------------------|-----------------|----------|--------------------------------------------|
 | `SessionStart`    | supported       | `context.append`, `session.token` | Yes             | No       | `client.session.started`                   |
 | `UserPromptSubmit`| supported       | `context.append`         | Yes             | No       | `client.session.userPrompt.submitted`      |
 | `PreToolUse`      | supported       | `claude-code.tool-response.approve`, `claude-code.tool-response.deny`, `context.append` | Yes | Yes | `client.session.tool.pre` |
-| `PostToolUse`     | unobserved      | *(none)*                 | No              | No       | `client.session.tool.post`                 |
+| `PostToolUse`     | supported       | `context.append`         | Yes             | No       | `client.session.tool.post`                 |
 | `Stop`            | unobserved      | *(none)*                 | No              | No       | `client.session.turn.completed`            |
 | `SubagentStart`   | supported       | `context.append`         | Yes             | No       | `client.session.subagent.started`          |
 | `SubagentStop`    | unobserved      | *(none)*                 | No              | No       | `client.session.subagent.completed`        |
@@ -52,8 +52,8 @@ for that event — an existing `observer-only` capture is not counter-evidence.
 
 #### Claude Code Notes
 
-- `PreToolUse`, `SessionStart`, `UserPromptSubmit`, and `SubagentStart` declare
-  `responseCapabilities` in the client definition. The wiring layer installs
+- `PreToolUse`, `SessionStart`, `UserPromptSubmit`, `SubagentStart`, and
+  `PostToolUse` declare `responseCapabilities` in the client definition. The wiring layer installs
   `makaio hook handle claude-code` for events with capabilities and
   `makaio hook received claude-code` for events without.
 - Blockable interactions (`PreToolUse`) use a 5000 ms handle timeout
@@ -62,10 +62,10 @@ for that event — an existing `observer-only` capture is not counter-evidence.
   (startup, resume, clear, and after every compaction), it is the event through
   which consumers deliver session context, and those contributors routinely need
   more than one second. The cost is a stall of up to 5 s per boundary while the
-  server is down. Per-prompt and per-subagent context-only interactions
-  (`UserPromptSubmit`, `SubagentStart`) use a 1000 ms timeout
-  (`CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS`) so a down server does not stall every
-  prompt or subagent spawn for the full duration.
+  server is down. Per-prompt, per-subagent, and per-tool-call context-only
+  interactions (`UserPromptSubmit`, `SubagentStart`, `PostToolUse`) use a
+  1000 ms timeout (`CONTEXT_ONLY_HOOK_HANDLE_TIMEOUT_MS`) so a down server does
+  not stall every prompt, subagent spawn, or tool call for the full duration.
 - `SessionStart` carries `context.append` only. It contributes context to a
   session that has already started and can refuse nothing, so it is declared
   non-blockable: a closed-policy contributor that fails on `SessionStart`
@@ -75,6 +75,22 @@ for that event — an existing `observer-only` capture is not counter-evidence.
 - `SubagentStart` carries `context.append` only. The appended context lands in
   the *subagent's* context window, not the parent's. Subagent creation cannot be
   refused, so the interaction is non-blockable.
+- `PostToolUse` carries `context.append` only. Native output is
+  `hookSpecificOutput.additionalContext`, which Claude Code adds to the model's
+  context alongside the tool result. The tool has already run, so nothing can
+  be refused and the interaction is non-blockable. Consumer-visible cost:
+  because the event is request-mode, every Claude tool call performs one
+  synchronous `makaio hook handle` round-trip after the tool, bounded by the
+  1000 ms context-only timeout. Upstream has no changelog entry for
+  `PostToolUse` `additionalContext`, so `binary.supportedVersions` is raised to
+  `^2.1.283` (the managed pin) by maintainer decision instead of resting on a
+  documented introduction version.
+- `PreToolUse` renders a permission decision only when a contributor approved
+  or denied. When contributors only appended context, the output carries
+  `additionalContext` with no `permissionDecision`, so Claude Code applies its
+  normal permission flow. Before contract `1.5.0` such a response rendered an
+  implicit `permissionDecision: "allow"`, which let a context-only hint hook
+  skip the user's permission prompt.
 - `SessionStart` also declares `session.token`. The token is never rendered to
   stdout --- the composer hands it to `ClientSessionTokenService` in-process via
   `ClientSessionTokenSink`, so no bus payload (and no `MAKAIO_DEBUG` bus logger)
@@ -159,12 +175,12 @@ for that event — an existing `observer-only` capture is not counter-evidence.
 |-------------------|--------------------|
 | Fixture version   | 0.2.0              |
 | Live probe status | captured            |
-| Claude Code CLI   | 2.1.219            |
+| Claude Code CLI   | 2.1.283            |
 | Codex CLI         | 0.144.1            |
 
 The provider manifests record their exact capture timestamps and event-level
 observations. Claude confirmed `PreToolUse` response consumption and
-`SessionStart` context consumption, saw four additional lifecycle hooks fire in
+`SessionStart` context consumption, saw additional lifecycle hooks fire in
 observation-only scenarios that attempted no response, and did not induce
 `Notification`, `MCPServerStart`, or `MCPServerStop`. Codex confirmed every
 declared effect for all five events.
@@ -172,6 +188,21 @@ declared effect for all five events.
 Every claim in the tables above is re-earned against the pinned binary, not
 carried forward: bumping a pin invalidates the committed captures, because the
 fixture suite requires each capture's `cliVersion` to equal the descriptor pin.
+All Claude Code probe fixtures were recaptured against 2.1.283 when the pin
+moved from 2.1.219.
+
+The Claude Code `PostToolUse` context-append claim is probed on three tool
+paths, because each reaches the hook through a different route:
+
+| Scenario | Tool path | Hook matcher | Note |
+|----------|-----------|--------------|------|
+| `post-tool-use-context-append` | Native `Read` | `Read` | Context appended after a built-in tool result. |
+| `post-tool-use-mcp-context-append` | MCP tool `probe_read` on the stdio probe server `probe` | `mcp__probe__.*` | Context appended after an MCP tool result. |
+| `post-tool-use-subagent-context-append` | `Bash` inside a subagent | `Bash` | The hook fires only in the subagent; the payload must carry `agent_id`. |
+
+The `pre-tool-use-context-append` scenario is context-only: it asserts that the
+appended context is consumed without the response carrying a permission
+decision.
 
 ---
 
@@ -502,8 +533,8 @@ defines the interactions it supports and how contributions are validated.
 |-------|-------|
 | `clientId` | `claude-code` |
 | `contractId` | `claude-code.tool-response` |
-| `version` | `1.4.0` |
-| `supportedInteractions` | `PreToolUse`, `SessionStart`, `UserPromptSubmit`, `SubagentStart`, `approve`, `deny`, `context.append`, `session.token` |
+| `version` | `1.5.0` |
+| `supportedInteractions` | `PreToolUse`, `SessionStart`, `UserPromptSubmit`, `SubagentStart`, `PostToolUse`, `approve`, `deny`, `context.append`, `session.token` |
 
 **Blockability:**
 
@@ -515,7 +546,9 @@ defines the interactions it supports and how contributions are validated.
 | `SessionStart` | No |
 | `UserPromptSubmit` | No |
 | `SubagentStart` | No |
+| `PostToolUse` | No |
 | `context.append` | No |
+| `session.token` | No |
 
 **Effect builders** (from `@makaio/client-claude-code/runtime`):
 
@@ -530,11 +563,15 @@ defines the interactions it supports and how contributions are validated.
 - Multiple `context.append` effects are concatenated with newlines.
 - Reasons from multiple contributors are joined with `'; '`.
 - When only `context.append` effects are present (no explicit decision),
-  the default decision is `allow`.
+  no decision is rendered: `PreToolUse` output carries `additionalContext`
+  alone and Claude Code applies its normal permission flow. There is no
+  implicit `allow` (since `1.5.0`; earlier versions defaulted to `allow`,
+  which skipped the user's permission prompt for context-only hint hooks).
 - Closed-failure causes a `deny` decision with the failure detail as the
   reason.
 
-**Native output format** (written to stdout for `PreToolUse`):
+**Native output format** (written to stdout for `PreToolUse` with an
+explicit approve or deny):
 
 ```json
 {

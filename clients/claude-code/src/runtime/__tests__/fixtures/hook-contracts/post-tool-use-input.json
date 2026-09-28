@@ -1,0 +1,24 @@
+{
+  "session_id": "fixture-session",
+  "transcript_path": null,
+  "cwd": "/workspace",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "prompt_id": "fixture-prompt",
+  "tool_name": "Read",
+  "tool_use_id": "fixture-tool-use",
+  "tool_input": {
+    "file_path": "/workspace/README.md"
+  },
+  "tool_response": {
+    "type": "text",
+    "file": {
+      "filePath": "/workspace/README.md",
+      "content": "# Fixture\n",
+      "numLines": 1,
+      "startLine": 1,
+      "totalLines": 1
+    }
+  },
+  "duration_ms": 12
+}

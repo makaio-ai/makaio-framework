@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "provider": "claude-code",
-  "cliVersion": "2.1.219",
+  "cliVersion": "2.1.283",
   "scenarioId": "stop-observation",
   "events": [
     {
@@ -18,7 +18,6 @@
       "payloadKeys": [
         "background_tasks",
         "cwd",
-        "effort",
         "hook_event_name",
         "last_assistant_message",
         "permission_mode",

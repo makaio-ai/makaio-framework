@@ -2,42 +2,44 @@
   "schemaVersion": 4,
   "provider": "claude-code",
   "cliVersion": "2.1.283",
-  "scenarioId": "pre-tool-use-unapproved-tool-negative-control",
+  "scenarioId": "post-tool-use-subagent-context-append",
   "events": [
     {
-      "eventName": "PreToolUse",
-      "frameworkSubject": "client.session.tool.pre",
+      "eventName": "PostToolUse",
+      "frameworkSubject": "client.session.tool.post",
       "responseCapabilities": [
-        "claude-code.tool-response.approve",
-        "claude-code.tool-response.deny",
         "context.append"
       ],
       "mode": "request",
       "candidateExpectedStatus": "supported",
       "observedStatus": "supported",
       "sourceExpectedEffects": [
-        "claude-code.tool-response.approve",
-        "claude-code.tool-response.deny",
         "context.append"
       ],
-      "observedEffects": [],
-      "blockingCapable": true,
+      "observedEffects": [
+        "context.append"
+      ],
+      "blockingCapable": false,
       "managedCommand": "hook handle claude-code",
       "payloadKeys": [
+        "agent_id",
+        "agent_type",
         "cwd",
+        "duration_ms",
         "hook_event_name",
         "permission_mode",
         "prompt_id",
         "session_id",
         "tool_input",
         "tool_name",
+        "tool_response",
         "tool_use_id",
         "transcript_path"
       ],
       "sentinelInjected": true
     }
   ],
-  "oracle": "native-must-deny-unapproved-tool",
+  "oracle": "final-response-must-contain-marker",
   "oraclePassed": true,
   "exitCode": 0,
   "terminal": "ok"

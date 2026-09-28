@@ -1,7 +1,7 @@
 /**
  * Claude Code hook response provider contracts.
  *
- * Declares only the capabilities proven for pinned Claude Code 2.1.219 by live
+ * Declares only the capabilities proven for pinned Claude Code 2.1.283 by live
  * evidence capture.  Every interaction and blockability entry is backed by the
  * fixture manifest at `__tests__/fixtures/hook-contracts/manifest.json`.
  *
@@ -47,7 +47,7 @@ export const CLAUDE_CODE_TOOL_RESPONSE_CONTRACT_ID = 'claude-code.tool-response'
 /**
  * Semantic version of the Claude Code tool-response contract.
  *
- * Pinned to the proven capabilities of Claude Code CLI 2.1.219.  Bump this
+ * Pinned to the proven capabilities of Claude Code CLI 2.1.283.  Bump this
  * version when future CLI releases expand the native response surface.
  *
  * `1.1.0` adds `SessionStart` as a request-capable, non-blockable interaction
@@ -74,8 +74,15 @@ export const CLAUDE_CODE_TOOL_RESPONSE_CONTRACT_ID = 'claude-code.tool-response'
  * binary's stdout; the composer collects it and hands it to the in-process
  * token sink of the client runtime. No native binary feature is required.
  * Purely additive: every `1.3.0` contributor remains valid.
+ *
+ * `1.5.0` adds `PostToolUse` as a request-capable, non-blockable interaction
+ * carrying canonical `context.append`: the appended context reaches the model
+ * alongside the tool result, and the tool has already run, so nothing can be
+ * refused. In the same release a context-only `PreToolUse` response no longer
+ * implies an `allow` decision (the composer change ships with this version).
+ * Additive for contributors: every `1.4.0` contributor remains valid.
  */
-export const CLAUDE_CODE_TOOL_RESPONSE_CONTRACT_VERSION = '1.4.0';
+export const CLAUDE_CODE_TOOL_RESPONSE_CONTRACT_VERSION = '1.5.0';
 
 // ---------------------------------------------------------------------------
 // Claude-specific effect types
@@ -162,8 +169,8 @@ export function createDenyEffect(reason?: string): ProviderContributionEnvelope<
  *
  * Only `PreToolUse` is blockable — proven by the manifest.  The namespaced
  * approve and deny capabilities map to the PreToolUse event and inherit its
- * blockability. `SessionStart`, `UserPromptSubmit`, and `SubagentStart`
- * contribute context only and can refuse nothing, so they are listed
+ * blockability. `SessionStart`, `UserPromptSubmit`, `SubagentStart`, and
+ * `PostToolUse` contribute context only and can refuse nothing, so they are listed
  * explicitly as non-blockable:
  * a closed-policy contributor must fail its blockability check loudly instead
  * of silently matching no entry.  `context.append` and `session.token` are
@@ -176,6 +183,7 @@ const BLOCKABILITY: readonly InteractionBlockability[] = Object.freeze([
   Object.freeze({ interaction: 'SessionStart', blockable: false }),
   Object.freeze({ interaction: 'UserPromptSubmit', blockable: false }),
   Object.freeze({ interaction: 'SubagentStart', blockable: false }),
+  Object.freeze({ interaction: 'PostToolUse', blockable: false }),
   Object.freeze({ interaction: 'context.append', blockable: false }),
   Object.freeze({
     interaction: CANONICAL_HOOK_RESPONSE_CAPABILITIES.sessionToken,
@@ -214,6 +222,7 @@ const SUPPORTED_INTERACTIONS: readonly string[] = Object.freeze([
   'SessionStart',
   'UserPromptSubmit',
   'SubagentStart',
+  'PostToolUse',
   CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES.approve,
   CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES.deny,
   'context.append',

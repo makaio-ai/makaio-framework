@@ -11,7 +11,7 @@ Static client definition and schema library for the Anthropic Claude Code CLI. T
 | `version` | `0.1.0` |
 | `description` | Anthropic Claude Code CLI — an agentic coding assistant |
 | `binary.name` | `claude` |
-| `binary.supportedVersions` | `^2.1.0` |
+| `binary.supportedVersions` | `^2.1.283` |
 | `defaultApprovalPolicy` | `full-access` |
 | `defaultAuth` | `anthropic-oauth` via client method `native` |
 | `configIsolation.envVar` | `CLAUDE_CONFIG_DIR` |
@@ -45,7 +45,7 @@ an `empty` lease for explicit auth, then deliver only the selected method.
 | `SessionStart` | `client.session.started` | `context.append` |
 | `UserPromptSubmit` | `client.session.userPrompt.submitted` | `context.append` |
 | `PreToolUse` | `client.session.tool.pre` | `approve`, `deny`, `context.append` |
-| `PostToolUse` | `client.session.tool.post` | *(none)* |
+| `PostToolUse` | `client.session.tool.post` | `context.append` (context-only, 1000 ms timeout) |
 | `Stop` | `client.session.turn.completed` | *(none)* |
 | `SubagentStart` | `client.session.subagent.started` | `context.append` |
 | `SubagentStop` | `client.session.subagent.completed` | *(none)* |
@@ -55,7 +55,9 @@ an `empty` lease for explicit auth, then deliver only the selected method.
 | `MCPServerStart` | _(no framework subject --- not normalized)_ | *(none)* |
 | `MCPServerStop` | _(no framework subject --- not normalized)_ | *(none)* |
 
-`PreToolUse`, `SessionStart`, `UserPromptSubmit`, and `SubagentStart` declare response capabilities. Events without capabilities use `makaio hook received` (fire-and-forget); events with them use `makaio hook handle` (request/response) and produce a native `hookSpecificOutput` JSON response. `PreToolUse` renders a permission decision; the other three render `additionalContext` alone, since they have no decision to make. `SubagentStart`'s context lands in the *subagent's* context window rather than the parent session's --- live probe evidence: `src/runtime/__tests__/fixtures/hook-contracts/probe/subagent-start-context-append.json`.
+`PreToolUse`, `SessionStart`, `UserPromptSubmit`, `SubagentStart`, and `PostToolUse` declare response capabilities. Events without capabilities use `makaio hook received` (fire-and-forget); events with them use `makaio hook handle` (request/response) and produce a native `hookSpecificOutput` JSON response. `PreToolUse` renders a permission decision only when a contributor approved or denied; a context-only `PreToolUse` response renders `additionalContext` alone, so Claude Code applies its normal permission flow. The other four events render `additionalContext` alone, since they have no decision to make.
+
+`PostToolUse` context reaches the model alongside the tool result; the tool has already run, so the event is non-blockable. Because it is request-mode, every Claude tool call now performs one synchronous `hook handle` round-trip after the tool, bounded by the 1000 ms context-only timeout. Live probes (recaptured against 2.1.283) cover a native tool (`post-tool-use-context-append`, after `Read`), an MCP tool (`post-tool-use-mcp-context-append`, stdio probe server `probe` with tool `probe_read`, matcher `mcp__probe__.*`), and a subagent tool call (`post-tool-use-subagent-context-append`, matcher `Bash`, the hook fires only inside the subagent and the payload carries `agent_id`). `SubagentStart`'s context lands in the *subagent's* context window rather than the parent session's --- live probe evidence: `src/runtime/__tests__/fixtures/hook-contracts/probe/subagent-start-context-append.json`.
 
 `PreCompact` and `PostCompact` are only reachable once a session has a conversation worth compacting. Issued against an empty non-interactive session, the manual compaction command returns an empty result without running compaction and neither hook fires; a session holding a single exchange reaches `PreCompact` and then aborts with "Not enough messages to compact.", so `PostCompact` is still never reached. The probe therefore seeds a tool-using turn, resumes that session, and compacts it --- live probe evidence: `src/runtime/__tests__/fixtures/hook-contracts/probe/pre-compact-observation.json` and `.../post-compact-observation.json`, where `PostCompact` carries the `compact_summary` compaction produced.
 
@@ -66,10 +68,10 @@ The `./runtime` entrypoint registers a `ProviderContractCatalogEntry` that defin
 | Field | Value |
 |-------|-------|
 | `contractId` | `claude-code.tool-response` |
-| `version` | `1.3.0` |
-| `supportedInteractions` | `PreToolUse`, `SessionStart`, `UserPromptSubmit`, `SubagentStart`, `approve`, `deny`, `context.append` |
+| `version` | `1.5.0` |
+| `supportedInteractions` | `PreToolUse`, `SessionStart`, `UserPromptSubmit`, `SubagentStart`, `PostToolUse`, `approve`, `deny`, `context.append`, `session.token` |
 
-**Blockability:** `PreToolUse`, `approve`, and `deny` are blockable; `SessionStart`, `UserPromptSubmit`, `SubagentStart`, and `context.append` are not.
+**Blockability:** `PreToolUse`, `approve`, and `deny` are blockable; `SessionStart`, `UserPromptSubmit`, `SubagentStart`, `PostToolUse`, `context.append`, and `session.token` are not.
 
 **Provider effect builders** (exported from `./runtime`):
 
@@ -78,7 +80,7 @@ The `./runtime` entrypoint registers a `ProviderContractCatalogEntry` that defin
 | `createApproveEffect(reason?)` | `allow` |
 | `createDenyEffect(reason?)` | `deny` |
 
-**Composition:** deny wins over allow (restrictive precedence). Multiple `context.append` effects are concatenated with newlines. When only `context.append` effects are present, the default decision is `allow`. Closed-failure causes a `deny` with the failure detail as reason.
+**Composition:** deny wins over allow (restrictive precedence). Multiple `context.append` effects are concatenated with newlines. When only `context.append` effects are present, no decision is rendered: the output carries `additionalContext` alone and Claude Code applies its normal permission flow (since contract `1.5.0`; earlier versions rendered an implicit `allow`, which skipped the user's permission prompt). Closed-failure causes a `deny` with the failure detail as reason.
 
 See [Client Hook Response Pipeline](../../docs/architecture/client-hook-responses.md) for the full architecture.
 

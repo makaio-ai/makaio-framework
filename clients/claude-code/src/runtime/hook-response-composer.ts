@@ -3,9 +3,11 @@
  *
  * One terminal `hook.handle` composer covering every request-capable Claude
  * Code event.  Which events those are is declared in the client definition and
- * proven by the fixture manifest; `PreToolUse` and `SessionStart` are
- * request-capable today.  Observer-only events bypass this composer entirely —
- * they remain on the `hook.received` pathway with no response.
+ * proven by the fixture manifest; `PreToolUse` is the only event that renders
+ * a permission decision, while context-only events such as `SessionStart` and
+ * `PostToolUse` carry appended context alone.  Observer-only events bypass this
+ * composer entirely — they remain on the `hook.received` pathway with no
+ * response.
  *
  * ## Composition pipeline
  *
@@ -238,11 +240,14 @@ function serializeDecisionOutput(
 }
 
 /**
- * Serialize appended context for an event that carries no permission decision.
+ * Serialize appended context for a response that carries no permission decision.
  *
- * Claude Code's documented shape for context contribution outside PreToolUse is
- * `hookSpecificOutput.additionalContext` with no decision fields. Events that
- * cannot render a decision must never receive one.
+ * Claude Code's documented shape for context contribution without a decision is
+ * `hookSpecificOutput.additionalContext` with no decision fields. It covers
+ * context-only events (`SessionStart`, `PostToolUse`, ...) and a `PreToolUse`
+ * where no contributor decided, which then falls through to Claude Code's
+ * normal permission flow. Events that cannot render a decision must never
+ * receive one.
  * @param eventName - Native Claude Code hook event name.
  * @param additionalContext - Context to append.
  * @returns JSON string for the native Claude Code hook output.
@@ -279,17 +284,16 @@ function closedFailureToResponse(detail: string, eventName: string): ClientHookH
  * @returns The native Claude Code hook handle response.
  */
 function buildResponseFromEffects(reduced: ReducedEffects, eventName: string): ClientHookHandleResponse {
-  if (rendersDecision(eventName)) {
-    if (reduced.decision === undefined && reduced.appendedContext === undefined) {
-      // No effects remain — return the provider-valid no-op.
-      return NOOP_RESPONSE;
-    }
-    const effectiveDecision = reduced.decision ?? 'allow';
-    const stdout = serializeDecisionOutput(eventName, effectiveDecision, reduced.reason, reduced.appendedContext);
+  if (rendersDecision(eventName) && reduced.decision !== undefined) {
+    const stdout = serializeDecisionOutput(eventName, reduced.decision, reduced.reason, reduced.appendedContext);
     return { exitCode: 0, stdout, stderr: '' };
   }
 
-  // Every other event renders appended context only; it has no decision to make.
+  // No decision to render: either the event carries none (context-only events
+  // such as SessionStart or PostToolUse), or it is a decision-capable event on
+  // which no contributor decided. Never synthesize an `allow` for the latter —
+  // it would skip the user's permission prompt. Context alone lets Claude Code
+  // apply its normal permission flow.
   if (reduced.appendedContext === undefined) return NOOP_RESPONSE;
   return { exitCode: 0, stdout: serializeContextOutput(eventName, reduced.appendedContext), stderr: '' };
 }

@@ -1,25 +1,31 @@
 {
   "schemaVersion": 4,
   "provider": "claude-code",
-  "cliVersion": "2.1.219",
-  "scenarioId": "post-tool-use-observation",
+  "cliVersion": "2.1.283",
+  "scenarioId": "post-tool-use-mcp-context-append",
   "events": [
     {
       "eventName": "PostToolUse",
       "frameworkSubject": "client.session.tool.post",
-      "responseCapabilities": [],
-      "mode": "event",
-      "candidateExpectedStatus": "unobserved",
-      "observedStatus": "observer-only",
-      "sourceExpectedEffects": [],
-      "observedEffects": [],
+      "responseCapabilities": [
+        "context.append"
+      ],
+      "mode": "request",
+      "candidateExpectedStatus": "supported",
+      "observedStatus": "supported",
+      "sourceExpectedEffects": [
+        "context.append"
+      ],
+      "observedEffects": [
+        "context.append"
+      ],
       "blockingCapable": false,
-      "managedCommand": "hook received claude-code",
+      "managedCommand": "hook handle claude-code",
       "payloadKeys": [
         "cwd",
         "duration_ms",
-        "effort",
         "hook_event_name",
+        "mcp_server",
         "permission_mode",
         "prompt_id",
         "session_id",
@@ -29,10 +35,10 @@
         "tool_use_id",
         "transcript_path"
       ],
-      "sentinelInjected": false
+      "sentinelInjected": true
     }
   ],
-  "oracle": "unobserved",
+  "oracle": "final-response-must-contain-marker",
   "oraclePassed": true,
   "exitCode": 0,
   "terminal": "ok"

@@ -30,7 +30,7 @@ const COMMON_INPUT_SHAPE = {
  * Additional payload keys Claude Code sends only for tool-scoped events.
  *
  * `permission_mode` belongs here too: the probe captured it on `PreToolUse`
- * and not on `SessionStart`, which has no pending permission to describe.
+ * and `PostToolUse` and not on `SessionStart`, which has no pending permission to describe.
  * Note: the probe also captured `permission_mode` on `UserPromptSubmit`, but
  * that field is not required by the transport contract for non-tool events.
  */
@@ -52,10 +52,14 @@ const TOOL_INPUT_SHAPE = {
 const OUTPUT_FIXTURE_EFFECTS: Readonly<Record<string, ReadonlyArray<CanonicalEffect | ProviderContributionEnvelope>>> =
   {
     PreToolUse: [createDenyEffect('Tool use denied by approval handler')],
+    PostToolUse: [{ kind: 'context.append', value: 'Repository conventions are documented in AGENTS.md.' }],
     SessionStart: [{ kind: 'context.append', value: 'Repository conventions are documented in AGENTS.md.' }],
     UserPromptSubmit: [{ kind: 'context.append', value: 'Repository conventions are documented in AGENTS.md.' }],
     SubagentStart: [{ kind: 'context.append', value: 'Repository conventions are documented in AGENTS.md.' }],
   };
+
+/** Native events whose payload carries the tool envelope ({@link TOOL_INPUT_SHAPE}). */
+const TOOL_SCOPED_EVENT_NAMES: ReadonlySet<string> = new Set(['PreToolUse', 'PostToolUse']);
 
 runHookContractFixtureSuite({
   clientId: 'claude-code',
@@ -64,7 +68,7 @@ runHookContractFixtureSuite({
   blockingCapabilities: [CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES.deny],
   scenarioManifest: getManifest('claude-code'),
   validateEventFixtures: (eventName, input, output) => {
-    const isToolScoped = eventName === 'PreToolUse';
+    const isToolScoped = TOOL_SCOPED_EVENT_NAMES.has(eventName);
     expect(input).toMatchObject({
       hook_event_name: eventName,
       ...COMMON_INPUT_SHAPE,

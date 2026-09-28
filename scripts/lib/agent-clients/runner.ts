@@ -1,11 +1,19 @@
 /** @packageDocumentation */
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { boundedByDeadline, buildSpawnCommand } from './command-construction.js';
 import type { ScenarioInvocation } from './command-construction.js';
 import { fixtureFilePath, readFixture, writeFixture } from './fixtures.js';
+import {
+  evaluateOracle,
+  finalResponseContainsMarker,
+  firedWithRequiredPayloadKeys,
+  isProjectMarker,
+  markerAbsent,
+  markerPresent,
+  noCompletedAgentOrToolOutput,
+} from './oracle-signals.js';
 import { redactDeep } from './redaction.js';
 import type {
   CapturedHookInvocation,
@@ -48,16 +56,22 @@ function nativeConfigPath(provider: ProbeOptions['provider'], workspace: ProbeWo
 /**
  * Writes native hook configuration that invokes the disposable capture shim.
  * @param params - Provider, scenario, and isolated workspace used to construct the hook command.
- * @returns The native settings path and disposable raw capture path.
+ * @returns The native settings path, disposable raw capture path, and the
+ *   Claude Code `--mcp-config` path when the scenario declares `mcpServers`.
  */
 export async function writeScenarioHookConfig(params: {
   provider: ProbeOptions['provider'];
   scenario: ProbeScenario;
   workspace: ProbeWorkspace;
-}): Promise<{ settingsPath: string; capturePath: string }> {
+}): Promise<{ settingsPath: string; capturePath: string; mcpConfigPath?: string }> {
   const { provider, scenario, workspace } = params;
   const event = scenario.expectedEvents[0];
   if (!event) throw new Error(`Scenario "${scenario.id}" does not declare an event`);
+  // Refused rather than dropped: evidence recorded under a configuration the
+  // fixture does not describe is worse than none (same rule as `cliArgs`).
+  if (provider !== 'claude-code' && (scenario.hookMatcher !== undefined || scenario.mcpServers !== undefined)) {
+    throw new Error(`Scenario "${scenario.id}" sets hookMatcher or mcpServers, which only Claude Code supports`);
+  }
   const capturePath = path.join(workspace.rootDir, `${scenario.id}.captures.jsonl`);
   const sentinelPath = path.join(workspace.rootDir, `${scenario.id}.sentinel`);
   const shimPath = path.join(workspace.rootDir, `${scenario.id}.hook-shim.cjs`);
@@ -73,7 +87,13 @@ export async function writeScenarioHookConfig(params: {
     provider === 'claude-code'
       ? {
           hooks: {
-            [event.eventName]: [{ hooks: [{ type: 'command', command, timeout: scenario.timeoutSeconds * 1000 }] }],
+            [event.eventName]: [
+              {
+                ...(scenario.hookMatcher !== undefined && { matcher: scenario.hookMatcher }),
+                // Claude Code reads hook `timeout` in seconds, like Codex's `timeoutSec`.
+                hooks: [{ type: 'command', command, timeout: scenario.timeoutSeconds }],
+              },
+            ],
           },
         }
       : {
@@ -82,7 +102,10 @@ export async function writeScenarioHookConfig(params: {
           },
         };
   await fs.writeFile(settingsPath, `${JSON.stringify(contents, null, 2)}\n`, 'utf8');
-  return { settingsPath, capturePath };
+  if (scenario.mcpServers === undefined) return { settingsPath, capturePath };
+  const mcpConfigPath = path.join(workspace.rootDir, `${scenario.id}.mcp-config.json`);
+  await fs.writeFile(mcpConfigPath, `${JSON.stringify({ mcpServers: scenario.mcpServers }, null, 2)}\n`, 'utf8');
+  return { settingsPath, capturePath, mcpConfigPath };
 }
 
 /**
@@ -172,11 +195,15 @@ function responseWasConsumed(params: {
   timedOut: boolean;
   projectDir: string;
   stdout: string;
-  hookFired: boolean;
+  invocationPayloadKeys: readonly (readonly string[])[];
   sentinelInjected: boolean;
 }): boolean {
-  const { provider, scenario, exitCode, timedOut, projectDir, stdout, hookFired, sentinelInjected } = params;
-  if (timedOut || !hookFired) return false;
+  const { provider, scenario, exitCode, timedOut, projectDir, stdout, invocationPayloadKeys, sentinelInjected } =
+    params;
+  if (timedOut || !firedWithRequiredPayloadKeys(scenario.requiredPayloadKeys, invocationPayloadKeys)) return false;
+  // A negative control that declares a sentinel proves the refusal survives that sentinel, so a
+  // run where the shim never injected it is no proof; one without a sentinel keeps the marker check alone.
+  if (scenario.sentinelEffect !== undefined && !sentinelInjected) return false;
   if (scenario.oracle === 'native-must-deny-unapproved-tool') {
     return markerAbsent(projectDir, scenario.expectedAbsentMarker);
   }
@@ -205,49 +232,6 @@ function responseWasConsumed(params: {
 }
 
 /**
- * Pure oracle evaluation for a completed scenario run.
- *
- * The capability-proving branch has two sub-cases keyed on `sentinelEffect`
- * (mirroring `provesDeclaredEffects` in the fixture suite):
- *
- * - **With a declared effect** (`sentinelEffect` defined): the session must
- *   have ended with `terminal === 'ok'`. A run that consumed the marker but
- *   ended in `error_max_turns` is not clean evidence — the fixture suite
- *   rejects such fixtures via `provesDeclaredEffects`.
- * - **Without a declared effect** (`sentinelEffect` undefined): the same
- *   bounded-turn rule as the observation branches applies — `error_max_turns`
- *   is accepted. Negative-control scenarios (e.g. `native-must-deny-unapproved-tool`)
- *   prove a native refusal that legitimately prevents the model from completing,
- *   so their committed fixture records `terminal: 'error_max_turns'` with
- *   `oraclePassed: true`.
- * @param params - Oracle kind, terminal classification, and derived signal flags.
- * @returns Whether the oracle condition is met for this run.
- */
-export function evaluateOracle(params: {
-  scenario: Pick<ProbeScenario, 'oracle' | 'candidateExpectedStatus' | 'sentinelEffect'>;
-  terminal: TerminalClassification;
-  hookFired: boolean;
-  responseConsumed: boolean;
-}): boolean {
-  const { scenario, terminal, hookFired, responseConsumed } = params;
-  // A run that ended on its own turn bound is finished evidence; one that was
-  // killed or failed is not. The distinction is read from the persisted
-  // classification, uniformly for every provider.
-  const terminatedCleanly = terminal === 'ok' || terminal === 'error_max_turns';
-  return scenario.oracle === 'unobserved'
-    ? terminatedCleanly
-    : scenario.oracle === 'capture-only'
-      ? terminatedCleanly && hookFired && scenario.candidateExpectedStatus !== 'supported'
-      : // Capability-proving branch: two sub-cases distinguished by sentinelEffect.
-        // With a declared effect: require responseConsumed AND terminal === 'ok'.
-        // Without a declared effect: require responseConsumed AND terminatedCleanly
-        // (error_max_turns is acceptable — the scenario proves a native refusal).
-        scenario.sentinelEffect !== undefined
-        ? responseConsumed && terminal === 'ok'
-        : responseConsumed && terminatedCleanly;
-}
-
-/**
  * Projects disposable captures into stable, non-sensitive fixture evidence.
  * @param params - Native captures, scenario contract, and process outcome.
  * @returns Normalized evidence suitable for fixture comparison.
@@ -267,6 +251,7 @@ function normalizedFixture(params: {
   const matching = captures.filter((capture) => capture.eventName === event.eventName);
   const hookFired = matching.length > 0;
   const sentinelInjected = matching.some((capture) => capture.sentinelInjected);
+  const invocationPayloadKeys = matching.map(capturePayloadKeys);
   const terminal = classifyTerminal({ provider, exitCode, timedOut, stdout });
   const responseConsumed = responseWasConsumed({
     provider,
@@ -275,7 +260,7 @@ function normalizedFixture(params: {
     timedOut,
     projectDir,
     stdout,
-    hookFired,
+    invocationPayloadKeys,
     sentinelInjected,
   });
   const oraclePassed = evaluateOracle({ scenario, terminal, hookFired, responseConsumed });
@@ -294,10 +279,15 @@ function normalizedFixture(params: {
             candidateExpectedStatus: scenario.candidateExpectedStatus,
             observedStatus: responseConsumed ? 'supported' : 'observer-only',
             sourceExpectedEffects: scenario.sourceExpectedEffects,
-            observedEffects: responseConsumed && scenario.sentinelEffect ? [scenario.sentinelEffect] : [],
+            // The negative control proves its sentinel changed nothing, not that the sentinel's effect was
+            // consumed, so it records no observed effect; the event's own context-append scenario owns that proof.
+            observedEffects:
+              responseConsumed && scenario.sentinelEffect && scenario.oracle !== 'native-must-deny-unapproved-tool'
+                ? [scenario.sentinelEffect]
+                : [],
             blockingCapable: scenario.blockingCapable,
             managedCommand: scenario.expectedManagedCommand,
-            payloadKeys: [...new Set(matching.flatMap(capturePayloadKeys))].sort(),
+            payloadKeys: [...new Set(invocationPayloadKeys.flat())].sort(),
             sentinelInjected,
           },
         ]
@@ -318,90 +308,6 @@ function capturePayloadKeys(capture: CapturedHookInvocation): readonly string[] 
   return capture.input && typeof capture.input === 'object' && !Array.isArray(capture.input)
     ? Object.keys(redactDeep(capture.input) as Record<string, unknown>)
     : [];
-}
-
-/**
- * Resolves and checks a scenario-owned marker inside its disposable project.
- * @param projectDir - Disposable project root.
- * @param marker - Basename declared by the scenario.
- * @returns Whether the marker exists without accepting path traversal.
- */
-function markerPresent(projectDir: string, marker: string | undefined): boolean {
-  return isProjectMarker(marker) && existsSync(path.join(projectDir, marker));
-}
-
-/**
- * Resolves and checks absence of a scenario-owned marker.
- * @param projectDir - Disposable project root.
- * @param marker - Basename declared by the scenario.
- * @returns Whether the marker is valid and absent.
- */
-function markerAbsent(projectDir: string, marker: string | undefined): boolean {
-  return isProjectMarker(marker) && !existsSync(path.join(projectDir, marker));
-}
-
-/**
- * Validates a single scenario-owned filename without accepting the project root or traversal.
- * @param marker - Marker basename declared by a scenario.
- * @returns Whether the marker can safely be resolved below the disposable project.
- */
-function isProjectMarker(marker: string | undefined): marker is string {
-  return marker !== undefined && marker !== '' && marker !== '.' && marker !== '..' && path.basename(marker) === marker;
-}
-
-/**
- * Tests a marker only in the provider's structured final assistant response.
- * Raw hook stdout, diagnostics, and echoed command input are deliberately not evidence.
- * @param provider - Provider whose machine-readable output format is parsed.
- * @param stdout - Complete bounded CLI stdout.
- * @param marker - Unique marker injected through the hook response.
- * @returns Whether a final assistant response contains the marker.
- */
-function finalResponseContainsMarker(
-  provider: ProbeOptions['provider'],
-  stdout: string,
-  marker: string | undefined,
-): boolean {
-  if (!marker) return false;
-  try {
-    if (provider === 'claude-code') {
-      const result = JSON.parse(stdout) as Record<string, unknown>;
-      return result.type === 'result' && typeof result.result === 'string' && result.result.includes(marker);
-    }
-    return stdout
-      .split('\n')
-      .filter(Boolean)
-      .some((line) => {
-        const event = JSON.parse(line) as Record<string, unknown>;
-        if (event.type !== 'item.completed' || typeof event.item !== 'object' || event.item === null) return false;
-        const item = event.item as Record<string, unknown>;
-        return item.type === 'agent_message' && typeof item.text === 'string' && item.text.includes(marker);
-      });
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Rejects a blocked-before-model proof when Codex reported a completed non-diagnostic item.
- * @param provider - Provider whose machine-readable output format is parsed.
- * @param stdout - Complete bounded CLI stdout.
- * @returns Whether completed items, if any, are only diagnostic errors.
- */
-function noCompletedAgentOrToolOutput(provider: ProbeOptions['provider'], stdout: string): boolean {
-  if (provider !== 'codex') return false;
-  try {
-    return !stdout
-      .split('\n')
-      .filter(Boolean)
-      .some((line) => {
-        const event = JSON.parse(line) as Record<string, unknown>;
-        if (event.type !== 'item.completed' || typeof event.item !== 'object' || event.item === null) return false;
-        return (event.item as Record<string, unknown>).type !== 'error';
-      });
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -483,6 +389,7 @@ async function seedResumableSession(params: {
   env: Record<string, string>;
   projectDir: string;
   settingsPath: string;
+  mcpConfigPath?: string;
   capturePath: string;
   deadlineMs: number;
 }): Promise<ScenarioInvocation | undefined> {
@@ -523,6 +430,7 @@ export async function runScenario(params: {
     env: params.env,
     projectDir: params.workspace.projectDir,
     settingsPath: config.settingsPath,
+    ...(config.mcpConfigPath !== undefined && { mcpConfigPath: config.mcpConfigPath }),
   };
   // One deadline for the whole scenario, fixed before the first spawn, so a
   // seeded scenario's two runs share the budget instead of each taking it.

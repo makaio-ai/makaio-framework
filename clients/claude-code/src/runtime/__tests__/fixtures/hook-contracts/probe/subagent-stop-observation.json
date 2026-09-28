@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "provider": "claude-code",
-  "cliVersion": "2.1.219",
+  "cliVersion": "2.1.283",
   "scenarioId": "subagent-stop-observation",
   "events": [
     {
@@ -21,7 +21,6 @@
         "agent_type",
         "background_tasks",
         "cwd",
-        "effort",
         "hook_event_name",
         "last_assistant_message",
         "permission_mode",

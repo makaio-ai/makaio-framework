@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "provider": "claude-code",
-  "cliVersion": "2.1.219",
+  "cliVersion": "2.1.283",
   "scenarioId": "user-prompt-submit-context-append",
   "events": [
     {

@@ -38,7 +38,7 @@ describe('first-party managed binary pins', () => {
     expect(contribution?.binary?.version).toBe(definition.managedInstall?.version);
   });
 
-  it('accepts the whole Claude Code minor line the pin sits on but not the next major', () => {
+  it('accepts Claude Code from the pin up to the next major', () => {
     const supportedVersions = claudeCodeDefinition.binary!.supportedVersions;
     const [major, minor, patch] = claudeCodeDefinition.managedInstall!.version.split('.').map(Number) as [
       number,
@@ -46,18 +46,17 @@ describe('first-party managed binary pins', () => {
       number,
     ];
 
-    // Detection range and evidence pin answer different questions. The pin is
-    // what every declared capability was probed against; this range is only
-    // which binaries the client will drive. Binaries older than the pin lack
-    // the newest response capabilities but run every dispatched event, so
-    // refusing them would strand users on a working install.
+    // The floor equals the evidence pin (FACT-88): PostToolUse additionalContext
+    // has no changelog version upstream, so the maintainer set the floor to the
+    // binary every declared capability was probed against. Older binaries are
+    // refused rather than silently dropping appended context.
     expect(satisfies(`${major}.${minor}.${patch}`, supportedVersions)).toBe(true);
-    expect(satisfies(`${major}.${minor}.${patch - 1}`, supportedVersions)).toBe(true);
+    expect(satisfies(`${major}.${minor}.${patch - 1}`, supportedVersions)).toBe(false);
     expect(satisfies(`${major}.${minor}.${patch + 1}`, supportedVersions)).toBe(true);
     expect(satisfies(`${major}.${minor + 1}.0`, supportedVersions)).toBe(true);
 
-    // Below the floor minor and across the major boundary the hook surface is
-    // no longer the one this client encodes.
+    // Across the major boundary the hook surface is no longer the one this
+    // client encodes.
     expect(satisfies(`${major}.${minor - 1}.0`, supportedVersions)).toBe(false);
     expect(satisfies(`${major + 1}.0.0`, supportedVersions)).toBe(false);
   });
