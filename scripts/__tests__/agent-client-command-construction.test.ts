@@ -325,6 +325,113 @@ describe('buildCodexCommand cliArgs', () => {
   });
 });
 
+describe('buildCodexCommand mcpServers', () => {
+  const MCP_SCENARIO: ProbeScenario = {
+    ...STUB_SCENARIO,
+    mcpServers: {
+      probe: { command: '/usr/bin/node', args: ['probe-mcp-server.js', '--flag'], alwaysLoad: true },
+      'side_car-2': { command: 'node', args: [] },
+    },
+    cliArgs: ['--config', 'model_auto_compact_token_limit=10000'],
+  };
+
+  /**
+   * Builds a Codex command for a scenario.
+   * @param scenario - Scenario to construct the command for.
+   * @returns The constructed Codex command.
+   */
+  function build(scenario: ProbeScenario): ReturnType<typeof buildCodexCommand> {
+    return buildCodexCommand({
+      executablePath: '/usr/local/bin/codex',
+      scenario,
+      env: { PATH: '/usr/bin' },
+      projectDir: '/tmp/project',
+      settingsPath: '/tmp/hooks.json',
+    });
+  }
+
+  it('passes each server as --config overrides between --skip-git-repo-check and the scenario cliArgs', () => {
+    const { args } = build(MCP_SCENARIO);
+    const start = args.indexOf('--skip-git-repo-check') + 1;
+
+    expect(args.slice(start)).toEqual([
+      '--config',
+      'mcp_servers.probe.command="/usr/bin/node"',
+      '--config',
+      'mcp_servers.probe.args=["probe-mcp-server.js", "--flag"]',
+      '--config',
+      'mcp_servers.probe.default_tools_approval_mode="approve"',
+      '--config',
+      'mcp_servers.probe.omit_tools_from=["deferred"]',
+      '--config',
+      'mcp_servers.side_car-2.command="node"',
+      '--config',
+      'mcp_servers.side_car-2.args=[]',
+      '--config',
+      'mcp_servers.side_car-2.default_tools_approval_mode="approve"',
+      '--config',
+      'model_auto_compact_token_limit=10000',
+      STUB_SCENARIO.prompt,
+    ]);
+  });
+
+  it('omits tools from deferral only for a server with alwaysLoad true', () => {
+    for (const alwaysLoad of [undefined, false] as const) {
+      const { args } = build({
+        ...STUB_SCENARIO,
+        mcpServers: { probe: { command: 'node', args: [], ...(alwaysLoad !== undefined && { alwaysLoad }) } },
+      });
+      expect(args.some((arg) => arg.includes('omit_tools_from'))).toBe(false);
+    }
+    const { args } = build({
+      ...STUB_SCENARIO,
+      mcpServers: { probe: { command: 'node', args: [], alwaysLoad: true } },
+    });
+    expect(args.filter((arg) => arg.includes('omit_tools_from'))).toEqual([
+      'mcp_servers.probe.omit_tools_from=["deferred"]',
+    ]);
+  });
+
+  it('adds no MCP overrides when the scenario declares no servers', () => {
+    expect(build(STUB_SCENARIO).args.some((arg) => arg.startsWith('mcp_servers.'))).toBe(false);
+  });
+
+  it('refuses a server name that is not a bare Codex config key', () => {
+    for (const name of ['a.b', 'with space', 'quote"d', '']) {
+      expect(() => build({ ...STUB_SCENARIO, mcpServers: { [name]: { command: 'node', args: [] } } })).toThrow(
+        /is not a bare Codex config key/,
+      );
+    }
+  });
+
+  it('refuses an MCP config path, which Codex cannot use', () => {
+    expect(() =>
+      buildCodexCommand({
+        executablePath: '/usr/local/bin/codex',
+        scenario: MCP_SCENARIO,
+        env: { PATH: '/usr/bin' },
+        projectDir: '/tmp/project',
+        settingsPath: '/tmp/hooks.json',
+        mcpConfigPath: '/tmp/test-scenario.mcp-config.json',
+      }),
+    ).toThrow('got an MCP config path, which Codex cannot use');
+  });
+
+  it('keeps the Claude Code command on --mcp-config without Codex overrides', () => {
+    const { args } = buildClaudeCodeCommand({
+      executablePath: '/usr/local/bin/claude',
+      scenario: MCP_SCENARIO,
+      env: { PATH: '/usr/bin' },
+      projectDir: '/tmp/project',
+      settingsPath: '/tmp/settings.json',
+      mcpConfigPath: '/tmp/test-scenario.mcp-config.json',
+    });
+
+    expect(args[args.indexOf('--mcp-config') + 1]).toBe('/tmp/test-scenario.mcp-config.json');
+    expect(args.some((arg) => arg.startsWith('mcp_servers.'))).toBe(false);
+  });
+});
+
 describe('buildSpawnCommand', () => {
   it('dispatches to Claude Code builder for claude-code provider', () => {
     const cmd = buildSpawnCommand({

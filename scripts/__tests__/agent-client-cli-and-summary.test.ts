@@ -320,19 +320,41 @@ describe('writeScenarioHookConfig', () => {
     }
   });
 
-  it('refuses hookMatcher and mcpServers for Codex', async () => {
+  it('sets the Codex hooks.json group matcher only when hookMatcher is declared', async () => {
     const workspace = await createProbeWorkspace({ provider: 'codex', manifest: emptyManifest('codex') });
     try {
-      await expect(
-        writeScenarioHookConfig({ provider: 'codex', scenario: { ...SCENARIO, hookMatcher: 'Bash' }, workspace }),
-      ).rejects.toThrow('only Claude Code supports');
-      await expect(
-        writeScenarioHookConfig({
-          provider: 'codex',
-          scenario: { ...SCENARIO, mcpServers: { probe: { command: 'node', args: [] } } },
-          workspace,
-        }),
-      ).rejects.toThrow('only Claude Code supports');
+      const withMatcher = await writeScenarioHookConfig({
+        provider: 'codex',
+        scenario: { ...SCENARIO, id: 'with-matcher', hookMatcher: 'mcp__probe__.*' },
+        workspace,
+      });
+      const [matched] = await readHookEntries(withMatcher.settingsPath, 'PostToolUse');
+      expect(matched!.matcher).toBe('mcp__probe__.*');
+      expect(matched!.hooks[0]!.timeoutSec).toBe(SCENARIO.timeoutSeconds);
+
+      const withoutMatcher = await writeScenarioHookConfig({
+        provider: 'codex',
+        scenario: { ...SCENARIO, id: 'without-matcher' },
+        workspace,
+      });
+      const [unmatched] = await readHookEntries(withoutMatcher.settingsPath, 'PostToolUse');
+      expect('matcher' in unmatched!).toBe(false);
+    } finally {
+      await cleanupProbeWorkspace(workspace);
+    }
+  });
+
+  it('writes no mcp-config file for a Codex scenario that declares servers', async () => {
+    const workspace = await createProbeWorkspace({ provider: 'codex', manifest: emptyManifest('codex') });
+    try {
+      const config = await writeScenarioHookConfig({
+        provider: 'codex',
+        scenario: { ...SCENARIO, mcpServers: { probe: { command: 'node', args: ['probe-mcp-server.js'] } } },
+        workspace,
+      });
+      expect(config.mcpConfigPath).toBeUndefined();
+      const written = await fs.readdir(workspace.rootDir);
+      expect(written.filter((name) => name.endsWith('.mcp-config.json'))).toEqual([]);
     } finally {
       await cleanupProbeWorkspace(workspace);
     }
