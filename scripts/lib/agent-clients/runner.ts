@@ -48,16 +48,22 @@ function nativeConfigPath(provider: ProbeOptions['provider'], workspace: ProbeWo
 /**
  * Writes native hook configuration that invokes the disposable capture shim.
  * @param params - Provider, scenario, and isolated workspace used to construct the hook command.
- * @returns The native settings path and disposable raw capture path.
+ * @returns The native settings path, disposable raw capture path, and the
+ *   Claude Code `--mcp-config` path when the scenario declares `mcpServers`.
  */
 export async function writeScenarioHookConfig(params: {
   provider: ProbeOptions['provider'];
   scenario: ProbeScenario;
   workspace: ProbeWorkspace;
-}): Promise<{ settingsPath: string; capturePath: string }> {
+}): Promise<{ settingsPath: string; capturePath: string; mcpConfigPath?: string }> {
   const { provider, scenario, workspace } = params;
   const event = scenario.expectedEvents[0];
   if (!event) throw new Error(`Scenario "${scenario.id}" does not declare an event`);
+  // Refused rather than dropped: evidence recorded under a configuration the
+  // fixture does not describe is worse than none (same rule as `cliArgs`).
+  if (provider !== 'claude-code' && (scenario.hookMatcher !== undefined || scenario.mcpServers !== undefined)) {
+    throw new Error(`Scenario "${scenario.id}" sets hookMatcher or mcpServers, which only Claude Code supports`);
+  }
   const capturePath = path.join(workspace.rootDir, `${scenario.id}.captures.jsonl`);
   const sentinelPath = path.join(workspace.rootDir, `${scenario.id}.sentinel`);
   const shimPath = path.join(workspace.rootDir, `${scenario.id}.hook-shim.cjs`);
@@ -73,7 +79,12 @@ export async function writeScenarioHookConfig(params: {
     provider === 'claude-code'
       ? {
           hooks: {
-            [event.eventName]: [{ hooks: [{ type: 'command', command, timeout: scenario.timeoutSeconds * 1000 }] }],
+            [event.eventName]: [
+              {
+                ...(scenario.hookMatcher !== undefined && { matcher: scenario.hookMatcher }),
+                hooks: [{ type: 'command', command, timeout: scenario.timeoutSeconds * 1000 }],
+              },
+            ],
           },
         }
       : {
@@ -82,7 +93,10 @@ export async function writeScenarioHookConfig(params: {
           },
         };
   await fs.writeFile(settingsPath, `${JSON.stringify(contents, null, 2)}\n`, 'utf8');
-  return { settingsPath, capturePath };
+  if (scenario.mcpServers === undefined) return { settingsPath, capturePath };
+  const mcpConfigPath = path.join(workspace.rootDir, `${scenario.id}.mcp-config.json`);
+  await fs.writeFile(mcpConfigPath, `${JSON.stringify({ mcpServers: scenario.mcpServers }, null, 2)}\n`, 'utf8');
+  return { settingsPath, capturePath, mcpConfigPath };
 }
 
 /**
@@ -483,6 +497,7 @@ async function seedResumableSession(params: {
   env: Record<string, string>;
   projectDir: string;
   settingsPath: string;
+  mcpConfigPath?: string;
   capturePath: string;
   deadlineMs: number;
 }): Promise<ScenarioInvocation | undefined> {
@@ -523,6 +538,7 @@ export async function runScenario(params: {
     env: params.env,
     projectDir: params.workspace.projectDir,
     settingsPath: config.settingsPath,
+    ...(config.mcpConfigPath !== undefined && { mcpConfigPath: config.mcpConfigPath }),
   };
   // One deadline for the whole scenario, fixed before the first spawn, so a
   // seeded scenario's two runs share the budget instead of each taking it.

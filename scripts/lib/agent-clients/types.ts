@@ -31,6 +31,14 @@ export interface CandidateHookEventShape {
   readonly mode: 'event' | 'request';
 }
 
+/** One stdio MCP server entry of a scenario's Claude Code `--mcp-config` file. */
+export interface ProbeMcpServerConfig {
+  /** Executable the client spawns for the server. */
+  readonly command: string;
+  /** Arguments passed to {@link ProbeMcpServerConfig.command}. */
+  readonly args: readonly string[];
+}
+
 /** A bounded native-client scenario. */
 export interface ProbeScenario {
   /** Stable fixture name. */
@@ -51,6 +59,21 @@ export interface ProbeScenario {
   readonly allowedTools: readonly string[];
   /** Extra provider-native CLI arguments required to reach this scenario's event. */
   readonly cliArgs?: readonly string[];
+  /**
+   * Claude Code hook `matcher` for the scenario's hook entry.
+   *
+   * Absent means no matcher: the hook fires on every invocation of the event.
+   * Claude Code only; a Codex scenario carrying one is refused.
+   */
+  readonly hookMatcher?: string;
+  /**
+   * MCP servers the harness writes into the scenario's `--mcp-config` file.
+   *
+   * Keyed by server name, which is also the `mcp__<name>__*` prefix of its
+   * tools in {@link ProbeScenario.allowedTools}. Claude Code only; a Codex
+   * scenario carrying servers is refused.
+   */
+  readonly mcpServers?: Readonly<Record<string, ProbeMcpServerConfig>>;
   /** Exactly one declared hook event attempted by this scenario. */
   readonly expectedEvents: readonly CandidateHookEventShape[];
   /** Native response emitted by the capture shim, when the event is request-capable. */

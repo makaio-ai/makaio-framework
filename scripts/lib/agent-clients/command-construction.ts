@@ -113,6 +113,7 @@ const CLAUDE_CODE_RESERVED_FLAGS = [
   '--permission-mode',
   '--allowedTools',
   '--add-dir',
+  '--mcp-config',
 ] as const;
 
 /**
@@ -165,9 +166,14 @@ export function buildClaudeCodeCommand(params: {
   env: Record<string, string>;
   projectDir: string;
   settingsPath: string;
+  /** Scenario MCP config file; required exactly when the scenario declares `mcpServers`. */
+  mcpConfigPath?: string;
   invocation?: ScenarioInvocation;
 }): SpawnCommand {
-  const { executablePath, scenario, env, projectDir, settingsPath, invocation } = params;
+  const { executablePath, scenario, env, projectDir, settingsPath, mcpConfigPath, invocation } = params;
+  if ((scenario.mcpServers === undefined) !== (mcpConfigPath === undefined)) {
+    throw new Error(`Scenario "${scenario.id}" needs an MCP config path exactly when it declares mcpServers`);
+  }
   const prompt = invocation?.seed === true ? (scenario.seedPrompt ?? scenario.prompt) : scenario.prompt;
   return {
     executable: executablePath,
@@ -201,6 +207,7 @@ export function buildClaudeCodeCommand(params: {
       scenario.allowedTools.join(','),
       '--add-dir',
       projectDir,
+      ...(mcpConfigPath === undefined ? [] : ['--mcp-config', mcpConfigPath]),
       ...scenarioCliArgs(scenario, CLAUDE_CODE_RESERVED_FLAGS),
     ],
     env,
@@ -259,6 +266,7 @@ export function buildSpawnCommand(params: {
   env: Record<string, string>;
   projectDir: string;
   settingsPath: string;
+  mcpConfigPath?: string;
   invocation?: ScenarioInvocation;
 }): SpawnCommand {
   return params.provider === 'claude-code' ? buildClaudeCodeCommand(params) : buildCodexCommand(params);
