@@ -10,7 +10,12 @@ import { getManifest } from '../lib/agent-clients/manifests.js';
 import { runCommand, runScenario, writeScenarioHookConfig } from '../lib/agent-clients/runner.js';
 import type { ProbeScenario, ScenarioFixture, ScenarioManifest } from '../lib/agent-clients/types.js';
 import { cleanupProbeWorkspace, createProbeWorkspace } from '../lib/agent-clients/workspace.js';
-import { findMissingEffectCoverage, resolveDefaultFixturesDir, runProbe } from '../test-agent-clients.js';
+import {
+  DEFAULT_MAX_SCENARIOS,
+  findMissingEffectCoverage,
+  resolveDefaultFixturesDir,
+  runProbe,
+} from '../test-agent-clients.js';
 
 const REQUEST_SCENARIO: ProbeScenario = {
   id: 'pre-tool-use',
@@ -132,8 +137,7 @@ describe('native probe driver', () => {
     'codex',
   ] as const)('%s manifest covers every source effect with a bounded scenario', (provider) => {
     const providerManifest = getManifest(provider);
-    // Mirrors DEFAULT_MAX_SCENARIOS in scripts/test-agent-clients.ts (not exported).
-    expect(providerManifest.scenarios.length).toBeLessThanOrEqual(20);
+    expect(providerManifest.scenarios.length).toBeLessThanOrEqual(DEFAULT_MAX_SCENARIOS);
     const scenarioEffects = new Set(
       providerManifest.scenarios.flatMap((scenario) =>
         scenario.sentinelEffect ? [`${scenario.expectedEvents[0]!.eventName}:${scenario.sentinelEffect}`] : [],
