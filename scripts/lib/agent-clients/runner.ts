@@ -93,7 +93,8 @@ export async function writeScenarioHookConfig(params: {
             [event.eventName]: [
               {
                 ...(scenario.hookMatcher !== undefined && { matcher: scenario.hookMatcher }),
-                hooks: [{ type: 'command', command, timeout: scenario.timeoutSeconds * 1000 }],
+                // Claude Code reads hook `timeout` in seconds, like Codex's `timeoutSec`.
+                hooks: [{ type: 'command', command, timeout: scenario.timeoutSeconds }],
               },
             ],
           },

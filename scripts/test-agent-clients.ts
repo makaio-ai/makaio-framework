@@ -22,15 +22,16 @@ import {
   publishProbeEvidence,
   preparePinnedProbeBinary,
   prepareNativeLoginLease,
-  redactStringValue,
   resolveCredentialMode,
   runScenario,
   validateBinaryVersion,
 } from './lib/agent-clients/index.js';
+import { summarizeNativeResult } from './lib/agent-clients/native-result-summary.js';
 import type {
   NativeLoginLeaseFactory,
   PreparedProbeBinary,
   ProbeOptions,
+  ProbeScenario,
   ProviderId,
   ScenarioFixture,
   ScenarioManifest,
@@ -41,6 +42,42 @@ const DEFAULT_MAX_SCENARIOS = 20;
 // exceeds the former 300 s budget (FACT-88 adds the MCP PostToolUse scenario).
 const DEFAULT_MAX_WALL_CLOCK_SECONDS = 1200;
 const VALID_PROVIDERS = new Set<ProviderId>(['claude-code', 'codex']);
+const USAGE = `Usage: yarn test:agent-clients --provider <claude-code|codex> [options]
+
+Options:
+  --scenario <id>          Run only this scenario; repeat to run several (verify mode only)
+  --max-scenarios <n>      Run at most n scenarios (default ${String(DEFAULT_MAX_SCENARIOS)})
+  --max-wall-clock <s>     Stop starting scenarios after s seconds (default ${String(DEFAULT_MAX_WALL_CLOCK_SECONDS)})
+  --update-fixtures        Record and publish fixtures; requires every scenario (no --scenario filter)
+  --help                   Show this help`;
+
+/** Probe options plus the optional CLI scenario filter. */
+export type ProbeCliOptions = ProbeOptions & {
+  /** Scenario ids to run, in manifest order; absent runs every scenario. */
+  readonly scenarioIds?: readonly string[];
+};
+
+/**
+ * Selects the manifest scenarios named by a `--scenario` filter, in manifest order.
+ * @param manifest - Provider manifest the ids are resolved against.
+ * @param scenarioIds - Requested ids; absent selects every scenario.
+ * @returns The selected scenarios.
+ */
+export function selectScenarios(
+  manifest: ScenarioManifest,
+  scenarioIds: readonly string[] | undefined,
+): readonly ProbeScenario[] {
+  if (scenarioIds === undefined) return manifest.scenarios;
+  const valid = manifest.scenarios.map((scenario) => scenario.id);
+  const unknown = scenarioIds.filter((id) => !valid.includes(id));
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown --scenario for ${manifest.provider}: ${unknown.join(', ')}. Valid ids: ${valid.join(', ')}`,
+    );
+  }
+  const requested = new Set(scenarioIds);
+  return manifest.scenarios.filter((scenario) => requested.has(scenario.id));
+}
 
 /**
  * Finds source-expected event/effect pairs not proven by live behavior fixtures.
@@ -83,9 +120,10 @@ export function resolveDefaultFixturesDir(scriptPath: string): string {
  * @param env - Process environment used only for credential selection.
  * @returns Validated, bounded probe options.
  */
-export function parseProbeArgs(args: readonly string[], env: NodeJS.ProcessEnv = process.env): ProbeOptions {
+export function parseProbeArgs(args: readonly string[], env: NodeJS.ProcessEnv = process.env): ProbeCliOptions {
   let provider: ProviderId | undefined;
   let updateFixtures = false;
+  const scenarioIds: string[] = [];
   let maxScenarios = DEFAULT_MAX_SCENARIOS;
   let maxWallClockSeconds = DEFAULT_MAX_WALL_CLOCK_SECONDS;
   for (let index = 0; index < args.length; index += 1) {
@@ -95,6 +133,10 @@ export function parseProbeArgs(args: readonly string[], env: NodeJS.ProcessEnv =
       if (!value || !VALID_PROVIDERS.has(value as ProviderId))
         throw new Error('--provider must be claude-code or codex');
       provider = value as ProviderId;
+    } else if (arg === '--scenario') {
+      const value = args[++index];
+      if (!value || value.startsWith('--')) throw new Error('--scenario requires a scenario id');
+      scenarioIds.push(value);
     } else if (arg === '--update-fixtures') {
       updateFixtures = true;
     } else if (arg === '--max-scenarios' || arg === '--max-wall-clock') {
@@ -107,9 +149,18 @@ export function parseProbeArgs(args: readonly string[], env: NodeJS.ProcessEnv =
     }
   }
   if (!provider) throw new Error('--provider is required');
+  // Fails fast on an unknown id, before any credential or binary work.
+  if (scenarioIds.length > 0) selectScenarios(getManifest(provider), scenarioIds);
   const credentials = resolveCredentialMode({ provider, env });
   if (!credentials.mode) throw new Error(credentials.error);
-  return { provider, credentialMode: credentials.mode, updateFixtures, maxScenarios, maxWallClockSeconds };
+  return {
+    provider,
+    credentialMode: credentials.mode,
+    updateFixtures,
+    maxScenarios,
+    maxWallClockSeconds,
+    ...(scenarioIds.length > 0 && { scenarioIds }),
+  };
 }
 
 /**
@@ -119,7 +170,7 @@ export function parseProbeArgs(args: readonly string[], env: NodeJS.ProcessEnv =
  * @returns Aggregate result without changing process exit state.
  */
 export async function runProbe(
-  options: ProbeOptions,
+  options: ProbeCliOptions,
   params?: {
     /** Exact executable override reserved for injected tests. */
     executablePath?: string;
@@ -135,12 +186,13 @@ export async function runProbe(
   readonly failures: readonly string[];
 }> {
   const manifest = getManifest(options.provider);
-  if (options.updateFixtures && options.maxScenarios < manifest.scenarios.length) {
+  const scenarios = selectScenarios(manifest, options.scenarioIds).slice(0, options.maxScenarios);
+  if (options.updateFixtures && scenarios.length < manifest.scenarios.length) {
     return {
       passed: false,
       scenariosExecuted: 0,
       failures: [
-        `Refusing to publish partial evidence: --max-scenarios must cover all ${String(manifest.scenarios.length)} scenarios`,
+        `Refusing to publish partial evidence: --update-fixtures must cover all ${String(manifest.scenarios.length)} scenarios (no --scenario filter, --max-scenarios >= ${String(manifest.scenarios.length)})`,
       ],
     };
   }
@@ -183,7 +235,7 @@ export async function runProbe(
       tempConfigDir: workspace.configDir,
       ...(nativeLoginLease ? { nativeAuthEnv: nativeLoginLease.env } : {}),
     });
-    for (const scenario of manifest.scenarios.slice(0, options.maxScenarios)) {
+    for (const scenario of scenarios) {
       const remainingMs = options.maxWallClockSeconds * 1000 - (Date.now() - startedAt);
       if (remainingMs <= 0) {
         failures.push(`Wall-clock cap reached after ${String(scenariosExecuted)} scenario(s)`);
@@ -206,10 +258,7 @@ export async function runProbe(
       scenariosExecuted += 1;
       fixtures.push(result.fixture);
       if (!result.fixture.oraclePassed) {
-        const diagnostic = redactStringValue([result.stdout, result.stderr].filter(Boolean).join(' '))
-          .trim()
-          .replace(/\s+/g, ' ')
-          .slice(0, 800);
+        const diagnostic = summarizeNativeResult(result.stdout, result.stderr);
         failures.push(`${scenario.id}: native oracle failed${diagnostic ? ` (${diagnostic})` : ''}`);
       }
       failures.push(...result.fixtureDiffs.map((diff) => `${scenario.id}: ${diff}`));
@@ -240,12 +289,18 @@ export async function runProbe(
 }
 
 async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log(USAGE);
+    return;
+  }
   try {
-    const options = parseProbeArgs(process.argv.slice(2));
+    const options = parseProbeArgs(args);
     const manifest = getManifest(options.provider);
+    const scenarioCount = selectScenarios(manifest, options.scenarioIds).slice(0, options.maxScenarios).length;
     console.warn('WARNING: test:agent-clients makes credentialed, networked, potentially billable requests.');
     console.log(
-      `provider=${options.provider} pinned=${manifest.pinnedVersion} scenarios=${String(Math.min(manifest.scenarios.length, options.maxScenarios))} mode=${options.updateFixtures ? 'update' : 'verify'}`,
+      `provider=${options.provider} pinned=${manifest.pinnedVersion} scenarios=${String(scenarioCount)} mode=${options.updateFixtures ? 'update' : 'verify'}`,
     );
     const result = await runProbe(options);
     if (!result.passed) throw new Error(result.failures.join('\n'));
