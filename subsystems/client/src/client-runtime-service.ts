@@ -14,7 +14,7 @@ import { CLIDetectionSubjects, type CLIDetectionResult } from '@makaio/services-
 import { ClientStorageSubjects, type ClientRecord } from '@makaio/services-core/settings/storage';
 import { ClientAccountRegistry } from './client-account-registry.js';
 import { ClientRuntimeRegistry } from './client-runtime-registry.js';
-import { canonicalizeClientId } from './client-session-observed-semantics.js';
+import { canonicalizeClientId } from './hook-subjects.js';
 import { createClientWiringListSubjectDef } from './create-client-wiring-list-subject.js';
 import { assertAbsoluteProjectDir, type ClientWiringAggregatedResult } from './wiring-schemas.js';
 

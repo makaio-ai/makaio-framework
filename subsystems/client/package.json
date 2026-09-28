@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./managed-install": "./src/managed-install.ts",
+    "./hook-subjects": "./src/hook-subjects.ts",
     "./package.json": "./package.json"
   },
   "makaio": {
@@ -50,6 +51,7 @@
     "exports": {
       ".": "./dist/index.mjs",
       "./managed-install": "./dist/managed-install.mjs",
+      "./hook-subjects": "./dist/hook-subjects.mjs",
       "./package.json": "./package.json"
     }
   },

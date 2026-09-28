@@ -37,7 +37,7 @@ import { SessionSubjects } from '@makaio/contracts/session';
 import { BaseService } from '@makaio/service-base';
 import type { RequestMessagePayload, SubjectDefinition, SubjectRecord } from '@makaio/core';
 import { ClientProfileStorageSubjects } from './storage/profile-storage-namespace.js';
-import { canonicalizeClientId } from './client-session-observed-semantics.js';
+import { canonicalizeClientId } from './hook-subjects.js';
 import { primeClientConfig } from './client-config-prime.js';
 
 // ---------------------------------------------------------------------------

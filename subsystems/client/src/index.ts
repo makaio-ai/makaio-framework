@@ -42,25 +42,27 @@ export {
 } from './client-session-token-service.js';
 export {
   buildClientSessionBase,
-  canonicalizeClientId,
-  ClientHookHandleResponseSchema,
   ClientSubjects,
-  NOOP_HOOK_HANDLE_RESPONSE,
-  createRawClientHookHandleSubject,
-  createRawClientHookReceivedSubject,
-  DEFAULT_HOOK_HANDLE_TIMEOUT_MS,
   emitBestEffort,
   pickNonEmptyString,
   pickNonEmptyStringValue,
-  RawClientHookPayloadSchema,
 } from './client-session-observed-semantics.js';
+export type { BuildClientSessionBaseOpts } from './client-session-observed-semantics.js';
+export {
+  canonicalizeClientId,
+  ClientHookHandleResponseSchema,
+  createRawClientHookHandleSubject,
+  createRawClientHookReceivedSubject,
+  DEFAULT_HOOK_HANDLE_TIMEOUT_MS,
+  NOOP_HOOK_HANDLE_RESPONSE,
+  RawClientHookPayloadSchema,
+} from './hook-subjects.js';
 export type {
-  BuildClientSessionBaseOpts,
   ClientHookHandleResponse,
   RawClientHookHandleSubject,
   RawClientHookPayload,
   RawClientHookReceivedSubject,
-} from './client-session-observed-semantics.js';
+} from './hook-subjects.js';
 export { createClientNamespace } from './create-client-namespace.js';
 export type { ClientNamespaceResult } from './create-client-namespace.js';
 export { createClientWiringListSubjectDef, createClientWiringSubjectDef } from './create-client-wiring-list-subject.js';

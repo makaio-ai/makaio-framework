@@ -13,10 +13,7 @@ import { z } from 'zod';
 import { MakaioBus } from '@makaio/bus-core';
 import { createClientDefinition } from '@makaio/contracts/client';
 import { createClientNamespace } from '../create-client-namespace.js';
-import {
-  ClientHookHandleResponseSchema,
-  createRawClientHookHandleSubject,
-} from '../client-session-observed-semantics.js';
+import { ClientHookHandleResponseSchema, createRawClientHookHandleSubject } from '../hook-subjects.js';
 import { deriveSessionEventDescriptors } from '../wiring-helpers.js';
 
 const OverrideHookSchema = z.object({ override: z.boolean() });

@@ -246,6 +246,10 @@
       "types": "./dist/clients/index.d.mts",
       "default": "./dist/clients/index.mjs"
     },
+    "./clients/hook-subjects": {
+      "types": "./dist/clients/hook-subjects.d.mts",
+      "default": "./dist/clients/hook-subjects.mjs"
+    },
     "./git": {
       "types": "./dist/git/index.d.mts",
       "default": "./dist/git/index.mjs"

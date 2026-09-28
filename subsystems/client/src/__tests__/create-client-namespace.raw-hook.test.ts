@@ -2,14 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { MakaioBus } from '@makaio/bus-core';
 import { createClientNamespace } from '../create-client-namespace.js';
+import { emitBestEffort, pickNonEmptyString, buildClientSessionBase } from '../client-session-observed-semantics.js';
 import {
   createRawClientHookReceivedSubject,
   canonicalizeClientId,
-  emitBestEffort,
-  pickNonEmptyString,
-  buildClientSessionBase,
   RawClientHookPayloadSchema,
-} from '../client-session-observed-semantics.js';
+} from '../hook-subjects.js';
 
 const ExtraStatuslineSchema = z.object({ status: z.string() });
 const ORIGINAL_DEBUG = process.env.DEBUG;

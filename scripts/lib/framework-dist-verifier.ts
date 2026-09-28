@@ -25,6 +25,7 @@ export interface FrameworkDistIssue {
     | 'declaration-target-without-surface'
     | 'export-target-not-file'
     | 'export-target-outside-root'
+    | 'light-entry-import'
     | 'migration-chain-extra-file'
     | 'migration-journal-mismatch'
     | 'missing-export-target'
@@ -137,6 +138,19 @@ export interface PostgresLiteralAllowlistEntry {
  */
 export const POSTGRES_DIST_LITERAL_ALLOWLIST: readonly PostgresLiteralAllowlistEntry[] = [];
 
+/**
+ * Light dist entries (built module path relative to the package root) mapped to
+ * the only import specifiers each may contain.
+ *
+ * Short-lived CLI hook processes load these entries on every hook call, so any
+ * extra import — including a shared chunk the bundler hoisted common code into
+ * — adds cold-start cost to every call. Entries absent from disk are skipped;
+ * the exports-map target check already reports a missing built entry.
+ */
+export const LIGHT_DIST_ENTRY_ALLOWED_IMPORTS: Readonly<Record<string, readonly string[]>> = {
+  'dist/clients/hook-subjects.mjs': ['zod'],
+};
+
 /** Options for {@link verifyFrameworkDist}. */
 export interface VerifyFrameworkDistOptions {
   /**
@@ -160,6 +174,11 @@ export interface VerifyFrameworkDistOptions {
    * Defaults to {@link BUNDLED_RUNTIME_ASSETS}.
    */
   readonly runtimeAssets?: readonly string[];
+  /**
+   * Light dist entries mapped to their allowed import specifiers. Defaults to
+   * {@link LIGHT_DIST_ENTRY_ALLOWED_IMPORTS}.
+   */
+  readonly lightEntries?: Readonly<Record<string, readonly string[]>>;
 }
 
 type ExportValue = string | Readonly<Record<string, unknown>>;
@@ -244,9 +263,10 @@ function isLocalFileTarget(target: string): boolean {
  * 6. Every required runtime asset exists as a regular file.
  * 7. Every bundled migration chain ships with a journal that matches its
  *    `.sql` migration files and contains no source-only Drizzle artifacts.
+ * 8. Every light dist entry imports only its allowed specifiers.
  * @param frameworkRoot - Absolute path to the `@makaio/framework` package root.
  * @param options - Optional overrides for required runtime assets, migration
- * chains, and self-contained declaration bundles.
+ * chains, light entries, and self-contained declaration bundles.
  * @returns Verification result with all missing or unsafe targets.
  */
 export function verifyFrameworkDist(
@@ -272,6 +292,7 @@ export function verifyFrameworkDist(
   }
   checkRuntimeAssets(root, options.runtimeAssets ?? BUNDLED_RUNTIME_ASSETS, issues);
   checkMigrationChains(root, options.migrationChains ?? BUNDLED_MIGRATION_CHAINS, issues);
+  checkLightEntries(root, options.lightEntries ?? LIGHT_DIST_ENTRY_ALLOWED_IMPORTS, issues);
 
   return { checkedTargets, scannedModules, issues, ok: issues.length === 0 };
 }
@@ -559,6 +580,37 @@ function checkSelfImport(
     message: `Built module "${modulePath}" imports "${specifier}" but the exports map has no "${exportKey}" entry`,
     target: modulePath,
   });
+}
+
+/**
+ * Reports every import specifier in a light dist entry that its allowlist does
+ * not name.
+ * @param root - Absolute framework package root.
+ * @param lightEntries - Light entry paths mapped to their allowed specifiers.
+ * @param issues - Issue sink to append findings to.
+ */
+function checkLightEntries(
+  root: string,
+  lightEntries: Readonly<Record<string, readonly string[]>>,
+  issues: FrameworkDistIssue[],
+): void {
+  for (const [entry, allowed] of Object.entries(lightEntries)) {
+    const entryPath = resolve(root, entry);
+    if (!existsSync(entryPath)) continue;
+
+    const content = readFileSync(entryPath, 'utf8');
+    for (const specifier of new Set(Array.from(content.matchAll(IMPORT_SPECIFIER_PATTERN), (match) => match[1]))) {
+      if (allowed.includes(specifier)) continue;
+      issues.push({
+        exportKey: specifier,
+        kind: 'light-entry-import',
+        message:
+          `Light entry "${entry}" imports "${specifier}" — allowed imports: ` +
+          `[${allowed.map((name) => `"${name}"`).join(', ')}], because CLI hook processes load it on every call`,
+        target: entry,
+      });
+    }
+  }
 }
 
 /**
