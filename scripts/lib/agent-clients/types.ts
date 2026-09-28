@@ -90,6 +90,16 @@ export interface ProbeScenario {
   readonly expectedPresentMarker?: string;
   /** Workspace marker forbidden after a tool-execution oracle. */
   readonly expectedAbsentMarker?: string;
+  /**
+   * Top-level payload keys every captured invocation of the hooked event must carry.
+   *
+   * Pins *where* the hook fired when the observable outcome alone cannot: a
+   * parent that runs a subagent's tool call itself produces the same final
+   * response, but its payload lacks the subagent's `agent_id`. Checked against
+   * the redacted keys recorded as `payloadKeys`, so the fixture shows the
+   * evidence the oracle relied on.
+   */
+  readonly requiredPayloadKeys?: readonly string[];
   /** Whether the provider can synchronously prevent the native action. */
   readonly blockingCapable: boolean;
   /** Managed bridge command expected for the event. */
