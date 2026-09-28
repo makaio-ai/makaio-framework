@@ -201,6 +201,9 @@ function responseWasConsumed(params: {
   const { provider, scenario, exitCode, timedOut, projectDir, stdout, invocationPayloadKeys, sentinelInjected } =
     params;
   if (timedOut || !firedWithRequiredPayloadKeys(scenario.requiredPayloadKeys, invocationPayloadKeys)) return false;
+  // A negative control that declares a sentinel proves the refusal survives that sentinel, so a
+  // run where the shim never injected it is no proof; one without a sentinel keeps the marker check alone.
+  if (scenario.sentinelEffect !== undefined && !sentinelInjected) return false;
   if (scenario.oracle === 'native-must-deny-unapproved-tool') {
     return markerAbsent(projectDir, scenario.expectedAbsentMarker);
   }
@@ -276,7 +279,12 @@ function normalizedFixture(params: {
             candidateExpectedStatus: scenario.candidateExpectedStatus,
             observedStatus: responseConsumed ? 'supported' : 'observer-only',
             sourceExpectedEffects: scenario.sourceExpectedEffects,
-            observedEffects: responseConsumed && scenario.sentinelEffect ? [scenario.sentinelEffect] : [],
+            // The negative control proves its sentinel changed nothing, not that the sentinel's effect was
+            // consumed, so it records no observed effect; the event's own context-append scenario owns that proof.
+            observedEffects:
+              responseConsumed && scenario.sentinelEffect && scenario.oracle !== 'native-must-deny-unapproved-tool'
+                ? [scenario.sentinelEffect]
+                : [],
             blockingCapable: scenario.blockingCapable,
             managedCommand: scenario.expectedManagedCommand,
             payloadKeys: [...new Set(invocationPayloadKeys.flat())].sort(),

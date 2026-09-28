@@ -36,14 +36,16 @@ export function firedWithRequiredPayloadKeys(
  * - **With a declared effect** (`sentinelEffect` defined): the session must
  *   have ended with `terminal === 'ok'`. A run that consumed the marker but
  *   ended in `error_max_turns` is not clean evidence — the fixture suite
- *   rejects such fixtures via `provesDeclaredEffects`.
+ *   rejects such fixtures via `provesDeclaredEffects`. This includes a
+ *   negative control that carries a sentinel: the Claude
+ *   `native-must-deny-unapproved-tool` scenario rides the `context.append`
+ *   path with a context-only `PreToolUse` sentinel, so it too must end `ok`.
  * - **Without a declared effect** (`sentinelEffect` undefined): the same
  *   bounded-turn rule as the observation branches applies — `error_max_turns`
- *   is accepted alongside `ok`. Negative-control scenarios (e.g.
- *   `native-must-deny-unapproved-tool`) prove a native refusal, which may keep
- *   the model from completing within its turn bound; the oracle relies only on
- *   `responseConsumed` plus a clean termination, not on a specific terminal.
- *   (The current committed fixture ends `terminal: 'ok'`, `exitCode: 0`.)
+ *   is accepted alongside `ok`. Such a scenario proves a native outcome with
+ *   no sentinel in play, which may keep the model from completing within its
+ *   turn bound; the oracle relies only on `responseConsumed` plus a clean
+ *   termination, not on a specific terminal.
  * @param params - Oracle kind, terminal classification, and derived signal flags.
  * @returns Whether the oracle condition is met for this run.
  */
@@ -65,7 +67,7 @@ export function evaluateOracle(params: {
       : // Capability-proving branch: two sub-cases distinguished by sentinelEffect.
         // With a declared effect: require responseConsumed AND terminal === 'ok'.
         // Without a declared effect: require responseConsumed AND terminatedCleanly
-        // (error_max_turns is acceptable — the scenario proves a native refusal).
+        // (error_max_turns is acceptable — no sentinel is in play).
         scenario.sentinelEffect !== undefined
         ? responseConsumed && terminal === 'ok'
         : responseConsumed && terminatedCleanly;
