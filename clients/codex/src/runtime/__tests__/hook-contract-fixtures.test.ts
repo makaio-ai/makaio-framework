@@ -29,7 +29,7 @@ function fixtureObject(value: unknown): Record<string, unknown> {
 }
 
 /**
- * Validates fields whose spelling and semantics are specific to Codex 0.144.1.
+ * Validates fields whose spelling and semantics are specific to Codex 0.158.0.
  * @param eventName - Native hook event name.
  * @param input - Parsed pinned-source input fixture.
  * @param output - Parsed pinned-source output fixture.

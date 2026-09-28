@@ -8,13 +8,18 @@
  * The hook name constants below are the canonical event names reported in the
  * `eventName` field of {@link RawClientHookPayload} by the Codex CLI.
  *
- * Event names are verified against the pinned `rust-v0.144.1` Codex source
+ * Event names are verified against the pinned `rust-v0.158.0` Codex source
  * (`codex-rs/hooks/src/lib.rs` — `HOOK_EVENT_NAMES` and
- * `engine/output_parser.rs`). The full set present in 0.144.1 is:
+ * `engine/output_parser.rs`). The full set present in 0.158.0 is:
  * `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`,
  * `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`,
- * `PermissionRequest`. `SessionEnd` and `Interrupt` are NOT present.
- * @see https://github.com/openai/codex/tree/rust-v0.144.1/codex-rs/hooks
+ * `PermissionRequest`, `SessionEnd`, `Interrupt`.
+ *
+ * `SessionEnd` and `Interrupt` (new since 0.156) are deliberately NOT declared
+ * or modelled here (maintainer decision, FACT-88): they have no consumer and
+ * no bus subject, and declaring them would spawn a hook process on every
+ * interrupt and every session end.
+ * @see https://github.com/openai/codex/tree/rust-v0.158.0/codex-rs/hooks
  * @packageDocumentation
  */
 
@@ -27,7 +32,7 @@ export { RawClientHookPayloadSchema, type RawClientHookPayload } from '@makaio/s
  * emissions. Any event NOT listed here is left as raw `client:codex`
  * namespace data only.
  *
- * Event names are verified against pinned source `rust-v0.144.1`
+ * Event names are verified against pinned source `rust-v0.158.0`
  * (`codex-rs/hooks/src/lib.rs`).
  */
 export const CODEX_HOOK_SESSION_START = 'SessionStart';

@@ -1,4 +1,4 @@
-/** Codex 0.144.1 synchronous hook-response contract. @packageDocumentation */
+/** Codex 0.158.0 synchronous hook-response contract. @packageDocumentation */
 import { CANONICAL_HOOK_RESPONSE_CAPABILITIES } from '@makaio/contracts/client';
 import type {
   InteractionBlockability,
@@ -20,7 +20,7 @@ export const CODEX_CONTRACT_ID = 'openai.codex-hook-response';
 /**
  * Semantic version of the Codex hook-response contract.
  *
- * Pinned to the proven capabilities of Codex CLI 0.144.1. Bump this version
+ * Pinned to the proven capabilities of Codex CLI 0.158.0. Bump this version
  * when a future CLI release expands the native response surface.
  *
  * `1.2.0` adds `SubagentStart` as a request-capable, non-blockable interaction

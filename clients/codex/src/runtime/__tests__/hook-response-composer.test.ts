@@ -1,4 +1,4 @@
-/** Source-backed Codex 0.144.1 response contract tests. */
+/** Source-backed Codex 0.158.0 response contract tests. */
 import { describe, expect, it } from 'vitest';
 import { ClientHookProviderContractRegistry, ClientHookResponseRegistry } from '@makaio/subsystem-client';
 import type { ContributorDefinition } from '@makaio/contracts/client';
