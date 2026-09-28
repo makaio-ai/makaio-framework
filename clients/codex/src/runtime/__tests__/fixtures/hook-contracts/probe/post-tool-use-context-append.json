@@ -1,7 +1,7 @@
 {
   "schemaVersion": 4,
   "provider": "codex",
-  "cliVersion": "0.144.1",
+  "cliVersion": "0.158.0",
   "scenarioId": "post-tool-use-context-append",
   "events": [
     {

@@ -2,32 +2,30 @@
   "schemaVersion": 4,
   "provider": "codex",
   "cliVersion": "0.158.0",
-  "scenarioId": "pre-tool-use-permission-deny",
+  "scenarioId": "post-tool-use-subagent-context-append",
   "events": [
     {
-      "eventName": "PreToolUse",
-      "frameworkSubject": "client.session.tool.pre",
+      "eventName": "PostToolUse",
+      "frameworkSubject": "client.session.tool.post",
       "responseCapabilities": [
         "context.append",
-        "openai.codex-hook-response.block",
-        "openai.codex-hook-response.permission.deny",
-        "openai.codex-hook-response.input.update"
+        "openai.codex-hook-response.block"
       ],
       "mode": "request",
       "candidateExpectedStatus": "supported",
       "observedStatus": "supported",
       "sourceExpectedEffects": [
         "context.append",
-        "openai.codex-hook-response.block",
-        "openai.codex-hook-response.permission.deny",
-        "openai.codex-hook-response.input.update"
+        "openai.codex-hook-response.block"
       ],
       "observedEffects": [
-        "openai.codex-hook-response.permission.deny"
+        "context.append"
       ],
       "blockingCapable": true,
       "managedCommand": "hook handle codex",
       "payloadKeys": [
+        "agent_id",
+        "agent_type",
         "cwd",
         "hook_event_name",
         "model",
@@ -35,6 +33,7 @@
         "session_id",
         "tool_input",
         "tool_name",
+        "tool_response",
         "tool_use_id",
         "transcript_path",
         "turn_id"
@@ -42,7 +41,7 @@
       "sentinelInjected": true
     }
   ],
-  "oracle": "sentinel-must-block-tool",
+  "oracle": "final-response-must-contain-marker",
   "oraclePassed": true,
   "exitCode": 0,
   "terminal": "ok"
