@@ -2,13 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildQueryOptions } from '../src/utils/buildQueryOptions.js';
 import type { ClaudeSessionConfig } from '../src/types/index.js';
 import { SessionLifecycle } from '@makaio/ai-adapters-core';
-import type {
-  HookCallback,
-  HookCallbackMatcher,
-  HookJSONOutput,
-  Options,
-  PreToolUseHookInput,
-} from '@anthropic-ai/claude-agent-sdk';
+import type { HookCallback, HookCallbackMatcher, HookJSONOutput, Options } from '@anthropic-ai/claude-agent-sdk';
+import { PRE_TOOL_USE_ID, preToolUseInput } from '../src/test/gate-test-helpers.js';
 
 /**
  * Build SDK options for the given config overrides.
@@ -61,17 +56,7 @@ function wrappedProviderHook(
  * @returns The hook output.
  */
 function callPreToolUse(hook: HookCallback, toolName: string, toolInput: unknown): Promise<HookJSONOutput> {
-  const input: PreToolUseHookInput = {
-    session_id: 'session-test',
-    transcript_path: '/tmp/transcript.jsonl',
-    cwd: '/tmp',
-    permission_mode: 'default',
-    hook_event_name: 'PreToolUse',
-    tool_name: toolName,
-    tool_input: toolInput,
-    tool_use_id: 'toolu-test',
-  };
-  return hook(input, 'toolu-test', { signal: new AbortController().signal });
+  return hook(preToolUseInput(toolName, toolInput), PRE_TOOL_USE_ID, { signal: new AbortController().signal });
 }
 
 describe('buildQueryOptions — provider PreToolUse hooks under caller lists', () => {
@@ -174,7 +159,7 @@ describe('buildQueryOptions — provider PreToolUse hooks under caller lists', (
 
     expect(providerHook).toHaveBeenCalledTimes(1);
     expect(providerHook.mock.calls[0]?.[0]).toMatchObject({ tool_name: 'Bash', tool_input: { command: 'ls' } });
-    expect(providerHook.mock.calls[0]?.[1]).toBe('toolu-test');
+    expect(providerHook.mock.calls[0]?.[1]).toBe(PRE_TOOL_USE_ID);
   });
 
   it('leaves provider hooks for other events untouched', () => {
