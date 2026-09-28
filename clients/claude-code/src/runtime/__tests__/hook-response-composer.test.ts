@@ -225,9 +225,9 @@ describe('composeHookResponse', () => {
       const result = await composeHookResponse(responseRegistry, payload);
 
       const output = parsePreToolUseOutput(result.stdout);
-      // When only context.append is contributed (no explicit decision),
-      // the default decision is 'allow'
-      expect(output.permissionDecision).toBe('allow');
+      // Context alone renders no permission decision; Claude Code's normal
+      // permission flow decides the tool call.
+      expect(output).not.toHaveProperty('permissionDecision');
       expect(output.additionalContext).toBe('Additional context from extension');
     });
 
@@ -262,6 +262,7 @@ describe('composeHookResponse', () => {
       const result = await composeHookResponse(responseRegistry, payload);
 
       const output = parsePreToolUseOutput(result.stdout);
+      expect(output).not.toHaveProperty('permissionDecision');
       expect(output.additionalContext).toBe('First context line\nSecond context line');
     });
   });
