@@ -1,5 +1,5 @@
 import type { ArtifactRelationRequirement } from './kind-registration.js';
-import { serializeArtifactRelationTargetIdentity } from './relation-target-identity.js';
+import { artifactRelationTargetIdentity, serializeArtifactRelationTargetIdentity } from './relation-target-identity.js';
 import type { ArtifactRelation } from './schemas.js';
 import { resolveDataPathValue } from './uniqueness.js';
 
@@ -71,11 +71,8 @@ function isRequirementApplicable(
   data: Record<string, unknown> | undefined,
 ): boolean {
   if (requirement.when === undefined) return true;
-  const resolved = resolveDataPathValue(data, requirement.when.path);
-  if (resolved === undefined) return false;
-  const { value } = resolved;
-  if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') return false;
-  return value === requirement.when.equals;
+  // `equals` is a scalar, so strict equality already rejects missing, null, and non-scalar values.
+  return resolveDataPathValue(data, requirement.when.path)?.value === requirement.when.equals;
 }
 
 /**
@@ -92,10 +89,11 @@ function countDistinctTargets(
   for (const relation of relations) {
     if (relation.sourceLocalId !== undefined) continue;
     if (relation.type !== requirement.relationType) continue;
-    const { target } = relation;
-    if (target.refClass !== 'artifact') continue;
-    if (requirement.targetKinds?.length && !requirement.targetKinds.includes(target.kind)) continue;
-    targets.add(serializeArtifactRelationTargetIdentity({ refClass: 'artifact', kind: target.kind, id: target.id }));
+    const identity = artifactRelationTargetIdentity(relation.target);
+    if (identity?.refClass !== 'artifact') continue;
+    // An empty list means "no filter", matching the host's counting for callers that pass unparsed requirements.
+    if (requirement.targetKinds?.length && !requirement.targetKinds.includes(identity.kind)) continue;
+    targets.add(serializeArtifactRelationTargetIdentity(identity));
   }
   return targets.size;
 }

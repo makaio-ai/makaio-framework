@@ -131,6 +131,8 @@ export const ArtifactKindRegistrationSchema = z
         });
       }
     });
+    // Mirrors validateKindDataPaths in kind-paths.ts (same message); lives here because kind-paths.ts is at the max-lines limit.
+    // `when.equals` is not checked against the field's schema type: an impossible value registers and the requirement never applies; accepted until a case needs it.
     value.relations?.forEach((requirement, index) => {
       if (requirement.when && !isArtifactDataPathDeclared(value.dataSchema, requirement.when.path)) {
         ctx.addIssue({
