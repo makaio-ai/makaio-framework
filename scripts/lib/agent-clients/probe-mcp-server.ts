@@ -12,8 +12,15 @@
  */
 import { createInterface } from 'node:readline';
 
-/** Fixed text returned by `probe_read`; the probe matches on it in transcripts. */
-export const PROBE_READ_RESULT_TEXT = 'MAKAIO probe MCP read result';
+/**
+ * Fixed text returned by `probe_read`.
+ *
+ * No oracle reads it: the probe only needs the call to complete so that `PostToolUse`
+ * fires. A constant result keeps the tool output inert and free of any probe marker.
+ */
+const PROBE_READ_RESULT_TEXT = 'MAKAIO probe MCP read result';
+/** Server name reported in `initialize`; also the `mcp__<name>__*` prefix of its tools in Claude Code. */
+export const PROBE_MCP_SERVER_NAME = 'probe';
 /** Name of the single tool this server exposes. */
 export const PROBE_TOOL_NAME = 'probe_read';
 
@@ -40,7 +47,7 @@ export function handleProbeMessage(message: JsonRpcRequest): Record<string, unkn
       return reply({
         protocolVersion: typeof requested === 'string' ? requested : DEFAULT_PROTOCOL_VERSION,
         capabilities: { tools: {} },
-        serverInfo: { name: 'probe', version: '1.0.0' },
+        serverInfo: { name: PROBE_MCP_SERVER_NAME, version: '1.0.0' },
       });
     }
     case 'ping':

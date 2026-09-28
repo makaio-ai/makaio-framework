@@ -38,6 +38,7 @@ import {
   type ClientProbeContract,
   type ProbeEffectScenario,
 } from '../probe-contract.js';
+import { PROBE_MCP_SERVER_NAME, PROBE_TOOL_NAME } from '../probe-mcp-server.js';
 
 /** Native tool that spawns a subagent, plus the ordinary scenario tools. */
 const SUBAGENT_ALLOWED_TOOLS = ['Agent', ...DEFAULT_ALLOWED_TOOLS] as const;
@@ -116,14 +117,31 @@ const CONTEXT_VALUE = `Include ${RESPONSE_CONSUMED_MARKER} in your final respons
  */
 const READ_TOOL_PROMPT = 'MAKAIO_PROBE_MARKER: use the Read tool to read MAKAIO_PROBE.md, then reply probe-ack.';
 
-/** Name of the stdio MCP server the MCP scenario configures; prefixes its tool names. */
-const PROBE_MCP_SERVER = 'probe';
-
 /** Absolute path of the stdio MCP probe server, launched with `bun`. */
 const PROBE_MCP_SERVER_PATH = fileURLToPath(new URL('../probe-mcp-server.ts', import.meta.url));
 
 /** Prompt that makes the model call the probe server's single tool. */
-const MCP_TOOL_PROMPT = 'MAKAIO_PROBE_MARKER: call the probe_read tool once, then reply probe-ack.';
+const MCP_TOOL_PROMPT = `MAKAIO_PROBE_MARKER: call the ${PROBE_TOOL_NAME} tool once, then reply probe-ack.`;
+
+/**
+ * Build one context-append attempt whose oracle is the marker in the final response.
+ * @param eventName - Native hook event being exercised.
+ * @param value - Context the sentinel appends.
+ * @param shape - Scenario-specific id suffix, prompt, tools and matcher.
+ * @returns Context-consumption probe shape.
+ */
+function contextAppendScenario(
+  eventName: string,
+  value: string,
+  shape: Omit<ProbeEffectScenario, 'sentinelOutput' | 'oracle' | 'expectedResponseMarker'>,
+): ProbeEffectScenario {
+  return {
+    ...shape,
+    sentinelOutput: sentinel(eventName, [{ kind: 'context.append', value }]),
+    oracle: 'final-response-must-contain-marker',
+    expectedResponseMarker: RESPONSE_CONSUMED_MARKER,
+  };
+}
 
 /**
  * Build the context-append probe shape for one event.
@@ -144,15 +162,8 @@ const MCP_TOOL_PROMPT = 'MAKAIO_PROBE_MARKER: call the probe_read tool once, the
  */
 function contextScenario(eventName: string): ProbeEffectScenario {
   const isSubagentStart = eventName === CLAUDE_CODE_HOOK_SUBAGENT_START;
-  const context: CanonicalEffect = {
-    kind: 'context.append',
-    value: isSubagentStart ? SUBAGENT_CONTEXT_VALUE : CONTEXT_VALUE,
-  };
-  return {
+  return contextAppendScenario(eventName, isSubagentStart ? SUBAGENT_CONTEXT_VALUE : CONTEXT_VALUE, {
     suffix: 'context-append',
-    sentinelOutput: sentinel(eventName, [context]),
-    oracle: 'final-response-must-contain-marker',
-    expectedResponseMarker: RESPONSE_CONSUMED_MARKER,
     ...(isSubagentStart && {
       description: 'Attempts to seed a spawned subagent with hook-appended context it must repeat back.',
       prompt: SUBAGENT_RELAY_PROMPT,
@@ -164,7 +175,7 @@ function contextScenario(eventName: string): ProbeEffectScenario {
       allowedTools: ['Read', ...DEFAULT_ALLOWED_TOOLS],
       hookMatcher: 'Read',
     }),
-  };
+  });
 }
 
 /**
@@ -179,33 +190,53 @@ function contextScenario(eventName: string): ProbeEffectScenario {
 function postToolUseExtraContextScenarios(): readonly ProbeEffectScenario[] {
   const eventName = CLAUDE_CODE_HOOK_POST_TOOL_USE;
   return [
-    {
+    contextAppendScenario(eventName, CONTEXT_VALUE, {
       suffix: 'mcp-context-append',
       description: 'Attempts to append context after an MCP tool call.',
-      sentinelOutput: sentinel(eventName, [{ kind: 'context.append', value: CONTEXT_VALUE }]),
-      oracle: 'final-response-must-contain-marker',
-      expectedResponseMarker: RESPONSE_CONSUMED_MARKER,
       prompt: MCP_TOOL_PROMPT,
-      allowedTools: [`mcp__${PROBE_MCP_SERVER}__probe_read`],
-      hookMatcher: `mcp__${PROBE_MCP_SERVER}__.*`,
+      allowedTools: [`mcp__${PROBE_MCP_SERVER_NAME}__${PROBE_TOOL_NAME}`],
+      hookMatcher: `mcp__${PROBE_MCP_SERVER_NAME}__.*`,
       // 2.1.283 defers MCP tools behind ToolSearch unless the server is marked alwaysLoad, which costs the turn budget.
-      mcpServers: { [PROBE_MCP_SERVER]: { command: 'bun', args: [PROBE_MCP_SERVER_PATH], alwaysLoad: true } },
-    },
-    {
-      // The parent only calls `Agent`, so a `Bash` matcher fires for the
-      // subagent's read alone, and the captured payload carries `agent_id`.
+      mcpServers: { [PROBE_MCP_SERVER_NAME]: { command: 'bun', args: [PROBE_MCP_SERVER_PATH], alwaysLoad: true } },
+    }),
+    // The parent only calls `Agent`, so a `Bash` matcher fires for the
+    // subagent's read alone, and the captured payload carries `agent_id`.
+    contextAppendScenario(eventName, SUBAGENT_CONTEXT_VALUE, {
       suffix: 'subagent-context-append',
       description: 'Attempts to append context after a tool call made inside a spawned subagent.',
-      sentinelOutput: sentinel(eventName, [{ kind: 'context.append', value: SUBAGENT_CONTEXT_VALUE }]),
-      oracle: 'final-response-must-contain-marker',
-      expectedResponseMarker: RESPONSE_CONSUMED_MARKER,
       prompt: SUBAGENT_RELAY_PROMPT,
       allowedTools: SUBAGENT_ALLOWED_TOOLS,
       hookMatcher: 'Bash',
       // The Bash matcher alone also passes if the parent runs `cat` itself; `agent_id` is present only in subagent tool hooks (Claude Code hooks docs).
       requiredPayloadKeys: ['agent_id'],
-    },
+    }),
   ];
+}
+
+/**
+ * Unapproved-tool negative control, carrying a context-only `PreToolUse` sentinel.
+ *
+ * Proves two things at once. Under the dontAsk policy Claude refuses a tool
+ * that is not pre-approved, so the marker the prompt asks for stays absent; and
+ * a sentinel that contributes context alone does not change that, because it
+ * renders no `permissionDecision`. A composer that defaulted such a response to
+ * `allow` would authorize the tool, the marker would appear, and this scenario
+ * would fail.
+ *
+ * It rides the `context.append` effect path rather than being a baseline:
+ * baselines inject no sentinel by rule, and this claim needs one.
+ * @returns The negative-control probe shape.
+ */
+function preToolUseUnapprovedToolNegativeControl(): ProbeEffectScenario {
+  return {
+    suffix: 'unapproved-tool-negative-control',
+    description:
+      'Proves Claude dontAsk leaves the marker absent when the hook response appends context and makes no permission decision.',
+    sentinelOutput: sentinel(CLAUDE_CODE_HOOK_PRE_TOOL_USE, [{ kind: 'context.append', value: CONTEXT_VALUE }]),
+    oracle: 'native-must-deny-unapproved-tool',
+    allowedTools: NO_TOOL_MARKER_ALLOWED_TOOLS,
+    expectedAbsentMarker: TOOL_MARKER,
+  };
 }
 
 /** Claude Code probe contract consumed by the scenario generator. */
@@ -240,8 +271,10 @@ export const claudeCodeProbeContract: ClientProbeContract = {
   },
 
   extraEffectScenarios(eventName, effect) {
-    if (eventName !== CLAUDE_CODE_HOOK_POST_TOOL_USE || effect !== 'context.append') return [];
-    return postToolUseExtraContextScenarios();
+    if (effect !== 'context.append') return [];
+    if (eventName === CLAUDE_CODE_HOOK_PRE_TOOL_USE) return [preToolUseUnapprovedToolNegativeControl()];
+    if (eventName === CLAUDE_CODE_HOOK_POST_TOOL_USE) return postToolUseExtraContextScenarios();
+    return [];
   },
 
   observationScenario(eventName) {
@@ -286,18 +319,5 @@ export const claudeCodeProbeContract: ClientProbeContract = {
       prompt: '/compact',
       oracle: 'capture-only',
     };
-  },
-
-  baselineScenarios(eventName) {
-    if (eventName !== CLAUDE_CODE_HOOK_PRE_TOOL_USE) return [];
-    return [
-      {
-        suffix: 'unapproved-tool-negative-control',
-        description: 'Proves Claude dontAsk leaves the marker absent without a hook permission decision.',
-        oracle: 'native-must-deny-unapproved-tool',
-        allowedTools: NO_TOOL_MARKER_ALLOWED_TOOLS,
-        expectedAbsentMarker: TOOL_MARKER,
-      },
-    ];
   },
 };
