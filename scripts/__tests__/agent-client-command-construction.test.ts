@@ -404,19 +404,6 @@ describe('buildCodexCommand mcpServers', () => {
     }
   });
 
-  it('refuses an MCP config path, which Codex cannot use', () => {
-    expect(() =>
-      buildCodexCommand({
-        executablePath: '/usr/local/bin/codex',
-        scenario: MCP_SCENARIO,
-        env: { PATH: '/usr/bin' },
-        projectDir: '/tmp/project',
-        settingsPath: '/tmp/hooks.json',
-        mcpConfigPath: '/tmp/test-scenario.mcp-config.json',
-      }),
-    ).toThrow('got an MCP config path, which Codex cannot use');
-  });
-
   it('keeps the Claude Code command on --mcp-config without Codex overrides', () => {
     const { args } = buildClaudeCodeCommand({
       executablePath: '/usr/local/bin/claude',

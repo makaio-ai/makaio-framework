@@ -264,15 +264,8 @@ export function buildCodexCommand(params: {
   env: Record<string, string>;
   projectDir: string;
   settingsPath: string;
-  /** Claude Code's MCP config file; Codex cannot read one and refuses it. */
-  mcpConfigPath?: string;
 }): SpawnCommand {
-  const { executablePath, scenario, env, projectDir, mcpConfigPath } = params;
-  // Codex takes MCP servers as `--config` overrides only; a config file handed
-  // here would be silently unused, so its presence means the caller is wrong.
-  if (mcpConfigPath !== undefined) {
-    throw new Error(`Scenario "${scenario.id}" got an MCP config path, which Codex cannot use`);
-  }
+  const { executablePath, scenario, env, projectDir } = params;
   return {
     executable: executablePath,
     args: [
