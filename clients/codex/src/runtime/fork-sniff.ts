@@ -31,8 +31,10 @@
  * - `forked_from_id` absent (or equal to the own id, which would be a
  *   self-reference and is never a usable parent) → no fork signal.
  * - No parseable `session_meta` inside the window → inconclusive; return
- *   `undefined`. Fork registration is fill-once on the ingestion side, so a
- *   guessed parent would be permanently wrong while deferring is safe.
+ *   `undefined`. The caller then reports the start as `'fresh'` without a
+ *   parent instead of guessing one: fork lineage is existing-wins at
+ *   ingestion, so a guessed parent would stick, while an unset parent can
+ *   still be filled by a later import.
  *
  * Anchoring the window at the start of the file is what makes the rule sound
  * under a byte cap: the decisive record is the first one, so no earlier record

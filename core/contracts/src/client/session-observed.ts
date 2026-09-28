@@ -122,11 +122,12 @@ export const ClientSessionStartedSchema = ClientSessionObservedBaseSchema.extend
    */
   startMode: observability.attribute(ClientSessionStartModeSchema, 'makaio.session.start_mode').optional(),
   /**
-   * Adapter session id of the parent session, when this session is a fork
-   * child (`startMode === 'fork'`).
+   * Adapter session id of the parent session of a fork child.
    *
-   * Absent for non-fork sessions and when the emitter cannot determine the
-   * parent identity.
+   * Present exactly when `startMode === 'fork'` and absent for every other
+   * start mode. An emitter that cannot determine the parent identity reports
+   * the start as `'fresh'` instead of `'fork'`, so a `'fork'` event never goes
+   * out without its parent.
    */
   parentAdapterSessionId: observability.attribute(z.string(), 'makaio.session.parent_adapter_session_id').optional(),
 });
