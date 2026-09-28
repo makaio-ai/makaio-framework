@@ -7,13 +7,14 @@ import { fixtureFilePath, writeFixture } from '../lib/agent-clients/fixtures.js'
 import { getManifest } from '../lib/agent-clients/manifests.js';
 import type { runScenario } from '../lib/agent-clients/runner.js';
 import type { CredentialMode, ProbeScenario, ProviderId, ScenarioFixture } from '../lib/agent-clients/types.js';
-import { resolveDefaultFixturesDir, runProbe } from '../test-agent-clients.js';
+import { resolveDefaultFixturesDir, runProbe, verifyRequiredEffectKeys } from '../test-agent-clients.js';
 
 const CREDENTIAL_MODE: Record<ProviderId, CredentialMode> = { 'claude-code': 'api-key', codex: 'access-token' };
 
 /**
- * Builds the injected scenario runner: every scenario passes its oracle and records its sentinel
- * effect as observed, unless `observedEffects` overrides the recorded effects for that scenario.
+ * Builds the injected scenario runner: every scenario passes its oracle and records only its own
+ * sentinel effect as observed (none for native-deny scenarios, matching `runner.ts`), unless
+ * `observedEffects` overrides the recorded effects for that scenario.
  * @param provider - Provider the fixtures are recorded for.
  * @param options - Executed-id sink, observed-effect override, and whether to write staged fixtures.
  * @returns A `runScenario` replacement.
@@ -42,7 +43,9 @@ function stubRunScenario(
           sourceExpectedEffects: params.scenario.sourceExpectedEffects,
           observedEffects:
             options.observedEffects?.(params.scenario) ??
-            (params.scenario.sentinelEffect ? [params.scenario.sentinelEffect] : []),
+            (params.scenario.sentinelEffect && params.scenario.oracle !== 'native-must-deny-unapproved-tool'
+              ? [params.scenario.sentinelEffect]
+              : []),
           blockingCapable: params.scenario.blockingCapable,
           managedCommand: params.scenario.expectedManagedCommand,
           payloadKeys: [],
@@ -81,6 +84,18 @@ function singleEffectScenario(provider: ProviderId): ProbeScenario {
   return scenario!;
 }
 
+/**
+ * A manifest scenario by id.
+ * @param provider - Provider whose manifest is searched.
+ * @param id - Scenario id.
+ * @returns The scenario.
+ */
+function scenarioById(provider: ProviderId, id: string): ProbeScenario {
+  const scenario = getManifest(provider).scenarios.find((candidate) => candidate.id === id);
+  expect(scenario).toBeDefined();
+  return scenario!;
+}
+
 describe('native probe verify-mode effect coverage', () => {
   async function withFixturesDir<T>(run: (fixturesDir: string) => Promise<T>): Promise<T> {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-client-filtered-verify-'));
@@ -90,6 +105,75 @@ describe('native probe verify-mode effect coverage', () => {
       await fs.rm(root, { recursive: true, force: true });
     }
   }
+
+  /**
+   * Runs a `--scenario` verify probe against a throwaway fixtures dir.
+   * @param provider - Provider under test.
+   * @param scenarioIds - Selected scenario ids.
+   * @param scenarioRunner - Injected scenario runner.
+   * @returns The probe result.
+   */
+  function verifyScenarios(provider: ProviderId, scenarioIds: readonly string[], scenarioRunner: typeof runScenario) {
+    return withFixturesDir((fixturesDir) =>
+      runProbe(
+        {
+          provider,
+          credentialMode: CREDENTIAL_MODE[provider],
+          updateFixtures: false,
+          maxScenarios: 20,
+          maxWallClockSeconds: 60,
+          scenarioIds,
+        },
+        {
+          executablePath: `/fake/${provider}`,
+          fixturesDir,
+          validateBinaryVersion: async ({ pinnedVersion }) => ({ valid: true, pinnedVersion }),
+          runScenario: scenarioRunner,
+        },
+      ),
+    );
+  }
+
+  it('passes a --scenario verify run of one effect of a multi-effect event on its sentinel alone', async () => {
+    const provider = 'codex';
+    const selected = scenarioById(provider, 'session-start-block');
+    // SessionStart also declares context.append, which only the sibling scenario exercises.
+    expect(selected.sourceExpectedEffects).toEqual(['context.append', 'openai.codex-hook-response.block']);
+    const executed: string[] = [];
+    const result = await verifyScenarios(provider, [selected.id], stubRunScenario(provider, { executed }));
+
+    expect(executed).toEqual([selected.id]);
+    expect(result).toEqual({ passed: true, scenariosExecuted: 1, failures: [] });
+  });
+
+  it('fails a --scenario verify run of a multi-effect event only for the missing sentinel', async () => {
+    const provider = 'codex';
+    const result = await verifyScenarios(
+      provider,
+      [scenarioById(provider, 'session-start-block').id],
+      stubRunScenario(provider, { executed: [], observedEffects: () => [] }),
+    );
+
+    expect(result.passed).toBe(false);
+    expect(result.failures.filter((failure) => failure.includes('Missing live behavior evidence'))).toEqual([
+      'Missing live behavior evidence for SessionStart:openai.codex-hook-response.block',
+    ]);
+  });
+
+  it('passes a --scenario verify run of a native-deny scenario that records no effect', async () => {
+    const provider = 'claude-code';
+    const selected = scenarioById(provider, 'pre-tool-use-unapproved-tool-negative-control');
+    expect(selected.oracle).toBe('native-must-deny-unapproved-tool');
+    const executed: string[] = [];
+    const result = await verifyScenarios(
+      provider,
+      [selected.id],
+      stubRunScenario(provider, { executed, observedEffects: () => [] }),
+    );
+
+    expect(executed).toEqual([selected.id]);
+    expect(result).toEqual({ passed: true, scenariosExecuted: 1, failures: [] });
+  });
 
   it('passes a --scenario verify run on the selected scenario evidence alone', async () => {
     const provider = 'codex';
@@ -237,5 +321,28 @@ describe('native probe verify-mode effect coverage', () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('verifyRequiredEffectKeys', () => {
+  it('requires only the sentinel effect, not the sibling effects of the event', () => {
+    expect([...verifyRequiredEffectKeys([scenarioById('codex', 'session-start-block')])]).toEqual([
+      'SessionStart:openai.codex-hook-response.block',
+    ]);
+  });
+
+  it('excludes native-deny scenarios', () => {
+    const provider = 'claude-code';
+    const keys = verifyRequiredEffectKeys([
+      scenarioById(provider, 'pre-tool-use-unapproved-tool-negative-control'),
+      scenarioById(provider, 'pre-tool-use-deny'),
+    ]);
+    expect([...keys]).toEqual(['PreToolUse:claude-code.tool-response.deny']);
+  });
+
+  it('excludes scenarios without a sentinel effect', () => {
+    const scenario = scenarioById('codex', 'subagent-stop-observation');
+    expect(scenario.sentinelEffect).toBeUndefined();
+    expect(verifyRequiredEffectKeys([scenario]).size).toBe(0);
   });
 });
