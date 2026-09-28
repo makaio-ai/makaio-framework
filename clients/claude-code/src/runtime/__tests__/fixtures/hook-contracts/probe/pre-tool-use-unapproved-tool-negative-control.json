@@ -34,7 +34,7 @@
         "tool_use_id",
         "transcript_path"
       ],
-      "sentinelInjected": false
+      "sentinelInjected": true
     }
   ],
   "oracle": "native-must-deny-unapproved-tool",
