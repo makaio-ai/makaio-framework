@@ -31,15 +31,15 @@
     "@makaio/services-core": "workspace:*",
     "@makaio/storage-drizzle": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "drizzle-orm": "0.45.2",
-    "zod": "4.4.3"
+    "drizzle-orm": "0.45.3",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@makaio/test-utils": "workspace:*",
     "@types/node": "^24.3.0",
-    "tsdown": "0.22.0",
-    "tsx": "^4.22.3",
+    "tsdown": "0.23.0",
+    "tsx": "^4.23.15",
     "vitest": "4.1.10"
   },
   "scripts": {

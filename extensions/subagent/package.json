@@ -19,11 +19,11 @@
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
     "@makaio/tools-core": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
-    "tsdown": "0.22.0",
+    "tsdown": "0.23.0",
     "typescript": "^6.0.3",
     "vitest": "4.1.10"
   },

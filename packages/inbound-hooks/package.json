@@ -13,12 +13,12 @@
     "@makaio/bus-core": "workspace:*",
     "@makaio/bus-transport-websocket": "workspace:*",
     "@makaio/core": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@types/node": "^24.3.0",
-    "tsdown": "0.22.0",
+    "tsdown": "0.23.0",
     "typescript": "^6.0.3",
     "vitest": "4.1.10"
   },

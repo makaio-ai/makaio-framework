@@ -14,16 +14,16 @@
     "@makaio/build-tooling": "workspace:*",
     "@makaio/storage-pg": "workspace:*",
     "@types/node": "^24.3.0",
-    "tsdown": "0.22.0",
-    "tsx": "^4.23.1",
+    "tsdown": "0.23.0",
+    "tsx": "^4.23.15",
     "vitest": "4.1.10"
   },
   "dependencies": {
-    "@libsql/client": "^0.17.4",
+    "@libsql/client": "^0.18.0",
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/storage-drizzle": "workspace:*",
-    "drizzle-orm": "0.45.2"
+    "drizzle-orm": "0.45.3"
   },
   "scripts": {
     "build": "tsdown",

@@ -16,15 +16,15 @@
     "@makaio/build-tooling": "workspace:*",
     "@types/node": "^24.3.0",
     "@types/picomatch": "^4.0.3",
-    "tsdown": "0.22.0",
-    "tsx": "^4.23.1"
+    "tsdown": "0.23.0",
+    "tsx": "^4.23.15"
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/service-base": "workspace:*",
     "@makaio/tools-core": "workspace:*",
-    "picomatch": "^4.0.5",
+    "picomatch": "^4.0.7",
     "simple-git": "^3.28.0"
   },
   "publishConfig": {
