@@ -132,7 +132,8 @@ describe('native probe driver', () => {
     'codex',
   ] as const)('%s manifest covers every source effect with a bounded scenario', (provider) => {
     const providerManifest = getManifest(provider);
-    expect(providerManifest.scenarios.length).toBeLessThanOrEqual(16);
+    // Mirrors DEFAULT_MAX_SCENARIOS in scripts/test-agent-clients.ts (not exported).
+    expect(providerManifest.scenarios.length).toBeLessThanOrEqual(20);
     const scenarioEffects = new Set(
       providerManifest.scenarios.flatMap((scenario) =>
         scenario.sentinelEffect ? [`${scenario.expectedEvents[0]!.eventName}:${scenario.sentinelEffect}`] : [],
