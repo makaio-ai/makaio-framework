@@ -1,12 +1,14 @@
 /**
  * Minimal stdio MCP server for the manual agent-client live probe (FACT-88).
  *
- * The Claude Code probe needs one MCP tool call to observe whether PostToolUse hooks fire
- * for MCP tools. Claude Code launches this file through an `--mcp-config` entry
- * `{ command: 'bun', args: [<absolute path of this file>] }`. The server is named `probe`
- * and exposes exactly one argument-free tool, `probe_read`, which returns a fixed text.
+ * The Claude Code and Codex probes each need one MCP tool call to observe whether
+ * PostToolUse hooks fire for MCP tools. Both launch this file as
+ * `{ command: 'bun', args: [<absolute path of this file>] }`: Claude Code through an
+ * `--mcp-config` entry, Codex through `--config mcp_servers.probe.*` overrides. The server
+ * is named `probe` and exposes exactly one argument-free tool, `probe_read`, which returns
+ * a fixed text.
  *
- * It implements only the JSON-RPC subset Claude Code needs (initialize,
+ * It implements only the JSON-RPC subset both clients need (initialize,
  * notifications/initialized, tools/list, tools/call) over newline-delimited stdin/stdout,
  * so the probe carries no SDK dependency. Stdout carries protocol messages only.
  */
@@ -19,7 +21,7 @@ import { createInterface } from 'node:readline';
  * fires. A constant result keeps the tool output inert and free of any probe marker.
  */
 const PROBE_READ_RESULT_TEXT = 'MAKAIO probe MCP read result';
-/** Server name reported in `initialize`; also the `mcp__<name>__*` prefix of its tools in Claude Code. */
+/** Server name reported in `initialize`; also the `mcp__<name>__*` prefix of its hook tool names in both clients. */
 export const PROBE_MCP_SERVER_NAME = 'probe';
 /** Name of the single tool this server exposes. */
 export const PROBE_TOOL_NAME = 'probe_read';

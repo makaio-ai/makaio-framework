@@ -626,7 +626,7 @@ describe('native probe driver', () => {
           provider: 'codex',
           credentialMode: 'access-token',
           updateFixtures: true,
-          maxScenarios: 16,
+          maxScenarios: getManifest('codex').scenarios.length,
           maxWallClockSeconds: 60,
         },
         {
@@ -725,7 +725,7 @@ describe('native probe driver', () => {
           provider: 'codex',
           credentialMode: 'access-token',
           updateFixtures: true,
-          maxScenarios: 16,
+          maxScenarios: getManifest('codex').scenarios.length,
           maxWallClockSeconds: 60,
         },
         {
