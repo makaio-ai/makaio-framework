@@ -4,13 +4,7 @@ import { ArtifactKindRegistrationSchema } from '../kind-registration.js';
 import { defineArtifactKind } from '../kind-definition.js';
 import { ArtifactSchemas } from '../namespace.js';
 import { ArtifactQueryRequestSchema, ArtifactRevisionSchema } from '../schemas.js';
-import {
-  ARTIFACT_DERIVED_SLUG_MAX_LENGTH,
-  ARTIFACT_SLUG_PATTERN,
-  ArtifactSlugSchema,
-  deriveArtifactSlug,
-  slugify,
-} from '../slug.js';
+import { ARTIFACT_SLUG_PATTERN, ArtifactSlugSchema, deriveArtifactSlug, slugify } from '../slug.js';
 import { mayArtifactDataCarryProperty } from '../kind-reserved-fields.js';
 import { compileArtifactDataChecker, compileArtifactDataSchema } from '../data-schema-validator.js';
 
@@ -90,69 +84,6 @@ describe('deriveArtifactSlug', () => {
 
   it('throws when neither title nor identity yields a slug', () => {
     expect(() => deriveArtifactSlug({ title: '???' }, 'title', '!!!')).toThrow(/yields no slug/);
-  });
-});
-
-describe('deriveArtifactSlug length cap', () => {
-  const derive = (title: string, id = 'ignored'): string => deriveArtifactSlug({ title }, 'title', id);
-  /**
-   * A segment of `n` copies of `char`.
-   * @param char - Character to repeat.
-   * @param n - Segment length.
-   * @returns The repeated segment.
-   */
-  const segment = (char: string, n: number): string => char.repeat(n);
-
-  it('caps derived slugs at 80 characters', () => {
-    expect(ARTIFACT_DERIVED_SLUG_MAX_LENGTH).toBe(80);
-  });
-
-  it('cuts a long title at the last segment boundary at or below the cap', () => {
-    const title = `${segment('a', 50)} ${segment('b', 20)} ${segment('c', 20)}`;
-    expect(derive(title)).toBe(`${segment('a', 50)}-${segment('b', 20)}`);
-  });
-
-  it('keeps the prefix when the hyphen sits exactly at the cap', () => {
-    const title = `${segment('a', 80)} ${segment('b', 5)}`;
-    expect(derive(title)).toBe(segment('a', 80));
-  });
-
-  it('hard-cuts a first segment longer than the cap', () => {
-    expect(derive(`${segment('x', 120)} tail`)).toBe(segment('x', 80));
-  });
-
-  it('leaves a slug of exactly 80 characters unchanged', () => {
-    const title = `${segment('a', 39)} ${segment('b', 40)}`;
-    expect(derive(title)).toHaveLength(80);
-    expect(derive(title)).toBe(`${segment('a', 39)}-${segment('b', 40)}`);
-  });
-
-  it('strips the trailing hyphen left by the cut', () => {
-    const slug = derive(`${segment('a', 79)} ${segment('b', 10)}`);
-    expect(slug).toBe(segment('a', 79));
-    expect(slug.endsWith('-')).toBe(false);
-  });
-
-  it('caps the identity fallback too', () => {
-    expect(derive('???', segment('i', 100))).toBe(segment('i', 80));
-  });
-
-  it('always yields a capped value that satisfies the slug pattern', () => {
-    const titles = [
-      'Überarbeitung der Konzeptbaum Prozess Orchestrierung für alle Stationen und Workflows im gesamten System',
-      segment('ä', 60),
-      segment('a', 81),
-      Array.from({ length: 60 }, (_, i) => `w${i}`).join(' '),
-    ];
-    for (const title of titles) {
-      const slug = derive(title);
-      expect(slug.length).toBeLessThanOrEqual(ARTIFACT_DERIVED_SLUG_MAX_LENGTH);
-      expect(ARTIFACT_SLUG_PATTERN.test(slug)).toBe(true);
-    }
-  });
-
-  it('does not cap slugify itself', () => {
-    expect(slugify(segment('a', 100))).toHaveLength(100);
   });
 });
 

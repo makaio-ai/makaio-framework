@@ -57,10 +57,6 @@ const TRANSLITERATIONS: readonly (readonly [RegExp, string])[] = [
  * runs of hyphens collapse to one. The result satisfies
  * {@link ARTIFACT_SLUG_PATTERN}; `null` means the text carries no usable
  * characters and the caller must choose another source.
- *
- * `slugify` is a pure normalization and does not limit the length. The
- * {@link ARTIFACT_DERIVED_SLUG_MAX_LENGTH} cap is applied by
- * {@link deriveArtifactSlug}, the single path every store-derived slug takes.
  * @param text - Free text such as an artifact title.
  * @returns A valid slug, or `null` when nothing remains after normalization.
  */
@@ -78,53 +74,22 @@ export function slugify(text: string): string | null {
 }
 
 /**
- * Upper bound, in characters, for a slug derived by {@link deriveArtifactSlug}.
- *
- * The bound applies before a store appends its collision suffix (`-2`, `-3`,
- * …), so a suffixed derived slug may exceed it. Caller-supplied slugs are not
- * cut, and {@link ArtifactSlugSchema} does not enforce this bound.
- */
-export const ARTIFACT_DERIVED_SLUG_MAX_LENGTH = 80;
-
-/**
- * Cut a valid slug to at most {@link ARTIFACT_DERIVED_SLUG_MAX_LENGTH}
- * characters. The cut falls on the last hyphen at or below the bound; when the
- * first segment alone is longer, it is a hard cut at the bound. Trailing
- * hyphens are stripped, so the result still satisfies
- * {@link ARTIFACT_SLUG_PATTERN}.
- * @param slug - A slug satisfying {@link ARTIFACT_SLUG_PATTERN}.
- * @returns The slug itself when within the bound, otherwise its cut prefix.
- */
-function capDerivedSlug(slug: string): string {
-  if (slug.length <= ARTIFACT_DERIVED_SLUG_MAX_LENGTH) return slug;
-  const boundary = slug.lastIndexOf('-', ARTIFACT_DERIVED_SLUG_MAX_LENGTH);
-  const cut = boundary > 0 ? slug.slice(0, boundary) : slug.slice(0, ARTIFACT_DERIVED_SLUG_MAX_LENGTH);
-  return cut.replace(/-+$/, '');
-}
-
-/**
  * Derive the envelope slug a store assigns when a create request carries none.
  *
  * The title selected by the kind's `titlePath` is the source. When the title
  * yields no usable characters the artifact identity is the fallback, so a
- * derived slug always exists. Either source is capped at
- * {@link ARTIFACT_DERIVED_SLUG_MAX_LENGTH} characters: cut at the last hyphen
- * at or below the cap, hard-cut at the cap when the first segment alone is
- * longer, trailing hyphens stripped.
- * Stores disambiguate a derived slug that collides within its kind and scope
- * with a numeric suffix (`-2`, `-3`, …) appended after the cut, so a suffixed
- * slug may exceed the cap; only a caller-supplied slug rejects on collision,
- * and a caller-supplied slug is never cut.
+ * derived slug always exists. Stores disambiguate a derived slug that collides
+ * within its kind and scope with a numeric suffix (`-2`, `-3`, …); only a
+ * caller-supplied slug rejects on collision.
  * @param data - Validated artifact data.
  * @param titlePath - Data-relative title path declared by the kind.
  * @param id - Artifact identity used when the title yields no slug.
- * @returns A slug satisfying {@link ARTIFACT_SLUG_PATTERN}, at most
- *   {@link ARTIFACT_DERIVED_SLUG_MAX_LENGTH} characters long.
+ * @returns A slug satisfying {@link ARTIFACT_SLUG_PATTERN}.
  */
 export function deriveArtifactSlug(data: Record<string, unknown>, titlePath: string, id: string): string {
   const fromTitle = slugify(readArtifactTitle(data, titlePath));
-  if (fromTitle !== null) return capDerivedSlug(fromTitle);
+  if (fromTitle !== null) return fromTitle;
   const fromId = slugify(id);
-  if (fromId !== null) return capDerivedSlug(fromId);
+  if (fromId !== null) return fromId;
   throw new Error(`Artifact ${id} yields no slug from its title or identity`);
 }

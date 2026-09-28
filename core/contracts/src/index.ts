@@ -93,7 +93,6 @@ export {
   ArtifactRevisionSchema,
   ArtifactSchemas,
   ArtifactSlugSchema,
-  ARTIFACT_DERIVED_SLUG_MAX_LENGTH,
   ARTIFACT_SLUG_FIELD,
   ARTIFACT_SLUG_PATTERN,
   deriveArtifactSlug,
@@ -690,30 +689,6 @@ export type {
   HarnessDefinitionCreate,
   ProfileToolCapabilitiesConfig,
 } from './harness/index.js';
-export {
-  isMakaioToolName,
-  isMcpToolName,
-  MAKAIO_TOOL_NAMES,
-  matchesCommandRule,
-  matchesDenyCommandRule,
-  NATIVE_TOOL_NAMES,
-  parseToolListEntry,
-  resolveToolPolicy,
-  toMakaioToolName,
-  toNativeToolName,
-  ToolNameError,
-  toolVocabularyForAdapter,
-} from './tool-names/index.js';
-export type {
-  CommandRule,
-  MakaioToolName,
-  ResolvedToolPolicy,
-  ToolGateDecision,
-  ToolListEntry,
-  ToolLists,
-  ToolNameErrorReason,
-  ToolVocabulary,
-} from './tool-names/index.js';
 export { HostNamespace, HostSchemas, HostSubjects, WindowStateSchema } from './host/index.js';
 export type {
   TrayActivateRequest,
