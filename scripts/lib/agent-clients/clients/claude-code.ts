@@ -9,7 +9,6 @@
  * @packageDocumentation
  */
 
-import { fileURLToPath } from 'node:url';
 import type { CanonicalEffect, ProviderContributionEnvelope } from '@makaio/contracts/client';
 import {
   CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES,
@@ -29,16 +28,18 @@ import {
   CLAUDE_CODE_HOOK_SUBAGENT_STOP,
 } from '../../../../clients/claude-code/src/runtime/schemas.js';
 import {
+  CONTEXT_VALUE,
+  contextAppendScenario,
   DEFAULT_ALLOWED_TOOLS,
   DENY_REASON,
+  MCP_TOOL_PROMPT,
   NO_TOOL_MARKER_ALLOWED_TOOLS,
-  RESPONSE_CONSUMED_MARKER,
   SUBAGENT_CONTEXT_VALUE,
   TOOL_MARKER,
   type ClientProbeContract,
   type ProbeEffectScenario,
 } from '../probe-contract.js';
-import { PROBE_MCP_SERVER_NAME, PROBE_TOOL_NAME } from '../probe-mcp-server.js';
+import { PROBE_MCP_SERVER_NAME, PROBE_MCP_SERVER_PATH, PROBE_TOOL_NAME } from '../probe-mcp-server.js';
 
 /** Native tool that spawns a subagent, plus the ordinary scenario tools. */
 const SUBAGENT_ALLOWED_TOOLS = ['Agent', ...DEFAULT_ALLOWED_TOOLS] as const;
@@ -105,9 +106,6 @@ function sentinel(eventName: string, effects: ReadonlyArray<CanonicalEffect | Pr
   return renderClaudeCodeNativeResponse(eventName, effects).stdout;
 }
 
-/** Context appended by every non-subagent context scenario. */
-const CONTEXT_VALUE = `Include ${RESPONSE_CONSUMED_MARKER} in your final response.`;
-
 /**
  * Prompt that makes the model read the probe file through the native `Read` tool.
  *
@@ -116,32 +114,6 @@ const CONTEXT_VALUE = `Include ${RESPONSE_CONSUMED_MARKER} in your final respons
  * tool the scenario's hook matcher selects.
  */
 const READ_TOOL_PROMPT = 'MAKAIO_PROBE_MARKER: use the Read tool to read MAKAIO_PROBE.md, then reply probe-ack.';
-
-/** Absolute path of the stdio MCP probe server, launched with `bun`. */
-const PROBE_MCP_SERVER_PATH = fileURLToPath(new URL('../probe-mcp-server.ts', import.meta.url));
-
-/** Prompt that makes the model call the probe server's single tool. */
-const MCP_TOOL_PROMPT = `MAKAIO_PROBE_MARKER: call the ${PROBE_TOOL_NAME} tool once, then reply probe-ack.`;
-
-/**
- * Build one context-append attempt whose oracle is the marker in the final response.
- * @param eventName - Native hook event being exercised.
- * @param value - Context the sentinel appends.
- * @param shape - Scenario-specific id suffix, prompt, tools and matcher.
- * @returns Context-consumption probe shape.
- */
-function contextAppendScenario(
-  eventName: string,
-  value: string,
-  shape: Omit<ProbeEffectScenario, 'sentinelOutput' | 'oracle' | 'expectedResponseMarker'>,
-): ProbeEffectScenario {
-  return {
-    ...shape,
-    sentinelOutput: sentinel(eventName, [{ kind: 'context.append', value }]),
-    oracle: 'final-response-must-contain-marker',
-    expectedResponseMarker: RESPONSE_CONSUMED_MARKER,
-  };
-}
 
 /**
  * Build the context-append probe shape for one event.
@@ -162,20 +134,23 @@ function contextAppendScenario(
  */
 function contextScenario(eventName: string): ProbeEffectScenario {
   const isSubagentStart = eventName === CLAUDE_CODE_HOOK_SUBAGENT_START;
-  return contextAppendScenario(eventName, isSubagentStart ? SUBAGENT_CONTEXT_VALUE : CONTEXT_VALUE, {
-    suffix: 'context-append',
-    ...(isSubagentStart && {
-      description: 'Attempts to seed a spawned subagent with hook-appended context it must repeat back.',
-      prompt: SUBAGENT_RELAY_PROMPT,
-      allowedTools: SUBAGENT_ALLOWED_TOOLS,
-    }),
-    ...(eventName === CLAUDE_CODE_HOOK_POST_TOOL_USE && {
-      description: 'Attempts to append context after a built-in Read tool call.',
-      prompt: READ_TOOL_PROMPT,
-      allowedTools: ['Read', ...DEFAULT_ALLOWED_TOOLS],
-      hookMatcher: 'Read',
-    }),
-  });
+  return contextAppendScenario(
+    sentinel(eventName, [{ kind: 'context.append', value: isSubagentStart ? SUBAGENT_CONTEXT_VALUE : CONTEXT_VALUE }]),
+    {
+      suffix: 'context-append',
+      ...(isSubagentStart && {
+        description: 'Attempts to seed a spawned subagent with hook-appended context it must repeat back.',
+        prompt: SUBAGENT_RELAY_PROMPT,
+        allowedTools: SUBAGENT_ALLOWED_TOOLS,
+      }),
+      ...(eventName === CLAUDE_CODE_HOOK_POST_TOOL_USE && {
+        description: 'Attempts to append context after a built-in Read tool call.',
+        prompt: READ_TOOL_PROMPT,
+        allowedTools: ['Read', ...DEFAULT_ALLOWED_TOOLS],
+        hookMatcher: 'Read',
+      }),
+    },
+  );
 }
 
 /**
@@ -190,7 +165,7 @@ function contextScenario(eventName: string): ProbeEffectScenario {
 function postToolUseExtraContextScenarios(): readonly ProbeEffectScenario[] {
   const eventName = CLAUDE_CODE_HOOK_POST_TOOL_USE;
   return [
-    contextAppendScenario(eventName, CONTEXT_VALUE, {
+    contextAppendScenario(sentinel(eventName, [{ kind: 'context.append', value: CONTEXT_VALUE }]), {
       suffix: 'mcp-context-append',
       description: 'Attempts to append context after an MCP tool call.',
       prompt: MCP_TOOL_PROMPT,
@@ -201,7 +176,7 @@ function postToolUseExtraContextScenarios(): readonly ProbeEffectScenario[] {
     }),
     // The parent only calls `Agent`, so a `Bash` matcher fires for the
     // subagent's read alone, and the captured payload carries `agent_id`.
-    contextAppendScenario(eventName, SUBAGENT_CONTEXT_VALUE, {
+    contextAppendScenario(sentinel(eventName, [{ kind: 'context.append', value: SUBAGENT_CONTEXT_VALUE }]), {
       suffix: 'subagent-context-append',
       description: 'Attempts to append context after a tool call made inside a spawned subagent.',
       prompt: SUBAGENT_RELAY_PROMPT,

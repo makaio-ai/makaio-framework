@@ -13,6 +13,7 @@
  */
 
 import type { ClientDefinition } from '@makaio/contracts';
+import { PROBE_TOOL_NAME } from './probe-mcp-server.js';
 import type { ProbeMcpServerConfig, ScenarioOracle } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -44,6 +45,12 @@ export const DENY_REASON = 'MAKAIO_PROBE_DENY';
  * marker its own sentinel never injected.
  */
 export const SUBAGENT_CONTEXT_VALUE = `The probe session token for this subagent is ${RESPONSE_CONSUMED_MARKER}.`;
+
+/** Context appended by every non-subagent context scenario. */
+export const CONTEXT_VALUE = `Include ${RESPONSE_CONSUMED_MARKER} in your final response.`;
+
+/** Prompt that makes the model call the probe MCP server's single tool. */
+export const MCP_TOOL_PROMPT = `MAKAIO_PROBE_MARKER: call the ${PROBE_TOOL_NAME} tool once, then reply probe-ack.`;
 
 const READ_PROBE_FILE_TOOL = 'Bash(cat MAKAIO_PROBE.md)';
 const TOUCH_TOOL_MARKER_TOOL = `Bash(touch ${TOOL_MARKER})`;
@@ -180,4 +187,30 @@ export interface ClientProbeContract {
    * @returns The client-owned observation shape, or `undefined` for the default.
    */
   observationScenario?(eventName: string): ProbeEffectScenario | undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Shared scenario builders
+// ---------------------------------------------------------------------------
+
+/**
+ * Build one context-append attempt whose oracle is the marker in the final response.
+ *
+ * Provider-neutral: the caller renders the native sentinel with its own
+ * client renderer and passes the result in, so this module never learns a
+ * provider's response shape.
+ * @param sentinelOutput - Native response the client rendered for a `context.append` effect.
+ * @param shape - Scenario-specific id suffix, prompt, tools, matcher and configuration.
+ * @returns Context-consumption probe shape.
+ */
+export function contextAppendScenario(
+  sentinelOutput: string,
+  shape: Omit<ProbeEffectScenario, 'sentinelOutput' | 'oracle' | 'expectedResponseMarker'>,
+): ProbeEffectScenario {
+  return {
+    ...shape,
+    sentinelOutput,
+    oracle: 'final-response-must-contain-marker',
+    expectedResponseMarker: RESPONSE_CONSUMED_MARKER,
+  };
 }

@@ -8,7 +8,6 @@
  * @packageDocumentation
  */
 
-import { fileURLToPath } from 'node:url';
 import type { CanonicalEffect, ProviderContributionEnvelope } from '@makaio/contracts/client';
 import { CODEX_HOOK_RESPONSE_CAPABILITIES, clientDefinition } from '../../../../clients/codex/src/definition.js';
 import {
@@ -30,7 +29,10 @@ import {
   CODEX_HOOK_USER_PROMPT_SUBMIT,
 } from '../../../../clients/codex/src/runtime/schemas.js';
 import {
+  CONTEXT_VALUE,
+  contextAppendScenario,
   DENY_REASON,
+  MCP_TOOL_PROMPT,
   ORIGINAL_MARKER,
   RESPONSE_CONSUMED_MARKER,
   REWRITTEN_MARKER,
@@ -40,7 +42,7 @@ import {
   type ClientProbeContract,
   type ProbeEffectScenario,
 } from '../probe-contract.js';
-import { PROBE_MCP_SERVER_NAME, PROBE_TOOL_NAME } from '../probe-mcp-server.js';
+import { PROBE_MCP_SERVER_NAME, PROBE_MCP_SERVER_PATH, PROBE_TOOL_NAME } from '../probe-mcp-server.js';
 
 /**
  * Prompt that makes the parent spawn one subagent and report the token it read.
@@ -99,15 +101,6 @@ const COMPACTION_PROMPT = 'MAKAIO_PROBE_MARKER: read MAKAIO_PROBE.md, then reply
  */
 const AUTO_COMPACT_ARGS = ['--config', 'model_auto_compact_token_limit=10000'] as const;
 
-/** Context appended by every non-subagent context scenario. */
-const CONTEXT_VALUE = `Include ${RESPONSE_CONSUMED_MARKER} in your final response.`;
-
-/** Absolute path of the stdio MCP probe server, launched with `bun`. */
-const PROBE_MCP_SERVER_PATH = fileURLToPath(new URL('../probe-mcp-server.ts', import.meta.url));
-
-/** Prompt that makes the model call the probe server's single tool. */
-const MCP_TOOL_PROMPT = `MAKAIO_PROBE_MARKER: call the ${PROBE_TOOL_NAME} tool once, then reply probe-ack.`;
-
 /** Instruction a blocked turn must echo for a response-consumption oracle. */
 const BLOCK_INSTRUCTION = `The requested tool result failed. Reply with exactly ${RESPONSE_CONSUMED_MARKER}.`;
 
@@ -125,26 +118,6 @@ function sentinel(eventName: string, effects: ReadonlyArray<CanonicalEffect | Pr
 }
 
 /**
- * Build one context-append attempt whose oracle is the marker in the final response.
- * @param eventName - Native hook event being exercised.
- * @param value - Context the sentinel appends.
- * @param shape - Scenario-specific id suffix, prompt, matcher and configuration.
- * @returns Context-consumption probe shape.
- */
-function contextAppendScenario(
-  eventName: string,
-  value: string,
-  shape: Omit<ProbeEffectScenario, 'sentinelOutput' | 'oracle' | 'expectedResponseMarker'>,
-): ProbeEffectScenario {
-  return {
-    ...shape,
-    sentinelOutput: sentinel(eventName, [{ kind: 'context.append', value }]),
-    oracle: 'final-response-must-contain-marker',
-    expectedResponseMarker: RESPONSE_CONSUMED_MARKER,
-  };
-}
-
-/**
  * Additional `PostToolUse` context-append attempts on the other native tool paths.
  *
  * An MCP tool call and a tool call made inside a subagent reach `PostToolUse`
@@ -157,7 +130,7 @@ function contextAppendScenario(
 function postToolUseExtraContextScenarios(): readonly ProbeEffectScenario[] {
   const eventName = CODEX_HOOK_POST_TOOL_USE;
   return [
-    contextAppendScenario(eventName, CONTEXT_VALUE, {
+    contextAppendScenario(sentinel(eventName, [{ kind: 'context.append', value: CONTEXT_VALUE }]), {
       suffix: 'mcp-context-append',
       description: 'Attempts to append context after an MCP tool call.',
       prompt: MCP_TOOL_PROMPT,
@@ -170,7 +143,7 @@ function postToolUseExtraContextScenarios(): readonly ProbeEffectScenario[] {
     // run under the parent's `approval_policy="never"` and `workspace-write`
     // sandbox, where a read-only `cat` needs no approval; the live run is what
     // confirms that inheritance.
-    contextAppendScenario(eventName, SUBAGENT_CONTEXT_VALUE, {
+    contextAppendScenario(sentinel(eventName, [{ kind: 'context.append', value: SUBAGENT_CONTEXT_VALUE }]), {
       suffix: 'subagent-context-append',
       description: 'Attempts to append context after a tool call made inside a spawned subagent.',
       prompt: SUBAGENT_TOOL_RELAY_PROMPT,
@@ -252,13 +225,18 @@ export const codexProbeContract: ClientProbeContract = {
       // back out; the default marker-only prompt would leave the event
       // unreached and the oracle unprovable.
       const isSubagentStart = eventName === CODEX_HOOK_SUBAGENT_START;
-      return contextAppendScenario(eventName, isSubagentStart ? SUBAGENT_CONTEXT_VALUE : CONTEXT_VALUE, {
-        suffix: 'context-append',
-        ...(isSubagentStart && {
-          description: 'Attempts to seed a spawned subagent with hook-appended context it must repeat back.',
-          prompt: SUBAGENT_RELAY_PROMPT,
-        }),
-      });
+      return contextAppendScenario(
+        sentinel(eventName, [
+          { kind: 'context.append', value: isSubagentStart ? SUBAGENT_CONTEXT_VALUE : CONTEXT_VALUE },
+        ]),
+        {
+          suffix: 'context-append',
+          ...(isSubagentStart && {
+            description: 'Attempts to seed a spawned subagent with hook-appended context it must repeat back.',
+            prompt: SUBAGENT_RELAY_PROMPT,
+          }),
+        },
+      );
     }
 
     if (effect === CODEX_HOOK_RESPONSE_CAPABILITIES.block) return blockScenario(eventName);

@@ -13,6 +13,7 @@
  * so the probe carries no SDK dependency. Stdout carries protocol messages only.
  */
 import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 
 /**
  * Fixed text returned by `probe_read`.
@@ -25,6 +26,12 @@ const PROBE_READ_RESULT_TEXT = 'MAKAIO probe MCP read result';
 export const PROBE_MCP_SERVER_NAME = 'probe';
 /** Name of the single tool this server exposes. */
 export const PROBE_TOOL_NAME = 'probe_read';
+/**
+ * Absolute path of this file, which the client probes launch with `bun`.
+ *
+ * Importing it is side-effect free: the stdio loop below runs only under `import.meta.main`.
+ */
+export const PROBE_MCP_SERVER_PATH = fileURLToPath(import.meta.url);
 
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 
