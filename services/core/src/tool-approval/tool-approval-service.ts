@@ -128,11 +128,18 @@ export class ToolApprovalService extends BaseService {
       }
 
       // The agent's tool lists deny unlisted calls ahead of any allowing policy.
-      // When the agent row lookup fails, the lists are unknown and this layer yields `none`.
+      // The lists live only on the agent row: when the lookup fails, or no row exists
+      // (no agent storage, ephemeral start, swallowed best-effort row write, first turn
+      // before the row is written), this layer yields `none`.
       // Only claude-agent-sdk carries its own allowlist gate; claude-code-cli enforces only
       // the denylist and claude-code-tmux neither, so an allowing policy would run an unlisted
       // call unchecked. A lookup error therefore falls back to asking (see below): interactive
       // sessions ask a human, headless calls are denied for lack of an approval handler.
+      // A missing row keeps the cascade: the request carries no lists, so it cannot be told
+      // apart from an agent without lists, and failing closed would downgrade every such agent.
+      // This gap predates the stored lists (develop allowed unlisted CLI calls the same way).
+      // TODO(FACT-247): adapters without their own gate carry the lists (or a flag) on the
+      // approval request so a missing row fails closed; tmux rejects starts with lists.
       // TODO(FACT-75): adapter-side availability limit (`--tools <nativeAvailableTools>`) for CLI/tmux.
       const toolGrant = evaluateToolGrant(agent, ctx.payload.toolName, ctx.payload.args, rawEnrichedPolicy);
       if (toolGrant.kind === 'deny') {
@@ -347,7 +354,8 @@ export class ToolApprovalService extends BaseService {
    *
    * An unhandled storage request (no agent storage registered, e.g. lightweight runtimes
    * and tests) counts as `absent`: without a storage handler no agent rows exist. Only a
-   * thrown request (storage or transport failure) is an `error`.
+   * thrown request (storage or transport failure) is an `error`. `absent` does not mean
+   * "no tool lists": see TODO(FACT-247) in the approval handler.
    * @param agentId - The agent identifier
    * @param sessionId - Optional session ID for scoped lookup
    * @returns `found` with the agent row, `absent` when no row exists, or `error` when the lookup failed
