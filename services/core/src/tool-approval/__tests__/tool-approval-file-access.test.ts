@@ -364,7 +364,7 @@ describe('ToolApprovalService - .makaioignore pre-check', () => {
       root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'file-access-')));
       repo = path.join(root, 'repo');
       outside = path.join(root, 'outside');
-      mkdirSync(path.join(repo, '.git'), { recursive: true });
+      mkdirSync(path.join(repo, '.git', 'subdir'), { recursive: true });
       mkdirSync(outside);
       writeFileSync(path.join(repo, '.git', 'config'), '[remote]');
       writeFileSync(path.join(repo, 'readme.txt'), 'r');
@@ -373,6 +373,7 @@ describe('ToolApprovalService - .makaioignore pre-check', () => {
         symlinkSync(path.join(repo, '.git', 'config'), path.join(repo, 'config-link'));
         symlinkSync(path.join(outside, 'secret.txt'), path.join(repo, 'outside-link'));
         symlinkSync(path.join(repo, 'missing.txt'), path.join(repo, 'dangling'));
+        symlinkSync(path.join(repo, '.git', 'subdir'), path.join(repo, 'git-subdir-link'));
       } catch (error) {
         if (process.platform !== 'win32') throw error;
         symlinksSupported = false;
@@ -423,6 +424,57 @@ describe('ToolApprovalService - .makaioignore pre-check', () => {
       });
     });
 
+    describe('parent-directory segments in the raw path', () => {
+      const parentReason = (raw: string): string =>
+        `Access denied: '${raw}' contains a '..' segment; file access rules need a path without parent references`;
+
+      beforeEach(() => {
+        registerAgentStub(cleanups, { cwd: repo });
+      });
+
+      it('denies a Read whose .. segment follows a symlink into .git under full-access', async (context) => {
+        if (!symlinksSupported) context.skip();
+
+        const raw = 'git-subdir-link/../config';
+        expect(await approve('Read', { file_path: raw })).toEqual({
+          action: 'deny',
+          message: parentReason(raw),
+          shouldAbort: false,
+        });
+      });
+
+      it('denies a backslash-separated .. segment', async () => {
+        const raw = 'git-subdir-link\\..\\config';
+        expect(await approve('Read', { file_path: raw })).toEqual({
+          action: 'deny',
+          message: parentReason(raw),
+          shouldAbort: false,
+        });
+      });
+
+      it('denies a harmless .. spelling too (documented trade-off)', async () => {
+        const raw = 'src/../README.md';
+        expect(await approve('Read', { file_path: raw })).toEqual({
+          action: 'deny',
+          message: parentReason(raw),
+          shouldAbort: false,
+        });
+      });
+
+      it('allows a path whose segment only contains dots', async () => {
+        expect(await approve('Read', { file_path: 'readme..txt' })).toEqual({ action: 'allow' });
+        expect(await approve('Read', { file_path: 'readme.txt' })).toEqual({ action: 'allow' });
+      });
+
+      it('leaves a .. path to the cascade when no provider is configured', async () => {
+        service.destroy();
+        service = new ToolApprovalService(MakaioBus);
+        await service.init();
+
+        expect(await approve('Read', { file_path: 'git-subdir-link/../config' })).toEqual({ action: 'allow' });
+      });
+    });
+
     describe('allowedDirectories containment under a full-access session', () => {
       const outsideReason = (target: string): string =>
         `Access denied: '${target}' is outside the agent's allowed directories`;
@@ -467,6 +519,28 @@ describe('ToolApprovalService - .makaioignore pre-check', () => {
         const result = await approve('Read', { file_path: target });
 
         expect(result).toEqual({ action: 'deny', message: outsideReason(target), shouldAbort: false });
+      });
+
+      it('denies every file-tool call with a path when the agent allowedDirectories are empty', async () => {
+        registerAgentStub(cleanups, { cwd: repo, allowedDirectories: [] });
+
+        const inside = path.join(repo, 'readme.txt');
+        expect(await approve('Read', { file_path: 'readme.txt' })).toEqual({
+          action: 'deny',
+          message: outsideReason(inside),
+          shouldAbort: false,
+        });
+      });
+
+      it('denies every file-tool call with a path when the profile RPC is unhandled', async () => {
+        registerAgentStub(cleanups, { cwd: repo, profileId: 'profile-without-service' });
+
+        const inside = path.join(repo, 'readme.txt');
+        expect(await approve('Read', { file_path: 'readme.txt' })).toEqual({
+          action: 'deny',
+          message: outsideReason(inside),
+          shouldAbort: false,
+        });
       });
 
       it('does not restrict an outside path when no allowedDirectories are set', async () => {

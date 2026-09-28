@@ -50,6 +50,30 @@ const TOOL_PATH_ARGS: ReadonlyMap<string, readonly string[]> = new Map([
 ]);
 
 /**
+ * Extract the raw, unresolved path argument of a filesystem tool call.
+ *
+ * Returns the path string exactly as the caller wrote it, or `null` if the tool is not a
+ * known filesystem tool or the args don't contain the expected path field. Callers that
+ * must reject spellings which `path.resolve` would collapse (such as `..` segments behind
+ * a symlink) inspect this value.
+ * @param toolName - Name of the tool being called
+ * @param args - Tool arguments record
+ * @returns Raw path argument, or `null` if not applicable
+ */
+export function extractToolRawFilePath(
+  toolName: string | undefined,
+  args: Record<string, unknown> | undefined,
+): string | null {
+  if (!toolName || !args) return null;
+  const argKeys = TOOL_PATH_ARGS.get(toolName);
+  if (!argKeys) return null;
+  const rawPath = argKeys
+    .map((key) => args[key])
+    .find((value): value is string => typeof value === 'string' && value.length > 0);
+  return rawPath ?? null;
+}
+
+/**
  * Extract the target file path from a filesystem tool call's arguments.
  *
  * Returns the resolved absolute path, or `null` if the tool is not a known
@@ -64,12 +88,7 @@ export function extractToolFilePath(
   args: Record<string, unknown> | undefined,
   cwd: string,
 ): string | null {
-  if (!toolName || !args) return null;
-  const argKeys = TOOL_PATH_ARGS.get(toolName);
-  if (!argKeys) return null;
-  const rawPath = argKeys
-    .map((key) => args[key])
-    .find((value): value is string => typeof value === 'string' && value.length > 0);
+  const rawPath = extractToolRawFilePath(toolName, args);
   if (!rawPath) return null;
   return path.resolve(cwd, rawPath);
 }

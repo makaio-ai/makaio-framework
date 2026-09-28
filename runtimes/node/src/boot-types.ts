@@ -337,9 +337,16 @@ export interface CoreBootOptions {
    * Scope:
    * - The patterns apply inside the agent's working directory. With a provider
    *   configured, the approval service also denies native file-tool calls
-   *   outside the agent's `allowedDirectories` (else the profile's). Without
-   *   `allowedDirectories`, paths outside the working directory are not
-   *   restricted by this check.
+   *   outside the agent's `allowedDirectories` (else the profile's); an empty
+   *   list denies every native file-tool call with a path. Without
+   *   `allowedDirectories` (`undefined`), paths outside the working directory
+   *   are not restricted by this check. An agent with a `profileId` but no own
+   *   list gets an empty list when the profile RPC is unhandled or fails, so a
+   *   host without a profile service denies all native file tools for such
+   *   agents unless it sets the agent's `allowedDirectories`.
+   * - A path argument with a `..` segment is denied, because resolving it
+   *   before following symlinks could alias a restricted path; harmless
+   *   spellings such as `src/../README.md` are denied too.
    * - `Glob` and `Grep` are checked on their supplied search root only. Without
    *   a `path` argument they get no file-access check, and files reached
    *   recursively are not filtered by the patterns; filtering descendants needs

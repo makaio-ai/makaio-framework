@@ -133,9 +133,10 @@ export function resolveProfileAllowedDirectories(
  *
  * The directory allowlist is the agent's `allowedDirectories`, else the profile's (derived
  * from the pre-fetched `approval.resolveEnrichedPolicy` RPC result). With a provider
- * configured, the service denies a native file-tool call whose target lies outside a
- * non-empty allowlist as part of the absolute deny floor, ahead of any policy cascade.
- * Without an allowlist, paths outside the cwd are not restricted by this check.
+ * configured, the service denies a native file-tool call whose target lies outside the
+ * allowlist as part of the absolute deny floor, ahead of any policy cascade; an empty list
+ * denies every such call. Without an allowlist (`undefined`), paths outside the cwd are not
+ * restricted by this check.
  * @param agent - Pre-fetched agent metadata, or null if unavailable
  * @param rawEnrichedPolicy - Pre-fetched enriched-policy RPC result, or undefined when toolName was absent or no persona/profile is active
  * @param fileAccessRuleProvider - Rule provider; used only as a truthiness gate to skip resolution when absent

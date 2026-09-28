@@ -11,7 +11,7 @@ import {
   type MakaioSessionAgent,
 } from '@makaio/contracts';
 import { AgentStorageSubjects, SessionStorageSubjects } from '../session/index.js';
-import { extractToolFilePath } from '@makaio/tools-core';
+import { extractToolFilePath, extractToolRawFilePath } from '@makaio/tools-core';
 import {
   applyCapabilityOverrides,
   canonicalizePath,
@@ -257,12 +257,18 @@ export class ToolApprovalService extends BaseService {
    * cwd-relative, so a canonical spelling outside the lexical cwd is not matched (same
    * limit as `createPathValidator` in the filesystem extension).
    *
-   * With a non-empty allowlist (`agent.allowedDirectories`, else the profile's) a target
-   * whose canonical path lies outside every entry is denied. An absent or empty list adds
-   * no containment here: an empty list is also what an unhandled profile RPC yields, and
-   * treating it as deny-all would remove every native file tool from hosts that configure
-   * a provider without a profile service. Hosts that need the boundary set the agent's
-   * `allowedDirectories` explicitly.
+   * A raw path argument with a `..` segment (split on `/` and `\`) is denied outright:
+   * `path.resolve` collapses `..` before symlinks are followed, so `link/../config` with
+   * `link -> .git/subdir` would be checked as `<cwd>/config` while the OS opens
+   * `<cwd>/.git/config`. This also denies harmless spellings such as `src/../README.md`.
+   *
+   * The allowlist is `agent.allowedDirectories`, else the profile's. A target whose
+   * canonical path lies outside every entry is denied, so an empty list denies every
+   * native file-tool call with a path, matching the runtime contract and the filesystem
+   * extension's path validator. An absent list (`undefined`) adds no containment. An
+   * agent with a `profileId` but no own list gets `[]` when the profile RPC is unhandled
+   * or fails, so such a host denies all native file-tool calls with a path; hosts without
+   * a profile service set the agent's `allowedDirectories` or leave `profileId` unset.
    * @param payload - Incoming tool approval payload
    * @param context - CWD and directory constraints for rule evaluation
    * @returns Deny message when access should be blocked, otherwise undefined
@@ -289,6 +295,10 @@ export class ToolApprovalService extends BaseService {
     if (!context.cwd) {
       return 'Access denied: file access rules could not be evaluated: agent has no working directory';
     }
+    const rawPath = extractToolRawFilePath(payload.toolName, payload.args);
+    if (rawPath?.split(/[\\/]/).includes('..')) {
+      return `Access denied: '${rawPath}' contains a '..' segment; file access rules need a path without parent references`;
+    }
 
     const canonicalPath = canonicalizePath(filePath);
     try {
@@ -306,7 +316,7 @@ export class ToolApprovalService extends BaseService {
       return `Access denied: file access rules could not be evaluated: '${filePath}' cannot be resolved safely`;
     }
     const { allowedDirectories } = context;
-    if (allowedDirectories?.length && !isCanonicalPathWithin(allowedDirectories, canonicalPath, context.cwd)) {
+    if (allowedDirectories !== undefined && !isCanonicalPathWithin(allowedDirectories, canonicalPath, context.cwd)) {
       return `Access denied: '${filePath}' is outside the agent's allowed directories`;
     }
     return undefined;
