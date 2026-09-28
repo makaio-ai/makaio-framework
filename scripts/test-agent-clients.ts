@@ -95,20 +95,25 @@ export function plannedScenarios(
 
 /**
  * Finds source-expected event/effect pairs not proven by live behavior fixtures.
- * @param manifest - Scenarios defining the required source surface: the complete manifest when
- * publishing, the planned scenarios of a verify run.
+ * @param manifest - Scenarios defining the required source surface; used for publishing, where the
+ * complete manifest must prove every source-expected effect of every event.
  * @param fixtures - Fresh fixtures from the scenarios executed by this probe.
+ * @param requiredKeys - Explicit `<event>:<effect>` keys to require instead of the manifest's
+ * source-expected effects (see {@link verifyRequiredEffectKeys}).
  * @returns Stable sorted event/effect keys missing behavioral evidence.
  */
 export function findMissingEffectCoverage(
   manifest: Pick<ScenarioManifest, 'scenarios'>,
   fixtures: readonly ScenarioFixture[],
+  requiredKeys?: Iterable<string>,
 ): readonly string[] {
-  const required = new Set<string>();
-  for (const scenario of manifest.scenarios) {
-    const event = scenario.expectedEvents[0];
-    if (!event) continue;
-    for (const effect of scenario.sourceExpectedEffects) required.add(`${event.eventName}:${effect}`);
+  const required = new Set<string>(requiredKeys);
+  if (requiredKeys === undefined) {
+    for (const scenario of manifest.scenarios) {
+      const event = scenario.expectedEvents[0];
+      if (!event) continue;
+      for (const effect of scenario.sourceExpectedEffects) required.add(`${event.eventName}:${effect}`);
+    }
   }
   const observed = new Set<string>();
   for (const fixture of fixtures) {
@@ -117,6 +122,25 @@ export function findMissingEffectCoverage(
     }
   }
   return [...required].filter((key) => !observed.has(key)).sort();
+}
+
+/**
+ * Event/effect keys a verify run owes: exactly the sentinel effect each planned scenario exercises.
+ * `sourceExpectedEffects` lists every effect of the event, shared across sibling scenarios, so it
+ * would make a `--scenario`/`--max-scenarios` subset owe evidence of scenarios it skipped.
+ * Native-deny scenarios are excluded: they prove the client's own denial and record no effect.
+ * @param scenarios - Scenarios planned for this verify run.
+ * @returns The required `<event>:<sentinelEffect>` keys.
+ */
+export function verifyRequiredEffectKeys(scenarios: readonly ProbeScenario[]): ReadonlySet<string> {
+  const required = new Set<string>();
+  for (const scenario of scenarios) {
+    const event = scenario.expectedEvents[0];
+    if (!event || scenario.sentinelEffect === undefined) continue;
+    if (scenario.oracle === 'native-must-deny-unapproved-tool') continue;
+    required.add(`${event.eventName}:${scenario.sentinelEffect}`);
+  }
+  return required;
 }
 
 /**
@@ -278,11 +302,13 @@ export async function runProbe(
       }
       failures.push(...result.fixtureDiffs.map((diff) => `${scenario.id}: ${diff}`));
     }
-    // Publishing must prove the whole manifest; a verify run only owes evidence for the scenarios it
-    // planned, so a --scenario or --max-scenarios subset is not failed for scenarios it skipped.
-    const coverageScope = options.updateFixtures ? manifest : { scenarios };
-    for (const missing of findMissingEffectCoverage(coverageScope, fixtures))
-      failures.push(`Missing live behavior evidence for ${missing}`);
+    // Publishing must prove every source-expected effect of the whole manifest; a verify run only
+    // owes the sentinel effects of the scenarios it planned, so a --scenario or --max-scenarios
+    // subset is not failed for effects that only skipped scenarios exercise.
+    const missingEffects = options.updateFixtures
+      ? findMissingEffectCoverage(manifest, fixtures)
+      : findMissingEffectCoverage({ scenarios }, fixtures, verifyRequiredEffectKeys(scenarios));
+    for (const missing of missingEffects) failures.push(`Missing live behavior evidence for ${missing}`);
     if (options.updateFixtures && failures.length === 0 && scenariosExecuted === manifest.scenarios.length) {
       await publishProbeEvidence({
         baseDir: fixturesDir,
