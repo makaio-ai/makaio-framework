@@ -13,7 +13,7 @@
  */
 
 import type { ClientDefinition } from '@makaio/contracts';
-import type { ScenarioOracle } from './types.js';
+import type { ProbeMcpServerConfig, ScenarioOracle } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Shared probe markers
@@ -111,6 +111,15 @@ export interface ProbeEffectScenario {
    * that must *not* compact.
    */
   readonly cliArgs?: readonly string[];
+  /**
+   * Claude Code hook `matcher` for the scenario's hook entry.
+   *
+   * Scopes the hook to the tool the scenario is about, so an incidental tool
+   * call elsewhere in the run cannot inject the sentinel.
+   */
+  readonly hookMatcher?: string;
+  /** MCP servers the scenario's native run is configured with, keyed by server name. */
+  readonly mcpServers?: Readonly<Record<string, ProbeMcpServerConfig>>;
   /** Marker required in the provider's final response. */
   readonly expectedResponseMarker?: string;
   /** Workspace marker required after the run. */
@@ -144,6 +153,19 @@ export interface ClientProbeContract {
    * @returns Extra probe shapes, or an empty array.
    */
   baselineScenarios?(eventName: string): readonly ProbeEffectScenario[];
+  /**
+   * Optional additional attempts at one declared effect, beyond {@link scenarioForEffect}.
+   *
+   * One effect can reach the binary through distinct native paths — Claude
+   * Code's `PostToolUse` fires for built-in tools, MCP tools and tool calls a
+   * subagent makes — and each path is its own claim. Every returned shape
+   * attempts the same effect, so it needs a suffix distinct from the primary
+   * scenario's.
+   * @param eventName - Native hook event being exercised.
+   * @param effect - Declared capability whose native consumption is attempted.
+   * @returns Extra probe shapes, or an empty array.
+   */
+  extraEffectScenarios?(eventName: string, effect: string): readonly ProbeEffectScenario[];
   /**
    * Optional client-owned shape for an event that claims no effect yet.
    *

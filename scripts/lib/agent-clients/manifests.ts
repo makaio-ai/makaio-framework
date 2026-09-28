@@ -62,7 +62,9 @@ const EVIDENCE: Record<ProviderId, Readonly<Record<string, EvidenceCandidate>>> 
       effects: ['claude-code.tool-response.approve', 'claude-code.tool-response.deny', 'context.append'],
       blocking: true,
     },
-    PostToolUse: { status: 'unobserved', effects: [], blocking: false },
+    // Non-blockable: the tool has already run when PostToolUse fires, so the
+    // only claim is context appended after it (FACT-88).
+    PostToolUse: { status: 'supported', effects: ['context.append'], blocking: false },
     Stop: { status: 'unobserved', effects: [], blocking: false },
     SubagentStart: { status: 'supported', effects: ['context.append'], blocking: false },
     SubagentStop: { status: 'unobserved', effects: [], blocking: false },
@@ -133,6 +135,8 @@ function buildScenario(
     ...(seed.seedPrompt !== undefined && { seedPrompt: seed.seedPrompt }),
     allowedTools: seed.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
     ...(seed.cliArgs !== undefined && { cliArgs: seed.cliArgs }),
+    ...(seed.hookMatcher !== undefined && { hookMatcher: seed.hookMatcher }),
+    ...(seed.mcpServers !== undefined && { mcpServers: seed.mcpServers }),
     expectedEvents: [
       {
         eventName: event.name,
@@ -175,8 +179,11 @@ export function getManifest(provider: ProviderId): ScenarioManifest {
         return [buildScenario(provider, event, evidence, seed)];
       }
       return [
-        ...evidence.effects.map((effect) =>
-          buildScenario(provider, event, evidence, contract.scenarioForEffect(event.name, effect), effect),
+        ...evidence.effects.flatMap((effect) =>
+          [
+            contract.scenarioForEffect(event.name, effect),
+            ...(contract.extraEffectScenarios?.(event.name, effect) ?? []),
+          ].map((seed) => buildScenario(provider, event, evidence, seed, effect)),
         ),
         ...(contract.baselineScenarios?.(event.name) ?? []).map((seed) =>
           buildScenario(provider, event, evidence, seed),

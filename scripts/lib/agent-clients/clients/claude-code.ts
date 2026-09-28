@@ -9,6 +9,7 @@
  * @packageDocumentation
  */
 
+import { fileURLToPath } from 'node:url';
 import type { CanonicalEffect, ProviderContributionEnvelope } from '@makaio/contracts/client';
 import {
   CLAUDE_CODE_HOOK_RESPONSE_CAPABILITIES,
@@ -22,6 +23,7 @@ import { renderClaudeCodeNativeResponse } from '../../../../clients/claude-code/
 import {
   CLAUDE_CODE_HOOK_POST_COMPACT,
   CLAUDE_CODE_HOOK_PRE_COMPACT,
+  CLAUDE_CODE_HOOK_POST_TOOL_USE,
   CLAUDE_CODE_HOOK_PRE_TOOL_USE,
   CLAUDE_CODE_HOOK_SUBAGENT_START,
   CLAUDE_CODE_HOOK_SUBAGENT_STOP,
@@ -96,17 +98,51 @@ function sentinel(eventName: string, effects: ReadonlyArray<CanonicalEffect | Pr
   return renderClaudeCodeNativeResponse(eventName, effects).stdout;
 }
 
+/** Context appended by every non-subagent context scenario. */
+const CONTEXT_VALUE = `Include ${RESPONSE_CONSUMED_MARKER} in your final response.`;
+
+/**
+ * Prompt that makes the model read the probe file through the native `Read` tool.
+ *
+ * The harness default for `PostToolUse` asks for a shell read, which is the
+ * Codex tool surface. Claude's built-in file tool is `Read`, and it is the
+ * tool the scenario's hook matcher selects.
+ */
+const READ_TOOL_PROMPT = 'MAKAIO_PROBE_MARKER: use the Read tool to read MAKAIO_PROBE.md, then reply probe-ack.';
+
+/** Name of the stdio MCP server the MCP scenario configures; prefixes its tool names. */
+const PROBE_MCP_SERVER = 'probe';
+
+/** Absolute path of the stdio MCP probe server, launched with `bun`. */
+const PROBE_MCP_SERVER_PATH = fileURLToPath(new URL('../probe-mcp-server.ts', import.meta.url));
+
+/** Prompt that makes the model call the probe server's single tool. */
+const MCP_TOOL_PROMPT = 'MAKAIO_PROBE_MARKER: call the probe_read tool once, then reply probe-ack.';
+
+/**
+ * Relay prompt for context appended after a tool call the *subagent* makes.
+ *
+ * Same relay shape as {@link SUBAGENT_RELAY_PROMPT}, with one addition: the
+ * token enters the subagent's context only after its own shell read, so the
+ * subagent has to be asked to perform that read before it reports.
+ */
+const SUBAGENT_TOOL_RELAY_PROMPT =
+  'Use the Agent tool to run a general-purpose subagent and ask it to run `cat MAKAIO_PROBE.md` with the Bash tool and then report the probe session token from its own context. Then reply with the token it reports.';
+
 /**
  * Build the context-append probe shape for one event.
  *
- * On `PreToolUse` the scenario must also approve the marker tool: the probe
- * runs under a dontAsk policy that would otherwise deny it before the appended
- * context could influence the final response. Events without a permission
- * decision contribute context alone.
+ * The sentinel contributes context alone, on `PreToolUse` too: a context-only
+ * response renders no permission decision, and the scenario's tool is
+ * pre-approved under the dontAsk policy, so it still runs and the appended
+ * context can reach the final response.
  *
  * `SubagentStart` appends to a context the parent never sees, so its scenario
  * has to create a subagent and route the subagent's own words back out; the
  * default marker-only prompt would leave the event unreached.
+ *
+ * `PostToolUse` reads the probe file through Claude's own `Read` tool, and its
+ * hook matches that tool only.
  * @param eventName - Native hook event being exercised.
  * @returns Context-consumption probe shape.
  */
@@ -114,12 +150,11 @@ function contextScenario(eventName: string): ProbeEffectScenario {
   const isSubagentStart = eventName === CLAUDE_CODE_HOOK_SUBAGENT_START;
   const context: CanonicalEffect = {
     kind: 'context.append',
-    value: isSubagentStart ? SUBAGENT_CONTEXT_VALUE : `Include ${RESPONSE_CONSUMED_MARKER} in your final response.`,
+    value: isSubagentStart ? SUBAGENT_CONTEXT_VALUE : CONTEXT_VALUE,
   };
-  const effects = eventName === CLAUDE_CODE_HOOK_PRE_TOOL_USE ? [createApproveEffect(), context] : [context];
   return {
     suffix: 'context-append',
-    sentinelOutput: sentinel(eventName, effects),
+    sentinelOutput: sentinel(eventName, [context]),
     oracle: 'final-response-must-contain-marker',
     expectedResponseMarker: RESPONSE_CONSUMED_MARKER,
     ...(isSubagentStart && {
@@ -127,7 +162,51 @@ function contextScenario(eventName: string): ProbeEffectScenario {
       prompt: SUBAGENT_RELAY_PROMPT,
       allowedTools: SUBAGENT_ALLOWED_TOOLS,
     }),
+    ...(eventName === CLAUDE_CODE_HOOK_POST_TOOL_USE && {
+      description: 'Attempts to append context after a built-in Read tool call.',
+      prompt: READ_TOOL_PROMPT,
+      allowedTools: ['Read', ...DEFAULT_ALLOWED_TOOLS],
+      hookMatcher: 'Read',
+    }),
   };
+}
+
+/**
+ * Additional `PostToolUse` context-append attempts on the other native tool paths.
+ *
+ * An MCP tool call and a tool call made inside a subagent reach `PostToolUse`
+ * through different code in the binary than a built-in tool call in the main
+ * session, so each is proven on its own. Both hooks match only the tool the
+ * scenario is about.
+ * @returns The MCP and subagent probe shapes.
+ */
+function postToolUseExtraContextScenarios(): readonly ProbeEffectScenario[] {
+  const eventName = CLAUDE_CODE_HOOK_POST_TOOL_USE;
+  return [
+    {
+      suffix: 'mcp-context-append',
+      description: 'Attempts to append context after an MCP tool call.',
+      sentinelOutput: sentinel(eventName, [{ kind: 'context.append', value: CONTEXT_VALUE }]),
+      oracle: 'final-response-must-contain-marker',
+      expectedResponseMarker: RESPONSE_CONSUMED_MARKER,
+      prompt: MCP_TOOL_PROMPT,
+      allowedTools: [`mcp__${PROBE_MCP_SERVER}__probe_read`],
+      hookMatcher: `mcp__${PROBE_MCP_SERVER}__.*`,
+      mcpServers: { [PROBE_MCP_SERVER]: { command: 'bun', args: [PROBE_MCP_SERVER_PATH] } },
+    },
+    {
+      // The parent only calls `Agent`, so a `Bash` matcher fires for the
+      // subagent's read alone, and the captured payload carries `agent_id`.
+      suffix: 'subagent-context-append',
+      description: 'Attempts to append context after a tool call made inside a spawned subagent.',
+      sentinelOutput: sentinel(eventName, [{ kind: 'context.append', value: SUBAGENT_CONTEXT_VALUE }]),
+      oracle: 'final-response-must-contain-marker',
+      expectedResponseMarker: RESPONSE_CONSUMED_MARKER,
+      prompt: SUBAGENT_TOOL_RELAY_PROMPT,
+      allowedTools: SUBAGENT_ALLOWED_TOOLS,
+      hookMatcher: 'Bash',
+    },
+  ];
 }
 
 /** Claude Code probe contract consumed by the scenario generator. */
@@ -159,6 +238,11 @@ export const claudeCodeProbeContract: ClientProbeContract = {
     }
 
     throw new Error(`No Claude Code probe shape for effect '${effect}' on '${eventName}'`);
+  },
+
+  extraEffectScenarios(eventName, effect) {
+    if (eventName !== CLAUDE_CODE_HOOK_POST_TOOL_USE || effect !== 'context.append') return [];
+    return postToolUseExtraContextScenarios();
   },
 
   observationScenario(eventName) {
