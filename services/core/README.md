@@ -102,3 +102,4 @@ major domains:
 | `capabilityPackage` | `CapabilityToken` | `CapabilityService` |
 | `trayMenuPackage` | `TrayMenuToken` | `TrayMenuService` |
 | `frameworkCorePackages()` | — | Convenience factory returning all framework-critical extension packages |
+| `createFrameworkCorePackages()` | — | `frameworkCorePackages` with the tool registry and tool approval packages bound to a host `fileAccessRuleProvider` |

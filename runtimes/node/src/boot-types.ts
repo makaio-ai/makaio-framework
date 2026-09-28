@@ -19,6 +19,7 @@ import type {
 } from '@makaio/subsystem-workflow-engine';
 import type { PersistedMachineIdentity } from '@makaio/machine-identity';
 import type { ConfigProvider } from '@makaio/providers';
+import type { FileAccessRuleProvider } from '@makaio/tools-core';
 import type { IAdapterConfigRepository } from '@makaio/services-core/adapter-subsystem';
 import type { PostInstallHandler, StrategyDependencies } from '@makaio/subsystem-client';
 import type {
@@ -321,6 +322,20 @@ export interface CoreBootOptions {
    * `MachineIdentity` shape.
    */
   readonly machineIdentity?: PersistedMachineIdentity;
+
+  /**
+   * Host-provided file-access rule provider (`.makaioignore` hierarchy plus
+   * built-in deny list), for example `createMakaioIgnoreProvider()` from
+   * `@makaio/extension-filesystem`.
+   *
+   * When provided, boot binds it into the framework tool registry, which
+   * injects the resolved rules into every tool execution context, and into the
+   * tool approval service, which denies file tool calls on restricted paths
+   * before any approval policy applies. When omitted, neither enforces
+   * file-access rules. Workflow-worker tool registries are not covered: they
+   * run in separate threads or processes and do not receive this provider.
+   */
+  readonly fileAccessRuleProvider?: FileAccessRuleProvider;
 
   /**
    * Host launcher command embedded into client wiring installed from warning actions.

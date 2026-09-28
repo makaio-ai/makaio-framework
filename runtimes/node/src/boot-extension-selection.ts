@@ -9,7 +9,11 @@ import {
   type ExtensionRuntimeSurface,
   type RuntimeEnvironment,
 } from '@makaio/kernel';
-import { frameworkCorePackages, SessionOrchestratorToken } from '@makaio/services-core';
+import {
+  createFrameworkCorePackages,
+  type FrameworkFileAccessOptions,
+  SessionOrchestratorToken,
+} from '@makaio/services-core';
 import type { ShutdownStep } from './boot-phase.js';
 import { isExtensionEnabled } from './extension-enablement-store.js';
 import { getExtensionPackageSource } from './extension-package-provenance.js';
@@ -578,20 +582,24 @@ export function shouldLoadDefaultSessionOrchestrator(
  * `runtimeOwnership.sessionOrchestrator`, and boot fails if more than one
  * loaded extension declares that ownership.
  * @param loadedExtensionPackages - Descriptor-loaded executable extension packages.
+ * @param fileAccessOptions - Host file-access rule provider bound into the tool
+ *   registry and tool approval packages; without one the static core set is used.
  * @returns Framework core packages for this boot.
  */
 export function selectFrameworkCorePackages(
   loadedExtensionPackages: ReadonlyArray<RuntimeOwnershipPackageView> | true,
+  fileAccessOptions: FrameworkFileAccessOptions = {},
 ): ReadonlyArray<KernelMakaioExtension> {
+  const corePackages = createFrameworkCorePackages(fileAccessOptions);
   if (loadedExtensionPackages === true) {
-    return frameworkCorePackages;
+    return corePackages;
   }
 
   if (shouldLoadDefaultSessionOrchestrator(loadedExtensionPackages)) {
-    return frameworkCorePackages;
+    return corePackages;
   }
 
-  return frameworkCorePackages.filter((pkg) => pkg.name !== SessionOrchestratorToken.name);
+  return corePackages.filter((pkg) => pkg.name !== SessionOrchestratorToken.name);
 }
 
 /**

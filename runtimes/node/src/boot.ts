@@ -622,7 +622,9 @@ export async function bootMakaioRuntimeCore(
     frameworkPackages.push(
       adapterSubsystemPackage,
       nativeSessionSupervisorPackage,
-      ...selectFrameworkCorePackages(effectiveEnabledBootPackages),
+      ...selectFrameworkCorePackages(effectiveEnabledBootPackages, {
+        fileAccessRuleProvider: options.fileAccessRuleProvider,
+      }),
       createWorkflowEnginePackage(workflowRunnerPackageOptions),
       createModelRegistryPackage(modelRegistryFetcher),
       logImportRegistryPackage,
