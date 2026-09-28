@@ -120,6 +120,8 @@ export interface ProbeEffectScenario {
   readonly hookMatcher?: string;
   /** MCP servers the scenario's native run is configured with, keyed by server name. */
   readonly mcpServers?: Readonly<Record<string, ProbeMcpServerConfig>>;
+  /** Hook payload keys the firing must carry; forwarded to `ProbeScenario.requiredPayloadKeys`. */
+  readonly requiredPayloadKeys?: readonly string[];
   /** Marker required in the provider's final response. */
   readonly expectedResponseMarker?: string;
   /** Workspace marker required after the run. */

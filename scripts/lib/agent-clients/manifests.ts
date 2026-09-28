@@ -137,6 +137,7 @@ function buildScenario(
     ...(seed.cliArgs !== undefined && { cliArgs: seed.cliArgs }),
     ...(seed.hookMatcher !== undefined && { hookMatcher: seed.hookMatcher }),
     ...(seed.mcpServers !== undefined && { mcpServers: seed.mcpServers }),
+    ...(seed.requiredPayloadKeys !== undefined && { requiredPayloadKeys: seed.requiredPayloadKeys }),
     expectedEvents: [
       {
         eventName: event.name,

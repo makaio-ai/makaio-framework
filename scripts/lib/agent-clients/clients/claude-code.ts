@@ -205,6 +205,8 @@ function postToolUseExtraContextScenarios(): readonly ProbeEffectScenario[] {
       prompt: SUBAGENT_TOOL_RELAY_PROMPT,
       allowedTools: SUBAGENT_ALLOWED_TOOLS,
       hookMatcher: 'Bash',
+      // The Bash matcher alone also passes if the parent runs `cat` itself; `agent_id` is present only in subagent tool hooks (Claude Code hooks docs).
+      requiredPayloadKeys: ['agent_id'],
     },
   ];
 }
