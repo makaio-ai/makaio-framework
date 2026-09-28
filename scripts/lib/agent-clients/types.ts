@@ -37,6 +37,8 @@ export interface ProbeMcpServerConfig {
   readonly command: string;
   /** Arguments passed to {@link ProbeMcpServerConfig.command}. */
   readonly args: readonly string[];
+  /** Claude Code: load the server's tools up front instead of deferring them behind `ToolSearch`. */
+  readonly alwaysLoad?: boolean;
 }
 
 /** A bounded native-client scenario. */

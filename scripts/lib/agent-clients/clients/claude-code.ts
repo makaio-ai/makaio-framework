@@ -57,9 +57,15 @@ const SUBAGENT_ALLOWED_TOOLS = ['Agent', ...DEFAULT_ALLOWED_TOOLS] as const;
  * binary. Handing a subagent an identifying token and asking what it received
  * is an ordinary request, and it is also exactly what a consumer exercises with
  * this capability.
+ *
+ * The subagent gets a concrete errand — a shell read of the probe file — before
+ * it reports. Without one, the account's default model (claude-haiku-4-5 on
+ * 2.1.283) answered in one turn without calling `Agent`, so `SubagentStart`
+ * never fired. The same prompt serves the `PostToolUse` subagent scenario,
+ * whose token enters the subagent's context only after that read.
  */
 const SUBAGENT_RELAY_PROMPT =
-  'Use the Agent tool to run a general-purpose subagent and ask it to report the probe session token from its own context. Then reply with the token it reports.';
+  'Use the Agent tool to run a general-purpose subagent and ask it to run `cat MAKAIO_PROBE.md` with the Bash tool and then report the probe session token from its own context. Then reply with the token it reports.';
 
 /**
  * Prompt that spawns one subagent on an ordinary errand.
@@ -118,16 +124,6 @@ const PROBE_MCP_SERVER_PATH = fileURLToPath(new URL('../probe-mcp-server.ts', im
 
 /** Prompt that makes the model call the probe server's single tool. */
 const MCP_TOOL_PROMPT = 'MAKAIO_PROBE_MARKER: call the probe_read tool once, then reply probe-ack.';
-
-/**
- * Relay prompt for context appended after a tool call the *subagent* makes.
- *
- * Same relay shape as {@link SUBAGENT_RELAY_PROMPT}, with one addition: the
- * token enters the subagent's context only after its own shell read, so the
- * subagent has to be asked to perform that read before it reports.
- */
-const SUBAGENT_TOOL_RELAY_PROMPT =
-  'Use the Agent tool to run a general-purpose subagent and ask it to run `cat MAKAIO_PROBE.md` with the Bash tool and then report the probe session token from its own context. Then reply with the token it reports.';
 
 /**
  * Build the context-append probe shape for one event.
@@ -192,7 +188,8 @@ function postToolUseExtraContextScenarios(): readonly ProbeEffectScenario[] {
       prompt: MCP_TOOL_PROMPT,
       allowedTools: [`mcp__${PROBE_MCP_SERVER}__probe_read`],
       hookMatcher: `mcp__${PROBE_MCP_SERVER}__.*`,
-      mcpServers: { [PROBE_MCP_SERVER]: { command: 'bun', args: [PROBE_MCP_SERVER_PATH] } },
+      // 2.1.283 defers MCP tools behind ToolSearch unless the server is marked alwaysLoad, which costs the turn budget.
+      mcpServers: { [PROBE_MCP_SERVER]: { command: 'bun', args: [PROBE_MCP_SERVER_PATH], alwaysLoad: true } },
     },
     {
       // The parent only calls `Agent`, so a `Bash` matcher fires for the
@@ -202,7 +199,7 @@ function postToolUseExtraContextScenarios(): readonly ProbeEffectScenario[] {
       sentinelOutput: sentinel(eventName, [{ kind: 'context.append', value: SUBAGENT_CONTEXT_VALUE }]),
       oracle: 'final-response-must-contain-marker',
       expectedResponseMarker: RESPONSE_CONSUMED_MARKER,
-      prompt: SUBAGENT_TOOL_RELAY_PROMPT,
+      prompt: SUBAGENT_RELAY_PROMPT,
       allowedTools: SUBAGENT_ALLOWED_TOOLS,
       hookMatcher: 'Bash',
       // The Bash matcher alone also passes if the parent runs `cat` itself; `agent_id` is present only in subagent tool hooks (Claude Code hooks docs).
