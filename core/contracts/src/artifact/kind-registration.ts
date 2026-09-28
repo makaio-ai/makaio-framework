@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { JsonObjectContractSchema } from '../shared/json-value.js';
-import { validateKindDataPaths } from './kind-paths.js';
+import { isArtifactDataPathDeclared, validateKindDataPaths } from './kind-paths.js';
 import { validateSchemaDialect } from './kind-schema-dialect.js';
 import { mayArtifactDataCarryProperty } from './kind-reserved-fields.js';
 import { ARTIFACT_SLUG_FIELD } from './slug.js';
@@ -37,13 +37,27 @@ export const ArtifactLifecycleStateSchema = z.enum([
   ...ARTIFACT_CATEGORY_LIFECYCLE_STATES.interaction,
 ]);
 
-/** Additional relation requirement; undeclared relation types remain permitted. */
+/** Applies the requirement only when the artifact data holds `equals` at `path`. */
+export const ArtifactRelationRequirementConditionSchema = z.strictObject({
+  /** Data-relative object-property path to the field the condition reads. */
+  path: ArtifactDataPathSchema,
+  /** Scalar value the field must hold, compared by exact equality. */
+  equals: z.union([z.string(), z.number(), z.boolean()]),
+});
+
+/**
+ * Additional relation requirement; undeclared relation types remain permitted.
+ * Without `when` the requirement always applies. With `when` it applies only when
+ * the value at `when.path` equals `when.equals`; it is skipped when that value is
+ * missing, non-scalar, or not equal.
+ */
 export const ArtifactRelationRequirementSchema = z
   .strictObject({
     relationType: z.string().trim().min(1),
     targetKinds: z.array(z.string().trim().min(1)).min(1).optional(),
     minItems: z.number().int().nonnegative(),
     maxItems: z.number().int().nonnegative().optional(),
+    when: ArtifactRelationRequirementConditionSchema.optional(),
   })
   .refine((value) => value.maxItems === undefined || value.maxItems >= value.minItems, {
     path: ['maxItems'],
@@ -117,6 +131,15 @@ export const ArtifactKindRegistrationSchema = z
         });
       }
     });
+    value.relations?.forEach((requirement, index) => {
+      if (requirement.when && !isArtifactDataPathDeclared(value.dataSchema, requirement.when.path)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['relations', index, 'when', 'path'],
+          message: `Data path ${requirement.when.path} must select a declared field`,
+        });
+      }
+    });
     Object.keys(value.views ?? {}).forEach((name) => {
       if (RESERVED_ARTIFACT_KIND_VIEW_NAMES.has(name)) {
         ctx.addIssue({
@@ -144,6 +167,8 @@ export type ArtifactCategory = z.infer<typeof ArtifactCategorySchema>;
 export type ArtifactLifecycleState = z.infer<typeof ArtifactLifecycleStateSchema>;
 /** Additional relation cardinality declaration. */
 export type ArtifactRelationRequirement = z.infer<typeof ArtifactRelationRequirementSchema>;
+/** Data condition under which a relation requirement applies. */
+export type ArtifactRelationRequirementCondition = z.infer<typeof ArtifactRelationRequirementConditionSchema>;
 /** Explicit uniqueness declaration. */
 export type ArtifactUniquenessRule = z.infer<typeof ArtifactUniquenessRuleSchema>;
 /** Direct evidence cardinality declaration. */

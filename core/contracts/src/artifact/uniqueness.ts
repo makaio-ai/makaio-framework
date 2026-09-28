@@ -182,7 +182,10 @@ export interface BuildUniquenessKeysResult {
  * @returns The value when the full path resolves, or `undefined` when any
  * segment is missing.
  */
-function resolveDataPathValue(data: Record<string, unknown> | undefined, path: string): { value: unknown } | undefined {
+export function resolveDataPathValue(
+  data: Record<string, unknown> | undefined,
+  path: string,
+): { value: unknown } | undefined {
   let current: unknown = data;
   for (const key of path.split('.')) {
     if (current === null || typeof current !== 'object' || Array.isArray(current) || !Object.hasOwn(current, key)) {
