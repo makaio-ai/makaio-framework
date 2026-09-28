@@ -171,6 +171,7 @@ export function buildClaudeCodeCommand(params: {
   invocation?: ScenarioInvocation;
 }): SpawnCommand {
   const { executablePath, scenario, env, projectDir, settingsPath, mcpConfigPath, invocation } = params;
+  // A scenario declaring MCP servers but spawned without --mcp-config would yield silently invalid live evidence; fail loudly instead.
   if ((scenario.mcpServers === undefined) !== (mcpConfigPath === undefined)) {
     throw new Error(`Scenario "${scenario.id}" needs an MCP config path exactly when it declares mcpServers`);
   }

@@ -24,9 +24,6 @@ import type {
 } from './types.js';
 import type { ProbeWorkspace } from './workspace.js';
 
-// Re-exported so existing importers of the pure oracle keep their entry point.
-export { evaluateOracle } from './oracle-signals.js';
-
 /** Result of one spawned scenario. */
 export interface ScenarioRunResult {
   readonly fixture: ScenarioFixture;

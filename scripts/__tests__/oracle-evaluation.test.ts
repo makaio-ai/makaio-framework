@@ -1,16 +1,15 @@
 /**
- * Unit tests for the pure `evaluateOracle` helper in runner.ts and the
- * `firedWithRequiredPayloadKeys` helper in oracle-signals.ts.
+ * Unit tests for the pure `evaluateOracle` and `firedWithRequiredPayloadKeys`
+ * helpers in oracle-signals.ts.
  *
  * The capability-proving branch has two sub-cases (mirroring provesDeclaredEffects):
  * - With sentinelEffect: requires responseConsumed AND terminal === 'ok'.
  * - Without sentinelEffect: requires responseConsumed AND terminatedCleanly
- *   (error_max_turns is accepted — negative-control scenarios prove a native
- *   refusal that legitimately prevents the model from completing).
+ *   (ok or error_max_turns — negative-control scenarios prove a native refusal,
+ *   which may keep the model from completing within its turn bound).
  */
 import { describe, expect, it } from 'vitest';
-import { firedWithRequiredPayloadKeys } from '../lib/agent-clients/oracle-signals.js';
-import { evaluateOracle } from '../lib/agent-clients/runner.js';
+import { evaluateOracle, firedWithRequiredPayloadKeys } from '../lib/agent-clients/oracle-signals.js';
 
 // Minimal scenario shapes required by evaluateOracle.
 

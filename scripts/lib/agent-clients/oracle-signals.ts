@@ -39,10 +39,11 @@ export function firedWithRequiredPayloadKeys(
  *   rejects such fixtures via `provesDeclaredEffects`.
  * - **Without a declared effect** (`sentinelEffect` undefined): the same
  *   bounded-turn rule as the observation branches applies — `error_max_turns`
- *   is accepted. Negative-control scenarios (e.g. `native-must-deny-unapproved-tool`)
- *   prove a native refusal that legitimately prevents the model from completing,
- *   so their committed fixture records `terminal: 'error_max_turns'` with
- *   `oraclePassed: true`.
+ *   is accepted alongside `ok`. Negative-control scenarios (e.g.
+ *   `native-must-deny-unapproved-tool`) prove a native refusal, which may keep
+ *   the model from completing within its turn bound; the oracle relies only on
+ *   `responseConsumed` plus a clean termination, not on a specific terminal.
+ *   (The current committed fixture ends `terminal: 'ok'`, `exitCode: 0`.)
  * @param params - Oracle kind, terminal classification, and derived signal flags.
  * @returns Whether the oracle condition is met for this run.
  */
