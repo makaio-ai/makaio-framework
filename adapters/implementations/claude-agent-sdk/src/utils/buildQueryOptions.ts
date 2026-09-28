@@ -269,7 +269,12 @@ function resolveToolPolicyOptions(policy: ResolvedToolPolicy): Partial<Options> 
  * names can never list it, so the tool-list check would deny the call. The returned
  * policy allows exactly that tool name and delegates every other call unchanged. Without
  * a schema (or without caller lists) the policy is returned as is. The PreToolUse hook,
- * the wrapped provider hooks, and `canUseTool` all receive this one policy.
+ * the wrapped provider hooks, and `canUseTool` all receive this one policy. The bundled
+ * CLI (SDK 0.2.131) runs the tool's own permission check (`allow`) before `canUseTool`,
+ * so in practice only the PreToolUse hook blocked the call; the `canUseTool` side is
+ * defence in depth, and the central ToolApprovalService (which re-checks the stored agent
+ * lists) is not reached for this tool. An earlier provider PreToolUse hook can still deny
+ * it; that is operator policy and intended.
  * @param policy - Caller tool policy resolved for this query.
  * @param responseSchema - The query's structured output descriptor, if any.
  * @returns The effective tool policy for the query.
