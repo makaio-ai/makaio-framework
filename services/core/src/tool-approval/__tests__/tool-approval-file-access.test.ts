@@ -11,12 +11,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, ApprovalSubjects, HarnessSubjects } from '@makaio/contracts';
-import type { FileAccessRuleProvider } from '@makaio/tools-core';
+import { extractToolFilePath, type FileAccessRuleProvider } from '@makaio/tools-core';
+import { AgentStorageSubjects } from '../../session/index.js';
 import { ToolApprovalService } from '../tool-approval-service.js';
 import {
   createToolApprovePayload,
   registerDefaultHarnessHandler,
   registerAgentStub,
+  registerSessionStorageHandler,
   TEST_ADAPTER_NAME,
 } from './test-utils.js';
 
@@ -27,6 +29,29 @@ const testProvider: FileAccessRuleProvider = async (_cwd, allowedDirs) => ({
 });
 
 const TEST_CWD = '/home/user/project';
+
+const NO_CWD_REASON = 'Access denied: file access rules could not be evaluated: agent has no working directory';
+
+/**
+ * Send a toolApprove request for one tool call.
+ * @param toolName - Tool name of the call
+ * @param args - Tool call input
+ * @returns Approval response
+ */
+function approve(toolName: string, args: Record<string, unknown>) {
+  return MakaioBus.request(AgentSubjects.toolApprove, createToolApprovePayload({ toolName, args }));
+}
+
+/**
+ * Assert that the file-access pre-check did not deny the call; the cascade may still deny it.
+ * @param result - Approval response
+ */
+function expectNotDeniedByFileAccess(result: Awaited<ReturnType<typeof approve>>): void {
+  if (result.action === 'deny') {
+    expect(result.message).not.toContain('.makaioignore');
+    expect(result.message).not.toContain('could not be evaluated');
+  }
+}
 
 describe('ToolApprovalService - .makaioignore pre-check', () => {
   let service: ToolApprovalService;
@@ -224,5 +249,96 @@ describe('ToolApprovalService - .makaioignore pre-check', () => {
       expect(result.message).toBe('Access denied: file access rules could not be evaluated');
       expect(result.shouldAbort).toBe(false);
     }
+  });
+
+  describe('agent without a working directory', () => {
+    it('denies Edit on a path when the agent row has no cwd', async () => {
+      registerAgentStub(cleanups);
+
+      const result = await approve('Edit', { file_path: `${TEST_CWD}/readme.txt` });
+
+      expect(result).toEqual({ action: 'deny', message: NO_CWD_REASON, shouldAbort: false });
+    });
+
+    it('denies Edit on a path when no agent row exists', async () => {
+      cleanups.push(
+        MakaioBus.on(AgentStorageSubjects.listBySession, (ctx) => {
+          ctx.setResult({ agents: [] });
+        }),
+      );
+
+      const result = await approve('Edit', { file_path: `${TEST_CWD}/readme.txt` });
+
+      expect(result).toEqual({ action: 'deny', message: NO_CWD_REASON, shouldAbort: false });
+    });
+
+    it('keeps the no-cwd deny ahead of a full-access session override', async () => {
+      registerAgentStub(cleanups);
+      registerSessionStorageHandler(cleanups, 'full-access');
+
+      const result = await approve('Write', { file_path: `${TEST_CWD}/out.txt` });
+
+      expect(result).toEqual({ action: 'deny', message: NO_CWD_REASON, shouldAbort: false });
+    });
+
+    it('does not deny a Glob call without path when the agent row has no cwd', async () => {
+      registerAgentStub(cleanups);
+
+      expectNotDeniedByFileAccess(await approve('Glob', { pattern: '**/*.ts' }));
+    });
+
+    it('leaves a row without cwd to the cascade when no provider is configured', async () => {
+      service.destroy();
+      service = new ToolApprovalService(MakaioBus);
+      await service.init();
+      registerAgentStub(cleanups);
+
+      const result = await approve('Edit', { file_path: `${TEST_CWD}/.env` });
+
+      // Default harness is always-ask and no approval handler is registered.
+      expect(result).toEqual({ action: 'deny', message: 'No approval handler available', shouldAbort: false });
+    });
+  });
+
+  describe('Claude search and notebook tools', () => {
+    const gitDenyingProvider: FileAccessRuleProvider = async () => ({
+      isDenied: (p) => p.split('/').includes('.git'),
+    });
+
+    beforeEach(async () => {
+      service.destroy();
+      service = new ToolApprovalService(MakaioBus, { fileAccessRuleProvider: gitDenyingProvider });
+      await service.init();
+      registerAgentStub(cleanups, { cwd: TEST_CWD });
+    });
+
+    it('denies Grep with a path inside a denied directory', async () => {
+      const result = await approve('Grep', { pattern: 'token', path: '.git' });
+
+      expect(result.action).toBe('deny');
+      if (result.action === 'deny') {
+        expect(result.message).toBe(`Access denied: '${TEST_CWD}/.git' is restricted by .makaioignore rules`);
+      }
+    });
+
+    it('does not deny Glob or Grep without a path via the file-access check', async () => {
+      expectNotDeniedByFileAccess(await approve('Glob', { pattern: '**/*.ts' }));
+      expectNotDeniedByFileAccess(await approve('Grep', { pattern: 'token' }));
+    });
+
+    it('denies NotebookEdit on a notebook inside a denied directory', async () => {
+      const result = await approve('NotebookEdit', { notebook_path: '.git/notes.ipynb', new_source: '' });
+
+      expect(result.action).toBe('deny');
+      if (result.action === 'deny') expect(result.message).toContain('.makaioignore');
+    });
+
+    it('extracts the search and notebook target paths', () => {
+      expect(extractToolFilePath('NotebookEdit', { notebook_path: 'nb/a.ipynb' }, TEST_CWD)).toBe(
+        `${TEST_CWD}/nb/a.ipynb`,
+      );
+      expect(extractToolFilePath('Grep', { pattern: 'x', path: 'src' }, TEST_CWD)).toBe(`${TEST_CWD}/src`);
+      expect(extractToolFilePath('Glob', { pattern: '**/*' }, TEST_CWD)).toBeNull();
+    });
   });
 });

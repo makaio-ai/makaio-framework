@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { BaseService } from '@makaio/service-base';
 import {
@@ -129,8 +130,10 @@ export class ToolApprovalService extends BaseService {
 
       // The agent's tool lists deny unlisted calls ahead of any allowing policy.
       // The lists live only on the agent row: when the lookup fails, or no row exists
-      // (no agent storage, ephemeral start, swallowed best-effort row write, first turn
-      // before the row is written), this layer yields `none`.
+      // (host without agent storage, ephemeral start, swallowed best-effort row write), this
+      // layer yields `none`. Both framework start paths (lead start, attach start) persist the
+      // row before adapter dispatch, so the first turn already finds it; a row may still lack
+      // `cwd` when the caller named none (the file-access check above fails closed on that).
       // Only claude-agent-sdk carries its own allowlist gate; claude-code-cli enforces only
       // the denylist and claude-code-tmux neither, so an allowing policy would run an unlisted
       // call unchecked. A lookup error therefore falls back to asking (see below): interactive
@@ -253,15 +256,20 @@ export class ToolApprovalService extends BaseService {
     },
     context: FileAccessContext,
   ): Promise<string | undefined> {
-    // Requires agent cwd to resolve file paths and load .makaioignore hierarchy.
-    // When cwd is unavailable, pre-check is skipped and downstream checks apply.
-    if (!this.options.fileAccessRuleProvider || !context.cwd) {
+    if (!this.options.fileAccessRuleProvider) {
       return undefined;
     }
 
-    const filePath = extractToolFilePath(payload.toolName, payload.args, context.cwd);
+    // The rules hang off the agent cwd. Without one (no agent row, a failed lookup, or a
+    // row whose caller named no cwd) a file-tool call cannot be evaluated and fails closed,
+    // so a later full-access override or tool-list grant cannot allow it. The root base
+    // only detects whether the call names a path; it is never evaluated.
+    const filePath = extractToolFilePath(payload.toolName, payload.args, context.cwd ?? path.sep);
     if (!filePath) {
       return undefined;
+    }
+    if (!context.cwd) {
+      return 'Access denied: file access rules could not be evaluated: agent has no working directory';
     }
 
     try {

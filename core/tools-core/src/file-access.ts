@@ -40,6 +40,10 @@ const TOOL_PATH_ARGS: ReadonlyMap<string, readonly string[]> = new Map([
   ['Edit', ['path', 'file_path']],
   ['MultiEdit', ['path', 'file_path']],
   ['create_file', ['path', 'file_path']],
+  // Claude search tools: an absent `path` searches the cwd and yields no target here.
+  ['Glob', ['path']],
+  ['Grep', ['path']],
+  ['NotebookEdit', ['notebook_path']],
 ]);
 
 /**

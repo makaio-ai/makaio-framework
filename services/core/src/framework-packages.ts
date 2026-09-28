@@ -1,7 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { MakaioNodeExtension } from '@makaio/contracts';
 import { dep, extensionToken } from '@makaio/contracts';
-import type { FileAccessRuleProvider } from '@makaio/tools-core';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
 import { ArtifactLifecycleHookRegistry } from './artifact/artifact-lifecycle-hook-registry.js';
 import { artifactSchemaRegistryPackage, ArtifactSchemaRegistryToken } from './artifact/packages.js';
@@ -31,7 +30,7 @@ import { SessionBridge } from './session/session-bridge.js';
 import { SessionOrchestrator } from './session/session-orchestrator.js';
 import type { ISessionOrchestrator } from './session/session-orchestrator.js';
 import { MakaioSessionService } from './session/session-service.js';
-import { ToolApprovalService } from './tool-approval/tool-approval-service.js';
+import { ToolApprovalService, type ToolApprovalServiceOptions } from './tool-approval/tool-approval-service.js';
 import { ToolRegistry } from './tools/tool-registry.js';
 import { TrayMenuService } from './tray-menu/tray-menu-service.js';
 import { WorkflowBlockRegistry } from './workflow-blocks/workflow-block-registry.js';
@@ -240,16 +239,10 @@ export const observedSessionIngestionPackage: MakaioNodeExtension<IMakaioBus> = 
  *
  * One provider feeds both the tool registry (rules injected into every tool
  * execution context) and the tool approval service (absolute deny pre-check
- * ahead of the policy cascade), so both layers enforce the same rules.
+ * ahead of the policy cascade), so both layers enforce the same rules. When
+ * `fileAccessRuleProvider` is omitted, neither package enforces file-access rules.
  */
-export interface FrameworkFileAccessOptions {
-  /**
-   * Resolves the file-access rules (`.makaioignore` hierarchy plus built-in
-   * deny list) for a working directory. When omitted, neither package enforces
-   * file-access rules.
-   */
-  readonly fileAccessRuleProvider?: FileAccessRuleProvider;
-}
+export type FrameworkFileAccessOptions = Pick<ToolApprovalServiceOptions, 'fileAccessRuleProvider'>;
 
 /**
  * Create the tool-registry package, optionally bound to a file-access rule provider.
@@ -257,13 +250,12 @@ export interface FrameworkFileAccessOptions {
  * @returns Tool-registry package.
  */
 function createToolRegistryPackage(options: FrameworkFileAccessOptions = {}): MakaioNodeExtension<IMakaioBus> {
-  const { fileAccessRuleProvider } = options;
   return {
     name: ToolRegistryToken.name,
     displayName: 'Tool Registry',
     version: '0.1.0',
     critical: true,
-    create: (ctx) => new ToolRegistry({ bus: ctx.bus, fileAccessRuleProvider }),
+    create: (ctx) => new ToolRegistry({ ...options, bus: ctx.bus }),
   };
 }
 
@@ -276,14 +268,13 @@ export const toolRegistryPackage: MakaioNodeExtension<IMakaioBus> = createToolRe
  * @returns Tool-approval package.
  */
 function createToolApprovalPackage(options: FrameworkFileAccessOptions = {}): MakaioNodeExtension<IMakaioBus> {
-  const { fileAccessRuleProvider } = options;
   return {
     name: ToolApprovalToken.name,
     displayName: 'Tool Approval',
     version: '0.1.0',
     dependencies: [dep(ToolRegistryToken.name)],
     critical: true,
-    create: (ctx) => new ToolApprovalService(ctx.bus, { fileAccessRuleProvider }),
+    create: (ctx) => new ToolApprovalService(ctx.bus, options),
   };
 }
 

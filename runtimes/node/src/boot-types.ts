@@ -332,8 +332,20 @@ export interface CoreBootOptions {
    * injects the resolved rules into every tool execution context, and into the
    * tool approval service, which denies file tool calls on restricted paths
    * before any approval policy applies. When omitted, neither enforces
-   * file-access rules. Workflow-worker tool registries are not covered: they
-   * run in separate threads or processes and do not receive this provider.
+   * file-access rules.
+   *
+   * Scope:
+   * - The patterns apply inside the agent's working directory. Paths outside
+   *   it are governed by the agent's `allowedDirectories`, not by this provider.
+   * - Only file tools with a path argument are inspected. Shell commands and
+   *   other tools without a path argument are not.
+   * - A known file-tool call from an agent without a working directory is
+   *   denied (fail-closed), because the rules cannot be resolved without one.
+   * - Boot fails when an extension overrides the framework tool registry or
+   *   tool approval package while a provider is configured, since the
+   *   override would drop the provider.
+   * - Workflow-worker tool registries are not covered: they run in separate
+   *   threads or processes and do not receive this provider.
    */
   readonly fileAccessRuleProvider?: FileAccessRuleProvider;
 

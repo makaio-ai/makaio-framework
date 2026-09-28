@@ -183,11 +183,10 @@ describe('boot fileAccessRuleProvider wiring', () => {
     const result = await readFile(bus, 'secret.txt');
     expect(result.success).toBe(true);
 
-    // No approval handler is registered, so the cascade may still deny — but
-    // never through the file-access pre-check.
-    const approval = await approveRead(bus, 'secret.txt');
-    if (approval.action === 'deny') {
-      expect(approval.message).not.toContain('.makaioignore');
-    }
+    // Without the pre-check the `always-ask` cascade runs and finds no approval handler.
+    await expect(approveRead(bus, 'secret.txt')).resolves.toMatchObject({
+      action: 'deny',
+      message: 'No approval handler available',
+    });
   });
 });
