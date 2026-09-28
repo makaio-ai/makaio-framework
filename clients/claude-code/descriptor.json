@@ -17,7 +17,7 @@
         "binary": {
           "name": "claude",
           "managed": true,
-          "version": "2.1.219"
+          "version": "2.1.283"
         }
       }
     ]
