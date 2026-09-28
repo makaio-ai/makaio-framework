@@ -116,6 +116,29 @@ describe('evaluateRelationRequirements', () => {
     ).toEqual([{ index: 0, requirement, reason: 'above-max-items', count: 2 }]);
   });
 
+  it('reports no issue when the distinct target count equals both minItems and maxItems', () => {
+    const requirement: ArtifactRelationRequirement = {
+      relationType: 'implements',
+      targetKinds: ['concept'],
+      minItems: 2,
+      maxItems: 2,
+    };
+    expect(
+      evaluateRelationRequirements([requirement], [implementsConcept1RevA, implementsConcept2], undefined),
+    ).toEqual([]);
+  });
+
+  it('counts the same id under two target kinds as two distinct targets when targetKinds is absent', () => {
+    const implementsDecisionWithConceptId = ArtifactRelationSchema.parse({
+      type: 'implements',
+      target: { refClass: 'artifact', kind: 'decision', id: 'concept-1', revision: 'rev-A' },
+    });
+    const requirement: ArtifactRelationRequirement = { relationType: 'implements', minItems: 0, maxItems: 1 };
+    expect(
+      evaluateRelationRequirements([requirement], [implementsConcept1RevA, implementsDecisionWithConceptId], undefined),
+    ).toEqual([{ index: 0, requirement, reason: 'above-max-items', count: 2 }]);
+  });
+
   describe('when condition', () => {
     it('enforces the requirement when the value equals', () => {
       const requirement = requireOneConceptWhen('mode', 'strict');

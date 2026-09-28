@@ -961,6 +961,32 @@ describe('defineArtifactKind', () => {
       ).toThrow('Data path undeclared must select a declared field');
     });
 
+    it('accepts a nested declared when path and rejects an undeclared nested one', () => {
+      const nestedOptions = {
+        ...ruleOptions,
+        dataSchema: z.strictObject({
+          topic: z.string(),
+          classification: z.strictObject({ ruleKind: z.enum(['rule', 'exception']) }),
+        }),
+      };
+      const nested = { ...conditional, when: { path: 'classification.ruleKind', equals: 'exception' } };
+      const registration = defineArtifactKind({ ...nestedOptions, relations: [nested] }).toRegistration();
+      expect(registration.relations).toEqual([nested]);
+      expect(ArtifactKindRegistrationSchema.parse(registration).relations).toEqual([nested]);
+
+      const result = ArtifactKindRegistrationSchema.safeParse({
+        ...registration,
+        relations: [{ ...conditional, when: { path: 'classification.missing', equals: 'exception' } }],
+      });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues).toContainEqual(
+        expect.objectContaining({
+          path: ['relations', 0, 'when', 'path'],
+          message: 'Data path classification.missing must select a declared field',
+        }),
+      );
+    });
+
     it.each([
       { name: 'null equals', when: { path: 'ruleKind', equals: null } },
       { name: 'object equals', when: { path: 'ruleKind', equals: {} } },
