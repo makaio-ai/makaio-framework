@@ -32,6 +32,7 @@ export {
   ArtifactCategorySchema,
   ArtifactDataPathSchema,
   ArtifactLifecycleStateSchema,
+  ArtifactRelationRequirementConditionSchema,
   ArtifactRelationRequirementSchema,
   ArtifactUniquenessSelectorSchema,
   ArtifactUniquenessRuleSchema,
@@ -140,6 +141,7 @@ export type {
   ArtifactCategory,
   ArtifactLifecycleState,
   ArtifactRelationRequirement,
+  ArtifactRelationRequirementCondition,
   ArtifactUniquenessRule,
   ArtifactEvidenceRequirements,
   ArtifactCompareRequest,
@@ -259,6 +261,7 @@ export {
   assessUniquenessSupport,
   buildUniquenessKeys,
   describeUniquenessKey,
+  evaluateRelationRequirements,
 } from './artifact/index.js';
 export type {
   ArtifactRelationTargetIdentity,
@@ -271,6 +274,8 @@ export type {
   UniquenessKeyIssue,
   UniquenessKeyIssueReason,
   BuildUniquenessKeysResult,
+  RelationRequirementIssue,
+  RelationRequirementIssueReason,
 } from './artifact/index.js';
 export { AIModelSchema, AIReasoningLevelSchema, ProviderAIModelSchema } from './model/index.js';
 export type {
