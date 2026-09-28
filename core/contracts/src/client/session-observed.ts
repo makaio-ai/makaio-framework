@@ -75,6 +75,11 @@ export type ClientSessionObservedBase = z.infer<typeof ClientSessionObservedBase
  * Maps 1:1 to the Claude Code SDK `SessionStartHookInput.source` union:
  * `'startup'` → `'fresh'`, `'resume'` → `'resume'` or `'fork'` (after
  * transcript sniff), `'clear'` → `'clear'`, `'compact'` → `'compact'`.
+ *
+ * Codex CLI `0.158.0` `SessionStart.source`: `'startup'` → `'fresh'`,
+ * `'resume'` → `'resume'`, `'clear'` → `'clear'`, `'compact'` → `'compact'`,
+ * `'fork'` → `'fork'` with the parent recovered from the rollout file, or
+ * `'fresh'` when the parent cannot be recovered.
  */
 export const CLIENT_SESSION_START_MODES = ['fresh', 'fork', 'resume', 'clear', 'compact'] as const;
 
