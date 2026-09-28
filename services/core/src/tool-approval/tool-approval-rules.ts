@@ -1,5 +1,16 @@
-import { computeMetaTags, type ApprovalPolicy, type MakaioSessionAgent, type ToolCapability } from '@makaio/contracts';
-import type { FileAccessRuleProvider } from '@makaio/tools-core';
+import { lstatSync, realpathSync } from 'node:fs';
+import path from 'node:path';
+import {
+  computeMetaTags,
+  resolveToolPolicy,
+  ToolNameError,
+  toolVocabularyForAdapter,
+  type ApprovalPolicy,
+  type MakaioSessionAgent,
+  type ResolvedToolPolicy,
+  type ToolCapability,
+} from '@makaio/contracts';
+import { extractToolFilePath, type FileAccessRuleProvider } from '@makaio/tools-core';
 import {
   type EnrichedApprovalRequest,
   type EnrichedBasePolicyResult,
@@ -178,6 +189,140 @@ export function resolveEnrichedBasePolicy(
     ...(rawResult.data.personaName && { personaName: rawResult.data.personaName }),
     ...(rawResult.data.profileName && { profileName: rawResult.data.profileName }),
   };
+}
+
+/** Outcome of the agent's tool lists for one tool call. */
+export type ToolGrantVerdict = { kind: 'deny'; message: string } | { kind: 'granted' } | { kind: 'none' };
+
+/**
+ * Evaluate the agent's stored tool lists (`allowedTools` / `disallowedTools`) for one tool call.
+ *
+ * - `none` — no tool name, no agent, no lists on the agent, no tool vocabulary for the
+ *   adapter, or the call passes a denylist-only policy. The approval cascade decides.
+ * - `deny` — a list entry is invalid ({@link ToolNameError}) or the lists reject the call.
+ * - `granted` — an allowlist exists and covers the call. The service uses this to replace
+ *   an `always-ask` policy only; a `reject` policy still wins. Under a directory allowlist
+ *   (`agent.allowedDirectories`, else the profile's) a covered call is granted only when its
+ *   target path lies inside it; otherwise the verdict is `none` and the cascade decides.
+ * @param agent - Pre-fetched agent metadata, or null if unavailable; its `adapterName`
+ *   selects the tool vocabulary of `toolName`
+ * @param toolName - Native tool name of the call
+ * @param args - Tool call input; `args.command` is matched against command rules
+ * @param rawEnrichedPolicy - Pre-fetched enriched-policy RPC result; supplies the profile
+ *   directory allowlist when the agent row carries none
+ * @returns Grant verdict for the call
+ */
+export function evaluateToolGrant(
+  agent: MakaioSessionAgent | null,
+  toolName: string | undefined,
+  args: Record<string, unknown> | undefined,
+  rawEnrichedPolicy?: RawEnrichedPolicyResult,
+): ToolGrantVerdict {
+  if (!toolName || !agent) return { kind: 'none' };
+  const { allowedTools, disallowedTools } = agent;
+  if (allowedTools === undefined && disallowedTools === undefined) return { kind: 'none' };
+  const vocabulary = toolVocabularyForAdapter(agent.adapterName);
+  if (vocabulary === undefined) return { kind: 'none' };
+
+  let policy: ResolvedToolPolicy;
+  try {
+    policy = resolveToolPolicy(vocabulary, { allowedTools, disallowedTools });
+  } catch (error) {
+    if (error instanceof ToolNameError) return { kind: 'deny', message: error.message };
+    throw error;
+  }
+
+  const decision = policy.checkToolCall(toolName, args ?? {});
+  if (!decision.allowed) return { kind: 'deny', message: decision.reason };
+  if (allowedTools === undefined) return { kind: 'none' };
+  // A grant must not widen a directory allowlist: the cascade decides calls outside it.
+  // TODO(FACT-75): Bash and other non-path tools get no grant under a directory allowlist.
+  const allowedDirectories = resolveEffectiveAllowedDirectories(agent, rawEnrichedPolicy);
+  if (allowedDirectories !== undefined && !isGrantTargetWithin(allowedDirectories, toolName, args, agent.cwd)) {
+    return { kind: 'none' };
+  }
+  return { kind: 'granted' };
+}
+
+/** Claude search tools whose optional `path` argument defaults to the cwd. */
+const CWD_DEFAULT_PATH_TOOLS: ReadonlySet<string> = new Set(['Glob', 'Grep']);
+
+/**
+ * Resolve the directory allowlist that bounds a tool-list grant.
+ * @param agent - Agent metadata; its `allowedDirectories` take precedence
+ * @param rawEnrichedPolicy - Pre-fetched enriched-policy RPC result for the profile fallback
+ * @returns Directory allowlist (`[]` allows nothing), or undefined when unrestricted
+ */
+function resolveEffectiveAllowedDirectories(
+  agent: MakaioSessionAgent,
+  rawEnrichedPolicy: RawEnrichedPolicyResult | undefined,
+): readonly string[] | undefined {
+  if (agent.allowedDirectories !== undefined) return agent.allowedDirectories;
+  if ((agent.personaId || agent.profileId) && rawEnrichedPolicy) {
+    return resolveProfileAllowedDirectories(agent.personaId, agent.profileId, rawEnrichedPolicy);
+  }
+  return undefined;
+}
+
+/**
+ * Resolve an absolute path, or its nearest existing ancestor, to its canonical path so a
+ * symlink or junction inside an allowed directory cannot alias a target outside it.
+ * Minimal copy of `canonicalizePath` in `extensions/filesystem/src/utils/path-utils.ts`
+ * (services/core cannot import that extension), stricter in two ways: only a missing path
+ * (`ENOENT`) walks up to its parent, and a dangling symlink yields undefined because a write
+ * through it would land at the link target.
+ * @param targetPath - Absolute path to canonicalize
+ * @returns Canonical absolute path, or undefined when it cannot be resolved safely
+ */
+function canonicalizePath(targetPath: string): string | undefined {
+  let existingPath = targetPath;
+  while (true) {
+    try {
+      return path.resolve(realpathSync(existingPath), path.relative(existingPath, targetPath));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return undefined;
+      if (lstatSync(existingPath, { throwIfNoEntry: false }) !== undefined) return undefined;
+      const parentPath = path.dirname(existingPath);
+      if (parentPath === existingPath) return undefined;
+      existingPath = parentPath;
+    }
+  }
+}
+
+/**
+ * Check whether a call's target path lies inside a directory allowlist. Roots and target are
+ * canonicalized ({@link canonicalizePath}) before the containment check, matching
+ * `createPathValidator` / `isWithinRoot` in the filesystem extension's path validator.
+ * @param allowedDirectories - Directory allowlist; `[]` contains nothing
+ * @param toolName - Native tool name of the call
+ * @param args - Tool call input
+ * @param cwd - Agent working directory; without it no path can be resolved
+ * @returns True only when a target path resolves and lies inside one of the directories
+ */
+function isGrantTargetWithin(
+  allowedDirectories: readonly string[],
+  toolName: string,
+  args: Record<string, unknown> | undefined,
+  cwd: string | undefined,
+): boolean {
+  if (!cwd) return false;
+  const searchPath = args?.path;
+  const target = CWD_DEFAULT_PATH_TOOLS.has(toolName)
+    ? path.resolve(cwd, typeof searchPath === 'string' && searchPath.length > 0 ? searchPath : '.')
+    : extractToolFilePath(toolName, args, cwd);
+  if (target === null) return false;
+  const canonicalTarget = canonicalizePath(target);
+  if (canonicalTarget === undefined) return false;
+  const fold = (value: string): string => (process.platform === 'win32' ? value.toLowerCase() : value);
+  return allowedDirectories.some((directory) => {
+    const canonicalRoot = canonicalizePath(path.resolve(cwd, directory));
+    if (canonicalRoot === undefined) return false;
+    const relativePath = path.relative(fold(canonicalRoot), fold(canonicalTarget));
+    return (
+      relativePath === '' ||
+      (relativePath !== '..' && !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath))
+    );
+  });
 }
 
 /**

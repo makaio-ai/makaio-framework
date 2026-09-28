@@ -134,7 +134,10 @@ export interface CallerOwnedAgentRow {
    * Read off the composed `startAgent` payload wherever the caller has one, so
    * the row and the dispatch cannot drift apart field by field.
    */
-  readonly runtime: Pick<StartAgentRequest, 'model' | 'cwd' | 'allowedDirectories' | 'clientId' | 'harnessId'>;
+  readonly runtime: Pick<
+    StartAgentRequest,
+    'model' | 'cwd' | 'allowedDirectories' | 'clientId' | 'harnessId' | 'allowedTools' | 'disallowedTools'
+  >;
   /** Provider config the runtime row is stamped with. */
   readonly providerConfigId?: string;
   /** Persona the agent was resolved from, when it was. */
@@ -151,9 +154,9 @@ export interface CallerOwnedAgentRow {
  * This is the **only** whole-record write for such a start: supplying `agentId`
  * transfers row ownership, and the adapter suppresses its own. So the row has to
  * carry what that suppressed write would have carried — the runtime facts the
- * request names (model, working directory, allowed directories, client and
- * harness) — or they simply never reach storage, and every reader of
- * `session.agents` sees an agent with no model and no cwd.
+ * request names (model, working directory, allowed directories, client,
+ * harness, and tool lists) — or they simply never reach storage, and every
+ * reader of `session.agents` sees an agent with no model and no cwd.
  *
  * One field is deliberately not mirrored: the adapter resolves an absent `cwd`
  * against its own platform defaults, which the service cannot see. A
@@ -164,7 +167,7 @@ export interface CallerOwnedAgentRow {
  */
 export function buildCallerOwnedAgentRow(input: CallerOwnedAgentRow): MakaioSessionAgent {
   const now = Date.now();
-  const { model, cwd, allowedDirectories, clientId, harnessId } = input.runtime;
+  const { model, cwd, allowedDirectories, clientId, harnessId, allowedTools, disallowedTools } = input.runtime;
   return {
     agentId: input.agentId,
     adapterId: input.instance.adapterId,
@@ -186,6 +189,8 @@ export function buildCallerOwnedAgentRow(input: CallerOwnedAgentRow): MakaioSess
     ...(allowedDirectories !== undefined && { allowedDirectories }),
     ...(clientId !== undefined && { clientId }),
     ...(harnessId !== undefined && { harnessId }),
+    ...(allowedTools !== undefined && { allowedTools }),
+    ...(disallowedTools !== undefined && { disallowedTools }),
     ...(input.providerConfigId !== undefined && { providerConfigId: input.providerConfigId }),
     ...(input.personaId !== undefined && { personaId: input.personaId }),
     ...(input.profileId !== undefined && { profileId: input.profileId }),
@@ -201,15 +206,18 @@ export function buildCallerOwnedAgentRow(input: CallerOwnedAgentRow): MakaioSess
  * conversation — so its identity comes from the agent being replaced, not from
  * a default the caller never asked for.
  *
- * **Two of these are inherited for a different reason than continuity.**
+ * **Some of these are inherited for a different reason than continuity.**
  * `allowedDirectories` is containment: a replacement that omits it is not "less
  * configured" — it is a connector with *no* directory restriction at all,
- * standing in for one that had them. `providerConfigId` is identity: credentials
- * and endpoint are resolved from it and from nothing else, so a replacement that
- * omits it does not fall back to the agent's account, it starts against an
- * unresolved provider context or the wrong one. Both are the invariant the
- * caller-owned row carries by name (case 83): a field the replacement omits is
- * written by nobody.
+ * standing in for one that had them. `allowedTools` and `disallowedTools` are
+ * the tool grant and refusal the same way: a replacement without them silently
+ * drops a denylist or an allowlist the agent ran under, and an explicit `[]` is
+ * carried as `[]` because an empty list is a statement, not an absence. `providerConfigId`
+ * is identity: credentials and endpoint are resolved from it and from nothing
+ * else, so a replacement that omits it does not fall back to the agent's
+ * account, it starts against an unresolved provider context or the wrong one.
+ * All of them are the invariant the caller-owned row carries by name (case 83):
+ * a field the replacement omits is written by nobody.
  *
  * **The adapter *instance* is inherited only with the machine that owns it, and
  * the row does not name one.** An instance ID is a one-way hash of
@@ -247,7 +255,7 @@ export function buildCallerOwnedAgentRow(input: CallerOwnedAgentRow): MakaioSess
  * @param machineId - Machine the replacement start will act under; the instance is
  *   inherited only when this machine provably owns it.
  * @returns A direct adapter selection naming the same adapter, model, cwd, provider config and
- *   directory limits — and the same instance when its machine can be proven.
+ *   directory limits and tool lists — and the same instance when its machine can be proven.
  */
 export function inheritAgentSelection(agent: MakaioSessionAgent, machineId: string): AdapterSelection {
   const ownsInstance = buildDeterministicAdapterId(machineId, agent.adapterName) === agent.adapterId;
@@ -259,5 +267,7 @@ export function inheritAgentSelection(agent: MakaioSessionAgent, machineId: stri
     ...(agent.cwd !== undefined && { cwd: agent.cwd }),
     ...(agent.allowedDirectories !== undefined && { allowedDirectories: agent.allowedDirectories }),
     ...(agent.providerConfigId !== undefined && { providerConfigId: agent.providerConfigId }),
+    ...(agent.allowedTools !== undefined && { allowedTools: agent.allowedTools }),
+    ...(agent.disallowedTools !== undefined && { disallowedTools: agent.disallowedTools }),
   };
 }

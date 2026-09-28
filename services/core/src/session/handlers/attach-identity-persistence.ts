@@ -14,7 +14,10 @@ export interface AttachAgentRowInput {
   /** Identity metadata resolved for the attach. */
   readonly identity: AttachIdentity;
   /** The runtime facts the dispatch will carry. */
-  readonly runtime: Pick<StartAgentRequest, 'model' | 'cwd' | 'allowedDirectories' | 'clientId' | 'harnessId'>;
+  readonly runtime: Pick<
+    StartAgentRequest,
+    'model' | 'cwd' | 'allowedDirectories' | 'clientId' | 'harnessId' | 'allowedTools' | 'disallowedTools'
+  >;
 }
 
 /**

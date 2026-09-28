@@ -225,6 +225,13 @@
       "when": 1790032067743,
       "tag": "0031_session_principal_owner",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790540488160,
+      "tag": "0032_agent_tool_lists",
+      "breakpoints": true
     }
   ]
 }

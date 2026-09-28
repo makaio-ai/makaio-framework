@@ -9,6 +9,7 @@ import {
   parseToolListEntry,
   toMakaioToolName,
   toNativeToolName,
+  toolVocabularyForAdapter,
 } from '../index.js';
 import type { CommandRule } from '../index.js';
 import { captureToolNameError } from './tool-name-error.test-support.js';
@@ -47,6 +48,25 @@ describe('isMakaioToolName', () => {
 
   it.each(['Read', 'Bash', 'WebFetch', '', 'mcp__s__t', 'READ_FILE', 'read_file '])('rejects %j', (name) => {
     expect(isMakaioToolName(name)).toBe(false);
+  });
+});
+
+describe('toolVocabularyForAdapter', () => {
+  it.each(['claude-code', 'claude-code-cli', 'claude-code-tmux'])('maps %s to the claude vocabulary', (adapterName) => {
+    expect(toolVocabularyForAdapter(adapterName)).toBe('claude');
+  });
+
+  it('returns undefined for an adapter with no vocabulary entry', () => {
+    expect(toolVocabularyForAdapter('codex-app-server')).toBeUndefined();
+  });
+
+  it.each([
+    'toString',
+    'constructor',
+    '__proto__',
+    'hasOwnProperty',
+  ])('returns undefined for the inherited object member %s', (adapterName) => {
+    expect(toolVocabularyForAdapter(adapterName)).toBeUndefined();
   });
 });
 

@@ -46,6 +46,28 @@ export const NATIVE_TOOL_NAMES: Readonly<Record<ToolVocabulary, Readonly<Partial
   },
 };
 
+/**
+ * Adapter name → tool vocabulary its toolApprove requests use. Adapters without an entry
+ * skip the tool-list grant. Module-private; read it through {@link toolVocabularyForAdapter}.
+ * A `Map` so only own entries resolve (no inherited `toString`/`constructor`/`__proto__`).
+ * Each listed adapter package pins its entry with a `tool-vocabulary` test.
+ */
+// TODO(FACT-75): declare the vocabulary once on the adapter (definition field or approval request) instead of this name-keyed map.
+const VOCABULARY_BY_ADAPTER: ReadonlyMap<string, ToolVocabulary> = new Map<string, ToolVocabulary>([
+  ['claude-code', 'claude'],
+  ['claude-code-cli', 'claude'],
+  ['claude-code-tmux', 'claude'],
+]);
+
+/**
+ * Looks up the tool vocabulary an adapter's toolApprove requests use.
+ * @param adapterName - Adapter type name (e.g., 'claude-code').
+ * @returns The adapter's tool vocabulary, or undefined when the adapter has no entry.
+ */
+export function toolVocabularyForAdapter(adapterName: string): ToolVocabulary | undefined {
+  return VOCABULARY_BY_ADAPTER.get(adapterName);
+}
+
 /** Name prefix of MCP-provided tools (`mcp__<server>__<tool>`). Package-internal. */
 export const MCP_TOOL_NAME_PREFIX = 'mcp__';
 

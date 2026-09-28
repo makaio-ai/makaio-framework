@@ -466,6 +466,12 @@ export const agentsDual = defineDualTable(
     /** Directory restrictions for file-system tool execution. */
     allowedDirectories: c.jsonCol<string[]>('allowed_directories'),
 
+    /** Makaio tool names the agent may use without a human decision (`[]` allows nothing). */
+    allowedTools: c.jsonCol<string[]>('allowed_tools'),
+
+    /** Makaio tool names the agent must never use. */
+    disallowedTools: c.jsonCol<string[]>('disallowed_tools'),
+
     /** Provider config UUID for credential/endpoint resolution */
     providerConfigId: c.text('provider_config_id'),
 
