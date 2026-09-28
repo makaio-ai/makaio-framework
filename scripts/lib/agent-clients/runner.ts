@@ -57,7 +57,7 @@ function nativeConfigPath(provider: ProbeOptions['provider'], workspace: ProbeWo
  * Writes native hook configuration that invokes the disposable capture shim.
  * @param params - Provider, scenario, and isolated workspace used to construct the hook command.
  * @returns The native settings path, disposable raw capture path, and the
- *   Claude Code `--mcp-config` path when the scenario declares `mcpServers`.
+ *   Claude Code `--mcp-config` path when a Claude Code scenario declares `mcpServers`.
  */
 export async function writeScenarioHookConfig(params: {
   provider: ProbeOptions['provider'];
@@ -67,11 +67,6 @@ export async function writeScenarioHookConfig(params: {
   const { provider, scenario, workspace } = params;
   const event = scenario.expectedEvents[0];
   if (!event) throw new Error(`Scenario "${scenario.id}" does not declare an event`);
-  // Refused rather than dropped: evidence recorded under a configuration the
-  // fixture does not describe is worse than none (same rule as `cliArgs`).
-  if (provider !== 'claude-code' && (scenario.hookMatcher !== undefined || scenario.mcpServers !== undefined)) {
-    throw new Error(`Scenario "${scenario.id}" sets hookMatcher or mcpServers, which only Claude Code supports`);
-  }
   const capturePath = path.join(workspace.rootDir, `${scenario.id}.captures.jsonl`);
   const sentinelPath = path.join(workspace.rootDir, `${scenario.id}.sentinel`);
   const shimPath = path.join(workspace.rootDir, `${scenario.id}.hook-shim.cjs`);
@@ -98,11 +93,18 @@ export async function writeScenarioHookConfig(params: {
         }
       : {
           hooks: {
-            [event.eventName]: [{ hooks: [{ type: 'command', command, timeoutSec: scenario.timeoutSeconds }] }],
+            [event.eventName]: [
+              {
+                // Codex hooks.json groups take the same optional `matcher` as Claude Code.
+                ...(scenario.hookMatcher !== undefined && { matcher: scenario.hookMatcher }),
+                hooks: [{ type: 'command', command, timeoutSec: scenario.timeoutSeconds }],
+              },
+            ],
           },
         };
   await fs.writeFile(settingsPath, `${JSON.stringify(contents, null, 2)}\n`, 'utf8');
-  if (scenario.mcpServers === undefined) return { settingsPath, capturePath };
+  // Codex has no MCP config file; its servers travel as `--config` overrides built from the scenario.
+  if (scenario.mcpServers === undefined || provider !== 'claude-code') return { settingsPath, capturePath };
   const mcpConfigPath = path.join(workspace.rootDir, `${scenario.id}.mcp-config.json`);
   await fs.writeFile(mcpConfigPath, `${JSON.stringify({ mcpServers: scenario.mcpServers }, null, 2)}\n`, 'utf8');
   return { settingsPath, capturePath, mcpConfigPath };
