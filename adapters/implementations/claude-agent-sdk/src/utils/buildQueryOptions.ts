@@ -18,6 +18,7 @@ import type {
   ResponseSchemaDescriptor,
 } from '@makaio/contracts';
 import { ClaudeSessionConfig, CreateToolApprovalHandler } from '../types/index.js';
+import { STRUCTURED_OUTPUT_TOOL_NAME } from '../constants.js';
 import { SessionLifecycle, type AIReasoningLevel } from '@makaio/ai-adapters-core';
 
 /**
@@ -260,6 +261,37 @@ function resolveToolPolicyOptions(policy: ResolvedToolPolicy): Partial<Options> 
 }
 
 /**
+ * Admit Claude Code's synthetic structured-output tool for a query that requests
+ * structured output.
+ *
+ * With a `responseSchema` the CLI offers {@link STRUCTURED_OUTPUT_TOOL_NAME} and the model
+ * must call it to deliver the result; a restricting allowlist written with Makaio tool
+ * names can never list it, so the tool-list check would deny the call. The returned
+ * policy allows exactly that tool name and delegates every other call unchanged. Without
+ * a schema (or without caller lists) the policy is returned as is. The PreToolUse hook,
+ * the wrapped provider hooks, and `canUseTool` all receive this one policy. The bundled
+ * CLI (SDK 0.2.131) runs the tool's own permission check (`allow`) before `canUseTool`,
+ * so in practice only the PreToolUse hook blocked the call; the `canUseTool` side is
+ * defence in depth, and the central ToolApprovalService (which re-checks the stored agent
+ * lists) is not reached for this tool. An earlier provider PreToolUse hook can still deny
+ * it; that is operator policy and intended.
+ * @param policy - Caller tool policy resolved for this query.
+ * @param responseSchema - The query's structured output descriptor, if any.
+ * @returns The effective tool policy for the query.
+ */
+function withStructuredOutputTool(
+  policy: ResolvedToolPolicy,
+  responseSchema: ResponseSchemaDescriptor | undefined,
+): ResolvedToolPolicy {
+  if (responseSchema === undefined || !policy.restricts) return policy;
+  return {
+    ...policy,
+    checkToolCall: (nativeName, input) =>
+      nativeName === STRUCTURED_OUTPUT_TOOL_NAME ? { allowed: true } : policy.checkToolCall(nativeName, input),
+  };
+}
+
+/**
  * Build the PreToolUse deny output for a call the caller tool lists reject.
  * @param reason - Why the tool policy denied the call.
  * @returns PreToolUse hook output carrying a `deny` decision.
@@ -425,10 +457,13 @@ export function buildQueryOptions({
 
   // Resolved once per query; the options, the PreToolUse hook, and `canUseTool` share it.
   // Invalid list entries throw a ToolNameError here.
-  const toolPolicy = resolveToolPolicy('claude', {
-    allowedTools: config.allowedTools,
-    disallowedTools: config.disallowedTools,
-  });
+  const toolPolicy = withStructuredOutputTool(
+    resolveToolPolicy('claude', {
+      allowedTools: config.allowedTools,
+      disallowedTools: config.disallowedTools,
+    }),
+    responseSchema,
+  );
   const hooks = resolveHooks(config.providerConfig?.queryOptions?.hooks, toolPolicy);
 
   return {

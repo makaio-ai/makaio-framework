@@ -8,6 +8,7 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { SessionLifecycle } from '@makaio/ai-adapters-core';
 import { toNativeToolName } from '@makaio/contracts';
+import type { ResponseSchemaDescriptor } from '@makaio/contracts';
 import { buildQueryOptions } from '../utils/buildQueryOptions.js';
 import { createGateConnector, preToolUseInput } from './gate-test-helpers.js';
 import type { GateConnectorLists } from './gate-test-helpers.js';
@@ -36,6 +37,8 @@ export interface ToolListProbeOptions {
   };
   /** Provider-config enablement of every skill (claude: `queryOptions.skills: 'all'`). */
   readonly providerSkills?: 'all';
+  /** Structured output descriptor for the query (`buildQueryOptions` `responseSchema`). */
+  readonly responseSchema?: ResponseSchemaDescriptor;
 }
 
 /** One tool call in the adapter's native shape. */
@@ -269,8 +272,9 @@ type GateVerdict = Pick<ToolListProbeGateResult, 'allowed' | 'reason'> & { persi
  * and feeds it with the connector's real `canUseTool` factory into the real
  * `buildQueryOptions`, so the probe reads what the SDK would receive. Residual gap:
  * `ClaudeConnectorSession.createQuery` forwards that config unchanged plus the session
- * id, resume/fork directives, MCP server port, and response schema, none of which touch
- * the tool lists; that forwarding is not exercised here.
+ * id, resume/fork directives, MCP server port, and response schema; that forwarding is
+ * not exercised here, and the response schema is passed in directly when the options set
+ * one.
  *
  * `gate(...)` models the bundled Claude Code CLI 0.2.131 permission pipeline for the
  * branches this suite uses, verified live in FACT-72 (SDK 0.2.131): the PreToolUse
@@ -331,6 +335,7 @@ export async function createToolListProbe(options: ToolListProbeOptions): Promis
     lifecycle: new SessionLifecycle(),
     createToolApprovalHandler,
     sessionId: 'session-probe',
+    ...(options.responseSchema !== undefined && { responseSchema: options.responseSchema }),
   });
   const { canUseTool } = queryOptions;
   if (canUseTool === undefined) throw new Error('buildQueryOptions produced no canUseTool gate');
