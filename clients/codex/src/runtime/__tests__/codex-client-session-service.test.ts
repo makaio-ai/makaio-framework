@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/subsystem-client';
-import type { ClientRuntimeStarted } from '@makaio/contracts/client';
 import { CodexClientSubjects } from '../namespace.js';
 import { CodexClientSessionService, MANAGED_SESSION_CAP } from '../codex-client-session-service.js';
 import { ClientHookProviderContractRegistry, ClientHookResponseRegistry } from '@makaio/subsystem-client';
@@ -9,11 +8,7 @@ import { createSessionTokenEffect } from '@makaio/contracts/client';
 import type { ContributorDefinition } from '@makaio/contracts/client';
 import { vi } from 'vitest';
 import { CODEX_HOOK_SESSION_START } from '../schemas.js';
-import {
-  capturePayloads,
-  emitRawHook,
-  emitRuntimeStarted as emitRuntimeStartedOn,
-} from './codex-client-session-service.test-support.js';
+import { capturePayloads, emitRawHook, emitRuntimeStarted } from './codex-client-session-service.test-support.js';
 
 describe('CodexClientSessionService', () => {
   let bus: IMakaioBus;
@@ -328,17 +323,8 @@ describe('CodexClientSessionService', () => {
   });
 
   describe('adapter-managed session gate', () => {
-    /**
-     * Emits a `client.runtime.started` event on the test bus with sensible
-     * defaults for the adapter-managed session gate tests.
-     * @param overrides - Partial payload merged over the defaults
-     */
-    function emitRuntimeStarted(overrides: Partial<ClientRuntimeStarted> = {}): Promise<void> {
-      return emitRuntimeStartedOn(bus, overrides);
-    }
-
     it('suppresses client.session.started when adapterSessionId belongs to an adapter-managed runtime', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-001' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-001' });
 
       const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
 
@@ -349,7 +335,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('emits client.session.started when adapterSessionId is not in the managed set', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-002', adapterSessionId: 'other-session' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-002', adapterSessionId: 'other-session' });
 
       const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
 
@@ -361,7 +347,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('emits client.session.started when SessionStart hook has no adapterSessionId', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-003', adapterSessionId: 'some-managed-session' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-003', adapterSessionId: 'some-managed-session' });
 
       const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
 
@@ -384,7 +370,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('does not suppress hook events for non-adapter runtime.started sources', async () => {
-      await emitRuntimeStarted({
+      await emitRuntimeStarted(bus, {
         clientRuntimeId: 'rt-004',
         source: { layer: 'supervisor', producer: 'test-supervisor' },
         supervisorSessionId: 'sup-session-abc',
@@ -399,7 +385,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('does not suppress client.session.started when runtime.started arrives from a different clientId', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-claude-001', clientId: 'claude-code' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-claude-001', clientId: 'claude-code' });
 
       const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
 
@@ -411,7 +397,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('suppresses all normalized client.session events for adapter-managed sessions', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-005' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-005' });
 
       const { received, cleanup } = capturePayloads(
         bus,
@@ -438,7 +424,7 @@ describe('CodexClientSessionService', () => {
 
     it('evicts the oldest adapter-managed session when the cap is exceeded', async () => {
       for (let index = 0; index <= MANAGED_SESSION_CAP; index++) {
-        await emitRuntimeStarted({
+        await emitRuntimeStarted(bus, {
           clientRuntimeId: `rt-${index}`,
           adapterSessionId: `managed-session-${index}`,
         });
@@ -457,7 +443,7 @@ describe('CodexClientSessionService', () => {
     it('suppresses adapter-emitted subjects for managed sessions but forwards hook-only subjects', async () => {
       // Adapter emits: started, turn.started, turn.completed, userPrompt.submitted, tool.pre, tool.post
       // Hook-only (no adapter equivalent): subagent.started, subagent.completed, compaction.pre
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-gate-selective' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-gate-selective' });
 
       const { received: suppressedReceived, cleanup: suppressedCleanup } = capturePayloads(
         bus,
@@ -504,7 +490,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('forwards session.started with startMode compact for a managed session (compaction signal has no adapter counterpart)', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-compact' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-compact' });
 
       const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
 
@@ -516,7 +502,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('forwards session.started with startMode clear for a managed session (clear restart has no adapter counterpart)', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-clear' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-clear' });
 
       const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
 
@@ -528,7 +514,7 @@ describe('CodexClientSessionService', () => {
     });
 
     it('suppresses session.started with source startup for a managed session (adapter owns the initial start)', async () => {
-      await emitRuntimeStarted({ clientRuntimeId: 'rt-startup' });
+      await emitRuntimeStarted(bus, { clientRuntimeId: 'rt-startup' });
 
       const { received, cleanup } = capturePayloads(bus, ClientSubjects.session.started);
 

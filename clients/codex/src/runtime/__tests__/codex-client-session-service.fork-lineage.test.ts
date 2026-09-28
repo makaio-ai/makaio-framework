@@ -15,6 +15,7 @@ import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/subsystem-client';
 import { CodexClientSessionService } from '../codex-client-session-service.js';
 import { capturePayloads, emitRawHook, emitRuntimeStarted } from './codex-client-session-service.test-support.js';
+import { rolloutMetaLine } from './rollout-fixtures.test-support.js';
 
 describe('CodexClientSessionService', () => {
   let bus: IMakaioBus;
@@ -52,19 +53,7 @@ describe('CodexClientSessionService', () => {
      */
     async function writeRollout(threadId: string, forkedFromId?: string): Promise<string> {
       const path = join(dir, `${threadId}.jsonl`);
-      const meta = JSON.stringify({
-        timestamp: '2026-09-16T23:09:48.711Z',
-        type: 'session_meta',
-        payload: {
-          session_id: threadId,
-          id: threadId,
-          ...(forkedFromId !== undefined && { forked_from_id: forkedFromId }),
-          cwd: '/workspace',
-          originator: 'codex_cli_rs',
-          cli_version: '0.158.0',
-        },
-      });
-      await writeFile(path, `${meta}\n`, 'utf8');
+      await writeFile(path, `${rolloutMetaLine(threadId, forkedFromId)}\n`, 'utf8');
       return path;
     }
 
