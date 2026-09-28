@@ -158,6 +158,7 @@ export {
   ArtifactCategorySchema,
   ArtifactDataPathSchema,
   ArtifactLifecycleStateSchema,
+  ArtifactRelationRequirementConditionSchema,
   ArtifactRelationRequirementSchema,
   ArtifactUniquenessSelectorSchema,
   ArtifactUniquenessRuleSchema,
@@ -170,6 +171,7 @@ export type {
   ArtifactCategory,
   ArtifactLifecycleState,
   ArtifactRelationRequirement,
+  ArtifactRelationRequirementCondition,
   ArtifactUniquenessRule,
   ArtifactEvidenceRequirements,
   ArtifactKindView,
@@ -316,3 +318,5 @@ export type {
   UniquenessKeyIssueReason,
   BuildUniquenessKeysResult,
 } from './uniqueness.js';
+export { evaluateRelationRequirements } from './relation-requirements.js';
+export type { RelationRequirementIssue, RelationRequirementIssueReason } from './relation-requirements.js';

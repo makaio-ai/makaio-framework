@@ -162,7 +162,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `kinds` | `{ kind: string; description: string; schemaVersion: number; category: "record" \| "knowledge" \| "commitment" \| "interaction"; dataSchema: Record<string, unknown>; titlePath: string; relations?: { relationType: string; minItems: number; targetKinds?: string[] \| undefined; maxItems?: number \| undefined; }[] \| undefined; uniqueness?: { by: ({ kind: "data"; path: string; } \| { kind: "relation-target"; relationType: string; })[]; lifecycleStates?: ("valid" \| "retired" \| "proposed" \| "decided" \| "fulfilled" \| "revoked" \| "open" \| "resolved" \| "closed-without-resolution")[] \| undefined; }[] \| undefined; evidenceRequirements?: { minItems: number; } \| undefined; indexedFields?: string[] \| undefined; searchableFields?: string[] \| undefined; addressableParts?: { path: string; idPath: string; }[] \| undefined; views?: Record<string, { fields: string[]; }> \| undefined; }[]` | yes |
+| `kinds` | `{ kind: string; description: string; schemaVersion: number; category: "record" \| "knowledge" \| "commitment" \| "interaction"; dataSchema: Record<string, unknown>; titlePath: string; relations?: { relationType: string; minItems: number; targetKinds?: string[] \| undefined; maxItems?: number \| undefined; when?: { path: string; equals: string \| number \| boolean; } \| undefined; }[] \| undefined; uniqueness?: { by: ({ kind: "data"; path: string; } \| { kind: "relation-target"; relationType: string; })[]; lifecycleStates?: ("valid" \| "retired" \| "proposed" \| "decided" \| "fulfilled" \| "revoked" \| "open" \| "resolved" \| "closed-without-resolution")[] \| undefined; }[] \| undefined; evidenceRequirements?: { minItems: number; } \| undefined; indexedFields?: string[] \| undefined; searchableFields?: string[] \| undefined; addressableParts?: { path: string; idPath: string; }[] \| undefined; views?: Record<string, { fields: string[]; }> \| undefined; }[]` | yes |
 
 ### <a id="artifact.kind.register"></a>`artifact.kind.register` (rpc)
 
@@ -182,7 +182,7 @@ Type: Request (RPC)
 | `evidenceRequirements` | `{ minItems: number; } \| undefined` | no |
 | `indexedFields` | `string[] \| undefined` | no |
 | `kind` | `string` | yes |
-| `relations` | `{ relationType: string; minItems: number; targetKinds?: string[] \| undefined; maxItems?: number \| undefined; }[] \| undefined` | no |
+| `relations` | `{ relationType: string; minItems: number; targetKinds?: string[] \| undefined; maxItems?: number \| undefined; when?: { path: string; equals: string \| number \| boolean; } \| undefined; }[] \| undefined` | no |
 | `schemaVersion` | `number` | yes |
 | `searchableFields` | `string[] \| undefined` | no |
 | `titlePath` | `string` | yes |

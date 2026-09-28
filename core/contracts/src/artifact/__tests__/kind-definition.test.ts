@@ -916,6 +916,109 @@ describe('defineArtifactKind', () => {
     ).toThrow();
   });
 
+  describe('conditional relation requirements', () => {
+    const ruleOptions = {
+      ...options,
+      kind: 'business-rule-exception',
+      dataSchema: z.strictObject({
+        topic: z.string(),
+        ruleKind: z.enum(['rule', 'exception']),
+        priority: z.number(),
+        active: z.boolean(),
+      }),
+    };
+    const conditional = {
+      relationType: 'narrows',
+      targetKinds: ['business-rule'],
+      minItems: 1,
+      when: { path: 'ruleKind', equals: 'exception' },
+    };
+
+    it('round-trips a requirement with a when condition over a declared field', () => {
+      const registration = defineArtifactKind({ ...ruleOptions, relations: [conditional] }).toRegistration();
+      expect(registration.relations).toEqual([conditional]);
+      expect(ArtifactKindRegistrationSchema.parse(registration).relations).toEqual([conditional]);
+    });
+
+    it('rejects a when path that does not select a declared data field', () => {
+      const registration = defineArtifactKind(ruleOptions).toRegistration();
+      const result = ArtifactKindRegistrationSchema.safeParse({
+        ...registration,
+        relations: [{ ...conditional, when: { path: 'undeclared', equals: 'exception' } }],
+      });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues).toContainEqual(
+        expect.objectContaining({
+          path: ['relations', 0, 'when', 'path'],
+          message: 'Data path undeclared must select a declared field',
+        }),
+      );
+      expect(() =>
+        defineArtifactKind({
+          ...ruleOptions,
+          relations: [{ ...conditional, when: { path: 'undeclared', equals: 'exception' } }],
+        }),
+      ).toThrow('Data path undeclared must select a declared field');
+    });
+
+    it('accepts a nested declared when path and rejects an undeclared nested one', () => {
+      const nestedOptions = {
+        ...ruleOptions,
+        dataSchema: z.strictObject({
+          topic: z.string(),
+          classification: z.strictObject({ ruleKind: z.enum(['rule', 'exception']) }),
+        }),
+      };
+      const nested = { ...conditional, when: { path: 'classification.ruleKind', equals: 'exception' } };
+      const registration = defineArtifactKind({ ...nestedOptions, relations: [nested] }).toRegistration();
+      expect(registration.relations).toEqual([nested]);
+      expect(ArtifactKindRegistrationSchema.parse(registration).relations).toEqual([nested]);
+
+      const result = ArtifactKindRegistrationSchema.safeParse({
+        ...registration,
+        relations: [{ ...conditional, when: { path: 'classification.missing', equals: 'exception' } }],
+      });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues).toContainEqual(
+        expect.objectContaining({
+          path: ['relations', 0, 'when', 'path'],
+          message: 'Data path classification.missing must select a declared field',
+        }),
+      );
+    });
+
+    it.each([
+      { name: 'null equals', when: { path: 'ruleKind', equals: null } },
+      { name: 'object equals', when: { path: 'ruleKind', equals: {} } },
+      { name: 'extra condition key', when: { path: 'ruleKind', equals: 'exception', extra: true } },
+    ])('rejects a when condition with $name', ({ when }) => {
+      const registration = defineArtifactKind(ruleOptions).toRegistration();
+      expect(
+        ArtifactKindRegistrationSchema.safeParse({ ...registration, relations: [{ ...conditional, when }] }).success,
+      ).toBe(false);
+    });
+
+    it.each([
+      { path: 'priority', equals: 3 },
+      { path: 'active', equals: true },
+      { path: 'active', equals: false },
+    ])('accepts a scalar $equals condition on $path', (when) => {
+      const registration = defineArtifactKind({
+        ...ruleOptions,
+        relations: [{ ...conditional, when }],
+      }).toRegistration();
+      expect(registration.relations?.[0]?.when).toEqual(when);
+    });
+
+    it('round-trips a requirement without when unchanged', () => {
+      const unconditional = { relationType: 'narrows', targetKinds: ['business-rule'], minItems: 1 };
+      const registration = defineArtifactKind({ ...ruleOptions, relations: [unconditional] }).toRegistration();
+      expect(registration.relations).toEqual([unconditional]);
+      expect(registration.relations?.[0]).not.toHaveProperty('when');
+      expect(ArtifactKindRegistrationSchema.parse(registration).relations).toEqual([unconditional]);
+    });
+  });
+
   it('resolves local schema references and rejects reference cycles', () => {
     const registration = defineArtifactKind(options).toRegistration();
     const dataSchema = {
