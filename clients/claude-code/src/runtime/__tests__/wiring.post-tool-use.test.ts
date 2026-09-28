@@ -22,6 +22,9 @@ const POST_TOOL_USE_COMMAND =
 /** Expected installed command for `PreToolUse` with the `makaio` executable. */
 const PRE_TOOL_USE_COMMAND = 'makaio --no-launch --debounce-failure hook handle claude-code PreToolUse --timeout 5000';
 
+// Deliberate local copy of the shared wiring test helper: the shared wiring test
+// files stay untouched here, and extraction would widen test coupling.
+
 /**
  * Create a mock {@link ClaudeCodeWiringSettings} with no existing wiring.
  * @returns Mock settings object.

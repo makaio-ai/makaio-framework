@@ -171,6 +171,10 @@ interface HookDescriptor {
  */
 function resolveHookDescriptor(mode: 'event' | 'request', eventName: string): HookDescriptor {
   if (mode === 'request') {
+    // PostToolUse is wired fail-open like the other context-only events: the
+    // tool has already run, so there is nothing left to deny. Fail-closed is a
+    // per-contributor policy, and the registry rejects it on non-blockable
+    // interactions (`closed-policy-on-non-blockable`).
     const timeoutMs =
       rendersDecision(eventName) || SESSION_BOUNDARY_EVENT_NAMES.has(eventName)
         ? DEFAULT_HOOK_HANDLE_TIMEOUT_MS

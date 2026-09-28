@@ -17,6 +17,9 @@ import { composeHookResponse } from '../hook-response-composer.js';
 import { claudeCodeToolResponseContract, createApproveEffect } from '../hook-response-contracts.js';
 import { CLAUDE_CODE_HOOK_POST_TOOL_USE, CLAUDE_CODE_HOOK_PRE_TOOL_USE } from '../schemas.js';
 
+// Deliberate local copy of the shared composer test helpers: the shared
+// composer test files stay untouched here, and extraction would widen test coupling.
+
 /** Extension ID used for all test contributor registrations. */
 const TEST_EXTENSION = 'test-extension';
 
@@ -128,6 +131,61 @@ describe('composeHookResponse', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe('');
       expect(result.stderr).toBe('');
+    });
+
+    it('returns the no-op response when an open-policy contributor fails', async () => {
+      const responseRegistry = createResponseRegistry();
+      installContributor(responseRegistry, {
+        lane: 'canonical',
+        clientIds: ['claude-code'],
+        id: 'failing-post-tool',
+        priority: 100,
+        timeoutMs: 50,
+        failurePolicy: 'open',
+        selectors: [{ kind: 'event-name', name: 'PostToolUse' }],
+        respond: () => {
+          throw new Error('post-tool contributor failed');
+        },
+      });
+
+      const result = await composeHookResponse(responseRegistry, toolPayload(CLAUDE_CODE_HOOK_POST_TOOL_USE));
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toBe('');
+    });
+
+    it('still renders sibling context when one open-policy contributor fails', async () => {
+      const responseRegistry = createResponseRegistry();
+      installContributor(responseRegistry, {
+        lane: 'canonical',
+        clientIds: ['claude-code'],
+        id: 'failing-post-tool',
+        priority: 200,
+        timeoutMs: 50,
+        failurePolicy: 'open',
+        selectors: [{ kind: 'event-name', name: 'PostToolUse' }],
+        respond: () => {
+          throw new Error('post-tool contributor failed');
+        },
+      });
+      installContributor(responseRegistry, {
+        lane: 'canonical',
+        clientIds: ['claude-code'],
+        id: 'post-tool-context',
+        priority: 100,
+        timeoutMs: 5000,
+        selectors: [{ kind: 'event-name', name: 'PostToolUse' }],
+        respond: () => ({ canonicalEffects: [createAppendEffect('tool result note')] }),
+      });
+
+      const result = await composeHookResponse(responseRegistry, toolPayload(CLAUDE_CODE_HOOK_POST_TOOL_USE));
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      expect(JSON.parse(result.stdout)).toEqual({
+        hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: 'tool result note' },
+      });
     });
   });
 });

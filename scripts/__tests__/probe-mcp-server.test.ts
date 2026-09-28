@@ -16,17 +16,33 @@ async function exchange(
   expectedResponses: number,
 ): Promise<Record<string, unknown>[]> {
   const child = spawn('bun', [SERVER_PATH], { stdio: ['pipe', 'pipe', 'inherit'] });
+  const lines = createInterface({ input: child.stdout });
   const responses: Record<string, unknown>[] = [];
   try {
     await new Promise<void>((resolve, reject) => {
       child.on('error', reject);
-      createInterface({ input: child.stdout }).on('line', (line) => {
-        responses.push(JSON.parse(line) as Record<string, unknown>);
+      // `close` fires after stdout has drained, so every emitted line is already
+      // counted; a server that exits early fails the exchange instead of hanging.
+      child.on('close', (code, signal) => {
+        reject(
+          new Error(
+            `probe MCP server closed after ${responses.length}/${expectedResponses} responses (code ${code}, signal ${signal})`,
+          ),
+        );
+      });
+      lines.on('line', (line) => {
+        try {
+          responses.push(JSON.parse(line) as Record<string, unknown>);
+        } catch (error) {
+          reject(error as Error);
+          return;
+        }
         if (responses.length === expectedResponses) resolve();
       });
       for (const message of messages) child.stdin.write(`${JSON.stringify(message)}\n`);
     });
   } finally {
+    lines.close();
     child.kill();
   }
   return responses;
