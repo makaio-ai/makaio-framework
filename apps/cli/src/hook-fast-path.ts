@@ -127,6 +127,9 @@ export async function runLightHookInvocation(
       // the identity only gates supervisor control). Auth is not gated on a /health probe because
       // the probe is exactly what this path avoids; a blank or invalid secret fails the connect
       // and falls back to the full path, which reports it.
+      // `debug` is intentionally not passed: the transport follows MAKAIO_DEBUG, makaio's own debug
+      // switch, same as `connectBusClient` on the full path. Transport logs landing on the hook's
+      // stdout is tracked in FACT-396 (the WS transport has no logger seam yet).
       connection = await connectFastHookBus({ name: `client-hook-${invocation.client}`, busUrl });
       // On fallback the full path probes/connects again; accepted — refused ports fail fast and
       // the cool-down suppresses repeats.

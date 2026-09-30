@@ -105,6 +105,25 @@ describe('connectFastHookBus', () => {
     });
   });
 
+  describe('debug resolution', () => {
+    it('enables transport debug for debug: true without MAKAIO_DEBUG', async () => {
+      await connectFastHookBus({ name: 'n', debug: true });
+      expect(mocks.transports[0]?.['debug']).toBe(true);
+    });
+
+    it('lets an explicit debug: false win over MAKAIO_DEBUG', async () => {
+      vi.stubEnv('MAKAIO_DEBUG', 'true');
+      await connectFastHookBus({ name: 'n', debug: false });
+      expect(mocks.transports[0]?.['debug']).toBe(false);
+    });
+
+    it('falls back to MAKAIO_DEBUG when the option is omitted', async () => {
+      vi.stubEnv('MAKAIO_DEBUG', 'true');
+      await connectFastHookBus({ name: 'n' });
+      expect(mocks.transports[0]?.['debug']).toBe(true);
+    });
+  });
+
   describe('failure handling', () => {
     it('resolves null without rejecting when createBusInstance throws', async () => {
       mocks.createBusInstance.mockImplementation(() => {
