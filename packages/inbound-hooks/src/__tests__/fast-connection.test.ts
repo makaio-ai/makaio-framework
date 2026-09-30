@@ -6,14 +6,14 @@ const mocks = vi.hoisted(() => ({
     connect: vi.fn<() => Promise<void>>(),
     disconnect: vi.fn<() => unknown>(),
   },
-  createBusInstance: vi.fn<() => unknown>(),
+  createBusInstance: vi.fn<(options: Record<string, unknown>) => unknown>(),
   transportError: undefined as Error | undefined,
   transports: [] as Record<string, unknown>[],
   auths: [] as { readonly secret: string }[],
 }));
 
 vi.mock('@makaio/bus-core', () => ({
-  createBusInstance: () => mocks.createBusInstance(),
+  createBusInstance: (options: Record<string, unknown>) => mocks.createBusInstance(options),
 }));
 
 vi.mock('@makaio/bus-transport-websocket', () => ({
@@ -134,6 +134,31 @@ describe('connectFastHookBus', () => {
         debugLog?.('[WebSocketClientTransport:n] Connected');
 
         expect(stderrSpy).toHaveBeenCalledWith('[WebSocketClientTransport:n] Connected\n');
+        expect(stdoutSpy).not.toHaveBeenCalled();
+      } finally {
+        stderrSpy.mockRestore();
+        stdoutSpy.mockRestore();
+      }
+    });
+  });
+
+  describe('bus diagnostics channel', () => {
+    it.each([
+      ['with MAKAIO_DEBUG=true', 'true'],
+      ['without MAKAIO_DEBUG', ''],
+    ])('gives the bus a debugLog that writes to stderr, never stdout %s', async (_label, envValue) => {
+      vi.stubEnv('MAKAIO_DEBUG', envValue);
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      try {
+        await connectFastHookBus({ name: 'n' });
+        const busOptions = mocks.createBusInstance.mock.calls[0]?.[0];
+        const debugLog = busOptions?.['debugLog'] as ((message: string) => void) | undefined;
+        expect(debugLog).toBeTypeOf('function');
+
+        debugLog?.('[bus] bus-marker');
+
+        expect(stderrSpy).toHaveBeenCalledWith('[bus] bus-marker\n');
         expect(stdoutSpy).not.toHaveBeenCalled();
       } finally {
         stderrSpy.mockRestore();

@@ -4,7 +4,7 @@
  * These helpers derive health/auth behavior without establishing any real
  * WebSocket connections.
  */
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { BusMessage, BusTransport, IMakaioBus } from '@makaio/bus-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HmacAuth } from '@makaio/bus-transport-websocket';
 import {
@@ -41,6 +41,19 @@ vi.mock('@makaio/bus-transport-websocket', async () => {
     WebSocketClientTransport: transportMocks.WebSocketClientTransport,
   };
 });
+
+type AnyListener = (context: { subject: string; payload: unknown }) => void;
+type CapturedOptions = { debug?: boolean; debugLog?: (message: string) => void };
+
+/**
+ * Collect the string chunks written to a stream spy that carry a marker.
+ * @param spy - Spy on a stream's `write`.
+ * @param marker - Substring identifying the lines under test.
+ * @returns The matching chunks, stringified.
+ */
+function writesContaining(spy: { mock: { calls: unknown[][] } }, marker: string): string[] {
+  return spy.mock.calls.map(([chunk]) => String(chunk)).filter((chunk) => chunk.includes(marker));
+}
 
 describe('deriveHealthUrl', () => {
   it('replaces a /bus suffix with /health', () => {
@@ -293,5 +306,141 @@ describe('connectBusClient', () => {
         url: 'ws://127.0.0.1:6252/bus',
       }),
     );
+  });
+});
+
+describe('connectBusClient debug output channel', () => {
+  let stderrSpy: ReturnType<typeof vi.spyOn>;
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
+  let consoleDebugSpy: ReturnType<typeof vi.spyOn>;
+  let onAny: ReturnType<typeof vi.fn>;
+
+  /**
+   * Connect with minimal fakes for transport and bus.
+   */
+  async function connectWithFakes(): Promise<void> {
+    transportMocks.WebSocketClientTransport.mockImplementation(function MockTransport() {
+      return {};
+    });
+    busCoreMocks.createBusInstance.mockReturnValue({
+      __onAny: onAny,
+      connect: vi.fn().mockResolvedValue(undefined),
+      disconnect: vi.fn(),
+    });
+    await connectBusClient('ws://127.0.0.1:6252/bus');
+  }
+
+  const transportOptions = (): CapturedOptions | undefined =>
+    transportMocks.WebSocketClientTransport.mock.calls[0]?.[0];
+  const busOptions = (): CapturedOptions | undefined => busCoreMocks.createBusInstance.mock.calls[0]?.[0];
+  const anyListener = (): AnyListener | undefined => onAny.mock.calls[0]?.[0];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    onAny = vi.fn();
+    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    consoleDebugSpy = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    stderrSpy.mockRestore();
+    stdoutSpy.mockRestore();
+    consoleDebugSpy.mockRestore();
+  });
+
+  it('passes a transport debugLog that writes to stderr and not stdout', async () => {
+    vi.stubEnv('MAKAIO_DEBUG', 'true');
+    await connectWithFakes();
+
+    expect(transportOptions()?.debug).toBe(true);
+    transportOptions()?.debugLog?.('[ws-client] transport-marker');
+
+    expect(writesContaining(stderrSpy, '[ws-client] transport-marker')).toEqual(['[ws-client] transport-marker\n']);
+    expect(stdoutSpy).not.toHaveBeenCalled();
+  });
+
+  it('writes the __onAny bus trace to stderr, not stdout or console.debug', async () => {
+    vi.stubEnv('MAKAIO_DEBUG', 'true');
+    await connectWithFakes();
+
+    anyListener()?.({ subject: 'test.subject', payload: { a: 1 } });
+
+    expect(writesContaining(stderrSpy, '[bus-client]')).toEqual([
+      '[bus-client] subject: test.subject, payload: {"a":1}\n',
+    ]);
+    expect(stdoutSpy).not.toHaveBeenCalled();
+    expect(consoleDebugSpy).not.toHaveBeenCalled();
+  });
+
+  it('marks unserializable payloads instead of throwing', async () => {
+    vi.stubEnv('MAKAIO_DEBUG', 'true');
+    await connectWithFakes();
+
+    const circular: Record<string, unknown> = {};
+    circular['self'] = circular;
+    anyListener()?.({ subject: 'test.circular', payload: circular });
+
+    expect(writesContaining(stderrSpy, '[bus-client]')).toEqual([
+      '[bus-client] subject: test.circular, payload: [unserializable payload]\n',
+    ]);
+  });
+
+  it('registers no trace listener and disables transport debug without MAKAIO_DEBUG', async () => {
+    vi.stubEnv('MAKAIO_DEBUG', '');
+    await connectWithFakes();
+
+    expect(transportOptions()?.debug).toBe(false);
+    expect(onAny).not.toHaveBeenCalled();
+    expect(stderrSpy).not.toHaveBeenCalled();
+    expect(stdoutSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['with MAKAIO_DEBUG=true', 'true'],
+    ['without MAKAIO_DEBUG', ''],
+  ])('passes a bus debugLog that writes to stderr and not stdout %s', async (_label, envValue) => {
+    vi.stubEnv('MAKAIO_DEBUG', envValue);
+    await connectWithFakes();
+
+    expect(busOptions()?.debugLog).toBeTypeOf('function');
+    busOptions()?.debugLog?.('[bus] bus-marker');
+
+    expect(writesContaining(stderrSpy, '[bus] bus-marker')).toEqual(['[bus] bus-marker\n']);
+    expect(stdoutSpy).not.toHaveBeenCalled();
+    expect(consoleDebugSpy).not.toHaveBeenCalled();
+  });
+
+  it('routes a real bus diagnostic through the sink to stderr, leaving stdout untouched', async () => {
+    const actual = await vi.importActual<typeof import('@makaio/bus-core')>('@makaio/bus-core');
+    busCoreMocks.createBusInstance.mockImplementation(actual.createBusInstance);
+    vi.stubEnv('MAKAIO_DEBUG', '');
+    const failingTransport: BusTransport = {
+      name: 'ws-client',
+      ready: Promise.resolve(),
+      send: (async (_message: BusMessage) => {
+        throw new Error('handshake refused');
+      }) as BusTransport['send'],
+      onReceive: () => () => undefined,
+      connect: async () => undefined,
+      disconnect: async () => undefined,
+      subscribe: async () => undefined,
+      unsubscribe: async () => undefined,
+    };
+    transportMocks.WebSocketClientTransport.mockImplementation(function MockTransport() {
+      return failingTransport;
+    });
+
+    const bus = await connectBusClient('ws://127.0.0.1:6252/bus');
+    try {
+      await vi.waitFor(() => {
+        expect(writesContaining(stderrSpy, '[AdvertisedState] subscribe-sync-complete send failed')).toHaveLength(1);
+      });
+      expect(stdoutSpy).not.toHaveBeenCalled();
+      expect(consoleDebugSpy).not.toHaveBeenCalled();
+    } finally {
+      bus.disconnect();
+    }
   });
 });

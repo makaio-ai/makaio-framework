@@ -45,6 +45,7 @@
 import type { PendingReadyEntry } from '../../registries/index.js';
 import type { DispatchOptions } from './dispatch.js';
 import { isRequestCancellation } from '../../errors/index.js';
+import { formatBusDiagnostic } from '../../utils/debug-log.js';
 import { awaitWithTimeoutAndSignal } from './await-with-timeout-and-signal.js';
 import { TimeoutError as pTimeoutError } from 'p-timeout';
 import { DEFAULT_READINESS_TIMEOUT_MS } from '../../types/options.js';
@@ -121,24 +122,28 @@ export function resolveReadinessBudget(options: DispatchOptions, deadline: numbe
  * @param options - Dispatch options supplying the signal and identifiers
  * @param fullSubjectKey - Fully-qualified subject, for the expiry diagnostic
  * @param budget - Deadline-clamped budget in milliseconds; `0` means no cap
+ * @param debugLog - Bus diagnostic sink for the expiry line
  */
 export async function awaitTransportReadiness(
   pending: ReadonlyArray<PendingReadyEntry>,
   options: DispatchOptions,
   fullSubjectKey: string,
   budget: number,
+  debugLog: (message: string) => void,
 ): Promise<void> {
   try {
     await awaitWithTimeoutAndSignal(Promise.allSettled(pending.map((entry) => entry.ready)), budget, options.signal);
   } catch (error) {
     if (!(error instanceof pTimeoutError) || isRequestCancellation(error, options.signal)) throw error;
-    console.debug('[Dispatch] Readiness budget expired, dispatching with the routes advertised so far', {
-      subject: fullSubjectKey,
-      correlationId: options.correlationId,
-      messageId: options.messageId,
-      readinessTimeoutMs: budget,
-      pendingTransports: pending.map((entry) => entry.name),
-    });
+    debugLog(
+      formatBusDiagnostic('[Dispatch] Readiness budget expired, dispatching with the routes advertised so far', {
+        subject: fullSubjectKey,
+        correlationId: options.correlationId,
+        messageId: options.messageId,
+        readinessTimeoutMs: budget,
+        pendingTransports: pending.map((entry) => entry.name),
+      }),
+    );
   }
 }
 
@@ -161,6 +166,8 @@ export interface ReadinessGateRequest {
   fullSubjectKey: string;
   /** The dispatch's single resolved deadline. */
   deadline: number | undefined;
+  /** The bus instance's diagnostic sink (`MakaioBusContext.debugLog`). */
+  debugLog: (message: string) => void;
 }
 
 /**
@@ -173,7 +180,7 @@ export interface ReadinessGateRequest {
  * @returns Whether the caller should rebuild, do nothing, or stop on an expired deadline
  */
 export async function runReadinessGate(request: ReadinessGateRequest): Promise<ReadinessGateOutcome> {
-  const { pending, options, fullSubjectKey, deadline } = request;
+  const { pending, options, fullSubjectKey, deadline, debugLog } = request;
   if (pending.length === 0) return 'skipped';
 
   const budget = resolveReadinessBudget(options, deadline);
@@ -182,7 +189,7 @@ export async function runReadinessGate(request: ReadinessGateRequest): Promise<R
   // no outer wrapper to catch that for us.
   if (budget === 'expired') return 'expired';
 
-  await awaitTransportReadiness(pending, options, fullSubjectKey, budget);
+  await awaitTransportReadiness(pending, options, fullSubjectKey, budget, debugLog);
 
   // The wait was cut short by the deadline rather than by its own budget.
   return remainingUntil(deadline) <= 0 ? 'expired' : 'rebuilt';

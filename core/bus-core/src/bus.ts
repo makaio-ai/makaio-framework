@@ -1,4 +1,4 @@
-/* eslint max-lines: ["error", { "max": 640 }] */
+/* eslint max-lines: ["error", { "max": 660 }] */ // Bumped for the debugLog diagnostic sink option
 import * as methods from './methods/index.js';
 import { resetSeenCorrelationIds } from './utils/invoke-any-handlers.js';
 import { createScopedBus, type ScopedBus } from './scoped-bus.js';
@@ -14,6 +14,7 @@ import type { BusTransport } from './types/transports.js';
 import type { HandlerEntry } from './types/handler-entry.js';
 import type { InterceptorEntry, InterceptorHandler } from './types/interceptor.js';
 import { createNamespaceRegistry, createTransportRegistry } from './registries/index.js';
+import { resolveBusDebugLog } from './utils/debug-log.js';
 import { validateMessage } from './utils/message-safeguards.js';
 import { extendSubjectImpl } from './extend-subject.js';
 import { createBusNamespace } from '@makaio/core';
@@ -27,9 +28,10 @@ import { wireLifecycleEmitter } from './utils/wire-lifecycle-emitter.js';
  * Used internally by createBusInstance to manage event and request handlers.
  * Can be used to create isolated bus instances (e.g., for testing) by providing
  * separate handler maps per instance.
+ * @param debugLog - Optional diagnostic sink; defaults to `console.debug`. Wrapped so it never throws.
  * @returns A new MakaioBusContext instance with empty handler registries
  */
-export const createBusContext = (): MakaioBusContext => {
+export const createBusContext = (debugLog?: (message: string) => void): MakaioBusContext => {
   // Storage for event handlers (sorted by priority)
   const eventHandlers = new Map<string, Array<HandlerEntry<EventHandler<unknown>>>>();
 
@@ -59,6 +61,7 @@ export const createBusContext = (): MakaioBusContext => {
     remoteRequestHandlers: new Map(),
     remoteEventHandlers: new Map(),
     remoteSubscriptionDeliveryClasses: new Map(),
+    debugLog: resolveBusDebugLog(debugLog),
   };
 
   context.transportRegistry = createTransportRegistry(context);
@@ -441,6 +444,17 @@ export interface CreateBusOptions<Namespace extends string | undefined = undefin
   namespace?: Namespace;
   /** Transports to register immediately after creation. */
   transports?: BusTransport[];
+  /**
+   * Sink for internal bus diagnostics (subscription propagation and
+   * subscribe-sync-complete failures, readiness-budget expiry). One formatted line
+   * per call. Defaults to `console.debug`, so browser visibility is unchanged; a
+   * Node CLI can pass a stderr writer. A throwing or rejecting sink never changes bus
+   * state. With an explicit `context`, this replaces that context's sink.
+   *
+   * Named `debugLog` to match the transports' `debugLog` option (same
+   * `(message: string) => void` shape).
+   */
+  debugLog?: (message: string) => void;
 }
 
 /**
@@ -456,6 +470,17 @@ function resetAllHandlers(context: MakaioBusContext): void {
   context.remoteRequestHandlers.clear();
   context.remoteEventHandlers.clear();
   resetSeenCorrelationIds();
+}
+
+/**
+ * Use the supplied context or build a fresh one; an explicit `debugLog` always wins.
+ * @param options - Bus creation options
+ * @returns The context the bus instance will run on
+ */
+function resolveBusContext(options?: CreateBusOptions<string | undefined>): MakaioBusContext {
+  if (!options?.context) return createBusContext(options?.debugLog);
+  if (options.debugLog) options.context.debugLog = resolveBusDebugLog(options.debugLog);
+  return options.context;
 }
 
 /**
@@ -476,7 +501,8 @@ export function createBusInstance<Namespace extends string | undefined = undefin
   // (called below) installs on an isolated transport registry. The only way
   // to share a context is to pass one explicitly; createScopedBus reuses the
   // parent context but does not call wireLifecycleEmitter itself.
-  const { context = createBusContext(), namespace, transports } = options ?? {};
+  const { namespace, transports } = options ?? {};
+  const context = resolveBusContext(options);
   const transportMethods = createTransportMethods(context);
 
   const bus: IMakaioBus<Namespace> = {

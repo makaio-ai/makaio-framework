@@ -74,6 +74,8 @@ export { isRequestSchema } from './utils/is-request-schema.js';
 
 export { matchesSubscription, matchesAnySubscription } from './utils/subscription-matching.js';
 
+export { toSafeDebugLog } from './utils/debug-log.js';
+export type { BusDebugLog } from './utils/debug-log.js';
 export { parseBusUrl } from './utils/url-config.js';
 export type { BusUrlConfig } from './utils/url-config.js';
 

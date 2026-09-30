@@ -16,6 +16,7 @@ import {
   type BusRequestMessage,
   type BusTransport,
   type SubscriptionDeliveryClass,
+  toSafeDebugLog,
 } from '@makaio/bus-core';
 import type { PayloadFilter } from '@makaio/core';
 import { type WebSocketClientTransportReconnectOptions } from './ws-client-reconnect.js';
@@ -24,7 +25,6 @@ import {
   DEFAULT_CONNECT_TIMEOUT_MS,
   DEFAULT_READINESS_MODE,
   defaultDebugLog,
-  toSafeDebugLog,
   resolveHeartbeatConfig,
   resolveReconnectConfig,
   type WebSocketClientTransportHeartbeatOptions,

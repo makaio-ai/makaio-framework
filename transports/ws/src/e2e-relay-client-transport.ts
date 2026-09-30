@@ -7,14 +7,15 @@
 
 import type { WebSocketLike, ClientTransportCodec } from './types.js';
 import { WebSocketClientTransport, type WebSocketClientTransportOptions } from './ws-client-transport.js';
-import { defaultDebugLog, toSafeDebugLog } from './ws-client-options.js';
-import type {
-  BusMessage,
-  BusResponseMessage,
-  BusSubscribeMessage,
-  BusSubscriptionAckMessage,
-  BusUnsubscribeMessage,
-  BusTransport,
+import { defaultDebugLog } from './ws-client-options.js';
+import {
+  toSafeDebugLog,
+  type BusMessage,
+  type BusResponseMessage,
+  type BusSubscribeMessage,
+  type BusSubscriptionAckMessage,
+  type BusUnsubscribeMessage,
+  type BusTransport,
 } from '@makaio/bus-core';
 import type { E2ERelayAuth } from './auth/e2e-relay-auth.js';
 import { decryptRelayEnvelope, encryptRelayEnvelope, isRelayEnvelopeMessage } from './e2e-relay-envelope.js';
