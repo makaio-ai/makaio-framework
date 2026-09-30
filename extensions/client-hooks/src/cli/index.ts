@@ -24,7 +24,7 @@
 
 import { z } from 'zod';
 import { ALWAYS_PROCEED, defineCliSubcommand, type CliContribution } from '@makaio/kernel/cli';
-import { DEFAULT_HOOK_HANDLE_TIMEOUT_MS } from '@makaio/subsystem-client';
+import { DEFAULT_HOOK_HANDLE_TIMEOUT_MS } from '@makaio/subsystem-client/hook-subjects';
 import { handleClientHook, handleClientHookHandle } from './client-hook-command.js';
 
 const hookSchema = z.object({

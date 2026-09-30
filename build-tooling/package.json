@@ -69,6 +69,10 @@
       "source": "./tsdown-scss.ts",
       "default": "./tsdown-scss.ts"
     },
+    "./source-runtime-imports": {
+      "source": "./source-runtime-imports.ts",
+      "default": "./source-runtime-imports.ts"
+    },
     "./tsgo-declarations": {
       "source": "./tsgo-declarations.ts",
       "default": "./tsgo-declarations.ts"

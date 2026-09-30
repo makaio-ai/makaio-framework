@@ -73,6 +73,11 @@ await build({
 });
 
 // CLI entry point — invoked by platform launchers via ELECTRON_RUN_AS_NODE=1.
+// Non-fix (FACT-391): the CLI bundle is one esbuild outfile without splitting, so externals
+// (native addons like node-pty) reached from the dynamically imported full path are hoisted to
+// top-level imports; the light hook route only skips module evaluation, not loading. Electron is
+// not a shipped host and has no hook latency target (the route stays for host parity, see
+// apps.md); splitting would also need chunk packaging in electron-builder.
 await build({
   entryPoints: [CLI_ENTRY_POINT],
   bundle: true,

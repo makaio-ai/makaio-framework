@@ -107,6 +107,7 @@ const bundledNodeBinaryName = process.platform === 'win32' ? 'node.exe' : 'node'
 
 const packageCopyEntries = {
   './dist/cli.mjs': 'dist/cli.mjs',
+  './dist/cli-chunks': 'dist/cli-chunks',
   './dist/renderer': 'dist/renderer',
   './dist/variant.json': 'Resources/variant.json',
   ...sourceDevCopyEntries,

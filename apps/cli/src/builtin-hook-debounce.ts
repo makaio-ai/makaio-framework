@@ -40,7 +40,6 @@
  * real evidence.
  * @packageDocumentation
  */
-import { resolveMakaioHome } from '@makaio/runtime-node';
 import type { FallbackReason } from './parse-error.js';
 import { recordHookCoolDown, shouldSuppressHookCoolDown } from './warning-debounce.js';
 
@@ -95,12 +94,47 @@ export function isBuiltinHookInvocation(argv: readonly string[]): boolean {
  * @param debounceFailure - Whether `--debounce-failure` was given.
  * @param busUrl - Resolved bus WebSocket URL used as part of the cool-down
  *   key. Never logged.
+ * @param makaioHome - Resolved MAKAIO home directory holding the cool-down
+ *   cache. Passed in so this module needs no `@makaio/runtime-node` import.
  * @returns `true` when the invocation must run with a `null` bus without
  *   contacting the server.
  */
-export function shouldSkipBusProbe(argv: readonly string[], debounceFailure: boolean, busUrl: string): boolean {
-  if (!debounceFailure || !isBuiltinHookInvocation(argv) || argv.includes(FAIL_CLOSE_FLAG)) return false;
-  return shouldSuppressHookCoolDown(resolveMakaioHome(), buildHookKey(busUrl));
+export function shouldSkipBusProbe(
+  argv: readonly string[],
+  debounceFailure: boolean,
+  busUrl: string,
+  makaioHome: string,
+): boolean {
+  return (
+    isBuiltinHookInvocation(argv) &&
+    isHookCoolDownActive({ debounceFailure, failClose: argv.includes(FAIL_CLOSE_FLAG), busUrl, makaioHome })
+  );
+}
+
+/** Inputs for {@link isHookCoolDownActive}. */
+export interface HookCoolDownOptions {
+  /** Whether `--debounce-failure` was given. */
+  readonly debounceFailure: boolean;
+  /** Whether the invocation runs with `--fail-close`. */
+  readonly failClose: boolean;
+  /** Resolved bus WebSocket URL used as part of the cool-down key. Never logged. */
+  readonly busUrl: string;
+  /** Resolved MAKAIO home directory holding the cool-down cache. */
+  readonly makaioHome: string;
+}
+
+/**
+ * Argv-free cool-down decision shared by the full CLI path (via
+ * {@link shouldSkipBusProbe}) and the light hook path.
+ *
+ * Never `true` for a `--fail-close` invocation, which must keep failing loudly.
+ * @param options - Decision inputs.
+ * @returns `true` when the invocation must run with a `null` bus without contacting the server.
+ */
+export function isHookCoolDownActive(options: HookCoolDownOptions): boolean {
+  const { debounceFailure, failClose, busUrl, makaioHome } = options;
+  if (!debounceFailure || failClose) return false;
+  return shouldSuppressHookCoolDown(makaioHome, buildHookKey(busUrl));
 }
 
 /**
@@ -161,18 +195,21 @@ export interface HookFailureOutcome {
  * @param outcome - Failure classification for this run.
  * @param busUrl - Resolved bus WebSocket URL used as part of the cool-down
  *   key. Never logged.
+ * @param makaioHome - Resolved MAKAIO home directory holding the cool-down
+ *   cache. Passed in so this module needs no `@makaio/runtime-node` import.
  */
 export function recordBuiltinHookFailure(
   argv: readonly string[],
   debounceFailure: boolean,
   outcome: HookFailureOutcome,
   busUrl: string,
+  makaioHome: string,
 ): void {
   const { fallback, connectionFailure, probeSkipped } = outcome;
   if (probeSkipped) return;
   const shouldRecord =
     fallback === 'unreachable' || (fallback === 'connection-failed' && connectionFailure === 'transport');
   if (debounceFailure && isBuiltinHookInvocation(argv) && shouldRecord) {
-    recordHookCoolDown(resolveMakaioHome(), buildHookKey(busUrl));
+    recordHookCoolDown(makaioHome, buildHookKey(busUrl));
   }
 }

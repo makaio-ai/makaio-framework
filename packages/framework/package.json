@@ -98,6 +98,14 @@
       "types": "./dist/inbound-hooks/index.d.mts",
       "default": "./dist/inbound-hooks/index.mjs"
     },
+    "./inbound-hooks/stdio": {
+      "types": "./dist/inbound-hooks/stdio.d.mts",
+      "default": "./dist/inbound-hooks/stdio.mjs"
+    },
+    "./inbound-hooks/fast-connection": {
+      "types": "./dist/inbound-hooks/fast-connection.d.mts",
+      "default": "./dist/inbound-hooks/fast-connection.mjs"
+    },
     "./providers": {
       "types": "./dist/providers/index.d.mts",
       "default": "./dist/providers/index.mjs"

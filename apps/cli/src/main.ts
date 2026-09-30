@@ -630,7 +630,9 @@ export async function main(
 
   try {
     await program.parseAsync(parsedArgv);
-    recordBuiltinHookFailure(parsedArgv, debounceFailure, { fallback, connectionFailure, probeSkipped }, busUrl);
+    // Local keeps `main` within the max-lines-per-function cap.
+    const home = resolveMakaioHome();
+    recordBuiltinHookFailure(parsedArgv, debounceFailure, { fallback, connectionFailure, probeSkipped }, busUrl, home);
   } catch (err) {
     handleParseError(err, parsedArgv, fallback, connectionError, { debounceFailure, noFailure });
   } finally {

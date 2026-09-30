@@ -14,6 +14,7 @@
  * @packageDocumentation
  */
 import type { IMakaioBus } from '@makaio/bus-core';
+import { resolveMakaioHome } from '@makaio/runtime-node';
 import { connectBusClient, isAuthConnectionError, probeHealth, resolveClientAuth } from './bus-client.js';
 import type { ServerHealth } from './bus-client.js';
 import { launchAppAndWaitForBus } from './app-launch.js';
@@ -158,7 +159,7 @@ interface ResolveBusOptions {
 export async function resolveBusForInvocation(options: ResolveBusOptions): Promise<CliBusResolution> {
   const { parsedArgv, debounceFailure, busUrl, skipLaunch, suppressConnectionWarnings } = options;
 
-  if (shouldSkipBusProbe(parsedArgv, debounceFailure, busUrl)) {
+  if (shouldSkipBusProbe(parsedArgv, debounceFailure, busUrl, resolveMakaioHome())) {
     return {
       health: null,
       bus: null,

@@ -4,6 +4,7 @@
  * Produces two bundles via `Bun.build()` in `dist/` by default:
  * - `dist/index.js`  — main-process entry, loaded by the Electrobun runtime.
  * - `dist/cli.mjs`   — CLI entry, exec'd by platform launchers (makaio-launcher.sh).
+ * - `dist/cli-chunks/` — code-split chunks of the CLI (dynamic imports), shipped next to `cli.mjs`.
  *
  * Also writes `dist/variant.json` from the `MAKAIO_VARIANT` and `MAKAIO_RELEASE_TRACK`
  * env vars, enabling the packager to copy variant metadata into the application bundle at build time.
@@ -19,7 +20,7 @@
  * Set `MAKAIO_ELECTROBUN_BUILD_OUTDIR` to isolate output for concurrent builds.
  */
 import { build } from 'bun';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { buildMigrationSourceId, discoverBundledMigrationSources } from '@makaio/host-shared/build/embedded-migrations';
 import {
@@ -83,6 +84,13 @@ const MAIN_ENTRY_POINT = path.join(PACKAGE_ROOT, 'src/main/index.ts');
 const CLI_ENTRY_POINT = path.join(PACKAGE_ROOT, 'src/cli-entry.ts');
 const DIST_DIR = path.resolve(PACKAGE_ROOT, process.env['MAKAIO_ELECTROBUN_BUILD_OUTDIR'] ?? 'dist');
 
+/** Directory (relative to `dist/`) holding the code-split CLI chunks; shipped next to `cli.mjs`. */
+const CLI_CHUNKS_DIRNAME = 'cli-chunks';
+const CLI_CHUNKS_DIR = path.join(DIST_DIR, CLI_CHUNKS_DIRNAME);
+
+// Stale chunks from earlier builds would be rewritten and shipped; start from a clean directory.
+rmSync(CLI_CHUNKS_DIR, { recursive: true, force: true });
+
 mkdirSync(DIST_DIR, { recursive: true });
 
 // Run both builds in parallel — they share no mutable state.
@@ -109,7 +117,14 @@ const [mainResult, cliResult] = await Promise.all([
     target: 'bun',
     external: EXTERNAL,
     banner: CJS_BANNER,
-    naming: 'cli.mjs',
+    // Splitting keeps dynamically imported modules (light hook path) in separate chunks, so
+    // their static imports of external heavy modules are not hoisted into cli.mjs as eager imports.
+    splitting: true,
+    naming: {
+      entry: 'cli.mjs',
+      chunk: `${CLI_CHUNKS_DIRNAME}/[name]-[hash].mjs`,
+      asset: `${CLI_CHUNKS_DIRNAME}/[name]-[hash].[ext]`,
+    },
     define: {
       'process.env.NODE_ENV': JSON.stringify('production'),
       __FRAMEWORK_VERSION__: JSON.stringify(FRAMEWORK_VERSION),
@@ -136,7 +151,15 @@ for (const [label, result] of [
 // Bun.build preserves the original import specifier for external modules, so
 // this post-processing step is required to produce the final framework-subpath
 // imports that Electrobun's re-bundle and runtime resolution expect.
-for (const filename of ['index.js', 'cli.mjs'] as const) {
+const cliChunkFiles = (existsSync(CLI_CHUNKS_DIR) ? readdirSync(CLI_CHUNKS_DIR) : [])
+  .filter((name) => name.endsWith('.mjs'))
+  .sort()
+  .map((name) => path.posix.join(CLI_CHUNKS_DIRNAME, name));
+if (cliChunkFiles.length === 0) {
+  console.error(`CLI build produced no .mjs chunks in ${CLI_CHUNKS_DIR}; code splitting did not take effect.`);
+  process.exit(1);
+}
+for (const filename of ['index.js', 'cli.mjs', ...cliChunkFiles]) {
   const filePath = path.join(DIST_DIR, filename);
   const original = readFileSync(filePath, 'utf-8');
   const rewritten = rewriteFrameworkImportsInText(original);

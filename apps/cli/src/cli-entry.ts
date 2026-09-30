@@ -7,12 +7,16 @@
  * headless CLI app surface used by development scripts and config-selected
  * standalone CLI execution.
  */
-import { buildNodeRuntimeOptions, resolveMakaioHome } from '@makaio/runtime-node';
-import { main } from './main.js';
+import { tryLightHookPath } from './hook-fast-path-detect.js';
 
-const makaioHome = resolveMakaioHome(process.env);
-const nodeRuntimeOptions = await buildNodeRuntimeOptions({ makaioHome, env: process.env });
+if (!(await tryLightHookPath(process.argv, () => import('./hook-fast-path.js')))) {
+  const { buildNodeRuntimeOptions, resolveMakaioHome } = await import('@makaio/runtime-node');
+  const { main } = await import('./main.js');
 
-void main(process.argv, [], nodeRuntimeOptions.discovery, {
-  boot: nodeRuntimeOptions,
-});
+  const makaioHome = resolveMakaioHome(process.env);
+  const nodeRuntimeOptions = await buildNodeRuntimeOptions({ makaioHome, env: process.env });
+
+  void main(process.argv, [], nodeRuntimeOptions.discovery, {
+    boot: nodeRuntimeOptions,
+  });
+}

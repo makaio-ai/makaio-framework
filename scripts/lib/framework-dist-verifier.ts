@@ -12,6 +12,7 @@ import {
   DECLARATION_TARGET_PATTERN,
   toBarePackageName,
 } from './framework-dist-declarations.js';
+import { checkLightEntries, IMPORT_SPECIFIER_PATTERN } from './framework-dist-light-entries.js';
 import { collectUnexpectedRuntimeMigrationFiles } from './runtime-migration-assets.js';
 
 /** A framework dist verification finding. */
@@ -143,12 +144,20 @@ export const POSTGRES_DIST_LITERAL_ALLOWLIST: readonly PostgresLiteralAllowlistE
  * the only import specifiers each may contain.
  *
  * Short-lived CLI hook processes load these entries on every hook call, so any
- * extra import — including a shared chunk the bundler hoisted common code into
- * — adds cold-start cost to every call. Entries absent from disk are skipped;
+ * extra import adds cold-start cost to every call. Relative chunk imports are
+ * followed transitively; the allowlist covers the external specifiers of the
+ * whole relative chunk graph reachable from the entry. `@makaio/framework/*`
+ * self-imports are treated as allowed leaves and not walked; their own weight
+ * (e.g. the bus entry inlining contracts) is tracked in FACT-392, which will
+ * extend the walk through the umbrella exports map. Entries absent from disk are skipped;
  * the exports-map target check already reports a missing built entry.
  */
 export const LIGHT_DIST_ENTRY_ALLOWED_IMPORTS: Readonly<Record<string, readonly string[]>> = {
   'dist/clients/hook-subjects.mjs': ['zod'],
+  // Hook subprocess per tool call (FACT-391): stdin reading must not pull in the framework.
+  'dist/inbound-hooks/stdio.mjs': ['node:stream/consumers'],
+  // Hook subprocess per tool call (FACT-391): fast bus connect may only load the bus and transports.
+  'dist/inbound-hooks/fast-connection.mjs': ['@makaio/framework/bus', '@makaio/framework/node/transports'],
 };
 
 /** Options for {@link verifyFrameworkDist}. */
@@ -420,14 +429,6 @@ function checkRuntimeAssets(root: string, runtimeAssets: readonly string[], issu
 }
 
 /**
- * Matches static and dynamic import specifiers in built ESM output, including
- * the minified forms `from"…"`, `import"…"`, and `` import(`…`) ``. The
- * negative lookbehind skips method calls such as `Buffer.from("…")` in
- * inlined library code.
- */
-const IMPORT_SPECIFIER_PATTERN = /(?<!\.)\b(?:from|import|require)\s*\(?\s*["'`]([^"'`\n]+)["'`]/g;
-
-/**
  * Scans built `dist/` modules for `@makaio/framework/*` self-import specifiers
  * that the exports map does not expose, for bare external imports that the
  * manifest does not declare, and for Postgres driver or engine code that must
@@ -580,37 +581,6 @@ function checkSelfImport(
     message: `Built module "${modulePath}" imports "${specifier}" but the exports map has no "${exportKey}" entry`,
     target: modulePath,
   });
-}
-
-/**
- * Reports every import specifier in a light dist entry that its allowlist does
- * not name.
- * @param root - Absolute framework package root.
- * @param lightEntries - Light entry paths mapped to their allowed specifiers.
- * @param issues - Issue sink to append findings to.
- */
-function checkLightEntries(
-  root: string,
-  lightEntries: Readonly<Record<string, readonly string[]>>,
-  issues: FrameworkDistIssue[],
-): void {
-  for (const [entry, allowed] of Object.entries(lightEntries)) {
-    const entryPath = resolve(root, entry);
-    if (!existsSync(entryPath)) continue;
-
-    const content = readFileSync(entryPath, 'utf8');
-    for (const specifier of new Set(Array.from(content.matchAll(IMPORT_SPECIFIER_PATTERN), (match) => match[1]))) {
-      if (allowed.includes(specifier)) continue;
-      issues.push({
-        exportKey: specifier,
-        kind: 'light-entry-import',
-        message:
-          `Light entry "${entry}" imports "${specifier}" — allowed imports: ` +
-          `[${allowed.map((name) => `"${name}"`).join(', ')}], because CLI hook processes load it on every call`,
-        target: entry,
-      });
-    }
-  }
 }
 
 /**
