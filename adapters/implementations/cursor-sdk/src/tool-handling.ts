@@ -29,11 +29,8 @@ import {
 } from '@makaio/ai-adapters-core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, type AgentToolApproveRequest, type AgentToolApproveResponse } from '@makaio/contracts';
-import {
-  createRawClientHookHandleSubject,
-  type ClientHookHandleResponse,
-  type RawClientHookPayload,
-} from '@makaio/subsystem-client';
+import { createRawClientHookHandleSubject } from '@makaio/subsystem-client/hook-subjects';
+import type { ClientHookHandleResponse, RawClientHookPayload } from '@makaio/subsystem-client/hook-subjects';
 import path from 'node:path';
 import { CursorSdkSubjects } from './namespaces/index.js';
 

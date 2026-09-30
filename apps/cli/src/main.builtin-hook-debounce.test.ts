@@ -59,6 +59,7 @@ import { isBuiltinHookInvocation, shouldSkipBusProbe } from './builtin-hook-debo
 const emptyDiscovery = new ExplicitDescriptorDiscovery([]);
 
 const BUS_URL = 'ws://127.0.0.1:6252/bus';
+const MAKAIO_HOME = '/tmp/makaio-home-debounce-test';
 
 /**
  * Run `main` with `process.stdin` reported as a TTY so the hook action's own
@@ -119,12 +120,14 @@ describe('shouldSkipBusProbe', () => {
   it('skips the probe for a hook handle invocation inside the cool-down', () => {
     warningDebounceMocks.shouldSuppressHookCoolDown.mockReturnValue(true);
     const argv = ['node', 'makaio', 'hook', 'handle', 'claude-code', 'PreToolUse', '--timeout', '5000'];
-    expect(shouldSkipBusProbe(argv, true, BUS_URL)).toBe(true);
+    expect(shouldSkipBusProbe(argv, true, BUS_URL, MAKAIO_HOME)).toBe(true);
   });
 
   it('skips the probe for a hook received invocation inside the cool-down', () => {
     warningDebounceMocks.shouldSuppressHookCoolDown.mockReturnValue(true);
-    expect(shouldSkipBusProbe(['node', 'makaio', 'hook', 'received', 'claude-code', 'Stop'], true, BUS_URL)).toBe(true);
+    expect(
+      shouldSkipBusProbe(['node', 'makaio', 'hook', 'received', 'claude-code', 'Stop'], true, BUS_URL, MAKAIO_HOME),
+    ).toBe(true);
   });
 
   it('skips the probe for argv spellings a hand-rolled grammar would miss', () => {
@@ -133,27 +136,27 @@ describe('shouldSkipBusProbe', () => {
     warningDebounceMocks.shouldSuppressHookCoolDown.mockReturnValue(true);
     for (const tail of [['--timeout=1000'], ['--metadata-json={}'], ['--timeout', 'nope'], ['--bogus']]) {
       const argv = ['node', 'makaio', 'hook', 'handle', 'claude-code', 'PreToolUse', ...tail];
-      expect(shouldSkipBusProbe(argv, true, BUS_URL)).toBe(true);
+      expect(shouldSkipBusProbe(argv, true, BUS_URL, MAKAIO_HOME)).toBe(true);
     }
   });
 
   it('never skips the probe for a --fail-close invocation', () => {
     warningDebounceMocks.shouldSuppressHookCoolDown.mockReturnValue(true);
     const argv = ['node', 'makaio', 'hook', 'handle', 'claude-code', 'PreToolUse', '--fail-close', '--timeout', '5000'];
-    expect(shouldSkipBusProbe(argv, true, BUS_URL)).toBe(false);
+    expect(shouldSkipBusProbe(argv, true, BUS_URL, MAKAIO_HOME)).toBe(false);
     expect(warningDebounceMocks.shouldSuppressHookCoolDown).not.toHaveBeenCalled();
   });
 
   it('never skips the probe without --debounce-failure', () => {
     warningDebounceMocks.shouldSuppressHookCoolDown.mockReturnValue(true);
     const argv = ['node', 'makaio', 'hook', 'handle', 'claude-code', 'PreToolUse'];
-    expect(shouldSkipBusProbe(argv, false, BUS_URL)).toBe(false);
+    expect(shouldSkipBusProbe(argv, false, BUS_URL, MAKAIO_HOME)).toBe(false);
     expect(warningDebounceMocks.shouldSuppressHookCoolDown).not.toHaveBeenCalled();
   });
 
   it('never skips the probe for a non-hook command', () => {
     warningDebounceMocks.shouldSuppressHookCoolDown.mockReturnValue(true);
-    expect(shouldSkipBusProbe(['node', 'makaio', 'serve'], true, BUS_URL)).toBe(false);
+    expect(shouldSkipBusProbe(['node', 'makaio', 'serve'], true, BUS_URL, MAKAIO_HOME)).toBe(false);
     expect(warningDebounceMocks.shouldSuppressHookCoolDown).not.toHaveBeenCalled();
   });
 });

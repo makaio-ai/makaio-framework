@@ -1,10 +1,7 @@
-import { createBusInstance } from '@makaio/bus-core';
-import { HmacAuth, WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import { emitInboundHookReceived } from './emit.js';
+import { connectFastHookBus } from './fast-connection.js';
+import { normalizeTimeoutMs, startDeadline } from './fast-hook-timing.js';
 import type { RawInboundHookPayload } from './schemas.js';
-
-const DEFAULT_BUS_URL = 'ws://127.0.0.1:6252/bus';
-const DEFAULT_TIMEOUT_MS = 250;
 
 /**
  * Options for the fast single-shot hook bus connection.
@@ -41,64 +38,34 @@ export async function emitInboundHookReceivedFast(
   payload: RawInboundHookPayload,
   options: FastHookBusOptions = {},
 ): Promise<void> {
-  const url = options.busUrl?.trim() || process.env['MAKAIO_BUS_URL']?.trim() || DEFAULT_BUS_URL;
-  const secret = options.secret ?? process.env['MAKAIO_BUS_SECRET'];
-  const auth = secret && secret.trim().length > 0 ? new HmacAuth({ secret: secret.trim() }) : undefined;
-  const transport = new WebSocketClientTransport({
-    url,
-    name: `hook-${source}`,
-    autoReconnect: false,
-    auth,
-    debug: process.env['MAKAIO_DEBUG'] === 'true',
-  });
-  const bus = createBusInstance({ transports: [transport] });
   const timeoutMs = normalizeTimeoutMs(options.timeoutMs ?? options.connectTimeoutMs);
+  const remainingMs = startDeadline(timeoutMs);
+  const connection = await connectFastHookBus({
+    name: `hook-${source}`,
+    busUrl: options.busUrl,
+    secret: options.secret,
+    timeoutMs,
+  });
+  if (!connection) {
+    return;
+  }
 
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-  const delivery = (async () => {
-    await bus.connect();
-    if (timedOut) {
-      return;
-    }
-    await emitInboundHookReceived(bus, source, payload, { failOpen: true });
-  })();
+  const delivery = emitInboundHookReceived(connection.bus, source, payload, { failOpen: true });
   void delivery.catch(() => undefined);
   try {
     await Promise.race([
       delivery,
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
-          timedOut = true;
           reject(new Error('hook bus delivery timeout'));
-        }, timeoutMs);
+        }, remainingMs());
       }),
     ]);
   } catch {
     return;
   } finally {
     clearTimeout(timeoutId);
-    disconnectBestEffort(() => bus.disconnect());
-  }
-}
-
-/**
- * Normalize user-provided timeout options to the default fast-path budget.
- * @param value - User-provided timeout in milliseconds.
- * @returns A non-negative timeout in milliseconds.
- */
-function normalizeTimeoutMs(value: number | undefined): number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : DEFAULT_TIMEOUT_MS;
-}
-
-/**
- * Start bus disconnect without letting cleanup extend the hook fast path.
- * @param disconnect - Disconnect callback for the bus instance.
- */
-function disconnectBestEffort(disconnect: () => void): void {
-  try {
-    disconnect();
-  } catch {
-    // Best-effort cleanup must not affect native hook execution.
+    connection.dispose();
   }
 }

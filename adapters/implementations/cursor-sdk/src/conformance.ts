@@ -12,7 +12,7 @@ import {
 } from '@makaio/ai-adapters-core';
 import { MakaioBus } from '@makaio/bus-core';
 import { startBusServer, type BusServer } from '@makaio/bus-server';
-import { DEFAULT_HOOK_HANDLE_TIMEOUT_MS } from '@makaio/subsystem-client';
+import { DEFAULT_HOOK_HANDLE_TIMEOUT_MS } from '@makaio/subsystem-client/hook-subjects';
 import { WebSocketServer } from 'ws';
 import { CursorSdkNamespace } from './namespaces/index.js';
 import type { CursorSdkBus } from './namespaces/index.js';

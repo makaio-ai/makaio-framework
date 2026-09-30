@@ -7,6 +7,7 @@ await build({
     entry: {
       index: './src/index.ts',
       'cli/index': './src/cli/index.ts',
+      'cli/client-hook-command': './src/cli/client-hook-command.ts',
     },
   }),
 });

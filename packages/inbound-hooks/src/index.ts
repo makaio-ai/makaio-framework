@@ -2,6 +2,8 @@ export { emitInboundHookReceived } from './emit.js';
 export type { InboundHookEmitOptions } from './emit.js';
 export { emitInboundHookReceivedFast } from './fast-bus.js';
 export type { FastHookBusOptions } from './fast-bus.js';
+export { connectFastHookBus, DEFAULT_FAST_HOOK_BUS_URL } from './fast-connection.js';
+export type { ConnectFastHookBusOptions, FastHookBusConnection } from './fast-connection.js';
 export {
   createInboundHookNamespace,
   createInboundHookReceivedSubject,

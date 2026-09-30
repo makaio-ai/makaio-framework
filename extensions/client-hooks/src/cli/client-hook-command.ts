@@ -30,15 +30,20 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { ClientSubjects } from '@makaio/contracts/client';
-import { parseJsonMetadata, parseJsonPayload, readProcessStdinText, safeReadStdinText } from '@makaio/inbound-hooks';
+import {
+  parseJsonMetadata,
+  parseJsonPayload,
+  readProcessStdinText,
+  safeReadStdinText,
+} from '@makaio/inbound-hooks/stdio';
 import {
   ClientHookHandleResponseSchema,
+  createClientRuntimeObserveSubject,
   createRawClientHookHandleSubject,
   createRawClientHookReceivedSubject,
   pickNonEmptyStringValue,
   type RawClientHookPayload,
-} from '@makaio/subsystem-client';
+} from '@makaio/subsystem-client/hook-subjects';
 import type { CommandContext } from '@makaio/kernel/cli';
 
 // ---------------------------------------------------------------------------
@@ -239,7 +244,7 @@ function safeEmitRuntimeObserve(
   }
 
   void bus
-    .requestOptional(ClientSubjects.runtime.observe, {
+    .requestOptional(createClientRuntimeObserveSubject(), {
       clientId,
       source: { layer: 'client-hook', producer: 'client-hook-command' },
       observedAt: Date.now(),

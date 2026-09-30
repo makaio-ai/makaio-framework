@@ -531,14 +531,40 @@ describe('verifyFrameworkDist', () => {
     expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
   });
 
-  it('reports shared-chunk and other imports in a light entry', () => {
+  it('reports extra external imports in a light entry', () => {
     const root = makeTempDir();
     writeJson(join(root, 'package.json'), { exports: {}, dependencies: { zod: '4.4.3' } });
-    writeBuiltFile(join(root, 'dist/shared-chunk.mjs'));
-    writeBuiltFile(
-      join(root, 'dist/light/entry.mjs'),
-      'import{z as e}from"zod";import{fixture as t}from"../shared-chunk.mjs";export{e as z,t};',
-    );
+    writeBuiltFile(join(root, 'dist/light/entry.mjs'), 'import{z as e}from"zod";import"node:fs";export{e as z};');
+
+    const result = verifyFrameworkDist(root, {
+      migrationChains: [],
+      lightEntries: { 'dist/light/entry.mjs': ['zod'] },
+    });
+
+    expect(result.issues).toEqual([
+      expect.objectContaining({ exportKey: 'node:fs', kind: 'light-entry-import', target: 'dist/light/entry.mjs' }),
+    ]);
+  });
+
+  it('follows relative chunks and accepts allowed externals in them', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {}, dependencies: { zod: '4.4.3' } });
+    writeBuiltFile(join(root, 'dist/chunk-abc.mjs'), 'import{z as e}from"zod";export{e as z};');
+    writeBuiltFile(join(root, 'dist/light/entry.mjs'), 'import{z as e}from"../chunk-abc.mjs";export{e as z};');
+
+    const result = verifyFrameworkDist(root, {
+      migrationChains: [],
+      lightEntries: { 'dist/light/entry.mjs': ['zod'] },
+    });
+
+    expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
+  });
+
+  it('reports an extra external import in a reached chunk, naming chunk and specifier', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {}, dependencies: { zod: '4.4.3' } });
+    writeBuiltFile(join(root, 'dist/chunk-abc.mjs'), 'import{z as e}from"zod";import"node:fs";export{e as z};');
+    writeBuiltFile(join(root, 'dist/light/entry.mjs'), 'import{z as e}from"../chunk-abc.mjs";export{e as z};');
 
     const result = verifyFrameworkDist(root, {
       migrationChains: [],
@@ -547,10 +573,91 @@ describe('verifyFrameworkDist', () => {
 
     expect(result.issues).toEqual([
       expect.objectContaining({
-        exportKey: '../shared-chunk.mjs',
+        exportKey: 'node:fs',
+        kind: 'light-entry-import',
+        message: expect.stringContaining('"dist/chunk-abc.mjs"'),
+        target: 'dist/chunk-abc.mjs',
+      }),
+    ]);
+    expect(result.issues[0]?.message).toContain('node:fs');
+  });
+
+  it('reports a relative import that does not resolve to a file', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {}, dependencies: { zod: '4.4.3' } });
+    writeBuiltFile(join(root, 'dist/light/entry.mjs'), 'import"../missing-chunk.mjs";');
+
+    const result = verifyFrameworkDist(root, {
+      migrationChains: [],
+      lightEntries: { 'dist/light/entry.mjs': ['zod'] },
+    });
+
+    expect(result.issues).toEqual([
+      expect.objectContaining({
+        exportKey: '../missing-chunk.mjs',
         kind: 'light-entry-import',
         target: 'dist/light/entry.mjs',
       }),
+    ]);
+  });
+
+  it('terminates on a cycle between two chunks', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {}, dependencies: { zod: '4.4.3' } });
+    writeBuiltFile(join(root, 'dist/a.mjs'), 'import"./b.mjs";import"zod";');
+    writeBuiltFile(join(root, 'dist/b.mjs'), 'import"./a.mjs";');
+    writeBuiltFile(join(root, 'dist/light/entry.mjs'), 'import"../a.mjs";');
+
+    const result = verifyFrameworkDist(root, {
+      migrationChains: [],
+      lightEntries: { 'dist/light/entry.mjs': ['zod'] },
+    });
+
+    expect(result.ok, result.issues.map((issue) => issue.message).join('\n')).toBe(true);
+  });
+
+  it('registers the expected light entries', () => {
+    expect(Object.keys(LIGHT_DIST_ENTRY_ALLOWED_IMPORTS)).toEqual(
+      expect.arrayContaining([
+        'dist/clients/hook-subjects.mjs',
+        'dist/inbound-hooks/stdio.mjs',
+        'dist/inbound-hooks/fast-connection.mjs',
+      ]),
+    );
+  });
+
+  it('reports a forbidden external imported by a transitively reached chunk', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {}, dependencies: { zod: '4.4.3', lodash: '4.0.0' } });
+    writeBuiltFile(join(root, 'dist/chunk-b.mjs'), 'import"lodash";export const b=1;');
+    writeBuiltFile(join(root, 'dist/chunk-a.mjs'), 'import"./chunk-b.mjs";export const a=1;');
+    writeBuiltFile(join(root, 'dist/light/entry.mjs'), 'import"../chunk-a.mjs";');
+
+    const result = verifyFrameworkDist(root, {
+      migrationChains: [],
+      lightEntries: { 'dist/light/entry.mjs': ['zod'] },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({ exportKey: 'lodash', kind: 'light-entry-import', target: 'dist/chunk-b.mjs' }),
+    ]);
+  });
+
+  it('follows a chunk reached via a literal dynamic import', () => {
+    const root = makeTempDir();
+    writeJson(join(root, 'package.json'), { exports: {}, dependencies: { zod: '4.4.3', lodash: '4.0.0' } });
+    writeBuiltFile(join(root, 'dist/light/chunk.mjs'), 'import"lodash";export const c=1;');
+    writeBuiltFile(join(root, 'dist/light/entry.mjs'), 'export const load=()=>import("./chunk.mjs");');
+
+    const result = verifyFrameworkDist(root, {
+      migrationChains: [],
+      lightEntries: { 'dist/light/entry.mjs': ['zod'] },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.issues).toEqual([
+      expect.objectContaining({ exportKey: 'lodash', kind: 'light-entry-import', target: 'dist/light/chunk.mjs' }),
     ]);
   });
 

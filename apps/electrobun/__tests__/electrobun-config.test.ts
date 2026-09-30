@@ -79,4 +79,16 @@ describe('electrobun.config.ts', () => {
     expect(Object.values(config.build?.copy ?? {})).toContain('node_modules/node-pty');
     expect(Object.values(config.build?.copy ?? {})).toContain('node_modules/node-addon-api');
   });
+
+  it('ships the CLI chunks directory next to cli.mjs so the split CLI can load its chunks', async () => {
+    const config = await importConfig({
+      MAKAIO_ELECTROBUN_SOURCE_DEV: undefined,
+      NODE_ENV: 'production',
+    });
+
+    expect(config.build?.copy).toMatchObject({
+      './dist/cli.mjs': 'dist/cli.mjs',
+      './dist/cli-chunks': 'dist/cli-chunks',
+    });
+  });
 });

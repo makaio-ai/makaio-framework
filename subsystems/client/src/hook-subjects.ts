@@ -16,6 +16,24 @@
 
 import { z } from 'zod';
 import type { EventMessagePayload, RequestMessagePayload, SubjectDefinition, SubjectRecord } from '@makaio/core';
+import type { ClientSubjects } from '@makaio/contracts/client';
+
+/**
+ * Trim and return a string value when non-empty, otherwise `undefined`.
+ *
+ * Primitive building block for normalizers that accept `unknown` values from
+ * raw JSON payloads.  Returns `undefined` when the input is not a string, or
+ * is a string that is empty or whitespace-only after trimming.
+ * @param value - Unknown value to inspect.
+ * @returns Trimmed non-empty string, or `undefined`.
+ */
+export function pickNonEmptyStringValue(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
 
 /**
  * Canonical schema for the raw catch-all hook payload delivered on
@@ -223,4 +241,46 @@ export function createRawClientHookHandleSubject(rawClientId: string): RawClient
       hostLocalRequest: true,
     },
   } as RawClientHookHandleSubject;
+}
+
+// ---------------------------------------------------------------------------
+// Runtime observe (request/response) subject
+// ---------------------------------------------------------------------------
+
+/**
+ * Subject definition for the global `client.runtime.observe` request/response
+ * subject.
+ *
+ * Aliases the type of `ClientSubjects.runtime.observe` (type-only import, erased
+ * at runtime) so `bus.requestOptional` infers identical request and response
+ * types without loading the contracts module in the CLI hook path.
+ */
+export type ClientRuntimeObserveSubject = typeof ClientSubjects.runtime.observe;
+
+/**
+ * Build a non-owning subject definition for `client.runtime.observe`.
+ *
+ * The `$meta` mirrors what `nestSubjectDefinitions` generates for the plain
+ * (unwrapped) `runtime.observe` request/response row in `ClientSchemas`, so the
+ * bus routes it identically to `ClientSubjects.runtime.observe`.  It exists
+ * because the hook path must not load the `@makaio/contracts/client` entry at
+ * runtime; that entry adds its own client, profile, and account-identity schema
+ * chunks on top of the bus.  The parity test guards drift against
+ * `ClientSubjects.runtime.observe`.  The `client` namespace stays owned by the
+ * contracts package; this helper does not register anything.
+ * @returns Non-owning subject definition for `client.runtime.observe`
+ */
+export function createClientRuntimeObserveSubject(): ClientRuntimeObserveSubject {
+  // `payload` is a type-level phantom used only for inference — it is never
+  // accessed at runtime. Cast the whole object rather than fabricating a
+  // phantom value on the field itself (mirrors nestSubjectDefinitions).
+  return {
+    subject: 'runtime.observe',
+    $meta: {
+      namespace: 'client',
+      isRequest: true,
+      local: false,
+      channel: false,
+    },
+  } as ClientRuntimeObserveSubject;
 }

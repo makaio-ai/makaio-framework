@@ -7,7 +7,9 @@
   "types": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./install-transaction": "./src/install-transaction-public.ts"
+    "./install-transaction": "./src/install-transaction-public.ts",
+    "./hook-fast-path-detect": "./src/hook-fast-path-detect.ts",
+    "./hook-fast-path": "./src/hook-fast-path.ts"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
@@ -22,11 +24,13 @@
     "@makaio/bus-transport-websocket": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/extension-client-hooks": "workspace:*",
+    "@makaio/inbound-hooks": "workspace:*",
     "@makaio/kernel": "workspace:*",
     "@makaio/runtime-node": "workspace:*",
     "@makaio/services-core": "workspace:*",
     "@makaio/services-package-manager": "workspace:*",
     "@makaio/setup": "workspace:*",
+    "@makaio/subsystem-client": "workspace:*",
     "@makaio/utils": "workspace:*",
     "commander": "^14.0.3",
     "esbuild": "^0.28.0",

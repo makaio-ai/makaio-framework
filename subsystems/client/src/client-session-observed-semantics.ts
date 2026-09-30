@@ -11,27 +11,16 @@
 
 export { ClientSubjects } from '@makaio/contracts/client';
 import type { ClientSessionObservedBase } from '@makaio/contracts/client';
+import { pickNonEmptyStringValue } from './hook-subjects.js';
 
 // ---------------------------------------------------------------------------
 // Shared adapter helpers for client.session.* observed-semantics
 // ---------------------------------------------------------------------------
 
-/**
- * Trim and return a string value when non-empty, otherwise `undefined`.
- *
- * Primitive building block for normalizers that accept `unknown` values from
- * raw JSON payloads.  Returns `undefined` when the input is not a string, or
- * is a string that is empty or whitespace-only after trimming.
- * @param value - Unknown value to inspect.
- * @returns Trimmed non-empty string, or `undefined`.
- */
-export function pickNonEmptyStringValue(value: unknown): string | undefined {
-  if (typeof value !== 'string') {
-    return undefined;
-  }
-  const normalized = value.trim();
-  return normalized.length > 0 ? normalized : undefined;
-}
+// Maintainer exception to the "no compatibility re-exports" rule (FACT-391): the
+// helper now lives in the light `hook-subjects` subpath so the CLI hook path can
+// use it without loading this module; existing importers keep working.
+export { pickNonEmptyStringValue } from './hook-subjects.js';
 
 /**
  * Extract a non-empty string value from an unknown-typed hook payload object.

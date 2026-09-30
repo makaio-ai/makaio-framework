@@ -7,8 +7,8 @@
  */
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { main } from '@makaio/cli';
-import { NodeFrameworkModuleResolver, type FrameworkModuleResolver } from '@makaio/runtime-node';
+import type { FrameworkModuleResolver } from '@makaio/runtime-node';
+import { tryLightHookPath } from '@makaio/cli/hook-fast-path-detect';
 
 /**
  * Resolve the module resolver for the framework dist this app bundles.
@@ -25,16 +25,20 @@ import { NodeFrameworkModuleResolver, type FrameworkModuleResolver } from '@maka
  * bundled dist does not exist and ordinary package resolution applies.
  * @returns Resolver for the bundled framework dist, when this app is packaged.
  */
-function resolveBundledFrameworkModuleResolver(): FrameworkModuleResolver | undefined {
+async function resolveBundledFrameworkModuleResolver(): Promise<FrameworkModuleResolver | undefined> {
   const resourcesPath: string | undefined = process.resourcesPath;
   if (!resourcesPath) return undefined;
 
   const frameworkPackagePath = path.join(resourcesPath, 'framework');
   if (!existsSync(path.join(frameworkPackagePath, 'package.json'))) return undefined;
 
+  const { NodeFrameworkModuleResolver } = await import('@makaio/runtime-node');
   return new NodeFrameworkModuleResolver(path.join(frameworkPackagePath, 'dist'));
 }
 
-void main(process.argv, [], undefined, undefined, {
-  frameworkModuleResolver: resolveBundledFrameworkModuleResolver(),
-});
+if (!(await tryLightHookPath(process.argv, () => import('@makaio/cli/hook-fast-path')))) {
+  const { main } = await import('@makaio/cli');
+  void main(process.argv, [], undefined, undefined, {
+    frameworkModuleResolver: await resolveBundledFrameworkModuleResolver(),
+  });
+}
