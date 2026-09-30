@@ -22,7 +22,7 @@
     "@makaio/build-tooling": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/framework": "workspace:*",
-    "tsdown": "0.22.0",
+    "tsdown": "0.23.0",
     "typescript": "^6.0.3"
   },
   "files": [

@@ -25,7 +25,7 @@
     "@makaio/service-base": "workspace:*",
     "@makaio/storage-core": "workspace:*",
     "@makaio/storage-drizzle": "workspace:*",
-    "drizzle-orm": "0.45.2",
+    "drizzle-orm": "0.45.3",
     "node-pty": "^1.2.0-beta.8"
   },
   "devDependencies": {
@@ -34,7 +34,7 @@
     "@types/ws": "^8.5.10",
     "typescript": "^6.0.3",
     "vitest": "4.1.10",
-    "ws": "^8.21.0"
+    "ws": "^8.22.0"
   },
   "license": "MIT",
   "scripts": {
