@@ -18,7 +18,7 @@ export interface ConnectFastHookBusOptions {
   readonly secret?: string;
   /** Deadline for the connect step in ms (non-negative finite, else 250). */
   readonly timeoutMs?: number;
-  /** Transport debug logging (written to stderr; stdout is the hook response channel); falls back to MAKAIO_DEBUG === 'true'. */
+  /** Transport debug logging, gated here (written to stderr; stdout is the hook response channel; bus diagnostics always go to stderr); falls back to MAKAIO_DEBUG === 'true'. */
   readonly debug?: boolean;
 }
 
@@ -48,18 +48,19 @@ export async function connectFastHookBus(options: ConnectFastHookBusOptions): Pr
     // connectTimeoutMs (30 s default) is intentionally not set: the outer deadline plus
     // bus.disconnect() aborts the in-flight attempt and clears the transport's timer, and
     // connectTimeoutMs would not cover the peer-sync readiness wait that bus.connect() includes.
+    // stdout is the hook response channel; transport and bus diagnostics must not land there.
+    const debugLog = (message: string): void => {
+      process.stderr.write(`${message}\n`);
+    };
     const transport = new WebSocketClientTransport({
       url,
       name: options.name,
       autoReconnect: false,
       auth,
       debug: options.debug ?? process.env['MAKAIO_DEBUG'] === 'true',
-      // stdout is the hook response channel; transport debug lines must not land there.
-      debugLog: (message) => {
-        process.stderr.write(`${message}\n`);
-      },
+      debugLog,
     });
-    bus = createBusInstance({ transports: [transport] });
+    bus = createBusInstance({ transports: [transport], debugLog });
   } catch {
     return null;
   }

@@ -78,17 +78,17 @@ export interface MakaioBusContext {
   /** Remote handler priorities from subscribe messages; keyed by subject pattern. */
   remoteRequestHandlers: Map<string, Array<{ transport: string; priority: number }>>;
   /**
-   * Set of transport names that have subscribed to each subject with event-only handlers
-   * (i.e. subscribe messages whose priority array was empty).
-   *
-   * Tracked separately from `remoteRequestHandlers` because event-only subscriptions
-   * produce no priority entries yet must still influence advertised-state decisions:
-   * if a remote has event-only handlers for a subject, peers should still receive a
-   * `subscribe` (with an empty priority array) rather than an `unsubscribe`.
+   * Set of transport names that subscribed to each subject with event-only handlers
+   * (subscribe messages whose priority array was empty). Tracked separately from `remoteRequestHandlers`
+   * because event-only subscriptions produce no priority entries yet must still influence advertised-state
+   * decisions: if a remote has event-only handlers for a subject, peers should still receive a `subscribe`
+   * (with an empty priority array) rather than an `unsubscribe`.
    */
   remoteEventHandlers: Map<string, Set<string>>;
   /** Owner-derived delivery semantics keyed by subject pattern and source transport. */
   remoteSubscriptionDeliveryClasses: Map<string, Map<string, SubscriptionDeliveryClass>>;
+  /** Failure-safe sink for internal bus diagnostics; resolved once from `CreateBusOptions.debugLog`. */
+  debugLog: (message: string) => void;
 }
 
 /**

@@ -203,31 +203,6 @@ export const defaultDebugLog = (message: string): void => {
   console.info(message);
 };
 
-/**
- * Wrap a caller-supplied debug sink so it can never change transport state.
- *
- * A diagnostic sink is observational only: a synchronous throw or a rejected
- * promise returned by the callback (assignable to the `void`-returning type) is
- * swallowed here instead of failing a live connection, a subscribe/unsubscribe,
- * or the reconnect loop. The failure is dropped deliberately and silently: there
- * is no safe channel to report it on (stdout may be a protocol channel, and
- * reporting through the same sink would recurse). Internal to the package.
- * @param sink - Caller-supplied or default debug sink
- * @returns Sink that never throws and never leaves an unhandled rejection
- */
-export function toSafeDebugLog(sink: (message: string) => void): (message: string) => void {
-  return (message) => {
-    try {
-      const result: unknown = sink(message);
-      if (result !== null && result !== undefined && typeof (result as PromiseLike<unknown>).then === 'function') {
-        (result as PromiseLike<unknown>).then(undefined, () => undefined);
-      }
-    } catch {
-      // Diagnostic sink failures must not affect transport behavior (see TSDoc).
-    }
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Defaults
 // ---------------------------------------------------------------------------

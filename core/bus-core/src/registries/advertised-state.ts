@@ -13,6 +13,7 @@ import type { BusTransport } from '../types/transports.js';
 import type { SubscriptionDeliveryClass } from '../types/transports.js';
 import type { BusTransportKeys } from './transport-registry.js';
 import { getMatchingHandlerEntries } from '../methods/request/getMatchingHandlers.js';
+import { formatBusDiagnostic } from '../utils/debug-log.js';
 import { matchesSubscription } from '../utils/subscription-matching.js';
 
 /**
@@ -94,11 +95,13 @@ export function pushAdvertisedSubject(
   if (prioritySet.size === 0 && !hasLocalEventHandlers && !hasForeignEventHandlers) {
     // Nothing to advertise for this subject — tell the target to stop routing it.
     return Promise.resolve(targetTransport.unsubscribe(subject)).catch((error: unknown) => {
-      console.debug('[AdvertisedState] unsubscribe propagation failed', {
-        transport: targetTransportName,
-        subject,
-        error,
-      });
+      context.debugLog(
+        formatBusDiagnostic('[AdvertisedState] unsubscribe propagation failed', {
+          transport: targetTransportName,
+          subject,
+          error,
+        }),
+      );
     });
   } else {
     const deliveryClass: SubscriptionDeliveryClass =
@@ -106,13 +109,15 @@ export function pushAdvertisedSubject(
     // Advertise the full priority set (may be empty for event-only subjects).
     return Promise.resolve(targetTransport.subscribe(subject, undefined, [...prioritySet], deliveryClass)).catch(
       (error: unknown) => {
-        console.debug('[AdvertisedState] subscribe propagation failed', {
-          transport: targetTransportName,
-          subject,
-          priorities: [...prioritySet],
-          deliveryClass,
-          error,
-        });
+        context.debugLog(
+          formatBusDiagnostic('[AdvertisedState] subscribe propagation failed', {
+            transport: targetTransportName,
+            subject,
+            priorities: [...prioritySet],
+            deliveryClass,
+            error,
+          }),
+        );
       },
     );
   }
@@ -219,10 +224,9 @@ export async function syncAllSubjectsToTransport(
   // subscribe-sync-complete noise in spy assertions.
   if (transport.ready !== undefined) {
     void Promise.resolve(transport.send({ type: 'subscribe-sync-complete' })).catch((error: unknown) => {
-      console.debug('[AdvertisedState] subscribe-sync-complete send failed', {
-        transport: nameStr,
-        error,
-      });
+      context.debugLog(
+        formatBusDiagnostic('[AdvertisedState] subscribe-sync-complete send failed', { transport: nameStr, error }),
+      );
     });
   }
 }

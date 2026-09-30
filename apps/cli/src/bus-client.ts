@@ -266,6 +266,10 @@ function resolveReconnectConfig(
  * server is not running rather than silently retrying. Long-lived consumers
  * (such as the interactive TUI) may opt in via `options.autoReconnect`.
  *
+ * Bus debug output (`MAKAIO_DEBUG=true`) and internal bus diagnostics (always) go to
+ * stderr, never stdout: stdout carries command data, the `makaio mcp-server` JSON-RPC
+ * stream, and hook responses.
+ *
  * Lifecycle events are emitted automatically by the transport registry for any
  * bus with registered transports — no factory wiring is required.
  * @param url - WebSocket URL of the bus server.
@@ -277,15 +281,19 @@ export async function connectBusClient(url?: string, options?: ConnectBusClientO
   const resolvedUrl = resolveBusUrl(url);
   const resolvedReconnectConfig = resolveReconnectConfig(options?.autoReconnect);
   const debug = process.env['MAKAIO_DEBUG'] === 'true';
+  const debugLog = (message: string): void => {
+    process.stderr.write(`${message}\n`);
+  };
   const transport = new WebSocketClientTransport({
     url: resolvedUrl,
     name: 'ws-client',
     autoReconnect: resolvedReconnectConfig,
     auth: options?.auth,
     debug,
+    debugLog,
   });
 
-  const bus = createBusInstance({ transports: [transport] });
+  const bus = createBusInstance({ transports: [transport], debugLog });
 
   if (debug) {
     bus.__onAny((context) => {
@@ -295,7 +303,7 @@ export async function connectBusClient(url?: string, options?: ConnectBusClientO
       } catch {
         payload = '[unserializable payload]';
       }
-      console.debug(`[bus-client] subject: ${context.subject}, payload: ${payload}`);
+      process.stderr.write(`[bus-client] subject: ${context.subject}, payload: ${payload}\n`);
     });
   }
 

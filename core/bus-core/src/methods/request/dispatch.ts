@@ -442,7 +442,13 @@ export async function dispatch(
   // Checked synchronously: in steady state nothing is pending, and dispatch must not
   // even add a microtask there — handler/cancellation orderings are observable.
   if (pending.length > 0) {
-    const gate = await runReadinessGate({ pending, options: dispatchOptions, fullSubjectKey, deadline });
+    const gate = await runReadinessGate({
+      pending,
+      options: dispatchOptions,
+      fullSubjectKey,
+      deadline,
+      debugLog: context.debugLog,
+    });
     if (gate === 'expired') throw new TimeoutError(subjectDefinition.subject, dispatchOptions.timeout);
   }
 
