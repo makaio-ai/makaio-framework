@@ -33,6 +33,8 @@ export interface SubscriptionDeps {
   readonly name: string;
   /** Whether verbose debug logging is enabled. */
   readonly debug: boolean;
+  /** Sink for debug log lines (used when `debug` is enabled). */
+  readonly debugLog: (message: string) => void;
   /** Wire codec used to encode subscription messages. */
   readonly codec: ClientTransportCodec;
   /** Active socket, or `null` when not connected. */
@@ -88,7 +90,7 @@ export async function addSubscription(
   }
 
   if (deps.debug) {
-    console.info(
+    deps.debugLog(
       `[WebSocketClientTransport:${deps.name}] Subscribed to ${subject}${resolvedFilter ? ' with filter' : ''}`,
     );
   }
@@ -118,6 +120,6 @@ export async function removeSubscription(subject: string, deps: SubscriptionDeps
   }
 
   if (deps.debug) {
-    console.info(`[WebSocketClientTransport:${deps.name}] Unsubscribed from ${subject}`);
+    deps.debugLog(`[WebSocketClientTransport:${deps.name}] Unsubscribed from ${subject}`);
   }
 }

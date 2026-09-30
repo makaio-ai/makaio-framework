@@ -122,6 +122,24 @@ describe('connectFastHookBus', () => {
       await connectFastHookBus({ name: 'n' });
       expect(mocks.transports[0]?.['debug']).toBe(true);
     });
+
+    it('routes transport debug lines to stderr, never stdout', async () => {
+      const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+      try {
+        await connectFastHookBus({ name: 'n', debug: true });
+        const debugLog = mocks.transports[0]?.['debugLog'] as ((message: string) => void) | undefined;
+        expect(debugLog).toBeTypeOf('function');
+
+        debugLog?.('[WebSocketClientTransport:n] Connected');
+
+        expect(stderrSpy).toHaveBeenCalledWith('[WebSocketClientTransport:n] Connected\n');
+        expect(stdoutSpy).not.toHaveBeenCalled();
+      } finally {
+        stderrSpy.mockRestore();
+        stdoutSpy.mockRestore();
+      }
+    });
   });
 
   describe('failure handling', () => {

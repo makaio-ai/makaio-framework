@@ -18,7 +18,7 @@ export interface ConnectFastHookBusOptions {
   readonly secret?: string;
   /** Deadline for the connect step in ms (non-negative finite, else 250). */
   readonly timeoutMs?: number;
-  /** Transport debug logging (console.info, stdout); falls back to MAKAIO_DEBUG === 'true'. */
+  /** Transport debug logging (written to stderr; stdout is the hook response channel); falls back to MAKAIO_DEBUG === 'true'. */
   readonly debug?: boolean;
 }
 
@@ -54,6 +54,10 @@ export async function connectFastHookBus(options: ConnectFastHookBusOptions): Pr
       autoReconnect: false,
       auth,
       debug: options.debug ?? process.env['MAKAIO_DEBUG'] === 'true',
+      // stdout is the hook response channel; transport debug lines must not land there.
+      debugLog: (message) => {
+        process.stderr.write(`${message}\n`);
+      },
     });
     bus = createBusInstance({ transports: [transport] });
   } catch {

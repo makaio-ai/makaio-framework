@@ -1343,3 +1343,67 @@ describe('WebSocketClientTransport — getSubscriptions', () => {
     await transport.disconnect();
   });
 });
+
+// ---------------------------------------------------------------------------
+// debugLog
+// ---------------------------------------------------------------------------
+
+describe('WebSocketClientTransport — debugLog', () => {
+  /**
+   * Build a debug-enabled transport over a mock socket.
+   * @param debugLog - Optional debug sink under test.
+   * @returns The transport and its mock socket.
+   */
+  function makeDebugTransport(debugLog?: (message: string) => void): {
+    transport: WebSocketClientTransport;
+    mock: MockWebSocket;
+  } {
+    const mock = new MockWebSocket();
+    const transport = new WebSocketClientTransport({
+      url: 'ws://localhost:9999',
+      createWebSocket: () => mock,
+      autoReconnect: false,
+      debug: true,
+      ...(debugLog !== undefined && { debugLog }),
+    });
+    return { transport, mock };
+  }
+
+  it('routes debug messages to debugLog instead of console.info when provided', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const debugLog = vi.fn<(message: string) => void>();
+    try {
+      const { transport, mock } = makeDebugTransport(debugLog);
+      await transport.connect();
+      const subscribe = transport.subscribe('topic.a');
+      await acknowledgeLatestSubscription(mock);
+      await subscribe;
+      await transport.disconnect();
+
+      const messages = debugLog.mock.calls.map(([message]) => message);
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('Connected to ws://localhost:9999'),
+          expect.stringContaining('Subscribed to topic.a'),
+          expect.stringContaining('Disconnected'),
+        ]),
+      );
+      expect(infoSpy).not.toHaveBeenCalled();
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it('falls back to console.info when no debugLog is provided', async () => {
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      const { transport } = makeDebugTransport();
+      await transport.connect();
+      await transport.disconnect();
+
+      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('Connected to ws://localhost:9999'));
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+});
