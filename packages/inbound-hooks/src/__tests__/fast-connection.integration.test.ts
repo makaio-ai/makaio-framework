@@ -88,6 +88,44 @@ describe('fast hook connection over a real WebSocket bus', () => {
     await vi.waitFor(() => expect(server.wss.clients.size).toBe(0));
   });
 
+  it('keeps real transport debug lines off stdout and console.info when debug is enabled', async () => {
+    const server = await startServer();
+    const prefix = '[WebSocketClientTransport';
+    const stdoutSpy = vi.spyOn(process.stdout, 'write');
+    const stderrSpy = vi.spyOn(process.stderr, 'write');
+    const infoSpy = vi.spyOn(console, 'info');
+    const writesContaining = (spy: { mock: { calls: unknown[][] } }, text: string) =>
+      spy.mock.calls.filter(([chunk]) => String(chunk).includes(text));
+
+    try {
+      const connection = await connectFastHookBus({
+        name: 'hook-git-debug',
+        busUrl: server.busUrl,
+        secret: SECRET,
+        timeoutMs: CONNECT_TIMEOUT_MS,
+        debug: true,
+      });
+      expect(connection).not.toBeNull();
+      if (!connection) return;
+      cleanups.push(() => connection.dispose());
+
+      await vi.waitFor(() => {
+        const lines = writesContaining(stderrSpy, prefix).filter(([chunk]) => String(chunk).includes('Connected to'));
+        expect(lines.length).toBeGreaterThan(0);
+      });
+
+      expect(writesContaining(stdoutSpy, prefix)).toEqual([]);
+      expect(infoSpy.mock.calls.filter((args) => args.some((arg) => String(arg).includes(prefix)))).toEqual([]);
+
+      connection.dispose();
+      await vi.waitFor(() => expect(server.wss.clients.size).toBe(0));
+    } finally {
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+      infoSpy.mockRestore();
+    }
+  });
+
   it('delivers one hook end to end with emitInboundHookReceivedFast', async () => {
     const server = await startServer();
 

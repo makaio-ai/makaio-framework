@@ -38,6 +38,8 @@ export interface ConnectionDeps {
   readonly name: string;
   /** Whether verbose debug logging is enabled. */
   readonly debug: boolean;
+  /** Sink for debug log lines (used when `debug` is enabled). */
+  readonly debugLog: (message: string) => void;
   /** Optional authentication strategy. */
   readonly auth: TransportAuth | undefined;
   /** Wire codec for encoding/decoding messages. */
@@ -390,7 +392,7 @@ async function establishSocket(socket: WebSocketLike, deps: ConnectionDeps, sign
   // `'session-established'` readiness this point — socket open, authenticated,
   // subscriptions replayed — is the milestone the connection actually owns.
   if (deps.readiness === 'session-established') deps.resolveReady();
-  if (deps.debug) console.info(`[WebSocketClientTransport:${deps.name}] Connected to ${deps.url}`);
+  if (deps.debug) deps.debugLog(`[WebSocketClientTransport:${deps.name}] Connected to ${deps.url}`);
   deps.notifyConnected();
 }
 
@@ -469,7 +471,7 @@ export async function runReconnectLoop(
         await drainAndRejectPendingCorrelations(deps, ws);
         if (signal.aborted) break;
         if (deps.debug) {
-          console.info(
+          deps.debugLog(
             `[WebSocketClientTransport:${deps.name}] ${new Date().toISOString()} Connection lost, starting reconnect loop (maxMs=${config.maxMs})`,
           );
         }
@@ -481,7 +483,7 @@ export async function runReconnectLoop(
       while (!signal.aborted) {
         const delay = backoffMs(attempt, config.baseMs, config.maxMs);
         if (deps.debug) {
-          console.info(
+          deps.debugLog(
             `[WebSocketClientTransport:${deps.name}] ${new Date().toISOString()} Reconnecting in ${delay}ms (attempt ${attempt + 1})`,
           );
         }
@@ -505,7 +507,7 @@ export async function runReconnectLoop(
               deps.auth?.cleanup();
               deps.setAuthComplete(false);
               if (deps.debug) {
-                console.info(`[WebSocketClientTransport:${deps.name}] ${new Date().toISOString()} Connection closed`);
+                deps.debugLog(`[WebSocketClientTransport:${deps.name}] ${new Date().toISOString()} Connection closed`);
               }
               deps.rejectPendingSubscriptionAcks(
                 new Error('WebSocketClientTransport: disconnected before subscription ack'),

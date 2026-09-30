@@ -7,6 +7,7 @@
 
 import type { WebSocketLike, ClientTransportCodec } from './types.js';
 import { WebSocketClientTransport, type WebSocketClientTransportOptions } from './ws-client-transport.js';
+import { defaultDebugLog, toSafeDebugLog } from './ws-client-options.js';
 import type {
   BusMessage,
   BusResponseMessage,
@@ -145,14 +146,14 @@ function canEncodeRelayMessage(
 /**
  * Create the codec used by relay E2E transport.
  * @param e2eAuth - Relay E2E auth instance
- * @param debug - Enable diagnostic logging
+ * @param log - Sink for diagnostic log lines; `undefined` disables diagnostic logging
  * @param relayControlResponseIds - Correlation ids that should remain plaintext
  * @param registry - Frozen relay control registry for subject classification
  * @returns Transport codec
  */
 function createRelayCodec(
   e2eAuth: E2ERelayAuth,
-  debug: boolean,
+  log: ((message: string) => void) | undefined,
   relayControlResponseIds: Map<string, number>,
   registry: RelayControlRegistry,
 ): ClientTransportCodec {
@@ -202,12 +203,9 @@ function createRelayCodec(
       const sessionKey = e2eAuth.getSessionKey();
       if (isRelayControlEnvelopeMessage(message)) {
         const payload = message.payload;
-        if (debug) {
-          console.info(
-            '[E2ERelayTransport] Decoded relay control envelope:',
-            payload.type,
-            payload.namespace,
-            payload.subject,
+        if (log) {
+          log(
+            `[E2ERelayTransport] Decoded relay control envelope: ${payload.type} ${payload.namespace} ${payload.subject}`,
           );
         }
         if (payload.type === 'request') {
@@ -281,16 +279,18 @@ export interface E2ERelayCodecHandle {
  * @param e2eAuth - Relay-mode E2E auth instance
  * @param registry - Frozen relay control registry for subject classification
  * @param debug - Enable diagnostic logging
+ * @param debugLog - Sink for diagnostic log lines while `debug` is enabled (defaults to `console.info`)
  * @returns Codec handle containing the wire codec and a session-reset function
  */
 export function createE2ERelayCodec(
   e2eAuth: E2ERelayAuth,
   registry: RelayControlRegistry,
   debug = false,
+  debugLog: (message: string) => void = defaultDebugLog,
 ): E2ERelayCodecHandle {
   const relayControlResponseIds = new Map<string, number>();
   return {
-    codec: createRelayCodec(e2eAuth, debug, relayControlResponseIds, registry),
+    codec: createRelayCodec(e2eAuth, debug ? toSafeDebugLog(debugLog) : undefined, relayControlResponseIds, registry),
     reset: () => relayControlResponseIds.clear(),
   };
 }
@@ -303,12 +303,13 @@ export function createE2ERelayCodec(
 export function createE2ERelayClientTransport(options: E2ERelayClientTransportOptions): BusTransport {
   const { e2eAuth, registry, websocket: ws, ...rest } = options;
   const debug = options.debug ?? false;
+  const debugLog = toSafeDebugLog(options.debugLog ?? defaultDebugLog);
 
   const relayControlResponseIds = new Map<string, number>();
-  const relayCodec = createRelayCodec(e2eAuth, debug, relayControlResponseIds, registry);
+  const relayCodec = createRelayCodec(e2eAuth, debug ? debugLog : undefined, relayControlResponseIds, registry);
 
   if (debug) {
-    console.info('[E2ERelayTransport] Creating inner transport...');
+    debugLog('[E2ERelayTransport] Creating inner transport...');
   }
   // The pre-created socket is injected via createWebSocket so the transport
   // does not attempt to dial a URL. Auto-reconnect is disabled because this
@@ -326,7 +327,7 @@ export function createE2ERelayClientTransport(options: E2ERelayClientTransportOp
     heartbeat: rest.heartbeat ?? false,
   });
   if (debug) {
-    console.info('[E2ERelayTransport] Inner transport created');
+    debugLog('[E2ERelayTransport] Inner transport created');
   }
 
   return {
@@ -355,7 +356,7 @@ export function createE2ERelayClientTransport(options: E2ERelayClientTransportOp
     cancelRequest: innerTransport.cancelRequest.bind(innerTransport),
     onReceive: (...args: Parameters<typeof innerTransport.onReceive>) => {
       if (debug) {
-        console.info('[E2ERelayTransport] onReceive called, delegating to inner transport');
+        debugLog('[E2ERelayTransport] onReceive called, delegating to inner transport');
       }
       return innerTransport.onReceive(...args);
     },

@@ -21,7 +21,7 @@ export interface FastHookBusOptions {
   readonly connectTimeoutMs?: number;
   /** HMAC secret for bus authentication. Falls back to `MAKAIO_BUS_SECRET`. */
   readonly secret?: string;
-  /** Transport debug logging (console.info, stdout); falls back to MAKAIO_DEBUG === 'true'. */
+  /** Transport debug logging (written to stderr; stdout is the hook response channel); falls back to MAKAIO_DEBUG === 'true'. */
   readonly debug?: boolean;
 }
 

@@ -23,6 +23,8 @@ import {
   DEFAULT_CODEC,
   DEFAULT_CONNECT_TIMEOUT_MS,
   DEFAULT_READINESS_MODE,
+  defaultDebugLog,
+  toSafeDebugLog,
   resolveHeartbeatConfig,
   resolveReconnectConfig,
   type WebSocketClientTransportHeartbeatOptions,
@@ -78,6 +80,7 @@ export class WebSocketClientTransport implements BusTransport {
   private readonly readiness: WebSocketClientTransportReadinessMode;
   private readonly wsFactory: (url: string) => WebSocketLike | Promise<WebSocketLike>;
   private readonly debug: boolean;
+  private readonly debugLog: (message: string) => void;
   private readonly onConnectedCallback: (() => void) | undefined;
   private readonly onDisconnectedCallback: (() => void) | undefined;
 
@@ -156,6 +159,7 @@ export class WebSocketClientTransport implements BusTransport {
     this.codec = options.codec ?? DEFAULT_CODEC;
     this.messageTransform = options.messageTransform;
     this.debug = options.debug ?? false;
+    this.debugLog = toSafeDebugLog(options.debugLog ?? defaultDebugLog);
     this.autoReconnectConfig = resolveReconnectConfig(options.autoReconnect);
     this.heartbeatConfig = resolveHeartbeatConfig(options.heartbeat);
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
@@ -236,7 +240,7 @@ export class WebSocketClientTransport implements BusTransport {
     this.handlers.clear();
 
     if (this.debug) {
-      console.info(`[WebSocketClientTransport:${this.name}] Disconnected`);
+      this.debugLog(`[WebSocketClientTransport:${this.name}] Disconnected`);
     }
   }
 
@@ -440,6 +444,7 @@ export class WebSocketClientTransport implements BusTransport {
     return {
       name: this.name,
       debug: this.debug,
+      debugLog: this.debugLog,
       codec: this.codec,
       socket: this.socket,
       localSubscriptions: this.localSubscriptions,
@@ -514,6 +519,7 @@ export class WebSocketClientTransport implements BusTransport {
     return {
       name: this.name,
       debug: this.debug,
+      debugLog: this.debugLog,
       auth: this.auth,
       codec: this.codec,
       messageTransform: this.messageTransform,
