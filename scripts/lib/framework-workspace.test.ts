@@ -11,8 +11,8 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-describe('standalone framework workspace', () => {
-  it('recognizes the scripts package as a standalone workspace', () => {
+describe('framework workspace', () => {
+  it('recognizes the scripts package as a workspace', () => {
     const frameworkRoot = new URL('../..', import.meta.url);
     const fixture = mkdtempSync(join(tmpdir(), 'framework-workspace-'));
     tempDirs.push(fixture);
