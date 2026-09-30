@@ -7,6 +7,8 @@ const fakeBus = vi.hoisted(() => ({
   emit: vi.fn<() => Promise<void>>(),
 }));
 
+const transportOptions = vi.hoisted(() => [] as Record<string, unknown>[]);
+
 vi.mock('@makaio/bus-core', () => ({
   createBusInstance: () => fakeBus,
 }));
@@ -16,7 +18,9 @@ vi.mock('@makaio/bus-transport-websocket', () => ({
     public constructor(_options: { readonly secret: string }) {}
   },
   WebSocketClientTransport: class WebSocketClientTransport {
-    public constructor(_options: Record<string, unknown>) {}
+    public constructor(options: Record<string, unknown>) {
+      transportOptions.push(options);
+    }
   },
 }));
 
@@ -30,9 +34,22 @@ const payload: RawInboundHookPayload = {
 
 describe('emitInboundHookReceivedFast', () => {
   afterEach(() => {
+    transportOptions.length = 0;
     vi.useRealTimers();
     vi.resetAllMocks();
     vi.restoreAllMocks();
+  });
+
+  it('forwards the debug option to the transport', async () => {
+    fakeBus.connect.mockResolvedValue(undefined);
+    fakeBus.emit.mockResolvedValue(undefined);
+    fakeBus.disconnect.mockResolvedValue(undefined);
+
+    const { emitInboundHookReceivedFast } = await import('../fast-bus.js');
+    await emitInboundHookReceivedFast('git', payload, { debug: true });
+
+    expect(transportOptions).toHaveLength(1);
+    expect(transportOptions[0]).toMatchObject({ debug: true });
   });
 
   it('fails open when the bus connection exceeds the delivery budget', async () => {
