@@ -28,15 +28,15 @@
     "@makaio/storage-handlers": "workspace:*",
     "@makaio/utils": "workspace:*",
     "ajv": "^8.18.0",
-    "drizzle-orm": "0.45.2",
-    "zod": "4.4.3"
+    "drizzle-orm": "0.45.3",
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@makaio/storage-migrations": "workspace:*",
     "@makaio/test-utils": "workspace:*",
     "@types/node": "^24.3.0",
-    "tsdown": "0.22.0",
+    "tsdown": "0.23.0",
     "vitest": "4.1.10"
   },
   "scripts": {
