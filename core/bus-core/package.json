@@ -22,7 +22,7 @@
   "dependencies": {
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
-    "nanoid": "5.1.11",
+    "nanoid": "5.1.16",
     "p-timeout": "6.1.2",
     "type-fest": "^5.2.0",
     "zod": "4.4.3"
