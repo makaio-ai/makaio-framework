@@ -31,13 +31,13 @@
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "type-fest": "^4.31.0",
-    "zod": "4.4.3"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@makaio/framework": "workspace:*",
     "@makaio/test-utils": "workspace:*",
-    "tsdown": "0.22.0",
+    "tsdown": "0.23.0",
     "typescript": "^6.0.3",
     "vitest": "4.1.10"
   },
