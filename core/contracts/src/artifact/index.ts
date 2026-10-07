@@ -20,6 +20,7 @@ export {
   EntityRefSchema,
   LocalRefSchema,
   RelationTypeRegistrationSchema,
+  RelationEndpointSchema,
 } from './schemas.js';
 export { ARTIFACT_VALUE_TYPE_KEYWORD, EVIDENCE_VALUE_TYPE, EvidenceValueSchema } from './evidence.js';
 export {
@@ -53,6 +54,8 @@ export type {
   EntityRef,
   LocalRef,
   RelationTypeRegistration,
+  RelationTargetRefClass,
+  RelationEndpoint,
 } from './schemas.js';
 export type { EvidenceValue } from './evidence.js';
 export { EvidenceResolveRequestSchema, EvidenceResolveResponseSchema } from './evidence-resolution.js';
@@ -320,3 +323,10 @@ export type {
 } from './uniqueness.js';
 export { evaluateRelationRequirements } from './relation-requirements.js';
 export type { RelationRequirementIssue, RelationRequirementIssueReason } from './relation-requirements.js';
+export {
+  RelationTypeConflictError,
+  relationTypePermits,
+  normalizeRelationTypeRegistration,
+  mergeRelationTypeRegistrations,
+} from './relation-endpoints.js';
+export type { RelationEndpointCandidate, NormalizedRelationTypeRegistration } from './relation-endpoints.js';

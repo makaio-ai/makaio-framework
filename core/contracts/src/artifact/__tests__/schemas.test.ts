@@ -14,6 +14,8 @@ import {
   EvidenceRefSchema,
   EntityRefSchema,
   LocalRefSchema,
+  RelationEndpointSchema,
+  RelationTargetRefClassSchema,
   RelationTypeRegistrationSchema,
 } from '../schemas.js';
 
@@ -194,6 +196,57 @@ describe('Artifact core schemas', () => {
         targetRefClasses: ['external'],
       }).success,
     ).toBe(false);
+  });
+
+  describe('relation endpoints', () => {
+    const base = { type: 'derives_from', symmetry: 'asymmetric' as const };
+
+    it('exposes the relation target ref classes', () => {
+      expect(RelationTargetRefClassSchema.options).toEqual(['artifact', 'local', 'evidence', 'entity']);
+    });
+
+    it('parses endpoint entries with all lists and an empty entry', () => {
+      const full = { sourceKinds: ['a'], targetKinds: ['b'], targetRefClasses: ['artifact', 'entity'] as const };
+      expect(RelationEndpointSchema.parse(full)).toEqual(full);
+      expect(RelationEndpointSchema.parse({})).toEqual({});
+    });
+
+    it('rejects an unknown ref class and an empty-string kind in an endpoint entry', () => {
+      expect(RelationEndpointSchema.safeParse({ targetRefClasses: ['external'] }).success).toBe(false);
+      expect(RelationEndpointSchema.safeParse({ sourceKinds: [''] }).success).toBe(false);
+      expect(RelationEndpointSchema.safeParse({ targetKinds: [''] }).success).toBe(false);
+    });
+
+    it('parses a registration with endpoints and no shorthand fields', () => {
+      const endpoints = [{ sourceKinds: ['a'], targetKinds: ['b'] }, { targetRefClasses: ['evidence' as const] }];
+      const parsed = RelationTypeRegistrationSchema.parse({ ...base, endpoints });
+      expect(parsed.endpoints).toEqual(endpoints);
+      expect(parsed.sourceKinds).toBeUndefined();
+    });
+
+    it('still parses the shorthand form', () => {
+      const parsed = RelationTypeRegistrationSchema.parse({
+        ...base,
+        sourceKinds: ['a'],
+        targetRefClasses: ['artifact'],
+      });
+      expect(parsed.sourceKinds).toEqual(['a']);
+      expect(parsed.endpoints).toBeUndefined();
+    });
+
+    it.each([
+      ['sourceKinds', { sourceKinds: ['a'] }],
+      ['targetKinds', { targetKinds: ['b'] }],
+      ['targetRefClasses', { targetRefClasses: ['artifact'] }],
+    ])('rejects endpoints combined with shorthand %s', (_name, shorthand) => {
+      const result = RelationTypeRegistrationSchema.safeParse({ ...base, endpoints: [{}], ...shorthand });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues.map((issue) => issue.path)).toContainEqual(['endpoints']);
+    });
+
+    it('rejects an empty endpoints list', () => {
+      expect(RelationTypeRegistrationSchema.safeParse({ ...base, endpoints: [] }).success).toBe(false);
+    });
   });
 
   it('rejects whitespace-only artifact kind descriptions', () => {

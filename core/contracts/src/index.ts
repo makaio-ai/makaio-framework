@@ -117,6 +117,7 @@ export {
   hydrateArtifactContextTree,
   LocalRefSchema,
   RelationTypeRegistrationSchema,
+  RelationEndpointSchema,
   ResolvedArtifactContextWireSchema,
 } from './artifact/index.js';
 export type {
@@ -235,6 +236,8 @@ export type {
   EntityRef,
   LocalRef,
   RelationTypeRegistration,
+  RelationTargetRefClass,
+  RelationEndpoint,
   ResolvedArtifactContextNode,
   ResolvedArtifactContextWire,
   UnresolvedArtifactContextNode,
@@ -262,6 +265,10 @@ export {
   buildUniquenessKeys,
   describeUniquenessKey,
   evaluateRelationRequirements,
+  RelationTypeConflictError,
+  relationTypePermits,
+  normalizeRelationTypeRegistration,
+  mergeRelationTypeRegistrations,
 } from './artifact/index.js';
 export type {
   ArtifactRelationTargetIdentity,
@@ -276,6 +283,8 @@ export type {
   BuildUniquenessKeysResult,
   RelationRequirementIssue,
   RelationRequirementIssueReason,
+  RelationEndpointCandidate,
+  NormalizedRelationTypeRegistration,
 } from './artifact/index.js';
 export { AIModelSchema, AIReasoningLevelSchema, ProviderAIModelSchema } from './model/index.js';
 export type {
