@@ -1,8 +1,9 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, RequestError, type IMakaioBus } from '@makaio/bus-core';
 import {
   ArtifactSubjects,
   ArtifactKindRegistrationSchema,
+  RelationTypeConflictError,
   type ArtifactKindRegistration,
   type RelationTypeRegistration,
 } from '@makaio/contracts';
@@ -537,7 +538,9 @@ describe('ArtifactSchemaRegistry', () => {
           type: 'custom-link',
           symmetry: 'symmetric',
         }),
-      ).rejects.toThrow("Relation type 'custom-link' is already registered with different symmetry");
+      ).rejects.toThrow(
+        "Relation type 'custom-link' is already registered with different symmetry (existing: 'asymmetric', new: 'symmetric')",
+      );
     });
 
     it('rejects conflicting symmetry for a core relation type', async () => {
@@ -546,7 +549,9 @@ describe('ArtifactSchemaRegistry', () => {
           type: 'derives_from',
           symmetry: 'symmetric',
         }),
-      ).rejects.toThrow("Relation type 'derives_from' is already registered with different symmetry");
+      ).rejects.toThrow(
+        "Relation type 'derives_from' is already registered with different symmetry (existing: 'asymmetric', new: 'symmetric')",
+      );
     });
 
     it('registers a new custom relation type', async () => {
@@ -572,6 +577,135 @@ describe('ArtifactSchemaRegistry', () => {
       expect(registry.getRelationType('external-link')).toEqual({
         type: 'external-link',
         symmetry: 'asymmetric',
+      });
+    });
+
+    describe('merged endpoint contributions', () => {
+      const docs = { sourceKinds: ['knowledge-document'], targetKinds: ['knowledge-document'] };
+      const caps = { sourceKinds: ['capability'], targetKinds: ['capability'] };
+
+      /**
+       * Registers the two `part_of` contributions used by several tests.
+       * @returns Resolves once both contributions are registered.
+       */
+      async function registerPartOfContributions(): Promise<void> {
+        const first = await bus.request(ArtifactSubjects['relation-type'].register, {
+          type: 'part_of',
+          symmetry: 'asymmetric',
+          ...docs,
+        });
+        const second = await bus.request(ArtifactSubjects['relation-type'].register, {
+          type: 'part_of',
+          symmetry: 'asymmetric',
+          endpoints: [caps],
+        });
+        expect([first.registered, second.registered]).toEqual([true, true]);
+      }
+
+      it('merges contributions from several modules into one normal-form entry', async () => {
+        await registerPartOfContributions();
+
+        const listed = await bus.request(ArtifactSubjects['relation-type'].list, { type: 'part_of' });
+
+        expect(listed.relationTypes).toHaveLength(1);
+        const entry = listed.relationTypes[0];
+        expect(entry).not.toHaveProperty('sourceKinds');
+        expect(entry).not.toHaveProperty('targetKinds');
+        // Sorted by structural key JSON([sourceKinds, targetKinds, targetRefClasses]): 'capability' < 'knowledge-document'.
+        expect(entry?.endpoints).toEqual([caps, docs]);
+      });
+
+      it('deduplicates an identical constrained contribution', async () => {
+        for (let i = 0; i < 2; i++) {
+          await bus.request(ArtifactSubjects['relation-type'].register, {
+            type: 'part_of',
+            symmetry: 'asymmetric',
+            ...docs,
+          });
+        }
+
+        const listed = await bus.request(ArtifactSubjects['relation-type'].list, { type: 'part_of' });
+
+        expect(listed.relationTypes).toHaveLength(1);
+        expect(listed.relationTypes[0]?.endpoints).toEqual([docs]);
+      });
+
+      it('opens the type when an unconstrained contribution follows constrained ones', async () => {
+        await registerPartOfContributions();
+        await bus.request(ArtifactSubjects['relation-type'].register, {
+          type: 'part_of',
+          symmetry: 'asymmetric',
+        });
+
+        const listed = await bus.request(ArtifactSubjects['relation-type'].list, { type: 'part_of' });
+
+        expect(listed.relationTypes).toHaveLength(1);
+        expect(listed.relationTypes[0]).not.toHaveProperty('endpoints');
+      });
+
+      it('rejects differing implications and accepts equal ones', async () => {
+        await bus.request(ArtifactSubjects['relation-type'].register, {
+          type: 'part_of',
+          symmetry: 'asymmetric',
+          implication: 'has_part',
+        });
+
+        const error = await bus
+          .request(ArtifactSubjects['relation-type'].register, {
+            type: 'part_of',
+            symmetry: 'asymmetric',
+            implication: 'other_part',
+          })
+          .catch((value: unknown) => value);
+
+        expect(error).toBeInstanceOf(RequestError);
+        expect((error as RequestError).message).toContain(
+          "Relation type 'part_of' is already registered with different implication (existing: 'has_part', new: 'other_part')",
+        );
+        const cause = (error as RequestError).cause;
+        expect(cause).toBeInstanceOf(RelationTypeConflictError);
+        expect(cause).toMatchObject({ field: 'implication', type: 'part_of' });
+
+        await bus.request(ArtifactSubjects['relation-type'].register, {
+          type: 'part_of',
+          symmetry: 'asymmetric',
+          implication: 'has_part',
+        });
+        expect(registry.getRelationType('part_of')?.implication).toBe('has_part');
+      });
+
+      it('lists core relation types in normal form without endpoints', async () => {
+        const listed = await bus.request(ArtifactSubjects['relation-type'].list, {});
+
+        expect(listed.relationTypes.length).toBeGreaterThan(0);
+        for (const entry of listed.relationTypes) {
+          expect(entry).not.toHaveProperty('endpoints');
+          expect(entry).not.toHaveProperty('sourceKinds');
+          expect(entry).not.toHaveProperty('targetKinds');
+        }
+      });
+
+      it('getRelationType returns the merged normal form as a detached clone', async () => {
+        await registerPartOfContributions();
+
+        const first = registry.getRelationType('part_of');
+        expect(first).toEqual({ type: 'part_of', symmetry: 'asymmetric', endpoints: [caps, docs] });
+
+        first?.endpoints?.[0]?.sourceKinds?.push('x');
+
+        expect(registry.getRelationType('part_of')?.endpoints).toEqual([caps, docs]);
+        expect(registry.getRelationType('part_of')?.endpoints?.[0]?.sourceKinds).toEqual(['capability']);
+      });
+
+      it('relation-type.list returns detached clones', async () => {
+        await registerPartOfContributions();
+
+        const listed = await bus.request(ArtifactSubjects['relation-type'].list, { type: 'part_of' });
+        listed.relationTypes[0]?.endpoints?.[1]?.sourceKinds?.push('x');
+
+        const again = await bus.request(ArtifactSubjects['relation-type'].list, { type: 'part_of' });
+        expect(again.relationTypes[0]?.endpoints).toEqual([caps, docs]);
+        expect(registry.getRelationType('part_of')?.endpoints).toEqual([caps, docs]);
       });
     });
 
@@ -616,6 +750,39 @@ describe('ArtifactSchemaRegistry', () => {
 
       expect(registry.getKind('plan', 1)).toBeUndefined();
       expect(registry.getRelationType('supersedes')).toBeUndefined();
+    });
+
+    it('drops merged contributions on destroy and re-seeds a clean vocabulary on init', async () => {
+      const partOf = { type: 'part_of', symmetry: 'asymmetric' } as const;
+      await bus.request(ArtifactSubjects['relation-type'].register, {
+        ...partOf,
+        sourceKinds: ['knowledge-document'],
+        targetKinds: ['knowledge-document'],
+      });
+      await bus.request(ArtifactSubjects['relation-type'].register, {
+        ...partOf,
+        endpoints: [{ sourceKinds: ['capability'], targetKinds: ['capability'] }],
+      });
+      await bus.request(ArtifactSubjects['relation-type'].register, {
+        type: 'contains',
+        symmetry: 'asymmetric',
+        implication: 'x',
+      });
+      expect(registry.getRelationType('contains')?.implication).toBe('x');
+
+      await registry.destroy();
+      await registry.init();
+
+      expect(registry.getRelationType('part_of')).toBeUndefined();
+      expect(registry.getRelationType('contains')).toEqual({ type: 'contains', symmetry: 'asymmetric' });
+
+      const result = await bus.request(ArtifactSubjects['relation-type'].register, {
+        type: 'contains',
+        symmetry: 'asymmetric',
+        implication: 'y',
+      });
+      expect(result.registered).toBe(true);
+      expect(registry.getRelationType('contains')?.implication).toBe('y');
     });
   });
 });

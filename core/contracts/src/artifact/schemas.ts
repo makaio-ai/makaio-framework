@@ -403,34 +403,65 @@ export const ArtifactRevisionSchema = z.object({
   createdAt: z.number().int().nonnegative().optional(),
 });
 
+/** Reference classes a relation target may belong to. */
+export const RelationTargetRefClassSchema = z.enum(['artifact', 'local', 'evidence', 'entity']);
+
+/**
+ * One permitted endpoint pair of a relation type.
+ * An omitted list is open. A present list is an allowlist, so an empty list permits nothing.
+ */
+export const RelationEndpointSchema = z.object({
+  /** Artifact kinds valid as the source. Open if omitted. */
+  sourceKinds: z.array(z.string().min(1)).optional(),
+  /** Artifact kinds valid as the target. Open if omitted. A present list requires the target to carry a kind. */
+  targetKinds: z.array(z.string().min(1)).optional(),
+  /** Reference classes valid as the target. Open if omitted. */
+  targetRefClasses: z.array(RelationTargetRefClassSchema).optional(),
+});
+
 /**
  * Registration record for a named relation type.
  *
- * Relation type registrations declare the semantics and valid endpoints
- * for a given relation `type` string.
+ * A registration declares the verb (`type`, `symmetry`, `implication`) and the
+ * endpoint pairs it may connect. `symmetry` and `implication` describe the verb
+ * as a whole, not an individual pair. Pairs are declared either through
+ * `endpoints` (a list of permitted pairs) or through the shorthand fields
+ * `sourceKinds`, `targetKinds` and `targetRefClasses`, which stand for exactly
+ * one endpoint. The two forms are mutually exclusive.
  */
-export const RelationTypeRegistrationSchema = z.object({
-  /** Unique relation type string. Must be stable across releases. */
-  type: z.string().min(1),
-  /**
-   * Whether the relation is directed or bidirectional.
-   *
-   * - `asymmetric` — source → target only
-   * - `symmetric` — implies the inverse relation as well
-   */
-  symmetry: z.enum(['asymmetric', 'symmetric']),
-  /**
-   * Optional implication string: the reverse relation type to materialise
-   * automatically when `symmetry` is `symmetric`.
-   */
-  implication: z.string().min(1).optional(),
-  /** Artifact kinds valid as the source of this relation. Open if omitted. */
-  sourceKinds: z.array(z.string().min(1)).optional(),
-  /** Artifact kinds valid as the target of this relation. Open if omitted. */
-  targetKinds: z.array(z.string().min(1)).optional(),
-  /** Reference classes valid as relation targets. Open if omitted. */
-  targetRefClasses: z.array(z.enum(['artifact', 'local', 'evidence', 'entity'])).optional(),
-});
+export const RelationTypeRegistrationSchema = z
+  .object({
+    /** Unique relation type string. Must be stable across releases. */
+    type: z.string().min(1),
+    /**
+     * Whether the relation is directed or bidirectional.
+     *
+     * - `asymmetric` — source → target only
+     * - `symmetric` — implies the inverse relation as well
+     */
+    symmetry: z.enum(['asymmetric', 'symmetric']),
+    /**
+     * Optional implication string: the reverse relation type to materialise
+     * automatically when `symmetry` is `symmetric`.
+     */
+    implication: z.string().min(1).optional(),
+    // Shorthand for exactly one endpoint, mutually exclusive with `endpoints`.
+    ...RelationEndpointSchema.shape,
+    /** Permitted endpoint pairs. A pair is valid when one entry permits it. At least one entry when present. */
+    endpoints: z.array(RelationEndpointSchema).min(1).optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (
+      value.endpoints !== undefined &&
+      (value.sourceKinds !== undefined || value.targetKinds !== undefined || value.targetRefClasses !== undefined)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['endpoints'],
+        message: 'endpoints cannot be combined with the shorthand fields sourceKinds, targetKinds or targetRefClasses',
+      });
+    }
+  });
 
 /**
  * Query parameters for retrieving artifact revisions from the store.
@@ -563,6 +594,12 @@ export type ArtifactRevision<TData extends Record<string, unknown> = Record<stri
 
 /** Registration record for a named relation type. */
 export type RelationTypeRegistration = z.infer<typeof RelationTypeRegistrationSchema>;
+
+/** Reference classes a relation target may belong to. */
+export type RelationTargetRefClass = z.infer<typeof RelationTargetRefClassSchema>;
+
+/** One permitted endpoint pair of a relation type. */
+export type RelationEndpoint = z.infer<typeof RelationEndpointSchema>;
 
 /** Query parameters for retrieving artifact revisions from the store. */
 export type ArtifactQueryRequest = z.infer<typeof ArtifactQueryRequestSchema>;

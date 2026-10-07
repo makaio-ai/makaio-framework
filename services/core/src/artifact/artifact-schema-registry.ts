@@ -2,7 +2,10 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import {
   ArtifactSubjects,
   ArtifactKindRegistrationSchema,
+  mergeRelationTypeRegistrations,
+  normalizeRelationTypeRegistration,
   type ArtifactKindRegistration,
+  type NormalizedRelationTypeRegistration,
   type RelationTypeRegistration,
 } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
@@ -11,6 +14,8 @@ import { assertKindDataSchema } from './assert-kind-data-schema.js';
 /**
  * Core relation types registered with every artifact schema registry at
  * initialisation time. Extensions may add further types via the bus RPC.
+ * The core types are open (no endpoint constraints); a later contribution
+ * cannot narrow them, since merging with an open registration stays open.
  */
 const CORE_RELATION_TYPES: readonly RelationTypeRegistration[] = [
   { type: 'supersedes', symmetry: 'asymmetric' },
@@ -155,7 +160,8 @@ export class ArtifactSchemaRegistry extends BaseService {
   /** Monotone counter for contribution insertion order. */
   private nextKindContributionOrder = 0;
 
-  private readonly relationTypes = new Map<string, RelationTypeRegistration>();
+  /** Relation types by name, stored in normal form (shorthand folded into `endpoints`). */
+  private readonly relationTypes = new Map<string, NormalizedRelationTypeRegistration>();
 
   /**
    * @param bus - Bus instance used for handler registration and event emission.
@@ -172,7 +178,7 @@ export class ArtifactSchemaRegistry extends BaseService {
    */
   protected async onInit(): Promise<void> {
     for (const relationType of CORE_RELATION_TYPES) {
-      this.relationTypes.set(relationType.type, relationType);
+      this.relationTypes.set(relationType.type, normalizeRelationTypeRegistration(relationType));
     }
 
     this.registerHandler(ArtifactSubjects.kind.register, (ctx) => {
@@ -191,6 +197,7 @@ export class ArtifactSchemaRegistry extends BaseService {
       ctx.setResult({ registered: true });
     });
 
+    // The list returns the stored normal form: shorthand fields are folded into `endpoints`.
     this.registerHandler(ArtifactSubjects['relation-type'].list, (ctx) => {
       const { type } = ctx.payload;
       const relationTypes = [...this.relationTypes.values()]
@@ -422,24 +429,21 @@ export class ArtifactSchemaRegistry extends BaseService {
   /**
    * Store a relation type registration.
    *
-   * An identical re-registration (same type and symmetry) is silently accepted.
-   * A registration that differs only in symmetry is rejected with an error.
+   * Contributions for the same type from several modules are merged: their endpoint
+   * entries are unioned and the result is kept in normal form. An identical
+   * re-registration merges to the same normal form.
+   * Conflicts on per-type properties (`symmetry`, differing `implication`) throw.
    * @param registration - Relation type registration payload received from the bus RPC.
-   * @throws If a conflicting registration for the same type already exists.
+   * @throws RelationTypeConflictError If a conflicting registration for the same type already exists.
    */
   private storeRelationType(registration: RelationTypeRegistration): void {
     const existing = this.relationTypes.get(registration.type);
-    if (existing) {
-      if (existing.symmetry !== registration.symmetry) {
-        throw new Error(
-          `Relation type '${registration.type}' is already registered with different symmetry` +
-            ` (existing: '${existing.symmetry}', new: '${registration.symmetry}')`,
-        );
-      }
-      // Identical re-registration is a no-op.
-      return;
-    }
-    this.relationTypes.set(registration.type, cloneRegistration(registration));
+    this.relationTypes.set(
+      registration.type,
+      existing
+        ? mergeRelationTypeRegistrations(existing, registration)
+        : normalizeRelationTypeRegistration(registration),
+    );
   }
 
   /**
@@ -456,9 +460,9 @@ export class ArtifactSchemaRegistry extends BaseService {
   /**
    * Look up a relation type registration by type string.
    * @param type - Relation type string.
-   * @returns The registration record, or `undefined` if not found.
+   * @returns The registration record in normal form, or `undefined` if not found.
    */
-  public getRelationType(type: string): RelationTypeRegistration | undefined {
+  public getRelationType(type: string): NormalizedRelationTypeRegistration | undefined {
     const registration = this.relationTypes.get(type);
     return registration ? cloneRegistration(registration) : undefined;
   }
