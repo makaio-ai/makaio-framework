@@ -10,12 +10,15 @@ export interface RelationEndpointCandidate {
   readonly targetKind?: string;
 }
 
+/** Per-type properties on which two registrations of the same relation type can conflict. */
+export type RelationTypeConflictField = 'symmetry' | 'implication' | 'description';
+
 /** Thrown when two registrations of the same relation type disagree on a per-type property. */
 export class RelationTypeConflictError extends Error {
   /** The relation type the conflict concerns. */
   public readonly type: string;
   /** The per-type property the registrations disagree on. */
-  public readonly field: 'symmetry' | 'implication';
+  public readonly field: RelationTypeConflictField;
 
   /**
    * @param type - Relation type of the existing registration.
@@ -23,7 +26,7 @@ export class RelationTypeConflictError extends Error {
    * @param existing - Value on the existing registration.
    * @param next - Conflicting value on the further registration.
    */
-  public constructor(type: string, field: 'symmetry' | 'implication', existing: string, next: string) {
+  public constructor(type: string, field: RelationTypeConflictField, existing: string, next: string) {
     super(
       `Relation type '${type}' is already registered with different ${field} (existing: '${existing}', new: '${next}')`,
     );
@@ -43,11 +46,12 @@ export type NormalizedRelationTypeRegistration = Omit<
 >;
 
 /**
- * Builds an endpoint from optional lists, omitting absent lists.
+ * Builds an endpoint from optional lists, omitting absent lists. The description is
+ * not read here: a registration's own `description` describes the verb, not a pair.
  * @param lists - The three optional endpoint lists.
  * @returns An endpoint carrying only the present lists.
  */
-function buildEndpoint(lists: RelationEndpoint): RelationEndpoint {
+function buildEndpoint(lists: Omit<RelationEndpoint, 'description'>): RelationEndpoint {
   return {
     ...(lists.sourceKinds === undefined ? {} : { sourceKinds: lists.sourceKinds }),
     ...(lists.targetKinds === undefined ? {} : { targetKinds: lists.targetKinds }),
@@ -153,16 +157,17 @@ function normalizeList<T extends string>(list: readonly T[] | undefined): T[] | 
 }
 
 /**
- * Normalises one endpoint entry: sorted, deduplicated lists.
+ * Normalises one endpoint entry: sorted, deduplicated lists; the description is kept.
  * @param endpoint - The entry to normalise.
  * @returns A new normalised entry.
  */
 function normalizeEndpoint(endpoint: RelationEndpoint): RelationEndpoint {
-  return buildEndpoint({
+  const lists = buildEndpoint({
     sourceKinds: normalizeList(endpoint.sourceKinds),
     targetKinds: normalizeList(endpoint.targetKinds),
     targetRefClasses: normalizeList(endpoint.targetRefClasses),
   });
+  return endpoint.description === undefined ? lists : { ...lists, description: endpoint.description };
 }
 
 /**
@@ -175,17 +180,20 @@ function endpointKey(endpoint: RelationEndpoint): string {
     endpoint.sourceKinds ?? null,
     endpoint.targetKinds ?? null,
     endpoint.targetRefClasses ?? null,
+    endpoint.description ?? null,
   ]);
 }
 
 /**
- * Whether an entry carries no constraint at all.
+ * Whether an entry carries no constraint at all. A description is no constraint.
  * @param endpoint - A normalised entry.
  * @returns True when the entry has no lists.
  */
 function isOpenEndpoint(endpoint: RelationEndpoint): boolean {
   // Normalised entries come from `buildEndpoint` and never carry undefined keys.
-  return Object.keys(endpoint).length === 0;
+  return (
+    endpoint.sourceKinds === undefined && endpoint.targetKinds === undefined && endpoint.targetRefClasses === undefined
+  );
 }
 
 /**
@@ -208,12 +216,12 @@ function normalizeEndpoints(entries: readonly RelationEndpoint[]): RelationEndpo
 /**
  * Builds a registration from its per-type properties and normalised entries.
  * An empty entry list stays an empty `endpoints` list, so the registration stays fail-closed.
- * @param verb - Registration providing `type`, `symmetry` and `implication`.
+ * @param verb - Registration providing `type`, `symmetry`, `implication` and `description`.
  * @param entries - Endpoint entries to normalise.
  * @returns A new registration without shorthand fields.
  */
 function assembleRegistration(
-  verb: Pick<RelationTypeRegistration, 'type' | 'symmetry' | 'implication'>,
+  verb: Pick<RelationTypeRegistration, 'type' | 'symmetry' | 'implication' | 'description'>,
   entries: readonly RelationEndpoint[],
 ): NormalizedRelationTypeRegistration {
   const endpoints = normalizeEndpoints(entries);
@@ -221,6 +229,7 @@ function assembleRegistration(
     type: verb.type,
     symmetry: verb.symmetry,
     ...(verb.implication === undefined ? {} : { implication: verb.implication }),
+    ...(verb.description === undefined ? {} : { description: verb.description }),
     ...(endpoints === undefined ? {} : { endpoints }),
   };
 }
@@ -258,8 +267,26 @@ function mergeImplication(existing: RelationTypeRegistration, next: RelationType
 }
 
 /**
+ * Resolves the description of two registrations of the same type.
+ * @param existing - Existing registration.
+ * @param next - Further registration.
+ * @returns The description present on either side.
+ * @throws RelationTypeConflictError when both carry differing descriptions.
+ */
+function mergeDescription(existing: RelationTypeRegistration, next: RelationTypeRegistration): string | undefined {
+  if (
+    existing.description !== undefined &&
+    next.description !== undefined &&
+    existing.description !== next.description
+  ) {
+    throw new RelationTypeConflictError(existing.type, 'description', existing.description, next.description);
+  }
+  return existing.description ?? next.description;
+}
+
+/**
  * Merges a further contribution into an existing registration of the same type.
- * `implication` is taken from whichever side has it. Endpoints are the
+ * `implication` and `description` are taken from whichever side has them. Endpoints are the
  * normalised union of both entry lists. An unconstrained side makes the merged
  * type open (its `endpoints` are omitted), because an open entry permits every
  * pair. Mutates neither input.
@@ -267,7 +294,7 @@ function mergeImplication(existing: RelationTypeRegistration, next: RelationType
  * @param next - The further contribution.
  * @returns A new normalised registration.
  * @throws Error when `type` differs.
- * @throws RelationTypeConflictError when `symmetry` differs, or when both carry a differing `implication`.
+ * @throws RelationTypeConflictError when `symmetry` differs, or when both carry a differing `implication` or `description`.
  */
 export function mergeRelationTypeRegistrations(
   existing: RelationTypeRegistration,
@@ -280,7 +307,8 @@ export function mergeRelationTypeRegistrations(
     throw new RelationTypeConflictError(existing.type, 'symmetry', existing.symmetry, next.symmetry);
   }
   const implication = mergeImplication(existing, next);
-  return assembleRegistration({ type: existing.type, symmetry: existing.symmetry, implication }, [
+  const description = mergeDescription(existing, next);
+  return assembleRegistration({ type: existing.type, symmetry: existing.symmetry, implication, description }, [
     ...relationTypeEndpoints(existing),
     ...relationTypeEndpoints(next),
   ]);

@@ -417,6 +417,12 @@ export const RelationEndpointSchema = z.object({
   targetKinds: z.array(z.string().min(1)).optional(),
   /** Reference classes valid as the target. Open if omitted. */
   targetRefClasses: z.array(RelationTargetRefClassSchema).optional(),
+  /**
+   * How the verb is used for this pair, e.g. which direction reads naturally or what the pair expresses.
+   * Part of the entry, so entries that differ only in their description stay distinct. The shorthand
+   * fields cannot carry it. Open pairs (an entry without any list) do not keep it; describe those on the type.
+   */
+  description: z.string().trim().min(1).optional(),
 });
 
 /**
@@ -427,7 +433,8 @@ export const RelationEndpointSchema = z.object({
  * as a whole, not an individual pair. Pairs are declared either through
  * `endpoints` (a list of permitted pairs) or through the shorthand fields
  * `sourceKinds`, `targetKinds` and `targetRefClasses`, which stand for exactly
- * one endpoint. The two forms are mutually exclusive.
+ * one endpoint. The two forms are mutually exclusive. `description` states the
+ * meaning of the verb for the whole type; per-pair usage lives on the endpoint entries.
  */
 export const RelationTypeRegistrationSchema = z
   .object({
@@ -445,8 +452,11 @@ export const RelationTypeRegistrationSchema = z
      * automatically when `symmetry` is `symmetric`.
      */
     implication: z.string().min(1).optional(),
-    // Shorthand for exactly one endpoint, mutually exclusive with `endpoints`.
-    ...RelationEndpointSchema.shape,
+    /** Optional meaning of the verb, independent of the endpoint pair. */
+    description: z.string().trim().min(1).optional(),
+    // Shorthand for exactly one endpoint, mutually exclusive with `endpoints`. The per-pair
+    // `description` is excluded: on the type it means the verb, not a pair.
+    ...RelationEndpointSchema.omit({ description: true }).shape,
     /** Permitted endpoint pairs. A pair is valid when one entry permits it. At least one entry when present. */
     endpoints: z.array(RelationEndpointSchema).min(1).optional(),
   })

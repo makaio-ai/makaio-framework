@@ -265,6 +265,59 @@ describe('normalizeRelationTypeRegistration', () => {
     expect(result).not.toHaveProperty('targetRefClasses');
   });
 
+  it('keeps the type description and per-entry descriptions', () => {
+    const result = normalizeRelationTypeRegistration({
+      type: 'x',
+      symmetry: 'asymmetric',
+      description: 'verb meaning',
+      endpoints: [{ sourceKinds: ['b', 'a'], description: 'pair usage' }],
+    });
+    expect(result).toEqual({
+      type: 'x',
+      symmetry: 'asymmetric',
+      description: 'verb meaning',
+      endpoints: [{ sourceKinds: ['a', 'b'], description: 'pair usage' }],
+    });
+  });
+
+  it('does not copy the type description into the shorthand endpoint', () => {
+    const result = normalizeRelationTypeRegistration({
+      type: 'x',
+      symmetry: 'asymmetric',
+      description: 'verb meaning',
+      sourceKinds: ['a'],
+    });
+    expect(result.endpoints).toEqual([{ sourceKinds: ['a'] }]);
+  });
+
+  it('dedups entries by description too: equal descriptions collapse, differing ones stay distinct', () => {
+    const result = normalizeRelationTypeRegistration({
+      type: 'x',
+      symmetry: 'asymmetric',
+      endpoints: [
+        { sourceKinds: ['a'], description: 'one' },
+        { sourceKinds: ['a'], description: 'one' },
+        { sourceKinds: ['a'], description: 'two' },
+        { sourceKinds: ['a'] },
+      ],
+    });
+    expect(result.endpoints).toEqual([
+      { sourceKinds: ['a'], description: 'one' },
+      { sourceKinds: ['a'], description: 'two' },
+      { sourceKinds: ['a'] },
+    ]);
+  });
+
+  it('treats an entry with only a description as open and drops it', () => {
+    const result = normalizeRelationTypeRegistration({
+      type: 'x',
+      symmetry: 'asymmetric',
+      description: 'verb meaning',
+      endpoints: [{ sourceKinds: ['a'] }, { description: 'anything goes' }],
+    });
+    expect(result).toEqual({ type: 'x', symmetry: 'asymmetric', description: 'verb meaning' });
+  });
+
   it('sorts and deduplicates lists', () => {
     const result = normalizeRelationTypeRegistration({
       type: 'x',
@@ -374,6 +427,50 @@ describe('mergeRelationTypeRegistrations', () => {
     const withImplication: RelationTypeRegistration = { ...left, symmetry: 'asymmetric', implication: 'y' };
     expect(mergeRelationTypeRegistrations(withImplication, right).implication).toBe('y');
     expect(mergeRelationTypeRegistrations(right, withImplication).implication).toBe('y');
+  });
+
+  it('takes the type description from either side', () => {
+    const described: RelationTypeRegistration = { ...left, description: 'verb meaning' };
+    expect(mergeRelationTypeRegistrations(described, right).description).toBe('verb meaning');
+    expect(mergeRelationTypeRegistrations(right, described).description).toBe('verb meaning');
+    expect(mergeRelationTypeRegistrations(left, right)).not.toHaveProperty('description');
+  });
+
+  it('accepts the same type description on both sides', () => {
+    const a: RelationTypeRegistration = { ...left, description: 'verb meaning' };
+    const b: RelationTypeRegistration = { ...right, description: 'verb meaning' };
+    expect(mergeRelationTypeRegistrations(a, b).description).toBe('verb meaning');
+  });
+
+  it('throws a description conflict for two differing type descriptions', () => {
+    expect(() =>
+      mergeRelationTypeRegistrations({ ...left, description: 'one' }, { ...right, description: 'two' }),
+    ).toThrow(
+      expect.objectContaining({
+        name: 'RelationTypeConflictError',
+        field: 'description',
+        type: 'x',
+        message: "Relation type 'x' is already registered with different description (existing: 'one', new: 'two')",
+      }),
+    );
+  });
+
+  it('keeps entries that differ only in their description as separate entries', () => {
+    const a: RelationTypeRegistration = {
+      type: 'x',
+      symmetry: 'asymmetric',
+      endpoints: [{ sourceKinds: ['a'], description: 'one' }],
+    };
+    const b: RelationTypeRegistration = {
+      type: 'x',
+      symmetry: 'asymmetric',
+      endpoints: [{ sourceKinds: ['a'], description: 'two' }],
+    };
+    expect(mergeRelationTypeRegistrations(a, b).endpoints).toEqual([
+      { sourceKinds: ['a'], description: 'one' },
+      { sourceKinds: ['a'], description: 'two' },
+    ]);
+    expect(mergeRelationTypeRegistrations(a, a).endpoints).toEqual([{ sourceKinds: ['a'], description: 'one' }]);
   });
 
   it('accepts the same implication on both sides', () => {
