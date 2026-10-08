@@ -674,6 +674,58 @@ describe('ArtifactSchemaRegistry', () => {
         expect(registry.getRelationType('part_of')?.implication).toBe('has_part');
       });
 
+      it('keeps type and per-entry descriptions through merge and listing', async () => {
+        await bus.request(ArtifactSubjects['relation-type'].register, {
+          type: 'part_of',
+          symmetry: 'asymmetric',
+          description: 'Source is a component of target',
+          endpoints: [
+            { sourceKinds: ['capability'], targetKinds: ['capability'], description: 'Capability hierarchy' },
+          ],
+        });
+        await bus.request(ArtifactSubjects['relation-type'].register, {
+          type: 'part_of',
+          symmetry: 'asymmetric',
+          endpoints: [{ sourceKinds: ['knowledge-document'], targetKinds: ['knowledge-document'] }],
+        });
+
+        const listed = await bus.request(ArtifactSubjects['relation-type'].list, { type: 'part_of' });
+
+        expect(listed.relationTypes).toEqual([
+          {
+            type: 'part_of',
+            symmetry: 'asymmetric',
+            description: 'Source is a component of target',
+            endpoints: [
+              { sourceKinds: ['capability'], targetKinds: ['capability'], description: 'Capability hierarchy' },
+              { sourceKinds: ['knowledge-document'], targetKinds: ['knowledge-document'] },
+            ],
+          },
+        ]);
+        expect(registry.getRelationType('part_of')?.description).toBe('Source is a component of target');
+      });
+
+      it('rejects differing type descriptions', async () => {
+        await bus.request(ArtifactSubjects['relation-type'].register, {
+          type: 'part_of',
+          symmetry: 'asymmetric',
+          description: 'one',
+        });
+
+        const error = await bus
+          .request(ArtifactSubjects['relation-type'].register, {
+            type: 'part_of',
+            symmetry: 'asymmetric',
+            description: 'two',
+          })
+          .catch((value: unknown) => value);
+
+        expect(error).toBeInstanceOf(RequestError);
+        expect((error as RequestError).cause).toBeInstanceOf(RelationTypeConflictError);
+        expect((error as RequestError).cause).toMatchObject({ field: 'description', type: 'part_of' });
+        expect(registry.getRelationType('part_of')?.description).toBe('one');
+      });
+
       it('lists core relation types in normal form without endpoints', async () => {
         const listed = await bus.request(ArtifactSubjects['relation-type'].list, {});
 

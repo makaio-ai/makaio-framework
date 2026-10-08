@@ -244,6 +244,36 @@ describe('Artifact core schemas', () => {
       expect(result.error?.issues.map((issue) => issue.path)).toContainEqual(['endpoints']);
     });
 
+    it('parses a type description and per-entry descriptions', () => {
+      const endpoints = [{ sourceKinds: ['a'], targetKinds: ['b'], description: 'a depends on b' }];
+      const parsed = RelationTypeRegistrationSchema.parse({
+        ...base,
+        description: 'Source derives from target',
+        endpoints,
+      });
+      expect(parsed.description).toBe('Source derives from target');
+      expect(parsed.endpoints).toEqual(endpoints);
+      expect(RelationEndpointSchema.parse({ description: 'x' })).toEqual({ description: 'x' });
+    });
+
+    it('rejects empty descriptions on the type and on an endpoint entry', () => {
+      expect(RelationTypeRegistrationSchema.safeParse({ ...base, description: '' }).success).toBe(false);
+      expect(RelationEndpointSchema.safeParse({ description: '' }).success).toBe(false);
+    });
+
+    it('rejects whitespace-only descriptions and trims the stored text', () => {
+      expect(RelationTypeRegistrationSchema.safeParse({ ...base, description: '   ' }).success).toBe(false);
+      expect(RelationEndpointSchema.safeParse({ description: ' \t ' }).success).toBe(false);
+      expect(RelationTypeRegistrationSchema.parse({ ...base, description: '  verb meaning ' }).description).toBe(
+        'verb meaning',
+      );
+    });
+
+    it('does not treat the type description as a shorthand endpoint description', () => {
+      const parsed = RelationTypeRegistrationSchema.parse({ ...base, description: 'verb', sourceKinds: ['a'] });
+      expect(parsed.description).toBe('verb');
+    });
+
     it('rejects an empty endpoints list', () => {
       expect(RelationTypeRegistrationSchema.safeParse({ ...base, endpoints: [] }).success).toBe(false);
     });
