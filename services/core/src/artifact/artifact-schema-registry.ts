@@ -4,8 +4,8 @@ import {
   ArtifactKindRegistrationSchema,
   mergeRelationTypeRegistrations,
   normalizeRelationTypeRegistration,
+  RelationTypeRegistrationSchema,
   type ArtifactKindRegistration,
-  type NormalizedRelationTypeRegistration,
   type RelationTypeRegistration,
 } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
@@ -160,8 +160,8 @@ export class ArtifactSchemaRegistry extends BaseService {
   /** Monotone counter for contribution insertion order. */
   private nextKindContributionOrder = 0;
 
-  /** Relation types by name, stored in normal form (shorthand folded into `endpoints`). */
-  private readonly relationTypes = new Map<string, NormalizedRelationTypeRegistration>();
+  /** Relation types by name, stored in normal form (sorted, deduplicated `endpoints`; omitted when open). */
+  private readonly relationTypes = new Map<string, RelationTypeRegistration>();
 
   /**
    * @param bus - Bus instance used for handler registration and event emission.
@@ -197,7 +197,7 @@ export class ArtifactSchemaRegistry extends BaseService {
       ctx.setResult({ registered: true });
     });
 
-    // The list returns the stored normal form: shorthand fields are folded into `endpoints`.
+    // The list returns the stored normal form.
     this.registerHandler(ArtifactSubjects['relation-type'].list, (ctx) => {
       const { type } = ctx.payload;
       const relationTypes = [...this.relationTypes.values()]
@@ -432,11 +432,15 @@ export class ArtifactSchemaRegistry extends BaseService {
    * Contributions for the same type from several modules are merged: their endpoint
    * entries are unioned and the result is kept in normal form. An identical
    * re-registration merges to the same normal form.
-   * Conflicts on per-type properties (`symmetry`, differing `implication`) throw.
-   * @param registration - Relation type registration payload received from the bus RPC.
+   * Conflicts on per-type properties (`symmetry`, differing `implication` or `description`) throw.
+   * The payload is parsed here, independent of transport validation, so a registration
+   * with unknown keys (such as pair lists written on the type) never reaches the merge.
+   * @param payload - Relation type registration payload received from the bus RPC.
+   * @throws ZodError If the payload is not a valid relation type registration.
    * @throws RelationTypeConflictError If a conflicting registration for the same type already exists.
    */
-  private storeRelationType(registration: RelationTypeRegistration): void {
+  private storeRelationType(payload: RelationTypeRegistration): void {
+    const registration = RelationTypeRegistrationSchema.parse(payload);
     const existing = this.relationTypes.get(registration.type);
     this.relationTypes.set(
       registration.type,
@@ -462,7 +466,7 @@ export class ArtifactSchemaRegistry extends BaseService {
    * @param type - Relation type string.
    * @returns The registration record in normal form, or `undefined` if not found.
    */
-  public getRelationType(type: string): NormalizedRelationTypeRegistration | undefined {
+  public getRelationType(type: string): RelationTypeRegistration | undefined {
     const registration = this.relationTypes.get(type);
     return registration ? cloneRegistration(registration) : undefined;
   }

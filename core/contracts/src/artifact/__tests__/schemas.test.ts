@@ -185,15 +185,15 @@ describe('Artifact core schemas', () => {
       type: 'derives_from',
       symmetry: 'asymmetric',
       implication: 'Causal chain',
-      targetRefClasses: ['artifact', 'evidence', 'entity'],
+      endpoints: [{ targetRefClasses: ['artifact', 'evidence', 'entity'] }],
     });
     expect(relationType.type).toBe('derives_from');
-    expect(relationType.targetRefClasses).toEqual(['artifact', 'evidence', 'entity']);
+    expect(relationType.endpoints).toEqual([{ targetRefClasses: ['artifact', 'evidence', 'entity'] }]);
     expect(
       RelationTypeRegistrationSchema.safeParse({
         type: 'derives_from',
         symmetry: 'asymmetric',
-        targetRefClasses: ['external'],
+        endpoints: [{ targetRefClasses: ['external'] }],
       }).success,
     ).toBe(false);
   });
@@ -217,31 +217,26 @@ describe('Artifact core schemas', () => {
       expect(RelationEndpointSchema.safeParse({ targetKinds: [''] }).success).toBe(false);
     });
 
-    it('parses a registration with endpoints and no shorthand fields', () => {
+    it('parses a registration with endpoints', () => {
       const endpoints = [{ sourceKinds: ['a'], targetKinds: ['b'] }, { targetRefClasses: ['evidence' as const] }];
       const parsed = RelationTypeRegistrationSchema.parse({ ...base, endpoints });
       expect(parsed.endpoints).toEqual(endpoints);
-      expect(parsed.sourceKinds).toBeUndefined();
     });
 
-    it('still parses the shorthand form', () => {
-      const parsed = RelationTypeRegistrationSchema.parse({
-        ...base,
-        sourceKinds: ['a'],
-        targetRefClasses: ['artifact'],
-      });
-      expect(parsed.sourceKinds).toEqual(['a']);
-      expect(parsed.endpoints).toBeUndefined();
+    it('parses a registration without endpoints as an open type', () => {
+      expect(RelationTypeRegistrationSchema.parse(base)).toEqual(base);
     });
 
     it.each([
       ['sourceKinds', { sourceKinds: ['a'] }],
       ['targetKinds', { targetKinds: ['b'] }],
       ['targetRefClasses', { targetRefClasses: ['artifact'] }],
-    ])('rejects endpoints combined with shorthand %s', (_name, shorthand) => {
-      const result = RelationTypeRegistrationSchema.safeParse({ ...base, endpoints: [{}], ...shorthand });
+    ])('rejects pair list %s written on the type instead of under endpoints', (key, list) => {
+      const result = RelationTypeRegistrationSchema.safeParse({ ...base, ...list });
       expect(result.success).toBe(false);
-      expect(result.error?.issues.map((issue) => issue.path)).toContainEqual(['endpoints']);
+      const issue = result.error?.issues[0];
+      expect(issue?.code).toBe('unrecognized_keys');
+      expect(issue?.message).toBe(`Unrecognized key(s) '${key}': declare endpoint pairs under endpoints`);
     });
 
     it('parses a type description and per-entry descriptions', () => {
@@ -267,11 +262,6 @@ describe('Artifact core schemas', () => {
       expect(RelationTypeRegistrationSchema.parse({ ...base, description: '  verb meaning ' }).description).toBe(
         'verb meaning',
       );
-    });
-
-    it('does not treat the type description as a shorthand endpoint description', () => {
-      const parsed = RelationTypeRegistrationSchema.parse({ ...base, description: 'verb', sourceKinds: ['a'] });
-      expect(parsed.description).toBe('verb');
     });
 
     it('rejects an empty endpoints list', () => {

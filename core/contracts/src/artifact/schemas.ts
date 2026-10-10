@@ -419,8 +419,8 @@ export const RelationEndpointSchema = z.object({
   targetRefClasses: z.array(RelationTargetRefClassSchema).optional(),
   /**
    * How the verb is used for this pair, e.g. which direction reads naturally or what the pair expresses.
-   * Part of the entry, so entries that differ only in their description stay distinct. The shorthand
-   * fields cannot carry it. Open pairs (an entry without any list) do not keep it; describe those on the type.
+   * Part of the entry, so entries that differ only in their description stay distinct. Open pairs (an
+   * entry without any list) do not keep it; describe those on the type.
    */
   description: z.string().trim().min(1).optional(),
 });
@@ -430,14 +430,17 @@ export const RelationEndpointSchema = z.object({
  *
  * A registration declares the verb (`type`, `symmetry`, `implication`) and the
  * endpoint pairs it may connect. `symmetry` and `implication` describe the verb
- * as a whole, not an individual pair. Pairs are declared either through
- * `endpoints` (a list of permitted pairs) or through the shorthand fields
- * `sourceKinds`, `targetKinds` and `targetRefClasses`, which stand for exactly
- * one endpoint. The two forms are mutually exclusive. `description` states the
- * meaning of the verb for the whole type; per-pair usage lives on the endpoint entries.
+ * as a whole, not an individual pair. Pairs are declared only through
+ * `endpoints`; a registration without `endpoints` is open and permits every
+ * pair. `description` states the meaning of the verb for the whole type;
+ * per-pair usage lives on the endpoint entries.
+ *
+ * Unknown keys are rejected, so pair lists written directly on the type (for
+ * example `sourceKinds`) fail validation instead of being dropped, which would
+ * silently leave the type open.
  */
-export const RelationTypeRegistrationSchema = z
-  .object({
+export const RelationTypeRegistrationSchema = z.strictObject(
+  {
     /** Unique relation type string. Must be stable across releases. */
     type: z.string().min(1),
     /**
@@ -454,24 +457,16 @@ export const RelationTypeRegistrationSchema = z
     implication: z.string().min(1).optional(),
     /** Optional meaning of the verb, independent of the endpoint pair. */
     description: z.string().trim().min(1).optional(),
-    // Shorthand for exactly one endpoint, mutually exclusive with `endpoints`. The per-pair
-    // `description` is excluded: on the type it means the verb, not a pair.
-    ...RelationEndpointSchema.omit({ description: true }).shape,
-    /** Permitted endpoint pairs. A pair is valid when one entry permits it. At least one entry when present. */
+    /** Permitted endpoint pairs. A pair is valid when one entry permits it. At least one entry when present; open when omitted. */
     endpoints: z.array(RelationEndpointSchema).min(1).optional(),
-  })
-  .superRefine((value, ctx) => {
-    if (
-      value.endpoints !== undefined &&
-      (value.sourceKinds !== undefined || value.targetKinds !== undefined || value.targetRefClasses !== undefined)
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['endpoints'],
-        message: 'endpoints cannot be combined with the shorthand fields sourceKinds, targetKinds or targetRefClasses',
-      });
-    }
-  });
+  },
+  {
+    error: (issue) =>
+      issue.code === 'unrecognized_keys'
+        ? `Unrecognized key(s) ${issue.keys.map((key) => `'${key}'`).join(', ')}: declare endpoint pairs under endpoints`
+        : undefined,
+  },
+);
 
 /**
  * Query parameters for retrieving artifact revisions from the store.
