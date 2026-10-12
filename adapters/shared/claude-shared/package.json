@@ -24,7 +24,7 @@
     "@makaio/core": "workspace:*",
     "@makaio/services-log-import": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.6.5"
   },
   "license": "MIT",
   "scripts": {

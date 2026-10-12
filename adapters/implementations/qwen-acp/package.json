@@ -39,7 +39,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^0.21.0",
-    "zod": "4.4.3"
+    "zod": "4.6.5"
   },
   "peerDependencies": {
     "@makaio/framework": "workspace:*"
