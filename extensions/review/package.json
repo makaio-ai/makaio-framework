@@ -19,7 +19,7 @@
     "@makaio/tools-core": "workspace:*",
     "@makaio/utils": "workspace:*",
     "drizzle-orm": "0.45.4",
-    "nanoid": "5.1.11",
+    "nanoid": "6.0.2",
     "zod": "4.6.5"
   },
   "devDependencies": {
