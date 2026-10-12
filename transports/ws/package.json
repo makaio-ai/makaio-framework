@@ -21,17 +21,17 @@
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
-    "@types/ws": "^8.5.10",
-    "tsdown": "0.22.0",
+    "@types/ws": "^8.18.2",
+    "tsdown": "0.23.0",
     "typescript": "^6.0.3",
-    "ws": "^8.21.1"
+    "ws": "^8.22.0"
   },
   "peerDependencies": {
-    "ws": "^8.21.1"
+    "ws": "^8.22.0"
   },
   "publishConfig": {
     "exports": {

@@ -32,14 +32,14 @@
     "@makaio/kernel": "workspace:*",
     "@makaio/service-base": "workspace:*",
     "@makaio/services-core": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.6.5"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@makaio/framework": "workspace:*",
     "@types/node": "^24.3.0",
     "execa": "^9.5.2",
-    "tsdown": "0.22.0",
+    "tsdown": "0.23.0",
     "typescript": "^6.0.3",
     "vitest": "4.1.10"
   },

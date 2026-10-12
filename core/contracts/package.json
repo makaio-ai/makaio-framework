@@ -53,7 +53,7 @@
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
     "semver": "^7.8.5",
-    "zod": "4.4.3"
+    "zod": "4.6.5"
   },
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0"
@@ -68,9 +68,9 @@
     "@makaio/core": "workspace:*",
     "@makaio/tools-core": "workspace:*",
     "@types/node": "^24.3.0",
-    "@types/react": "^19.2.15",
+    "@types/react": "^19.3.0",
     "@types/semver": "^7.7.0",
-    "tsx": "^4.22.3"
+    "tsx": "^4.23.15"
   },
   "scripts": {
     "build": "bun build.ts",
