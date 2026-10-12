@@ -4332,7 +4332,7 @@ __metadata:
     electrobun: "npm:^1.16.0"
     get-port: "npm:^7.0.0"
     hono: "npm:^4.13.13"
-    lucide-react: "npm:^0.562.0"
+    lucide-react: "npm:^1.54.0"
     node-pty: "npm:^1.2.0-beta.8"
     react: "npm:^19.3.0"
     react-dom: "npm:^19.3.0"
@@ -4377,7 +4377,7 @@ __metadata:
     esbuild: "npm:^0.28.2"
     get-port: "npm:^7.0.0"
     hono: "npm:^4.13.13"
-    lucide-react: "npm:^0.562.0"
+    lucide-react: "npm:^1.54.0"
     react: "npm:^19.3.0"
     react-dom: "npm:^19.3.0"
     sass: "npm:^1.101.0"
@@ -5788,7 +5788,7 @@ __metadata:
     "@types/react": "npm:^19.3.0"
     "@types/react-dom": "npm:^19.3.0"
     clsx: "npm:^2.1.1"
-    lucide-react: "npm:^0.562.0"
+    lucide-react: "npm:^1.54.0"
     react: "npm:^19.3.0"
     react-dom: "npm:^19.3.0"
     react-resizable-panels: "npm:4.14.3"
@@ -18284,12 +18284,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"lucide-react@npm:^0.562.0":
-  version: 0.562.0
-  resolution: "lucide-react@npm:0.562.0"
+"lucide-react@npm:^1.54.0":
+  version: 1.54.0
+  resolution: "lucide-react@npm:1.54.0"
   peerDependencies:
+    "@types/react": "*"
     react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
-  checksum: 10c0/c713a2490916e42c678b9df0d7309d8cdb715af1d7139c7eb49c45547901b276a7cf722548012a668dc0e337eeadf5141d5af8c8fcda6721fc58fb2d288efcba
+  peerDependenciesMeta:
+    "@types/react":
+      optional: true
+  checksum: 10c0/28c80675dfd7daf76cc50fd737245c108b1d65c56c065babc3fd23d8f626cbec76aff9115a5f83e5124f80c7342b2042c64160aea6e5cb63021906b643bb2e99
   languageName: node
   linkType: hard
 
@@ -22829,14 +22833,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"source-map-js@npm:>=0.6.2 <2.0.0, source-map-js@npm:^1.0.1, source-map-js@npm:^1.2.1":
-  version: 1.2.2
-  resolution: "source-map-js@npm:1.2.2"
-  checksum: 10c0/d5d6dec62266834f83dd4f8a2606a196fb1a006ca5d53b0ef80ee513b7eba2f4e2ae241f4bc129ae7e9b80dea24f6e3d92b446b7e6e96be7653cab8888168a94
-  languageName: node
-  linkType: hard
-
-"source-map-js@npm:^1.2.2":
+"source-map-js@npm:>=0.6.2 <2.0.0, source-map-js@npm:^1.0.1, source-map-js@npm:^1.2.1, source-map-js@npm:^1.2.2":
   version: 1.2.2
   resolution: "source-map-js@npm:1.2.2"
   checksum: 10c0/d5d6dec62266834f83dd4f8a2606a196fb1a006ca5d53b0ef80ee513b7eba2f4e2ae241f4bc129ae7e9b80dea24f6e3d92b446b7e6e96be7653cab8888168a94
