@@ -5858,7 +5858,7 @@ __metadata:
     react: "npm:^19.3.0"
     react-dom: "npm:^19.3.0"
     react-grid-layout: "npm:^1.4.4"
-    sonner: "npm:^1.5.0"
+    sonner: "npm:^2.0.8"
     tsdown: "npm:0.23.0"
   peerDependencies:
     react: ^19.0.0
@@ -22819,24 +22819,21 @@ __metadata:
   languageName: node
   linkType: hard
 
-"sonner@npm:^1.5.0":
-  version: 1.7.4
-  resolution: "sonner@npm:1.7.4"
+"sonner@npm:^2.0.8":
+  version: 2.0.8
+  resolution: "sonner@npm:2.0.8"
   peerDependencies:
+    "@types/react": ^18.0.0 || ^19.0.0
     react: ^18.0.0 || ^19.0.0 || ^19.0.0-rc
     react-dom: ^18.0.0 || ^19.0.0 || ^19.0.0-rc
-  checksum: 10c0/2856a43c1afaacec5ca74c7f6bb8eb439edf1fdadb045bd201590f809e6e9b711eabcf7d1e8f3448cf414e1333d97e3e16372a989011a3190f20952947b1f60a
+  peerDependenciesMeta:
+    "@types/react":
+      optional: true
+  checksum: 10c0/cc271f78dca7e7d7ce34a724883f3292ba671b5ed3d41732430df28c38a8f6a47e8e59da5fdd0b258ac07136db0cdaf02f8cda9afb9cc9f12d81b6c319b427f7
   languageName: node
   linkType: hard
 
-"source-map-js@npm:>=0.6.2 <2.0.0, source-map-js@npm:^1.0.1, source-map-js@npm:^1.2.1":
-  version: 1.2.2
-  resolution: "source-map-js@npm:1.2.2"
-  checksum: 10c0/d5d6dec62266834f83dd4f8a2606a196fb1a006ca5d53b0ef80ee513b7eba2f4e2ae241f4bc129ae7e9b80dea24f6e3d92b446b7e6e96be7653cab8888168a94
-  languageName: node
-  linkType: hard
-
-"source-map-js@npm:^1.2.2":
+"source-map-js@npm:>=0.6.2 <2.0.0, source-map-js@npm:^1.0.1, source-map-js@npm:^1.2.1, source-map-js@npm:^1.2.2":
   version: 1.2.2
   resolution: "source-map-js@npm:1.2.2"
   checksum: 10c0/d5d6dec62266834f83dd4f8a2606a196fb1a006ca5d53b0ef80ee513b7eba2f4e2ae241f4bc129ae7e9b80dea24f6e3d92b446b7e6e96be7653cab8888168a94
