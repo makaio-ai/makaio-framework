@@ -79,7 +79,7 @@
     "@makaio/runtime-node": "workspace:*",
     "@makaio/sdk": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "zod": "4.6.5",
     "zod-to-json-schema": "^3.25.1"
   },
