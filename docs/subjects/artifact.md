@@ -373,7 +373,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `relationTypes` | `{ type: string; symmetry: "asymmetric" \| "symmetric"; endpoints?: { sourceKinds?: string[] \| undefined; targetKinds?: string[] \| undefined; targetRefClasses?: ("artifact" \| "local" \| "evidence" \| "entity")[] \| undefined; description?: string \| undefined; }[] \| undefined; targetKinds?: string[] \| undefined; sourceKinds?: string[] \| undefined; targetRefClasses?: ("artifact" \| "local" \| "evidence" \| "entity")[] \| undefined; implication?: string \| undefined; description?: string \| undefined; }[]` | yes |
+| `relationTypes` | `{ type: string; symmetry: "asymmetric" \| "symmetric"; implication?: string \| undefined; description?: string \| undefined; endpoints?: { sourceKinds?: string[] \| undefined; targetKinds?: string[] \| undefined; targetRefClasses?: ("artifact" \| "local" \| "evidence" \| "entity")[] \| undefined; description?: string \| undefined; }[] \| undefined; }[]` | yes |
 
 ### <a id="artifact.relation-type.register"></a>`artifact.relation-type.register` (rpc)
 
@@ -389,10 +389,7 @@ Type: Request (RPC)
 | `description` | `string \| undefined` | no |
 | `endpoints` | `{ sourceKinds?: string[] \| undefined; targetKinds?: string[] \| undefined; targetRefClasses?: ("artifact" \| "local" \| "evidence" \| "entity")[] \| undefined; description?: string \| undefined; }[] \| undefined` | no |
 | `implication` | `string \| undefined` | no |
-| `sourceKinds` | `string[] \| undefined` | no |
 | `symmetry` | `"asymmetric" \| "symmetric"` | yes |
-| `targetKinds` | `string[] \| undefined` | no |
-| `targetRefClasses` | `("artifact" \| "local" \| "evidence" \| "entity")[] \| undefined` | no |
 | `type` | `string` | yes |
 
 **Response:**

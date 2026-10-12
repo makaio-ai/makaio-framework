@@ -46,26 +46,7 @@ describe('relationTypeEndpoints', () => {
     expect(relationTypeEndpoints(partOf)).toEqual(partOf.endpoints);
   });
 
-  it('builds one entry from the shorthand fields', () => {
-    const registration: RelationTypeRegistration = {
-      type: 'x',
-      symmetry: 'asymmetric',
-      sourceKinds: ['a'],
-      targetKinds: ['b'],
-      targetRefClasses: ['artifact'],
-    };
-    expect(relationTypeEndpoints(registration)).toEqual([
-      { sourceKinds: ['a'], targetKinds: ['b'], targetRefClasses: ['artifact'] },
-    ]);
-  });
-
-  it('omits absent shorthand lists from the built entry', () => {
-    const registration: RelationTypeRegistration = { type: 'x', symmetry: 'asymmetric', sourceKinds: ['a'] };
-    const [entry] = relationTypeEndpoints(registration);
-    expect(Object.keys(entry ?? {})).toEqual(['sourceKinds']);
-  });
-
-  it('returns a single open entry for a registration without constraints', () => {
+  it('returns a single open entry for a registration without endpoints', () => {
     expect(relationTypeEndpoints({ type: 'x', symmetry: 'symmetric' })).toEqual([{}]);
   });
 
@@ -76,7 +57,7 @@ describe('relationTypeEndpoints', () => {
   it('returns a non-empty array for every other registration shape', () => {
     const registrations: RelationTypeRegistration[] = [
       { type: 'x', symmetry: 'asymmetric' },
-      { type: 'x', symmetry: 'asymmetric', sourceKinds: [] },
+      { type: 'x', symmetry: 'asymmetric', endpoints: [{ sourceKinds: [] }] },
       partOf,
     ];
     for (const registration of registrations) {
@@ -164,18 +145,11 @@ describe('relationTypePermits', () => {
     expect(relationTypePermits(registration, candidate('a', undefined, 'local'))).toBe(false);
   });
 
-  it('evaluates shorthand registrations', () => {
-    const registration: RelationTypeRegistration = { type: 'x', symmetry: 'asymmetric', sourceKinds: ['a'] };
-    expect(relationTypePermits(registration, candidate('a', 'b'))).toBe(true);
-    expect(relationTypePermits(registration, candidate('b', 'b'))).toBe(false);
-  });
-
   describe('symmetric reversal', () => {
     const symmetricAB: RelationTypeRegistration = {
       type: 'x',
       symmetry: 'symmetric',
-      sourceKinds: ['a'],
-      targetKinds: ['b'],
+      endpoints: [{ sourceKinds: ['a'], targetKinds: ['b'] }],
     };
 
     it.each([
@@ -206,8 +180,7 @@ describe('relationTypePermits', () => {
       const registration: RelationTypeRegistration = {
         type: 'x',
         symmetry: 'symmetric',
-        sourceKinds: ['a'],
-        targetRefClasses: ['entity'],
+        endpoints: [{ sourceKinds: ['a'], targetRefClasses: ['entity'] }],
       };
       expect(relationTypePermits(registration, candidate('b', 'a'))).toBe(false);
     });
@@ -247,24 +220,6 @@ describe('relationTypePermits', () => {
 // ── normalizeRelationTypeRegistration ─────────────────────────────────────────
 
 describe('normalizeRelationTypeRegistration', () => {
-  it('folds shorthand into endpoints and drops the shorthand fields', () => {
-    const result = normalizeRelationTypeRegistration({
-      type: 'x',
-      symmetry: 'asymmetric',
-      sourceKinds: ['a'],
-      targetKinds: ['b'],
-      targetRefClasses: ['artifact'],
-    });
-    expect(result).toEqual({
-      type: 'x',
-      symmetry: 'asymmetric',
-      endpoints: [{ sourceKinds: ['a'], targetKinds: ['b'], targetRefClasses: ['artifact'] }],
-    });
-    expect(result).not.toHaveProperty('sourceKinds');
-    expect(result).not.toHaveProperty('targetKinds');
-    expect(result).not.toHaveProperty('targetRefClasses');
-  });
-
   it('keeps the type description and per-entry descriptions', () => {
     const result = normalizeRelationTypeRegistration({
       type: 'x',
@@ -278,16 +233,6 @@ describe('normalizeRelationTypeRegistration', () => {
       description: 'verb meaning',
       endpoints: [{ sourceKinds: ['a', 'b'], description: 'pair usage' }],
     });
-  });
-
-  it('does not copy the type description into the shorthand endpoint', () => {
-    const result = normalizeRelationTypeRegistration({
-      type: 'x',
-      symmetry: 'asymmetric',
-      description: 'verb meaning',
-      sourceKinds: ['a'],
-    });
-    expect(result.endpoints).toEqual([{ sourceKinds: ['a'] }]);
   });
 
   it('dedups entries by description too: equal descriptions collapse, differing ones stay distinct', () => {
@@ -379,7 +324,7 @@ describe('normalizeRelationTypeRegistration', () => {
       type: 'x',
       symmetry: 'symmetric',
       implication: 'y',
-      sourceKinds: ['a'],
+      endpoints: [{ sourceKinds: ['a'] }],
     });
     expect(result.implication).toBe('y');
   });
@@ -400,16 +345,23 @@ describe('normalizeRelationTypeRegistration', () => {
 // ── mergeRelationTypeRegistrations ────────────────────────────────────────────
 
 describe('mergeRelationTypeRegistrations', () => {
-  const left: RelationTypeRegistration = { type: 'x', symmetry: 'asymmetric', sourceKinds: ['a'], targetKinds: ['b'] };
-  const right: RelationTypeRegistration = { type: 'x', symmetry: 'asymmetric', sourceKinds: ['c'], targetKinds: ['d'] };
+  const left: RelationTypeRegistration = {
+    type: 'x',
+    symmetry: 'asymmetric',
+    endpoints: [{ sourceKinds: ['a'], targetKinds: ['b'] }],
+  };
+  const right: RelationTypeRegistration = {
+    type: 'x',
+    symmetry: 'asymmetric',
+    endpoints: [{ sourceKinds: ['c'], targetKinds: ['d'] }],
+  };
 
-  it('unions entries from two shorthand contributions', () => {
+  it('unions the entries of two contributions', () => {
     const result = mergeRelationTypeRegistrations(left, right);
     expect(result.endpoints).toEqual([
       { sourceKinds: ['a'], targetKinds: ['b'] },
       { sourceKinds: ['c'], targetKinds: ['d'] },
     ]);
-    expect(result).not.toHaveProperty('sourceKinds');
   });
 
   it('merges identical contributions to one entry', () => {

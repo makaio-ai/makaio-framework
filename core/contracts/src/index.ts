@@ -284,7 +284,6 @@ export type {
   RelationRequirementIssue,
   RelationRequirementIssueReason,
   RelationEndpointCandidate,
-  NormalizedRelationTypeRegistration,
 } from './artifact/index.js';
 export { AIModelSchema, AIReasoningLevelSchema, ProviderAIModelSchema } from './model/index.js';
 export type {

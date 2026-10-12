@@ -592,7 +592,7 @@ describe('ArtifactSchemaRegistry', () => {
         const first = await bus.request(ArtifactSubjects['relation-type'].register, {
           type: 'part_of',
           symmetry: 'asymmetric',
-          ...docs,
+          endpoints: [docs],
         });
         const second = await bus.request(ArtifactSubjects['relation-type'].register, {
           type: 'part_of',
@@ -609,8 +609,6 @@ describe('ArtifactSchemaRegistry', () => {
 
         expect(listed.relationTypes).toHaveLength(1);
         const entry = listed.relationTypes[0];
-        expect(entry).not.toHaveProperty('sourceKinds');
-        expect(entry).not.toHaveProperty('targetKinds');
         // Sorted by structural key JSON([sourceKinds, targetKinds, targetRefClasses]): 'capability' < 'knowledge-document'.
         expect(entry?.endpoints).toEqual([caps, docs]);
       });
@@ -620,7 +618,7 @@ describe('ArtifactSchemaRegistry', () => {
           await bus.request(ArtifactSubjects['relation-type'].register, {
             type: 'part_of',
             symmetry: 'asymmetric',
-            ...docs,
+            endpoints: [docs],
           });
         }
 
@@ -641,6 +639,30 @@ describe('ArtifactSchemaRegistry', () => {
 
         expect(listed.relationTypes).toHaveLength(1);
         expect(listed.relationTypes[0]).not.toHaveProperty('endpoints');
+      });
+
+      it('rejects pair lists written on the type even without transport validation', async () => {
+        await registerPartOfContributions();
+        vi.stubEnv('NODE_ENV', 'production');
+        try {
+          const legacy = { type: 'part_of', symmetry: 'asymmetric' as const, sourceKinds: ['other'] };
+          const error = await bus
+            .request(ArtifactSubjects['relation-type'].register, legacy)
+            .catch((value: unknown) => value);
+
+          expect(error).toBeInstanceOf(RequestError);
+          expect((error as RequestError).message).toContain(
+            "Unrecognized key(s) 'sourceKinds': declare endpoint pairs under endpoints",
+          );
+          const fresh = { type: 'restricted', symmetry: 'asymmetric' as const, targetKinds: ['b'] };
+          await expect(bus.request(ArtifactSubjects['relation-type'].register, fresh)).rejects.toBeInstanceOf(
+            RequestError,
+          );
+          expect(registry.getRelationType('restricted')).toBeUndefined();
+        } finally {
+          vi.unstubAllEnvs();
+        }
+        expect(registry.getRelationType('part_of')?.endpoints).toEqual([caps, docs]);
       });
 
       it('rejects differing implications and accepts equal ones', async () => {
@@ -732,8 +754,6 @@ describe('ArtifactSchemaRegistry', () => {
         expect(listed.relationTypes.length).toBeGreaterThan(0);
         for (const entry of listed.relationTypes) {
           expect(entry).not.toHaveProperty('endpoints');
-          expect(entry).not.toHaveProperty('sourceKinds');
-          expect(entry).not.toHaveProperty('targetKinds');
         }
       });
 
@@ -808,8 +828,7 @@ describe('ArtifactSchemaRegistry', () => {
       const partOf = { type: 'part_of', symmetry: 'asymmetric' } as const;
       await bus.request(ArtifactSubjects['relation-type'].register, {
         ...partOf,
-        sourceKinds: ['knowledge-document'],
-        targetKinds: ['knowledge-document'],
+        endpoints: [{ sourceKinds: ['knowledge-document'], targetKinds: ['knowledge-document'] }],
       });
       await bus.request(ArtifactSubjects['relation-type'].register, {
         ...partOf,

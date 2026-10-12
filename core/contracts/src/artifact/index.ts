@@ -329,4 +329,4 @@ export {
   normalizeRelationTypeRegistration,
   mergeRelationTypeRegistrations,
 } from './relation-endpoints.js';
-export type { RelationEndpointCandidate, NormalizedRelationTypeRegistration } from './relation-endpoints.js';
+export type { RelationEndpointCandidate } from './relation-endpoints.js';

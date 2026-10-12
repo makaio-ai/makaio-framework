@@ -37,17 +37,7 @@ export class RelationTypeConflictError extends Error {
 }
 
 /**
- * Normal form of a registration: shorthand folded into `endpoints`; an open
- * type carries no endpoints.
- */
-export type NormalizedRelationTypeRegistration = Omit<
-  RelationTypeRegistration,
-  'sourceKinds' | 'targetKinds' | 'targetRefClasses'
->;
-
-/**
- * Builds an endpoint from optional lists, omitting absent lists. The description is
- * not read here: a registration's own `description` describes the verb, not a pair.
+ * Builds an endpoint from optional lists, omitting absent lists.
  * @param lists - The three optional endpoint lists.
  * @returns An endpoint carrying only the present lists.
  */
@@ -59,16 +49,18 @@ function buildEndpoint(lists: Omit<RelationEndpoint, 'description'>): RelationEn
   };
 }
 
+/** The single entry of a registration without `endpoints`: no list, so every pair is permitted. */
+const OPEN_ENDPOINTS: readonly RelationEndpoint[] = Object.freeze([Object.freeze({})]);
+
 /**
- * Endpoints of a registration: `endpoints` when present, else one entry built
- * from the shorthand fields. A registration without any constraint yields a
- * single open entry `{}`. An explicit empty `endpoints` list yields no entry
- * and therefore permits nothing.
+ * Endpoints of a registration: `endpoints` when present, else a single open
+ * entry `{}`. An explicit empty `endpoints` list yields no entry and therefore
+ * permits nothing.
  * @param registration - The registration to read.
  * @returns The endpoint entries; empty only for an explicit empty `endpoints` list.
  */
 export function relationTypeEndpoints(registration: RelationTypeRegistration): readonly RelationEndpoint[] {
-  return registration.endpoints ?? [buildEndpoint(registration)];
+  return registration.endpoints ?? OPEN_ENDPOINTS;
 }
 
 /**
@@ -218,12 +210,12 @@ function normalizeEndpoints(entries: readonly RelationEndpoint[]): RelationEndpo
  * An empty entry list stays an empty `endpoints` list, so the registration stays fail-closed.
  * @param verb - Registration providing `type`, `symmetry`, `implication` and `description`.
  * @param entries - Endpoint entries to normalise.
- * @returns A new registration without shorthand fields.
+ * @returns A new registration.
  */
 function assembleRegistration(
   verb: Pick<RelationTypeRegistration, 'type' | 'symmetry' | 'implication' | 'description'>,
   entries: readonly RelationEndpoint[],
-): NormalizedRelationTypeRegistration {
+): RelationTypeRegistration {
   const endpoints = normalizeEndpoints(entries);
   return {
     type: verb.type,
@@ -235,16 +227,14 @@ function assembleRegistration(
 }
 
 /**
- * Normal form of a registration: shorthand folded into `endpoints`; lists
- * sorted and deduplicated; structurally equal entries deduplicated. An entry
- * without any constraint makes the type open, in which case `endpoints` is
- * omitted. The result never carries the shorthand fields.
+ * Normal form of a registration: lists sorted and deduplicated; structurally
+ * equal entries deduplicated. An entry without any constraint makes the type
+ * open, in which case `endpoints` is omitted. Expects a registration parsed with
+ * `RelationTypeRegistrationSchema`; unknown keys are not inspected here.
  * @param registration - The registration to normalise.
  * @returns A new normalised registration.
  */
-export function normalizeRelationTypeRegistration(
-  registration: RelationTypeRegistration,
-): NormalizedRelationTypeRegistration {
+export function normalizeRelationTypeRegistration(registration: RelationTypeRegistration): RelationTypeRegistration {
   return assembleRegistration(registration, relationTypeEndpoints(registration));
 }
 
@@ -286,6 +276,7 @@ function mergeDescription(existing: RelationTypeRegistration, next: RelationType
 
 /**
  * Merges a further contribution into an existing registration of the same type.
+ * Expects registrations parsed with `RelationTypeRegistrationSchema`.
  * `implication` and `description` are taken from whichever side has them. Endpoints are the
  * normalised union of both entry lists. An unconstrained side makes the merged
  * type open (its `endpoints` are omitted), because an open entry permits every
@@ -299,7 +290,7 @@ function mergeDescription(existing: RelationTypeRegistration, next: RelationType
 export function mergeRelationTypeRegistrations(
   existing: RelationTypeRegistration,
   next: RelationTypeRegistration,
-): NormalizedRelationTypeRegistration {
+): RelationTypeRegistration {
   if (existing.type !== next.type) {
     throw new Error(`Cannot merge relation type '${next.type}' into relation type '${existing.type}'`);
   }
