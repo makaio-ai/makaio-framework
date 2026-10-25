@@ -136,7 +136,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.4.15",
     "@changesets/cli": "^2.29.0",
-    "@eslint/js": "^9.36.0",
+    "@eslint/js": "^10.0.1",
     "@makaio/build-tooling": "workspace:*",
     "@octokit/rest": "^22.0.1",
     "@playwright/test": "^1.60.0",
