@@ -36,7 +36,7 @@
     "@makaio/ui-theme": "workspace:*",
     "@makaio/ui-views": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "hono": "^4.13.13",
+    "hono": "^4.13.16",
     "lucide-react": "^0.562.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
