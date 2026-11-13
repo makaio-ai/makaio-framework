@@ -17,7 +17,7 @@
     "@makaio/bus-transport-websocket": "workspace:*",
     "@makaio/kernel": "workspace:*",
     "@makaio/runtime-node": "workspace:*",
-    "hono": "^4.13.13",
+    "hono": "^4.13.16",
     "ws": "^8.22.0"
   },
   "license": "MIT",

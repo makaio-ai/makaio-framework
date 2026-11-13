@@ -34,7 +34,7 @@
     "@makaio/utils": "workspace:*",
     "commander": "^14.0.3",
     "esbuild": "^0.28.2",
-    "hono": "^4.13.13",
+    "hono": "^4.13.16",
     "ink": "^6.5.1",
     "react": "^19.3.0",
     "zod": "4.6.5"
