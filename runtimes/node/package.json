@@ -64,7 +64,7 @@
     "@makaio/utils": "workspace:*",
     "drizzle-orm": "0.45.4",
     "execa": "^9.5.2",
-    "glob": "13.0.6",
+    "glob": "14.0.2",
     "hono": "^4.13.13",
     "minimatch": "^10.2.6",
     "node-pty": "^1.2.0-beta.8",
