@@ -18,6 +18,8 @@ class MockSubprocess {
   stderr = { on: vi.fn() };
   on = vi.fn();
   kill = vi.fn();
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
 }
 
 const mockSpawn = vi.fn();

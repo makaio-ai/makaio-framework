@@ -61,6 +61,10 @@ export interface JsonRpcClient {
 /**
  * Creates a JSON-RPC 2.0 client wrapping a stdio transport
  * @param transport - Stdio transport for sending/receiving messages
+ * @param onTransportFailure - Owner callback for a transport failure. It runs
+ *   after the client has rejected its in-flight requests with that failure, and
+ *   its subscription ends with the client, so a transport reused by a later
+ *   client never notifies an earlier client's owner.
  * @returns JSON-RPC client interface
  * @example
  * ```ts
@@ -84,29 +88,34 @@ export interface JsonRpcClient {
  * });
  * ```
  */
-export function createJsonRpcClient(transport: StdioTransport): JsonRpcClient {
-  // Bridge: wrap StdioTransport as IJsonlTransport for the generic client.
-  // StdioTransport uses single-callback registration (last-write-wins) while
-  // IJsonlTransport uses multi-listener sets with unsubscribe returns. The
-  // bridge satisfies the type contract; unsubscription is a no-op because
-  // StdioTransport does not support it.
+export function createJsonRpcClient(
+  transport: StdioTransport,
+  onTransportFailure?: (error: Error) => void,
+): JsonRpcClient {
+  // Bridge: present StdioTransport as IJsonlTransport for the generic client.
+  // Both are multi-subscriber, and the generic client removes its own
+  // subscriptions when it closes.
   const bridgedTransport: IJsonlTransport = {
     send: (msg) => transport.send(msg),
     close: () => transport.close(),
-    onMessage: (listener) => {
-      transport.onMessage((msg) => listener(msg));
-      return () => {};
-    },
-    onError: (listener) => {
-      transport.onError((err) => listener(err));
-      return () => {};
-    },
+    onMessage: (listener) => transport.onMessage(listener),
+    onError: (listener) => transport.onError(listener),
     get process() {
       return undefined as never;
     },
   };
 
   const generic = createGenericClient(bridgedTransport);
+  // Subscribed after the generic client, which settles its in-flight requests
+  // with the failure before the owner reacts to it.
+  // The generic client shuts itself down on a failure without going through
+  // `close()` below, so the subscription also ends itself on its first failure.
+  const unsubscribeTransportFailure = onTransportFailure
+    ? transport.onError((error) => {
+        unsubscribeTransportFailure?.();
+        onTransportFailure(error);
+      })
+    : undefined;
   let serverRequestUnsubscribe: (() => void) | undefined;
 
   return {
@@ -151,6 +160,7 @@ export function createJsonRpcClient(transport: StdioTransport): JsonRpcClient {
      * Close the client and cleanup resources
      */
     close(): void {
+      unsubscribeTransportFailure?.();
       serverRequestUnsubscribe?.();
       serverRequestUnsubscribe = undefined;
       generic.close();

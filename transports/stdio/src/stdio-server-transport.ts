@@ -137,18 +137,13 @@ export class StdioServerTransport implements BusTransport {
       void this.handleInbound(raw);
     });
 
+    // The JSONL transport reports every end of the child exactly once, and only
+    // after the last stdout message, so a response the child wrote before
+    // exiting still settles its correlation before the session terminates.
+    // TODO(FACT-459): bound the stdout drain after exit (I2/O3 drain deadline); a descendant holding stdout keeps the session open until close.
     session.onError((error) => {
       if (this.jsonl !== session) return;
-      this.terminateSession(error, true);
-    });
-
-    // Wire process exit: clean up and notify disconnected.
-    session.process.once('exit', (code) => {
-      if (this.jsonl !== session) return;
-      this.terminateSession(
-        new Error(`Child process exited (code ${code ?? 'signal'}) before subscribe-sync handshake completed`),
-        false,
-      );
+      this.terminateSession(error);
     });
 
     // Replay any pre-connect subscriptions to the child process.
@@ -174,11 +169,12 @@ export class StdioServerTransport implements BusTransport {
         ? Array<{ nodeId: string; payload: unknown }>
         : boolean
   > {
-    if (this.jsonl === null) {
+    const jsonl = this.writableJsonl();
+    if (jsonl === null) {
       throw new Error('StdioServerTransport: not connected');
     }
 
-    this.jsonl.send(message);
+    jsonl.send(message);
 
     return trackMessageCorrelation(message, this.correlations, timeout ?? DEFAULT_REQUEST_TIMEOUT_MS);
   }
@@ -235,9 +231,7 @@ export class StdioServerTransport implements BusTransport {
     const resolvedDeliveryClass = deliveryClass ?? this.localSubscriptions.get(subject)?.deliveryClass ?? 'relayable';
     this.localSubscriptions.set(subject, { priorities, filter, deliveryClass: resolvedDeliveryClass });
 
-    if (this.jsonl !== null) {
-      this.sendSubscribeMessage(subject, filter, priorities, resolvedDeliveryClass);
-    }
+    this.sendSubscribeMessage(subject, filter, priorities, resolvedDeliveryClass);
   }
 
   /**
@@ -251,8 +245,8 @@ export class StdioServerTransport implements BusTransport {
   public async unsubscribe(subject: string): Promise<void> {
     const wasSubscribed = this.localSubscriptions.delete(subject);
 
-    if (this.jsonl !== null && wasSubscribed) {
-      this.jsonl.send({
+    if (wasSubscribed) {
+      this.writableJsonl()?.send({
         type: 'unsubscribe',
         subjects: { [subject]: [] },
       });
@@ -260,17 +254,13 @@ export class StdioServerTransport implements BusTransport {
   }
 
   /**
-   * Returns `true` when the child process is running and the subscribe-sync
-   * handshake has completed.
+   * Returns `true` when the subscribe-sync handshake has completed and the
+   * child can still receive writes. Agrees with `send()`: both stop at the
+   * observed child exit (code or signal), before the session is terminated.
    * @returns `true` if the transport can send messages
    */
   public isReady(): boolean {
-    return (
-      this.jsonl !== null &&
-      this.terminalError === null &&
-      this.handshakeComplete &&
-      this.jsonl.process.exitCode === null
-    );
+    return this.terminalError === null && this.handshakeComplete && this.writableJsonl() !== null;
   }
 
   /**
@@ -300,11 +290,27 @@ export class StdioServerTransport implements BusTransport {
   }
 
   /**
-   * Move the current session into a terminal failed state.
-   * @param error - Failure that ended the session.
-   * @param closeJsonl - Whether to kill/close the underlying JSONL transport.
+   * Return the current JSONL session only while the child can still receive
+   * writes.
+   *
+   * Writing is blocked from the observed child exit onwards, although the
+   * session itself stays open until stdout closes: a descendant holding stdout
+   * delays `close` well past `exit`, and a write to the destroyed stdin would
+   * fail silently while its correlation kept waiting for a reply that can
+   * never come. Stdout keeps draining for requests that are already pending.
+   * @returns The session while the child's stdin is writable, otherwise `null`.
    */
-  private terminateSession(error: Error, closeJsonl: boolean): void {
+  private writableJsonl(): IJsonlTransport | null {
+    const jsonl = this.jsonl;
+    return jsonl !== null && jsonl.process.stdin?.writable === true ? jsonl : null;
+  }
+
+  /**
+   * Move the current session into a terminal failed state and release its
+   * JSONL transport.
+   * @param error - Failure that ended the session.
+   */
+  private terminateSession(error: Error): void {
     const jsonl = this.jsonl;
     this.jsonl = null;
     this.handshakeComplete = false;
@@ -316,9 +322,7 @@ export class StdioServerTransport implements BusTransport {
 
     this.correlations.cleanup();
 
-    if (closeJsonl) {
-      jsonl?.close();
-    }
+    jsonl?.close();
 
     this.onDisconnected?.();
   }
@@ -352,7 +356,7 @@ export class StdioServerTransport implements BusTransport {
       this.readyReject = null;
 
       // Send our own sync-complete so the child knows the host is ready too.
-      this.jsonl?.send({ type: 'subscribe-sync-complete' });
+      this.writableJsonl()?.send({ type: 'subscribe-sync-complete' });
 
       this.onConnected?.();
       return;
@@ -385,10 +389,11 @@ export class StdioServerTransport implements BusTransport {
     priorities: number[] = [],
     deliveryClass: SubscriptionDeliveryClass = 'relayable',
   ): void {
-    if (this.jsonl === null) return;
+    const jsonl = this.writableJsonl();
+    if (jsonl === null) return;
 
     if (subject !== undefined) {
-      this.jsonl.send({
+      jsonl.send({
         type: 'subscribe',
         subjects: { [subject]: priorities },
         deliveryClasses: { [subject]: deliveryClass },
@@ -412,7 +417,7 @@ export class StdioServerTransport implements BusTransport {
       }
     }
 
-    this.jsonl.send({
+    jsonl.send({
       type: 'subscribe',
       subjects,
       deliveryClasses,

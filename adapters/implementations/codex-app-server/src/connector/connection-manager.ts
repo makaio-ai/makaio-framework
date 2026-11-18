@@ -154,8 +154,9 @@ async function createClient(ctx: ConnectionManagerContext): Promise<void> {
   if (!ctx.getInjectedTransport()) {
     ctx.setOwnedTransport(transport);
   }
-  ctx.setJsonRpcClient(makeJsonRpcClient(transport));
-  transport.onError((error) => ctx.handleError(error, true));
+  // The failure subscription belongs to this client generation: an injected
+  // transport outlives `resetClient`, and the next client must not inherit it.
+  ctx.setJsonRpcClient(makeJsonRpcClient(transport, (error) => ctx.handleError(error, true)));
   wireRequestedShutdownFinalisation(ctx, transport);
   ctx.registerClientHandlers();
 }

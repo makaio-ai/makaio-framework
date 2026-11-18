@@ -12,9 +12,10 @@ import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createStdioTransport, type StdioTransport } from '../createStdioTransport.js';
+import { createJsonRpcClient } from '../jsonRpcClient.js';
 
 /**
  * Create a working directory holding an `app-server` script.
@@ -105,6 +106,22 @@ describe('Codex transport expected-shutdown separation', () => {
     expect(errors[0]!.message).toContain('exited with code 4');
   });
 
+  // Arm 2b: a clean exit nobody asked for is just as terminal. After a malformed
+  // line (now non-fatal) it is the only signal that settles pending RPCs early.
+  it('rejects an in-flight request when the child exits 0 after a malformed line', async () => {
+    const cwd = appServerCwd(
+      "process.stdin.once('data', () => { process.stdout.write('not json\\n', () => process.exit(0)); });\n",
+    );
+    const transport = createStdioTransport(cwd, {}, process.execPath);
+    const errors = recordErrors(transport);
+    const client = createJsonRpcClient(transport);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(client.request('initialize', {})).rejects.toThrow('codex app-server exited with code 0');
+    expect(errors.map((error) => error.message)).toEqual(['codex app-server exited with code 0']);
+    warnSpy.mockRestore();
+  });
+
   // Arm 3: the overlap. The child ignores the signal and then dies on its own,
   // so the exit callback lands *after* the marker for a cause the marker did not
   // create. The contract's answer is that the exit is reported as an exit and no
@@ -137,5 +154,20 @@ describe('Codex transport expected-shutdown separation', () => {
     expect(code).toBe(23);
     expect(errors).toEqual([]);
     expect(transport.shutdownRequested()).toBe(true);
+  });
+});
+
+describe('Codex transport failure fan-out', () => {
+  // The JSON-RPC client and its owner, the connector, both subscribe to the
+  // error channel. Both must observe the same failure: the client to reject
+  // in-flight requests with it, the connector to terminate.
+  it('rejects an in-flight request with the transport failure and still notifies the owner', async () => {
+    const cwd = appServerCwd("process.stdin.once('data', () => process.exit(4));\n");
+    const transport = createStdioTransport(cwd, {}, process.execPath);
+    const ownerErrors: Error[] = [];
+    const client = createJsonRpcClient(transport, (error) => ownerErrors.push(error));
+
+    await expect(client.request('initialize', {})).rejects.toThrow('codex app-server exited with code 4');
+    expect(ownerErrors.map((error) => error.message)).toEqual(['codex app-server exited with code 4']);
   });
 });

@@ -380,7 +380,7 @@ describe('createJsonRpcClient', () => {
       await expect(p2).rejects.toThrow('JSON-RPC client closed');
     });
 
-    it('rejects all pending requests when the transport emits an error', async () => {
+    it('closes the client when the transport emits an error', async () => {
       const transport = createFakeTransport();
       const client = createJsonRpcClient(transport);
 
@@ -389,6 +389,9 @@ describe('createJsonRpcClient', () => {
       transport.simulateError(new Error('transport died'));
 
       await expect(p1).rejects.toThrow('transport died');
+      await expect(client.request('later', {})).rejects.toThrow('JSON-RPC client is closed');
+      expect(transport.sent).toHaveLength(1);
+      expect(transport.closeCount).toBe(1);
     });
 
     it('detaches from transport so no further messages are dispatched after close', () => {

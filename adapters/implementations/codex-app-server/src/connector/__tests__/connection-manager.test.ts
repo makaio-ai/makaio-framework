@@ -1,3 +1,6 @@
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { CONNECTOR_EXIT_OBSERVATION_MS, GenerationRetirementLedger } from '@makaio/ai-adapters-core';
@@ -9,7 +12,7 @@ import {
   wireRequestedShutdownFinalisation,
 } from '../connection-manager.js';
 import type { JsonRpcClient } from '../../utils/jsonRpcClient.js';
-import type { StdioTransport } from '../../utils/createStdioTransport.js';
+import { createStdioTransport, type StdioTransport } from '../../utils/createStdioTransport.js';
 import { MockJsonRpcClient } from '../../__tests__/shared.js';
 
 /** Observable connection state a reset is expected to have cleared. */
@@ -60,8 +63,8 @@ function createResetHarness(closeClient: () => void, closeTransport: () => void)
   const transport: StdioTransport = {
     send: () => undefined,
     close: closeTransport,
-    onMessage: () => undefined,
-    onError: () => undefined,
+    onMessage: () => () => undefined,
+    onError: () => () => undefined,
     exited,
     shutdownRequested: () => shutdownRequested,
   };
@@ -222,6 +225,46 @@ describe('Codex requested-shutdown finalisation', () => {
     expect(connectorTransport(harness.context)).toBeUndefined();
     // The interrupted turn is still finalised — that half was never the problem.
     expect(harness.finalisations).toEqual([{ code: null, terminate: false }]);
+  });
+});
+
+/**
+ * Each process exit is classified once and finalised once. An unrequested exit
+ * travels the error channel, whose subscriber (the connector) shuts itself down
+ * by calling `close()` — and that late close must not turn the same exit into a
+ * requested one for the `exited` consumer. Real children, because the ordering
+ * of `exit`, the error dispatch and the promise continuation is the subject.
+ */
+describe('Codex unrequested exit is finalised exactly once', () => {
+  it.each([
+    { label: 'clean exit 0', code: 0 },
+    { label: 'non-zero exit', code: 4 },
+  ])('reports one terminal error and no requested finalisation for a $label', async ({ code }) => {
+    const cwd = mkdtempSync(join(tmpdir(), 'codex-appserver-'));
+    const script = join(cwd, 'app-server');
+    writeFileSync(script, `process.exit(${code});\n`, 'utf8');
+    chmodSync(script, 0o755);
+
+    const harness = createResetHarness(
+      () => undefined,
+      () => undefined,
+    );
+    const transport = createStdioTransport(cwd, {}, process.execPath);
+    const errors: Error[] = [];
+    transport.onError((error) => {
+      errors.push(error);
+      // What the connector's failure handling does: shut down in response.
+      transport.close();
+    });
+    wireRequestedShutdownFinalisation(harness.context, transport);
+
+    await transport.exited;
+    // Let the finalisation continuation chained on `exited` run.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(errors.map((error) => error.message)).toEqual([`codex app-server exited with code ${code}`]);
+    expect(transport.shutdownRequested()).toBe(false);
+    expect(harness.finalisations).toEqual([]);
   });
 });
 

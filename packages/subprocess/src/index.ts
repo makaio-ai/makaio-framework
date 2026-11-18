@@ -6,3 +6,4 @@ export { createProcessLifecycle } from './process-lifecycle.js';
 export type { ProcessLifecycleOptions, ProcessLifecycleHandle, ProcessState } from './process-lifecycle.js';
 export { decodeJsonlChunk } from './jsonl-framing.js';
 export type { JsonlDecodeResult } from './jsonl-framing.js';
+export { notifyListeners } from './notify-listeners.js';
