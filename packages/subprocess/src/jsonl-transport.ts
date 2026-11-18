@@ -32,19 +32,9 @@ import {
   type ProcessSignalPort,
   type StopOwnership,
 } from './process-tree.js';
-import { nonNegativeOption } from './option-values.js';
+import { nonNegativeOption } from '@makaio/utils';
+import { DEFAULT_DRAIN_TIMEOUT_MS, DEFAULT_EXIT_OBSERVATION_MS, DEFAULT_KILL_GRACE_MS } from './stop-budget.js';
 import { startStopEscalation, windowsTreeEvidence, type StopEscalation, type StopHost } from './stop-escalation.js';
-
-/**
- * Default drain window. Conservative: a final response a descendant writes
- * shortly after the child exited is still delivered; only a stalled or
- * inherited pipe ever waits this long.
- */
-const DEFAULT_DRAIN_TIMEOUT_MS = 5_000;
-/** Default time between `SIGTERM` and `SIGKILL`. */
-const DEFAULT_KILL_GRACE_MS = 5_000;
-/** Default wait for the exit after the forceful stage. */
-const DEFAULT_EXIT_OBSERVATION_MS = 2_000;
 
 /**
  * How far stdout got. Only `open` still decodes: `ended` reached the genuine

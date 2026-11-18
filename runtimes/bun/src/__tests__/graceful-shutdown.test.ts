@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createGracefulShutdown, type BunServer } from '../index.js';
 
 describe('createGracefulShutdown', () => {
@@ -11,7 +11,7 @@ describe('createGracefulShutdown', () => {
     try {
       const handler = createGracefulShutdown({
         label: 'server',
-        runtime: { shutdown },
+        runtime: { shutdown, stopBudgetMs: () => 0 },
         bunServer: { port: 3000, hostname: '127.0.0.1', stop } satisfies BunServer,
         exit,
       });
@@ -38,7 +38,7 @@ describe('createGracefulShutdown', () => {
     try {
       const handler = createGracefulShutdown({
         label: 'server',
-        runtime: { shutdown },
+        runtime: { shutdown, stopBudgetMs: () => 0 },
         bunServer: { port: 3000, hostname: '127.0.0.1', stop } satisfies BunServer,
         exit,
       });
@@ -53,5 +53,70 @@ describe('createGracefulShutdown', () => {
       info.mockRestore();
       error.mockRestore();
     }
+  });
+
+  describe('force-exit deadline', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    /**
+     * Start a shutdown whose runtime settles after a given time.
+     * @param stopBudgetMs - Bound the runtime reports.
+     * @param shutdownMs - Time the runtime's shutdown takes.
+     * @param timeoutMs - Explicit override of the deadline.
+     * @returns The exit hook and the handler's promise.
+     */
+    function startShutdown(
+      stopBudgetMs: number,
+      shutdownMs: number,
+      timeoutMs?: number,
+    ): { readonly exit: ReturnType<typeof vi.fn>; readonly done: Promise<void> } {
+      vi.useFakeTimers();
+      vi.spyOn(console, 'info').mockImplementation(() => undefined);
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const exit = vi.fn((_code: number): never => undefined as never);
+      const handler = createGracefulShutdown({
+        label: 'server',
+        runtime: {
+          shutdown: () => new Promise<void>((resolve) => setTimeout(resolve, shutdownMs)),
+          stopBudgetMs: () => stopBudgetMs,
+        },
+        bunServer: { port: 3000, hostname: '127.0.0.1', stop: () => undefined } satisfies BunServer,
+        exit,
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      });
+      return { exit, done: handler('SIGTERM') };
+    }
+
+    it('follows the runtime bound: a 12 s runtime is not cut off at 10 s', async () => {
+      const { exit, done } = startShutdown(12_000, 12_500);
+
+      await vi.advanceTimersByTimeAsync(10_001);
+      expect(exit).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(2_500);
+      await done;
+      expect(exit).toHaveBeenCalledTimes(1);
+      expect(exit).toHaveBeenCalledWith(0);
+    });
+
+    it('forces the exit once the runtime bound and its headroom have passed', async () => {
+      const { exit } = startShutdown(12_000, 2 ** 31 - 1);
+
+      await vi.advanceTimersByTimeAsync(12_999);
+      expect(exit).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(2);
+      expect(exit).toHaveBeenCalledWith(1);
+    });
+
+    it('lets an explicit timeout override the runtime bound', async () => {
+      const { exit } = startShutdown(12_000, 2 ** 31 - 1, 500);
+
+      await vi.advanceTimersByTimeAsync(501);
+      expect(exit).toHaveBeenCalledWith(1);
+    });
   });
 });

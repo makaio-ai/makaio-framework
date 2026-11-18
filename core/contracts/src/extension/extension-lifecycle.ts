@@ -17,6 +17,19 @@ export interface ExtensionIdentity {
   readonly [extensionIdentityBrand]: true;
 }
 
+/** Options the host passes to {@link ExtensionServiceLifecycle.init}. */
+export interface ExtensionInitOptions {
+  /**
+   * Aborted when the host cancels the start (a stop request that arrives while
+   * extensions are still starting). A service whose `init()` waits for something
+   * outside the process (a child process's readiness, a peer's reply) should end
+   * that wait when the signal aborts and release what it has started, so that
+   * the host's shutdown is not held up by the remainder of the wait. A service
+   * that ignores it keeps the host waiting for the `init()` to settle.
+   */
+  readonly signal?: AbortSignal;
+}
+
 /**
  * Minimal lifecycle shape accepted as an extension service.
  *
@@ -24,10 +37,30 @@ export interface ExtensionIdentity {
  * participate in extension startup when they expose the same lifecycle.
  */
 export interface ExtensionServiceLifecycle {
-  /** Initialize the service when startup work is not constructor-owned. */
-  init?(): Promise<void> | void;
+  /**
+   * Initialize the service when startup work is not constructor-owned.
+   * @param options - What the host offers the start; see {@link ExtensionInitOptions}.
+   */
+  init?(options?: ExtensionInitOptions): Promise<void> | void;
   /** Destroy the service and release resources when teardown is required. */
   destroy?(): Promise<void> | void;
+  /**
+   * Longest time, in milliseconds, the host should wait for this extension to
+   * stop: the whole of its teardown (its contributions' stop, {@link destroy}
+   * and the release of its storage handlers) counts against this one window.
+   *
+   * Declare it when the service owns work that legitimately takes longer than
+   * the host's default window, such as several child processes that are stopped
+   * one after the other, and derive it from the limits the service enforces
+   * itself. When the window closes first (the host adds a little scheduling
+   * headroom to the declared value, so a stop that uses all of it is not cut
+   * off), the host reports the extension as not stopped by name and goes on with
+   * the next one, so a stuck extension cannot consume the time of the others.
+   * Omitted, the host's default window applies, which is one bounded stop of one
+   * child process. Must be a non-negative finite number: a service declaring
+   * anything else fails its start.
+   */
+  readonly stopBudgetMs?: number;
   /**
    * Called after the extension reaches active state.
    *

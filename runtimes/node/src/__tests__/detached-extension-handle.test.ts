@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, DEFAULT_REQUEST_TIMEOUT_MS, type IMakaioBus } from '@makaio/bus-core';
 import type { NodeExtensionContext } from '@makaio/contracts';
 import type { DetachedDescriptor, ExtensionServiceLifecycle } from '@makaio/contracts/extension';
+import { processStopBudgetMs } from '@makaio/subprocess';
 import { createDetachedExtensionPackage } from '../detached-extension-handle.js';
 import { isMakaioExtensionLike } from '../load-extensions.js';
 
@@ -9,7 +10,8 @@ const subprocessMocks = vi.hoisted(() => ({
   createProcessLifecycle: vi.fn(),
 }));
 
-vi.mock('@makaio/subprocess', () => ({
+vi.mock('@makaio/subprocess', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@makaio/subprocess')>()),
   createProcessLifecycle: subprocessMocks.createProcessLifecycle,
 }));
 
@@ -253,7 +255,10 @@ describe('createDetachedExtensionPackage', () => {
       expect(request).toHaveBeenCalledWith(
         expect.anything(),
         { reason: 'runtime-shutdown' },
-        expect.objectContaining({ timeout: undefined }),
+        expect.objectContaining({ timeout: DEFAULT_REQUEST_TIMEOUT_MS }),
+      );
+      expect(subprocessMocks.createProcessLifecycle).toHaveBeenCalledWith(
+        expect.objectContaining({ stopTiming: { killGraceMs: undefined } }),
       );
     });
 
@@ -263,6 +268,41 @@ describe('createDetachedExtensionPackage', () => {
       const service = pkg.create!(mockCtx) as ExtensionServiceLifecycle;
 
       await expect(service.destroy?.()).resolves.toBeUndefined();
+    });
+  });
+
+  describe('stop budget', () => {
+    /**
+     * Create the service of a descriptor.
+     * @param descriptor - Detached descriptor.
+     * @returns The service the extension's `create` returns.
+     */
+    function serviceOf(descriptor: DetachedDescriptor): ExtensionServiceLifecycle {
+      const pkg = createDetachedExtensionPackage(descriptor, FAKE_EXTENSION_PATH);
+      return pkg.create!({ bus: {} } as Parameters<NonNullable<typeof pkg.create>>[0]) as ExtensionServiceLifecycle;
+    }
+
+    it.each([
+      ['bus-stdio', makeBusStdioDescriptor],
+      ['bus-websocket', makeBusWebSocketDescriptor],
+    ])('adds the destroy request window to the stop of the %s child, both set by shutdownTimeoutMs', (_, make) => {
+      const base = make();
+      const service = serviceOf({
+        ...base,
+        transport: { ...base.transport, shutdownTimeoutMs: 1_000 },
+      });
+
+      expect(service.stopBudgetMs).toBe(1_000 + processStopBudgetMs({ killGraceMs: 1_000 }));
+    });
+
+    it('runs the destroy request under the bus default when no window is declared', () => {
+      expect(serviceOf(makeBusWebSocketDescriptor()).stopBudgetMs).toBe(
+        DEFAULT_REQUEST_TIMEOUT_MS + processStopBudgetMs(),
+      );
+    });
+
+    it('declares none for an mcp-stdio child, whose MCP client keeps its own stop contract', () => {
+      expect(serviceOf(makeMcpStdioDescriptor()).stopBudgetMs).toBeUndefined();
     });
   });
 

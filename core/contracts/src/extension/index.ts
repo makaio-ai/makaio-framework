@@ -69,7 +69,12 @@ export type {
   AdapterProviderDefinitionContract,
   AdapterProviderRef,
 } from './adapter-definition.js';
-export type { ExtensionIdentity, ExtensionService, ExtensionServiceLifecycle } from './extension-lifecycle.js';
+export type {
+  ExtensionIdentity,
+  ExtensionInitOptions,
+  ExtensionService,
+  ExtensionServiceLifecycle,
+} from './extension-lifecycle.js';
 export type { CredentialResolver, ExtensionContext, NodeExtensionContext } from './extension-context.js';
 export type {
   ExtensionCliBeforeRunContext,

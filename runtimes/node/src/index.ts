@@ -24,6 +24,14 @@ export {
 export { FileConfigStorage } from './file-config-storage.js';
 export { resolveStaticModelRegistryPath } from './model-registry/static-registry-path.js';
 export { waitForServerListening, resolveListeningPort } from './http-server-utils.js';
+export { installHostShutdown } from './host-shutdown.js';
+export type {
+  HostShutdown,
+  HostShutdownOptions,
+  HostShutdownStep,
+  HostStopSignal,
+} from './host-shutdown.js';
+export { LOCAL_STEP_STOP_BUDGET_MS, resourceStepStopBudgetMs } from './runtime-stop-budget.js';
 export { createHonoRouteGraph, type HonoRouteGraph, type HonoRouteGraphOptions } from './hono-route-graph.js';
 export { createHttpRouteGraphBuilder, type HttpRouteGraphBuilder } from './http-route-graph-builder.js';
 export type { HttpRouteContribution, HttpContributionPhase } from './http-route-contribution.js';

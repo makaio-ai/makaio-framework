@@ -615,6 +615,33 @@ export interface CoreBootOptions {
    * When omitted, the platform-default factory is used (Node: `@hono/node-server/serve-static`).
    */
   readonly createMount?: BridgeBrowserOptions['createMount'];
+
+  /**
+   * Cancels the boot. When the signal aborts, the boot stops at its next
+   * checkpoint (between its phases and between extension starts), rolls back
+   * what it has started through the same steps a failed startup uses, and
+   * rejects with the signal's reason. When that rollback itself fails, it
+   * rejects with an `AggregateError` instead, whose `errors` are the rollback
+   * failures and whose `cause` is the reason, so a host can tell a clean
+   * cancellation from one that left resources behind. A boot that already
+   * returned is not affected; its owner shuts the runtime down.
+   *
+   * A host that handles process signals passes the signal here so a stop
+   * request that arrives while detached children are being started does not
+   * dereference a runtime that does not exist yet.
+   */
+  readonly signal?: AbortSignal;
+
+  /**
+   * Receives, before the boot does any work, the bound on how long cancelling
+   * it takes: the grace for the phase in flight to reach its next checkpoint
+   * plus the rollback of the steps registered so far. The function reads the
+   * boot's live state, so call it when the cancellation happens, not earlier.
+   * A host that must end within a bounded time after a stop request adds it to
+   * its own window for the boot.
+   * @param stopBudgetMs - Reads the cancellation bound, in milliseconds.
+   */
+  readonly onCancellationBudget?: (stopBudgetMs: () => number) => void;
 }
 
 /** Context passed to host-owned coordinator setup. */
@@ -718,4 +745,15 @@ export interface MakaioRuntime {
    * @throws An AggregateError when any shutdown step failed.
    */
   shutdown(): Promise<void>;
+
+  /**
+   * Longest time {@link shutdown} takes, in milliseconds: the windows of the
+   * shutdown steps added up. Every step runs inside a window of its own, so
+   * this holds however many of them hang; the extensions are the largest part,
+   * counted as the extensions that are active now, each by the window its own
+   * stop code declares. A host that bounds its teardown reads it for its
+   * backstop when the shutdown begins.
+   * @returns The bound, in milliseconds.
+   */
+  stopBudgetMs(): number;
 }

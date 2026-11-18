@@ -167,6 +167,21 @@ export interface ProcessLifecycleOptions {
   readonly onStateChange?: (state: ProcessState) => void;
 }
 
+/** Options of {@link ProcessLifecycleHandle.start}. */
+export interface ProcessStartOptions {
+  /**
+   * Cancels the start. When it aborts while the start is pending (a run waiting
+   * for its readiness, or a previous run still ending), the lifecycle is stopped
+   * exactly as by `stop()`, so the same guarantees hold: the readiness wait is
+   * aborted, its subscriptions are removed, a pending automatic restart is
+   * dropped and the child is stopped within its bounded stop. `start()` then
+   * rejects. A signal that is already aborted rejects with its reason before
+   * anything is spawned. A start that settled before the signal aborted is not
+   * affected: stopping a running child stays the owner's `stop()`.
+   */
+  readonly signal?: AbortSignal;
+}
+
 /** Handle for a managed subprocess lifecycle. */
 export interface ProcessLifecycleHandle {
   /** Transport of the current run, until that run has ended. */
@@ -184,8 +199,9 @@ export interface ProcessLifecycleHandle {
    * for its end (bounded by the stop timing) and spawns afterwards; the state
    * stays `crashed` meanwhile, and a `stop()` or another `start()` that comes
    * first rejects this call without spawning anything.
+   * @param options - Start options; see {@link ProcessStartOptions}.
    */
-  start(): Promise<void>;
+  start(options?: ProcessStartOptions): Promise<void>;
   /**
    * Stop the current run and drop a pending restart. Sends `SIGTERM`, then
    * `SIGKILL` after the kill grace; every phase is bounded, and a run that may
@@ -227,6 +243,12 @@ interface Run {
   readiness: RunReadiness | 'pending';
   /** Clear the health timer and the readiness subscription. */
   readonly stopWaiting: () => void;
+}
+
+/** What one `start()` call knows about the run it spawned. */
+interface StartAttempt {
+  /** The run this start spawned; unset while it still waits for the previous run to end. */
+  run?: Run;
 }
 
 /**
@@ -284,7 +306,32 @@ class ProcessLifecycle implements ProcessLifecycleHandle {
     return this.lifecycleState;
   }
 
-  public async start(): Promise<void> {
+  public async start(options: ProcessStartOptions = {}): Promise<void> {
+    const { signal } = options;
+    signal?.throwIfAborted();
+    // The cancellation is the abort path `stop()` already has (I10): it is not
+    // reimplemented here, only requested. It applies while this start is
+    // unsettled: once the run it spawned has decided its readiness (ready, timed
+    // out, stopped or ended) an abort has no effect, even when it is raised by
+    // the observer that readiness notified, before the listener is removed below.
+    const attempt: StartAttempt = {};
+    const onAbort = (): void => {
+      if (attempt.run === undefined || attempt.run.readiness === 'pending') void this.stop();
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    try {
+      await this.startRun(attempt);
+    } finally {
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+
+  /**
+   * Spawn a new run, once the previous one has ended, and wait for its readiness.
+   * @param attempt - The start's record, which receives the run once it is spawned.
+   * @returns Settles with the run's readiness.
+   */
+  private async startRun(attempt: StartAttempt): Promise<void> {
     assertTransition(this.lifecycleState, 'starting');
     this.cancelRestart();
     // A run that is still current while the lifecycle may start is the one a
@@ -301,6 +348,7 @@ class ProcessLifecycle implements ProcessLifecycleHandle {
       }
     }
     const run = this.launch();
+    attempt.run = run;
     this.transition('starting');
     this.flushNotices();
     return run.started.promise;

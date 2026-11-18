@@ -7,6 +7,7 @@ import type {
   ProcessLifecycleHandle,
   ProcessLifecycleOptions,
   ProcessRunOutcome,
+  ProcessStartOptions,
   ProcessState,
 } from '../process-lifecycle.js';
 import type { IJsonlTransport, SubprocessSpawnOptions } from '../types.js';
@@ -191,13 +192,17 @@ function sleep(ms: number): Promise<void> {
  * Start a lifecycle and capture the first message of the run it spawns. The
  * transport exists as soon as `start()` returned its promise.
  * @param handle - Lifecycle in a state that allows `start()`.
+ * @param options - Options of the `start()` call.
  * @returns The start promise and the first message of the new run.
  */
-function startCapturingFirstMessage(handle: ProcessLifecycleHandle): {
+function startCapturingFirstMessage(
+  handle: ProcessLifecycleHandle,
+  options?: ProcessStartOptions,
+): {
   started: Promise<void>;
   first: Promise<Record<string, unknown>>;
 } {
-  const started = handle.start();
+  const started = handle.start(options);
   const transport = handle.transport;
   if (transport === undefined) throw new Error('start() did not create a transport');
   const first = new Promise<Record<string, unknown>>((resolve) => {
@@ -226,10 +231,11 @@ function recordMessages(handle: ProcessLifecycleHandle): unknown[] {
  * Start a lifecycle whose child reports its PID as readiness message, and
  * register that PID for cleanup.
  * @param handle - Lifecycle spawning {@link READY_WITH_PID_AND_STAY} or a script with the same first line.
+ * @param options - Options of the `start()` call.
  * @returns The child's PID once the lifecycle is running.
  */
-async function startReportingPid(handle: ProcessLifecycleHandle): Promise<number> {
-  const { started, first } = startCapturingFirstMessage(handle);
+async function startReportingPid(handle: ProcessLifecycleHandle, options?: ProcessStartOptions): Promise<number> {
+  const { started, first } = startCapturingFirstMessage(handle, options);
   const pid = (await first).pid as number;
   strayPids.add(pid);
   await started;
@@ -431,6 +437,77 @@ describe('createProcessLifecycle', { timeout: PROCESS_TEST_TIMEOUT_MS }, () => {
       await sleep(Math.max(0, startedAt + healthTimeoutMs + 200 - Date.now()));
       expect(handle.state).toBe('stopped');
       expect(states).toEqual(['starting', 'stopping', 'stopped']);
+    });
+  });
+
+  describe('cancelling a start with a signal', () => {
+    it('takes the abort path of stop(): readiness is aborted, subscriptions are removed and the lifecycle ends stopped', async () => {
+      const controller = new AbortController();
+      const cancelled = new Error('boot cancelled');
+      let readyCalls = 0;
+      const { handle, states, outcomes } = track({
+        spawn: nodeChild(READY_ONLY_ON_SIGTERM, { processName: 'cancelled' }),
+        stopTiming: { killGraceMs: 300 },
+        onReady: () => {
+          readyCalls += 1;
+        },
+      });
+      const { started, first } = startCapturingFirstMessage(handle, { signal: controller.signal });
+      const messages = recordMessages(handle);
+      await first;
+
+      controller.abort(cancelled);
+
+      await expect(started).rejects.toThrow('Process start aborted by stop(): cancelled');
+      await waitFor(() => handle.state === 'stopped');
+      // The child answers SIGTERM with an object message; it came after the abort and did not make the run ready.
+      expect(messages).toContainEqual({ ready: true });
+      expect(readyCalls).toBe(0);
+      expect(states).toEqual(['starting', 'stopping', 'stopped']);
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0]).toMatchObject({ readiness: 'aborted' });
+      expect(outcomes[0]!.end.cause).toBe('requested');
+    });
+
+    it('rejects with the reason and spawns nothing when the signal is already aborted', async () => {
+      const reason = new Error('already cancelled');
+      const { handle, states } = track({ spawn: nodeChild(READY_AND_STAY) });
+
+      await expect(handle.start({ signal: AbortSignal.abort(reason) })).rejects.toBe(reason);
+
+      expect(handle.state).toBe('idle');
+      expect(handle.generation).toBe(0);
+      expect(states).toEqual([]);
+    });
+
+    it('leaves a start that already settled alone when the signal aborts later', async () => {
+      const controller = new AbortController();
+      const { handle, states } = track({ spawn: nodeChild(READY_WITH_PID_AND_STAY) });
+      await startReportingPid(handle, { signal: controller.signal });
+
+      controller.abort(new Error('late'));
+      await sleep(100);
+
+      expect(handle.state).toBe('running');
+      expect(states).toEqual(['starting', 'running']);
+    });
+
+    it('leaves the run alone when the readiness observers abort the signal', async () => {
+      const controller = new AbortController();
+      const { handle, states } = track({
+        spawn: nodeChild(READY_WITH_PID_AND_STAY),
+        // Delivered synchronously with the readiness, before the start has returned.
+        onStateChange: (state) => {
+          if (state === 'running') controller.abort(new Error('aborted by the observer'));
+        },
+        onReady: () => controller.abort(new Error('aborted by the observer')),
+      });
+
+      await startReportingPid(handle, { signal: controller.signal });
+      await sleep(100);
+
+      expect(handle.state).toBe('running');
+      expect(states).toEqual(['starting', 'running']);
     });
   });
 

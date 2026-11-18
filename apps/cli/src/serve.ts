@@ -27,8 +27,15 @@ import {
   normalizeNodeHostCapabilities,
   createHonoRouteGraph,
   createHttpRouteGraphBuilder,
+  type HonoRouteGraph,
+  type HttpRouteGraphBuilder,
+  installHostShutdown,
+  type HostShutdownOptions,
+  type HostStopSignal,
+  LOCAL_STEP_STOP_BUDGET_MS,
+  resourceStepStopBudgetMs,
 } from '@makaio/runtime-node';
-import { normalizeBusSecret } from '@makaio/utils';
+import { normalizeBusSecret, outerBoundMs } from '@makaio/utils';
 import { MakaioBus } from '@makaio/bus-core';
 import { KernelSubjects } from '@makaio/kernel';
 import type { DevPortalMap } from '@makaio/services-package-manager';
@@ -80,6 +87,22 @@ export interface ServeBootOverrides {
 // ---------------------------------------------------------------------------
 
 /**
+ * What a `serve` host does on a terminal hangup (`SIGHUP`).
+ *
+ * - `'shutdown'`: the hangup runs the same shutdown as `SIGINT` and `SIGTERM`
+ *   (persistent, joined by later signals, every step bounded by a window of its own), so
+ *   the detached extension children, which run in process groups of their own
+ *   and receive no terminal signal, are stopped with the host.
+ * - `'ignore'`: the host installs a listener that does nothing but log the
+ *   first hangup, and keeps running and serving. Ignoring needs a real
+ *   listener: `nohup` alone does not protect a Node host, because Node resets
+ *   an inherited ignored `SIGHUP` at startup, and libraries loaded into the
+ *   host (`signal-exit`, via `proper-lockfile`, `execa` and `ink`) install a
+ *   `SIGHUP` listener that re-raises the signal when it is the only one.
+ */
+export type HangupPolicy = 'shutdown' | 'ignore';
+
+/**
  * Options for the {@link serve} CLI command.
  */
 export interface ServeOptions {
@@ -119,6 +142,12 @@ export interface ServeOptions {
    *   revoked peers.
    */
   peerSigningKeyResolver?: (peerId: string) => Promise<CryptoKey | null>;
+
+  /**
+   * What the host does on a terminal hangup (`SIGHUP`). Defaults to
+   * `'shutdown'`; `serve --ignore-hangup` selects `'ignore'`. See {@link HangupPolicy}.
+   */
+  hangup?: HangupPolicy;
 
   /**
    * Host-owned boot overrides for discovery policy.
@@ -273,67 +302,157 @@ export async function serve(options: ServeOptions): Promise<void> {
   const boundPort = resolveListeningPort(httpServer);
   console.info('[serve] HTTP server listening on port %d', boundPort);
 
-  // --- Shared boot sequence ---
-  let runtime!: MakaioRuntime;
+  await bootUnderHostShutdown(options, {
+    httpServer,
+    routeGraph,
+    builder,
+    auth,
+    lanBind,
+    unregisterLocalCliIdentity,
+  });
+}
+
+/** Signals every serve host stops on, whatever its hangup policy. */
+const STOP_SIGNALS: readonly HostStopSignal[] = ['SIGINT', 'SIGTERM'];
+
+/**
+ * Split the process signals into the ones the host stops on and the ones it survives.
+ * @param hangup - Hangup policy; defaults to `'shutdown'`.
+ * @returns The `signals` and `ignoredSignals` of the host shutdown.
+ */
+function signalPolicy(hangup: HangupPolicy = 'shutdown'): Pick<HostShutdownOptions, 'signals' | 'ignoredSignals'> {
+  return hangup === 'ignore'
+    ? { signals: STOP_SIGNALS, ignoredSignals: ['SIGHUP'] }
+    : { signals: [...STOP_SIGNALS, 'SIGHUP'], ignoredSignals: [] };
+}
+
+/**
+ * What {@link serve} has built by the time the runtime boots, and what the
+ * shutdown therefore has to release.
+ */
+interface ServeHostResources {
+  /** HTTP server, already listening; closed by the shutdown. */
+  readonly httpServer: HttpServer;
+  /** Route graph marked ready once the runtime is up. */
+  readonly routeGraph: HonoRouteGraph;
+  /** Route graph builder handed to the boot. */
+  readonly builder: HttpRouteGraphBuilder;
+  /** Bus authentication strategy. */
+  readonly auth: DispatchingAuth | HmacAuth | undefined;
+  /** Whether LAN mode is requested. */
+  readonly lanBind: boolean;
+  /** Releases the local CLI identity; `undefined` when none was registered. */
+  readonly unregisterLocalCliIdentity: (() => void) | undefined;
+}
+
+/**
+ * Boot the runtime with the process signals already owned by the host
+ * shutdown, then announce the port.
+ *
+ * Detached extension children run in process groups of their own, so a
+ * terminal signal reaches the host only; the runtime's shutdown stops the
+ * children. The handlers are installed before the boot can start a child, and
+ * stay installed until the teardown has finished, so a later signal joins the
+ * shutdown in progress instead of ending the host in the middle of it. A signal
+ * during the boot cancels it through the boot's own rollback.
+ * @param options - Server startup configuration.
+ * @param resources - What {@link serve} built and the shutdown releases.
+ */
+async function bootUnderHostShutdown(options: ServeOptions, resources: ServeHostResources): Promise<void> {
+  const { httpServer, routeGraph, builder, auth, lanBind, unregisterLocalCliIdentity } = resources;
   let unsubRestart: (() => void) | undefined;
+  // The booted runtime, or `undefined` while the boot runs and once it failed
+  // or was cancelled (it has rolled itself back by then). Not yet known while
+  // the shutdown is installed, which is why the steps read it through here.
+  let runtime: MakaioRuntime | undefined;
+  let bootOutcome: Promise<void> = Promise.resolve();
+  // The boot's own bound on how long cancelling it takes, reported by the boot
+  // as soon as it starts and read when the host's boot step begins.
+  let bootCancellationBudgetMs: (() => number) | undefined;
 
-  let shutdownPromise: Promise<void> | null = null;
-  const shutdown = async (): Promise<void> => {
-    if (shutdownPromise) {
-      return await shutdownPromise;
-    }
-
-    shutdownPromise = (async () => {
-      unsubRestart?.();
-      try {
-        await runtime.shutdown();
-      } catch (err) {
-        // The exit status is the only channel a supervisor reads, so a runtime
-        // that could not release everything it started must not leave behind a
-        // status that says the drain completed.
-        process.exitCode = 1;
-        console.error('[serve] Runtime shutdown did not complete cleanly:', err);
-      } finally {
-        await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-        unregisterLocalCliIdentity?.();
-      }
-    })();
-
-    return await shutdownPromise;
-  };
-
-  try {
-    const bootOverrides = options.boot;
-    runtime = await bootMakaioRuntime({
-      ...(bootOverrides ?? {}),
-      httpServer,
-      routeGraphBuilder: builder,
-      auth,
-      lanBind,
-      surface: bootOverrides?.surface ?? 'headless',
-      hostCapabilities: normalizeNodeHostCapabilities(bootOverrides?.hostCapabilities),
-      peerSigningKeyResolver: options.peerSigningKeyResolver,
-      onTransportReady({ host, port: readyPort }) {
-        console.info('[serve] Bus transport ready on %s:%d', host, readyPort);
+  // Each step has a window of its own. The runtime's is the bound it reports
+  // for its own teardown, whose stages enforce their windows themselves, plus a
+  // margin: the host's timer is a backstop for a runtime that does not hold to
+  // its bound, never the thing that limits it (`outerBoundMs`).
+  const hostShutdown = installHostShutdown({
+    label: 'serve',
+    ...signalPolicy(options.hangup),
+    steps: [
+      { name: 'restart handler', budgetMs: () => LOCAL_STEP_STOP_BUDGET_MS, run: () => unsubRestart?.() },
+      // A boot a signal interrupted rolls itself back once the phase in flight
+      // reaches a checkpoint. It reports how long that takes, so a phase that
+      // never reaches one still ends the host with the step named.
+      {
+        name: 'runtime boot',
+        budgetMs: () => (bootCancellationBudgetMs === undefined ? undefined : outerBoundMs(bootCancellationBudgetMs())),
+        run: () => bootOutcome,
       },
-    });
-    routeGraph.markReady();
-    unsubRestart = MakaioBus.on(KernelSubjects.restart, createRestartHandler({ shutdown }));
-    process.stdout.write(`MAKAIO_PORT=${runtime.port}\n`);
+      {
+        name: 'runtime shutdown',
+        budgetMs: () => (runtime === undefined ? undefined : outerBoundMs(runtime.stopBudgetMs())),
+        run: () => runtime?.shutdown(),
+      },
+      {
+        name: 'HTTP server close',
+        budgetMs: resourceStepStopBudgetMs,
+        run: () => new Promise<void>((resolve) => httpServer.close(() => resolve())),
+      },
+      {
+        name: 'local CLI identity',
+        budgetMs: () => LOCAL_STEP_STOP_BUDGET_MS,
+        run: () => unregisterLocalCliIdentity?.(),
+      },
+    ],
+  });
+  const bootOverrides = options.boot;
+  const bootAttempt = bootMakaioRuntime({
+    ...(bootOverrides ?? {}),
+    httpServer,
+    routeGraphBuilder: builder,
+    auth,
+    lanBind,
+    surface: bootOverrides?.surface ?? 'headless',
+    hostCapabilities: normalizeNodeHostCapabilities(bootOverrides?.hostCapabilities),
+    peerSigningKeyResolver: options.peerSigningKeyResolver,
+    signal: hostShutdown.cancellation,
+    onCancellationBudget: (stopBudgetMs) => {
+      bootCancellationBudgetMs = stopBudgetMs;
+    },
+    onTransportReady({ host, port: readyPort }) {
+      console.info('[serve] Bus transport ready on %s:%d', host, readyPort);
+    },
+  });
+  bootOutcome = bootAttempt.then(
+    (booted) => {
+      runtime = booted;
+    },
+    () => undefined,
+  );
+
+  let booted: MakaioRuntime;
+  try {
+    booted = await bootAttempt;
   } catch (err) {
-    // Boot failed — close the HTTP server we own
-    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
-    unregisterLocalCliIdentity?.();
+    // The shutdown owns the cleanup of the HTTP server and the identity, so a
+    // failed boot goes through it too: its signal listeners and its step
+    // windows stay in force until that cleanup has finished.
+    const interrupted = hostShutdown.cancellation.aborted;
+    await (interrupted ? hostShutdown.finished() : hostShutdown.request('boot failure'));
+    // A boot a signal cancelled is a clean exit, unless its rollback failed
+    // (then `err` is an AggregateError and the cancellation reason is its cause).
+    if (interrupted && err === hostShutdown.cancellation.reason) return;
     throw err;
   }
 
-  // Detached extension children run in process groups of their own, so these
-  // signals reach the host only; the runtime's shutdown stops the children. A
-  // terminal hangup (`SIGHUP`) and a second Ctrl-C during a slow shutdown still
-  // end the host with the default action and leave its children to exit on
-  // their own (stdin closing). Handling `SIGHUP` here would also override an
-  // ignored `SIGHUP` inherited from `nohup`, so whether serve takes it over is
-  // a host policy decision, not part of the children's stop contract.
-  process.once('SIGTERM', () => void shutdown());
-  process.once('SIGINT', () => void shutdown());
+  if (hostShutdown.cancellation.aborted) {
+    // The boot completed before it could see the request; the shutdown tears the finished runtime down.
+    await hostShutdown.finished();
+    return;
+  }
+  routeGraph.markReady();
+  unsubRestart = MakaioBus.on(
+    KernelSubjects.restart,
+    createRestartHandler({ shutdown: () => hostShutdown.request('kernel.restart') }),
+  );
+  process.stdout.write(`MAKAIO_PORT=${booted.port}\n`);
 }

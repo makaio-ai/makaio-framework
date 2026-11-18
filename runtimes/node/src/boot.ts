@@ -33,6 +33,10 @@ import { MakaioBus } from '@makaio/bus-core';
 import {
   ExtensionCoordinator,
   createShutdownSequence,
+  runBoundedShutdownSteps,
+  type BoundedShutdownStep,
+  cancellationRejection,
+  readCancellation,
   BootNamespace,
   ExtensionNamespace,
   KernelNamespace,
@@ -45,7 +49,6 @@ import { FileConfigStorage } from './file-config-storage.js';
 import { NodeRuntimeProvider } from './node-runtime-provider.js';
 import { loadOrCreateMachineIdentity } from '@makaio/machine-identity';
 import { resolveExtensionOptions } from './resolve-extension-options.js';
-import { type ShutdownStep } from './boot-phase.js';
 import { initializeNodeDatabase } from './initialize-node-database.js';
 import { KernelSubjects } from '@makaio/kernel/namespace';
 import {
@@ -117,6 +120,8 @@ import {
   selectFrameworkCorePackages,
 } from './boot-extension-selection.js';
 import { loadBootExtensions } from './boot-extension-loading.js';
+import { processStopBudgetMs } from '@makaio/subprocess';
+import { bootCancellationBudgetMs, extensionsStep, localStep, resourceStep } from './runtime-stop-budget.js';
 import { readFrameworkVersion } from './read-framework-version.js';
 import { runBootExtensionMigrations } from './boot-extension-migrations.js';
 import { createBootE2EAuth } from './boot-e2e-auth.js';
@@ -222,6 +227,22 @@ export async function bootMakaioRuntimeCore(
   boundHost: string,
   options: CoreBootOptions,
 ): Promise<MakaioRuntime> {
+  // Shutdown steps are pushed in startup order. On normal shutdown they run
+  // in reverse; on startup failure the same array is iterated in reverse as a
+  // rollback, tearing down only what was successfully started. Every step runs
+  // inside a window of its own, so the shutdown and the rollback are bounded by
+  // the windows of the steps that exist when they run.
+  const shutdownSteps: BoundedShutdownStep[] = [];
+  // Reported before the first await: a phase that never reaches a checkpoint can be
+  // the first one.
+  options.onCancellationBudget?.(() => bootCancellationBudgetMs(shutdownSteps));
+
+  // A cancelled boot leaves through the failure path below, so the rollback that
+  // tears down a failed startup also tears down a cancelled one. The checkpoints
+  // sit after the phases that register a shutdown step, never in the middle of one,
+  // and before the phases that acquire something the rollback would then have to undo.
+  const checkpoint = (): void => options.signal?.throwIfAborted();
+
   const makaioHome = options.makaioHome ?? resolveMakaioHome();
 
   // Operator-owned extension config is read here, once, from the home this
@@ -245,12 +266,10 @@ export async function bootMakaioRuntimeCore(
   const skipExtensions = parseSkipExtensions();
   const peerSigningKeyResolver = options.peerSigningKeyResolver;
 
-  // Shutdown steps are pushed in startup order. On normal shutdown they run
-  // in reverse; on startup failure the same array is iterated in reverse as a
-  // rollback, tearing down only what was successfully started.
-  const shutdownSteps: ShutdownStep[] = [];
-
   try {
+    // Nothing is acquired yet: a boot that was cancelled before it began leaves at once.
+    checkpoint();
+
     // -----------------------------------------------------------------------
     // 1. Config
     // -----------------------------------------------------------------------
@@ -272,6 +291,7 @@ export async function bootMakaioRuntimeCore(
     }
 
     console.info('[boot] Config resolved (mode=%s)', config.mode);
+    checkpoint();
 
     // -----------------------------------------------------------------------
     // 2. Bus — namespace registration + busCreated phase
@@ -299,20 +319,24 @@ export async function bootMakaioRuntimeCore(
         }
         console.debug(`[bus-server] subject: ${context.subject}, payload: ${payload}`);
       });
-      shutdownSteps.push(disposeDebugHook);
+      shutdownSteps.push(localStep('bus debug hook', disposeDebugHook));
     }
     if (options.upstreamTelemetry) {
       const attachedTelemetry = await attachUpstreamTelemetry(bus, machineId, options.upstreamTelemetry);
-      shutdownSteps.push(attachedTelemetry.shutdown);
+      shutdownSteps.push(resourceStep('upstream telemetry', attachedTelemetry.shutdown));
     }
 
     await bus.emit(KernelSubjects.phase.busCreated, { machineId });
+
+    // The transport is the first thing that accepts connections: a cancelled boot must not open it.
+    checkpoint();
 
     // -----------------------------------------------------------------------
     // 3. Transport (Phase 0 — resolves in ~50ms)
     // -----------------------------------------------------------------------
     await transport.connect(bus, machineId);
-    shutdownSteps.push(() => transport.disconnect());
+    shutdownSteps.push(resourceStep('bus transport', () => transport.disconnect()));
+    checkpoint();
 
     console.info('[boot] Transport ready on %s:%d', boundHost, boundPort);
     try {
@@ -343,7 +367,8 @@ export async function bootMakaioRuntimeCore(
     });
     const db = databaseClient.db;
     console.info('[boot] Database initialized');
-    shutdownSteps.push(() => databaseClient.close());
+    shutdownSteps.push(resourceStep('database', () => databaseClient.close()));
+    checkpoint();
 
     // -----------------------------------------------------------------------
     // 5. Runtime resource bus handlers
@@ -363,13 +388,15 @@ export async function bootMakaioRuntimeCore(
     const isReadyCleanup = bus.on(KernelSubjects.isReady, (ctx) => {
       ctx.setResult({ ready: runtimeReady, machineId });
     });
-    shutdownSteps.push(() => {
-      runtimeReady = false;
-      isReadyCleanup();
-      for (const cleanup of runtimeResourceCleanups) {
-        cleanup();
-      }
-    });
+    shutdownSteps.push(
+      localStep('runtime resource handlers', () => {
+        runtimeReady = false;
+        isReadyCleanup();
+        for (const cleanup of runtimeResourceCleanups) {
+          cleanup();
+        }
+      }),
+    );
 
     await bus.emit(KernelSubjects.phase.coreReady, { machineId });
     console.info('[boot] Core ready (machineId=%s)', machineId);
@@ -380,7 +407,7 @@ export async function bootMakaioRuntimeCore(
     const srcDir = path.dirname(fileURLToPath(import.meta.url));
 
     const configCleanup = registerConfigHandlers(bus, resolvedConfigProvider);
-    shutdownSteps.push(configCleanup);
+    shutdownSteps.push(localStep('config handlers', configCleanup));
     console.info('[boot] Config handlers registered');
 
     // -----------------------------------------------------------------------
@@ -399,7 +426,7 @@ export async function bootMakaioRuntimeCore(
         await Promise.resolve(frameworkModuleResolver.uninstall()).catch(() => undefined);
         throw error;
       }
-      shutdownSteps.push(() => frameworkModuleResolver.uninstall());
+      shutdownSteps.push(localStep('framework module resolver', () => frameworkModuleResolver.uninstall()));
       console.info('[boot] Framework module resolver installed');
     }
 
@@ -435,6 +462,7 @@ export async function bootMakaioRuntimeCore(
         frameworkVersion: runtimeFrameworkVersion,
         createMount: options.createMount,
       });
+    checkpoint();
     const runtimeEnvironment = buildRuntimeEnvironment(process.platform, options.hostCapabilities);
     const bootEligibleExtensionPackages = selectBootEligibleExtensionPackages({
       packages: allExtensionPackages,
@@ -502,6 +530,9 @@ export async function bootMakaioRuntimeCore(
 
     const coordinator = new ExtensionCoordinator(bus, {
       surface: options.surface ?? 'headless',
+      // An extension that declares no stop window of its own may own a child
+      // process, so it gets the window of one bounded stop of one.
+      defaultStopBudgetMs: processStopBudgetMs(),
       db,
       extensionContextBase: {
         cwd: process.cwd(),
@@ -764,14 +795,19 @@ export async function bootMakaioRuntimeCore(
       selection.extensionManagedPackageNames,
       effectiveEnabledPackageNames,
     );
-    collectHostCleanups(shutdownSteps, registerExtensionBootContributions(enabledRetainedPackages, bus, coordinator));
+    collectHostCleanups(
+      shutdownSteps,
+      'extension boot contribution',
+      registerExtensionBootContributions(enabledRetainedPackages, bus, coordinator),
+    );
     // Close the credential channel before the bus/transport tears down. In
     // reverse shutdown order this runs after coordinator.shutdown() (which
     // stops all extension activity) and before transport.disconnect().
-    shutdownSteps.push(() => credentialsProvider.close());
-    shutdownSteps.push(() => coordinator.shutdown());
+    shutdownSteps.push(resourceStep('credentials channel', () => credentialsProvider.close()));
+    shutdownSteps.push(extensionsStep(coordinator));
     collectHostCleanups(
       shutdownSteps,
+      'host coordinator cleanup',
       options.configureCoordinator?.({
         bus,
         coordinator,
@@ -789,7 +825,8 @@ export async function bootMakaioRuntimeCore(
     // above when routeGraphBuilder is provided. The processor adds/removes routes
     // dynamically as extensions activate/deactivate, so no imperative mount loop
     // is needed here.
-    await coordinator.startAll();
+    await coordinator.startAll({ signal: options.signal });
+    checkpoint();
     await bus.emit(KernelSubjects.phase.servicesReady, { machineId });
     const allExtensions = coordinator.list();
     const activeExtensions = allExtensions.filter((e) => e.state === 'active');
@@ -845,24 +882,29 @@ export async function bootMakaioRuntimeCore(
         await piscinaRunner.dispose().catch(() => undefined);
         throw error;
       }
-      shutdownSteps.push(async () => {
-        try {
-          await unregisterWorkerProvider(bus, piscinaProvider.id);
-        } finally {
-          await piscinaRunner.dispose().catch(() => undefined);
-        }
-      });
+      shutdownSteps.push(
+        resourceStep('worker pool', async () => {
+          try {
+            await unregisterWorkerProvider(bus, piscinaProvider.id);
+          } finally {
+            await piscinaRunner.dispose().catch(() => undefined);
+          }
+        }),
+      );
       console.info('[boot] Piscina thin workflow provider registered (id=%s)', piscinaProvider.id);
     }
 
     shutdownSteps.push(
-      registerRuntimeHandlers(
-        bus,
-        () => adapterServiceRef.current?.getLoadedAdapters() ?? [],
-        () => adapterServiceRef.current?.getAdapterInstances() ?? new Map(),
-        (name) => coordinator.getExtension(name),
-        (name) => operatorConfig.get(name),
-        (name) => coordinator.getResolvedConfig(name),
+      localStep(
+        'runtime handlers',
+        registerRuntimeHandlers(
+          bus,
+          () => adapterServiceRef.current?.getLoadedAdapters() ?? [],
+          () => adapterServiceRef.current?.getAdapterInstances() ?? new Map(),
+          (name) => coordinator.getExtension(name),
+          (name) => operatorConfig.get(name),
+          (name) => coordinator.getResolvedConfig(name),
+        ),
       ),
     );
 
@@ -876,7 +918,7 @@ export async function bootMakaioRuntimeCore(
       resolveLiveAdapterIdentity: (adapterId) => adapterServiceRef.current?.resolveLiveAdapterIdentity(adapterId),
       listLiveAdapterIdentities: () => adapterServiceRef.current?.getLiveAdapterIdentities() ?? [],
     });
-    shutdownSteps.push(adapterRuntimeIdentity.cleanup);
+    shutdownSteps.push(localStep('adapter runtime identity', adapterRuntimeIdentity.cleanup));
 
     // -----------------------------------------------------------------------
     // 10. Host coordinator-ready broadcast
@@ -901,11 +943,12 @@ export async function bootMakaioRuntimeCore(
     // -----------------------------------------------------------------------
     // 12. Ready
     // -----------------------------------------------------------------------
+    checkpoint();
     runtimeReady = true;
     await bus.emit(KernelSubjects.ready, { machineId });
     console.info('[boot] Runtime ready (machineId=%s)', machineId);
 
-    const shutdown = createShutdownSequence([...shutdownSteps].reverse());
+    const shutdownSequence = createShutdownSequence([...shutdownSteps].reverse());
     return {
       port: boundPort,
       host: boundHost,
@@ -914,19 +957,34 @@ export async function bootMakaioRuntimeCore(
       coordinator,
       trayEntries: coordinator.trayEntries,
       windowRegistry: coordinator.windowRegistry,
-      shutdown,
+      shutdown: shutdownSequence.run,
+      stopBudgetMs: shutdownSequence.budgetMs,
     };
   } catch (err) {
-    console.error('[boot] Startup failed — rolling back started resources', err);
-    // Roll back in reverse order. The startup failure is what the caller asked
-    // about, so the secondary failures of unwinding a half-built runtime are
-    // reported rather than substituted for it.
-    for (const step of [...shutdownSteps].reverse()) {
-      try {
-        await step();
-      } catch (cleanupErr) {
-        console.warn('[boot] Rollback step error:', cleanupErr);
-      }
+    // A cancellation reaches here as the signal's reason, or as an aggregate of the
+    // cleanup failures it set off (see `cancellationRejection`).
+    const startFailures = readCancellation(err, options.signal);
+    const cancelled = startFailures !== undefined;
+    if (cancelled) {
+      console.info('[boot] Startup cancelled — rolling back started resources');
+    } else {
+      console.error('[boot] Startup failed — rolling back started resources', err);
+    }
+    // Roll back in reverse order, collecting what fails to unwind.
+    const rollbackFailures = await runBoundedShutdownSteps([...shutdownSteps].reverse());
+    for (const cleanupErr of rollbackFailures) console.warn('[boot] Rollback step error:', cleanupErr);
+    // A failed startup is what the caller asked about, so the secondary failures
+    // of unwinding a half-built runtime are reported rather than substituted for
+    // it. A cancellation says nothing but "stop", so there the cleanup is the
+    // news: failures of the phase that was cancelled and of the rollback are
+    // reported apart from the reason, because swallowing them would let the
+    // caller treat a stop that left resources behind as a clean one.
+    if (cancelled) {
+      throw cancellationRejection(
+        options.signal?.reason,
+        [...startFailures, ...rollbackFailures],
+        '[boot] Startup cancelled, but rolling back the started resources failed',
+      );
     }
     throw err;
   }

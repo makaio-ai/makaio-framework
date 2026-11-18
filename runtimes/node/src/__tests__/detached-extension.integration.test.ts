@@ -20,7 +20,7 @@
  * - Clean teardown via destroy().
  */
 
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -306,6 +306,42 @@ describe('detached extension integration (bus-stdio)', () => {
     // Transport must be removed from the registry.
     expect(bus.getContext().transportRegistry.all()).toHaveLength(0);
   }, 30_000);
+
+  it('aborts a start that is waiting for the subscribe-sync handshake when the signal aborts, and stops the child', async () => {
+    const workDir = mkdtempSync(path.join(tmpdir(), 'makaio-detached-stdio-'));
+    const pidFile = path.join(workDir, 'pid');
+    try {
+      // A child that never takes part in the handshake: the host's `ready` never resolves.
+      const script = `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`;
+      const descriptor: DetachedDescriptor = {
+        ...makeTestDescriptor(),
+        transport: {
+          type: 'bus-stdio',
+          command: process.execPath,
+          args: ['-e', script],
+          healthTimeoutMs: 30_000,
+          shutdownTimeoutMs: 500,
+        },
+      };
+      const pkg = createDetachedExtensionPackage(descriptor, FIXTURES_DIR);
+      service = await resolveService(pkg.create!(makeTestContext(createBusInstance())));
+      const controller = new AbortController();
+      const cancelled = new Error('boot cancelled');
+
+      const settled = outcomeOf(service.init!({ signal: controller.signal }));
+      await waitFor(() => existsSync(pidFile));
+      const pid = Number(readFileSync(pidFile, 'utf8'));
+      const abortedAt = Date.now();
+      controller.abort(cancelled);
+
+      await expect(settled).resolves.toBe(cancelled);
+      expect(Date.now() - abortedAt).toBeLessThan(5_000);
+      service = undefined;
+      await waitFor(() => !isAlive(pid), 5_000);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -366,6 +402,20 @@ function makeWebSocketDescriptor(
 }
 
 /**
+ * Settle a start into what it ended with.
+ * @param start - The result of an `init()` call.
+ * @returns `'resolved'`, or the reason the start rejected with.
+ */
+async function outcomeOf(start: void | Promise<void>): Promise<unknown> {
+  try {
+    await start;
+    return 'resolved';
+  } catch (error) {
+    return error;
+  }
+}
+
+/**
  * Report whether a process still exists; an unreaped zombie still counts.
  * @param pid - Process to probe.
  * @returns `false` once the process is gone.
@@ -404,11 +454,13 @@ describe('detached extension integration (bus-websocket process lifecycle)', () 
    * Create a bus that answers the lifecycle requests itself, and a service for `descriptor`.
    * @param descriptor - Descriptor of the extension under test.
    * @param failInitsFrom - 1-based number of the first init request the bus rejects; default: none.
-   * @returns The service and the init requests the bus answered.
+   * @param holdInit - Whether the bus never answers the init requests; default: it answers them.
+   * @returns The service and the init requests the bus received.
    */
   async function createService(
     descriptor: DetachedDescriptor,
     failInitsFrom = Number.POSITIVE_INFINITY,
+    holdInit = false,
   ): Promise<{
     service: ExtensionServiceLifecycle;
     inits: unknown[];
@@ -416,8 +468,9 @@ describe('detached extension integration (bus-websocket process lifecycle)', () 
     const bus = createBusInstance();
     const LifecycleSubjects = registerLifecycleSubjects(bus);
     const inits: unknown[] = [];
-    bus.on(LifecycleSubjects.init, (request) => {
+    bus.on(LifecycleSubjects.init, async (request) => {
       inits.push(request.payload);
+      if (holdInit) await new Promise<void>(() => undefined);
       // The n-th init request (1-based) and every later one is rejected.
       if (inits.length >= failInitsFrom) throw new Error('init rejected by test');
       request.setResult({ ready: true });
@@ -459,6 +512,54 @@ describe('detached extension integration (bus-websocket process lifecycle)', () 
     service = undefined;
 
     await waitFor(() => !isAlive(pid) && (grandchild === null || !isAlive(grandchild)), 5_000);
+  }, 30_000);
+
+  it('aborts a start that is waiting for readiness when the signal aborts, and stops the child at once', async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), 'makaio-detached-ws-'));
+    const pidsFile = path.join(workDir, 'pids.json');
+    const script = `require('node:fs').writeFileSync(process.env.MAKAIO_TEST_PIDS, JSON.stringify({ pid: process.pid, grandchild: null })); setInterval(() => {}, 1000);`;
+    const created = await createService(
+      makeWebSocketDescriptor(script, { MAKAIO_TEST_PIDS: pidsFile }, { healthTimeoutMs: 30_000 }),
+    );
+    service = created.service;
+    const controller = new AbortController();
+
+    const settled = outcomeOf(service.init!({ signal: controller.signal }));
+    await waitFor(() => existsSync(pidsFile));
+    const { pid } = readPids(pidsFile);
+    const abortedAt = Date.now();
+    controller.abort(new Error('boot cancelled'));
+
+    // Far inside the 30 s health timeout the start would otherwise run into.
+    await expect(settled).resolves.toMatchObject({ message: expect.stringContaining('aborted by stop()') });
+    expect(Date.now() - abortedAt).toBeLessThan(5_000);
+    service = undefined;
+    expect(created.inits).toHaveLength(0);
+    await waitFor(() => !isAlive(pid), 5_000);
+  }, 30_000);
+
+  it('aborts a start that is waiting for the reply to its init request when the signal aborts, and stops the child', async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), 'makaio-detached-ws-'));
+    const pidsFile = path.join(workDir, 'pids.json');
+    const created = await createService(
+      makeWebSocketDescriptor(WEBSOCKET_CHILD_SCRIPT, { MAKAIO_TEST_PIDS: pidsFile }, { healthTimeoutMs: 30_000 }),
+      Number.POSITIVE_INFINITY,
+      true,
+    );
+    service = created.service;
+    const controller = new AbortController();
+    const cancelled = new Error('boot cancelled');
+
+    const settled = outcomeOf(service.init!({ signal: controller.signal }));
+    await waitFor(() => created.inits.length === 1);
+    const { pid } = readPids(pidsFile);
+    const abortedAt = Date.now();
+    controller.abort(cancelled);
+
+    await expect(settled).resolves.toBe(cancelled);
+    expect(Date.now() - abortedAt).toBeLessThan(5_000);
+    service = undefined;
+    await waitFor(() => !isAlive(pid), 5_000);
   }, 30_000);
 
   it('fails init() at the health timeout when the readiness line is not a JSON object, and stops the child', async () => {

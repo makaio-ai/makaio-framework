@@ -1618,6 +1618,7 @@ export type {
   ExtensionFieldTypeRegistration,
   ExtensionFieldTypeEntry,
   ExtensionIdentity,
+  ExtensionInitOptions,
   ExtensionOperatorConfigEntry,
   ExtensionOperatorConfigFailure,
   ExtensionOperatorConfigFailureReason,

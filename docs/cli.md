@@ -109,7 +109,33 @@ Options:
   --host <host>       Bind address override (default: 127.0.0.1)
   --lan-bind          Host-composition LAN mode. Requires a peer-signing-key resolver
                       supplied by the embedding host.
+  --ignore-hangup     Keep running on SIGHUP (terminal close) instead of shutting down.
 ```
+
+**Signals:** `SIGINT` and `SIGTERM` start a shutdown that runs to the end: the handlers stay
+installed until it has finished, so a second Ctrl-C (or any further signal) only reports that
+the shutdown is in progress, and a signal during boot cancels the boot and rolls it back. The cancellation reaches the
+waits inside an extension's start too: a detached extension whose child has not become ready yet,
+or whose `init` request has not been answered, is aborted at once and its child stopped, instead
+of the boot waiting out the health timeout. The
+shutdown is bounded step by step. Every extension is stopped inside a window of its own (a
+detached extension's is its destroy request window plus the bounded stop of its child; an embedded
+one declares `stopBudgetMs` on its service or gets the window of one bounded stop), and the
+runtime's own steps (transport, database, worker pool) have windows as well, so one stuck extension
+cannot consume the time of the others. A step that does not finish is named in the log, the next one
+still runs, and `serve` then exits with status 1. The host's own timer per step (HTTP close, runtime
+shutdown) is a backstop: the runtime's window is the bound it reports for itself plus a small margin.
+
+`SIGHUP` (terminal close) starts the same shutdown by default, so the detached extension
+children, which run in process groups of their own and receive no terminal signal, are
+stopped with the host.
+
+`--ignore-hangup` makes the host survive a hangup: it installs a listener that logs the first
+`SIGHUP` and otherwise does nothing, and the host keeps running and serving (stop it with
+`SIGTERM`). `nohup` alone does not protect `serve`: Node resets an inherited ignored `SIGHUP`
+when it starts, so `nohup makaio serve` still shuts down on a hangup. Use
+`nohup makaio serve --ignore-hangup` (or `setsid`, `tmux`, a service manager) for a host that must
+outlive its terminal.
 
 **Examples:**
 

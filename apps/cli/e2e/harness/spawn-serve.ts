@@ -83,6 +83,34 @@ async function assertEntryFile(entryPath: string): Promise<void> {
   throw new Error(`SpawnServeOptions.entryPath must exist and be a file: ${entryPath}`);
 }
 
+/** An isolated serve environment and the home directory it uses. */
+export interface IsolatedServeEnv {
+  /** Environment variables for the spawned process. */
+  readonly env: Record<string, string>;
+  /** Home directory the environment points at; the caller creates it. */
+  readonly homeDir: string;
+}
+
+/**
+ * Environment of a serve process isolated from the developer's machine: a
+ * minimal `PATH`, a home directory and a database inside `tempDir`.
+ * @param tempDir - Temporary directory that holds the database and, by default, the home directory.
+ * @param overrides - Variables that take precedence; `HOME` or `USERPROFILE` relocate the home directory.
+ * @returns The environment and the home directory it uses.
+ */
+export function isolatedServeEnv(tempDir: string, overrides?: Record<string, string>): IsolatedServeEnv {
+  const homeDir = overrides?.['HOME'] ?? overrides?.['USERPROFILE'] ?? path.join(tempDir, 'home');
+  const env: Record<string, string> = {
+    PATH: process.env['PATH'] ?? '',
+    HOME: homeDir,
+    USERPROFILE: overrides?.['USERPROFILE'] ?? homeDir,
+    MAKAIO_HOME: path.join(homeDir, '.makaio'),
+    MAKAIO_DATABASE_PATH: path.join(tempDir, 'makaio.db'),
+    ...overrides,
+  };
+  return { env, homeDir };
+}
+
 /**
  * Spawn the CLI serve process with an isolated temporary database.
  * @param options - Spawn configuration forwarded from the public helper.
@@ -93,18 +121,8 @@ async function startCliServeInternal(options?: SpawnServeOptions): Promise<Serve
   const entryPath = options?.entryPath ?? CLI_ENTRY;
   await assertEntryFile(entryPath);
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-cli-e2e-'));
-  const dbPath = path.join(tempDir, 'makaio.db');
-  const homeDir = options?.env?.HOME ?? options?.env?.USERPROFILE ?? path.join(tempDir, 'home');
+  const { env, homeDir } = isolatedServeEnv(tempDir, options?.env);
   await fs.mkdir(homeDir, { recursive: true });
-
-  const env: Record<string, string> = {
-    PATH: process.env['PATH'] ?? '',
-    HOME: homeDir,
-    USERPROFILE: options?.env?.USERPROFILE ?? homeDir,
-    MAKAIO_HOME: path.join(homeDir, '.makaio'),
-    MAKAIO_DATABASE_PATH: dbPath,
-    ...options?.env,
-  };
 
   let cleaned = false;
   const cleanupTempDir = async (): Promise<void> => {

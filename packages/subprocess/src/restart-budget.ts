@@ -8,7 +8,7 @@
  * one before, up to `maxDelayMs`. Once the window holds `maxRestarts` restarts,
  * the next request is refused until the oldest one has left the window.
  */
-import { nonNegativeOption } from './option-values.js';
+import { nonNegativeOption } from '@makaio/utils';
 
 /** Limits of automatic restarts; every field has a default. */
 export interface RestartBudgetOptions {

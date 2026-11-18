@@ -60,6 +60,7 @@ makaio serve [options]
 | `-p, --port <port>` | HTTP/WebSocket port | `6252` |
 | `--host <host>` | Bind address | `127.0.0.1` |
 | `--lan-bind` | Host-composition LAN mode with E2E peer key resolution | off |
+| `--ignore-hangup` | Keep running when `SIGHUP` (terminal close) arrives; by default `SIGHUP` shuts the host down like `SIGINT`. `nohup` alone does not protect a Node host | off |
 
 For standalone non-loopback access, set `MAKAIO_BUS_SECRET` and use `--host`. The
 `--lan-bind` E2E pairing path requires peer key resolution supplied by the embedding host.

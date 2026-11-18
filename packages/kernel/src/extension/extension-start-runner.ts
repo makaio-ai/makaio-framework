@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { getErrorString } from '@makaio/utils';
+import { cancellationRejection } from '../cancellation.js';
 import { ServiceSkipError } from '../service-skip-error.js';
 import type { BootProgressObserver } from './boot-progress-observer.js';
 import { runContributionProcessors } from './contribution-processor-runner.js';
@@ -9,6 +10,7 @@ import {
   type ExtensionContextHost,
   resolveExtensionEntryConfig,
 } from './extension-context-builder.js';
+import { createAndInitService, releaseService } from './extension-shutdown-runner.js';
 import { registerPackageTrayMenuEntry } from './tray-menu-entry-bridge.js';
 import { transitionPackageEntry } from './state-transition.js';
 import type { ContributionProcessor, ExtensionEntry } from './types.js';
@@ -27,6 +29,12 @@ export interface ExtensionStartHost {
   readonly contextHost: ExtensionContextHost;
   /** Boot progress observer updated as the extension settles. */
   readonly bootProgress: BootProgressObserver;
+  /**
+   * Cancels the start. Handed to a service's `init()`, whose waits can end when
+   * it aborts; an entry whose start it interrupted is not counted as a failure
+   * of the extension, but ends the whole start with the signal's reason.
+   */
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -143,12 +151,9 @@ async function startEntryWithService(
   entry: ExtensionEntry,
   config: unknown,
 ): Promise<void> {
-  let service: Awaited<ReturnType<NonNullable<typeof entry.pkg.create>>> | undefined;
   try {
     const pkgCtx = buildExtensionContext(host.contextHost, entry, config);
-    service = await entry.pkg.create!(pkgCtx);
-    await service.init?.();
-    entry.service = service;
+    await createAndInitService(name, entry, pkgCtx, host.signal);
     // Contributions must succeed before the extension can become active.
     // On failure the catch block below destroys the service and transitions
     // the entry to failed, exactly the same path as a create/init failure.
@@ -157,16 +162,24 @@ async function startEntryWithService(
     host.bootProgress.ready(entry.pkg);
     await registerEntryTray(host.bus, name, entry);
   } catch (err) {
-    try {
-      await service?.destroy?.();
-    } catch (destroyErr) {
-      console.error(`[ExtensionCoordinator] Service cleanup error after failed start of "${name}":`, destroyErr);
-    }
-    entry.service = undefined;
-    runStorageCleanup(name, entry);
+    const cleanupFailures: unknown[] = await releaseService(name, entry, 'start');
+    cleanupFailures.push(...runStorageCleanup(name, entry));
     if (handleServiceSkipError(host, name, entry, err)) return;
     const message = err instanceof Error ? err.message : String(err);
-    failEntry(host, name, entry, message);
+    const cancelled = host.signal?.aborted === true;
+    failEntry(host, name, entry, cancelled ? `Start cancelled: ${message}` : message);
+    // A start the host cancelled is not the extension's failure, whatever its
+    // criticality: it ends the whole start with the reason the host gave, which
+    // is what lets the boot treat it as a cancellation. Cleanup that failed on
+    // the way is the one thing the cancellation must not hide: this entry is
+    // `failed` now, so the coordinator's rollback will not stop its service again.
+    if (cancelled) {
+      throw cancellationRejection(
+        host.signal.reason,
+        cleanupFailures,
+        `Start of "${name}" cancelled, but releasing what it had started failed`,
+      );
+    }
     if (entry.pkg.critical) throw err;
   }
 }
@@ -222,16 +235,21 @@ function registerEntryStorage(host: ExtensionStartHost, name: string, entry: Ext
 }
 
 /**
- * Run the storage cleanup callback for an extension entry (best-effort).
+ * Run the storage cleanup callback for an extension entry. A failure is logged
+ * and returned, never thrown: the start that is being undone decides what to do
+ * with it.
  * @param name - Extension name used for log messages.
  * @param entry - Extension entry whose storage should be cleaned up.
+ * @returns The failures of the cleanup; empty when it was clean.
  */
-function runStorageCleanup(name: string, entry: ExtensionEntry): void {
-  if (!entry.storageCleanup) return;
+function runStorageCleanup(name: string, entry: ExtensionEntry): unknown[] {
+  if (!entry.storageCleanup) return [];
   try {
     entry.storageCleanup();
+    return [];
   } catch (cleanupErr) {
     console.error(`[ExtensionCoordinator] Storage cleanup error after failed start of "${name}":`, cleanupErr);
+    return [cleanupErr];
   } finally {
     entry.storageCleanup = undefined;
   }

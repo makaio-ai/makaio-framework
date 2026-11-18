@@ -145,7 +145,8 @@ interface OutputWaiter {
   readonly timer: NodeJS.Timeout;
 }
 
-interface OutputCapture {
+/** Bounded output buffer of a child process, with waiters for expected text. */
+export interface OutputCapture {
   append(chunk: Buffer): string;
   get(): string;
   waitFor(matcher: string | RegExp, timeoutMs: number): Promise<string>;
@@ -173,7 +174,7 @@ function outputMatches(output: string, matcher: string | RegExp): boolean {
  * @param label - Process label used in timeout errors.
  * @returns Output capture helper for spawn harnesses.
  */
-function createOutputCapture(label: string): OutputCapture {
+export function createOutputCapture(label: string): OutputCapture {
   let output = '';
   const waiters: OutputWaiter[] = [];
 
