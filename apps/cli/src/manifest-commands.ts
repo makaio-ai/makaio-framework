@@ -20,7 +20,7 @@ import { toCliLongOptionName } from './flag-names.js';
 import {
   createProcessCommandContext,
   createProcessCommandSignalContext,
-  disposeResolvedBusForCommand,
+  finishCommand,
   evaluateBeforeRunGate,
   getAuthorizedProvideBus,
   reportCommandFailure,
@@ -240,6 +240,7 @@ async function resolveAndExecute(
       subcommandName,
       parsed.data as Record<string, unknown>,
       process.cwd(),
+      signalContext,
     );
     if (shouldStopForCommandSignal(signalContext.signal)) return;
     const gate = await evaluateBeforeRunGate(
@@ -261,8 +262,7 @@ async function resolveAndExecute(
       reportCommandFailure(err);
     }
   } finally {
-    signalContext.cleanup();
-    await disposeResolvedBusForCommand(resolved);
+    await finishCommand(resolved, signalContext);
   }
 }
 
@@ -318,6 +318,7 @@ async function resolveAndExecuteInteractive(
       INTERACTIVE_SUBCOMMAND,
       {},
       process.cwd(),
+      signalContext,
     );
     if (shouldStopForCommandSignal(signalContext.signal)) return;
     const gate = await evaluateBeforeRunGate(
@@ -338,8 +339,7 @@ async function resolveAndExecuteInteractive(
       reportCommandFailure(err);
     }
   } finally {
-    signalContext.cleanup();
-    await disposeResolvedBusForCommand(resolved);
+    await finishCommand(resolved, signalContext);
   }
 }
 

@@ -103,12 +103,8 @@ be non-negative finite numbers (`nonNegativeOption`, moved to `@makaio/utils` fr
 for the host shutdown that arrives from an abort listener joins the shutdown in
 progress instead of starting a second teardown.
 
-The Bun hosts (`createGracefulShutdown` in `@makaio/runtime-bun`) no longer force-exit
-after a fixed 10 s, which killed an extension that settled inside the runtime's own
-stop windows. The default deadline is `outerBoundMs(runtime.stopBudgetMs())`, read when
-the shutdown starts; `runtime` now needs `stopBudgetMs` as well as `shutdown`, and an
-explicit `timeoutMs` below that bound can cut a cleanup short. The GitHub App
-entrypoint uses `createGracefulShutdown` instead of its own copy with a hard-coded 10 s.
-Persistent signal handlers, boot cancellation and `SIGHUP` for Bun hosts remain
-FACT-464. `installHostShutdown` keeps the first numeric window of a step when a later
+The Bun hosts no longer force-exit after a fixed 10 s, which killed an extension that
+settled inside the runtime's own stop windows: their deadline follows the runtime's own
+bound, `outerBoundMs(runtime.stopBudgetMs())` (their signal handling is covered by the
+FACT-464 changeset). `installHostShutdown` keeps the first numeric window of a step when a later
 read of it is `undefined`, instead of falling back to 0.

@@ -38,3 +38,8 @@ export const BOOT_HANG_ENV = 'SIGNAL_FIXTURE_BOOT_HANG';
  * other fixture children.
  */
 export const DETACHED_NEVER_READY_HEALTH_ENV = 'SIGNAL_FIXTURE_DETACHED_NEVER_READY_HEALTH_MS';
+/**
+ * When `1`, the handler of the fixture CLI command never returns, even after the
+ * invocation signal aborted: it is the command that does not honour the abort.
+ */
+export const COMMAND_IGNORES_ABORT_ENV = 'SIGNAL_FIXTURE_COMMAND_IGNORES_ABORT';

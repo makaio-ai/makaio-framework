@@ -262,6 +262,28 @@ export interface ProvideBusContext {
   readonly args: Record<string, unknown>;
   /** Absolute path of the working directory from which the CLI was invoked. */
   readonly cwd: string;
+  /**
+   * Abort signal that is triggered when local CLI execution receives SIGINT,
+   * SIGTERM or SIGHUP. It is the signal of the whole invocation, so it can fire
+   * while the embedded bus is still being provisioned.
+   *
+   * A provider that boots a runtime must pass it to the boot, so a stop request
+   * that arrives during the boot cancels it through the boot's own rollback
+   * instead of leaving a half-started runtime (and the children it started)
+   * behind. The provider's returned handle is disposed by the router as usual
+   * once the command has settled.
+   */
+  readonly signal: AbortSignal;
+  /**
+   * Report how long stopping what this provider started takes at most. The
+   * router uses it as the time a signal-driven shutdown of the invocation may
+   * take before it ends the process, so a provider that boots a runtime reports
+   * the bound of the phase it is in (its boot's cancellation, then the
+   * runtime's teardown) as soon as it knows it, before it boots. A provider that
+   * does not call it leaves the invocation with the router's default bound.
+   * @param stopBudgetMs - Reads the current bound in milliseconds, or `undefined` when nothing is running.
+   */
+  readonly onStopBudget: (stopBudgetMs: () => number | undefined) => void;
 }
 
 /**

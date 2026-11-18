@@ -307,7 +307,7 @@ describe('serve signal handling', () => {
     await expect(host.exited).resolves.toEqual({ code: 1, signal: null });
     // Nothing is registered yet when the phase hangs, so the bound is the grace for the phase in flight.
     const graceMs = processStopBudgetMs();
-    expect(host.output()).toContain(`runtime boot (did not settle within ${outerBoundMs(graceMs)} ms)`);
+    expect(host.output()).toContain(`runtime (did not settle within ${outerBoundMs(graceMs)} ms)`);
     const elapsedMs = Date.now() - signalledAt;
     expect(elapsedMs).toBeGreaterThanOrEqual(graceMs - 500);
     expect(elapsedMs).toBeLessThan(outerBoundMs(graceMs) + 30_000);

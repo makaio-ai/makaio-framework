@@ -43,6 +43,11 @@ export {
   type ResolveDesktopMakaioHomeOptions,
 } from './desktop-boot-context.js';
 export {
+  cleanupsStep,
+  installDesktopHostShutdown,
+  type DesktopHostShutdownOptions,
+} from './desktop-host-shutdown.js';
+export {
   assertNoReservedWindowParams,
   registerHostNavigationHandler,
   resolveNavigation,

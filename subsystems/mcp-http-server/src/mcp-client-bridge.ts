@@ -135,6 +135,13 @@ export interface McpClientBridgeOptions {
    * results and route only the MCP tools it owns before delegating.
    */
   readonly busHandlerPriority?: number;
+  /**
+   * Cancels the start: the MCP handshake and the first tool listing end with the
+   * signal's reason, and the subprocess is closed like on any other failed start.
+   * Only the start observes it; a started bridge is stopped through
+   * {@link McpClientBridgeHandle.close}.
+   */
+  readonly signal?: AbortSignal;
 }
 
 /** Bus handler priority used when no explicit bridge priority is configured. */
@@ -335,6 +342,29 @@ function emitRegistryChanged(
 }
 
 /**
+ * Connect the client to its transport, which spawns the subprocess and performs the MCP handshake.
+ * @param client - MCP client to connect.
+ * @param transport - Stdio transport that owns the subprocess.
+ * @param signal - Cancels the handshake; `undefined` waits for it.
+ * @throws The signal's reason when the start was cancelled, the connection failure otherwise.
+ */
+async function connectClient(
+  client: Client,
+  transport: StdioClientTransport,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  try {
+    await client.connect(transport, { signal });
+  } catch (err) {
+    // The SDK wraps the signal's reason in an `McpError`; the host recognizes a cancelled
+    // start by the reason itself. A cancelled handshake has closed the client (and with it
+    // the subprocess) through the SDK already.
+    signal?.throwIfAborted();
+    throw err;
+  }
+}
+
+/**
  * Spawn an MCP server subprocess via stdio, connect to it as an MCP client,
  * and discover its tool list.
  *
@@ -351,7 +381,9 @@ function emitRegistryChanged(
  * list, updated each time the server signals a change.
  *
  * If `listTools()` fails after the transport has already connected, the bridge
- * closes the client and re-throws so no subprocess is left orphaned.
+ * closes the client and re-throws so no subprocess is left orphaned. A start
+ * cancelled through {@link McpClientBridgeOptions.signal} ends the same way,
+ * whichever of the two waits it interrupts, and rejects with the signal's reason.
  * @param options - Bridge configuration.
  * @returns Handle exposing the live tool list and proxy methods.
  */
@@ -366,7 +398,11 @@ export async function startMcpClientBridge(options: McpClientBridgeOptions): Pro
     bus,
     toolsetName = extensionName,
     busHandlerPriority = DEFAULT_BUS_HANDLER_PRIORITY,
+    signal,
   } = options;
+
+  // Nothing is spawned for a start that was cancelled before it began.
+  signal?.throwIfAborted();
 
   // Mutable tool list: updated at startup and on every list_changed notification.
   let currentTools: McpBridgedTool[] = [];
@@ -396,15 +432,16 @@ export async function startMcpClientBridge(options: McpClientBridgeOptions): Pro
     handleToolsChanged,
   );
 
-  await client.connect(transport);
+  await connectClient(client, transport, signal);
 
   // Guard: if listTools() throws the subprocess is already running — close it
   // before re-throwing so no orphaned child processes are left behind.
   try {
-    const toolsResult = await client.listTools();
+    const toolsResult = await client.listTools(undefined, { signal });
     currentTools = (toolsResult.tools ?? []).map(toBridgedTool);
   } catch (err) {
     await client.close();
+    signal?.throwIfAborted();
     throw err;
   }
 

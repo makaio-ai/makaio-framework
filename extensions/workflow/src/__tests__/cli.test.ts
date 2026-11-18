@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { ProvideBusContext } from '@makaio/kernel/cli';
 import type { CoreBootOptions, MakaioRuntime, ServerTransportProvider } from '@makaio/runtime-node';
 
 // ---------------------------------------------------------------------------
@@ -46,7 +47,9 @@ const bootMock = vi.fn<
 // same seam so these tests can assert bootEmbeddedWorkflowRuntime's option-forwarding
 // contract; the resolver's real env-parsing behavior is covered end-to-end in
 // runtimes/node/src/__tests__/upstream-telemetry-config.test.ts.
-vi.mock('@makaio/runtime-node', () => ({
+// `createRuntimeLifecycle` stays the real implementation: it is the seam under test.
+vi.mock('@makaio/runtime-node', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@makaio/runtime-node')>()),
   bootMakaioRuntimeCore: bootMock,
   resolveUpstreamTelemetryBootOptionsFromEnv: resolveUpstreamTelemetryMock,
 }));
@@ -117,6 +120,19 @@ describe('workflow package public dependencies', () => {
 // bootEmbeddedWorkflowRuntime — options forwarded to bootMakaioRuntimeCore
 // ---------------------------------------------------------------------------
 
+/**
+ * Build the invocation context a router hands the provider.
+ * @param signal - Invocation signal; a never-aborting one by default.
+ * @param onStopBudget - Receiver of the reported stop bound.
+ * @returns The context.
+ */
+function createContext(
+  signal: AbortSignal = new AbortController().signal,
+  onStopBudget: ProvideBusContext['onStopBudget'] = () => undefined,
+): ProvideBusContext {
+  return { subcommandName: 'run', args: {}, cwd: '/tmp', signal, onStopBudget };
+}
+
 describe('bootEmbeddedWorkflowRuntime', () => {
   beforeEach(() => {
     bootMock.mockClear();
@@ -126,7 +142,7 @@ describe('bootEmbeddedWorkflowRuntime', () => {
   });
 
   it('calls bootMakaioRuntimeCore with surface: headless', async () => {
-    await bootEmbeddedWorkflowRuntime({ subcommandName: 'run', args: {}, cwd: '/tmp' });
+    await bootEmbeddedWorkflowRuntime(createContext());
 
     expect(bootMock).toHaveBeenCalledTimes(1);
     const options = bootMock.mock.calls[0]?.[3];
@@ -134,14 +150,14 @@ describe('bootEmbeddedWorkflowRuntime', () => {
   });
 
   it('calls bootMakaioRuntimeCore with enablePackageManager: false', async () => {
-    await bootEmbeddedWorkflowRuntime({ subcommandName: 'run', args: {}, cwd: '/tmp' });
+    await bootEmbeddedWorkflowRuntime(createContext());
 
     const options = bootMock.mock.calls[0]?.[3];
     expect(options?.enablePackageManager).toBe(false);
   });
 
   it('configures in-process execution with an invocation workspace materialization resolver', async () => {
-    await bootEmbeddedWorkflowRuntime({ subcommandName: 'run', args: {}, cwd: '/tmp' });
+    await bootEmbeddedWorkflowRuntime(createContext());
 
     const options = bootMock.mock.calls[0]?.[3];
     expect(options?.workflowRunner).toEqual({ mode: 'in-process' });
@@ -149,7 +165,7 @@ describe('bootEmbeddedWorkflowRuntime', () => {
   });
 
   it('resolves push embedded upstream telemetry from environment', async () => {
-    await bootEmbeddedWorkflowRuntime({ subcommandName: 'run', args: {}, cwd: '/tmp' });
+    await bootEmbeddedWorkflowRuntime(createContext());
 
     expect(resolveUpstreamTelemetryMock).toHaveBeenCalledTimes(1);
   });
@@ -160,20 +176,20 @@ describe('bootEmbeddedWorkflowRuntime', () => {
     };
     resolveUpstreamTelemetryMock.mockReturnValueOnce(upstreamTelemetry);
 
-    await bootEmbeddedWorkflowRuntime({ subcommandName: 'run', args: {}, cwd: '/tmp' });
+    await bootEmbeddedWorkflowRuntime(createContext());
 
     const options = bootMock.mock.calls[0]?.[3];
     expect(options?.upstreamTelemetry).toBe(upstreamTelemetry);
   });
 
   it('returns the bus from the booted runtime', async () => {
-    const handle = await bootEmbeddedWorkflowRuntime({ subcommandName: 'run', args: {}, cwd: '/tmp' });
+    const handle = await bootEmbeddedWorkflowRuntime(createContext());
 
     expect(handle.bus).toBe(mockBus);
   });
 
   it('dispose calls runtime.shutdown()', async () => {
-    const handle = await bootEmbeddedWorkflowRuntime({ subcommandName: 'run', args: {}, cwd: '/tmp' });
+    const handle = await bootEmbeddedWorkflowRuntime(createContext());
 
     await handle.dispose();
 
@@ -181,7 +197,7 @@ describe('bootEmbeddedWorkflowRuntime', () => {
   });
 
   it('passes boundPort 0 and boundHost 127.0.0.1 to bootMakaioRuntimeCore', async () => {
-    await bootEmbeddedWorkflowRuntime({ subcommandName: 'run', args: {}, cwd: '/tmp' });
+    await bootEmbeddedWorkflowRuntime(createContext());
 
     const [, boundPort, boundHost] = bootMock.mock.calls[0] as [
       ServerTransportProvider,
@@ -194,7 +210,7 @@ describe('bootEmbeddedWorkflowRuntime', () => {
   });
 
   it('passes a NoTransportProvider instance as the first argument to bootMakaioRuntimeCore', async () => {
-    await bootEmbeddedWorkflowRuntime({ subcommandName: 'run', args: {}, cwd: '/tmp' });
+    await bootEmbeddedWorkflowRuntime(createContext());
 
     const transport = bootMock.mock.calls[0]?.[0];
     expect(typeof transport?.connect).toBe('function');
@@ -202,7 +218,7 @@ describe('bootEmbeddedWorkflowRuntime', () => {
   });
 
   it('dispose() is idempotent, calling it twice only invokes shutdown once', async () => {
-    const handle = await bootEmbeddedWorkflowRuntime({ subcommandName: 'run', args: {}, cwd: '/tmp' });
+    const handle = await bootEmbeddedWorkflowRuntime(createContext());
 
     await handle.dispose();
     await handle.dispose();
@@ -220,7 +236,7 @@ describe('bootEmbeddedWorkflowRuntime', () => {
           resolveShutdown = resolve;
         }),
     );
-    const handle = await bootEmbeddedWorkflowRuntime({ subcommandName: 'run', args: {}, cwd: '/tmp' });
+    const handle = await bootEmbeddedWorkflowRuntime(createContext());
 
     const firstDispose = handle.dispose();
     const secondDispose = handle.dispose();
@@ -232,11 +248,61 @@ describe('bootEmbeddedWorkflowRuntime', () => {
 
   it('dispose() retries shutdown after a failed attempt', async () => {
     shutdownMock.mockRejectedValueOnce(new Error('shutdown failed')).mockResolvedValueOnce(undefined);
-    const handle = await bootEmbeddedWorkflowRuntime({ subcommandName: 'run', args: {}, cwd: '/tmp' });
+    const handle = await bootEmbeddedWorkflowRuntime(createContext());
 
     await expect(handle.dispose()).rejects.toThrow('shutdown failed');
     await handle.dispose();
 
     expect(shutdownMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('boots under the invocation signal so a process signal cancels the boot', async () => {
+    const controller = new AbortController();
+
+    await bootEmbeddedWorkflowRuntime(createContext(controller.signal));
+
+    const bootSignal = bootMock.mock.calls[0]?.[3].signal;
+    expect(bootSignal?.aborted).toBe(false);
+    controller.abort('SIGINT');
+    expect(bootSignal?.aborted).toBe(true);
+    expect(bootSignal?.reason).toBe('SIGINT');
+  });
+
+  it('reports the stop bound to the router before the boot starts, then the runtime bound once it is up', async () => {
+    let reported: (() => number | undefined) | undefined;
+    let reportedBeforeBoot = false;
+    bootMock.mockImplementationOnce(async (_transport, _port, _host, options) => {
+      reportedBeforeBoot = reported !== undefined;
+      options.onCancellationBudget?.(() => 3_000);
+      expect(reported?.()).toBe(3_000);
+      return {
+        bus: mockBus,
+        shutdown: shutdownMock,
+        stopBudgetMs: () => 9_000,
+        port: 0,
+        host: '127.0.0.1',
+        machineId: 'test-machine-id',
+        trayEntries: [],
+        windowRegistry: {} as MakaioRuntime['windowRegistry'],
+        coordinator: {} as MakaioRuntime['coordinator'],
+      };
+    });
+
+    await bootEmbeddedWorkflowRuntime(
+      createContext(new AbortController().signal, (read) => {
+        reported = read;
+      }),
+    );
+
+    expect(reportedBeforeBoot).toBe(true);
+    expect(reported?.()).toBe(9_000);
+  });
+
+  it('forwards a host-owned discovery override', async () => {
+    const discovery = {} as NonNullable<CoreBootOptions['discovery']>;
+
+    await bootEmbeddedWorkflowRuntime(createContext(), { discovery });
+
+    expect(bootMock.mock.calls[0]?.[3].discovery).toBe(discovery);
   });
 });
