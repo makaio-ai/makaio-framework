@@ -12,14 +12,14 @@
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
-    "tsdown": "0.23.0"
+    "tsdown": "0.22.0"
   },
   "dependencies": {
     "@makaio/ai-adapters-core": "workspace:*",
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
-    "zod": "4.6.5"
+    "zod": "4.4.3"
   },
   "scripts": {
     "build": "tsdown"
@@ -40,7 +40,7 @@
     "@vitest/spy": "4.1.0",
     "@vitest/utils": "4.1.0",
     "chai": "6.2.2",
-    "drizzle-orm": "0.45.2",
+    "drizzle-orm": "0.45.4",
     "emittery": "1.2.0",
     "magic-string": "0.30.21",
     "p-defer": "4.0.1",

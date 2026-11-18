@@ -6,7 +6,7 @@
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@makaio/test-utils": "workspace:*",
-    "tsdown": "0.23.0"
+    "tsdown": "0.22.0"
   },
   "scripts": {
     "build": "tsdown",
@@ -132,11 +132,11 @@
     "ajv-formats": "^3.0.1",
     "croner": "^10.0.1",
     "drizzle-orm": "0.45.4",
-    "zod": "4.6.5"
+    "zod": "4.4.3"
   },
   "inlinedDependencies": {
     "@libsql/core": "0.15.15",
-    "drizzle-orm": "0.45.2",
+    "drizzle-orm": "0.45.4",
     "ignore": "7.0.5",
     "type-fest": "5.3.1"
   },

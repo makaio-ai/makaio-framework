@@ -30,7 +30,7 @@
     "@makaio/test-utils": "workspace:*",
     "typescript": "^6.0.3",
     "vitest": "4.1.10",
-    "zod": "4.6.5"
+    "zod": "4.4.3"
   },
   "license": "MIT",
   "scripts": {

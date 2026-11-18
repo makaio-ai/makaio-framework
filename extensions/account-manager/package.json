@@ -34,8 +34,8 @@
   },
   "peerDependencies": {
     "@makaio/bus-core": "*",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
   },
   "dependencies": {
     "@makaio/client-claude-code": "workspace:*",
@@ -50,8 +50,8 @@
     "d3-shape": "^3.2.0",
     "drizzle-orm": "0.45.4",
     "ink": "^6.0.0",
-    "smol-toml": "^1.9.1",
-    "zod": "4.6.5"
+    "smol-toml": "^1.7.0",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
@@ -66,13 +66,13 @@
     "@makaio/ui-theme": "workspace:*",
     "@makaio/ui-views": "workspace:*",
     "@types/d3-shape": "^3.1.7",
-    "@types/react": "^19.3.0",
+    "@types/react": "^19.2.15",
     "drizzle-kit": "^0.31.8",
     "ink-testing-library": "^3.0.0",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
-    "tsdown": "0.23.0",
-    "tsx": "^4.23.15",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "tsdown": "0.22.0",
+    "tsx": "^4.23.1",
     "typescript": "^6.0.3",
     "unrun": "^0.3.0",
     "vitest": "4.1.10"

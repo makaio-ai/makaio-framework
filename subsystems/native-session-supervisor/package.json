@@ -31,10 +31,10 @@
   "devDependencies": {
     "@makaio/bus-transport-websocket": "workspace:*",
     "@makaio/test-utils": "workspace:*",
-    "@types/ws": "^8.18.2",
+    "@types/ws": "^8.5.10",
     "typescript": "^6.0.3",
     "vitest": "4.1.10",
-    "ws": "^8.22.0"
+    "ws": "^8.21.0"
   },
   "license": "MIT",
   "scripts": {
