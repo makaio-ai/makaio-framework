@@ -257,16 +257,19 @@ The package exports generated protocol types from `src/protocol/generated/index.
 **Solution:**
 - Verify `codex` CLI is installed: `codex --version`
 - Check the working directory is accessible
-- Review stderr logs for subprocess errors
+- Run `codex app-server` manually in the same directory to see its own output; the adapter suppresses the subprocess's
+  stderr because it can contain account-login payloads
 
-### JSONL parsing errors
+### Malformed JSONL lines
 
-**Error:** `Failed to parse JSONL`
+**Warning:** `[codex app-server] dropped N malformed JSONL line(s)`
+
+Lines on the app-server's stdout that are not valid JSON are dropped and counted; they do not fail the connector, and
+their content is never logged.
 
 **Solution:**
-- This may indicate a protocol mismatch
+- Repeated warnings may indicate a protocol mismatch or a `codex` build that logs to stdout
 - Ensure you're using the correct version of `codex`
-- Check the subprocess logs for protocol errors
 
 ### Approval handling issues
 

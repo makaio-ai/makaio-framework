@@ -540,10 +540,11 @@ describe('StdioClientTransport', () => {
         errors.push(error);
       });
 
-      hostIn.write('not-json\n');
+      hostIn.write('not-json token=secret-value\n');
 
       expect(errors).toHaveLength(1);
-      expect(errors[0]?.message).toContain('Failed to parse stdio JSONL');
+      // The exact message proves the raw line (and its token) is not echoed.
+      expect(errors[0]?.message).toBe('Failed to parse 1 stdio JSONL line(s)');
 
       unsubscribe();
       hostIn.end();

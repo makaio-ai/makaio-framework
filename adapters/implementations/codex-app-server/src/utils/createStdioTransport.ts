@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import * as path from 'node:path';
+import { decodeJsonlChunk, notifyListeners } from '@makaio/subprocess';
 import { DeferredPromise } from '@makaio/utils';
 import type { ServerNotification, ServerRequest } from '../protocol/generated/index.js';
 
@@ -15,10 +16,27 @@ export type StdioMessage = ServerNotification | { id: number; result: unknown } 
 type MessageCallback = (message: StdioMessage) => void;
 
 /**
- * Callback invoked when an error occurs
+ * Callback invoked when the transport fails: the subprocess reported an error,
+ * exited unexpectedly, or a message consumer threw. Malformed stdout lines are
+ * not failures and never reach it.
  * @param error - Error describing the failure
  */
 type ErrorCallback = (error: Error) => void;
+
+/**
+ * Report a transport failure to every error subscriber. A subscriber that
+ * throws is logged by name only, because a failure can carry app-server
+ * protocol content, and does not keep later subscribers from the failure.
+ * @param callbacks - Error subscribers of one transport
+ * @param error - Failure to report
+ */
+function reportTransportFailure(callbacks: ReadonlySet<ErrorCallback>, error: Error): void {
+  notifyListeners(callbacks, error, (thrown) => {
+    console.error(
+      `[codex app-server] transport error subscriber threw ${thrown instanceof Error ? thrown.name : typeof thrown}`,
+    );
+  });
+}
 
 /**
  * Resolve the command used to start the Codex app server.
@@ -53,16 +71,21 @@ export interface StdioTransport {
   close(): void;
 
   /**
-   * Register a callback for message received from stdout
+   * Subscribe to messages received from stdout. Every subscriber receives every
+   * message; a subscriber that throws is reported as a transport failure.
    * @param callback - Function to handle incoming messages
+   * @returns Function that removes this subscription
    */
-  onMessage(callback: MessageCallback): void;
+  onMessage(callback: MessageCallback): () => void;
 
   /**
-   * Register a callback for errors
-   * @param callback - Function to handle errors
+   * Subscribe to transport failures (see {@link ErrorCallback}). Every
+   * subscriber observes every failure: the JSON-RPC client rejects its in-flight
+   * requests with it while the connector terminates on the same failure.
+   * @param callback - Function to handle transport failures
+   * @returns Function that removes this subscription
    */
-  onError(callback: ErrorCallback): void;
+  onError(callback: ErrorCallback): () => void;
 
   /**
    * Settles once the spawned `codex app-server` process has ended, with the exit
@@ -93,6 +116,8 @@ export interface StdioTransport {
    * the exit callback carries only a code. Consumers use it for exactly one
    * decision — whether the resulting exit may be surfaced as a terminal
    * connector error — and never to describe *why* the process ended.
+   * A `close()` that arrives after the child's end was observed does not set it:
+   * that exit was already classified, as unrequested if it was reported.
    * @returns `true` once `close()` has requested termination.
    */
   shutdownRequested(): boolean;
@@ -127,8 +152,9 @@ export function createStdioTransport(cwd: string, env: Record<string, unknown>, 
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
-  let messageCallback: MessageCallback | null = null;
-  let errorCallback: ErrorCallback | null = null;
+  const messageCallbacks = new Set<MessageCallback>();
+  const errorCallbacks = new Set<ErrorCallback>();
+  const reportFailure = (error: Error): void => reportTransportFailure(errorCallbacks, error);
 
   // Buffer for incomplete JSONL lines
   let buffer = '';
@@ -137,21 +163,22 @@ export function createStdioTransport(cwd: string, env: Record<string, unknown>, 
    * Parse JSONL from stdout and dispatch messages
    */
   subprocess.stdout.on('data', (chunk: Buffer) => {
-    buffer += chunk.toString('utf-8');
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || ''; // Keep incomplete line in buffer
+    const result = decodeJsonlChunk(chunk.toString('utf-8'), buffer);
+    buffer = result.remaining;
 
-    for (const line of lines) {
-      if (line.trim()) {
-        try {
-          const message = JSON.parse(line) as StdioMessage;
-          messageCallback?.(message);
-        } catch {
-          // Never retain the malformed line: app-server protocol payloads can
-          // contain connector-local authentication material.
-          errorCallback?.(new Error('Codex app-server emitted invalid JSONL.'));
-        }
-      }
+    for (const message of result.messages) {
+      // A throwing consumer is a connector fault, not malformed input.
+      notifyListeners(messageCallbacks, message as StdioMessage, (error) => {
+        reportFailure(error instanceof Error ? error : new Error(String(error)));
+      });
+    }
+
+    // A malformed line names no request and leaves app-server running, so it is
+    // a diagnostic, not a connector failure. The decoder only counts such lines:
+    // app-server protocol payloads can contain connector-local authentication
+    // material.
+    if (result.malformedLineCount > 0) {
+      console.warn(`[codex app-server] dropped ${result.malformedLineCount} malformed JSONL line(s)`);
     }
   });
 
@@ -168,7 +195,7 @@ export function createStdioTransport(cwd: string, env: Record<string, unknown>, 
    * Handle subprocess errors (e.g., codex not found)
    */
   subprocess.on('error', (error: Error) => {
-    errorCallback?.(error);
+    reportFailure(error);
   });
 
   // Kill-intention marker. Set before the signal is sent so the exit callback
@@ -195,10 +222,16 @@ export function createStdioTransport(cwd: string, env: Record<string, unknown>, 
     // connector error is withheld, because the connector asked for it.
     if (closeRequested) return;
 
-    if (code !== 0) {
-      const error = new Error(`codex app-server exited with code ${code ?? 'unknown'}`);
-      errorCallback?.(error);
-    }
+    // Every exit this transport did not request is terminal, whatever its code:
+    // the connection is gone, so in-flight requests can never be answered. A
+    // clean code 0 is no exception — malformed lines are non-fatal, so this exit
+    // is the only signal left that would settle pending RPCs before their timeout.
+    // Reported on `exit`, not on the later `close` the generic JSONL transport in
+    // `@makaio/subprocess` waits for: app-server is a long-lived server, so an
+    // exit it was not asked for is a death rather than a final answer still in
+    // the pipe, and `close` waits on every holder of its stdout, so a descendant
+    // that inherited the pipe would hide that death indefinitely.
+    reportFailure(new Error(`codex app-server exited with code ${code ?? 'unknown'}`));
   });
 
   // **The event every spawn attempt reaches.** A child that failed to start emits
@@ -230,24 +263,48 @@ export function createStdioTransport(cwd: string, env: Record<string, unknown>, 
     close(): void {
       // Order matters: the marker must be in place before the signal, because
       // the exit callback can run as soon as the signal is delivered.
-      closeRequested = true;
+      //
+      // Once the child's end is observed (`exitCode`/`signalCode`, set before
+      // `exit` is emitted), a later `close()` no longer sets the marker, so the
+      // exit that an error subscriber's shutdown follows is not re-read as
+      // requested. A close issued while the child is still alive is not
+      // distinguishable from a requested one here.
+      //
+      // TODO(FACT-459): a failure-driven `close()` while the child is still alive
+      // sets the marker and finalises the exit a second time. Two cases remain:
+      // a message subscriber that throws while the child is alive, and a spawn
+      // failure under Bun, which leaves `exitCode` null during `error` (Node sets
+      // -2). The marker records only that `close()` ran, not who asked for it, so
+      // it cannot tell these apart from a requested close. The redesign replaces
+      // the marker with intent recorded by the stop owner.
+      if (subprocess.exitCode === null && subprocess.signalCode === null) {
+        closeRequested = true;
+      }
       subprocess.kill();
     },
 
     /**
-     * Register a callback for incoming messages
+     * Subscribe to incoming messages
      * @param callback - Function to handle incoming messages
+     * @returns Function that removes this subscription
      */
-    onMessage(callback: MessageCallback): void {
-      messageCallback = callback;
+    onMessage(callback: MessageCallback): () => void {
+      messageCallbacks.add(callback);
+      return () => {
+        messageCallbacks.delete(callback);
+      };
     },
 
     /**
-     * Register a callback for errors
-     * @param callback - Function to handle errors
+     * Subscribe to transport failures
+     * @param callback - Function to handle transport failures
+     * @returns Function that removes this subscription
      */
-    onError(callback: ErrorCallback): void {
-      errorCallback = callback;
+    onError(callback: ErrorCallback): () => void {
+      errorCallbacks.add(callback);
+      return () => {
+        errorCallbacks.delete(callback);
+      };
     },
   };
 }

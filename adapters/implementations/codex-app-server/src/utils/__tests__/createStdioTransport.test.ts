@@ -20,6 +20,11 @@ class MockSubprocess {
   on = vi.fn();
 
   kill = vi.fn();
+
+  // A live ChildProcess reports `null` for both until it has ended.
+  exitCode: number | null = null;
+
+  signalCode: NodeJS.Signals | null = null;
 }
 
 /**
@@ -193,17 +198,38 @@ describe('createStdioTransport', () => {
     expect(messages[0]).toEqual({ method: 'test', params: {} });
   });
 
-  it('should call error callback for invalid JSON', () => {
+  it('drops invalid JSON lines without failing the transport', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const transport = createStdioTransport('/test/cwd', {});
+    const errors: Error[] = [];
+    const messages: unknown[] = [];
+
+    transport.onError((error) => errors.push(error));
+    transport.onMessage((message) => messages.push(message));
+
+    const stdoutOnCallback = mockSubprocess.stdout.on.mock.calls[0][1];
+    stdoutOnCallback(Buffer.from('invalid json\n{"method":"after","params":{}}\n'));
+
+    expect(errors).toHaveLength(0);
+    expect(messages).toEqual([{ method: 'after', params: {} }]);
+    expect(warnSpy).toHaveBeenCalledWith('[codex app-server] dropped 1 malformed JSONL line(s)');
+
+    warnSpy.mockRestore();
+  });
+
+  it('reports a throwing message consumer as a transport failure', () => {
     const transport = createStdioTransport('/test/cwd', {});
     const errors: Error[] = [];
 
     transport.onError((error) => errors.push(error));
+    transport.onMessage(() => {
+      throw new Error('consumer failed');
+    });
 
     const stdoutOnCallback = mockSubprocess.stdout.on.mock.calls[0][1];
-    stdoutOnCallback(Buffer.from('invalid json\n'));
+    stdoutOnCallback(Buffer.from('{"method":"test","params":{}}\n'));
 
-    expect(errors).toHaveLength(1);
-    expect(errors[0].message).toBeTruthy();
+    expect(errors.map((error) => error.message)).toEqual(['consumer failed']);
   });
 
   it('should send messages to stdin as JSONL', () => {
@@ -242,11 +268,24 @@ describe('createStdioTransport', () => {
     expect(errors[0].message).toContain('exited with code 1');
   });
 
-  it('should not call error callback on subprocess exit with code 0', () => {
+  it('should call error callback on unrequested subprocess exit with code 0', () => {
     const transport = createStdioTransport('/test/cwd', {});
     const errors: Error[] = [];
 
     transport.onError((error) => errors.push(error));
+
+    const onCallback = mockSubprocess.on.mock.calls.find(([event]) => event === 'exit')?.[1];
+    onCallback?.(0);
+
+    expect(errors.map((error) => error.message)).toEqual(['codex app-server exited with code 0']);
+  });
+
+  it('should not call error callback on subprocess exit after a requested close', () => {
+    const transport = createStdioTransport('/test/cwd', {});
+    const errors: Error[] = [];
+
+    transport.onError((error) => errors.push(error));
+    transport.close();
 
     const onCallback = mockSubprocess.on.mock.calls.find(([event]) => event === 'exit')?.[1];
     onCallback?.(0);
@@ -278,52 +317,57 @@ describe('createStdioTransport', () => {
     warnSpy.mockRestore();
   });
 
-  it('does not retain malformed protocol payloads in parse errors', () => {
-    const transport = createStdioTransport('/test/cwd', {});
-    const errors: Error[] = [];
-    transport.onError((error) => errors.push(error));
+  it('does not retain malformed protocol payloads in parse diagnostics', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    createStdioTransport('/test/cwd', {});
 
     const stdoutOnCallback = mockSubprocess.stdout.on.mock.calls[0][1];
     stdoutOnCallback(Buffer.from('{"apiKey":"secret-value"\n'));
 
-    expect(errors).toHaveLength(1);
-    expect(errors[0]?.message).toBe('Codex app-server emitted invalid JSONL.');
-    expect(errors[0]?.message).not.toContain('secret-value');
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy.mock.calls.flat().join(' ')).not.toContain('secret-value');
+
+    warnSpy.mockRestore();
   });
 
-  it('should allow registering multiple message callbacks', () => {
+  it('delivers every message to every subscriber until it unsubscribes', () => {
     const transport = createStdioTransport('/test/cwd', {});
     const messages1: unknown[] = [];
     const messages2: unknown[] = [];
 
-    transport.onMessage((message) => messages1.push(message));
-    // Second callback replaces the first
+    const unsubscribe1 = transport.onMessage((message) => messages1.push(message));
     transport.onMessage((message) => messages2.push(message));
 
     const stdoutOnCallback = mockSubprocess.stdout.on.mock.calls[0][1];
-    stdoutOnCallback(Buffer.from('{"method":"test","params":{}}\n'));
+    stdoutOnCallback(Buffer.from('{"method":"first","params":{}}\n'));
+    unsubscribe1();
+    stdoutOnCallback(Buffer.from('{"method":"second","params":{}}\n'));
 
-    // First callback should not be called (replaced by second)
-    expect(messages1).toHaveLength(0);
-    // Second callback should be called
-    expect(messages2).toHaveLength(1);
+    expect(messages1).toEqual([{ method: 'first', params: {} }]);
+    expect(messages2).toEqual([
+      { method: 'first', params: {} },
+      { method: 'second', params: {} },
+    ]);
   });
 
-  it('should allow registering multiple error callbacks', () => {
+  it('reports a failure to every error subscriber, even past one that unsubscribes or throws', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const transport = createStdioTransport('/test/cwd', {});
-    const errors1: Error[] = [];
-    const errors2: Error[] = [];
+    const errors: Error[] = [];
 
-    transport.onError((error) => errors1.push(error));
-    // Second callback replaces the first
-    transport.onError((error) => errors2.push(error));
+    const unsubscribe = transport.onError(() => unsubscribe());
+    transport.onError(() => {
+      throw new Error('subscriber failed');
+    });
+    transport.onError((error) => errors.push(error));
 
     const onCallback = mockSubprocess.on.mock.calls.find(([event]) => event === 'error')?.[1];
     onCallback?.(new Error('Test error'));
+    onCallback?.(new Error('Second error'));
 
-    // First callback should not be called (replaced by second)
-    expect(errors1).toHaveLength(0);
-    // Second callback should be called
-    expect(errors2).toHaveLength(1);
+    expect(errors.map((error) => error.message)).toEqual(['Test error', 'Second error']);
+    expect(errorSpy).toHaveBeenCalledWith('[codex app-server] transport error subscriber threw Error');
+
+    errorSpy.mockRestore();
   });
 });

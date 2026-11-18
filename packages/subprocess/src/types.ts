@@ -19,7 +19,13 @@ export interface SubprocessSpawnOptions {
 /** Listener invoked when a parsed JSON message arrives from stdout. */
 export type MessageListener = (message: unknown) => void;
 
-/** Listener invoked when an error occurs (parse failure, process error, non-zero exit). */
+/**
+ * Listener invoked once when the transport ends without `close()`: the child
+ * process could not be spawned, exited (with any code, including `0`), or was
+ * killed by a signal it did not receive from `close()`. It runs after the last
+ * stdout message was delivered. A malformed stdout line is not a transport
+ * failure and never reaches this listener.
+ */
 export type ErrorListener = (error: Error) => void;
 
 /**
@@ -27,6 +33,12 @@ export type ErrorListener = (error: Error) => void;
  *
  * Sends JSON objects as newline-delimited lines to stdin, receives them from
  * stdout. Supports multiple concurrent listeners.
+ *
+ * A stdout line that is not valid JSON carries no readable correlation and
+ * leaves the process running, so the transport drops it and logs a diagnostic
+ * that never includes the line itself. Error listeners only observe failures
+ * that end the transport. A listener that throws is logged and isolated; it
+ * neither ends the transport nor prevents later listeners from running.
  */
 export interface IJsonlTransport {
   /** Send a JSON-serializable message to the subprocess via stdin. */
@@ -35,7 +47,7 @@ export interface IJsonlTransport {
   close(): void;
   /** Register a message listener. Returns an unsubscribe function. */
   onMessage(listener: MessageListener): () => void;
-  /** Register an error listener. Returns an unsubscribe function. */
+  /** Register a listener for transport failures. Returns an unsubscribe function. */
   onError(listener: ErrorListener): () => void;
   /** The underlying child process (for lifecycle inspection). */
   readonly process: ChildProcess;

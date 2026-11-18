@@ -1,6 +1,17 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import type { ChildProcess } from 'node:child_process';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createJsonlTransport } from '../jsonl-transport.js';
 import type { IJsonlTransport } from '../types.js';
+
+/**
+ * Wait for the child's `close` event. Unlike `events.once`, this does not
+ * reject on the child's `error` event, which a failed spawn emits first.
+ * @param child - Child process to observe.
+ * @returns Promise that resolves once the child has closed.
+ */
+function closed(child: ChildProcess): Promise<void> {
+  return new Promise((resolve) => child.once('close', () => resolve()));
+}
 
 describe('createJsonlTransport', () => {
   let transport: IJsonlTransport | undefined;
@@ -8,6 +19,7 @@ describe('createJsonlTransport', () => {
   afterEach(() => {
     transport?.close();
     transport = undefined;
+    vi.restoreAllMocks();
   });
 
   it('should spawn a process and parse JSONL from stdout', async () => {
@@ -102,20 +114,112 @@ describe('createJsonlTransport', () => {
     expect(error.message).toContain('exited');
   });
 
-  it('should call error listeners on invalid JSON', async () => {
+  it('should call error listeners when the process is killed by a signal it did not get from close()', async () => {
     transport = createJsonlTransport({
       command: process.execPath,
-      args: ['-e', 'process.stdout.write("not-json\\n")'],
+      args: ['-e', 'process.kill(process.pid, "SIGKILL")'],
       cwd: process.cwd(),
-      processName: 'test-bad-json',
+      processName: 'test-signal',
     });
 
     const error = await new Promise<Error>((resolve) => {
       transport!.onError((err) => resolve(err));
     });
 
-    expect(error.message).toContain('parse');
-    expect(error.message).toContain('test-bad-json');
+    expect(error.message).toBe('test-signal exited with signal SIGKILL');
+  });
+
+  it('reports a clean exit the transport did not request', async () => {
+    transport = createJsonlTransport({
+      command: process.execPath,
+      args: ['-e', 'process.exit(0)'],
+      cwd: process.cwd(),
+      processName: 'test-clean-exit',
+    });
+
+    const error = await new Promise<Error>((resolve) => {
+      transport!.onError((err) => resolve(err));
+    });
+
+    expect(error.message).toBe('test-clean-exit exited with code 0');
+  });
+
+  it('reports a process that could not be spawned exactly once, with the spawn error', async () => {
+    transport = createJsonlTransport({
+      command: '/definitely/missing/jsonl-binary',
+      cwd: process.cwd(),
+      processName: 'test-missing',
+    });
+    const errors: Error[] = [];
+    transport.onError((err) => errors.push(err));
+
+    // The transport's own `close` handler was registered first, so it has run
+    // by the time this one resolves.
+    await closed(transport.process);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).toContain('ENOENT');
+  });
+
+  it('notifies every error listener even when an earlier one closes the transport', async () => {
+    transport = createJsonlTransport({
+      command: process.execPath,
+      args: ['-e', 'process.exit(1)'],
+      cwd: process.cwd(),
+      processName: 'test-close-in-listener',
+    });
+    const closingTransport = transport;
+    const observed: Error[] = [];
+    closingTransport.onError(() => closingTransport.close());
+    closingTransport.onError((err) => observed.push(err));
+
+    await closed(closingTransport.process);
+
+    expect(observed.map((err) => err.message)).toEqual(['test-close-in-listener exited with code 1']);
+  });
+
+  it('isolates a throwing message listener from later listeners', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    transport = createJsonlTransport({
+      command: process.execPath,
+      args: ['-e', 'process.stdout.write(JSON.stringify({ a: 1 }) + "\\n")'],
+      cwd: process.cwd(),
+      processName: 'test-throwing-listener',
+    });
+
+    const errors: Error[] = [];
+    transport.onError((err) => errors.push(err));
+    transport.onMessage(() => {
+      throw new Error('listener failed');
+    });
+    const message = await new Promise<unknown>((resolve) => {
+      transport!.onMessage((msg) => resolve(msg));
+    });
+
+    expect(message).toEqual({ a: 1 });
+    expect(errors).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith('[test-throwing-listener] transport listener threw', expect.any(Error));
+  });
+
+  it('drops invalid JSON lines without reporting a transport error or logging the line', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    transport = createJsonlTransport({
+      command: process.execPath,
+      args: ['-e', 'process.stdout.write("not-json token=secret-value\\n" + JSON.stringify({ after: true }) + "\\n")'],
+      cwd: process.cwd(),
+      processName: 'test-bad-json',
+    });
+
+    const errors: Error[] = [];
+    transport.onError((err) => errors.push(err));
+    const message = await new Promise<unknown>((resolve) => {
+      transport!.onMessage((msg) => resolve(msg));
+    });
+
+    expect(message).toEqual({ after: true });
+    expect(errors).toEqual([]);
+    expect(warnSpy).toHaveBeenCalledWith('[test-bad-json] dropped 1 malformed JSONL line(s) from stdout');
+    expect(warnSpy.mock.calls.flat().join(' ')).not.toContain('secret-value');
   });
 
   it('should preserve parent environment variables when child env is provided', async () => {

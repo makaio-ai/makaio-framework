@@ -330,11 +330,11 @@ export class StdioClientTransport implements BusTransport {
    * @param chunk - New data chunk from stdin
    */
   private handleChunk(chunk: string): void {
-    const { messages, remaining, errors } = decodeBusChunk(chunk, this.lineBuffer);
+    const { messages, remaining, malformedLineCount } = decodeBusChunk(chunk, this.lineBuffer);
     this.lineBuffer = remaining;
 
-    for (const line of errors) {
-      this.reportError(new Error(`Failed to parse stdio JSONL: ${line}`));
+    if (malformedLineCount > 0) {
+      this.reportError(new Error(`Failed to parse ${malformedLineCount} stdio JSONL line(s)`));
     }
 
     for (const parsed of messages) {

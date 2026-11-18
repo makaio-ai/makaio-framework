@@ -7,27 +7,28 @@ export interface JsonlDecodeResult {
   /** Leftover bytes not yet terminated by a newline. */
   remaining: string;
   /**
-   * Raw lines that could not be parsed as JSON.
-   * Callers may log or report these; they are never included in `messages`.
+   * Number of complete lines in the chunk that were not valid JSON. The lines
+   * themselves are not retained: a JSONL stream carries protocol payloads that
+   * may hold credentials, so callers can only report how many lines were dropped.
    */
-  errors: string[];
+  malformedLineCount: number;
 }
 
 /**
  * Decode a chunk of JSONL data, handling partial lines across chunks.
  *
- * Malformed JSON lines are skipped rather than thrown — the raw offending line
- * is collected in `errors` so callers can log or handle them without crashing.
+ * Malformed JSON lines are skipped rather than thrown and only counted in
+ * `malformedLineCount`; their content never leaves the decoder.
  * @param chunk - New data chunk to process.
  * @param buffer - Leftover data from previous chunk.
- * @returns Parsed messages, remaining buffer, and any unparseable lines.
+ * @returns Parsed messages, remaining buffer, and the number of unparseable lines.
  */
 export function decodeJsonlChunk(chunk: string, buffer: string): JsonlDecodeResult {
   const combined = buffer + chunk;
   const lines = combined.split('\n');
   const remaining = lines.pop() ?? '';
   const messages: unknown[] = [];
-  const errors: string[] = [];
+  let malformedLineCount = 0;
 
   for (const line of lines) {
     if (line.trim()) {
@@ -35,10 +36,10 @@ export function decodeJsonlChunk(chunk: string, buffer: string): JsonlDecodeResu
         messages.push(JSON.parse(line));
       } catch {
         // Skip malformed JSONL lines rather than crashing.
-        errors.push(line);
+        malformedLineCount += 1;
       }
     }
   }
 
-  return { messages, remaining, errors };
+  return { messages, remaining, malformedLineCount };
 }

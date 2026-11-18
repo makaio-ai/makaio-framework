@@ -18,21 +18,21 @@ export interface DecodeBusChunkResult {
   /** Leftover bytes not yet terminated by a newline. */
   remaining: string;
   /**
-   * Raw lines that could not be parsed as JSON.
-   * Callers may log or report these; they are never included in `messages`.
+   * Number of complete lines that were not valid JSON. Their content is not
+   * retained, so it cannot leak into logs or error messages.
    */
-  errors: string[];
+  malformedLineCount: number;
 }
 
 /**
  * Decode a chunk of JSONL data, handling partial lines across chunks.
  *
  * Delegates to the shared `decodeJsonlChunk` primitive in `@makaio/subprocess`.
- * Malformed JSON lines are skipped rather than thrown — the raw offending line
- * is collected in `errors` so callers can log or handle them without crashing.
+ * Malformed JSON lines are skipped rather than thrown and only counted in
+ * `malformedLineCount`.
  * @param chunk - New data chunk to process.
  * @param buffer - Leftover data from previous chunk.
- * @returns Parsed messages, remaining buffer, and any unparseable lines.
+ * @returns Parsed messages, remaining buffer, and the number of unparseable lines.
  */
 export function decodeBusChunk(chunk: string, buffer: string): DecodeBusChunkResult {
   return decodeJsonlChunk(chunk, buffer);

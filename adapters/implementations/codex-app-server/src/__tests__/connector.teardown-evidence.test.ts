@@ -40,8 +40,8 @@ function makeTransport(exited: Promise<number | null>): StdioTransport {
   return {
     send: () => undefined,
     close: () => undefined,
-    onMessage: () => undefined,
-    onError: () => undefined,
+    onMessage: () => () => undefined,
+    onError: () => () => undefined,
     exited,
     shutdownRequested: () => false,
   };

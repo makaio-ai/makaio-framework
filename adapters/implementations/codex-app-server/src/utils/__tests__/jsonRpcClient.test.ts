@@ -13,8 +13,8 @@ class MockTransport implements StdioTransport {
 
   closeRequested = false;
 
-  messageCallback: ((message: StdioMessage) => void) | null = null;
-  errorCallback: ((error: Error) => void) | null = null;
+  readonly messageCallbacks = new Set<(message: StdioMessage) => void>();
+  readonly errorCallbacks = new Set<(error: Error) => void>();
 
   send(message: object): void {
     this.sentMessages.push(message);
@@ -28,12 +28,18 @@ class MockTransport implements StdioTransport {
     return this.closeRequested;
   }
 
-  onMessage(callback: (message: StdioMessage) => void): void {
-    this.messageCallback = callback;
+  onMessage(callback: (message: StdioMessage) => void): () => void {
+    this.messageCallbacks.add(callback);
+    return () => {
+      this.messageCallbacks.delete(callback);
+    };
   }
 
-  onError(callback: (error: Error) => void): void {
-    this.errorCallback = callback;
+  onError(callback: (error: Error) => void): () => void {
+    this.errorCallbacks.add(callback);
+    return () => {
+      this.errorCallbacks.delete(callback);
+    };
   }
 
   /**
@@ -41,7 +47,7 @@ class MockTransport implements StdioTransport {
    * @param message - Message to receive
    */
   receiveMessage(message: unknown): void {
-    this.messageCallback?.(message as StdioMessage);
+    for (const callback of [...this.messageCallbacks]) callback(message as StdioMessage);
   }
 
   /**
@@ -49,7 +55,7 @@ class MockTransport implements StdioTransport {
    * @param error - Error to receive
    */
   receiveError(error: Error): void {
-    this.errorCallback?.(error);
+    for (const callback of [...this.errorCallbacks]) callback(error);
   }
 }
 
@@ -293,6 +299,57 @@ describe('createJsonRpcClient', () => {
     await expect(request1).resolves.toBe('result1');
     await expect(request2).resolves.toBe('result2');
     await expect(request3).resolves.toBe('result3');
+  });
+
+  it('shuts the client down on a transport failure before notifying the owner', async () => {
+    let clientClosedWhenOwnerRan = false;
+    const client = createJsonRpcClient(transport, () => {
+      clientClosedWhenOwnerRan = transport.closeRequested;
+    });
+    const pending = client.request('thread/start', {});
+
+    transport.receiveError(new Error('app-server died'));
+
+    await expect(pending).rejects.toThrow('app-server died');
+    expect(clientClosedWhenOwnerRan).toBe(true);
+    await expect(client.request('later', {})).rejects.toThrow('JSON-RPC client is closed');
+  });
+
+  it('ends the owner failure subscription with the client, so a reused transport notifies only the current owner', async () => {
+    const firstOwner = vi.fn();
+    const secondOwner = vi.fn();
+
+    createJsonRpcClient(transport, firstOwner).close();
+    const client = createJsonRpcClient(transport, secondOwner);
+    const pending = client.request('thread/start', {});
+    // The current client and its owner, nothing left over from the first.
+    expect(transport.errorCallbacks.size).toBe(2);
+
+    transport.receiveError(new Error('app-server died'));
+
+    await expect(pending).rejects.toThrow('app-server died');
+    expect(firstOwner).not.toHaveBeenCalled();
+    expect(secondOwner).toHaveBeenCalledOnce();
+  });
+
+  it('ends the owner failure subscription on a failure even when the owner never closes the client', async () => {
+    const firstOwner = vi.fn();
+    const secondOwner = vi.fn();
+
+    const firstClient = createJsonRpcClient(transport, firstOwner);
+    const firstPending = firstClient.request('thread/start', {});
+    transport.receiveError(new Error('first failure'));
+    await expect(firstPending).rejects.toThrow('first failure');
+    expect(firstOwner).toHaveBeenCalledOnce();
+
+    // The transport is reused by a second client; the first owner never closed its client.
+    const secondClient = createJsonRpcClient(transport, secondOwner);
+    const secondPending = secondClient.request('thread/start', {});
+    transport.receiveError(new Error('second failure'));
+
+    await expect(secondPending).rejects.toThrow('second failure');
+    expect(firstOwner).toHaveBeenCalledOnce();
+    expect(secondOwner).toHaveBeenCalledOnce();
   });
 
   it('should ignore response messages for unknown request IDs', () => {

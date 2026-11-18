@@ -60,15 +60,74 @@ setTimeout(() => {
 const MALFORMED_BEFORE_HANDSHAKE_SCRIPT = `
 process.stdin.resume();
 process.stdout.write('not-json\\n');
-setTimeout(() => {}, 60000);
+process.stdout.write(JSON.stringify({ type: 'subscribe-sync-complete' }) + '\\n');
 `;
 
-const MALFORMED_AFTER_DELAY_SCRIPT = `
+const MALFORMED_BEFORE_RESPONSE_SCRIPT = `
 process.stdin.resume();
-setTimeout(() => {
-  process.stdout.write('not-json\\n');
-}, 50);
-setTimeout(() => {}, 60000);
+process.stdin.setEncoding('utf-8');
+let buf = '';
+process.stdin.on('data', (chunk) => {
+  buf += chunk;
+  const lines = buf.split('\\n');
+  buf = lines.pop() || '';
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const msg = JSON.parse(line);
+    if (msg.type === 'request') {
+      process.stdout.write('not-json\\n');
+      process.stdout.write(JSON.stringify({ type: 'response', correlationId: msg.correlationId, result: 'answered' }) + '\\n');
+    }
+  }
+});
+process.stdout.write(JSON.stringify({ type: 'subscribe-sync-complete' }) + '\\n');
+`;
+
+// Answers the first request from a helper process that inherits stdout and
+// writes after this child has exited cleanly, so the child's `exit` always
+// precedes the response on stdout.
+const ANSWER_AFTER_EXIT_SCRIPT = `
+process.stdin.setEncoding('utf-8');
+let buf = '';
+process.stdin.on('data', (chunk) => {
+  buf += chunk;
+  const lines = buf.split('\\n');
+  buf = lines.pop() || '';
+  const msg = lines.filter((line) => line.trim()).map((line) => JSON.parse(line)).find((m) => m.type === 'request');
+  if (!msg) return;
+  const response = JSON.stringify({ type: 'response', correlationId: msg.correlationId, result: 'answered' });
+  require('node:child_process').spawn(
+    process.execPath,
+    ['-e', 'setTimeout(() => process.stdout.write(process.argv[1] + "\\\\n"), 100)', response],
+    { stdio: ['ignore', 'inherit', 'ignore'] },
+  );
+  process.exit(0);
+});
+process.stdout.write(JSON.stringify({ type: 'subscribe-sync-complete' }) + '\\n');
+`;
+
+// Answers the first request, leaves a helper process holding the inherited
+// stdout open, and ends the child with the given statement (a code exit or a
+// self-inflicted signal). The child's `exit` therefore precedes stdout `close`
+// by the helper's lifetime; the helper terminates itself after 3 seconds.
+const answerThenEndHoldingStdoutScript = (endStatement: string): string => `
+process.stdin.setEncoding('utf-8');
+let buf = '';
+process.stdin.on('data', (chunk) => {
+  buf += chunk;
+  const lines = buf.split('\\n');
+  buf = lines.pop() || '';
+  const msg = lines.filter((line) => line.trim()).map((line) => JSON.parse(line)).find((m) => m.type === 'request');
+  if (!msg) return;
+  require('node:child_process').spawn(
+    process.execPath,
+    ['-e', 'setTimeout(() => {}, 3000)'],
+    { stdio: ['ignore', 'inherit', 'ignore'] },
+  ).unref();
+  process.stdout.write(JSON.stringify({ type: 'response', correlationId: msg.correlationId, result: 'answered' }) + '\\n');
+  ${endStatement}
+});
+process.stdout.write(JSON.stringify({ type: 'subscribe-sync-complete' }) + '\\n');
 `;
 
 const CONTROL_OBSERVER_SCRIPT = `
@@ -131,6 +190,7 @@ describe('StdioServerTransport', { timeout: TRANSPORT_INTEGRATION_TIMEOUT_MS }, 
   afterEach(async () => {
     await transport?.disconnect();
     transport = undefined;
+    vi.restoreAllMocks();
   });
 
   it('connect() spawns the child process and resolves', async () => {
@@ -148,7 +208,8 @@ describe('StdioServerTransport', { timeout: TRANSPORT_INTEGRATION_TIMEOUT_MS }, 
     await expect(transport.ready).resolves.toBeUndefined();
   });
 
-  it('rejects ready, stays not ready, and notifies disconnect on malformed output before handshake', async () => {
+  it('drops malformed output before the handshake and still becomes ready', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     let disconnected = false;
     transport = new StdioServerTransport({
       spawn: {
@@ -164,22 +225,25 @@ describe('StdioServerTransport', { timeout: TRANSPORT_INTEGRATION_TIMEOUT_MS }, 
 
     await transport.connect();
 
-    await expect(transport.ready).rejects.toThrow(/parse JSONL/);
-    expect(transport.isReady()).toBe(false);
-    expect(disconnected).toBe(true);
+    await expect(transport.ready).resolves.toBeUndefined();
+    expect(transport.isReady()).toBe(true);
+    expect(disconnected).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith('[malformed-child] dropped 1 malformed JSONL line(s) from stdout');
   });
 
-  it('rejects pending correlations when malformed output terminates the session', async () => {
+  it('keeps pending correlations when malformed output precedes their response', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     transport = new StdioServerTransport({
       spawn: {
         command: 'node',
-        args: ['-e', MALFORMED_AFTER_DELAY_SCRIPT],
+        args: ['-e', MALFORMED_BEFORE_RESPONSE_SCRIPT],
         cwd: process.cwd(),
         processName: 'malformed-child',
       },
     });
 
     await transport.connect();
+    await transport.ready;
 
     const request: BusMessage = {
       type: 'request',
@@ -189,11 +253,76 @@ describe('StdioServerTransport', { timeout: TRANSPORT_INTEGRATION_TIMEOUT_MS }, 
       correlationId: 'corr-malformed',
       messageId: 'msg-malformed',
     };
-    const pending = transport.send(request, 60_000);
 
-    await expect(pending).rejects.toThrow(/Transport disconnected|parse JSONL/);
-    await expect(transport.ready).rejects.toThrow(/parse JSONL/);
-    expect(transport.isReady()).toBe(false);
+    await expect(transport.send(request, 10_000)).resolves.toBe('answered');
+    expect(transport.isReady()).toBe(true);
+    expect(warnSpy).toHaveBeenCalledWith('[malformed-child] dropped 1 malformed JSONL line(s) from stdout');
+  });
+
+  it('settles a correlation whose response is still on stdout when the child exits', async () => {
+    transport = new StdioServerTransport({
+      spawn: {
+        command: 'node',
+        args: ['-e', ANSWER_AFTER_EXIT_SCRIPT],
+        cwd: process.cwd(),
+        processName: 'answer-after-exit-child',
+      },
+    });
+
+    await transport.connect();
+    await transport.ready;
+
+    const request: BusMessage = {
+      type: 'request',
+      subject: 'test.pending',
+      namespace: 'test',
+      payload: {},
+      correlationId: 'corr-after-exit',
+      messageId: 'msg-after-exit',
+    };
+
+    await expect(transport.send(request, 10_000)).resolves.toBe('answered');
+  });
+
+  it.each([
+    { ending: 'a code exit', endStatement: 'process.exit(0);' },
+    { ending: 'a signal exit', endStatement: "process.kill(process.pid, 'SIGTERM');" },
+  ])('rejects send() once the child has ended by $ending while a descendant still holds stdout', async ({
+    endStatement,
+  }) => {
+    transport = new StdioServerTransport({
+      spawn: {
+        command: 'node',
+        args: ['-e', answerThenEndHoldingStdoutScript(endStatement)],
+        cwd: process.cwd(),
+        processName: 'exit-holding-stdout-child',
+      },
+    });
+    let disconnected = false;
+    transport.onDisconnected = () => {
+      disconnected = true;
+    };
+
+    await transport.connect();
+    await transport.ready;
+
+    const request = (id: string): BusMessage => ({
+      type: 'request',
+      subject: 'test.pending',
+      namespace: 'test',
+      payload: {},
+      correlationId: `corr-${id}`,
+      messageId: `msg-${id}`,
+    });
+
+    // The response written before the exit still settles its correlation.
+    await expect(transport.send(request('before-exit'), 10_000)).resolves.toBe('answered');
+
+    // The helper keeps stdout open, so the session has not been terminated yet,
+    // but the child is gone and nothing may be written or tracked any more.
+    await vi.waitFor(() => expect(transport?.isReady()).toBe(false));
+    expect(disconnected).toBe(false);
+    await expect(transport.send(request('after-exit'), 200)).rejects.toThrow('not connected');
   });
 
   it(

@@ -32,6 +32,25 @@ interface PendingJsonRpcRequest {
 }
 
 /**
+ * Convert the `error` member of a JSON-RPC error response into an `Error`.
+ *
+ * The member comes from the remote process, so its shape is checked rather
+ * than assumed; a response without a well-formed error object still rejects
+ * its request instead of throwing inside message dispatch.
+ * @param value - The `error` member of the response.
+ * @returns Error describing the remote failure.
+ */
+function toRpcError(value: unknown): Error {
+  if (typeof value !== 'object' || value === null) {
+    return new Error('JSON-RPC error response without an error object');
+  }
+  const { code, message } = value as Record<string, unknown>;
+  const codeText = typeof code === 'number' ? String(code) : 'unknown';
+  const messageText = typeof message === 'string' ? message : 'no message';
+  return new Error(`JSON-RPC error ${codeText}: ${messageText}`);
+}
+
+/**
  * Handler for server-initiated requests.
  * @param request - Raw server request object (JSON-RPC 2.0 with `id` and `method`).
  * @returns Promise resolving to the response result to send back.
@@ -47,6 +66,10 @@ export type NotificationHandler = (method: string, params: unknown) => void;
 
 /**
  * Generic JSON-RPC 2.0 client that wraps an {@link IJsonlTransport}.
+ *
+ * A transport failure ends the client exactly like {@link IJsonRpcClient.close}:
+ * pending requests reject with the transport error and later requests reject
+ * immediately.
  */
 export interface IJsonRpcClient {
   /**
@@ -173,8 +196,7 @@ export function createJsonRpcClient(transport: IJsonlTransport): IJsonRpcClient 
     // Correlated response (error)
     if (id !== undefined && 'error' in msg && !('method' in msg)) {
       settlePending(id, (pending) => {
-        const rpcError = msg['error'] as { code: number; message: string };
-        pending.reject(new Error(`JSON-RPC error ${rpcError.code}: ${rpcError.message}`));
+        pending.reject(toRpcError(msg['error']));
       });
       return;
     }
@@ -243,9 +265,26 @@ export function createJsonRpcClient(transport: IJsonlTransport): IJsonRpcClient 
 
   const unsubMessage = transport.onMessage(handleMessage);
 
-  const unsubError = transport.onError((error) => {
-    rejectAllPending(error);
-  });
+  // The transport reports only failures that end it (a malformed line is not
+  // one), so neither a pending nor a later request can be answered anymore.
+  const unsubError = transport.onError(shutdown);
+
+  /**
+   * Move the client into its terminal closed state: detach from the transport,
+   * reject every pending request, and close the transport. Later requests are
+   * rejected immediately instead of being written to a transport that is gone.
+   * @param reason - Error passed to every pending request.
+   */
+  function shutdown(reason: Error): void {
+    if (closed) return;
+    closed = true;
+    unsubMessage();
+    unsubError();
+    rejectAllPending(reason);
+    notificationHandlers.clear();
+    serverRequestHandlers.clear();
+    transport.close();
+  }
 
   return {
     request<T>(method: string, params: unknown, timeoutMs: number = DEFAULT_JSON_RPC_REQUEST_TIMEOUT_MS): Promise<T> {
@@ -312,14 +351,7 @@ export function createJsonRpcClient(transport: IJsonlTransport): IJsonRpcClient 
     },
 
     close(): void {
-      if (closed) return;
-      closed = true;
-      unsubMessage();
-      unsubError();
-      rejectAllPending(new Error('JSON-RPC client closed'));
-      notificationHandlers.clear();
-      serverRequestHandlers.clear();
-      transport.close();
+      shutdown(new Error('JSON-RPC client closed'));
     },
   };
 }
