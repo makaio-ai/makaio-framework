@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
-import { createDatabaseClient } from '@makaio/storage-drizzle/client';
+import { createTempDatabaseClient } from '@makaio/test-utils/drizzle-harness';
 import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { decodeEmbedding, EmbeddingIndexManager } from '../index-manager.js';
 
@@ -13,7 +13,7 @@ import { decodeEmbedding, EmbeddingIndexManager } from '../index-manager.js';
  * @returns Test database context with db and cleanup
  */
 async function createTestDb(): Promise<{ db: MakaioDatabase; cleanup: () => void }> {
-  const { db, close } = await createDatabaseClient({ url: ':memory:' });
+  const { db, close } = await createTempDatabaseClient('index-manager');
   return { db, cleanup: close };
 }
 

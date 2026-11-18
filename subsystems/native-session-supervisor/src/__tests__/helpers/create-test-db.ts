@@ -4,7 +4,7 @@
  */
 
 import { sql } from 'drizzle-orm';
-import { createDatabaseClient } from '@makaio/storage-drizzle/client';
+import { createTempDatabaseClient } from '@makaio/test-utils/drizzle-harness';
 import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
 
 /**
@@ -34,7 +34,7 @@ export interface TestDbContext {
  * @returns Database context with db and close function.
  */
 export async function createTestDb(): Promise<TestDbContext> {
-  const { db, close } = await createDatabaseClient({ url: ':memory:' });
+  const { db, close } = await createTempDatabaseClient('native-session-supervisor');
   const rawSql = getRawSqlExecutor(db);
 
   await rawSql.run(sql`

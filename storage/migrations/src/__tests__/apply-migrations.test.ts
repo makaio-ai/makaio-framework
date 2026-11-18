@@ -3,12 +3,12 @@ import { sql, type SQL } from 'drizzle-orm';
 import { drizzle, type LibSQLDatabase } from 'drizzle-orm/libsql';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { getRawSqlExecutor, getStorageEngine } from '@makaio/storage-drizzle';
-import { createDatabaseClient } from '@makaio/storage-drizzle/client';
+import { createTempDatabaseClient } from '@makaio/test-utils/drizzle-harness';
 import { applyMigrations, resolveDefaultMigrationsTable } from '../apply-migrations.js';
 
 describe('applyMigrations', () => {
   it('rolls back the whole migration when one statement fails', async () => {
-    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const { db, close } = await createTempDatabaseClient('apply-migrations');
     const rawSql = getRawSqlExecutor(db);
 
     try {
@@ -52,7 +52,7 @@ describe('applyMigrations', () => {
   });
 
   it('rejects a later CREATE conflict without recording the migration hash', async () => {
-    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const { db, close } = await createTempDatabaseClient('apply-migrations');
     const rawSql = getRawSqlExecutor(db);
 
     try {
@@ -88,7 +88,7 @@ describe('applyMigrations', () => {
   });
 
   it('applies a migration, creates the tracking row, and executes the DDL', async () => {
-    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const { db, close } = await createTempDatabaseClient('apply-migrations');
     const rawSql = getRawSqlExecutor(db);
 
     try {
@@ -121,7 +121,7 @@ describe('applyMigrations', () => {
   });
 
   it('does not re-apply a migration that was already applied (idempotency)', async () => {
-    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const { db, close } = await createTempDatabaseClient('apply-migrations');
     const rawSql = getRawSqlExecutor(db);
 
     const migration = {
@@ -149,7 +149,7 @@ describe('applyMigrations', () => {
   });
 
   it('rejects multi-statement adoption when the first CREATE target already exists', async () => {
-    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const { db, close } = await createTempDatabaseClient('apply-migrations');
     const rawSql = getRawSqlExecutor(db);
 
     try {
@@ -183,7 +183,7 @@ describe('applyMigrations', () => {
   });
 
   it('adopts a single-statement existing CREATE target', async () => {
-    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const { db, close } = await createTempDatabaseClient('apply-migrations');
     const rawSql = getRawSqlExecutor(db);
 
     try {
@@ -209,7 +209,7 @@ describe('applyMigrations', () => {
   });
 
   it('applies a migration whose timestamp is earlier than an already-applied migration (multi-runner safety)', async () => {
-    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const { db, close } = await createTempDatabaseClient('apply-migrations');
     const rawSql = getRawSqlExecutor(db);
 
     // Simulate first runner having applied a migration with a later timestamp.
@@ -257,7 +257,7 @@ describe('applyMigrations', () => {
   });
 
   it('applies only the new migration when called a second time with an additional entry', async () => {
-    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const { db, close } = await createTempDatabaseClient('apply-migrations');
     const rawSql = getRawSqlExecutor(db);
 
     const migrationA = {
@@ -305,7 +305,7 @@ describe('applyMigrations', () => {
   });
 
   it('honors an explicit ledger table name instead of the dialect default', async () => {
-    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const { db, close } = await createTempDatabaseClient('apply-migrations');
     const rawSql = getRawSqlExecutor(db);
 
     try {

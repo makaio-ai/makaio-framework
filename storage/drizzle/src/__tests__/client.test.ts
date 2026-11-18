@@ -1,12 +1,13 @@
 /**
  * Tests for {@link createDatabaseClient}.
  *
- * All tests use real in-memory or temporary file-based SQLite databases
+ * All tests use real temporary file-based SQLite databases
  * via runtime-selected SQLite drivers (`bun:sqlite` under Bun, `@libsql/client` under Node.js) — no mocks.
  * The Postgres driver glue moved to `@makaio/storage-pg` and is tested there;
  * registry dispatch to a claiming engine is exercised here via an engine double.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { createClient } from '@libsql/client';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
 import * as fs from 'node:fs';
@@ -20,6 +21,7 @@ import { brandDatabase, getRawSqlExecutor } from '../raw-sql';
 import { DATABASE_DIALECT, getDatabaseDialect } from '../types';
 import type { MakaioDatabase, StorageDialect } from '../types';
 import { buildPostgresEngineDouble } from './postgres-engine-double';
+import { createTempDatabaseClient } from './temp-database';
 
 // ---------------------------------------------------------------------------
 // Helper — extract the scalar value from a single-column PRAGMA result row.
@@ -149,35 +151,37 @@ describe('createDatabaseClient', () => {
   }
 
   // -------------------------------------------------------------------------
-  // In-memory database
+  // In-memory URLs — libsql hands its connection to every transaction, so the
+  // factory rejects them there. (bun:sqlite accepts them; its Bun-only lane
+  // lives in sqlite-bun-transaction.bun.test.ts.)
   // -------------------------------------------------------------------------
 
-  describe('in-memory database (:memory: URL)', () => {
-    it('returns a db instance that can execute a simple SQL statement', async () => {
-      const { db } = track(await createDatabaseClient({ url: ':memory:' }));
+  describe('in-memory URLs', () => {
+    // Every spelling libsql resolves to a private in-memory database. The
+    // classification must not depend on the spelling: `file::memory:` starts
+    // with `file:` but is no file.
+    const IN_MEMORY_URLS = [
+      ':memory:',
+      'file::memory:',
+      'file::memory:?cache=shared',
+      'file:memdb?mode=memory&cache=shared',
+    ] as const;
 
-      const rows = await getRawSqlExecutor(db).all<{ val: number }>(sql`SELECT 1 AS val`);
+    it.each(IN_MEMORY_URLS)('rejects %s on libsql with the reason and the alternative', async (url) => {
+      // Vitest runs on Node.js, so the factory selects the libsql driver here.
+      const rejection = createDatabaseClient({ url });
 
-      expect(rows).toHaveLength(1);
-      expect(rows[0]?.val).toBe(1);
+      await expect(rejection).rejects.toThrow(/libsql/);
+      await expect(rejection).rejects.toThrow(/takes? over (its|the) connection/);
+      await expect(rejection).rejects.toThrow(/in-memory database is lost/);
+      await expect(rejection).rejects.toThrow(/temporary database file/);
     });
 
-    it('keeps journal mode in memory', async () => {
-      const { db } = track(await createDatabaseClient({ url: ':memory:' }));
+    it('does not reject a file whose name merely contains "memory"', async () => {
+      const dbFilePath = trackDbFile(path.join(os.tmpdir(), `makaio-memory-test-${crypto.randomUUID()}.db`));
+      const { db } = track(await createDatabaseClient({ url: `file:${dbFilePath}` }));
 
-      expect(String(await readPragmaValue(db, 'journal_mode')).toLowerCase()).toBe('memory');
-    });
-
-    it('keeps busy_timeout at the SQLite default', async () => {
-      const { db } = track(await createDatabaseClient({ url: ':memory:' }));
-
-      expect(Number(await readPragmaValue(db, 'busy_timeout'))).toBe(0);
-    });
-
-    it('applies foreign_keys = ON', async () => {
-      const { db } = track(await createDatabaseClient({ url: ':memory:' }));
-
-      expect(Number(await readPragmaValue(db, 'foreign_keys'))).toBe(1);
+      expect(await getRawSqlExecutor(db).all(sql`SELECT 1 AS val`)).toEqual([{ val: 1 }]);
     });
   });
 
@@ -231,6 +235,32 @@ describe('createDatabaseClient', () => {
       const { dbFilePath } = await createTrackedFileClient();
 
       expect(fs.existsSync(dbFilePath)).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Initialization failure
+  // -------------------------------------------------------------------------
+
+  describe('initialization failure', () => {
+    it('closes the connection of a handle that failed to initialize and keeps the original error', async () => {
+      // The first PRAGMA of a file-backed handle fails on a file that is no
+      // SQLite database, after the driver already opened the connection.
+      const dbFilePath = trackDbFile(tempDbPath());
+      fs.writeFileSync(dbFilePath, 'this file is not a SQLite database '.repeat(8));
+      // The libsql client class is not exported: take it from a throwaway instance.
+      const probe = createClient({ url: 'file::memory:' });
+      const closeConnection = vi.spyOn(Object.getPrototypeOf(probe) as { close(): void }, 'close');
+      probe.close();
+      closeConnection.mockClear();
+
+      await expect(createDatabaseClient({ url: `file:${dbFilePath}` })).rejects.toMatchObject({
+        message: expect.stringContaining('PRAGMA journal_mode'),
+        cause: { message: expect.stringMatching(/not a database/i) },
+      });
+
+      expect(closeConnection).toHaveBeenCalledTimes(1);
+      closeConnection.mockRestore();
     });
   });
 
@@ -304,14 +334,14 @@ describe('createDatabaseClient', () => {
 
   describe('dialect brand', () => {
     it('exposes dialect "sqlite" on the client and brands the db handle', async () => {
-      const client = track(await createDatabaseClient({ url: ':memory:' }));
+      const client = track(await createTempDatabaseClient('drizzle-client'));
 
       expect(client.dialect).toBe('sqlite');
       expect(getDatabaseDialect(client.db)).toBe('sqlite');
     });
 
     it('attaches the brand non-enumerably so it does not leak through spreads', async () => {
-      const client = track(await createDatabaseClient({ url: ':memory:' }));
+      const client = track(await createTempDatabaseClient('drizzle-client'));
 
       const descriptor = Object.getOwnPropertyDescriptor(client.db, DATABASE_DIALECT);
       expect(descriptor).toMatchObject({ value: 'sqlite', enumerable: false, writable: false, configurable: false });
@@ -323,7 +353,7 @@ describe('createDatabaseClient', () => {
     });
 
     it('throws when re-branding an already-branded handle with a different dialect', async () => {
-      const client = track(await createDatabaseClient({ url: ':memory:' }));
+      const client = track(await createTempDatabaseClient('drizzle-client'));
 
       // A dialect-matching executor view gets past the consistency guard so
       // the test exercises the defineProperty rejection itself.
@@ -336,7 +366,7 @@ describe('createDatabaseClient', () => {
     });
 
     it('rejects branding when the executor dialect does not match the brand dialect', async () => {
-      const client = track(await createDatabaseClient({ url: ':memory:' }));
+      const client = track(await createTempDatabaseClient('drizzle-client'));
 
       // Every branded handle carries a dialect-consistent executor; a
       // mismatched pair must fail loudly at creation time.
@@ -346,7 +376,8 @@ describe('createDatabaseClient', () => {
     it('defaults unbranded handles to "sqlite"', async () => {
       // Hand-rolled raw drizzle instance — never passes through the factory,
       // so it carries no brand. This is the contract that keeps existing
-      // hand-rolled in-memory test clients on SQLite semantics.
+      // hand-rolled test clients on SQLite semantics. It is never queried or
+      // used for a transaction, so the libsql in-memory handoff does not apply.
       const rawDb = drizzle({ connection: { url: ':memory:' } });
       try {
         expect(getDatabaseDialect(rawDb)).toBe('sqlite');
@@ -396,7 +427,7 @@ describe('createDatabaseClient', () => {
     });
 
     it('does not dispatch sqlite-shaped URLs to a non-default engine — resolves to sqlite dialect', async () => {
-      const client = track(await createDatabaseClient({ url: ':memory:' }));
+      const client = track(await createTempDatabaseClient('drizzle-client'));
 
       expect(client.dialect).toBe('sqlite');
     });
@@ -408,13 +439,13 @@ describe('createDatabaseClient', () => {
 
   describe('close()', () => {
     it('does not throw when called once', async () => {
-      const client = track(await createDatabaseClient({ url: ':memory:' }));
+      const client = track(await createTempDatabaseClient('drizzle-client'));
 
       expect(() => client.close()).not.toThrow();
     });
 
     it('does not throw when called multiple times', async () => {
-      const client = track(await createDatabaseClient({ url: ':memory:' }));
+      const client = track(await createTempDatabaseClient('drizzle-client'));
 
       client.close();
 
@@ -423,7 +454,7 @@ describe('createDatabaseClient', () => {
     });
 
     it('is awaitable, including across repeated calls (void-tolerant await)', async () => {
-      const client = track(await createDatabaseClient({ url: ':memory:' }));
+      const client = track(await createTempDatabaseClient('drizzle-client'));
 
       // close() is typed void | Promise<void>; shutdown call sites await it
       // unconditionally. Both calls must tolerate that await.

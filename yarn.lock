@@ -5674,11 +5674,12 @@ __metadata:
   dependencies:
     "@makaio/storage-drizzle": "workspace:*"
     "@makaio/storage-pg": "workspace:*"
+    "@makaio/test-utils": "workspace:*"
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     drizzle-kit: "npm:^0.31.8"
-    drizzle-orm: "npm:0.45.4"
-    tsx: "npm:^4.23.15"
+    drizzle-orm: "npm:0.45.2"
+    tsx: "npm:^4.23.1"
   languageName: unknown
   linkType: soft
 
@@ -24176,7 +24177,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tsx@npm:^4.22.3, tsx@npm:^4.22.4, tsx@npm:^4.23.15":
+"tsx@npm:^4.22.3, tsx@npm:^4.22.4, tsx@npm:^4.23.1, tsx@npm:^4.23.15":
   version: 4.23.15
   resolution: "tsx@npm:4.23.15"
   dependencies:

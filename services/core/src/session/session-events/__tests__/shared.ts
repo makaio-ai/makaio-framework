@@ -2,7 +2,7 @@
  * Shared test utilities for session events Drizzle handler tests.
  */
 import { sql } from 'drizzle-orm';
-import { createDatabaseClient } from '@makaio/storage-drizzle/client';
+import { createTempDatabaseClient } from '@makaio/test-utils/drizzle-harness';
 import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { MakaioBus } from '@makaio/bus-core';
 import type { MakaioSessionEvent, SessionEventType, SessionEventTypeMap } from '@makaio/contracts';
@@ -134,7 +134,7 @@ export interface TestDbContext {
  * @returns Test database context
  */
 export async function createTestDb(): Promise<TestDbContext> {
-  const { db, close } = await createDatabaseClient({ url: ':memory:' });
+  const { db, close } = await createTempDatabaseClient('session-events');
   const rawSql = getRawSqlExecutor(db);
 
   // Create tables in order (sessions first due to FK)

@@ -12,8 +12,10 @@ Extends `@makaio/storage-core` with:
   migration behavior, full-text search) behind a global registry, with the
   built-in SQLite engine as the default
 - **Database client sub-entry** - Async factory dispatching through the engine
-  registry: the SQLite engine serves local files, `:memory:`, and remote
-  libSQL/Turso URLs (Bun SQLite under Bun, `@libsql/client` elsewhere), while
+  registry: the SQLite engine serves local files and remote libSQL/Turso URLs
+  (Bun SQLite under Bun, `@libsql/client` elsewhere) plus `:memory:` under Bun
+  only (libsql transactions take over the connection, so the libsql driver
+  rejects in-memory URLs: use a temporary database file), while
   `postgres://` / `postgresql://` URLs are served by the registered
   `@makaio/storage-pg` engine
 - **Type-safe tables** - Access Drizzle schemas directly from storage namespaces

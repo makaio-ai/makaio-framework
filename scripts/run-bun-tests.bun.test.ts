@@ -10,7 +10,7 @@ describe('Bun test runner', () => {
     expect(relativeFiles).toContain('lib/vitest-categories.bun.test.ts');
     expect(relativeFiles).toContain('lib/ci-shard-coverage.bun.test.ts');
     expect(relativeFiles).not.toContain('lib/test-runner-contract.ts');
-    expect(relativeFiles).toEqual([...relativeFiles].sort());
+    expect(files).toEqual([...files].sort());
   });
 
   it('accepts checkout-relative Bun files and rejects a Vitest-owned path', async () => {

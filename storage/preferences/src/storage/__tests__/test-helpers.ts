@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { createDatabaseClient } from '@makaio/storage-drizzle/client';
+import { createTempDatabaseClient } from '@makaio/test-utils/drizzle-harness';
 import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
 
 export interface PreferencesTestDbContext {
@@ -17,7 +17,7 @@ export interface LocalStorageMock {
  * @returns Database context with db and close function
  */
 export async function createPreferencesTestDb(): Promise<PreferencesTestDbContext> {
-  const { db, close } = await createDatabaseClient({ url: ':memory:' });
+  const { db, close } = await createTempDatabaseClient('preferences');
   const executor = getRawSqlExecutor(db);
 
   await executor.run(sql`

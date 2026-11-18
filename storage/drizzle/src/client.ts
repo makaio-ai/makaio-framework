@@ -30,7 +30,10 @@ export interface DatabaseClientConfig {
    * - `file:./path/to/db.db` — local SQLite file via the runtime SQLite driver.
    * - `libsql://host` — remote libSQL/Turso via `@libsql/client`.
    * - `http://localhost:8080` — local libSQL server via `@libsql/client`.
-   * - `:memory:` — in-process in-memory SQLite database.
+   * - `:memory:` — in-process in-memory SQLite database. Served by `bun:sqlite`
+   *   only: on the libsql driver (Node.js) it is rejected, because every libsql
+   *   transaction takes over the connection and the in-memory database with it.
+   *   Use a temporary `file:` database there.
    *
    * Defaults to `'file:./makaio.db'`.
    */
@@ -59,11 +62,24 @@ export interface DatabaseClient {
   /** Storage dialect served by this client. Matches the brand on {@link DatabaseClient.db}. */
   readonly dialect: StorageDialect;
   /**
-   * Close the database connection. Safe to call multiple times.
+   * Close the database connection. Safe to call multiple times: repeated calls
+   * return the first call's result.
    *
-   * May return a promise when the underlying driver tears down asynchronously;
-   * shutdown call sites must await the result — awaiting a synchronous `void`
-   * is harmless.
+   * May return a promise when the underlying driver tears down asynchronously
+   * or the close has to wait; shutdown call sites must await the result —
+   * awaiting a synchronous `void` is harmless.
+   *
+   * **Local SQLite handles:** the close waits for the transaction or raw
+   * session that holds the handle, and for every statement that queued for the
+   * handle before the close, and only then closes the connection (synchronously
+   * when the handle is free). Statements issued after `close()` fail with the
+   * driver's closed-connection error; the close neither cancels nor waits for
+   * operations that have not reached the handle yet. Calling it from inside
+   * the transaction or session callback that holds the handle cannot wait for
+   * its own release and rejects with a `ReentrantOperationError`. On libsql the
+   * close releases the connection the client holds; connections it handed to
+   * earlier transactions are released when the runtime collects them (libsql
+   * offers no way to close them). `bun:sqlite` releases its only connection.
    */
   close(): void | Promise<void>;
 }
@@ -84,7 +100,7 @@ export interface DatabaseClient {
  *   dispatches between the Bun-native `bun:sqlite` driver (local URLs under
  *   Bun) and `@libsql/client` (everything else) and applies local-database
  *   PRAGMAs (WAL journal mode, busy timeout, and foreign key enforcement for
- *   `file:` URLs; foreign key enforcement for `:memory:`).
+ *   `file:` URLs; foreign key enforcement for in-memory `bun:sqlite` databases).
  *
  * SEAM: This factory allows swapping the database backend by providing
  * different connection URLs (local file, Turso, libSQL server, Postgres) and

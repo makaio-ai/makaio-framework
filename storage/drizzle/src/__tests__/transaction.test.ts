@@ -12,7 +12,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { createDatabaseClient, type DatabaseClient } from '../client';
 import { brandDatabase, getRawSqlExecutor } from '../raw-sql';
+import { ReentrantOperationError } from '../reentrant-operation-error';
 import { executeTransaction, serializeByKey, serializeDatabaseOperation } from '../transaction';
+import { createTempDatabaseClient, removeDatabaseFiles, tempDatabasePath } from './temp-database';
 
 describe('executeTransaction', () => {
   let openClients: DatabaseClient[] = [];
@@ -98,12 +100,13 @@ describe('executeTransaction', () => {
   });
 
   it('serializes postgres-branded handles through the same per-handle queue', async () => {
-    // Real in-memory libsql drizzle database — only the brand differs from a
+    // Real file-backed libsql drizzle database — only the brand differs from a
     // SQLite handle. The executor view claims 'postgres' to satisfy the brand
     // consistency guard. Pins the serialization contract: a 'postgres' brand
     // must NOT bypass the queue — read-modify-write callers rely on callbacks
     // observing each other's commits, which MVCC alone does not provide.
-    const rawDb = drizzle({ connection: { url: ':memory:' } });
+    const databaseFile = tempDatabasePath('transaction-postgres-brand');
+    const rawDb = drizzle({ connection: { url: `file:${databaseFile}` } });
     try {
       const db = brandDatabase(rawDb, 'postgres', { ...getRawSqlExecutor(rawDb), dialect: 'postgres' as const });
 
@@ -142,6 +145,7 @@ describe('executeTransaction', () => {
       }
     } finally {
       rawDb.$client.close();
+      removeDatabaseFiles(databaseFile);
     }
   });
 
@@ -208,6 +212,81 @@ describe('executeTransaction', () => {
     expect(events).toEqual(['first:start', 'other:ran', 'first:end', 'second:start']);
     // Both queues drained, so neither key is retained.
     expect(tails.size).toBe(0);
+  });
+
+  it('rejects a call for a key from inside the work holding it, and only for that key', async () => {
+    const tails = new Map<string, Promise<void>>();
+    const otherTails = new Map<string, Promise<void>>();
+    const events: string[] = [];
+
+    await serializeByKey(tails, 'shared', async () => {
+      // Other keys and other stores are other queues: nesting on them is fine.
+      await serializeByKey(tails, 'other', async () => {
+        events.push('other key');
+        // Still inside 'shared' (through 'other'): the outer slot is held.
+        await expect(serializeByKey(tails, 'shared', async () => undefined)).rejects.toBeInstanceOf(
+          ReentrantOperationError,
+        );
+      });
+      await serializeByKey(otherTails, 'shared', async () => {
+        events.push('other store');
+      });
+      // Anything the work starts shares its async context.
+      await expect(
+        new Promise<void>((resolve, reject) => {
+          setTimeout(() => {
+            serializeByKey(tails, 'shared', async () => undefined).then(resolve, reject);
+          }, 1);
+        }),
+      ).rejects.toBeInstanceOf(ReentrantOperationError);
+    });
+
+    // The rejected calls left the queue as they found it.
+    await serializeByKey(tails, 'shared', async () => {
+      events.push('after');
+    });
+    expect(events).toEqual(['other key', 'other store', 'after']);
+    expect(tails.size).toBe(0);
+  });
+
+  it('recognizes a NaN key as held, the way a Map identifies it', async () => {
+    // Map identifies NaN with itself (SameValueZero), so a nested request for
+    // it queues behind its own slot and would wait forever.
+    const tails = new Map<number, Promise<void>>();
+
+    await serializeByKey(tails, Number.NaN, async () => {
+      await expect(serializeByKey(tails, Number.NaN, async () => undefined)).rejects.toBeInstanceOf(
+        ReentrantOperationError,
+      );
+    });
+  });
+
+  it('queues work started from a context that outlived the work holding the key', async () => {
+    const tails = new Map<string, Promise<void>>();
+    let late: Promise<string> | undefined;
+
+    await serializeByKey(tails, 'shared', async () => {
+      setTimeout(() => {
+        late = serializeByKey(tails, 'shared', async () => 'ran');
+      }, 5);
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+
+    await expect(late).resolves.toBe('ran');
+  });
+
+  it('does not treat a transaction on another handle as re-entrant', async () => {
+    const first = track(await createTempDatabaseClient('transaction-reentrancy-first'));
+    const second = track(await createTempDatabaseClient('transaction-reentrancy-second'));
+    await getRawSqlExecutor(second.db).run(sql`CREATE TABLE other_handle (id TEXT PRIMARY KEY)`);
+
+    await executeTransaction(first.db, async () => {
+      await executeTransaction(second.db, async (tx) => {
+        await tx.run(sql`INSERT INTO other_handle (id) VALUES ('nested')`);
+      });
+    });
+
+    expect(await getRawSqlExecutor(second.db).all(sql`SELECT id FROM other_handle`)).toEqual([{ id: 'nested' }]);
   });
 });
 

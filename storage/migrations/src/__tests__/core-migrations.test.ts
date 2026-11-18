@@ -13,7 +13,7 @@ import * as fs from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { getRawSqlExecutor, type MakaioDatabase, type RawSqlExecutor } from '@makaio/storage-drizzle';
-import { createDatabaseClient } from '@makaio/storage-drizzle/client';
+import { createTempDatabaseClient } from '@makaio/test-utils/drizzle-harness';
 import { readMigrations, type MigrationMeta } from '../read-migrations.js';
 import { applyMigrations } from '../apply-migrations.js';
 
@@ -57,7 +57,7 @@ async function readMigrationMeta(filename: string): Promise<Record<string, unkno
 async function withMigratedMemoryDatabase<TResult>(
   callback: (context: MigrationTestDb) => Promise<TResult>,
 ): Promise<TResult> {
-  const { db, close } = await createDatabaseClient({ url: ':memory:' });
+  const { db, close } = await createTempDatabaseClient('core-migrations');
 
   try {
     await applyMigrations(db, readMigrations());
@@ -78,7 +78,7 @@ async function withMemoryDatabaseAtMigrations<TResult>(
   migrations: MigrationMeta[],
   callback: (context: MigrationTestDb) => Promise<TResult>,
 ): Promise<TResult> {
-  const { db, close } = await createDatabaseClient({ url: ':memory:' });
+  const { db, close } = await createTempDatabaseClient('core-migrations');
 
   try {
     await applyMigrations(db, migrations);

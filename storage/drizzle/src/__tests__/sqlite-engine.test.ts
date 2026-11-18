@@ -1,7 +1,7 @@
 /**
  * Tests for the built-in SQLite storage engine.
  *
- * Behavior assertions run against real in-memory databases created through
+ * Behavior assertions run against real temporary database files created through
  * the engine's own client factory — no mocks. The migration-behavior strings
  * are byte-pins: they are cross-version contracts that must keep matching
  * ledgers written by earlier framework versions.
@@ -11,6 +11,7 @@ import { sql } from 'drizzle-orm';
 import { sqliteStorageEngine } from '../engine/sqlite/engine';
 import { quoteSqlIdentifier } from '../engine/types';
 import { getRawSqlExecutor } from '../raw-sql';
+import { removeDatabaseFiles, tempDatabasePath } from './temp-database';
 
 describe('sqliteStorageEngine identity', () => {
   it('declares the sqlite dialect and no URL claim (default engine)', () => {
@@ -22,14 +23,16 @@ describe('sqliteStorageEngine identity', () => {
 });
 
 describe('sqliteStorageEngine.createClient', () => {
-  it('round-trips a simple statement on an in-memory database', async () => {
-    const client = await sqliteStorageEngine.createClient({ url: ':memory:' });
+  it('round-trips a simple statement on a temporary database file', async () => {
+    const databaseFile = tempDatabasePath('sqlite-engine');
+    const client = await sqliteStorageEngine.createClient({ url: `file:${databaseFile}` });
     try {
       expect(client.dialect).toBe('sqlite');
       const rows = await getRawSqlExecutor(client.db).all<{ val: number }>(sql`SELECT 1 AS val`);
       expect(rows).toEqual([{ val: 1 }]);
     } finally {
       await client.close();
+      removeDatabaseFiles(databaseFile);
     }
   });
 });
@@ -41,7 +44,8 @@ describe('sqliteStorageEngine.capabilities', () => {
   });
 
   it('tableExists probes the real sqlite_master catalog', async () => {
-    const client = await sqliteStorageEngine.createClient({ url: ':memory:' });
+    const databaseFile = tempDatabasePath('sqlite-engine');
+    const client = await sqliteStorageEngine.createClient({ url: `file:${databaseFile}` });
     try {
       const executor = getRawSqlExecutor(client.db);
       expect(await sqliteStorageEngine.capabilities.tableExists(executor, 'probe_target')).toBe(false);
@@ -52,6 +56,7 @@ describe('sqliteStorageEngine.capabilities', () => {
       expect(await sqliteStorageEngine.capabilities.tableExists(executor, 'still_missing')).toBe(false);
     } finally {
       await client.close();
+      removeDatabaseFiles(databaseFile);
     }
   });
 });
