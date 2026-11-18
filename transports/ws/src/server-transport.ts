@@ -13,6 +13,7 @@ import {
   type BusTransport,
   type SubscriptionDeliveryClass,
   getSubjectFromBusMessage,
+  BusAbortError,
   CorrelationTracker,
 } from '@makaio/bus-core';
 import type { PayloadFilter } from '@makaio/core';
@@ -68,6 +69,8 @@ export class ServerTransport implements BusTransport {
 
   private readonly broadcastAggregator: BroadcastAggregator;
   private readonly correlations = new CorrelationTracker();
+  /** Cancellation handles of in-flight server-initiated requests, keyed by the caller's correlation ID. */
+  private readonly requestRoutes = new Map<string, AbortController>();
 
   private connectionListener: ((socket: WebSocketLike) => void) | null = null;
   private readonly connectionClosedHandlers = new Set<(connectionId: string) => void>();
@@ -250,10 +253,7 @@ export class ServerTransport implements BusTransport {
 
     // Handle server-initiated requests with subject-authorized routing.
     if (message.type === 'request') {
-      return routeRequestToClients(message, timeout ?? DEFAULT_REQUEST_TIMEOUT_MS, {
-        registry: this.registry,
-        correlations: this.correlations,
-      });
+      return this.routeRequest(message, timeout ?? DEFAULT_REQUEST_TIMEOUT_MS);
     }
 
     // Server mode: broadcast to all connected clients (for non-broadcast, non-request messages)
@@ -287,6 +287,29 @@ export class ServerTransport implements BusTransport {
     }
 
     return sentToAny;
+  }
+
+  /**
+   * Route a server-initiated request so the caller can cancel it by its own correlation ID.
+   *
+   * Client attempts are tracked under attempt-scoped correlation IDs, so
+   * cancellation reaches the in-flight attempt through this route's signal.
+   * @param message - Request envelope
+   * @param timeout - Total routing budget in milliseconds; `0` means no automatic timeout
+   * @returns Response payload from the handling client
+   */
+  private async routeRequest(message: BusRequestMessage, timeout: number): Promise<unknown> {
+    const route = new AbortController();
+    this.requestRoutes.set(message.correlationId, route);
+    try {
+      return await routeRequestToClients(message, timeout, {
+        registry: this.registry,
+        correlations: this.correlations,
+        signal: route.signal,
+      });
+    } finally {
+      if (this.requestRoutes.get(message.correlationId) === route) this.requestRoutes.delete(message.correlationId);
+    }
   }
 
   /**
@@ -328,12 +351,16 @@ export class ServerTransport implements BusTransport {
   }
 
   /**
-   * Cancel a pending correlated server-initiated request.
+   * Cancel a pending correlated request.
+   *
+   * A server-initiated request rejects its in-flight client attempt and is not
+   * routed to further clients. A request accepted from a client loses its
+   * response route.
    * @param correlationId - Correlation ID to cancel
    * @param error - Optional cancellation error
    */
   public cancelRequest(correlationId: string, error?: Error): void {
-    this.correlations.cancel(correlationId, error);
+    this.requestRoutes.get(correlationId)?.abort(error ?? new BusAbortError(undefined));
     this.registry.cancelRequestOrigin(correlationId);
   }
 

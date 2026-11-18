@@ -19,6 +19,7 @@ import {
   getSubjectFromBusMessage,
   matchesFilter,
   matchesSubscription,
+  resolveInboundRequestBudget,
   shouldReceiveMessage,
 } from '@makaio/bus-core';
 import type { WebSocketLike } from './types.js';
@@ -532,7 +533,9 @@ export class ClientRegistry {
    * @returns Remaining milliseconds, or `undefined` for no-timeout requests
    */
   private getRequestRemainingLifetime(request: BusRequestMessage): number | undefined {
-    const timeout = request.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    // Resolved exactly as the bus resolves the budget it dispatches this request
+    // with, so the route lives as long as the request can.
+    const timeout = resolveInboundRequestBudget(request.timeout) ?? DEFAULT_REQUEST_TIMEOUT_MS;
     return timeout > 0 ? timeout : undefined;
   }
 

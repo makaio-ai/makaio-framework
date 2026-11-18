@@ -15,6 +15,7 @@ import type { TransportRegistration } from '../types/bus.js';
 import { getSubjectFromBusMessage, getReadyTransports, serializeError, sendErrorResponse } from '../utils/index.js';
 import type { MessagePayload, SubjectDefinition, TransportReceiveContext } from '@makaio/core';
 import { dispatch } from '../methods/request/dispatch.js';
+import { resolveInboundRequestBudget } from '../methods/request/request-budget.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../types/options.js';
 import { syncAllSubjectsToTransport } from './advertised-state.js';
 import { propagateSubscribe, propagateUnsubscribe, purgeRemoteHandlersForTransport } from './remote-subscriptions.js';
@@ -183,20 +184,6 @@ const handleEventMessage = async (
 export const anchorRequestDeadline = (timeout: number): number | undefined =>
   timeout > 0 ? Date.now() + timeout : undefined;
 
-/**
- * Validate an inbound hop's readiness budget.
- *
- * A peer controls this value, so it is validated on ingress exactly like `timeout`:
- * an unusable budget is dropped in favour of the default rather than being allowed to
- * reach the timeout primitive, where it would fail a request the gate must never fail.
- * @param readinessTimeout - Budget carried by the message, if any
- * @returns The budget when usable, otherwise `undefined` to use the default
- */
-const resolveInboundReadinessTimeout = (readinessTimeout: number | undefined): number | undefined => {
-  if (readinessTimeout === undefined) return undefined;
-  return Number.isFinite(readinessTimeout) && readinessTimeout >= 0 ? readinessTimeout : undefined;
-};
-
 const handleRequestMessage = async (
   context: MakaioBusContext,
   _sourceTransportName: BusTransportKeys,
@@ -205,7 +192,7 @@ const handleRequestMessage = async (
   receiveContext?: TransportReceiveContext,
 ): Promise<void> => {
   const fullSubject = getSubjectFromBusMessage(message);
-  const relayTimeout = message.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const relayTimeout = resolveInboundRequestBudget(message.timeout) ?? DEFAULT_REQUEST_TIMEOUT_MS;
   if (!fullSubject) {
     await sendErrorResponse(transport, message, new Error('Invalid subject in request message'));
     return;
@@ -241,7 +228,7 @@ const handleRequestMessage = async (
       // Anchored from the relative budget alone — `message.deadline` belongs to the
       // sender's clock and is never compared against ours.
       deadline: anchorRequestDeadline(relayTimeout),
-      readinessTimeout: resolveInboundReadinessTimeout(message.readinessTimeout),
+      readinessTimeout: resolveInboundRequestBudget(message.readinessTimeout),
       // Start dispatch from the cursor sent by the originating node (if any).
       priority: message.priority,
       transport: receiveContext,
@@ -329,7 +316,7 @@ const handleBroadcastMessage = async (
   receiveContext?: TransportReceiveContext,
 ): Promise<void> => {
   const fullSubject = getSubjectFromBusMessage(message);
-  const relayTimeout = message.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const relayTimeout = resolveInboundRequestBudget(message.timeout) ?? DEFAULT_REQUEST_TIMEOUT_MS;
   if (!fullSubject) {
     await deliverBroadcastResults(
       transport,

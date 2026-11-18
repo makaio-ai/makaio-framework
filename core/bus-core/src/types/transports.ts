@@ -351,6 +351,8 @@ export interface BusTransport {
    * through the dispatch layer to the transport's correlation tracker.
    * A value of `0` means no automatic timeout — the promise stays open until
    * resolved or rejected externally (e.g. by the caller's own AbortSignal).
+   * The bus validates the budget where it enters, so a transport receives a
+   * finite number `>= 0` and `0` is the only unbounded value.
    * @param message - Message to send
    * @param timeout - Correlation timeout in milliseconds; `0` means no automatic timeout
    * @returns Promise resolving to response payload (requests) or delivery status (events/other)

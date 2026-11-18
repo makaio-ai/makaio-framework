@@ -1,4 +1,9 @@
-import { CorrelationTracker, type BusReceiveHandler, type BusRequestMessage } from '@makaio/bus-core';
+import {
+  CorrelationTracker,
+  DEFAULT_REQUEST_TIMEOUT_MS,
+  type BusReceiveHandler,
+  type BusRequestMessage,
+} from '@makaio/bus-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BroadcastAggregator } from '../broadcast-aggregator.js';
 import { ClientRegistry } from '../client-registry.js';
@@ -1855,6 +1860,20 @@ describe('inbound request response-route lifetime', () => {
     vi.advanceTimersByTime(86_400_000);
 
     expect(registry.consumeResponseClient('no-timeout')).toBe(requester);
+  });
+
+  it('gives a request with an invalid wire timeout the default response-route lifetime', () => {
+    // Only `0` means "no timeout": the bus dispatches such a request with the
+    // default budget, so its response route must not outlive that budget.
+    vi.useFakeTimers();
+    const registry = new ClientRegistry();
+    const requester = new MockWebSocket();
+    registry.addClient(requester);
+
+    registry.trackRequestOrigin(requester, makeRequest('invalid-timeout', -1));
+    vi.advanceTimersByTime(DEFAULT_REQUEST_TIMEOUT_MS);
+
+    expect(registry.consumeResponseClient('invalid-timeout')).toBeUndefined();
   });
 
   it('tracks the response route when the sender minted a deadline already in the past', () => {

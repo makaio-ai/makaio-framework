@@ -335,9 +335,12 @@ valid responder and produce an incomplete result array.
 
 `ServerTransport` adds per-client filtering inside a WebSocket server transport:
 event, broadcast, and request delivery use each client's subscriptions and
-payload filters. Requests require an explicit matching subscription, never
-route back to their origin socket, and retry matching clients in connection
-order when a `NoHandlerError` or timeout occurs.
+payload filters. Requests require an explicit matching subscription and never
+route back to their origin socket. A request moves on to the next matching
+client in connection order only when the send fails or the client answers
+`NoHandlerError`; a timeout or caller cancellation ends routing, because the
+client may already be running the handler. All attempts share the caller's
+deadline.
 
 ## Priority-Cursor Dispatch
 
@@ -444,6 +447,11 @@ unchanged through every handler in the dispatch chain (local and remote).
 Handlers can compare `deadline` to `Date.now()` to determine their remaining
 time budget. `deadline` is `undefined` when the request was made with
 `timeout: 0`.
+
+A request budget is a finite number of milliseconds `>= 0`, and `0` is the only
+"no timeout" value. `request()` rejects any other `timeout` or `readinessTimeout`,
+and `broadcast()` any other `timeout`, with a `RangeError` before dispatching; an
+inbound hop whose wire budget is unusable falls back to the default instead.
 
 This is the handler-visible surface of the `deadline` field on
 `BusRequestMessage`. On each remote hop, the transport computes remaining time

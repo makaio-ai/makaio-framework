@@ -12,6 +12,7 @@ import { notifyMessageObservers } from '../observability/subject-telemetry-proje
 import { TimeoutError as pTimeoutError } from 'p-timeout';
 import { isRequestCancellation, TimeoutError } from '../errors/index.js';
 import { awaitWithTimeoutAndSignal } from './request/await-with-timeout-and-signal.js';
+import { requireRequestBudget } from './request/request-budget.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../types/options.js';
 import {
   resolveRequestValidation,
@@ -214,7 +215,7 @@ export async function broadcast<
   const fullSubjectKey = getFullSubjectForSubjectDefinition(subjectDefinition);
   const messageId = options?.messageId ?? nanoid();
   const correlationId = options?.correlationId ?? nanoid();
-  const timeout = options?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  const timeout = requireRequestBudget('timeout', options?.timeout ?? DEFAULT_REQUEST_TIMEOUT_MS);
   const signal = options?.signal;
   const validationCtx = resolveRequestValidation(context, fullSubjectKey);
   const effectiveTransports = resolveEffectiveTransports(

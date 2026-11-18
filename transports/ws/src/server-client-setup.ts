@@ -6,15 +6,16 @@
  *   server cannot be forced to retain pending aggregation state indefinitely.
  * - `setupClientConnection` — handles the full per-socket lifecycle: auth,
  *   subscription-sync, event listeners, and cleanup on close.
- * - `routeRequestToClients` — subscription-gated fan-out for server-initiated
- *   requests, retrying matching clients in connection order.
+ * - `routeRequestToClients` — subscription-gated routing for server-initiated
+ *   requests, moving on in connection order within one deadline only past
+ *   clients that did not deliver the request to a terminal handler.
  *
  * Keeping this logic out of `ServerTransport` lets the transport class focus on
  * the `BusTransport` contract while this module owns connection mechanics.
  */
 
 import type { BusReceiveHandler, BusRequestMessage, CorrelationTracker } from '@makaio/bus-core';
-import { NoHandlerError, TimeoutError, isNoHandlerErrorForSubject } from '@makaio/bus-core';
+import { NoHandlerError, TimeoutError, isNoHandlerErrorForSubject, isRequestCancellation } from '@makaio/bus-core';
 import type { TransportAuth, WebSocketLike } from './types.js';
 import type { BroadcastAggregator } from './broadcast-aggregator.js';
 import type { ClientRegistry } from './client-registry.js';
@@ -201,66 +202,160 @@ export interface RequestRoutingDeps {
   registry: ClientRegistry;
   /** Correlation tracker for server-initiated request/response pairs. */
   correlations: CorrelationTracker;
+  /** Caller cancellation: rejects the in-flight attempt and ends routing. */
+  signal: AbortSignal;
 }
 
 /**
- * Send a server-initiated request to interested connected clients, retrying
- * in connection order until one handles it.
+ * Send a server-initiated request to interested connected clients, moving on
+ * in connection order only while a client did not deliver it to a handler.
  *
  * Routing considers only clients that advertised a matching request handler
  * and remain authorized for the request subject. A request received from a
  * client is never routed back to that origin socket.
  *
- * Each retry uses a unique correlation ID so stale responses or timeouts from
- * earlier attempts cannot settle the currently active attempt.
+ * The request reaches the next client only when the previous attempt did not
+ * deliver it to a terminal handler: the send failed or the client answered
+ * that its handler chain was exhausted without a result. Any other outcome
+ * ends routing — in particular a timeout, after which the client may still be
+ * executing, and caller cancellation.
+ *
+ * Routing contract:
+ * - All attempts share one deadline anchored from `timeout` when routing
+ *   starts, so candidate lookup and serialization spend it too. Each attempt is
+ *   sent and tracked with only the budget that remains, so no client gets a
+ *   fresh budget.
+ * - Candidate lookup (subscription-filter reads, authorization resolvers) and
+ *   serialization (`toJSON`, getters) run caller code that can cancel the
+ *   request or spend the budget. Every decision that follows such a phase is
+ *   preceded by one checkpoint: cancellation first — the caller's own reason
+ *   wins — then budget exhaustion, which is a `TimeoutError` for the request
+ *   subject. Nothing is sent once either happened.
+ * - Only after the checkpoint is the outcome classified. The budget guards
+ *   sending, so a route that has nothing to send ends with `NoHandlerError`
+ *   even when the budget is spent: that answer is definitive, whereas a timeout
+ *   would claim an unknown outcome for a request that was never sent. Caller
+ *   cancellation still outranks it, so an empty route is not a separate exit.
+ *
+ * Each attempt uses a unique correlation ID so stale responses from earlier
+ * attempts cannot settle the currently active attempt.
  * @param requestMsg - Request envelope
- * @param timeout - Correlation timeout in milliseconds
+ * @param timeout - Total routing budget in milliseconds; `0` means no automatic timeout
  * @param deps - Routing dependencies
  * @returns Request result from the first handling client
  * @throws NoHandlerError when no connected client handles the request
+ * @throws TimeoutError when the budget is spent before a client answers
  */
 export async function routeRequestToClients(
   requestMsg: BusRequestMessage,
   timeout: number,
   deps: RequestRoutingDeps,
 ): Promise<unknown> {
-  const { registry, correlations } = deps;
+  const { registry, correlations, signal } = deps;
   const fullSubject = `${requestMsg.namespace}.${requestMsg.subject}`;
+  // One deadline for the whole routing, anchored before anything else runs: the
+  // budget is measured from the moment the transport accepts the request, so
+  // candidate lookup (subscription-filter reads, authorization resolvers) and
+  // serialization spend it too, and a later attempt gets only what is left of
+  // the caller's budget, never a fresh one. `timeout` is a finite number
+  // >= 0, so `0` is the only unbounded value: the bus validates every budget
+  // where it enters — `bus.request`/`bus.broadcast` reject an invalid one before
+  // dispatching, and an invalid wire budget from a peer falls back to the
+  // default — instead of each transport re-validating it.
+  const deadline = timeout > 0 ? Date.now() + timeout : undefined;
+  /**
+   * Read what is left of the shared routing budget.
+   * @returns Remaining milliseconds, or `0` — the tracker's no-timeout value — for an unbounded request
+   * @throws TimeoutError once a bounded budget is spent
+   */
+  const remainingBudget = (): number => {
+    if (deadline === undefined) return 0;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new TimeoutError(fullSubject, timeout);
+    return remaining;
+  };
+
+  /**
+   * The checkpoint that follows every phase running caller code: cancellation
+   * first, so the caller's reason wins, then budget exhaustion.
+   * @returns What is left of the budget, as `remainingBudget` reports it
+   * @throws The caller's cancellation reason once the request was cancelled
+   * @throws TimeoutError once a bounded budget is spent
+   */
+  const checkpoint = (): number => {
+    signal.throwIfAborted();
+    return remainingBudget();
+  };
+
   const origin = registry.getRequestOrigin(requestMsg.correlationId);
+  // Candidate lookup runs caller code; the checkpoint at the top of each attempt
+  // follows it. An empty result has no attempt, so it falls through to the exit
+  // below, which checks cancellation before classifying.
   const interestedClients = registry.getInterestedRequestClients(fullSubject, requestMsg.payload, origin);
 
-  if (interestedClients.length === 0) {
-    throw new NoHandlerError(fullSubject);
-  }
-
   for (const [attemptIndex, targetClient] of interestedClients.entries()) {
-    // Each retry must have a unique correlation ID so stale responses/timeouts
-    // from earlier attempts cannot settle the currently active attempt.
+    // After candidate lookup, or after the previous attempt: nothing is
+    // serialized or sent once the caller cancelled or the budget is spent.
+    checkpoint();
+    // Each attempt must have a unique correlation ID so stale responses from
+    // earlier attempts cannot settle the currently active attempt.
     const attemptCorrelationId = `${requestMsg.correlationId}:attempt-${attemptIndex + 1}`;
-    const requestForAttempt: BusRequestMessage = { ...requestMsg, correlationId: attemptCorrelationId };
+    // Serialized outside the send guard: an unserializable payload fails the
+    // request for every client alike, it is not a lost socket. `timeout` is
+    // left out here (an `undefined` value is not serialized) and appended below.
+    const envelope = JSON.stringify({ ...requestMsg, correlationId: attemptCorrelationId, timeout: undefined });
+    // After serialization, which runs caller code (`toJSON`, getters).
+    const attemptBudget = checkpoint();
+    // The wire `timeout` is the budget the receiver anchors its own deadline
+    // from, so it is read after serialization — the same value the attempt is
+    // tracked with — and appended as the frame's last field. `envelope` is a
+    // non-empty JSON object, so replacing its closing brace keeps the frame
+    // valid JSON.
+    const frame = `${envelope.slice(0, -1)},"timeout":${attemptBudget}}`;
 
     try {
       // send() can throw synchronously if the socket closed between
       // the readyState check in getReadyClients and now.
-      targetClient.send(JSON.stringify(requestForAttempt));
+      targetClient.send(frame);
     } catch {
       continue; // socket gone, try next client
     }
 
+    // TODO(FACT-460): settle this attempt when the target connection drops. With
+    // `timeout` 0 and no caller cancellation nothing ends the wait below, so the
+    // request and its `requestRoutes` and tracker entries stay until the process
+    // exits. Settling needs per-connection in-flight attempt tracking and
+    // no-resend `ConnectionLostError` semantics: the client may already be running
+    // the handler, so routing must end instead of moving to the next client.
     try {
-      return await correlations.track(attemptCorrelationId, timeout);
+      return await correlations.track(attemptCorrelationId, attemptBudget, signal);
     } catch (error) {
-      // Retry on errors that mean "this client did not handle the request":
-      // - NoHandlerError: the client explicitly reported no handler.
-      // - TimeoutError: the client was connected but did not respond in time.
-      // Any other error (e.g. a handler ran and returned a failure) must
-      // propagate immediately so the caller sees the real error.
-      if (isNoHandlerErrorForSubject(error, fullSubject) || error instanceof TimeoutError) {
+      // The caller's own cancellation reaches it unchanged, before any
+      // classification — even a reason shaped like a no-handler answer or a
+      // timeout.
+      if (isRequestCancellation(error, signal)) throw error;
+      // A timeout leaves the outcome unknown, so it ends routing — the bus
+      // never re-sends a request whose handler may already be running. Client
+      // answers arrive as deserialized plain errors, so a TimeoutError here is
+      // the tracker's attempt timer, which names the attempt correlation ID
+      // and the remaining budget; the caller timed out on the request subject
+      // after its whole budget.
+      if (error instanceof TimeoutError) throw new TimeoutError(fullSubject, timeout);
+      // Only an explicit no-handler answer lets the request move on: the
+      // client's chain ended without a terminal handler producing a result.
+      // Every other error propagates: a handler failure is the real result.
+      // A cancellation that lands after a no-handler answer is caught by the
+      // abort checks on the way to the next client or out of the loop.
+      if (isNoHandlerErrorForSubject(error, fullSubject)) {
         continue;
       }
       throw error;
     }
   }
 
+  // No client took the request: none was a candidate, or every attempt failed
+  // to send or answered no handler. Cancellation outranks that classification;
+  // the budget does not, as nothing is pending (see the routing contract).
+  signal.throwIfAborted();
   throw new NoHandlerError(fullSubject);
 }

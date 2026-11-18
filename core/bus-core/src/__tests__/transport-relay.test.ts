@@ -195,6 +195,42 @@ describe('Transport relay and subscription propagation', () => {
       }
     });
 
+    it('relays a request carrying an invalid wire timeout with the default budget', async () => {
+      const {
+        transport: relayTransport,
+        recordedSends,
+        advertise,
+      } = createRecordedRelayTransport((message) => (message.type === 'request' ? { relayed: true } : true));
+
+      const unregister = registerTransport(
+        'relayInvalidTimeout' as keyof BusTransportRegistry,
+        relayTransport,
+      ).unregister;
+
+      try {
+        await advertise({ 'unknown.remoteAction': [0] });
+
+        // A peer controls the wire `timeout`. Only `0` means "no timeout", so a
+        // negative value must not reach the next hop as an unbounded request.
+        await sourceTransport.simulateReceive({
+          type: 'request',
+          namespace: 'unknown',
+          subject: 'remoteAction',
+          payload: { data: 'test' },
+          correlationId: 'corr-relay-invalid-timeout',
+          messageId: 'msg-relay-invalid-timeout',
+          timeout: -1,
+        });
+
+        expect(recordedSends).toHaveLength(1);
+        expect(recordedSends[0]?.timeout).toBeGreaterThan(0);
+        expect(recordedSends[0]?.timeout).toBeLessThanOrEqual(DEFAULT_REQUEST_TIMEOUT_MS);
+        expect(recordedSends[0]?.message).toMatchObject({ timeout: recordedSends[0]?.timeout });
+      } finally {
+        unregister();
+      }
+    });
+
     it('should try next transport when first relay target fails', async () => {
       const failingTransport = createStubTransport({
         send: async () => {
