@@ -7,6 +7,7 @@ import type {
   TransitionRuleDefinition,
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '@makaio/contracts';
+import { ZodError } from 'zod';
 import { TransitionActionRegistry, WORKFLOW_START_ACTION_TYPE } from '../transition-action-registry.js';
 import { TransitionRuleRegistry } from '../transition-rule-registry.js';
 
@@ -239,6 +240,67 @@ describe('TransitionRuleRegistry', () => {
         }),
       ]),
     ).toThrow();
+    expect(registry.snapshotSource('pkg-transition')).toBeUndefined();
+    expect(registry.getRulesForEvent('artifact.created')).toEqual([]);
+  });
+
+  it('replaces a source atomically, reusing its own rule IDs', () => {
+    const registry = new TransitionRuleRegistry();
+
+    registry.register('pkg-transition', [makeRule(), makeRule({ id: 'pkg-transition.retired' })]);
+    registry.replace('pkg-transition', [
+      makeRule({ when: { field: 'data.status', operator: 'ready' } }),
+      makeRule({ id: 'pkg-transition.added', on: 'artifact.revised' }),
+    ]);
+
+    expect(registry.snapshotSource('pkg-transition')).toEqual({
+      ruleIds: ['pkg-transition.capture-created', 'pkg-transition.added'],
+    });
+    expect(registry.getRulesForEvent('artifact.created').map(({ rule }) => rule.when)).toEqual([
+      { field: 'data.status', operator: 'ready' },
+    ]);
+    expect(registry.getRulesForEvent('artifact.revised').map(({ rule }) => rule.id)).toEqual(['pkg-transition.added']);
+  });
+
+  it('keeps the last good rules of a source when its replacement is rejected', () => {
+    const registry = new TransitionRuleRegistry();
+
+    registry.register('other-source', [makeRule({ id: 'other-source.owned' })]);
+    registry.register('pkg-transition', [makeRule()]);
+
+    expect(() =>
+      registry.replace('pkg-transition', [makeRule({ id: 'pkg-transition.next', when: { unknown: 'value' } })]),
+    ).toThrow(ZodError);
+    expect(() => registry.replace('pkg-transition', [makeRule({ id: 'other-source.owned' })])).toThrow(
+      "duplicate rule ID 'other-source.owned' from source 'pkg-transition'",
+    );
+    expect(registry.snapshotSource('pkg-transition')).toEqual({ ruleIds: ['pkg-transition.capture-created'] });
+    expect(registry.getRulesForEvent('artifact.created').map(({ rule }) => rule.id)).toEqual([
+      'other-source.owned',
+      'pkg-transition.capture-created',
+    ]);
+  });
+
+  it('validates a replacement without touching the registered rules', () => {
+    const registry = new TransitionRuleRegistry();
+
+    registry.register('other-source', [makeRule({ id: 'other-source.owned' })]);
+    registry.register('pkg-transition', [makeRule()]);
+
+    registry.validateReplacement('pkg-transition', [makeRule(), makeRule({ id: 'pkg-transition.added' })]);
+    expect(() => registry.validateReplacement('pkg-transition', [makeRule({ id: 'other-source.owned' })])).toThrow(
+      "duplicate rule ID 'other-source.owned' from source 'pkg-transition'",
+    );
+    expect(registry.snapshotSource('pkg-transition')).toEqual({ ruleIds: ['pkg-transition.capture-created'] });
+    expect(registry.snapshotSource('other-source')).toEqual({ ruleIds: ['other-source.owned'] });
+  });
+
+  it('removes a source when replacing it with no rules', () => {
+    const registry = new TransitionRuleRegistry();
+
+    registry.register('pkg-transition', [makeRule()]);
+    registry.replace('pkg-transition', []);
+
     expect(registry.snapshotSource('pkg-transition')).toBeUndefined();
     expect(registry.getRulesForEvent('artifact.created')).toEqual([]);
   });
