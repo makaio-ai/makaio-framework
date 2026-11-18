@@ -162,4 +162,25 @@ describe('startMcpServer stdio onclose lifecycle', () => {
     await expect(handle.close()).rejects.toThrow('teardown failed');
     expect(closeCalls()).toBe(1);
   });
+
+  it('tears the server down once when the onclose callback closes the handle again', async () => {
+    stubStdin();
+    vi.spyOn(StdioServerTransport.prototype, 'start').mockResolvedValue(undefined);
+    const transportClose = vi.spyOn(StdioServerTransport.prototype, 'close');
+    let handle: Awaited<ReturnType<typeof startMcpServer>> | undefined;
+    let nestedClose: Promise<void> | undefined;
+    // The transport reports its close while the teardown is still in its synchronous prefix.
+    handle = await startMcpServer(createBusInstance(), 'test-session', {
+      transport: 'stdio',
+      onclose: () => {
+        nestedClose = handle?.close();
+      },
+    });
+
+    await handle.close();
+    await nestedClose;
+
+    expect(nestedClose).toBeDefined();
+    expect(transportClose).toHaveBeenCalledTimes(1);
+  });
 });

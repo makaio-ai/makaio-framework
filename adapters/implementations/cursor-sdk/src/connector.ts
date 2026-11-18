@@ -82,6 +82,10 @@ export class CursorSdkConnector extends ProceduralAgentConnector<CursorSdkBus, C
     }
     if (this.session) return this.session;
     if (!this.sessionInitPromise) {
+      // Stored after `initializeSession()` has run its synchronous prefix, which is
+      // safe: it constructs the session (callbacks are not invoked) and enters
+      // `session.initialize()`, whose first statement is an await. A re-entrant
+      // call would find `this.session` already set and never start a second one.
       this.sessionInitPromise = this.initializeSession().catch((err: unknown) => {
         this.sessionInitPromise = undefined;
         throw err;

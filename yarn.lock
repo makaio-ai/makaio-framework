@@ -5779,12 +5779,13 @@ __metadata:
     "@makaio/service-base": "workspace:*"
     "@makaio/services-core": "workspace:*"
     "@makaio/tools-core": "workspace:*"
+    "@makaio/utils": "workspace:*"
     "@modelcontextprotocol/sdk": "npm:^1.29.0"
     "@types/node": "npm:^24.3.0"
     quick-lru: "npm:^7.3.0"
-    tsdown: "npm:0.23.0"
-    tsx: "npm:^4.23.15"
-    zod: "npm:4.6.5"
+    tsdown: "npm:0.22.0"
+    tsx: "npm:^4.22.4"
+    zod: "npm:4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -24175,7 +24176,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"tsx@npm:^4.22.3, tsx@npm:^4.23.15":
+"tsx@npm:^4.22.3, tsx@npm:^4.22.4, tsx@npm:^4.23.15":
   version: 4.23.15
   resolution: "tsx@npm:4.23.15"
   dependencies:

@@ -1,4 +1,4 @@
-import { boundedWaitReread } from '@makaio/utils';
+import { boundedWaitReread, JoinedOperation } from '@makaio/utils';
 
 /** One named stage of a runtime teardown, with the window it must finish in. */
 export interface BoundedShutdownStep {
@@ -112,18 +112,12 @@ async function runAllSteps(steps: ReadonlyArray<BoundedShutdownStep>): Promise<v
  * @returns The sequence and its bound.
  */
 export function createShutdownSequence(steps: ReadonlyArray<BoundedShutdownStep>): ShutdownSequence {
-  let running: Promise<void> | undefined;
+  // A stage may call `run()` again (a signal handler it triggers, a nested
+  // teardown) and must join this run instead of starting a second one that runs
+  // every stage again, so the run is published before the first stage starts.
+  const running = new JoinedOperation<void>();
   return {
-    run: () => {
-      if (running !== undefined) return running;
-      // Published before the first stage starts: a stage may call `run()` again
-      // (a signal handler it triggers, a nested teardown), and must join this run
-      // instead of starting a second one that runs every stage again.
-      const shared = Promise.withResolvers<void>();
-      running = shared.promise;
-      void runAllSteps(steps).then(shared.resolve, shared.reject);
-      return running;
-    },
+    run: () => running.join(() => runAllSteps(steps)),
     budgetMs: () => shutdownBudgetMs(steps),
   };
 }

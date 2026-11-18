@@ -7,6 +7,7 @@ export {
   outerBoundMs,
 } from './bounded-wait.js';
 export type { BoundedWaitOutcome, RereadWaitOutcome } from './bounded-wait.js';
+export { JoinedOperation } from './joined-operation.js';
 export { isNonNegativeFinite, nonNegativeOption } from './non-negative-option.js';
 export {
   CLI_COMMAND_ABORT_SIGNALS,

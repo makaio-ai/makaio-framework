@@ -6,7 +6,7 @@
  */
 
 import { writeSync } from 'node:fs';
-import { boundedWait, boundedWaitReread } from '@makaio/utils';
+import { boundedWait, boundedWaitReread, JoinedOperation } from '@makaio/utils';
 
 /**
  * Process signals a host can stop on. `SIGINT` and `SIGTERM` are the ordinary
@@ -110,25 +110,28 @@ export function installHostShutdown(options: HostShutdownOptions): HostShutdown 
   }
 
   const controller = new AbortController();
-  let shutdown: Promise<void> | undefined;
+  const shutdown = new JoinedOperation<void>();
   // The abort reason is an Error that wraps this; later requests name the initiator.
   let initiator = '';
 
   const request = (reason: string): Promise<void> => {
-    if (shutdown !== undefined) {
+    const inProgress = shutdown.current;
+    if (inProgress !== undefined) {
       console.info(`[${label}] ${reason} received; shutdown already in progress (requested by ${initiator})`);
-      return shutdown;
+      return inProgress;
     }
     initiator = reason;
     console.info(`[${label}] ${reason} received, shutting down...`);
     // Published before the abort: abort listeners run synchronously and may call
     // `request()` or `finished()`, which must find this one shutdown. The teardown
     // itself starts on the next microtask, so it still begins after the abort.
-    shutdown = Promise.resolve()
-      .then(() => runTeardown(label, steps))
-      .finally(release);
+    const run = shutdown.join(() =>
+      Promise.resolve()
+        .then(() => runTeardown(label, steps))
+        .finally(release),
+    );
     controller.abort(new Error(`[${label}] startup cancelled: ${reason} received`));
-    return shutdown;
+    return run;
   };
 
   const handlers: ReadonlyArray<readonly [HostStopSignal, () => void]> = [
@@ -141,7 +144,7 @@ export function installHostShutdown(options: HostShutdownOptions): HostShutdown 
   }
   for (const [signal, listener] of handlers) process.on(signal, listener);
 
-  return { cancellation: controller.signal, request, finished: () => shutdown ?? Promise.resolve() };
+  return { cancellation: controller.signal, request, finished: () => shutdown.current ?? Promise.resolve() };
 }
 
 /**
