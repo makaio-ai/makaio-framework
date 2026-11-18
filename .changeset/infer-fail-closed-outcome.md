@@ -1,0 +1,7 @@
+---
+"@makaio/ai-adapters-core": major
+---
+
+**Breaking:** `adapter.infer` fails closed. It resolves only when the inference turn ends with outcome `completed`. A provider error reported after start, a cancellation, or any other non-completed outcome now rejects the request with a `TurnNotCompletedError` that carries the terminal `outcome` and keeps the connector-reported failure as `cause`, instead of resolving with empty or partial `text`. `TurnNotCompletedError` and its `NonCompletedTurnResult` type are exported from the package entry point so callers can narrow the rejection's `cause`. Schema validation and enforcement only ever see output from completed turns.
+
+Structured-output retries on agent turns follow the same rule: when a retry turn does not complete, or cannot run because no connector is live, the original turn ends with the retry's terminal outcome instead of `completed` — a provider error surfaces as outcome `error` with the provider error (and its error category) on `agent.complete`, a cancellation as `cancelled`. The invalid first-attempt output is dropped from the result, validation reports `failed` with the failure in its errors, and the failure is no longer passed to the `agent.structuredOutput.enforce` handler as empty output, so enforcement can no longer turn a provider failure into an `enforced` answer and error-outcome consumers such as provider fallback see the failure.

@@ -261,11 +261,12 @@ export type {
 } from './log-importer/index.js';
 
 // Message handle
-export { markCompletedWithFinalResult, MessageHandle } from './message-handle/index.js';
+export { markCompletedWithFinalResult, MessageHandle, TurnNotCompletedError } from './message-handle/index.js';
 export type {
   MessageDeliveryMode,
   MessageResult,
   MessageState,
+  NonCompletedTurnResult,
   SendMessageOptions,
   ProcessingState,
 } from './message-handle/index.js';

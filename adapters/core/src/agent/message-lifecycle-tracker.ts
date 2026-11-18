@@ -361,6 +361,9 @@ export class MessageLifecycleTracker {
             // Transform failed — synthesize a validation failure so the cause is
             // visible in every completion consumer while preserving the terminal
             // event invariant: complete() and onTerminal must always be called.
+            // The turn's own output stands here; a structured-output retry that
+            // did not complete never reaches this catch — its transform ends
+            // the turn with the retry's outcome instead.
             const structuredOutputValidation: StructuredOutputValidation = {
               status: 'failed',
               errors: [

@@ -203,6 +203,11 @@ Purpose: Ephemeral LLM inference without agent lifecycle overhead.
 The adapter creates a temporary connector, executes the inference,
 extracts the text response, and cleans up — no persistent agent.
 
+A response always means the inference turn completed (and, with
+`responseSchema`, produced conforming output). Provider errors, cancellation,
+and schema violations reject the request instead of returning empty or
+partial text.
+
 **Request:**
 
 | Field | Type | Required |

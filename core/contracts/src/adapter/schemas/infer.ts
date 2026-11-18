@@ -12,6 +12,11 @@ import { ProviderContextSchema } from './provider-context.js';
  *
  * The adapter creates a temporary connector, executes the inference,
  * extracts the text response, and cleans up — no persistent agent.
+ *
+ * A response always means the inference turn completed (and, with
+ * `responseSchema`, produced conforming output). Provider errors, cancellation,
+ * and schema violations reject the request instead of returning empty or
+ * partial text.
  */
 export const InferSchema = {
   request: z.object({

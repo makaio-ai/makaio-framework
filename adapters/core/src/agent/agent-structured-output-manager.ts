@@ -36,7 +36,9 @@ export interface ValidateTerminalResultInput {
   /**
    * Callback invoked for each retry attempt. Receives the 1-based attempt
    * number and the validation errors from the preceding attempt. Should
-   * return the new raw output string from a re-run of the turn.
+   * return the new raw output string from a re-run of the turn, and reject
+   * when the re-run does not complete; the rejection propagates unchanged and
+   * skips enforcement.
    *
    * When absent, the retry loop is skipped even if `maxRetries > 0`.
    * @param input - Retry context including attempt number and prior errors

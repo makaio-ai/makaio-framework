@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { RateLimitError, type ExtractSubjectPayload } from '@makaio/core';
 import { AgentSubjects, type StructuredOutputValidation } from '@makaio/contracts';
 import { createTestableAgent, MockConnector } from './helpers/mock-agent.js';
 import { UserMessageQueue } from '../../session/user-message-queue.js';
@@ -21,6 +22,21 @@ class QueueingMockConnector extends MockConnector {
     const handle = await super.sendMessage(message, options);
     this.queue.enqueue(handle);
     return handle;
+  }
+}
+
+/** Rejects internal-retry dispatch, as a connector does when its session gate or turn-start RPC fails. */
+class RetryDispatchRejectingMockConnector extends MockConnector {
+  public static readonly dispatchFailure = new RateLimitError('retry dispatch rejected');
+
+  public override async sendMessage(
+    message: NormalizedMessageInput,
+    options?: ConnectorSendMessageOptions,
+  ): Promise<MessageHandle> {
+    if (options?.internalRetry === true) {
+      throw RetryDispatchRejectingMockConnector.dispatchFailure;
+    }
+    return super.sendMessage(message, options);
   }
 }
 
@@ -236,6 +252,184 @@ describe('AIAgent responseSchema scoping', () => {
       ]);
     } finally {
       cleanupRetryPolicy();
+      await agent.close();
+    }
+  });
+
+  it.each([
+    {
+      label: 'provider error',
+      retryResult: {
+        outcome: 'error',
+        error: new RateLimitError('rate limit exceeded on retry'),
+      } satisfies MessageResult,
+      expectedComplete: {
+        outcome: 'error',
+        error: 'rate limit exceeded on retry',
+        errorCategory: 'rate_limit',
+        validationMessage: 'Turn ended with outcome "error": rate limit exceeded on retry',
+      },
+    },
+    {
+      label: 'cancellation',
+      retryResult: { outcome: 'cancelled' } satisfies MessageResult,
+      expectedComplete: {
+        outcome: 'cancelled',
+        error: undefined,
+        errorCategory: undefined,
+        validationMessage: 'Turn ended with outcome "cancelled"',
+      },
+    },
+    {
+      label: 'supersession',
+      retryResult: { outcome: 'superseded', supersededBy: 'immediate-follow-up' } satisfies MessageResult,
+      expectedComplete: {
+        outcome: 'superseded',
+        error: undefined,
+        errorCategory: undefined,
+        validationMessage: 'Turn ended with outcome "superseded"',
+      },
+    },
+  ])('ends the turn with the retry outcome instead of enforcing when the retry turn ends with a $label', async ({
+    retryResult,
+    expectedComplete,
+  }) => {
+    const agent = createTestableAgent({
+      agentId: 'test-agent-response-schema-retry-failure',
+      mockConnectorFactory: makeQueueingMockConnectorFactory(),
+      sessionId: 'session-response-schema-retry-failure',
+    });
+    const cleanupRetryPolicy = MakaioBus.on(AgentSubjects.structuredOutput.retryPolicy, (ctx) => {
+      ctx.setResult({ maxRetries: 1 });
+    });
+    const enforceHandler = vi.fn();
+    const cleanupEnforce = MakaioBus.on(AgentSubjects.structuredOutput.enforce, (ctx) => {
+      enforceHandler();
+      ctx.setResult({ enforced: true, output: '{"ok":true}' });
+    });
+    const completePayloads: Array<ExtractSubjectPayload<typeof AgentSubjects.complete>> = [];
+    const cleanupComplete = MakaioBus.on(AgentSubjects.complete, (ctx) => {
+      completePayloads.push(ctx.payload);
+    });
+
+    try {
+      const startResult = await agent.start('return json', {
+        responseSchema: {
+          schema: {
+            type: 'object',
+            properties: { ok: { type: 'boolean' } },
+            required: ['ok'],
+          },
+          name: 'ok_schema',
+        },
+      });
+      const connector = agent.currentConnector as QueueingMockConnector;
+
+      startResult.messageHandle.markCompleted({ outcome: 'completed', result: { message: 'invalid json' } });
+
+      const retryHandle = await vi.waitFor(() => {
+        const handle = connector.sentHandles.find((sent) => sent.messageId.includes(':structured-output-retry:1'));
+        if (!handle) {
+          throw new Error('Expected structured-output retry handle');
+        }
+        return handle;
+      });
+      retryHandle.markCompleted(retryResult);
+
+      const failedValidation = {
+        status: 'failed',
+        errors: [{ message: expectedComplete.validationMessage, instancePath: '', schemaPath: '#' }],
+      };
+      // The retry's terminal result replaces the original turn's: the invalid
+      // first attempt is dropped, so no consumer can persist it as the answer.
+      await expect(startResult.messageHandle.waitForCompletion()).resolves.toEqual({
+        ...retryResult,
+        result: null,
+        structuredOutputValidation: failedValidation,
+      });
+      await vi.waitFor(() => {
+        expect(completePayloads).toHaveLength(1);
+      });
+      const completePayload = completePayloads[0];
+      expect(completePayload).toMatchObject({
+        messageId: startResult.messageHandle.messageId,
+        outcome: expectedComplete.outcome,
+        structuredOutputValidation: failedValidation,
+      });
+      expect(completePayload?.message).toBeUndefined();
+      expect(completePayload?.error).toBe(expectedComplete.error);
+      expect(completePayload?.errorCategory).toBe(expectedComplete.errorCategory);
+      expect(enforceHandler).not.toHaveBeenCalled();
+    } finally {
+      cleanupRetryPolicy();
+      cleanupEnforce();
+      cleanupComplete();
+      await agent.close();
+    }
+  });
+
+  it('ends the turn as an error with the dispatch failure when the retry turn cannot be dispatched', async () => {
+    const agent = createTestableAgent({
+      agentId: 'test-agent-response-schema-retry-dispatch-failure',
+      mockConnectorFactory: (config: { model: string; cwd: string }) =>
+        new RetryDispatchRejectingMockConnector(config.model, config.cwd),
+      sessionId: 'session-response-schema-retry-dispatch-failure',
+    });
+    const cleanupRetryPolicy = MakaioBus.on(AgentSubjects.structuredOutput.retryPolicy, (ctx) => {
+      ctx.setResult({ maxRetries: 1 });
+    });
+    const enforceHandler = vi.fn();
+    const cleanupEnforce = MakaioBus.on(AgentSubjects.structuredOutput.enforce, (ctx) => {
+      enforceHandler();
+      ctx.setResult({ enforced: true, output: '{"ok":true}' });
+    });
+    const turnCompletedOutcomes: string[] = [];
+    const cleanupTurnCompleted = MakaioBus.on(AgentSubjects.turn.completed, (ctx) => {
+      turnCompletedOutcomes.push(ctx.payload.outcome);
+    });
+    const completePayloads: Array<ExtractSubjectPayload<typeof AgentSubjects.complete>> = [];
+    const cleanupComplete = MakaioBus.on(AgentSubjects.complete, (ctx) => {
+      completePayloads.push(ctx.payload);
+    });
+
+    try {
+      const startResult = await agent.start('return json', {
+        responseSchema: {
+          schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] },
+          name: 'ok_schema',
+        },
+      });
+      startResult.messageHandle.markAcknowledged(true);
+      startResult.messageHandle.markCompleted({ outcome: 'completed', result: { message: 'invalid json' } });
+
+      const dispatchFailure = RetryDispatchRejectingMockConnector.dispatchFailure;
+      await expect(startResult.messageHandle.waitForCompletion()).resolves.toEqual({
+        outcome: 'error',
+        error: dispatchFailure,
+        result: null,
+        structuredOutputValidation: {
+          status: 'failed',
+          errors: [
+            {
+              message: 'Turn ended with outcome "error": retry dispatch rejected',
+              instancePath: '',
+              schemaPath: '#',
+            },
+          ],
+        },
+      });
+      await vi.waitFor(() => {
+        expect(completePayloads).toHaveLength(1);
+        expect(turnCompletedOutcomes).toEqual(['error']);
+      });
+      expect(completePayloads[0]).toMatchObject({ outcome: 'error', errorCategory: 'rate_limit' });
+      expect(completePayloads[0]?.message).toBeUndefined();
+      expect(enforceHandler).not.toHaveBeenCalled();
+    } finally {
+      cleanupRetryPolicy();
+      cleanupEnforce();
+      cleanupTurnCompleted();
+      cleanupComplete();
       await agent.close();
     }
   });
