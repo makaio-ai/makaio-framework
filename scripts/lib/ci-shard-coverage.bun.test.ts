@@ -65,14 +65,24 @@ describe('checkShardCoverage', () => {
         projectNames: [
           'Core',
           'Packages',
-          'Platform',
+          'Platform-Runtime',
+          'Platform-Subsystems',
           'Adapters',
           'Extensions',
           'Apps',
           'forks-required',
           'git-serial',
         ],
-        claimedShards: ['Core', 'Packages', 'Platform', 'Adapters', 'Extensions', 'Apps', 'forks-required'],
+        claimedShards: [
+          'Core',
+          'Packages',
+          'Platform-Runtime',
+          'Platform-Subsystems',
+          'Adapters',
+          'Extensions',
+          'Apps',
+          'forks-required',
+        ],
         intentionallyUnclaimed: ['git-serial'],
       });
       expect(issues).toEqual([]);

@@ -130,7 +130,10 @@ export function resolveShardForFile(filePath: string, shards: Record<string, str
 export const frameworkShards: Record<string, string[]> = {
   Core: ['core', 'services', 'storage'],
   Packages: ['packages'],
-  Platform: ['platforms', 'runtimes', 'transports', 'clients', 'providers', 'scripts', 'build-tooling', 'subsystems'],
+  // Platform is split in two so each CI job stays well under its timeout.
+  // `runtimes` alone carries about half of the platform test time.
+  'Platform-Runtime': ['platforms', 'runtimes'],
+  'Platform-Subsystems': ['subsystems', 'transports', 'clients', 'providers', 'scripts', 'build-tooling'],
   Adapters: ['adapters'],
   Extensions: ['extensions'],
   Apps: ['apps', 'ui', 'sdks'],
