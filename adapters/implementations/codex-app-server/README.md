@@ -41,7 +41,7 @@ CodexAppServerAgent extends AIAgent
     -> receives connector via connectorFactory()
 CodexAppServerConnector extends AIAgentConnector
     -> JsonRpcClient
-    -> StdioTransport
+    -> JSONL transport (createJsonlTransport from @makaio/subprocess)
     -> [codex app-server subprocess]
 ```
 
@@ -143,7 +143,7 @@ descriptor, whose `adapters[]` entry wraps the internal definition from
 
 | Export | Description |
 |--------|-------------|
-| `createStdioTransport` | Create stdio transport for subprocess |
+| `createStdioTransport` | Start `codex app-server` on the shared JSONL transport with the app-server's options |
 | `createJsonRpcClient` | Create JSON-RPC client |
 
 ### Protocol Types

@@ -28,8 +28,23 @@ import { VersionLiteralSchema, VersionRangeSchema } from '../version/index.js';
  * `args` are additional arguments forwarded to the child process.
  * `env` is a key-value map of environment variables to inject.
  * `healthTimeoutMs` limits how long the runtime waits for the child to become
- * healthy before treating startup as failed.
- * `shutdownTimeoutMs` limits how long the runtime waits for a graceful stop.
+ * healthy before treating startup as failed. A supervised `bus-websocket`
+ * child becomes healthy with its first stdout line that is a JSON object; any
+ * other line does not count. A child that exits before that fails its start at
+ * once instead of at the timeout.
+ * `shutdownTimeoutMs` bounds the stop of a `bus-stdio` or `bus-websocket`
+ * child: the runtime first gives the extension that long to answer its destroy
+ * request, then waits that long for a graceful stop (`SIGTERM`) before it forces
+ * one (`SIGKILL`); the exit observation and the output drain that follow are
+ * bounded by the runtime's own limits. An `mcp-stdio` child is stopped by its
+ * MCP client, which keeps its own stop contract and does not read this value.
+ *
+ * `bus-stdio` and `bus-websocket` children run in a process group (POSIX
+ * session) of their own, which the runtime stops as a whole. Signals aimed at
+ * the host's terminal job (Ctrl-C, a terminal hangup) therefore no longer reach
+ * them, and they have no controlling terminal (`/dev/tty` is unavailable). A
+ * host that dies without stopping them leaves them running, so a detached child
+ * must exit by itself when its stdin closes or its bus connection is lost.
  */
 const ProcessTransportBaseSchema = z.object({
   command: z.string().min(1),
@@ -40,11 +55,27 @@ const ProcessTransportBaseSchema = z.object({
 });
 
 /**
- * Restart policy for supervised child processes.
+ * Restart policy for supervised child processes, applied once a child that
+ * became healthy ends without being stopped. The runtime supervises
+ * `bus-websocket` children; `bus-stdio` accepts the field but does not restart
+ * a session that ended.
  *
  * - `'none'` — never restart (default).
- * - `'on-crash'` — restart only on non-zero exit.
- * - `'always'` — restart unconditionally.
+ * - `'on-crash'` — restart unless the child exited with code 0; an end by a
+ *   signal counts as a crash.
+ * - `'always'` — restart after every such end, also an exit with code 0.
+ *
+ * Automatic restarts are spaced out and capped (by default at most 5 within
+ * 60 s, starting 500 ms after the end and doubling up to 10 s). None follows a
+ * stop, an end whose exit could not be observed, or an end after which a
+ * process of the child may still be running; the child then stays down until
+ * it is started again explicitly.
+ *
+ * Windows: only a positive proof that no process of the child is left counts as
+ * safe, and Windows can give none for a child that ended on its own (there is no
+ * process group to probe). After a crash its descendants may still run, so no
+ * restart follows it at all, whatever the policy; start it again explicitly.
+ * TODO(FACT-463): Windows Job Objects would let a crash prove the tree empty.
  */
 const RestartPolicySchema = z.enum(['none', 'on-crash', 'always']);
 

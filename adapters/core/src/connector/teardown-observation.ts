@@ -21,16 +21,58 @@ import type { TeardownReport } from './teardown-report.js';
 import { unknownTeardown } from './teardown-report.js';
 import { CONNECTOR_EXIT_OBSERVATION_MS } from './teardown-timing.js';
 
-/** Inputs for {@link reportObservedExit}. */
-export interface ObservedExitOptions {
+/**
+ * Whether a fulfilment value can say that an end was *not* observed: an outcome
+ * whose `kind` may be `unobserved`, or an end report whose `exit` may be one.
+ * Distributes over unions, so a single member that can is enough.
+ * @typeParam T - Fulfilment value to inspect.
+ */
+type MayDescribeUnobservedEnd<T> = T extends { readonly kind: infer Kind }
+  ? 'unobserved' extends Kind
+    ? true
+    : false
+  : T extends { readonly exit: { readonly kind: infer Kind } }
+    ? 'unobserved' extends Kind
+      ? true
+      : false
+    : false;
+
+/**
+ * A promise that fulfils only once the end of a resource was actually observed:
+ * an exit event, a published pane exit, a spawn attempt that ended without a
+ * process. It never fulfils merely because its owner stopped watching.
+ *
+ * Every evidence consumer in this module and in the retirement ledger counts a
+ * fulfilment as an observed end, so this is the one shape they accept. An end
+ * *report* does not qualify: it also fulfils when its owner gave up watching and
+ * recorded the end as `unobserved`, and counting that fulfilment would claim an
+ * end nobody saw. A promise whose value can describe an unobserved end therefore
+ * resolves this type to `never` and is refused at compile time. For a JSONL
+ * transport, pass `exitObserved`, never `ended`.
+ *
+ * The check reads the declared fulfilment type only. It cannot see through a
+ * promise whose type no longer shows that shape: one widened to
+ * `Promise<unknown>` or `Promise<void>`, or one mapped away from an end report
+ * (`ended.then(() => undefined)`), passes although it still fulfils on a
+ * give-up. Pass the observation promise itself, never a widened or mapped one.
+ * @typeParam T - Fulfilment value of the observation.
+ */
+export type ExitObservation<T> = true extends MayDescribeUnobservedEnd<T> ? never : Promise<T>;
+
+/**
+ * Inputs for {@link reportObservedExit}.
+ * @typeParam T - Fulfilment value of the observation.
+ */
+export interface ObservedExitOptions<T> {
   /**
    * Promise settled by the runtime's own observation of the end.
    *
    * Must be the promise the *existing* listener settles, never a second
    * subscription: two observations of one event are two things to keep in step,
-   * and the second one is always the one that goes stale.
+   * and the second one is always the one that goes stale. It must fulfil on an
+   * observation only (see {@link ExitObservation}).
    */
-  readonly exited: Promise<unknown>;
+  readonly exited: ExitObservation<T>;
   /**
    * What was signalled, named for the `detail` a non-observation carries.
    *
@@ -49,15 +91,17 @@ export interface ObservedExitOptions {
  * consumer that hangs is strictly worse off than one told the end was not
  * observed. So expiry is a normal answer here, not a failure.
  *
- * A **rejected** observation counts as no observation. These promises are built
- * not to reject, but if one does then what failed is the watching, and a failed
- * watch has seen nothing.
+ * A **fulfilled** observation counts as an observed end, which is why only an
+ * {@link ExitObservation} is accepted. A **rejected** observation counts as no
+ * observation. These promises are built not to reject, but if one does then what
+ * failed is the watching, and a failed watch has seen nothing.
+ * @typeParam T - Fulfilment value of the observation.
  * @param exited - Promise settled by the runtime's own end observation.
  * @param budgetMs - Milliseconds to watch for; defaults to the wave's budget.
  * @returns Whether the end was observed inside the budget.
  */
-export async function exitWasObserved(
-  exited: Promise<unknown>,
+export async function exitWasObserved<T>(
+  exited: ExitObservation<T>,
   budgetMs: number = CONNECTOR_EXIT_OBSERVATION_MS,
 ): Promise<boolean> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -89,10 +133,11 @@ export async function exitWasObserved(
  * The budget is {@link CONNECTOR_EXIT_OBSERVATION_MS} and is not an option: "did
  * the resource end" is one question with one answer time across the wave, and a
  * per-call override nobody passed would only be a second place for it to differ.
+ * @typeParam T - Fulfilment value of the observation.
  * @param options - Observation promise and resource name.
  * @returns `exited` on an observed end, `detached` with a `detail` otherwise.
  */
-export async function reportObservedExit(options: ObservedExitOptions): Promise<ConnectorTeardownResult> {
+export async function reportObservedExit<T>(options: ObservedExitOptions<T>): Promise<ConnectorTeardownResult> {
   if (await exitWasObserved(options.exited)) {
     return { evidence: 'exited' };
   }

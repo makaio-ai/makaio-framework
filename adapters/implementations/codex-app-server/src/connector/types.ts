@@ -5,7 +5,7 @@
 
 import type { BaseAgentConnectorConfig } from '@makaio/ai-adapters-core';
 import type { AIReasoningLevel } from '@makaio/contracts';
-import type { StdioTransport } from '../utils/createStdioTransport.js';
+import type { IJsonlTransport } from '@makaio/subprocess';
 import type { JsonRpcClient } from '../utils/jsonRpcClient.js';
 import type { CodexAppServerBus } from '../namespaces/index.js';
 import type { CodexAppServerProviderConfig } from '../schemas.js';
@@ -51,8 +51,18 @@ export interface CodexAppServerConfig
   approvalPolicy?: ApprovalPolicy;
   /** Sandbox mode per SandboxMode protocol type */
   sandboxMode?: SandboxMode;
-  /** Optional transport for dependency injection (e.g., testing) */
-  transport?: StdioTransport;
-  /** Optional JSON-RPC client for dependency injection (e.g., testing). If provided, transport is ignored. */
+  /**
+   * Optional app-server transport for dependency injection (e.g., testing). The
+   * connector evaluates its end once, like that of a transport it spawned, and
+   * requests that end itself when it closes or aborts, whether or not a client
+   * is built on the transport. It is single-use: the connector cannot replace
+   * it, so any end of it, including the close that follows a failed handshake,
+   * terminates the connector.
+   */
+  transport?: IJsonlTransport;
+  /**
+   * Optional JSON-RPC client for dependency injection (e.g., testing). If provided, no client is
+   * built on an injected `transport`; the connector still supervises and closes that transport.
+   */
   jsonRpcClient?: JsonRpcClient;
 }

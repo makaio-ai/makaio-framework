@@ -1,44 +1,37 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import type { JsonlChannel, MessageListener, TransportEnd } from '@makaio/subprocess';
 import { createJsonRpcClient } from '../jsonRpcClient.js';
-import type { StdioTransport, StdioMessage } from '../createStdioTransport.js';
+import { transportEnd } from '../../__tests__/shared.js';
 
 /**
- * Mock transport for testing
+ * Message channel double for the client's own dispatch rules. The channel's
+ * production of messages and of its end is driven through a real app-server
+ * child in `createStdioTransport.exit.test.ts`.
  */
-class MockTransport implements StdioTransport {
+class MockTransport implements JsonlChannel {
   sentMessages: unknown[] = [];
-
-  /** No child process backs this double, so its exit is never observed. */
-  readonly exited = new Promise<number | null>(() => {});
 
   closeRequested = false;
 
-  readonly messageCallbacks = new Set<(message: StdioMessage) => void>();
-  readonly errorCallbacks = new Set<(error: Error) => void>();
+  readonly messageCallbacks = new Set<MessageListener>();
+
+  private readonly endReport = Promise.withResolvers<TransportEnd>();
+
+  readonly ended = this.endReport.promise;
 
   send(message: object): void {
     this.sentMessages.push(message);
   }
 
-  close(): void {
+  close(): Promise<TransportEnd> {
     this.closeRequested = true;
+    return this.ended;
   }
 
-  shutdownRequested(): boolean {
-    return this.closeRequested;
-  }
-
-  onMessage(callback: (message: StdioMessage) => void): () => void {
+  onMessage(callback: MessageListener): () => void {
     this.messageCallbacks.add(callback);
     return () => {
       this.messageCallbacks.delete(callback);
-    };
-  }
-
-  onError(callback: (error: Error) => void): () => void {
-    this.errorCallbacks.add(callback);
-    return () => {
-      this.errorCallbacks.delete(callback);
     };
   }
 
@@ -47,15 +40,15 @@ class MockTransport implements StdioTransport {
    * @param message - Message to receive
    */
   receiveMessage(message: unknown): void {
-    for (const callback of [...this.messageCallbacks]) callback(message as StdioMessage);
+    for (const callback of [...this.messageCallbacks]) callback(message);
   }
 
   /**
-   * Simulate receiving an error from the transport
-   * @param error - Error to receive
+   * Simulate the transport reporting its end
+   * @param end - The end report
    */
-  receiveError(error: Error): void {
-    for (const callback of [...this.errorCallbacks]) callback(error);
+  publishEnd(end: TransportEnd): void {
+    this.endReport.resolve(end);
   }
 }
 
@@ -129,14 +122,14 @@ describe('createJsonRpcClient', () => {
     await expect(requestPromise).rejects.toThrow('Method not found');
   });
 
-  it('should reject request promise on transport error', async () => {
+  it('rejects an in-flight request when the transport is stopped by its owner', async () => {
     const client = createJsonRpcClient(transport);
 
     const requestPromise = client.request('test/method', {});
 
-    transport.receiveError(new Error('Transport error'));
+    transport.publishEnd(transportEnd('requested'));
 
-    await expect(requestPromise).rejects.toThrow('Transport error');
+    await expect(requestPromise).rejects.toThrow('JSON-RPC transport stopped on request: exited with signal SIGTERM');
   });
 
   it('should send JSON-RPC 2.0 notification without ID', () => {
@@ -301,55 +294,23 @@ describe('createJsonRpcClient', () => {
     await expect(request3).resolves.toBe('result3');
   });
 
-  it('shuts the client down on a transport failure before notifying the owner', async () => {
-    let clientClosedWhenOwnerRan = false;
-    const client = createJsonRpcClient(transport, () => {
-      clientClosedWhenOwnerRan = transport.closeRequested;
-    });
+  it('closes on an unexpected transport end: pending requests reject, later ones fail at once', async () => {
+    const client = createJsonRpcClient(transport);
     const pending = client.request('thread/start', {});
 
-    transport.receiveError(new Error('app-server died'));
+    transport.publishEnd(transportEnd('unexpected', { kind: 'exited', code: 4, signal: null }));
 
-    await expect(pending).rejects.toThrow('app-server died');
-    expect(clientClosedWhenOwnerRan).toBe(true);
+    await expect(pending).rejects.toThrow('JSON-RPC transport ended unexpectedly: exited with code 4');
     await expect(client.request('later', {})).rejects.toThrow('JSON-RPC client is closed');
   });
 
-  it('ends the owner failure subscription with the client, so a reused transport notifies only the current owner', async () => {
-    const firstOwner = vi.fn();
-    const secondOwner = vi.fn();
+  it('leaves no subscription on the channel once closed', () => {
+    const client = createJsonRpcClient(transport);
+    client.onServerRequest(vi.fn());
 
-    createJsonRpcClient(transport, firstOwner).close();
-    const client = createJsonRpcClient(transport, secondOwner);
-    const pending = client.request('thread/start', {});
-    // The current client and its owner, nothing left over from the first.
-    expect(transport.errorCallbacks.size).toBe(2);
+    client.close();
 
-    transport.receiveError(new Error('app-server died'));
-
-    await expect(pending).rejects.toThrow('app-server died');
-    expect(firstOwner).not.toHaveBeenCalled();
-    expect(secondOwner).toHaveBeenCalledOnce();
-  });
-
-  it('ends the owner failure subscription on a failure even when the owner never closes the client', async () => {
-    const firstOwner = vi.fn();
-    const secondOwner = vi.fn();
-
-    const firstClient = createJsonRpcClient(transport, firstOwner);
-    const firstPending = firstClient.request('thread/start', {});
-    transport.receiveError(new Error('first failure'));
-    await expect(firstPending).rejects.toThrow('first failure');
-    expect(firstOwner).toHaveBeenCalledOnce();
-
-    // The transport is reused by a second client; the first owner never closed its client.
-    const secondClient = createJsonRpcClient(transport, secondOwner);
-    const secondPending = secondClient.request('thread/start', {});
-    transport.receiveError(new Error('second failure'));
-
-    await expect(secondPending).rejects.toThrow('second failure');
-    expect(firstOwner).toHaveBeenCalledOnce();
-    expect(secondOwner).toHaveBeenCalledOnce();
+    expect(transport.messageCallbacks.size).toBe(0);
   });
 
   it('should ignore response messages for unknown request IDs', () => {

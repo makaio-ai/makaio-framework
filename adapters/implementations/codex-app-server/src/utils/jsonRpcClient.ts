@@ -1,7 +1,5 @@
-import { createJsonRpcClient as createGenericClient } from '@makaio/subprocess';
-import type { IJsonlTransport } from '@makaio/subprocess';
+import { createJsonRpcClient as createGenericClient, type JsonlChannel } from '@makaio/subprocess';
 import type { ServerRequest } from '../protocol/generated/index.js';
-import type { StdioTransport } from './createStdioTransport.js';
 
 /**
  * Handler for server requests (e.g., approval requests)
@@ -59,16 +57,17 @@ export interface JsonRpcClient {
 // NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines-per-function: ["error", { "max": 200 }] */
 /**
- * Creates a JSON-RPC 2.0 client wrapping a stdio transport
- * @param transport - Stdio transport for sending/receiving messages
- * @param onTransportFailure - Owner callback for a transport failure. It runs
- *   after the client has rejected its in-flight requests with that failure, and
- *   its subscription ends with the client, so a transport reused by a later
- *   client never notifies an earlier client's owner.
+ * Creates a JSON-RPC 2.0 client on the app-server transport.
+ *
+ * The generic client drives the transport directly. The transport's end report,
+ * whatever its cause, rejects every in-flight request and closes the client;
+ * what the end means for the connector is decided once per generation from the
+ * same report, not through this client.
+ * @param transport - Message channel to the app-server, normally from `createStdioTransport`
  * @returns JSON-RPC client interface
  * @example
  * ```ts
- * const transport = createStdioTransport(cwd, env);
+ * const transport = createStdioTransport({ cwd, env });
  * const client = createJsonRpcClient(transport);
  *
  * // Send request
@@ -88,34 +87,8 @@ export interface JsonRpcClient {
  * });
  * ```
  */
-export function createJsonRpcClient(
-  transport: StdioTransport,
-  onTransportFailure?: (error: Error) => void,
-): JsonRpcClient {
-  // Bridge: present StdioTransport as IJsonlTransport for the generic client.
-  // Both are multi-subscriber, and the generic client removes its own
-  // subscriptions when it closes.
-  const bridgedTransport: IJsonlTransport = {
-    send: (msg) => transport.send(msg),
-    close: () => transport.close(),
-    onMessage: (listener) => transport.onMessage(listener),
-    onError: (listener) => transport.onError(listener),
-    get process() {
-      return undefined as never;
-    },
-  };
-
-  const generic = createGenericClient(bridgedTransport);
-  // Subscribed after the generic client, which settles its in-flight requests
-  // with the failure before the owner reacts to it.
-  // The generic client shuts itself down on a failure without going through
-  // `close()` below, so the subscription also ends itself on its first failure.
-  const unsubscribeTransportFailure = onTransportFailure
-    ? transport.onError((error) => {
-        unsubscribeTransportFailure?.();
-        onTransportFailure(error);
-      })
-    : undefined;
+export function createJsonRpcClient(transport: JsonlChannel): JsonRpcClient {
+  const generic = createGenericClient(transport);
   let serverRequestUnsubscribe: (() => void) | undefined;
 
   return {
@@ -160,7 +133,6 @@ export function createJsonRpcClient(
      * Close the client and cleanup resources
      */
     close(): void {
-      unsubscribeTransportFailure?.();
       serverRequestUnsubscribe?.();
       serverRequestUnsubscribe = undefined;
       generic.close();

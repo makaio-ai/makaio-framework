@@ -1,4 +1,5 @@
-import type { IJsonlTransport } from './types.js';
+import { describeTransportEnd } from './process-end.js';
+import type { JsonlChannel } from './types.js';
 
 /** Default request timeout for JSON-RPC calls. */
 const DEFAULT_JSON_RPC_REQUEST_TIMEOUT_MS = 60_000;
@@ -65,11 +66,15 @@ export type ServerRequestHandler = (request: unknown) => Promise<unknown>;
 export type NotificationHandler = (method: string, params: unknown) => void;
 
 /**
- * Generic JSON-RPC 2.0 client that wraps an {@link IJsonlTransport}.
+ * Generic JSON-RPC 2.0 client that wraps a {@link JsonlChannel}.
  *
- * A transport failure ends the client exactly like {@link IJsonRpcClient.close}:
- * pending requests reject with the transport error and later requests reject
- * immediately.
+ * Every request settles exactly once. The client ends either through its own
+ * {@link IJsonRpcClient.close} (pending requests reject at once with a closed
+ * error) or through the channel's end report, whatever its cause: an unexpected
+ * end and a stop someone else requested on the channel both reject the pending
+ * requests with a description of that end, after the channel delivered its last
+ * message. Either way later requests reject immediately, and a request issued
+ * while the channel no longer accepts writes rejects with the write failure.
  */
 export interface IJsonRpcClient {
   /**
@@ -83,7 +88,9 @@ export interface IJsonRpcClient {
   request<T>(method: string, params: unknown, timeoutMs?: number): Promise<T>;
 
   /**
-   * Send a fire-and-forget notification (no `id`, no response expected).
+   * Send a fire-and-forget notification (no `id`, no response expected). A
+   * no-op once the client is closed; throws when the channel no longer accepts
+   * writes while the client is still open.
    * @param method - Notification method name.
    * @param params - Notification parameters.
    */
@@ -110,7 +117,8 @@ export interface IJsonRpcClient {
   onServerRequest(handler: ServerRequestHandler): () => void;
 
   /**
-   * Close the client: rejects all pending requests and closes the transport.
+   * Close the client: rejects all pending requests at once and closes the
+   * channel, unless the channel already ended. Idempotent.
    */
   close(): void;
 }
@@ -123,11 +131,11 @@ export interface IJsonRpcClient {
  * - `id` + `error`   → correlated error response (rejects pending promise)
  * - `id` + `method`  → server-initiated request (call handlers, send response)
  * - `method`, no `id` → notification (call method-specific handler)
- * @param transport - JSONL transport to send/receive messages on.
+ * @param transport - JSONL channel to send/receive messages on.
  * @returns JSON-RPC 2.0 client interface.
  */
 // eslint-disable-next-line max-lines-per-function
-export function createJsonRpcClient(transport: IJsonlTransport): IJsonRpcClient {
+export function createJsonRpcClient(transport: JsonlChannel): IJsonRpcClient {
   let nextId = 1;
   let closed = false;
 
@@ -210,15 +218,18 @@ export function createJsonRpcClient(transport: IJsonlTransport): IJsonRpcClient 
     // Notification (has `method`, no `id`)
     if ('method' in msg && !('id' in msg)) {
       const method = msg['method'] as string;
-      const handlers = notificationHandlers.get(method);
-      if (handlers) {
-        for (const handler of handlers) {
-          try {
-            handler(method, msg['params']);
-          } catch {
-            // Notification subscribers are independent; one faulty handler
-            // must not prevent later subscribers from observing the message.
-          }
+      // Dispatch over a snapshot, with the contract of `notifyListeners` that
+      // every other listener path of this package follows: each handler
+      // registered when the message arrived receives it, whatever an earlier
+      // handler subscribes, unsubscribes or closes. The message was received
+      // before any of that, so hiding it from the remaining handlers would make
+      // their view depend on handler order.
+      for (const handler of [...(notificationHandlers.get(method) ?? [])]) {
+        try {
+          handler(method, msg['params']);
+        } catch {
+          // Notification subscribers are independent; one faulty handler
+          // must not prevent later subscribers from observing the message.
         }
       }
       return;
@@ -234,7 +245,7 @@ export function createJsonRpcClient(transport: IJsonlTransport): IJsonRpcClient 
   async function handleServerRequest(message: unknown, requestId: RequestId, method: string): Promise<void> {
     const handlers = [...serverRequestHandlers];
     if (handlers.length === 0) {
-      transport.send({
+      respond({
         jsonrpc: '2.0',
         id: requestId,
         error: { code: -32601, message: `No handler registered for server request: ${method}` },
@@ -249,41 +260,60 @@ export function createJsonRpcClient(transport: IJsonlTransport): IJsonRpcClient 
 
     const success = results.find((result): result is PromiseFulfilledResult<unknown> => result.status === 'fulfilled');
     if (success) {
-      transport.send({ jsonrpc: '2.0', id: requestId, result: success.value });
+      respond({ jsonrpc: '2.0', id: requestId, result: success.value });
       return;
     }
 
     const firstFailure = results[0] as PromiseRejectedResult | undefined;
     const reason = firstFailure?.reason;
     const messageText = reason instanceof Error ? reason.message : String(reason ?? 'handler failed');
-    transport.send({
+    respond({
       jsonrpc: '2.0',
       id: requestId,
       error: { code: -32603, message: messageText },
     });
   }
 
+  /**
+   * Write the response to a server request. A server request can still arrive
+   * while the channel is ending (its last messages are delivered after writing
+   * was blocked); the end reaches this client separately, so a response that
+   * can no longer be written is dropped instead of escaping the dispatch.
+   * @param response - JSON-RPC response message.
+   */
+  function respond(response: object): void {
+    try {
+      transport.send(response);
+    } catch {
+      // The channel no longer accepts writes; its end is reported on its own.
+    }
+  }
+
   const unsubMessage = transport.onMessage(handleMessage);
 
-  // The transport reports only failures that end it (a malformed line is not
-  // one), so neither a pending nor a later request can be answered anymore.
-  const unsubError = transport.onError(shutdown);
+  // The end report arrives once, for every cause, after the channel delivered
+  // its last message: a response written just before the end has settled its
+  // request by now, and nothing outstanding can be answered anymore. A stop the
+  // channel's owner requested settles the pending requests too, so none hangs.
+  void transport.ended.then((end) => {
+    shutdown(new Error(`JSON-RPC transport ${describeTransportEnd(end)}`));
+  });
 
   /**
-   * Move the client into its terminal closed state: detach from the transport,
-   * reject every pending request, and close the transport. Later requests are
-   * rejected immediately instead of being written to a transport that is gone.
+   * Move the client into its terminal closed state: detach from the channel and
+   * reject every pending request. Later requests are rejected immediately
+   * instead of being written to a channel that is gone.
    * @param reason - Error passed to every pending request.
+   * @returns Whether this call closed the client; `false` when it was already closed.
    */
-  function shutdown(reason: Error): void {
-    if (closed) return;
+  function shutdown(reason: Error): boolean {
+    if (closed) return false;
     closed = true;
     unsubMessage();
-    unsubError();
     rejectAllPending(reason);
     notificationHandlers.clear();
     serverRequestHandlers.clear();
-    transport.close();
+    return true;
   }
 
   return {
@@ -351,7 +381,9 @@ export function createJsonRpcClient(transport: IJsonlTransport): IJsonRpcClient 
     },
 
     close(): void {
-      shutdown(new Error('JSON-RPC client closed'));
+      // The channel's close is bounded and its result never rejects; the end
+      // it leads to finds this client closed already.
+      if (shutdown(new Error('JSON-RPC client closed'))) void transport.close();
     },
   };
 }

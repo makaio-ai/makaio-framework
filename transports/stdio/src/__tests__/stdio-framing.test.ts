@@ -1,5 +1,6 @@
+import { createJsonlDecoder } from '@makaio/subprocess';
 import { describe, expect, it } from 'vitest';
-import { decodeBusChunk, encodeBusMessage } from '../stdio-framing.js';
+import { encodeBusMessage } from '../stdio-framing.js';
 
 describe('encodeBusMessage', () => {
   it('produces a newline-terminated JSON string', () => {
@@ -13,50 +14,22 @@ describe('encodeBusMessage', () => {
     expect(encoded.endsWith('\n')).toBe(true);
     expect(JSON.parse(encoded.trimEnd())).toEqual(message);
   });
-});
 
-describe('decodeBusChunk', () => {
-  it('parses a complete single message', () => {
-    const { messages, remaining } = decodeBusChunk('{"type":"ping"}\n', '');
-    expect(messages).toEqual([{ type: 'ping' }]);
-    expect(remaining).toBe('');
+  it('round-trips through the JSONL decoder, one message per line', () => {
+    const messages = [{ type: 'a' }, { type: 'b', payload: { text: 'Grüße 💡' } }, { type: 'c' }];
+    const decoder = createJsonlDecoder({ finalLine: 'discard' });
+
+    const batch = decoder.push(Buffer.from(messages.map(encodeBusMessage).join(''), 'utf8'));
+
+    expect(batch.messages).toEqual(messages);
+    expect(batch.malformedLineCount).toBe(0);
+    // Every encoded message is newline-terminated, so nothing is left at the end.
+    expect(decoder.end().discardedChars).toBe(0);
   });
 
-  it('parses multiple messages arriving in one chunk', () => {
-    const chunk = '{"type":"a"}\n{"type":"b"}\n{"type":"c"}\n';
-    const { messages, remaining } = decodeBusChunk(chunk, '');
-    expect(messages).toEqual([{ type: 'a' }, { type: 'b' }, { type: 'c' }]);
-    expect(remaining).toBe('');
-  });
+  it('encodes a payload containing newlines on a single line', () => {
+    const encoded = encodeBusMessage({ type: 'event', payload: { text: 'line one\nline two' } });
 
-  it('returns partial data as remaining buffer when line is incomplete', () => {
-    const { messages, remaining } = decodeBusChunk('{"type":"par', '');
-    expect(messages).toHaveLength(0);
-    expect(remaining).toBe('{"type":"par');
-  });
-
-  it('handles empty lines gracefully without adding them to messages', () => {
-    const chunk = '{"type":"a"}\n\n{"type":"b"}\n';
-    const { messages, remaining } = decodeBusChunk(chunk, '');
-    expect(messages).toEqual([{ type: 'a' }, { type: 'b' }]);
-    expect(remaining).toBe('');
-  });
-
-  it('reassembles a message split across two chunks', () => {
-    const firstChunk = '{"type":"split';
-    const { messages: firstMessages, remaining: firstRemaining } = decodeBusChunk(firstChunk, '');
-    expect(firstMessages).toHaveLength(0);
-    expect(firstRemaining).toBe('{"type":"split');
-
-    const secondChunk = '"}\n';
-    const { messages: secondMessages, remaining: secondRemaining } = decodeBusChunk(secondChunk, firstRemaining);
-    expect(secondMessages).toEqual([{ type: 'split' }]);
-    expect(secondRemaining).toBe('');
-  });
-
-  it('carries over a non-empty buffer prefix when combining with new chunk', () => {
-    const { messages, remaining } = decodeBusChunk('ld"}\n', '{"type":"wor');
-    expect(messages).toEqual([{ type: 'world' }]);
-    expect(remaining).toBe('');
+    expect(encoded.indexOf('\n')).toBe(encoded.length - 1);
   });
 });

@@ -26,6 +26,7 @@ import {
   runScenario,
   validateBinaryVersion,
 } from './lib/agent-clients/index.js';
+import { classifyCleanup } from './lib/agent-clients/process-tree-cleanup.js';
 import { summarizeNativeResult } from './lib/agent-clients/native-result-summary.js';
 import type {
   NativeLoginLeaseFactory,
@@ -223,6 +224,8 @@ export async function runProbe(
   readonly passed: boolean;
   readonly scenariosExecuted: number;
   readonly failures: readonly string[];
+  /** Findings that do not fail the probe, e.g. a Windows provider tree that could not be proven empty. */
+  readonly warnings: readonly string[];
 }> {
   const manifest = getManifest(options.provider);
   const scenarios = plannedScenarios(manifest, options);
@@ -230,6 +233,7 @@ export async function runProbe(
     return {
       passed: false,
       scenariosExecuted: 0,
+      warnings: [],
       failures: [
         `Refusing to publish partial evidence: --update-fixtures must cover all ${String(manifest.scenarios.length)} scenarios (no --scenario filter, --max-scenarios >= ${String(manifest.scenarios.length)})`,
       ],
@@ -257,6 +261,7 @@ export async function runProbe(
     const stagedFixturesDir = path.join(workspace.rootDir, 'staged-fixtures');
     const startedAt = Date.now();
     const failures: string[] = [];
+    const warnings: string[] = [];
     const fixtures: ScenarioFixture[] = [];
     let scenariosExecuted = 0;
     if (options.credentialMode === 'native-login') {
@@ -301,6 +306,12 @@ export async function runProbe(
         failures.push(`${scenario.id}: native oracle failed${diagnostic ? ` (${diagnostic})` : ''}`);
       }
       failures.push(...result.fixtureDiffs.map((diff) => `${scenario.id}: ${diff}`));
+      // The workspace is removed after the last scenario: processes of the
+      // provider that may still run could write to it, or taint later scenarios.
+      const cleanupFinding = classifyCleanup(result.cleanup);
+      if (cleanupFinding) {
+        (cleanupFinding.severity === 'warning' ? warnings : failures).push(`${scenario.id}: ${cleanupFinding.message}`);
+      }
     }
     // Publishing must prove every source-expected effect of the whole manifest; a verify run only
     // owes the sentinel effects of the scenarios it planned, so a --scenario or --max-scenarios
@@ -318,7 +329,7 @@ export async function runProbe(
         capturedAt: new Date().toISOString(),
       });
     }
-    return { passed: failures.length === 0 && scenariosExecuted > 0, scenariosExecuted, failures };
+    return { passed: failures.length === 0 && scenariosExecuted > 0, scenariosExecuted, failures, warnings };
   } finally {
     try {
       if (nativeLoginLease) await nativeLoginLease.teardown();
@@ -347,6 +358,7 @@ async function main(): Promise<void> {
       `provider=${options.provider} pinned=${manifest.pinnedVersion} scenarios=${String(scenarioCount)} mode=${options.updateFixtures ? 'update' : 'verify'}`,
     );
     const result = await runProbe(options);
+    for (const warning of result.warnings) console.warn(`WARNING: ${warning}`);
     if (!result.passed) throw new Error(result.failures.join('\n'));
     console.log(`Passed ${String(result.scenariosExecuted)} scenario(s).`);
   } catch (error) {

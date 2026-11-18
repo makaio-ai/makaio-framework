@@ -34,7 +34,15 @@ import {
   trackMessageCorrelation,
 } from '@makaio/bus-core';
 import type { PayloadFilter } from '@makaio/core';
-import { decodeBusChunk, encodeBusMessage } from './stdio-framing.js';
+import {
+  createJsonlDecoder,
+  describeJsonlDrops,
+  notifyObserver,
+  type JsonlDecodeBatch,
+  type JsonlDecodeEnd,
+  type JsonlDecoder,
+} from '@makaio/subprocess';
+import { encodeBusMessage } from './stdio-framing.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -73,6 +81,15 @@ export interface StdioClientTransportOptions {
 // ---------------------------------------------------------------------------
 
 /**
+ * Create the decoder for one stdin session. The host terminates every bus
+ * message with a newline, so an unterminated final line is dropped and reported.
+ * @returns A fresh JSONL decoder.
+ */
+function createStdinDecoder(): JsonlDecoder {
+  return createJsonlDecoder({ finalLine: 'discard' });
+}
+
+/**
  * Child-side stdio bus transport.
  *
  * Wraps a pair of Node.js streams (defaulting to `process.stdin` /
@@ -98,8 +115,8 @@ export class StdioClientTransport implements BusTransport {
 
   private connected = false;
   private handshakeComplete = false;
-  private lineBuffer = '';
-  private dataListener: ((chunk: string) => void) | null = null;
+  private decoder: JsonlDecoder = createStdinDecoder();
+  private dataListener: ((chunk: Buffer | string) => void) | null = null;
   private endListener: (() => void) | null = null;
 
   /** Resolver for the `ready` promise; `null` once resolved. */
@@ -157,14 +174,12 @@ export class StdioClientTransport implements BusTransport {
     }
     this.connected = true;
     this.handshakeComplete = false;
-    this.lineBuffer = '';
+    this.decoder = createStdinDecoder();
 
-    // Configure stdin and attach listeners before resume() so synchronous
-    // streams cannot emit handshake data before the parser is installed.
-    if (typeof (this.stdin as NodeJS.Socket).setEncoding === 'function') {
-      (this.stdin as NodeJS.Socket).setEncoding('utf8');
-    }
-    const dataListener = (chunk: string): void => {
+    // Attach listeners before resume() so synchronous streams cannot emit
+    // handshake data before the parser is installed. The decoder owns UTF-8
+    // decoding, so stdin keeps delivering raw bytes.
+    const dataListener = (chunk: Buffer | string): void => {
       this.handleChunk(chunk);
     };
     this.dataListener = dataListener;
@@ -197,6 +212,9 @@ export class StdioClientTransport implements BusTransport {
     this.handshakeComplete = false;
     this.removeListeners();
     this.stdin.pause();
+    // A local disconnect stops reading on purpose; a partial line is dropped
+    // without a report.
+    this.decoder.abandon();
 
     this.settleReadyAfterDisconnect(completedHandshake);
 
@@ -329,15 +347,21 @@ export class StdioClientTransport implements BusTransport {
    * Process an incoming data chunk, parsing complete JSONL lines.
    * @param chunk - New data chunk from stdin
    */
-  private handleChunk(chunk: string): void {
-    const { messages, remaining, malformedLineCount } = decodeBusChunk(chunk, this.lineBuffer);
-    this.lineBuffer = remaining;
+  private handleChunk(chunk: Buffer | string): void {
+    this.handleBatch(this.decoder.push(chunk));
+  }
 
-    if (malformedLineCount > 0) {
-      this.reportError(new Error(`Failed to parse ${malformedLineCount} stdio JSONL line(s)`));
+  /**
+   * Report what one decode step dropped, by count only, then dispatch its messages.
+   * @param batch - Decoded messages and drop counts of a chunk or of the end of stdin
+   */
+  private handleBatch(batch: JsonlDecodeBatch | JsonlDecodeEnd): void {
+    const drops = describeJsonlDrops(batch);
+    if (drops !== undefined) {
+      this.reportError(new Error(`Dropped ${drops} from stdin`));
     }
 
-    for (const parsed of messages) {
+    for (const parsed of batch.messages) {
       this.dispatchMessage(parsed);
     }
   }
@@ -399,6 +423,9 @@ export class StdioClientTransport implements BusTransport {
       return;
     }
 
+    // stdin reached its genuine end: flush the decoder while still connected.
+    this.handleBatch(this.decoder.end());
+
     this.connected = false;
     const completedHandshake = this.handshakeComplete;
     this.handshakeComplete = false;
@@ -407,7 +434,9 @@ export class StdioClientTransport implements BusTransport {
     this.settleReadyAfterDisconnect(completedHandshake);
 
     this.correlations.cleanup();
-    this.onDisconnected?.();
+    notifyObserver(this.onDisconnected, (error) => {
+      console.error(`[StdioClientTransport] onDisconnected observer threw`, error);
+    });
   }
 
   /**

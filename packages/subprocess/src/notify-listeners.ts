@@ -24,3 +24,18 @@ export function notifyListeners<T>(
     }
   }
 }
+
+/**
+ * Invoke one observer of a lifecycle event, isolated like a listener.
+ *
+ * Observers such as `onDisconnected` are called from promise continuations and
+ * stream handlers, where an escaping exception would become an unhandled
+ * rejection or an uncaught exception that can terminate the host. The throw is
+ * handed to `onObserverError` instead; an absent observer is a no-op.
+ * @param observer - Observer to call, if any.
+ * @param onObserverError - Receives whatever the observer threw.
+ */
+export function notifyObserver(observer: (() => void) | undefined, onObserverError: (error: unknown) => void): void {
+  if (observer === undefined) return;
+  notifyListeners(new Set([observer]), undefined, onObserverError);
+}

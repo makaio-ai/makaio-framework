@@ -13,7 +13,12 @@ import { createBusNamespace } from '@makaio/core';
 import { descriptorToBasePackage } from './descriptor-to-package.js';
 import type { DetachedDescriptor } from '@makaio/contracts/extension';
 import type { StdioServerTransport } from '@makaio/bus-transport-stdio';
-import { createProcessLifecycle, type ProcessLifecycleHandle } from '@makaio/subprocess';
+import {
+  createProcessLifecycle,
+  describeTransportEnd,
+  type ProcessLifecycleHandle,
+  type ProcessRunOutcome,
+} from '@makaio/subprocess';
 import type { McpClientBridgeHandle } from '@makaio/subsystem-mcp-http-server';
 import { z } from 'zod';
 
@@ -157,6 +162,8 @@ class BusStdioExtensionService implements ExtensionServiceLifecycle {
         env: transportConfig.env,
         processName: this.descriptor.name,
       },
+      // The descriptor's stop window bounds the transport's stop, not only the destroy request.
+      stopTiming: { killGraceMs: transportConfig.shutdownTimeoutMs },
     });
 
     let unregister: (() => void) | null = null;
@@ -220,7 +227,16 @@ class BusStdioExtensionService implements ExtensionServiceLifecycle {
  *
  * Uses `ProcessLifecycle` to spawn the child and manage its lifecycle. The
  * process is responsible for connecting back to the host bus over WebSocket
- * independently.
+ * independently. Starting an extension has two phases: stdout readiness, then
+ * the host's `init` request with config and context. Every generation the
+ * restart policy starts goes through both, so a restarted child is initialised
+ * like the first one.
+ *
+ * The child runs in a process group of its own, so a terminal's Ctrl-C or hangup
+ * aimed at the host does not reach it, and its stdout carries only readiness. A
+ * host that dies without stopping it leaves it running until it reacts on its
+ * own: a detached child must exit when its stdin closes or its bus connection
+ * is lost for good.
  */
 class ProcessLifecycleExtensionService implements ExtensionServiceLifecycle {
   private readonly descriptor: DetachedDescriptor;
@@ -251,7 +267,8 @@ class ProcessLifecycleExtensionService implements ExtensionServiceLifecycle {
         `[extensions] ${this.descriptor.name}: bus-websocket transport requires NodeExtensionContext.busUrl`,
       );
     }
-    const lifecycleSubjects = this.getLifecycleSubjects();
+    // Register the lifecycle subjects before the child can reach the bus.
+    this.getLifecycleSubjects();
 
     this.lifecycle = createProcessLifecycle({
       spawn: {
@@ -267,25 +284,78 @@ class ProcessLifecycleExtensionService implements ExtensionServiceLifecycle {
         processName: this.descriptor.name,
       },
       healthTimeoutMs: transportConfig.healthTimeoutMs,
-      shutdownTimeoutMs: transportConfig.shutdownTimeoutMs,
+      stopTiming: { killGraceMs: transportConfig.shutdownTimeoutMs },
       restartPolicy: 'restartPolicy' in transportConfig ? transportConfig.restartPolicy : undefined,
+      onReady: () => this.initializeRestartedGeneration(),
+      onExit: (outcome) => this.reportUnrequestedEnd(outcome),
     });
 
     try {
       await this.lifecycle.start();
-      await this.ctx.bus.request(
-        lifecycleSubjects.init,
-        {
-          config: this.ctx.config ?? this.descriptor.config?.defaults,
-          context: buildDetachedLifecycleContext(this.ctx),
-        },
-        { timeout: transportConfig.healthTimeoutMs },
-      );
+      await this.requestInit();
     } catch (error) {
       await this.lifecycle.stop();
       this.lifecycle = null;
       throw error;
     }
+  }
+
+  /**
+   * Send the host's lifecycle `init` request to the current generation.
+   * @returns Promise that settles with the request.
+   */
+  private async requestInit(): Promise<void> {
+    await this.ctx.bus.request(
+      this.getLifecycleSubjects().init,
+      {
+        config: this.ctx.config ?? this.descriptor.config?.defaults,
+        context: buildDetachedLifecycleContext(this.ctx),
+      },
+      { timeout: this.descriptor.transport.healthTimeoutMs },
+    );
+  }
+
+  /**
+   * Initialise a generation that an automatic restart made ready. The first
+   * generation is initialised by `init()` once `start()` resolved; any later one
+   * comes from the restart policy and would otherwise run uninitialised.
+   *
+   * A failed `init` follows the contract of the first start: the child never
+   * received its configuration, so it is stopped rather than left running
+   * uninitialised, and the failure is reported. The lifecycle has no seam that
+   * lets its owner fail a generation into the restart budget, so the service
+   * ends `stopped` and no further restart follows; a fresh service start
+   * (`init()`) is the way back. Only a generation that is still the current,
+   * running one is stopped: when it already ended, the lifecycle's own end
+   * handling and restart policy have the say, and a newer generation
+   * initialises itself.
+   */
+  private initializeRestartedGeneration(): void {
+    const lifecycle = this.lifecycle;
+    if (lifecycle === null || lifecycle.generation <= 1) return;
+    const { generation } = lifecycle;
+    this.requestInit().catch(async (error: unknown) => {
+      console.error(
+        `[extensions] ${this.descriptor.name}: init of restarted generation ${generation} failed:`,
+        error instanceof Error ? error.message : error,
+      );
+      if (this.lifecycle !== lifecycle || lifecycle.generation !== generation || lifecycle.state !== 'running') return;
+      console.error(`[extensions] ${this.descriptor.name}: stopping uninitialised generation ${generation}`);
+      await lifecycle.stop();
+      if (this.lifecycle === lifecycle) this.lifecycle = null;
+    });
+  }
+
+  /**
+   * Log a run that ended without being stopped, whatever the restart policy
+   * then did; a stop requested by `destroy()` or a failed `init()` is no news.
+   * @param outcome - The lifecycle's report of the run's end.
+   */
+  private reportUnrequestedEnd(outcome: ProcessRunOutcome): void {
+    if (outcome.end.cause === 'requested') return;
+    console.warn(
+      `[extensions] ${this.descriptor.name}: generation ${outcome.generation} ${describeTransportEnd(outcome.end)} (restart: ${outcome.restart.kind})`,
+    );
   }
 
   /**

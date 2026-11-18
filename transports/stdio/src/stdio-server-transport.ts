@@ -11,6 +11,12 @@
  * 3. Host resolves its `ready` promise on receipt of the child's sync-complete.
  * 4. Host sends its own `subscribe-sync-complete` after replaying its
  *    subscriptions so the child knows the host is ready too.
+ *
+ * stdout is the session's channel, so the session ends with the JSONL
+ * transport's end report: an end the host did not ask for (an exit, also with
+ * code 0, a failed spawn, a failed channel, or stdout ending while the child
+ * keeps running) makes the session terminal; `disconnect()` is a requested end
+ * and no error.
  */
 
 import {
@@ -25,7 +31,15 @@ import {
   type BusTransport,
   type SubscriptionDeliveryClass,
 } from '@makaio/bus-core';
-import { createJsonlTransport, type IJsonlTransport, type SubprocessSpawnOptions } from '@makaio/subprocess';
+import {
+  createJsonlTransport,
+  describeTransportEnd,
+  mayHaveLeftProcesses,
+  notifyObserver,
+  type IJsonlTransport,
+  type ProcessStopTiming,
+  type SubprocessSpawnOptions,
+} from '@makaio/subprocess';
 import type { PayloadFilter } from '@makaio/core';
 
 /**
@@ -33,10 +47,22 @@ import type { PayloadFilter } from '@makaio/core';
  * @param spawn - Subprocess spawn options for the child extension process.
  * @param name - Optional transport name used as the bus registry key.
  *   Defaults to `'stdio-server'`.
+ * @param terminateTree - Whether ending a session also stops every process the
+ *   child started (an isolated POSIX process group, or the Windows process
+ *   tree) instead of the child alone. Defaults to `true`. The child then runs
+ *   in a session of its own: signals aimed at the host's terminal job (Ctrl-C,
+ *   a terminal hangup) no longer reach it, and it has no controlling terminal.
+ *   A host that dies without ending the session leaves the child running until
+ *   it reacts to its stdin closing. Opt out to keep the child in the host's group.
+ * @param stopTiming - Bounded phases of ending a session (kill grace, exit
+ *   observation, drain); omitted fields take the JSONL transport's defaults.
+ *   `disconnect()` takes at most about their sum.
  */
 export interface StdioServerTransportOptions {
   readonly spawn: SubprocessSpawnOptions;
   readonly name?: string;
+  readonly terminateTree?: boolean;
+  readonly stopTiming?: ProcessStopTiming;
 }
 
 /**
@@ -59,7 +85,23 @@ export class StdioServerTransport implements BusTransport {
   public readonly name: string;
 
   private readonly spawnOptions: SubprocessSpawnOptions;
+  private readonly terminateTree: boolean;
+  private readonly stopTiming: ProcessStopTiming | undefined;
   private jsonl: IJsonlTransport | null = null;
+  /**
+   * Stops this transport requested whose session end is not reported yet. A
+   * session leaves {@link jsonl} when its stop is requested, but its child and
+   * tree run until that end, so every `disconnect()` waits for all of them.
+   */
+  private readonly pendingStops = new Set<Promise<void>>();
+  /**
+   * The `connect()` that is waiting for pending stops to end, until it spawns or
+   * a `disconnect()` cancels it. Needed because the wait is the only point where
+   * a `disconnect()` can arrive while no session exists yet: without it, that
+   * `disconnect()` would resolve and the waiting `connect()` would spawn a child
+   * afterwards.
+   */
+  private pendingConnect: symbol | undefined;
 
   private readonly handlers = new Set<BusReceiveHandler>();
   private readonly correlations = new CorrelationTracker();
@@ -88,7 +130,10 @@ export class StdioServerTransport implements BusTransport {
   /** Set by the transport registry; called after subscribe-sync completes. */
   public onConnected: (() => void) | undefined = undefined;
 
-  /** Set by the transport registry; called when the process exits unexpectedly. */
+  /**
+   * Set by the transport registry; called once per session that ends without
+   * `disconnect()`, after its last message was delivered.
+   */
   public onDisconnected: (() => void) | undefined = undefined;
 
   /**
@@ -104,6 +149,8 @@ export class StdioServerTransport implements BusTransport {
   public constructor(options: StdioServerTransportOptions) {
     this.name = options.name ?? 'stdio-server';
     this.spawnOptions = options.spawn;
+    this.terminateTree = options.terminateTree ?? true;
+    this.stopTiming = options.stopTiming;
     this.ready = this.createReadyPromise();
   }
 
@@ -115,12 +162,33 @@ export class StdioServerTransport implements BusTransport {
    * child to send `subscribe-sync-complete` before resolving. After the child
    * confirms, the host sends its own `subscribe-sync-complete` so the child
    * knows the host is ready.
+   *
+   * A new session starts only after the previous one has ended: while a stop
+   * requested by `disconnect()` is still pending (its child and tree run until
+   * the end is reported), `connect()` waits for it, bounded by the stop timing,
+   * and spawns afterwards, so two children are never alive at once. A
+   * `disconnect()` that arrives during that wait cancels the `connect()`, which
+   * then rejects without spawning.
    * @returns Promise that resolves when the child process is spawned and
    *   initial I/O wiring is in place (not yet ready — await `this.ready`).
+   * @throws Error when a session is already open or being opened, or when a
+   *   `disconnect()` cancelled this call while it waited for a pending stop.
    */
   public async connect(): Promise<void> {
     if (this.jsonl !== null) {
       throw new Error('StdioServerTransport: already connected');
+    }
+    if (this.pendingConnect !== undefined) {
+      throw new Error('StdioServerTransport: already connecting');
+    }
+    if (this.pendingStops.size > 0) {
+      const attempt = Symbol('connect');
+      this.pendingConnect = attempt;
+      await Promise.all(this.pendingStops);
+      if (this.pendingConnect !== attempt) {
+        throw new Error('StdioServerTransport: connect() cancelled by disconnect()');
+      }
+      this.pendingConnect = undefined;
     }
 
     if (this.readyResolve === null && this.readyReject === null) {
@@ -129,21 +197,32 @@ export class StdioServerTransport implements BusTransport {
     this.handshakeComplete = false;
     this.terminalError = null;
 
-    const session = createJsonlTransport(this.spawnOptions);
+    // stdout is the session's channel, so its end ends the session. A final
+    // line without a newline is parsed at the genuine end of stdout; whatever it
+    // holds passes the same shape check as every other line.
+    const session = createJsonlTransport({
+      ...this.spawnOptions,
+      ...this.stopTiming,
+      onStdoutEnd: 'terminal',
+      finalLine: 'parse',
+      terminateTree: this.terminateTree,
+    });
     this.jsonl = session;
 
     session.onMessage((raw) => {
       if (this.jsonl !== session) return;
-      void this.handleInbound(raw);
+      this.handleInbound(raw);
     });
 
-    // The JSONL transport reports every end of the child exactly once, and only
-    // after the last stdout message, so a response the child wrote before
-    // exiting still settles its correlation before the session terminates.
-    // TODO(FACT-459): bound the stdout drain after exit (I2/O3 drain deadline); a descendant holding stdout keeps the session open until close.
-    session.onError((error) => {
+    // The end is reported exactly once, after the last stdout message, so a
+    // response the child wrote before exiting still settles its correlation
+    // before the session terminates. Only `disconnect()` and this handler
+    // detach a session before closing it, so an end that still finds its
+    // session current is one the host did not ask for.
+    void session.ended.then((end) => {
       if (this.jsonl !== session) return;
-      this.terminateSession(error);
+      const processName = this.spawnOptions.processName ?? this.spawnOptions.command;
+      this.terminateSession(new Error(`${processName} ${describeTransportEnd(end)}`));
     });
 
     // Replay any pre-connect subscriptions to the child process.
@@ -169,7 +248,7 @@ export class StdioServerTransport implements BusTransport {
         ? Array<{ nodeId: string; payload: unknown }>
         : boolean
   > {
-    const jsonl = this.writableJsonl();
+    const jsonl = this.writableSession();
     if (jsonl === null) {
       throw new Error('StdioServerTransport: not connected');
     }
@@ -192,12 +271,24 @@ export class StdioServerTransport implements BusTransport {
   }
 
   /**
-   * Kill the child process and release all resources.
-   * @returns Promise that resolves when the transport is disconnected
+   * End the current session on request: stop the child (and its process tree,
+   * unless opted out) and release all resources. A requested end is not an
+   * error, so `onDisconnected` is not called.
+   *
+   * A stop is one in-flight operation per session: a `disconnect()` that
+   * arrives while an earlier one is still pending, and one that finds no
+   * current session, waits for every session whose end has not yet been
+   * reported, and so never resolves before the child it stands for is gone.
+   * @returns Promise that resolves once the end of every session this transport
+   *   stopped was reported; the wait is bounded by the stop timing. An end that
+   *   may have left a process behind (an unobserved exit, a held pipe, an
+   *   unproven process group) is logged once per session: that process may still
+   *   run when the next session starts, which `connect()` does not wait for.
    */
   public async disconnect(): Promise<void> {
     const jsonl = this.jsonl;
     this.jsonl = null;
+    this.pendingConnect = undefined;
     this.handshakeComplete = false;
     this.terminalError = null;
 
@@ -208,7 +299,22 @@ export class StdioServerTransport implements BusTransport {
 
     this.correlations.cleanup();
 
-    jsonl?.close();
+    if (jsonl !== null) this.trackStop(jsonl);
+    await Promise.all(this.pendingStops);
+  }
+
+  /**
+   * Request the end of a session and keep it pending until its end is reported.
+   * @param session - Session that was detached from the transport.
+   */
+  private trackStop(session: IJsonlTransport): void {
+    const stop = session.close().then((end) => {
+      if (!mayHaveLeftProcesses(end)) return;
+      const processName = this.spawnOptions.processName ?? this.spawnOptions.command;
+      console.warn(`[${this.name}] ${processName} may have left processes running (${describeTransportEnd(end)})`);
+    });
+    this.pendingStops.add(stop);
+    void stop.finally(() => this.pendingStops.delete(stop));
   }
 
   /**
@@ -230,7 +336,6 @@ export class StdioServerTransport implements BusTransport {
   ): Promise<void> {
     const resolvedDeliveryClass = deliveryClass ?? this.localSubscriptions.get(subject)?.deliveryClass ?? 'relayable';
     this.localSubscriptions.set(subject, { priorities, filter, deliveryClass: resolvedDeliveryClass });
-
     this.sendSubscribeMessage(subject, filter, priorities, resolvedDeliveryClass);
   }
 
@@ -246,7 +351,7 @@ export class StdioServerTransport implements BusTransport {
     const wasSubscribed = this.localSubscriptions.delete(subject);
 
     if (wasSubscribed) {
-      this.writableJsonl()?.send({
+      this.writableSession()?.send({
         type: 'unsubscribe',
         subjects: { [subject]: [] },
       });
@@ -255,12 +360,12 @@ export class StdioServerTransport implements BusTransport {
 
   /**
    * Returns `true` when the subscribe-sync handshake has completed and the
-   * child can still receive writes. Agrees with `send()`: both stop at the
-   * observed child exit (code or signal), before the session is terminated.
+   * session still accepts writes. Agrees with `send()`: both stop once the
+   * JSONL transport blocks writing, from the observed child exit onwards.
    * @returns `true` if the transport can send messages
    */
   public isReady(): boolean {
-    return this.terminalError === null && this.handshakeComplete && this.writableJsonl() !== null;
+    return this.terminalError === null && this.handshakeComplete && this.writableSession() !== null;
   }
 
   /**
@@ -290,28 +395,24 @@ export class StdioServerTransport implements BusTransport {
   }
 
   /**
-   * Return the current JSONL session only while the child can still receive
-   * writes.
-   *
-   * Writing is blocked from the observed child exit onwards, although the
-   * session itself stays open until stdout closes: a descendant holding stdout
-   * delays `close` well past `exit`, and a write to the destroyed stdin would
-   * fail silently while its correlation kept waiting for a reply that can
-   * never come. Stdout keeps draining for requests that are already pending.
-   * @returns The session while the child's stdin is writable, otherwise `null`.
+   * The current session while it still accepts writes. The JSONL transport
+   * blocks writing from the observed child exit (or the first channel failure)
+   * onwards, while the session stays open until its end is reported: stdout
+   * keeps draining for pending requests, but a new write could never be
+   * answered. `send()` reports such a session as not connected; subscription
+   * changes are buffered for the next session and simply not written.
+   * @returns The session while its JSONL transport is writable, otherwise `null`.
    */
-  private writableJsonl(): IJsonlTransport | null {
-    const jsonl = this.jsonl;
-    return jsonl !== null && jsonl.process.stdin?.writable === true ? jsonl : null;
+  private writableSession(): IJsonlTransport | null {
+    return this.jsonl?.status === 'writable' ? this.jsonl : null;
   }
 
   /**
-   * Move the current session into a terminal failed state and release its
-   * JSONL transport.
+   * Move the current session into a terminal failed state. Its JSONL transport
+   * has already ended and released the child.
    * @param error - Failure that ended the session.
    */
   private terminateSession(error: Error): void {
-    const jsonl = this.jsonl;
     this.jsonl = null;
     this.handshakeComplete = false;
     this.terminalError = error;
@@ -322,9 +423,9 @@ export class StdioServerTransport implements BusTransport {
 
     this.correlations.cleanup();
 
-    jsonl?.close();
-
-    this.onDisconnected?.();
+    notifyObserver(this.onDisconnected, (error) => {
+      console.error(`[StdioServerTransport] onDisconnected observer threw`, error);
+    });
   }
 
   /**
@@ -335,9 +436,14 @@ export class StdioServerTransport implements BusTransport {
    * 2. Handle subscribe-sync-complete → resolve ready, send host sync-complete
    * 3. Handle correlation responses (request/broadcast responses)
    * 4. Fan out to application handlers
+   *
+   * Runs synchronously within the JSONL transport's delivery, so every handler
+   * registered when the message arrived has received it before the transport
+   * can report its end and the session terminates. Handlers settle on their own;
+   * one that rejects or throws affects no other.
    * @param raw - Parsed JSON value from the child's stdout
    */
-  private async handleInbound(raw: unknown): Promise<void> {
+  private handleInbound(raw: unknown): void {
     if (raw === null || typeof raw !== 'object' || typeof (raw as Record<string, unknown>).type !== 'string') {
       return;
     }
@@ -356,7 +462,9 @@ export class StdioServerTransport implements BusTransport {
       this.readyReject = null;
 
       // Send our own sync-complete so the child knows the host is ready too.
-      this.writableJsonl()?.send({ type: 'subscribe-sync-complete' });
+      // The handshake can be the last message a child wrote before it exited;
+      // its session then no longer accepts writes and ends on its own.
+      this.writableSession()?.send({ type: 'subscribe-sync-complete' });
 
       this.onConnected?.();
       return;
@@ -366,11 +474,13 @@ export class StdioServerTransport implements BusTransport {
       return;
     }
 
-    for (const handler of this.handlers) {
+    const context = { transportName: this.name };
+    for (const handler of [...this.handlers]) {
       try {
-        await handler(message, { transportName: this.name });
-      } catch {
         // Individual handler errors must not crash the inbound pipeline.
+        void Promise.resolve(handler(message, context)).catch(() => undefined);
+      } catch {
+        // A handler that throws synchronously is isolated the same way.
       }
     }
   }
@@ -389,11 +499,11 @@ export class StdioServerTransport implements BusTransport {
     priorities: number[] = [],
     deliveryClass: SubscriptionDeliveryClass = 'relayable',
   ): void {
-    const jsonl = this.writableJsonl();
-    if (jsonl === null) return;
+    const session = this.writableSession();
+    if (session === null) return;
 
     if (subject !== undefined) {
-      jsonl.send({
+      session.send({
         type: 'subscribe',
         subjects: { [subject]: priorities },
         deliveryClasses: { [subject]: deliveryClass },
@@ -417,7 +527,7 @@ export class StdioServerTransport implements BusTransport {
       }
     }
 
-    jsonl.send({
+    session.send({
       type: 'subscribe',
       subjects,
       deliveryClasses,

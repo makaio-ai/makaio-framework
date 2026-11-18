@@ -16,7 +16,6 @@ import type { CodexAppServerBus } from '../namespaces/index.js';
 import { CodexAppServerThread } from '../thread.js';
 import { CodexAppServerTurn } from '../turn.js';
 import type { JsonRpcClient } from '../utils/jsonRpcClient.js';
-import type { StdioTransport } from '../utils/createStdioTransport.js';
 import { type CodexAppServerConfig, type ApprovalPolicy, type SandboxMode, type ReasoningEffort } from './types.js';
 import { handleDynamicToolCallApprovalRequest, type ApprovalContext } from './approval-handlers.js';
 import { registerNotificationHandlers, registerServerRequestHandler } from './client-handlers.js';
@@ -25,7 +24,8 @@ import {
   type DynamicToolCallServerRequest,
   type DynamicToolCallResponse,
 } from '../dynamic-tool-handling.js';
-import { connectorTransport, initializeConnection, type ConnectionManagerContext } from './connection-manager.js';
+import type { ConnectionManagerContext } from './connection-manager.js';
+import { connectorTransport, initializeConnection, requestEnd, superviseGenerationEnd } from './connection-manager.js';
 import { resolveCodexApiKeyAccountLogin, type CodexApiKeyAccountLogin } from './account-login.js';
 import {
   abortCodexConnection,
@@ -33,7 +33,7 @@ import {
   closeCodexConnection,
   reportAfterCodexTermination,
   reportCodexShutdown,
-  requestedShutdownExitError,
+  requestedShutdownError,
   type CodexTerminalTeardownNote,
 } from './connector-shutdown.js';
 import { CommandInfoRegistry } from './command-info-registry.js';
@@ -48,12 +48,12 @@ import {
 export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus> {
   /** Lazy: initialised in initializeConnection(); public methods access via getJsonRpcClient(). */
   private jsonRpcClient?: JsonRpcClient;
-  /** Injected transport for tests; null means "create from subprocess on first connect". */
-  private readonly _injectedTransport?: StdioTransport;
+  /** Injected transport for tests; undefined means "create from subprocess on first connect". */
+  private readonly _injectedTransport?: CodexAppServerConfig['transport'];
   /** Injected JSON-RPC client for tests; bypasses subprocess creation entirely. */
   private readonly _injectedJsonRpcClient?: JsonRpcClient;
   /** Transport owned by this connector and safe to tear down after partial startup failures. */
-  private ownedTransport?: StdioTransport;
+  private ownedTransport?: CodexAppServerConfig['transport'];
   private readonly messageQueue = new UserMessageQueue();
   private thread?: CodexAppServerThread;
   private currentTurn?: CodexAppServerTurn;
@@ -114,6 +114,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     }
 
     this.connCtx = this.buildConnectionContext();
+    if (config.transport) superviseGenerationEnd(this.connCtx, config.transport);
     // buildTurnFlowContext deliberately mixes sourcing: config-sourced initial directives
     // (resumeAdapterSessionId — later consumed by suppressed resume — and nativeFork) are snapshot
     // from `config`, while getter-backed fields (model, approvalPolicy, reasoningEffort) are
@@ -154,7 +155,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
       generations: this.generations,
       registerClientHandlers: () => this.registerClientHandlers(),
       handleError: (error, terminate) => this.handleError(error, terminate),
-      finalizeRequestedShutdown: (code, terminate) => this.handleError(requestedShutdownExitError(code), terminate),
+      finalizeRequestedShutdown: (end) => this.handleError(requestedShutdownError(end), true),
     };
   }
 
@@ -401,7 +402,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
     if (this.isTerminated) return;
     this.isTerminated = true;
     abortCodexConnection({
-      closeClient: () => this.jsonRpcClient?.close(),
+      closeClient: () => requestEnd(this.connCtx),
       discardAuth: () => void (this.accountLogin = undefined),
       note: this.terminalTeardown,
     });
@@ -427,7 +428,7 @@ export class CodexAppServerConnector extends AIAgentConnector<CodexAppServerBus>
         archiveCodexThread(this.thread?.threadId, (id) =>
           this.jsonRpcClient?.request('thread/archive', { threadId: id }),
         ),
-      closeClient: () => this.jsonRpcClient?.close(),
+      closeClient: () => requestEnd(this.connCtx),
       discardAuth: () => void (this.accountLogin = undefined),
       note: this.terminalTeardown,
     });

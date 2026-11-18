@@ -1,0 +1,25 @@
+---
+"@makaio/framework": major
+"@makaio/runtime-node": patch
+---
+
+`createProcessLifecycle` no longer listens to raw child process events. Each run owns one JSONL transport (`onStdoutEnd: 'ignore'`, `finalLine: 'discard'`), and the transport's end report is the only event that ends a run, so a message the child wrote just before it exited is delivered before the run is reported as ended.
+
+- Readiness is the first stdout message that is a JSON object. Readiness and the health timeout have exactly one winner; a message after the timeout changes nothing.
+- A failed spawn, and any other end before readiness (an exit with code 0 included), rejects `start()` at once instead of at the health timeout. Once the child's exit is observed the health timeout no longer applies: a readiness line still in the pipe counts, and otherwise the end report rejects `start()` with the real cause.
+- `stop()` during `starting` aborts the readiness wait, removes its subscriptions and rejects `start()`. `stop()` drops a pending automatic restart.
+- `stop()` goes through the transport's bounded `close()`: `SIGTERM`, `SIGKILL` after the kill grace, then a bounded wait. Every end that may have left a process behind (an unobserved exit, for example because the signals were denied, a held pipe or an unproven process group) is logged as a warning, a requested stop included, instead of hanging `stop()` or passing silently. A `start()` after a health timeout waits for the run that is still stopping before it spawns (see the next changeset), so `stopped` is never reached while a run is left.
+- A ready run that ends unexpectedly with exit code 0 ends `stopped`; any other end, including one by a signal (read from the explicit `signal` field), ends `crashed`. An end requested through the exposed transport ends `stopped`.
+- Automatic restarts follow only an observed exit: after an unobserved exit the old child may still run, so the lifecycle stays `crashed` and does not restart (`withheld`, `exit-unobserved`), while an explicit `start()` stays allowed. The same holds when a process of the run may have outlived it: a pipe held past the drain deadline, or a process group not proven quiescent (`withheld`, `descendants-may-run`, with a warning). Automatic restarts are spaced and capped by the new `restartBudget` option (default: at most 5 restarts within 60 s, starting 500 ms after the end and doubling up to 10 s); once it is used up, the lifecycle stays where it is and logs a warning.
+- Every run carries a generation (`handle.generation`); a new run is spawned only after the previous one has ended, so the end of an old run never drives the state of a newer one.
+- `onStateChange`, `onReady` and `onExit` run once the step that caused them is complete (state, restart decision and the settlement of `start()`), in order and isolated from each other: an observer that throws is logged and no longer leaves `start()` pending. An observer may call `stop()` or `start()`; a `stop()` from the `crashed` notification now suppresses the restart decided in the same step, and a `stop()` from the `stopping` notification returns the stop in progress.
+- New options `stopTiming` (kill grace, exit observation and drain of every run), `terminateTree` (default `true`, so a stop reaches the child's descendants through its process group) and `signalPort`. New exported types: `ProcessRunOutcome`, `RunReadiness`, `RestartDecision`, `RestartPolicy`, `RestartBudgetOptions`. `ProcessRunOutcome.exitObserved` keeps watching a run whose end was `unobserved`, so a caller can wait for the old child before an explicit `start()`.
+- `@makaio/runtime-node`: a `bus-websocket` extension whose child the restart policy restarted receives the lifecycle `init` request again, like the first generation, and every end that was not requested is logged with its description. A restarted generation whose `init` request fails is stopped and the failure logged, as a failed first `init()` stops its child, instead of running uninitialised; the extension then stays stopped. `bus-stdio` children are stopped with the descriptor's `shutdownTimeoutMs` as kill grace, as `bus-websocket` children already were.
+
+**Breaking:**
+
+- The `shutdownTimeoutMs` option is replaced by `stopTiming.killGraceMs`.
+- `onExit` receives a `ProcessRunOutcome` (`generation`, `readiness`, the transport's `end` with separate exit code and signal, and the `restart` decision) instead of the exit code, and it is called once for every run, including runs that failed to start, timed out or were stopped.
+- `IJsonlTransport.process` is removed; the transport is the only owner of its child. Use `ended`, `exitObserved` and `status` instead.
+- A readiness message that is not a JSON object (an array, a string, a number, `null`) no longer counts: a child that only writes such a line now fails its start at the health timeout.
+- A stop from `crashed` now passes through `stopping`, and a clean exit of a ready run moves `running` → `stopped` directly instead of through `stopping`.
