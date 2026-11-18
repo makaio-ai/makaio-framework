@@ -4,9 +4,8 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { getRawSqlExecutor, type MakaioDatabase } from '@makaio/storage-drizzle';
-import { createDatabaseClient } from '@makaio/storage-drizzle/client';
 import { getMigrationsFolder } from '@makaio/storage-migrations';
-import { createPgBrandedTestDb } from '@makaio/test-utils/drizzle-harness';
+import { createPgBrandedTestDb, createTempDatabaseClient } from '@makaio/test-utils/drizzle-harness';
 import { runMigrations } from '@makaio/runtime-node';
 
 /**
@@ -57,7 +56,7 @@ async function assertTableAbsent(db: MakaioDatabase, tableName: string): Promise
 
 describe('runMigrations', () => {
   it('creates the expected post-migration schema', async () => {
-    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const { db, close } = await createTempDatabaseClient('db-migrations');
 
     try {
       await runMigrations(db);

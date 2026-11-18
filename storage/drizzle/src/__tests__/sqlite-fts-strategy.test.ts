@@ -11,10 +11,11 @@ import { sql } from 'drizzle-orm';
 import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { readMigrations } from '@makaio/storage-migrations';
 import { applyMigrations } from '@makaio/storage-migrations/apply-migrations';
-import { createDatabaseClient, type DatabaseClient } from '../client';
+import type { DatabaseClient } from '../client';
 import { sqliteStorageEngine } from '../engine/sqlite/engine';
 import { sqliteFtsSearchStrategy } from '../engine/sqlite/fts-strategy';
 import { getRawSqlExecutor } from '../raw-sql';
+import { createTempDatabaseClient } from './temp-database';
 
 /**
  * Stand-in messages table object. The SQLite strategy accepts and ignores the
@@ -28,7 +29,7 @@ const messagesTableStandIn = sqliteTable('messages', {
 let client: DatabaseClient;
 
 beforeAll(async () => {
-  client = await createDatabaseClient({ url: ':memory:' });
+  client = await createTempDatabaseClient('fts-strategy');
 
   // Central chain first (creates sessions/messages), then engine-owned
   // search-index provisioning — the boot ordering of runtime hosts.

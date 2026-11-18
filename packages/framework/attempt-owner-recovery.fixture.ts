@@ -198,7 +198,8 @@ export function captureWorkflowBusSecretCleanup(
 }
 export async function compose(codec: OutcomeCodec<number>) {
   const memory: ExecutionAttemptRepository<number> = createInMemoryAttemptRepository(codec);
-  const client = await createDatabaseClient({ url: ':memory:' });
+  // A file, not ':memory:': the libsql driver rejects in-memory URLs.
+  const client = await createDatabaseClient({ url: 'file:./compose.sqlite' });
   try {
     const sqlite: ExecutionAttemptRepository<number> = await createSqliteAttemptRepository(client.db, codec);
     const authority = new ExecutionAttemptAuthority(sqlite, { bootstrapTimeoutMs: 30_000 });

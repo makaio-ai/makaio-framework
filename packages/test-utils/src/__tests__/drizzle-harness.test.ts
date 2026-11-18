@@ -11,7 +11,14 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getRawSqlExecutor } from '@makaio/storage-drizzle';
-import { createDbCleanup, createPluginTestDb, createRestartableTempDb, createTempDb } from '../drizzle-harness.js';
+import {
+  createDbCleanup,
+  createPluginTestDb,
+  createRestartableTempDb,
+  createTempDatabaseClient,
+  createTempDb,
+} from '../drizzle-harness.js';
+import { executeTransaction } from '@makaio/storage-drizzle';
 
 describe('createRestartableTempDb', () => {
   it('hands out independent connections that share one committed store', async () => {
@@ -80,6 +87,53 @@ describe('createTempDb', () => {
     } finally {
       ctx.cleanup();
     }
+  });
+});
+
+describe('createTempDatabaseClient', () => {
+  it('keeps its data across transactions and removes the files on close, repeatedly', async () => {
+    const client = await createTempDatabaseClient('harness-temp-client');
+    const rawSql = getRawSqlExecutor(client.db);
+    try {
+      await rawSql.run(sql`CREATE TABLE temp_client_test (id TEXT PRIMARY KEY)`);
+      // The libsql driver hands its connection to the transaction; the data
+      // written before it must still be there afterwards.
+      await executeTransaction(client.db, async (tx) => {
+        await tx.run(sql`INSERT INTO temp_client_test (id) VALUES ('committed')`);
+      });
+      expect(await rawSql.all(sql`SELECT id FROM temp_client_test`)).toEqual([{ id: 'committed' }]);
+      expect(existsSync(client.dbPath)).toBe(true);
+    } finally {
+      await client.close();
+    }
+
+    expect(existsSync(client.dbPath)).toBe(false);
+    expect(existsSync(`${client.dbPath}-wal`)).toBe(false);
+    await expect(Promise.resolve(client.close())).resolves.toBeUndefined();
+  });
+});
+
+describe('createTempDatabaseClient close timing', () => {
+  it('keeps the files while a transaction holds the handle and removes them once the close settled', async () => {
+    const client = await createTempDatabaseClient('harness-temp-client-pending');
+    const inTransaction = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const transaction = executeTransaction(client.db, async (tx) => {
+      await tx.run(sql`SELECT 1`);
+      inTransaction.resolve();
+      await release.promise;
+    });
+    await inTransaction.promise;
+
+    const closing = client.close();
+    await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    // The connection is still in use by the transaction: its file must stay.
+    expect(existsSync(client.dbPath)).toBe(true);
+
+    release.resolve();
+    await transaction;
+    await closing;
+    expect(existsSync(client.dbPath)).toBe(false);
   });
 });
 

@@ -16,8 +16,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { getRawSqlExecutor } from '@makaio/storage-drizzle';
-import { createDatabaseClient } from '@makaio/storage-drizzle/client';
-import { createPgBrandedTestDb } from '@makaio/test-utils/drizzle-harness';
+import { createPgBrandedTestDb, createTempDatabaseClient } from '@makaio/test-utils/drizzle-harness';
 import { runBootExtensionMigrations } from '../boot-extension-migrations.js';
 
 // ---------------------------------------------------------------------------
@@ -110,7 +109,7 @@ describe('runBootExtensionMigrations', () => {
   });
 
   it('applies sqlite extension chains and keeps the historical ledger name', async () => {
-    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const { db, close } = await createTempDatabaseClient('boot-extension-migrations');
     try {
       await runBootExtensionMigrations(db, [
         {
@@ -167,7 +166,7 @@ describe('runBootExtensionMigrations', () => {
   });
 
   it('rethrows non-mismatch read failures unchanged', async () => {
-    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const { db, close } = await createTempDatabaseClient('boot-extension-migrations');
     try {
       const nonexistentPath = path.join(os.tmpdir(), `makaio-nonexistent-${randomUUID()}`);
 
@@ -223,7 +222,7 @@ describe('runBootExtensionMigrations', () => {
   });
 
   it('falls back to migrationsPath when migrationsPathByDialect has no entry for the dialect', async () => {
-    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const { db, close } = await createTempDatabaseClient('boot-extension-migrations');
     try {
       // Only a postgres override is declared; on a sqlite handle the runner
       // must fall back to migrationsPath instead of failing or skipping.
@@ -256,7 +255,7 @@ describe('runBootExtensionMigrations', () => {
   // -------------------------------------------------------------------------
 
   it('object-form: sqlite host applies the sqlite chain and keeps the historical ledger', async () => {
-    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const { db, close } = await createTempDatabaseClient('boot-extension-migrations');
     const pgDir = createPostgresExtensionFixture();
     try {
       // Both dialects are declared; on a sqlite handle the runner must select
@@ -324,7 +323,7 @@ describe('runBootExtensionMigrations', () => {
   });
 
   it('object-form without a sqlite entry on a sqlite host falls back to migrationsPath and fails loud at the journal-dialect guard', async () => {
-    const { db, close } = await createDatabaseClient({ url: ':memory:' });
+    const { db, close } = await createTempDatabaseClient('boot-extension-migrations');
     const pgDir = createPostgresExtensionFixture();
     try {
       // No sqlite entry; the singular fallback points at the postgres chain.

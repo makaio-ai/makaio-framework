@@ -95,6 +95,7 @@ export { sqliteStorageEngine } from './engine/sqlite/engine';
 // build their own classifiers from. Consumers go through StorageEngine.errors.
 export { isSqliteDuplicateObjectError, isSqliteUniqueViolationError, readErrorCode, someInCauseChain } from './errors';
 
+export { ReentrantOperationError } from './reentrant-operation-error';
 export { acquireTransactionLocks, type TransactionLockTransaction } from './transaction-locks';
 export {
   executeTransaction,

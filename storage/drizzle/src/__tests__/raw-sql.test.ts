@@ -7,8 +7,9 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
-import { createDatabaseClient, type DatabaseClient } from '../client';
+import type { DatabaseClient } from '../client';
 import { getRawSqlExecutor, RAW_SQL_EXECUTOR } from '../raw-sql';
+import { createTempDatabaseClient } from './temp-database';
 
 describe('getRawSqlExecutor', () => {
   let openClients: DatabaseClient[] = [];
@@ -25,7 +26,7 @@ describe('getRawSqlExecutor', () => {
    * @returns The tracked client.
    */
   async function createTrackedClient(): Promise<DatabaseClient> {
-    const client = await createDatabaseClient({ url: ':memory:' });
+    const client = await createTempDatabaseClient('raw-sql');
     openClients.push(client);
     return client;
   }

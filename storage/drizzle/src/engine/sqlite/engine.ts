@@ -31,7 +31,8 @@ const FOREIGN_KEYS_OFF_REQUEST = /^[ \t]*PRAGMA[ \t]+foreign_keys[ \t]*=[ \t]*OF
  *
  * This is the default engine: it deliberately omits {@link StorageEngine.matchesUrl}
  * and serves every database URL no registered engine claims (local `file:`
- * and `:memory:` databases as well as remote libSQL/Turso connections).
+ * databases and, under Bun only, in-memory databases, as well as remote
+ * libSQL/Turso connections).
  *
  * Migration behavior keeps Drizzle's historical SQLite contracts byte-for-byte
  * (`__drizzle_migrations` ledger name and DDL shape, bare `BEGIN`,

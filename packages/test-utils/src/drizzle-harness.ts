@@ -2,7 +2,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { createDatabaseClient } from '@makaio/storage-drizzle/client';
+import { createDatabaseClient, type DatabaseClient } from '@makaio/storage-drizzle/client';
 import {
   brandDatabase,
   findStorageEngine,
@@ -13,7 +13,7 @@ import {
   type RawSqlSession,
   type StorageEngine,
 } from '@makaio/storage-drizzle';
-import { beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
+import { beforeAll, beforeEach, afterEach, afterAll, onTestFinished } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -152,6 +152,79 @@ export async function createTempDb(name: string): Promise<TestDbContext> {
   }
   const cleanup = createDbCleanup(() => {}, close, dbPath);
   return { db, dbPath, exec: (query) => rawSql.run(query), close, cleanup };
+}
+
+/** A {@link DatabaseClient} on a temporary database file that its `close()` removes. */
+export interface TempDatabaseClient extends DatabaseClient {
+  /** Absolute path of the temporary database file. */
+  readonly dbPath: string;
+}
+
+/**
+ * Create a database client on a fresh temporary SQLite file.
+ *
+ * The replacement for in-memory test databases: the libsql driver hands its
+ * connection to every transaction, so an in-memory database does not survive
+ * one and the factory rejects in-memory URLs. A file is shared by every
+ * connection of the handle.
+ *
+ * The returned client is a drop-in {@link DatabaseClient}: `close()` closes
+ * the connection, then deletes the database file and its WAL sidecars, and
+ * may be called repeatedly. A close that fails or waits for an open
+ * transaction keeps the files until the connection is closed.
+ * @param name - Service name used in the temporary file name.
+ * @returns A client whose `close()` also removes the database files.
+ */
+export async function createTempDatabaseClient(name: string): Promise<TempDatabaseClient> {
+  const dbPath = path.join(os.tmpdir(), `makaio-${name}-test-${crypto.randomUUID()}.db`);
+  const client = await createDatabaseClient({ url: `file:${dbPath}` });
+  return {
+    db: client.db,
+    dialect: client.dialect,
+    dbPath,
+    close: createFileRemovingClose(client, () => removeDatabaseFiles(dbPath)),
+  };
+}
+
+/**
+ * Wrap a client's `close()` so the files are removed once the connection is closed.
+ *
+ * Every call goes to the client's own `close()`: idempotency, retry after a
+ * failed release and the rejection of a close from inside a transaction live
+ * there, and a result cached here would outlive a failure the client lets be
+ * retried. Removal follows the client's timing (synchronously when the close
+ * completes synchronously, once it settled when it had to wait for an open
+ * transaction) and only after a close that succeeded: a close that failed or
+ * was rejected leaves the handle open, so its files stay. Removal is idempotent,
+ * so repeated calls simply repeat it.
+ * @param client - Client whose `close()` is wrapped.
+ * @param removeFiles - Removal of the client's database files.
+ * @returns A `close()` that is safe to call repeatedly.
+ */
+function createFileRemovingClose(client: DatabaseClient, removeFiles: () => void): DatabaseClient['close'] {
+  return () => {
+    const result = client.close();
+    if (result instanceof Promise) return result.then(removeFiles);
+    removeFiles();
+    return result;
+  };
+}
+
+/**
+ * Open a temporary database that the running test tears down itself.
+ *
+ * Registers the client's `close()` (which also removes the database files) as
+ * the current test's `onTestFinished` hook, so a `beforeEach` or test body can
+ * open a database without a matching `afterEach`. It needs a running test:
+ * suite-level setup (`beforeAll`) owns its own teardown through
+ * {@link createTempDatabaseClient}.
+ * @param name - Service name used in the temporary file name.
+ * @returns A client that is closed and deleted when the current test finishes.
+ */
+export async function useTempDatabaseClient(name: string): Promise<TempDatabaseClient> {
+  const client = await createTempDatabaseClient(name);
+  onTestFinished(() => client.close());
+  return client;
 }
 
 /**

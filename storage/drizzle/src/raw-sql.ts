@@ -53,12 +53,27 @@ export interface RawSqlExecutor extends RawSqlSession {
    * checked-out `pool.connect()` client that is always released — returned to
    * the pool on success, destroyed via `release(true)` when the callback
    * rejects so a poisoned connection (open or aborted transaction) never
-   * re-enters the pool. SQLite: the single connection (trivial).
+   * re-enters the pool. SQLite: the handle's connection, held exclusively —
+   * statements issued on the handle from outside `fn` (and other sessions or
+   * transactions) wait until `fn` settled, so raw `BEGIN`/`COMMIT` neither
+   * collides with them nor swallows them. Like a transaction callback, `fn`
+   * contains database work only and must not await work started outside it
+   * that uses the same handle.
    * @param fn - Work to execute against the pinned session.
    * @returns The value resolved by `fn`.
    * @typeParam T - Result type produced by the session callback.
    */
   withSession<T>(fn: (session: RawSqlSession) => Promise<T>): Promise<T>;
+
+  /**
+   * Whether the calling async context currently holds the handle exclusively,
+   * that is, runs inside a transaction callback or a `withSession` callback of
+   * this handle. Work that would queue behind that holder from inside it waits
+   * for itself. Engines whose sessions do not hold a handle-wide lock (the
+   * Postgres engine pins a pooled connection instead) omit it.
+   * @returns `true` when the caller holds the handle.
+   */
+  readonly heldByCaller?: () => boolean;
 }
 
 /**
@@ -151,14 +166,43 @@ function toRowsAffected(result: unknown): number {
 }
 
 /**
+ * Exclusive access to a SQLite handle for the duration of one piece of work.
+ *
+ * While the work runs, statements issued from outside it wait; statements it
+ * issues itself are never held back. Implemented per handle by the engine's
+ * serialization gate.
+ */
+export interface SqliteHandleExclusivity {
+  /**
+   * Whether the calling async context currently holds the handle.
+   * @returns `true` while the caller runs inside the holder's work.
+   */
+  heldByCaller(): boolean;
+
+  /**
+   * Run work as the only user of the handle.
+   * @param work - Database work to run exclusively.
+   * @returns Whatever `work` resolves to.
+   * @typeParam T - Result type of the work.
+   */
+  exclusive<T>(work: () => Promise<T>): Promise<T>;
+}
+
+/**
  * Create a {@link RawSqlExecutor} over a native SQLite driver handle.
  *
- * SQLite has a single connection, so `withSession` is trivial: the standalone
- * statement surface and the pinned session are the same connection.
+ * The standalone statement surface and the pinned session are the same
+ * connection; `withSession` holds the handle exclusively so a raw transaction
+ * is serialized with every other statement and transaction on it.
  * @param native - Concrete driver handle exposing the raw `run`/`all` API.
+ * @param handle - Exclusive access to the handle. Omitted for hand-rolled
+ *   handles that carry no serialization; their sessions are not serialized.
  * @returns Executor delegating to the native driver.
  */
-export function createSqliteRawSqlExecutor(native: SqliteRawDatabase): RawSqlExecutor {
+export function createSqliteRawSqlExecutor(
+  native: SqliteRawDatabase,
+  handle?: SqliteHandleExclusivity,
+): RawSqlExecutor {
   const session: RawSqlSession = {
     async run(query: SQL): Promise<{ rowsAffected: number }> {
       // Awaiting tolerates both libsql's promise and bun-sqlite's sync result.
@@ -175,9 +219,22 @@ export function createSqliteRawSqlExecutor(native: SqliteRawDatabase): RawSqlExe
     run: session.run,
     all: session.all,
     async withSession<T>(fn: (pinned: RawSqlSession) => Promise<T>): Promise<T> {
-      return fn(session);
+      return handle === undefined ? fn(session) : handle.exclusive(() => fn(session));
     },
+    ...(handle === undefined ? {} : { heldByCaller: () => handle.heldByCaller() }),
   };
+}
+
+/**
+ * Whether the calling async context holds a factory-created handle exclusively.
+ *
+ * Reads the attached executor only: hand-rolled handles carry no
+ * serialization, so nothing can hold them.
+ * @param db - Database handle to probe.
+ * @returns `true` when the caller runs inside a transaction or raw session of the handle.
+ */
+export function isHandleHeldByCaller(db: MakaioDatabase): boolean {
+  return (db as RawSqlExecutorCarrier)[RAW_SQL_EXECUTOR]?.heldByCaller?.() ?? false;
 }
 
 /**
