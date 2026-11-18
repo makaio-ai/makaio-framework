@@ -13,6 +13,11 @@
  * - Test E: fire-and-forget ctx.next() propagates downstream result
  * - Test F: fire-and-forget ctx.next() propagates downstream errors
  * - Test G: remote NoHandlerError falls through to local handler (real registry on both sides)
+ * - Test H: a peer advertising several priorities receives one hop per chain, so without a
+ *   route back to the caller each of its handlers runs at most once
+ * - Test I: a peer's covered lower entry still bounds the cursor sent to the next transport
+ * - Test J: a relaying node never forwards a cursor above the one it was entered with
+ * - Test K: thousands of covered entries are walked past without exhausting the call stack
  */
 
 import { describe, it, expect } from 'vitest';
@@ -550,6 +555,360 @@ describe('Test G: remote NoHandlerError falls through to lower-priority local ha
       busA.disconnect();
       busB.disconnect();
       cleanupB300();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test H: a peer advertising several priorities receives one hop per chain
+//
+// busB runs middleware at 300 and 200 and advertises both priorities, so busA's
+// merged list holds two entries for the same transport. The first hop already runs
+// busB's whole chain below the cursor; a second hop for the 200 entry would run
+// busB's 200 middleware again. busB has no route back to busA, so its chain ends
+// with NoHandlerError and busA continues with its own remaining entries.
+// ---------------------------------------------------------------------------
+
+describe('Test H: a peer with several advertised priorities is hopped once per chain', () => {
+  /**
+   * Wire busA and busB with busB running middleware at 300 and 200 that only delegates.
+   * @param label - Transport pair label, unique per test
+   * @param executionOrder - Receives one entry per handler execution
+   * @param middleware - Optional override for busB's middleware body
+   * @returns Both buses, the A-to-B request messages, and a cleanup function
+   */
+  function setupPeerWithTwoTiers(
+    label: string,
+    executionOrder: string[],
+    middleware?: (tier: string) => void,
+  ): {
+    busA: ReturnType<typeof createBusInstance>;
+    requestsToB: BusRequestMessage[];
+    cleanup: () => void;
+  } {
+    const requestsToB: BusRequestMessage[] = [];
+    const { sideA, sideB } = createBidirectionalTransportPair({
+      label,
+      spy: (message, direction) => {
+        if (direction === 'a-to-b' && message.type === 'request') requestsToB.push(message as BusRequestMessage);
+      },
+    });
+
+    const busA = createBusInstance({ context: createBusContext() });
+    const busB = createBusInstance({ context: createBusContext() });
+    registerCursorNamespace(busA, busB);
+
+    const cleanups = [300, 200].map((priority) =>
+      busB.on(
+        CursorSubjects.compute,
+        async (ctx) => {
+          executionOrder.push(`busB-${priority}`);
+          middleware?.(`busB-${priority}`);
+          await ctx.next();
+        },
+        { priority },
+      ),
+    );
+
+    busA.registerTransport(sideA);
+    busB.registerTransport(sideB);
+
+    // The priority set busB advertises for its two handlers.
+    busA.getContext().remoteRequestHandlers.set('cursorE2e.compute', [
+      { transport: sideA.name, priority: 300 },
+      { transport: sideA.name, priority: 200 },
+    ]);
+
+    return {
+      busA,
+      requestsToB,
+      cleanup: () => {
+        busA.disconnect();
+        busB.disconnect();
+        for (const cleanup of cleanups) cleanup();
+      },
+    };
+  }
+
+  it('runs each peer handler once before falling through to the local handler', async () => {
+    const executionOrder: string[] = [];
+    const { busA, requestsToB, cleanup } = setupPeerWithTwoTiers('h-fallthrough', executionOrder);
+
+    const cleanupA100 = busA.on(
+      CursorSubjects.compute,
+      (ctx) => {
+        executionOrder.push('busA-100');
+        ctx.setResult({ result: 100, handledBy: 'busA-100' });
+      },
+      { priority: 100 },
+    );
+
+    try {
+      const result = await busA.request(CursorSubjects.compute, { value: 1 });
+
+      expect(executionOrder).toEqual(['busB-300', 'busB-200', 'busA-100']);
+      expect(result.handledBy).toBe('busA-100');
+      expect(requestsToB).toHaveLength(1);
+    } finally {
+      cleanupA100();
+      cleanup();
+    }
+  });
+
+  it('runs each peer handler once and throws NoHandlerError when nothing handles the request', async () => {
+    const executionOrder: string[] = [];
+    const { busA, requestsToB, cleanup } = setupPeerWithTwoTiers('h-nofallback', executionOrder);
+
+    try {
+      await expect(busA.request(CursorSubjects.compute, { value: 1 })).rejects.toBeInstanceOf(NoHandlerError);
+
+      expect(executionOrder).toEqual(['busB-300', 'busB-200']);
+      expect(requestsToB).toHaveLength(1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('does not re-send to the peer after its first hop failed', async () => {
+    const executionOrder: string[] = [];
+    const { busA, requestsToB, cleanup } = setupPeerWithTwoTiers('h-failed-hop', executionOrder, (tier) => {
+      if (tier === 'busB-300') throw new Error('peer middleware failed');
+    });
+
+    try {
+      // Whether a failed remote hop falls through to other handlers is a separate
+      // contract; this test pins only that the peer is not asked a second time.
+      await busA.request(CursorSubjects.compute, { value: 1 }).catch(() => undefined);
+
+      expect(executionOrder).toEqual(['busB-300']);
+      expect(requestsToB).toHaveLength(1);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test I: a covered entry still bounds the next transport's cursor
+//
+// busA advertises 300 and 200, busC advertises 200 only. busX hops to busA once,
+// which runs busA's 300 and 200 middleware; busA's 200 entry is covered, not sent.
+// busC's hop must start below the 200 tier the walk already passed (cursor 201),
+// so busC's unadvertised 250 handler cannot run after busA's 200 handler.
+// ---------------------------------------------------------------------------
+
+describe('Test I: a covered entry bounds the cursor of the next transport', () => {
+  it('sends the next transport a cursor below the covered priority', async () => {
+    const executionOrder: string[] = [];
+    const requestsToC: BusRequestMessage[] = [];
+
+    const busX = createBusInstance({ context: createBusContext() });
+    const busA = createBusInstance({ context: createBusContext() });
+    const busC = createBusInstance({ context: createBusContext() });
+    registerCursorNamespace(busX, busA, busC);
+
+    const pairXA = createBidirectionalTransportPair({ label: 'i-xa' });
+    const pairXC = createBidirectionalTransportPair({
+      label: 'i-xc',
+      spy: (message, direction) => {
+        if (direction === 'a-to-b' && message.type === 'request') requestsToC.push(message as BusRequestMessage);
+      },
+    });
+    busX.registerTransport(pairXA.sideA);
+    busA.registerTransport(pairXA.sideB);
+    busX.registerTransport(pairXC.sideA);
+    busC.registerTransport(pairXC.sideB);
+
+    const cleanups = [
+      ...[300, 200].map((priority) =>
+        busA.on(
+          CursorSubjects.compute,
+          async (ctx) => {
+            executionOrder.push(`busA-${priority}`);
+            await ctx.next();
+          },
+          { priority },
+        ),
+      ),
+      // Registered on busC but not yet advertised to busX.
+      busC.on(
+        CursorSubjects.compute,
+        async (ctx) => {
+          executionOrder.push('busC-250');
+          await ctx.next();
+        },
+        { priority: 250 },
+      ),
+      busC.on(
+        CursorSubjects.compute,
+        (ctx) => {
+          executionOrder.push('busC-200');
+          ctx.setResult({ result: 200, handledBy: 'busC-200' });
+        },
+        { priority: 200 },
+      ),
+    ];
+
+    busX.getContext().remoteRequestHandlers.set('cursorE2e.compute', [
+      { transport: pairXA.sideA.name, priority: 300 },
+      { transport: pairXA.sideA.name, priority: 200 },
+      { transport: pairXC.sideA.name, priority: 200 },
+    ]);
+
+    try {
+      const result = await busX.request(CursorSubjects.compute, { value: 1 });
+
+      expect(result.handledBy).toBe('busC-200');
+      expect(executionOrder).toEqual(['busA-300', 'busA-200', 'busC-200']);
+      expect(requestsToC).toHaveLength(1);
+      expect(requestsToC[0].priority).toBe(201);
+    } finally {
+      busX.disconnect();
+      busA.disconnect();
+      busC.disconnect();
+      for (const cleanup of cleanups) cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test J: a relaying node never widens the cursor it was entered with
+//
+// busU runs its 300 middleware and hops to busN with cursor 300. busN skips its own
+// 400 handler and relays to busC. The entry preceding busC in busN's list is that
+// skipped 400 handler; forwarding its priority would let busC's unadvertised 350
+// handler run after busU's walk already passed 300.
+// ---------------------------------------------------------------------------
+
+describe('Test J: a relaying node forwards at most its incoming cursor', () => {
+  it('clamps the relayed cursor to the incoming cursor', async () => {
+    const executionOrder: string[] = [];
+    const requestsToC: BusRequestMessage[] = [];
+
+    const busU = createBusInstance({ context: createBusContext() });
+    const busN = createBusInstance({ context: createBusContext() });
+    const busC = createBusInstance({ context: createBusContext() });
+    registerCursorNamespace(busU, busN, busC);
+
+    const pairUN = createBidirectionalTransportPair({ label: 'j-un' });
+    const pairNC = createBidirectionalTransportPair({
+      label: 'j-nc',
+      spy: (message, direction) => {
+        if (direction === 'a-to-b' && message.type === 'request') requestsToC.push(message as BusRequestMessage);
+      },
+    });
+    busU.registerTransport(pairUN.sideA);
+    busN.registerTransport(pairUN.sideB);
+    busN.registerTransport(pairNC.sideA);
+    busC.registerTransport(pairNC.sideB);
+
+    /**
+     * Register a handler that records its execution and delegates.
+     * @param bus - Bus to register on
+     * @param label - Execution label, also used as the priority suffix
+     * @param priority - Handler priority
+     * @returns Cleanup function
+     */
+    const delegate = (bus: ReturnType<typeof createBusInstance>, label: string, priority: number): (() => void) =>
+      bus.on(
+        CursorSubjects.compute,
+        async (ctx) => {
+          executionOrder.push(label);
+          await ctx.next();
+        },
+        { priority },
+      );
+
+    const cleanups = [
+      delegate(busU, 'busU-300', 300),
+      delegate(busN, 'busN-400', 400),
+      // Registered on busC but not yet advertised to busN.
+      delegate(busC, 'busC-350', 350),
+      busC.on(
+        CursorSubjects.compute,
+        (ctx) => {
+          executionOrder.push('busC-200');
+          ctx.setResult({ result: 200, handledBy: 'busC-200' });
+        },
+        { priority: 200 },
+      ),
+    ];
+
+    busU.getContext().remoteRequestHandlers.set('cursorE2e.compute', [{ transport: pairUN.sideA.name, priority: 200 }]);
+    busN.getContext().remoteRequestHandlers.set('cursorE2e.compute', [{ transport: pairNC.sideA.name, priority: 200 }]);
+    // busN dispatches an inbound request with first-hop-only routes excluded; busC's route is relayable.
+    busN
+      .getContext()
+      .remoteSubscriptionDeliveryClasses.set('cursorE2e.compute', new Map([[pairNC.sideA.name, 'relayable']]));
+
+    try {
+      const result = await busU.request(CursorSubjects.compute, { value: 1 });
+
+      expect(result.handledBy).toBe('busC-200');
+      expect(executionOrder).toEqual(['busU-300', 'busC-200']);
+      expect(requestsToC).toHaveLength(1);
+      expect(requestsToC[0].priority).toBe(300);
+    } finally {
+      busU.disconnect();
+      busN.disconnect();
+      busC.disconnect();
+      for (const cleanup of cleanups) cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test K: a peer advertising thousands of priorities still reaches the fallback
+//
+// busB advertises one entry per priority it serves. After busA's single hop to busB
+// falls through, every remaining busB entry is covered. Walking past them must not
+// grow the call stack per entry, or a large advertised priority set exhausts the
+// stack before the lower-priority local fallback runs.
+// ---------------------------------------------------------------------------
+
+describe('Test K: covered entries are walked past without per-entry stack growth', () => {
+  it('falls through thousands of covered entries to the local fallback', async () => {
+    const advertisedTiers = 20_000;
+    const requestsToB: BusRequestMessage[] = [];
+    const { sideA, sideB } = createBidirectionalTransportPair({
+      label: 'k-many-tiers',
+      spy: (message, direction) => {
+        if (direction === 'a-to-b' && message.type === 'request') requestsToB.push(message as BusRequestMessage);
+      },
+    });
+
+    const busA = createBusInstance({ context: createBusContext() });
+    const busB = createBusInstance({ context: createBusContext() });
+    registerCursorNamespace(busA, busB);
+
+    const cleanupA0 = busA.on(
+      CursorSubjects.compute,
+      (ctx) => {
+        ctx.setResult({ result: 0, handledBy: 'busA-0' });
+      },
+      { priority: 0 },
+    );
+
+    busA.registerTransport(sideA);
+    busB.registerTransport(sideB);
+
+    busA.getContext().remoteRequestHandlers.set(
+      'cursorE2e.compute',
+      Array.from({ length: advertisedTiers }, (_, tier) => ({
+        transport: sideA.name,
+        priority: advertisedTiers - tier,
+      })),
+    );
+
+    try {
+      const result = await busA.request(CursorSubjects.compute, { value: 1 });
+
+      expect(result.handledBy).toBe('busA-0');
+      expect(requestsToB).toHaveLength(1);
+    } finally {
+      busA.disconnect();
+      busB.disconnect();
+      cleanupA0();
     }
   });
 });

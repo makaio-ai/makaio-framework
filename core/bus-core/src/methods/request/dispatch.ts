@@ -3,6 +3,8 @@ import type { RequestContext, SubjectDefinition } from '@makaio/core';
 import { getMatchingHandlerEntries, getMatchingRemoteEntries } from './getMatchingHandlers.js';
 import {
   buildMergedList,
+  markCoveredRemoteHops,
+  nextExecutableEntry,
   resolveRemoteCursor,
   resolveRemoteEntries,
   resolveStartIndex,
@@ -74,7 +76,8 @@ export interface DispatchOutcome {
 /**
  * Execute one step in the merged dispatch chain.
  *
- * Picks the entry at `index`, executes it, and returns the outcome. When the list is
+ * Picks the first executable entry at or after `index` — covered entries are passed
+ * over as cursor boundaries — executes it, and returns the outcome. When the list is
  * exhausted, any `firstTransportError` collected during remote dispatch is rethrown so
  * a local wrapper's `ctx.next()` rejects and its compensation runs.
  * @param context - Bus context
@@ -95,7 +98,9 @@ async function stepDispatch(
   options: DispatchOptions,
   firstTransportError?: unknown,
 ): Promise<DispatchOutcome> {
-  if (index >= merged.length) {
+  // Covered entries are skipped in a loop, not one recursive step each: see `nextExecutableEntry`.
+  const next = nextExecutableEntry(merged, index);
+  if (next === undefined) {
     // Chain exhausted — rethrow the first transport error so a local wrapper's
     // `ctx.next()` rejects and its compensation runs.
     if (firstTransportError !== undefined) {
@@ -112,7 +117,7 @@ async function stepDispatch(
     throw new TimeoutError(subjectDefinition.subject, options.timeout);
   }
 
-  const entry = merged[index];
+  const { entry, index: entryIndex } = next;
 
   if (entry.kind === 'local') {
     return executeLocalEntry(
@@ -121,7 +126,7 @@ async function stepDispatch(
       payload,
       entry,
       merged,
-      index + 1,
+      entryIndex + 1,
       options,
       firstTransportError,
     );
@@ -133,7 +138,7 @@ async function stepDispatch(
     payload,
     entry,
     merged,
-    index + 1,
+    entryIndex + 1,
     options,
     firstTransportError,
   );
@@ -277,7 +282,10 @@ async function executeLocalEntry(
 // True per-entry interleaving would require a round-trip per handler, which
 // is impractical for network latency. The priority cursor is a deliberate
 // trade-off: correct priority ordering at the tier level, batched execution
-// within each remote hop.
+// within each remote hop. Because one hop covers the remote node's whole chain
+// below the cursor, a walk sends each transport at most one hop; the later
+// entries a peer advertises for its lower priorities are marked covered before the
+// walk starts (`markCoveredRemoteHops`): never re-sent, but kept as cursor boundaries.
 /**
  * Forward the request to a remote transport.
  *
@@ -346,8 +354,8 @@ async function executeRemoteEntry(
     messageId: options.messageId,
     timeout: remainingTimeout,
     // The cursor tells the remote node "start from handlers strictly below
-    // this value". It is normally the priority of the last locally executed
-    // entry (merged[nextIndex - 2]).
+    // this value". It is normally the priority of the entry the walk passed
+    // just before this one (merged[nextIndex - 2]), covered entries included.
     priority: resolveRemoteCursor(merged, nextIndex, entry.priority, options.priority),
     deadline,
     // Carry the caller's readiness budget so the next hop gates on it rather than
@@ -466,5 +474,7 @@ export async function dispatch(
   const startIndex = resolveStartIndex(merged, options.priority);
   if (startIndex === -1 || merged.length === 0) return { handled: false };
 
-  return stepDispatch(context, subjectDefinition, payload, merged, startIndex, dispatchOptions);
+  // One hop per transport and walk: its first entry already runs the peer's whole chain.
+  const walk = markCoveredRemoteHops(merged, startIndex);
+  return stepDispatch(context, subjectDefinition, payload, walk, startIndex, dispatchOptions);
 }
