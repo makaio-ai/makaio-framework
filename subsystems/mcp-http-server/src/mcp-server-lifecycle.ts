@@ -1,5 +1,6 @@
 import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import { JoinedOperation } from '@makaio/utils';
 
 /**
  * Wrap an optional notification so it is delivered at most once.
@@ -30,8 +31,11 @@ export function once(notify: (() => void) | undefined): () => void {
  * @returns A close function returning the shared teardown promise.
  */
 export function onceAsync(teardown: () => Promise<void>): () => Promise<void> {
-  let closePromise: Promise<void> | undefined;
-  return () => (closePromise ??= teardown());
+  const closing = new JoinedOperation<void>();
+  // Published before the teardown starts: its synchronous prefix closes the
+  // transport, whose `onclose` reaches the caller's own callback, and that
+  // callback may call the returned function again.
+  return () => closing.join(teardown);
 }
 
 /**

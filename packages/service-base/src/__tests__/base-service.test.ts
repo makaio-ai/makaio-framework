@@ -208,6 +208,32 @@ class HandlerCleanupOrderingService extends BaseService {
   }
 }
 
+/** A service whose own lifecycle hooks call back into the lifecycle they run in. */
+class ReentrantLifecycleService extends BaseService {
+  public readonly steps: string[] = [];
+  public nestedInit: Promise<void> | undefined;
+  public nestedDestroy: Promise<void> | undefined;
+  public readonly destroyGate = Promise.withResolvers<void>();
+
+  public constructor() {
+    super(createBusInstance());
+  }
+
+  protected override onInit(): void {
+    this.steps.push('init');
+    // Runs in the synchronous prefix of the initialization, before it has returned.
+    this.nestedInit = this.init();
+  }
+
+  protected override async onDestroy(): Promise<void> {
+    this.steps.push('destroy-start');
+    // Runs in the synchronous prefix of the teardown, before it has returned.
+    this.nestedDestroy = this.destroy();
+    await this.destroyGate.promise;
+    this.steps.push('destroy-finish');
+  }
+}
+
 describe('BaseService lifecycle', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -395,5 +421,37 @@ describe('BaseService lifecycle', () => {
     service.finishDestroy();
     await destroying;
     expect(service.steps).toEqual(['on-destroy', 'resource-cleanup']);
+  });
+
+  it('joins the initialization under way when onInit() calls init() again', async () => {
+    const service = new ReentrantLifecycleService();
+
+    await service.init();
+
+    // A second `onInit()` would call `init()` again from its own prefix, without end.
+    expect(service.steps).toEqual(['init']);
+    await expect(service.nestedInit).resolves.toBeUndefined();
+    expect(service.initialized).toBe(true);
+  });
+
+  it('joins the teardown under way when onDestroy() calls destroy() again', async () => {
+    const service = new ReentrantLifecycleService();
+    await service.init();
+
+    const outer = service.destroy();
+    let nestedSettled = false;
+    void service.nestedDestroy?.then(() => {
+      nestedSettled = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The nested call reports the teardown it joined, not one that already ended.
+    expect(nestedSettled).toBe(false);
+    expect(service.nestedDestroy).toBe(outer);
+
+    service.destroyGate.resolve();
+    await outer;
+    expect(service.steps).toEqual(['init', 'destroy-start', 'destroy-finish']);
   });
 });

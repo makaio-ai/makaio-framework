@@ -358,6 +358,10 @@ export class PiscinaCodeExecutionProvider implements ICodeExecutionProvider {
     // Set synchronously so an execution that has not yet been admitted sees the
     // disposal before it can materialize anything.
     this.disposed = true;
+    // Stored after `destroyPoolAndDrain()` has run its synchronous prefix, which
+    // is safe because that prefix reaches no code that can call `dispose()`: it
+    // reads this provider's own fields and starts `Pool.destroy()`, which only
+    // rejects queued tasks (their observers run as promise reactions, later).
     this.disposal ??= this.destroyPoolAndDrain();
     return this.disposal;
   }
@@ -785,6 +789,8 @@ export class PiscinaCodeExecutionProvider implements ICodeExecutionProvider {
    * refused to shut down, and rejects again for every later caller.
    */
   private tearDown(generation: WorkerGeneration): Promise<void> {
+    // Stored after `Pool.destroy()` has run its synchronous prefix, which only
+    // rejects queued tasks and detaches workers; nothing in it calls back here.
     generation.teardown ??= generation.pool.destroy();
     return generation.teardown;
   }

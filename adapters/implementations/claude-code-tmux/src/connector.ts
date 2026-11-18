@@ -231,6 +231,10 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
     if (this.connectorSession) return Promise.resolve();
 
     if (!this.initializationPromise) {
+      // Stored after `_doInitializeSession()` has run its synchronous prefix, which
+      // is safe: it reads this connector's own environment, probes for tmux, and
+      // starts the hook-wiring and MCP registration, whose prefixes are their own
+      // file and bus work. None of them calls `initializeSession()`.
       const token = ++this.lifecycleToken;
       this.initializationPromise = this._doInitializeSession(token).catch((error) => {
         // Clear the promise on failure so a future call can retry.

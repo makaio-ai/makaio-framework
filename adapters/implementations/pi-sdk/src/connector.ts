@@ -117,6 +117,10 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
     }
     if (this.session) return this.session;
     if (!this.sessionInitPromise) {
+      // Stored after `initializeSession()` has run its synchronous prefix, which is
+      // safe: it builds this connector's own registry and loader, and starts the
+      // Pi reload, model lookup and tool-registry request. None of them calls
+      // `ensureSession()`, and the bus defers its message observers to microtasks.
       this.sessionInitPromise = this.initializeSession().catch((err: unknown) => {
         this.sessionInitPromise = undefined;
         throw err;

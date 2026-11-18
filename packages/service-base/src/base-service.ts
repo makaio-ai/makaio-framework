@@ -1,6 +1,6 @@
 import type { IMakaioBus, OnOptions } from '@makaio/bus-core';
 import type { SubjectDefinition, HandlerForSubjectDefinition } from '@makaio/core';
-import { getErrorString } from '@makaio/utils';
+import { getErrorString, JoinedOperation } from '@makaio/utils';
 
 type CleanupRegistration =
   | { readonly cleanup: () => void; readonly kind: 'handler' }
@@ -45,8 +45,11 @@ export abstract class BaseService {
   private readonly _cleanups: CleanupRegistration[] = [];
   private _initialized = false;
   private _serviceLifecycleGeneration = 0;
-  private _initPromise: Promise<void> | null = null;
-  private _destroyPromise: Promise<void> | null = null;
+  // Both runs are published before `onInit()` / `onDestroy()` or any cleanup
+  // starts: those are subclass code, and one that calls back into `init()` or
+  // `destroy()` must join the run under way instead of starting a second one.
+  private readonly _initialization = new JoinedOperation<void>();
+  private readonly _destruction = new JoinedOperation<void>();
 
   /**
    * @param bus - Bus instance used for registering handlers
@@ -78,15 +81,13 @@ export abstract class BaseService {
    * @throws The `onInit()` failure, or the failure of a preceding teardown
    */
   public async init(): Promise<void> {
-    if (this._destroyPromise) {
-      await this._destroyPromise;
+    const destruction = this._destruction.current;
+    if (destruction !== undefined) {
+      await destruction;
     }
     if (this._initialized) return;
-    if (this._initPromise) {
-      return this._initPromise;
-    }
 
-    this._initPromise = (async () => {
+    return this._initialization.join(async (forget) => {
       try {
         await this.onInit();
         this._serviceLifecycleGeneration += 1;
@@ -99,11 +100,9 @@ export abstract class BaseService {
         this._cleanups.length = 0;
         throw error;
       } finally {
-        this._initPromise = null;
+        forget();
       }
-    })();
-
-    return this._initPromise;
+    });
   }
 
   /**
@@ -125,47 +124,52 @@ export abstract class BaseService {
    * @returns Promise that resolves after teardown completes
    * @throws An AggregateError when `onDestroy()` or any cleanup failed
    */
-  public async destroy(): Promise<void> {
-    if (this._destroyPromise) {
-      return this._destroyPromise;
-    }
-    this._destroyPromise = (async () => {
-      if (this._initPromise) {
-        try {
-          await this._initPromise;
-        } catch {
-          return;
-        }
-      }
-      if (!this._initialized) return;
+  public destroy(): Promise<void> {
+    return this._destruction.join(async (forget) => {
+      await this.runDestroySequence();
+      // Reached only by a clean teardown: the await above rethrows a failed one
+      // and leaves it in place, so every later caller — `init()` included — shares
+      // the rejection instead of being told the service drained cleanly. A clean
+      // teardown is forgotten so a re-initialized service can be destroyed again.
+      forget();
+    });
+  }
 
-      this._initialized = false;
-
-      const failures = this.unregisterHandlers();
+  /**
+   * Run one teardown: wait out an initialization in flight, unsubscribe the
+   * handlers, run `onDestroy()`, then the cleanups.
+   * @throws An AggregateError when `onDestroy()` or any cleanup failed
+   */
+  private async runDestroySequence(): Promise<void> {
+    const initialization = this._initialization.current;
+    if (initialization !== undefined) {
       try {
-        await this.onDestroy?.();
-      } catch (destroyError) {
-        failures.push(destroyError);
+        await initialization;
+      } catch {
+        return;
       }
+    }
+    if (!this._initialized) return;
 
-      failures.push(...(await this.runCleanups()));
-      this._cleanups.length = 0;
+    this._initialized = false;
 
-      if (failures.length > 0) {
-        // The member messages are inlined because the aggregate is what a host
-        // logs and what a coordinator records against an extension entry;
-        // without them both would report only that teardown failed.
-        const detail = failures.map((failure) => getErrorString(failure)).join('; ');
-        throw new AggregateError(failures, `Service '${this.constructor.name}' failed to tear down cleanly: ${detail}`);
-      }
-    })();
+    const failures = this.unregisterHandlers();
+    try {
+      await this.onDestroy?.();
+    } catch (destroyError) {
+      failures.push(destroyError);
+    }
 
-    await this._destroyPromise;
-    // Reached only by a clean teardown: the await above rethrows a failed one
-    // and leaves it in place, so every later caller — `init()` included — shares
-    // the rejection instead of being told the service drained cleanly. A clean
-    // teardown is forgotten so a re-initialized service can be destroyed again.
-    this._destroyPromise = null;
+    failures.push(...(await this.runCleanups()));
+    this._cleanups.length = 0;
+
+    if (failures.length > 0) {
+      // The member messages are inlined because the aggregate is what a host
+      // logs and what a coordinator records against an extension entry;
+      // without them both would report only that teardown failed.
+      const detail = failures.map((failure) => getErrorString(failure)).join('; ');
+      throw new AggregateError(failures, `Service '${this.constructor.name}' failed to tear down cleanly: ${detail}`);
+    }
   }
 
   /**
