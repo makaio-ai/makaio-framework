@@ -462,10 +462,16 @@ class McpStdioExtensionService implements ExtensionServiceLifecycle {
   }
 
   /**
-   * Spawn the MCP server subprocess and connect to it as an MCP client.
+   * Spawn the MCP server subprocess and connect to it as an MCP client. The
+   * handshake and the first tool listing end when the host cancels the start
+   * (`options.signal`); the bridge then closes the subprocess like on any other
+   * failed start.
+   * @param options - Start options; see {@link ExtensionInitOptions}.
    * @see startMcpClientBridge
    */
-  public async init(): Promise<void> {
+  public async init(options: ExtensionInitOptions = {}): Promise<void> {
+    const { signal } = options;
+    signal?.throwIfAborted();
     const { startMcpClientBridge } = await import('@makaio/subsystem-mcp-http-server');
     const { transport: transportConfig } = this.descriptor;
 
@@ -476,6 +482,7 @@ class McpStdioExtensionService implements ExtensionServiceLifecycle {
       cwd: this.extensionPath,
       extensionName: this.descriptor.name,
       bus: this.ctx.bus,
+      signal,
     });
   }
 

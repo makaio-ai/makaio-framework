@@ -13,7 +13,7 @@ import { toCliLongOptionName } from './flag-names.js';
 import {
   createProcessCommandContext,
   createProcessCommandSignalContext,
-  disposeResolvedBusForCommand,
+  finishCommand,
   evaluateBeforeRunGate,
   getAuthorizedProvideBus,
   reportCommandFailure,
@@ -83,7 +83,14 @@ export function registerContribution(
       const signalContext = createProcessCommandSignalContext();
       let resolved: ResolvedCliBus | undefined;
       try {
-        resolved = await resolveContributionBus(bus, contributionProvideBus, INTERACTIVE_SUBCOMMAND, {}, process.cwd());
+        resolved = await resolveContributionBus(
+          bus,
+          contributionProvideBus,
+          INTERACTIVE_SUBCOMMAND,
+          {},
+          process.cwd(),
+          signalContext,
+        );
         if (shouldStopForCommandSignal(signalContext.signal)) return;
         const gate = await evaluateBeforeRunGate(
           contributionBeforeRun,
@@ -102,8 +109,7 @@ export function registerContribution(
           reportCommandFailure(err);
         }
       } finally {
-        signalContext.cleanup();
-        await disposeResolvedBusForCommand(resolved);
+        await finishCommand(resolved, signalContext);
       }
     });
   }
@@ -164,6 +170,7 @@ function registerSubcommand(
         entry.name,
         parsed.data as Record<string, unknown>,
         process.cwd(),
+        signalContext,
       );
       if (shouldStopForCommandSignal(signalContext.signal)) return;
       const gate = await evaluateBeforeRunGate(
@@ -185,8 +192,7 @@ function registerSubcommand(
         reportCommandFailure(err);
       }
     } finally {
-      signalContext.cleanup();
-      await disposeResolvedBusForCommand(resolved);
+      await finishCommand(resolved, signalContext);
     }
   });
 }

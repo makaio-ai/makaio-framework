@@ -1,6 +1,6 @@
 import { writeSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
-import { installHostShutdown, type HostShutdownStep } from './host-shutdown.js';
+import { installHostShutdown, type HostShutdown, type HostShutdownStep } from './host-shutdown.js';
 
 // `process.exit` is stubbed below, so the report of a stage that ran out of its
 // window is observed as the synchronous stderr write that precedes it.
@@ -13,11 +13,11 @@ vi.mock('node:fs', async (importOriginal) => ({
  * Build a stage.
  * @param name - Name of the stage.
  * @param run - What the stage does.
- * @param windowMs - Window of the stage; `null` leaves the stage to enforce its own limits.
+ * @param windowMs - Window of the stage.
  * @returns The stage.
  */
-function step(name: string, run: HostShutdownStep['run'], windowMs: number | null = 1_000): HostShutdownStep {
-  return { name, budgetMs: () => windowMs ?? undefined, run };
+function step(name: string, run: HostShutdownStep['run'], windowMs = 1_000): HostShutdownStep {
+  return { name, budgetMs: () => windowMs, run };
 }
 
 /**
@@ -96,7 +96,7 @@ describe('installHostShutdown', () => {
   });
 
   it('reads the window of a stage when the stage is about to run, not when the shutdown is requested', async () => {
-    let window: number | undefined;
+    let window = 1_000;
     const lateWindow: HostShutdownStep = {
       name: 'late',
       budgetMs: () => window,
@@ -111,35 +111,6 @@ describe('installHostShutdown', () => {
     await shutdown.request('test');
 
     expect(writeSync).toHaveBeenCalledWith(2, expect.stringContaining('late (did not settle within 20 ms)'));
-  });
-
-  it('keeps the first numeric window when a later read of it is undefined', async () => {
-    // The guard read finds a number, the first reread of the wait finds none: the
-    // number already read is the window, not a zero that ends the wait at once.
-    const reads: Array<number | undefined> = [5_000, undefined];
-    const stage: HostShutdownStep = {
-      name: 'flaky window',
-      budgetMs: () => reads.shift(),
-      run: () => new Promise<void>((resolve) => setTimeout(resolve, 30)),
-    };
-    const shutdown = installHostShutdown({ label: 'test', signals: [], steps: [stage] });
-
-    await shutdown.request('test');
-
-    expect(writeSync).not.toHaveBeenCalled();
-    expect(exit).not.toHaveBeenCalled();
-  });
-
-  it('puts no window of its own on a stage that enforces its own limits', async () => {
-    const shutdown = installHostShutdown({
-      label: 'test',
-      signals: [],
-      steps: [step('self-bounded', () => new Promise<void>((resolve) => setTimeout(resolve, 80)), null)],
-    });
-
-    await shutdown.request('test');
-
-    expect(exit).not.toHaveBeenCalled();
   });
 
   it('ends the host with status 1 once a failing stage has been followed by the rest', async () => {
@@ -215,6 +186,88 @@ describe('installHostShutdown', () => {
     expect(settledInListener).toBe(false);
     release();
     await first;
+  });
+
+  it('hands the reason of the first request to onRequest before the cancellation aborts and before a stage runs', async () => {
+    const order: string[] = [];
+    const shutdown = installHostShutdown({
+      label: 'test',
+      signals: [],
+      steps: [step('only', () => void order.push('stage'))],
+      onRequest: (reason) => order.push(`onRequest:${reason}`),
+    });
+    shutdown.cancellation.addEventListener('abort', () => order.push('abort'));
+
+    await shutdown.request('SIGINT');
+    await shutdown.request('SIGTERM');
+
+    expect(order).toEqual(['onRequest:SIGINT', 'abort', 'stage']);
+  });
+
+  it('still aborts and tears down when onRequest throws, and never throws from request', async () => {
+    const ran: string[] = [];
+    const shutdown = installHostShutdown({
+      label: 'test',
+      signals: [],
+      steps: [step('only', () => void ran.push('stage'))],
+      onRequest: () => {
+        throw new Error('callback failed');
+      },
+    });
+
+    await expect(shutdown.request('SIGINT')).resolves.toBeUndefined();
+
+    expect(shutdown.cancellation.aborted).toBe(true);
+    expect(ran).toEqual(['stage']);
+  });
+
+  it('joins a request made from inside onRequest instead of starting a second shutdown', async () => {
+    const ran: string[] = [];
+    const requests: string[] = [];
+    const shutdown: HostShutdown = installHostShutdown({
+      label: 'test',
+      signals: [],
+      steps: [step('only', () => void ran.push('stage'))],
+      onRequest: (reason) => {
+        requests.push(reason);
+        void shutdown.request('nested');
+      },
+    });
+
+    await shutdown.request('SIGINT');
+
+    expect(requests).toEqual(['SIGINT']);
+    expect(ran).toEqual(['stage']);
+  });
+
+  it('keeps the signals through a shutdown in progress when release is called', async () => {
+    let finish!: () => void;
+    const shutdown = installHostShutdown({
+      label: 'test',
+      signals: ['SIGINT'],
+      steps: [step('slow', () => new Promise<void>((resolve) => (finish = resolve)))],
+    });
+    const listenersWhileInstalled = process.listenerCount('SIGINT');
+    const requested = shutdown.request('first');
+    // The first stage starts on the next microtask.
+    await Promise.resolve();
+
+    shutdown.release();
+    expect(process.listenerCount('SIGINT')).toBe(listenersWhileInstalled);
+    finish();
+    await requested;
+
+    expect(process.listenerCount('SIGINT')).toBe(listenersWhileInstalled - 1);
+  });
+
+  it('removes the signal listeners on release when no shutdown was requested', () => {
+    const before = process.listenerCount('SIGINT');
+    const shutdown = installHostShutdown({ label: 'test', signals: ['SIGINT'], steps: [] });
+    expect(process.listenerCount('SIGINT')).toBe(before + 1);
+
+    shutdown.release();
+
+    expect(process.listenerCount('SIGINT')).toBe(before);
   });
 
   it('rejects a signal that both stops the host and is ignored', () => {

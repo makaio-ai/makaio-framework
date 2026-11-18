@@ -62,6 +62,15 @@ export {
   type HttpRouteGraphBuilder,
   type HttpRouteContribution,
   type HttpContributionPhase,
+  bootUnderShutdown,
+  createRuntimeLifecycle,
+  LOCAL_STEP_STOP_BUDGET_MS,
+  type HangupPolicy,
+  type HostShutdown,
+  type HostShutdownStep,
+  type LifecycleBootHooks,
+  type LifecycleRuntime,
+  type RuntimeLifecycle,
 } from '@makaio/runtime-node';
 
 // Bun-specific overrides
@@ -88,7 +97,7 @@ export {
   type BunHostExtensionPackage,
   type BunHostRouter,
 } from './bun-host-contributions.js';
-export { createGracefulShutdown, type BunGracefulShutdownOptions } from './graceful-shutdown.js';
+export { installBunHostShutdown, type BunHostShutdownOptions } from './host-shutdown.js';
 export {
   readBunServerEnv,
   type BunServerEnvConfig,

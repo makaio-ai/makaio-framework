@@ -128,12 +128,21 @@ Both desktop hosts consume `@makaio/host-shared` for everything that is not plat
 | Bus transport (prod) | Node `ws` | Bun-native WebSocket (`createBunWebSocket`) |
 | Config to renderer | `contextBridge` + `preload.cjs` | URL query params (`?busUrl=...&bootComplete=1`) |
 | Singleton policy | `app.requestSingleInstanceLock()` | Health probe + port bind (production only; dev allows multiple instances) |
-| Shutdown trigger | `app.on('before-quit')` | `process.on('SIGTERM')` / `process.on('SIGINT')` |
+| Shutdown trigger | `app.on('before-quit')` | Tray quit, `host.app.shutdown`, restart |
 | Window state queries | Synchronous (`win.isVisible()`) | Event-tracked proxy (`ElectrobunWindowProxy`) |
 | Display matching | `screen.getDisplayMatching()` | Not available |
 | Notifications | `ElectronNotificationProvider` | Stub (returns `success: false`) |
 | Global shortcut | `globalShortcut` in `tray.ts` | `electrobun/bun GlobalShortcut` in `main.ts` |
 | Bus handlers | Separate `bus-handlers.ts` | Inline `registerBusHandlers()` in `main.ts` |
+
+Both hosts share the signal handling and the teardown ordering (`installDesktopHostShutdown` in
+`@makaio/host-shared`, built on the runtime lifecycle handle of `@makaio/runtime-node`): `SIGINT`,
+`SIGTERM` and `SIGHUP` shut the host down, a quit that arrives while the runtime boots cancels the boot
+through its own rollback, a later signal or quit joins the shutdown in progress, and every stage runs inside
+a window of its own (the runtime's is the bound it reports for the phase it is in). There is no
+ignore-hangup option: desktop hosts normally run without a controlling terminal, and a hangup that does
+reach one launched from a terminal means the session that owns it ended; ignoring it would leave the detached
+extension children running. The host-specific triggers above only request the shutdown.
 
 ### Boot Sequence (Shared Pattern)
 

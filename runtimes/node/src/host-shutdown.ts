@@ -15,6 +15,38 @@ import { boundedWait, boundedWaitReread, JoinedOperation } from '@makaio/utils';
  */
 export type HostStopSignal = 'SIGINT' | 'SIGTERM' | 'SIGHUP';
 
+/**
+ * What a host does on a terminal hangup (`SIGHUP`).
+ *
+ * - `'shutdown'`: the hangup runs the same shutdown as `SIGINT` and `SIGTERM`
+ *   (persistent, joined by later signals, every step bounded by a window of its own), so
+ *   the detached extension children, which run in process groups of their own
+ *   and receive no terminal signal, are stopped with the host.
+ * - `'ignore'`: the host installs a listener that does nothing but log the
+ *   first hangup, and keeps running and serving. Ignoring needs a real
+ *   listener: `nohup` alone does not protect a Node host, because Node resets
+ *   an inherited ignored `SIGHUP` at startup, and libraries loaded into the
+ *   host (`signal-exit`, via `proper-lockfile`, `execa` and `ink`) install a
+ *   `SIGHUP` listener that re-raises the signal when it is the only one.
+ */
+export type HangupPolicy = 'shutdown' | 'ignore';
+
+/** Signals every host stops on, whatever its hangup policy. */
+const STOP_SIGNALS: readonly HostStopSignal[] = ['SIGINT', 'SIGTERM'];
+
+/**
+ * Split the process signals into the ones a host stops on and the ones it survives.
+ * @param hangup - Hangup policy; defaults to `'shutdown'`.
+ * @returns The `signals` and `ignoredSignals` of the host shutdown.
+ */
+export function hostSignalPolicy(
+  hangup: HangupPolicy = 'shutdown',
+): Pick<HostShutdownOptions, 'signals' | 'ignoredSignals'> {
+  return hangup === 'ignore'
+    ? { signals: STOP_SIGNALS, ignoredSignals: ['SIGHUP'] }
+    : { signals: [...STOP_SIGNALS, 'SIGHUP'], ignoredSignals: [] };
+}
+
 /** One named stage of a host teardown. */
 export interface HostShutdownStep {
   /** Name the report of a stage that did not finish uses. */
@@ -25,11 +57,15 @@ export interface HostShutdownStep {
    * (the runtime's, once it has booted) supplies what it knows at that time, and
    * one whose work was still registering cleanup (a boot that was in the middle of
    * a phase) keeps the time that cleanup needs. A stage that wraps work which
-   * bounds itself reports `outerBoundMs(...)` from `@makaio/utils`. `undefined` gives the stage no
-   * window of the host's: it enforces its own limits, and a second timer on top
-   * of the owner's could only end the host while the owner is still within them.
+   * bounds itself reports `outerBoundMs(...)` from `@makaio/utils`.
+   *
+   * Every stage has a finite window, whatever it waits on: once a stop was
+   * requested the host must end in bounded time, and a stage that never settles and
+   * has no window would keep it (and every normal termination signal) stuck. A stage
+   * whose own limit is not known yet falls back to a default bound such as
+   * `resourceStepStopBudgetMs()`.
    */
-  readonly budgetMs: () => number | undefined;
+  readonly budgetMs: () => number;
   /**
    * Run the stage. It may be called before what it tears down exists (a
    * shutdown can arrive while the runtime is still booting), so it must find
@@ -55,6 +91,14 @@ export interface HostShutdownOptions {
   readonly ignoredSignals?: readonly HostStopSignal[];
   /** Teardown stages, run one after the other in this order. */
   readonly steps: readonly HostShutdownStep[];
+  /**
+   * Called synchronously with the reason of the first request, before the
+   * cancellation aborts and before the first stage starts. For a host that has
+   * a cancellation of its own to raise, with a reason of its own, and an exit
+   * status that follows the signal. Later requests do not call it.
+   * @param reason - What asked for the shutdown, e.g. a signal name.
+   */
+  readonly onRequest?: (reason: string) => void;
 }
 
 /** Control of the signal handling installed by {@link installHostShutdown}. */
@@ -79,6 +123,12 @@ export interface HostShutdown {
    * @returns Settles when the teardown has finished; already settled when no shutdown was requested.
    */
   finished(): Promise<void>;
+  /**
+   * Give the signals back without a shutdown, for a host that ended by itself.
+   * A shutdown that was already requested gives them back itself once it has
+   * finished, so this does nothing then.
+   */
+  release(): void;
 }
 
 /**
@@ -122,15 +172,20 @@ export function installHostShutdown(options: HostShutdownOptions): HostShutdown 
     }
     initiator = reason;
     console.info(`[${label}] ${reason} received, shutting down...`);
-    // Published before the abort: abort listeners run synchronously and may call
+    // Published before `onRequest` and the abort: both run synchronously and may call
     // `request()` or `finished()`, which must find this one shutdown. The teardown
     // itself starts on the next microtask, so it still begins after the abort.
-    const run = shutdown.join(() =>
-      Promise.resolve()
+    const run = shutdown.join(() => {
+      try {
+        options.onRequest?.(reason);
+      } catch (err) {
+        console.error(`[${label}] onRequest failed; shutting down anyway:`, err);
+      }
+      controller.abort(new Error(`[${label}] startup cancelled: ${reason} received`));
+      return Promise.resolve()
         .then(() => runTeardown(label, steps))
-        .finally(release),
-    );
-    controller.abort(new Error(`[${label}] startup cancelled: ${reason} received`));
+        .finally(release);
+    });
     return run;
   };
 
@@ -144,7 +199,14 @@ export function installHostShutdown(options: HostShutdownOptions): HostShutdown 
   }
   for (const [signal, listener] of handlers) process.on(signal, listener);
 
-  return { cancellation: controller.signal, request, finished: () => shutdown.current ?? Promise.resolve() };
+  return {
+    cancellation: controller.signal,
+    request,
+    finished: () => shutdown.current ?? Promise.resolve(),
+    release: () => {
+      if (shutdown.current === undefined) release();
+    },
+  };
 }
 
 /**
@@ -172,21 +234,13 @@ const OUTPUT_FLUSH_WINDOW_MS = 1_000;
 /**
  * Run one stage inside its window.
  * @param step - Teardown stage.
- * @returns The window the stage ran out of, or `undefined` when it settled inside its window or has none.
+ * @returns The window the stage ran out of, or `undefined` when it settled inside its window.
  * @throws The stage's rejection.
  */
 async function runInWindow(step: HostShutdownStep): Promise<number | undefined> {
-  const firstWindowMs = step.budgetMs();
-  if (firstWindowMs === undefined) {
-    await step.run();
-    return undefined;
-  }
-  // `budgetMs` may turn `undefined` later; the last window that was a number
-  // holds, starting with the one read above.
-  let lastWindowMs = firstWindowMs;
   const outcome = await boundedWaitReread(
     async () => step.run(),
-    () => (lastWindowMs = step.budgetMs() ?? lastWindowMs),
+    () => step.budgetMs(),
   );
   return outcome.settled ? undefined : outcome.windowMs;
 }

@@ -13,13 +13,15 @@
  * - `close` tears down the transport and child process cleanly
  * - `onToolsChanged` is invoked when the server sends `tools/list_changed`
  * - `handle.tools` is live-updated when `onToolsChanged` fires
+ * - A start cancelled through `signal` ends with the signal's reason and leaves no subprocess behind
  */
-import { existsSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createBusInstance } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { startMcpClientBridge, type McpClientBridgeHandle } from '../mcp-client-bridge.js';
 
 // ---------------------------------------------------------------------------
@@ -297,5 +299,111 @@ describe('startMcpClientBridge', { timeout: MCP_FIXTURE_TIMEOUT_MS }, () => {
         content: [{ type: 'text', text: 'hello bus' }],
       },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Start cancellation
+// ---------------------------------------------------------------------------
+
+/** Script of an MCP server that records its PID and then never answers the handshake. */
+const SILENT_SERVER_SCRIPT = `
+require('node:fs').appendFileSync(process.env.SILENT_SERVER_PID_FILE, process.pid + '\\n');
+setInterval(() => {}, 1000);
+`;
+
+/**
+ * Whether a process exists.
+ * @param pid - Process ID.
+ * @returns `true` when signal 0 can be delivered.
+ */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+describe('startMcpClientBridge start cancellation', { timeout: MCP_FIXTURE_TIMEOUT_MS }, () => {
+  const tempDirs: string[] = [];
+  const spawnedPids: number[] = [];
+
+  afterEach(() => {
+    for (const pid of spawnedPids.splice(0)) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // Already gone, which is what the tests want.
+      }
+    }
+    for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /**
+   * Prepare a PID file for the silent server.
+   * @returns Path of the file the server appends its PID to, and a reader of the recorded PIDs.
+   */
+  function preparePidFile(): { readonly file: string; readonly pids: () => number[] } {
+    const dir = mkdtempSync(path.join(tmpdir(), 'mcp-bridge-cancel-'));
+    tempDirs.push(dir);
+    const file = path.join(dir, 'server.pids');
+    writeFileSync(file, '');
+    const pids = (): number[] =>
+      readFileSync(file, 'utf8')
+        .split('\n')
+        .filter((line) => line !== '')
+        .map(Number);
+    return { file, pids };
+  }
+
+  /**
+   * Start a bridge whose server never answers the handshake.
+   * @param file - PID file the server appends its PID to.
+   * @param signal - Cancels the start.
+   * @returns The pending start.
+   */
+  function startSilentBridge(file: string, signal: AbortSignal): Promise<McpClientBridgeHandle> {
+    return startMcpClientBridge({
+      command: process.execPath,
+      args: ['-e', SILENT_SERVER_SCRIPT],
+      extensionName: 'silent-extension',
+      env: { ...(process.env as Record<string, string>), SILENT_SERVER_PID_FILE: file },
+      signal,
+    });
+  }
+
+  it('ends a start that waits for the handshake with the signal reason and stops the subprocess', async () => {
+    const { file, pids } = preparePidFile();
+    const controller = new AbortController();
+    const reason = new Error('boot cancelled');
+    const starting = startSilentBridge(file, controller.signal);
+    const rejected = expect(starting).rejects.toBe(reason);
+
+    await vi.waitFor(() => expect(pids()).toHaveLength(1), { timeout: 10_000 });
+    const [pid] = pids();
+    spawnedPids.push(pid as number);
+    expect(isAlive(pid as number)).toBe(true);
+    const abortedAt = Date.now();
+    controller.abort(reason);
+
+    // Without the signal the handshake would wait for the SDK's 60 s request timeout.
+    await rejected;
+    expect(Date.now() - abortedAt).toBeLessThan(5_000);
+    // The SDK closes the transport: stdin ends, then SIGTERM after its grace.
+    await vi.waitFor(() => expect(isAlive(pid as number)).toBe(false), { timeout: 8_000 });
+  });
+
+  it('spawns nothing for a start that was cancelled before it began', async () => {
+    const { file, pids } = preparePidFile();
+    const controller = new AbortController();
+    const reason = new Error('already cancelled');
+    controller.abort(reason);
+
+    await expect(startSilentBridge(file, controller.signal)).rejects.toBe(reason);
+
+    appendFileSync(file, '');
+    expect(pids()).toEqual([]);
   });
 });

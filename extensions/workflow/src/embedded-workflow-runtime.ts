@@ -14,7 +14,9 @@ import type { EmbeddedBusHandle, ProvideBusContext } from '@makaio/kernel/cli';
 // build that predates this export.
 import {
   bootMakaioRuntimeCore,
+  createRuntimeLifecycle,
   resolveUpstreamTelemetryBootOptionsFromEnv,
+  type CoreBootOptions,
   type ServerTransportProvider,
 } from '@makaio/runtime-node';
 import { computeDirectoryDigest } from '@makaio/runtime-node/workflow-worker';
@@ -61,37 +63,54 @@ function createCliWorkspaceResolvers(cwd: string): {
 }
 
 /**
+ * Host-owned boot overrides of the embedded runtime, for hosts and E2E harnesses
+ * that drive the same provider with their own extension set.
+ */
+export interface EmbeddedWorkflowBootOverrides {
+  /** Override boot-time discovery strategies. */
+  readonly discovery?: CoreBootOptions['discovery'];
+}
+
+/**
  * Boot a headless Makaio runtime for standalone workflow execution.
  *
  * Called by the CLI router when `makaio workflow <subcommand>` is dispatched
  * and the contribution declares `canProvideBus: true`. The runtime uses a
  * {@link NoTransportProvider} and configures the workflow engine in
  * in-process mode, with the invocation CWD as its only allowed workspace.
- * @param context - Subcommand invocation context that owns the allowed workspace.
+ *
+ * The runtime lives under a {@link RuntimeLifecycle}: the invocation signal
+ * cancels a boot a process signal interrupts (through the boot's own rollback),
+ * the lifecycle's stop bound is reported to the router before the boot starts,
+ * and `dispose` stops the runtime whatever phase it is in.
+ * @param context - Subcommand invocation context that owns the allowed workspace and the invocation signal.
+ * @param overrides - Optional host-owned boot overrides.
  * @returns A handle containing the live bus instance and runtime shutdown hook.
  */
-export async function bootEmbeddedWorkflowRuntime(context: ProvideBusContext): Promise<EmbeddedBusHandle> {
+export async function bootEmbeddedWorkflowRuntime(
+  context: ProvideBusContext,
+  overrides: EmbeddedWorkflowBootOverrides = {},
+): Promise<EmbeddedBusHandle> {
   const transport: ServerTransportProvider = new NoTransportProvider();
   const upstreamTelemetry = resolveUpstreamTelemetryBootOptionsFromEnv();
   const { materializationSpecResolver } = createCliWorkspaceResolvers(context.cwd);
 
-  const runtime = await bootMakaioRuntimeCore(transport, 0, '127.0.0.1', {
-    surface: 'headless',
-    enablePackageManager: false,
-    workflowRunner: { mode: 'in-process' },
-    workflowMaterializationSpecResolvers: [materializationSpecResolver],
-    ...(upstreamTelemetry === undefined ? {} : { upstreamTelemetry }),
-  });
+  const lifecycle = createRuntimeLifecycle({ cancellation: context.signal });
+  context.onStopBudget(lifecycle.stopBudgetMs);
+  const runtime = await lifecycle.boot((hooks) =>
+    bootMakaioRuntimeCore(transport, 0, '127.0.0.1', {
+      surface: 'headless',
+      enablePackageManager: false,
+      workflowRunner: { mode: 'in-process' },
+      workflowMaterializationSpecResolvers: [materializationSpecResolver],
+      ...(upstreamTelemetry === undefined ? {} : { upstreamTelemetry }),
+      ...(overrides.discovery === undefined ? {} : { discovery: overrides.discovery }),
+      ...hooks,
+    }),
+  );
 
-  let shutdownPromise: Promise<void> | undefined;
   return {
     bus: runtime.bus,
-    dispose: async () => {
-      shutdownPromise ??= runtime.shutdown().catch((error: unknown) => {
-        shutdownPromise = undefined;
-        throw error;
-      });
-      await shutdownPromise;
-    },
+    dispose: () => lifecycle.stop('dispose'),
   };
 }

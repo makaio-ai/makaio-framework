@@ -8,7 +8,7 @@ Surfaces sit at the top of the Kernel → Runtime → Platform → Surface layer
 
 - **Production** uses `Bun.serve()` with the Bun-native WebSocket transport (`BunBusServerTransportProvider`) and `hono/bun` for static serving.
 - **Dev mode** uses `@makaio/runtime-node` with Vite owning the HTTP server (same single-port pattern as Electron).
-- **Shutdown** is handled via `process.on('SIGTERM')` / `process.on('SIGINT')` rather than Electron's `before-quit` event.
+- **Shutdown** runs on `SIGINT`, `SIGTERM`, `SIGHUP` and the tray, app-shutdown and restart triggers rather than Electron's `before-quit` event, through the `installDesktopHostShutdown` it shares with Electron (installed before the runtime boots).
 - **Config injection** uses URL query parameters into window URLs; there is no preload script or `contextBridge`.
 
 ```

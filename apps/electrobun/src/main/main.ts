@@ -16,7 +16,8 @@
  * - Production uses `Bun.serve()` and `hono/bun` instead of `@hono/node-server`.
  * - Config is injected into windows via URL query params (no preload/contextBridge).
  * - In production, a health-probe singleton check runs at startup; in dev mode multiple instances are allowed.
- * - Shutdown is handled via `process.on('SIGTERM')` and `process.on('SIGINT')`.
+ * - Shutdown runs on `SIGINT`, `SIGTERM` and `SIGHUP` and on the tray and app-shutdown triggers, through the shared desktop
+ *   host shutdown, which is installed before the runtime boots.
  * @packageDocumentation
  */
 
@@ -39,11 +40,21 @@ import {
   bootMakaioRuntime as bootNodeRuntime,
   createHonoRouteGraph,
   createHttpRouteGraphBuilder,
+  createRuntimeLifecycle,
+  localStep,
+  LOCAL_STEP_STOP_BUDGET_MS,
+  resourceStep,
   type HonoRouteGraph,
 } from '@makaio/runtime-node';
 import { HostSubjects } from '@makaio/contracts';
 import { TrayMenuSubjects, type TrayMenuListEntry } from '@makaio/services-core/tray-menu';
-import { FRAMEWORK_FALLBACK_WINDOW, createDevHealthPlugin, saveWindowSession } from '@makaio/host-shared';
+import {
+  FRAMEWORK_FALLBACK_WINDOW,
+  cleanupsStep,
+  createDevHealthPlugin,
+  installDesktopHostShutdown,
+  saveWindowSession,
+} from '@makaio/host-shared';
 import { applySelectedDesktopRuntimeConfig } from '@makaio/host-shared/desktop-runtime-config';
 import Electrobun, { GlobalShortcut } from 'electrobun/bun';
 import { WindowManager } from './window-manager.js';
@@ -54,7 +65,6 @@ import { createAutoLaunchController } from './auto-launch-controller.js';
 import { registerBusHandlers } from './bus-handlers.js';
 import { openInitialWindows } from './initial-windows.js';
 import { createElectrobunRestartHandler } from './restart-handler.js';
-import { shutdownElectrobun } from './shutdown-cleanup.js';
 import {
   buildDesktopBaseRuntimeOptions,
   createElectrobunBootContext,
@@ -70,7 +80,10 @@ import {
 // ── State ─────────────────────────────────────────────────────────────────────
 
 let windowManager: WindowManager | null = null;
+const lifecycle = createRuntimeLifecycle();
 let bootPromise: Promise<MakaioRuntime | null> = Promise.resolve(null);
+/** Tears the tray and the global shortcut down; `null` until they exist. */
+let destroyTray: (() => void) | null = null;
 
 /**
  * Whether the process was started in background-only mode (`--background`).
@@ -130,41 +143,33 @@ function configureBundledNodePtyBridge(): void {
   process.env['MAKAIO_NODE_EXECUTABLE'] = executable;
 }
 
-// ── Cleanup ───────────────────────────────────────────────────────────────────
+// ── Shutdown ──────────────────────────────────────────────────────────────────
 
-/**
- * Tear down bus handlers, runtime, tray, and Vite dev server.
- *
- * Centralises the cleanup pattern used by the graceful shutdown handlers so
- * they stay in sync.
- * @param destroyTray - Tray teardown callback invoked during shutdown.
- */
-async function shutdownGracefully(destroyTray: (() => void) | null): Promise<void> {
-  const manager = windowManager;
-  const closeViteServer = viteClose;
-  await shutdownElectrobun({
-    saveWindowSession: manager ? () => saveWindowSession(MakaioBus, manager, WINDOW_SESSION_SCOPE) : null,
+// Installed before anything boots: a signal or a quit that arrives while the runtime boots cancels
+// the boot through its own rollback, and a later one joins the shutdown in progress. Window and tray
+// quits are Electrobun-specific triggers; they request the shutdown through `hostShutdown.request`.
+const hostShutdown = installDesktopHostShutdown({
+  label: 'electrobun',
+  lifecycle,
+  beforeRuntime: [
+    resourceStep('window session', async () => {
+      if (windowManager) await saveWindowSession(MakaioBus, windowManager, WINDOW_SESSION_SCOPE);
+    }),
     // Native window teardown is best-effort after the session is saved.
-    closeWindows: manager ? () => manager.closeAllWindows() : null,
-    shutdownRuntime: async () => (await bootPromise)?.shutdown(),
-    busHandlerCleanups,
-    destroyTray,
-    closeVite: closeViteServer
-      ? async () => {
-          const timeout = new Promise<void>((resolve) => setTimeout(resolve, 3_000));
-          await Promise.race([closeViteServer(), timeout]);
-        }
-      : null,
-  });
-}
-
-/**
- * Report a startup-path cleanup failure before the process exits.
- * @param error - Aggregated or individual shutdown failure.
- */
-function logStartupCleanupFailure(error: unknown): void {
-  console.error('[electrobun] Startup cleanup did not complete cleanly:', error);
-}
+    localStep('windows', () => windowManager?.closeAllWindows()),
+  ],
+  afterRuntime: [
+    cleanupsStep(
+      'bus handlers',
+      () => LOCAL_STEP_STOP_BUDGET_MS,
+      () => busHandlerCleanups,
+    ),
+    localStep('tray', () => destroyTray?.()),
+    resourceStep('vite dev server', () => viteClose?.()),
+  ],
+  // No argument: an unclean teardown already ended the process with status 1, and a failed boot set `process.exitCode`.
+  exit: () => process.exit(),
+});
 
 // ── Window creation helper ────────────────────────────────────────────────────
 
@@ -294,10 +299,9 @@ function openDefaultWindow(): number {
       };
       console.info('[electrobun] Vite dev server listening on http://127.0.0.1:%d', boundPort);
 
-      bootPromise = bootNodeRuntime({
-        httpServer: httpServer as HttpServer,
-        ...commonBootOptions,
-      });
+      bootPromise = lifecycle.boot((hooks) =>
+        bootNodeRuntime({ httpServer: httpServer as HttpServer, ...commonBootOptions, ...hooks }),
+      );
     } else {
       // Production: Bun.serve() with Bun-native WebSocket transport.
       routeGraph = createHonoRouteGraph(honoApp, { health: () => 'ok' });
@@ -339,7 +343,9 @@ function openDefaultWindow(): number {
       boundPort = rawServer.port;
       const bunServer = { port: boundPort, hostname: rawServer.hostname };
 
-      bootPromise = bootBunRuntime({ transport, bunServer, routeGraphBuilder: builder, ...commonBootOptions });
+      bootPromise = lifecycle.boot((hooks) =>
+        bootBunRuntime({ transport, bunServer, routeGraphBuilder: builder, ...commonBootOptions, ...hooks }),
+      );
     }
 
     const baseUrl = `http://127.0.0.1:${boundPort}`;
@@ -361,15 +367,21 @@ function openDefaultWindow(): number {
         return runtime;
       })
       .catch((err: unknown) => {
-        console.error('[electrobun] Boot failed:', err);
+        // A quit that interrupted the boot is no failure: its rollback has run.
+        if (!lifecycle.signal.aborted) console.error('[electrobun] Boot failed:', err);
         return null;
       });
 
     const runtime = await bootPromise;
     if (!runtime) {
-      await shutdownGracefully(null).catch(logStartupCleanupFailure);
+      if (lifecycle.signal.aborted) {
+        await hostShutdown.finished();
+        return;
+      }
       console.error('[electrobun] Boot failed — exiting.');
-      process.exit(1);
+      process.exitCode = 1;
+      await hostShutdown.request('boot failure');
+      return;
     }
 
     windowManager = new WindowManager({
@@ -391,24 +403,6 @@ function openDefaultWindow(): number {
       onRestoreFromBackground: restoreFromBackgroundMode,
     });
 
-    let shutdownInProgress = false;
-    let destroyTray: (() => void) | null = null;
-
-    const handleShutdown = async (): Promise<void> => {
-      if (shutdownInProgress) return;
-      shutdownInProgress = true;
-
-      return shutdownGracefully(destroyTray)
-        .catch((err: unknown) => {
-          console.error('[electrobun] Shutdown error:', err);
-          process.exitCode = 1;
-        })
-        .finally(() => {
-          // No argument: an unclean teardown already set `process.exitCode`.
-          process.exit();
-        });
-    };
-
     const relaunchCurrentProcess = (): void => {
       const child = spawn(process.execPath, process.argv.slice(1), {
         detached: true,
@@ -420,7 +414,10 @@ function openDefaultWindow(): number {
     busHandlerCleanups.push(
       MakaioBus.on(
         KernelSubjects.restart,
-        createElectrobunRestartHandler({ relaunch: relaunchCurrentProcess, shutdown: handleShutdown }),
+        createElectrobunRestartHandler({
+          relaunch: relaunchCurrentProcess,
+          shutdown: () => hostShutdown.request('kernel.restart'),
+        }),
       ),
     );
 
@@ -460,7 +457,7 @@ function openDefaultWindow(): number {
             console.warn('[electrobun] Failed to open dashboard from tray menu:', err);
           });
       },
-      onQuit: () => void handleShutdown(),
+      onQuit: () => void hostShutdown.request('tray quit'),
       get autoLaunchEnabled() {
         return autoLaunchController.enabled;
       },
@@ -479,7 +476,7 @@ function openDefaultWindow(): number {
     }
 
     // Combine tray + shortcut teardown into a single destroyTray callback so
-    // shutdownGracefully can call one function to clean everything up.
+    // the shutdown can call one function to clean everything up.
     destroyTray = () => {
       GlobalShortcut.unregister(GLOBAL_SHORTCUT);
       trayHandle.destroy();
@@ -518,12 +515,9 @@ function openDefaultWindow(): number {
     busHandlerCleanups.push(
       MakaioBus.on(HostSubjects.app.shutdown, (ctx) => {
         ctx.setResult({});
-        queueMicrotask(handleShutdown);
+        queueMicrotask(() => void hostShutdown.request('host.app.shutdown'));
       }),
     );
-
-    process.on('SIGTERM', handleShutdown);
-    process.on('SIGINT', handleShutdown);
 
     // ── Open initial windows ──────────────────────────────────────────────────
     // Skip in background mode: windows are opened lazily when the app is
@@ -542,7 +536,7 @@ function openDefaultWindow(): number {
     process.stdout.write(`MAKAIO_BUS_URL=${busUrl}\n`);
   } catch (err: unknown) {
     console.error('[electrobun] Fatal startup error:', err);
-    await shutdownGracefully(null).catch(logStartupCleanupFailure);
-    process.exit(1);
+    process.exitCode = 1;
+    await hostShutdown.request('startup failure');
   }
 })();

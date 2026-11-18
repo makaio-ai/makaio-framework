@@ -116,7 +116,7 @@ Options:
 installed until it has finished, so a second Ctrl-C (or any further signal) only reports that
 the shutdown is in progress, and a signal during boot cancels the boot and rolls it back. The cancellation reaches the
 waits inside an extension's start too: a detached extension whose child has not become ready yet,
-or whose `init` request has not been answered, is aborted at once and its child stopped, instead
+or whose `init` request has not been answered (for `mcp-stdio`, whose MCP handshake or first tool listing has not completed), is aborted at once and its child stopped, instead
 of the boot waiting out the health timeout. The
 shutdown is bounded step by step. Every extension is stopped inside a window of its own (a
 detached extension's is its destroy request window plus the bounded stop of its child; an embedded
@@ -136,6 +136,16 @@ stopped with the host.
 when it starts, so `nohup makaio serve` still shuts down on a hangup. Use
 `nohup makaio serve --ignore-hangup` (or `setsid`, `tmux`, a service manager) for a host that must
 outlive its terminal.
+
+**Other commands:** a command that boots a runtime of its own (`provideBus`, e.g.
+`makaio workflow run`) handles `SIGINT`, `SIGTERM` and `SIGHUP` the same way. The first signal aborts the
+command's signal (and cancels the runtime boot, if it is still running) and sets the conventional exit
+code (130, 143, 129). The listeners stay installed until the command has finished and its runtime is
+disposed, so a further signal joins the shutdown in progress, and a second Ctrl-C no longer ends the command in
+the middle of the disposal. The shutdown is bounded stage by stage: the handler gets one wind-down window (one
+bounded stop) to return after the abort, and the embedded runtime is then stopped inside the bound its provider
+reports, by the shutdown itself if the handler never returned. A stage that does not finish is named in the log
+and the command ends with status 1.
 
 **Examples:**
 

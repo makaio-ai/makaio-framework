@@ -13,12 +13,18 @@ import {
   normalizeNodeHostCapabilities,
   createHonoRouteGraph,
   createHttpRouteGraphBuilder,
+  createRuntimeLifecycle,
+  localStep,
+  LOCAL_STEP_STOP_BUDGET_MS,
+  resourceStep,
 } from '@makaio/runtime-node';
 import { HostSubjects } from '@makaio/contracts';
 import { TrayMenuSubjects, type TrayMenuListEntry } from '@makaio/services-core/tray-menu';
 import { LocalNotificationSubjects } from '@makaio/services-core/local-notification/namespace';
 import {
   FRAMEWORK_FALLBACK_WINDOW,
+  cleanupsStep,
+  installDesktopHostShutdown,
   loadWindowSession,
   resolveInitialCustomData,
   resolveInitialWindowState,
@@ -61,7 +67,10 @@ export function startApp() {
   // ── State ─────────────────────────────────────────────────────────────────
 
   let windowManager: WindowManager | null = null;
+  const lifecycle = createRuntimeLifecycle();
   let bootPromise: Promise<MakaioRuntime | null> = Promise.resolve(null);
+  /** Tears the tray down; `null` until the tray exists. */
+  let destroyTray: (() => void) | null = null;
   let httpServer: HttpServer | null = null;
   let initialWindowsComplete = false;
   /**
@@ -132,6 +141,36 @@ export function startApp() {
     const closeInfrastructure = preserveStartupFailure ? closeServersAfterStartupFailure : closeServers;
     await closeInfrastructure({ closeVite, server });
   }
+
+  // ── Shutdown ──────────────────────────────────────────────────────────────
+
+  // Installed before anything boots: a signal or a quit (`before-quit`) that arrives while the
+  // runtime boots cancels the boot through its own rollback, and a later one joins the shutdown
+  // in progress. The stage windows come from the shared coordinator; the runtime's from its lifecycle.
+  const hostShutdown = installDesktopHostShutdown({
+    label: 'electron',
+    lifecycle,
+    beforeRuntime: [
+      resourceStep('window session', async () => {
+        if (windowManager) await saveWindowSession(MakaioBus, windowManager, WINDOW_SESSION_SCOPE);
+      }),
+    ],
+    afterRuntime: [
+      cleanupsStep(
+        'bus handlers',
+        () => LOCAL_STEP_STOP_BUDGET_MS,
+        () => busHandlerCleanups,
+      ),
+      localStep('tray', () => destroyTray?.()),
+      resourceStep('server infrastructure', () => closeServerInfrastructure()),
+    ],
+    exit: () => app.exit(0),
+  });
+
+  app.on('before-quit', (e) => {
+    e.preventDefault();
+    void hostShutdown.request('before-quit');
+  });
 
   // ── Window creation helper ────────────────────────────────────────────────
 
@@ -269,34 +308,40 @@ export function startApp() {
       await registerElectronStaticRoutes(builder);
     }
 
-    bootPromise = bootMakaioRuntime({
-      httpServer: httpServer!,
-      routeGraphBuilder: builder,
-      surface: 'interactive',
-      ...runtimeOptions,
-      makaioHome: bootContext.makaioHome,
-      ...(bootContext.frameworkPackagePath !== undefined
-        ? { frameworkPackagePath: bootContext.frameworkPackagePath }
-        : {}),
-      ...(bootContext.modelRegistryFallbackSeedPaths !== undefined
-        ? { modelRegistryFallbackSeedPaths: bootContext.modelRegistryFallbackSeedPaths }
-        : {}),
-      frameworkModuleResolver,
-      hostCapabilities: normalizeNodeHostCapabilities(runtimeOptions.hostCapabilities),
-      onTransportReady({ host, port: readyPort }) {
-        // Announce the bound address on stdout — consumed by the E2E test
-        // harness for port discovery. This fires after the bus WebSocket
-        // upgrade handler is attached, so the port is actually connectable.
-        process.stdout.write(`MAKAIO_PORT=${readyPort}\n`);
-        console.info('[electron] Bus transport ready on %s:%d', host, readyPort);
-      },
-    })
+    bootPromise = lifecycle
+      .boot((hooks) =>
+        bootMakaioRuntime({
+          httpServer: httpServer!,
+          routeGraphBuilder: builder,
+          surface: 'interactive',
+          ...runtimeOptions,
+          makaioHome: bootContext.makaioHome,
+          ...(bootContext.frameworkPackagePath !== undefined
+            ? { frameworkPackagePath: bootContext.frameworkPackagePath }
+            : {}),
+          ...(bootContext.modelRegistryFallbackSeedPaths !== undefined
+            ? { modelRegistryFallbackSeedPaths: bootContext.modelRegistryFallbackSeedPaths }
+            : {}),
+          frameworkModuleResolver,
+          hostCapabilities: normalizeNodeHostCapabilities(runtimeOptions.hostCapabilities),
+          ...hooks,
+          onTransportReady({ host, port: readyPort }) {
+            // Announce the bound address on stdout — consumed by the E2E test
+            // harness for port discovery. This fires after the bus WebSocket
+            // upgrade handler is attached, so the port is actually connectable.
+            process.stdout.write(`MAKAIO_PORT=${readyPort}\n`);
+            console.info('[electron] Bus transport ready on %s:%d', host, readyPort);
+          },
+        }),
+      )
       .then((runtime) => {
         routeGraph?.markReady();
         console.info('[electron] Runtime ready (port=%d)', runtime.port);
         return runtime;
       })
       .catch((err: unknown) => {
+        // A quit interrupted the boot: its rollback has run and the shutdown owns the rest.
+        if (lifecycle.signal.aborted) return null;
         // Release the port before the error window shows.
         return closeServerInfrastructure(true).then(() => {
           showBootErrorWindow(err);
@@ -402,11 +447,11 @@ export function startApp() {
   // ── Shutdown + lifecycle registration ─────────────────────────────────────
 
   /**
-   * Register the `before-quit` shutdown handler and app lifecycle hooks.
-   * @param destroyTray - Tray teardown callback invoked during shutdown.
+   * Register the host-specific quit triggers: the restart and app-shutdown bus
+   * handlers (the `before-quit` trigger is wired with the shutdown itself, early
+   * enough to cover the boot) and the tray-keeps-the-app-alive window policy.
    */
-  function registerShutdownAndLifecycle(destroyTray: () => void): void {
-    let shutdownPromise: Promise<void> | null = null;
+  function registerShutdownAndLifecycle(): void {
     busHandlerCleanups.push(MakaioBus.on(KernelSubjects.restart, createElectronRestartHandler({ app })));
 
     busHandlerCleanups.push(
@@ -415,60 +460,6 @@ export function startApp() {
         queueMicrotask(() => app.quit());
       }),
     );
-
-    app.on('before-quit', (e) => {
-      e.preventDefault();
-      if (shutdownPromise) return;
-
-      shutdownPromise = (async () => {
-        // The exit status is the only channel a supervisor reads, so a runtime
-        // that could not release everything it started must not leave behind a
-        // status that says the drain completed.
-        let exitCode = 0;
-
-        try {
-          if (windowManager) await saveWindowSession(MakaioBus, windowManager, WINDOW_SESSION_SCOPE);
-        } catch (err: unknown) {
-          exitCode = 1;
-          console.warn('[electron] Failed to save window session:', err);
-        }
-
-        try {
-          const runtime = await bootPromise;
-          if (runtime) await runtime.shutdown();
-        } catch (err: unknown) {
-          exitCode = 1;
-          console.error('[electron] Runtime shutdown did not complete cleanly:', err);
-        }
-
-        // Defensive: individual cleanup failures must not prevent subsequent
-        // teardown steps (especially httpServer.close) from running.
-        for (const cleanup of busHandlerCleanups) {
-          try {
-            cleanup();
-          } catch (cleanupErr: unknown) {
-            exitCode = 1;
-            console.warn('[electron] Bus handler cleanup error:', cleanupErr);
-          }
-        }
-
-        try {
-          destroyTray();
-        } catch (trayErr: unknown) {
-          exitCode = 1;
-          console.warn('[electron] Tray teardown error:', trayErr);
-        }
-
-        try {
-          await closeServerInfrastructure();
-        } catch (err: unknown) {
-          exitCode = 1;
-          console.error('[electron] Server infrastructure shutdown did not complete cleanly:', err);
-        }
-
-        app.exit(exitCode);
-      })();
-    });
 
     app.on('window-all-closed', () => {
       // Don't quit — the tray keeps the app alive on all platforms.
@@ -531,7 +522,7 @@ export function startApp() {
         onRestoreFromBackground: restoreFromBackgroundMode,
       });
 
-      const { destroy: destroyTray, refreshMenu } = createTray({
+      const { destroy, refreshMenu } = createTray({
         iconPath,
         listWindows: () => windowManager!.listWindows(),
         listRegistrations: () => runtime.windowRegistry.list(),
@@ -587,7 +578,8 @@ export function startApp() {
 
       await refreshTrayEntries();
 
-      registerShutdownAndLifecycle(destroyTray);
+      destroyTray = destroy;
+      registerShutdownAndLifecycle();
 
       // Skip in background mode: windows are opened lazily when the app is
       // first brought to the foreground (via activate, second-instance, or app.focus).
@@ -603,10 +595,9 @@ export function startApp() {
       // Tear down any partially-initialized infrastructure so the error
       // window is the only thing left running.
       try {
-        const runtime = await bootPromise;
-        if (runtime) await runtime.shutdown();
-      } catch {
-        // Ignore — runtime may not have booted.
+        await lifecycle.stop('fatal startup error');
+      } catch (stopErr: unknown) {
+        console.warn('[electron] Runtime stop after the fatal startup error did not complete cleanly:', stopErr);
       }
       for (const cleanup of busHandlerCleanups) {
         try {

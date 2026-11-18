@@ -1,7 +1,8 @@
 /**
- * Process harness for the serve signal-handling E2E tests.
+ * Process harness for the signal-handling E2E tests of the hosts.
  *
- * Starts the `serve-signal-entry.ts` fixture as an isolated child process whose
+ * Starts one of the fixture entries (`serve-signal-entry.ts`, the Bun host
+ * `bun-host-signal-entry.ts`, the CLI command `command-signal-entry.ts`) as an isolated child process whose
  * PID is the host's own (not a wrapper that relays signals), so a test can
  * deliver real OS signals to the host exactly as a terminal or a supervisor
  * would, and tracks every PID the fixture's children record so that nothing
@@ -20,7 +21,16 @@ import { isolatedServeEnv } from './spawn-serve.js';
 
 const HARNESS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolveWorkspaceRoot(path.resolve(HARNESS_DIR, '../..'));
-const ENTRY = path.resolve(HARNESS_DIR, 'serve-signal-entry.ts');
+
+/** Fixture entries a host under test can be started from. */
+const ENTRIES = {
+  serve: { file: path.resolve(HARNESS_DIR, 'serve-signal-entry.ts'), runtime: 'node' },
+  'bun-host': { file: path.resolve(HARNESS_DIR, 'bun-host-signal-entry.ts'), runtime: 'bun' },
+  command: { file: path.resolve(HARNESS_DIR, 'command-signal-entry.ts'), runtime: 'node' },
+} as const;
+
+/** Which fixture entry a host is started from. */
+export type SignalHostKind = keyof typeof ENTRIES;
 
 /** How a host process ended. */
 export interface HostExit {
@@ -32,7 +42,9 @@ export interface HostExit {
 
 /** Options of {@link startSignalServe}. */
 export interface SignalServeOptions {
-  /** Extra `serve` arguments, e.g. `--ignore-hangup`. */
+  /** Fixture entry to start; `serve` (the real `makaio serve` command) by default. */
+  readonly kind?: SignalHostKind;
+  /** Extra arguments of the entry, e.g. `--ignore-hangup` for `serve`. */
   readonly args?: readonly string[];
   /** Fixture environment variables (see `serve-signal-entry.ts`). */
   readonly env?: Readonly<Record<string, string>>;
@@ -86,11 +98,16 @@ export function startSignalServe(options: SignalServeOptions = {}): SignalServeH
 
   const { env, homeDir } = isolatedServeEnv(tempDir, { [CHILD_PID_FILE_ENV]: pidFile, ...options.env });
   fs.mkdirSync(homeDir, { recursive: true });
-  const entryArgs = ['--import', 'tsx', ENTRY, ...(options.args ?? [])];
+  const entry = ENTRIES[options.kind ?? 'serve'];
+  // A Bun host runs on Bun itself, as the product Bun apps do; the others run on Node through tsx.
+  const [executable, entryArgs] =
+    entry.runtime === 'bun'
+      ? (['bun', [entry.file, ...(options.args ?? [])]] as const)
+      : ([process.execPath, ['--import', 'tsx', entry.file, ...(options.args ?? [])]] as const);
   // `exec` keeps the host's PID; the ignored disposition is inherited across it.
   const [command, args] = options.launchIgnoringHangup
-    ? (['/bin/sh', ['-c', 'trap "" HUP; exec "$0" "$@"', process.execPath, ...entryArgs]] as const)
-    : ([process.execPath, entryArgs] as const);
+    ? (['/bin/sh', ['-c', 'trap "" HUP; exec "$0" "$@"', executable, ...entryArgs]] as const)
+    : ([executable, entryArgs] as const);
   const child: ChildProcess = spawn(command, args, { cwd: REPO_ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });
   const pid = child.pid;
   if (pid === undefined) throw new Error('Failed to spawn the serve fixture');

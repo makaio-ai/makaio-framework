@@ -4,10 +4,13 @@ import type {
   BeforeRunResult,
   CommandContext,
   CliContribution,
+  EmbeddedBusHandle,
   ProvideBusContext,
 } from '@makaio/kernel/cli';
+import { readCancellation } from '@makaio/kernel';
 import { formatConnectionError } from './connection-error.js';
-import { CLI_COMMAND_ABORT_SIGNALS, CLI_COMMAND_SIGNAL_EXIT_CODES } from '@makaio/utils';
+import { installHostShutdown, resourceStepStopBudgetMs } from '@makaio/runtime-node';
+import { CLI_COMMAND_ABORT_SIGNALS, CLI_COMMAND_SIGNAL_EXIT_CODES, outerBoundMs } from '@makaio/utils';
 
 type CommandAbortSignal = (typeof CLI_COMMAND_ABORT_SIGNALS)[number];
 
@@ -56,6 +59,8 @@ const noopDispose = (): Promise<void> => Promise.resolve();
  *   the factory via {@link ProvideBusContext}).
  * @param args - Parsed command arguments (forwarded to the factory).
  * @param cwd - Working directory from which the CLI was invoked.
+ * @param signalContext - Signal context of the invocation; its signal and stop-budget
+ *   report are what the embedded provider receives through {@link ProvideBusContext}.
  * @returns A resolved bus handle with a unified `dispose` contract.
  */
 export async function resolveContributionBus(
@@ -64,16 +69,26 @@ export async function resolveContributionBus(
   subcommandName: string,
   args: Record<string, unknown>,
   cwd: string,
+  signalContext: ProcessCommandSignalContext,
 ): Promise<ResolvedCliBus> {
   if (externalBus !== null) {
     return { bus: externalBus, dispose: noopDispose };
   }
 
   if (provideBus) {
-    const context: ProvideBusContext = { subcommandName, args, cwd };
-    const handle = await provideBus(context);
+    const context: ProvideBusContext = {
+      subcommandName,
+      args,
+      cwd,
+      signal: signalContext.signal,
+      onStopBudget: signalContext.onStopBudget,
+    };
+    const provisioning = provideBus(context);
+    // Registered before the boot is awaited: a signal during it must find the boot to cancel and the handle to dispose.
+    const disposeEmbedded = signalContext.adoptEmbeddedBus(provisioning);
+    const handle = await provisioning;
     if (handle !== null) {
-      return { bus: handle.bus, dispose: () => handle.dispose() };
+      return { bus: handle.bus, dispose: disposeEmbedded };
     }
   }
 
@@ -104,21 +119,19 @@ export function getAuthorizedProvideBus(
 /**
  * Result of {@link createProcessCommandContext}.
  *
- * Callers must invoke `cleanup()` when the command finishes (typically in a
- * `finally` block) to remove process signal listeners if no signal was received.
+ * Callers must invoke `finish()` when the command has finished, including the
+ * disposal of what it owns (typically in a `finally` block after the embedded
+ * bus was disposed), so the process signals are given back.
  * @typeParam TArgs - Inferred from the command's Zod schema.
  */
 export interface ProcessCommandContextResult<TArgs> {
   /** The command context to pass to the handler. */
   readonly context: CommandContext<TArgs>;
   /**
-   * Remove process signal listeners registered for this command.
-   *
-   * Must be called when the command completes (success or failure) so the
-   * listeners do not accumulate across many commands in a long-lived process.
-   * Calling this after a signal has already fired is safe (a no-op).
+   * Declare the command finished. See {@link ProcessCommandSignalContext.finish}.
+   * @returns Settles once the process signals have been given back.
    */
-  cleanup(): void;
+  finish(): Promise<void>;
 }
 
 /**
@@ -131,47 +144,152 @@ export interface ProcessCommandContextResult<TArgs> {
 export interface ProcessCommandSignalContext {
   /** Abort signal shared with the eventual {@link CommandContext}. */
   readonly signal: AbortSignal;
-  /** Remove process signal listeners registered for this invocation. */
-  cleanup(): void;
+  /**
+   * Receive the bound an embedded provider reports for stopping what it started
+   * (see {@link ProvideBusContext.onStopBudget}).
+   * @param stopBudgetMs - Reads the current bound in milliseconds, or `undefined` when nothing is running.
+   */
+  onStopBudget(stopBudgetMs: () => number | undefined): void;
+  /**
+   * Take over the stopping of the embedded bus that is being provisioned. When a
+   * signal arrives, the shutdown stops it on its own once the handler has had its
+   * wind-down, whether or not the handler ever returns: so a command that does not
+   * honour the abort cannot leave the runtime (and the children it started) running
+   * when the shutdown ends the process.
+   * @param provisioning - The pending result of the provider.
+   * @returns The disposal of the embedded bus, shared with the shutdown: the first call starts it, later ones
+   *   join it, and a failed one is not kept. Once the provisioning has settled without a handle it does nothing.
+   */
+  adoptEmbeddedBus(provisioning: Promise<EmbeddedBusHandle | null>): () => Promise<void>;
+  /**
+   * Declare the handler settled: it has returned or failed, and what the command
+   * owns is about to be disposed. A shutdown that is waiting for the handler to
+   * wind down moves on to stopping the embedded bus.
+   */
+  handlerSettled(): void;
+  /**
+   * Declare the command finished: its handler has returned and what it owns has
+   * been disposed. A shutdown that a signal requested while the command ran
+   * completes now and gives the signals back; without one the signals are given
+   * back at once. Safe to call repeatedly.
+   * @returns Settles once the process signals have been given back.
+   */
+  finish(): Promise<void>;
+}
+
+/**
+ * Time the handler of an aborted command gets to wind down before the shutdown
+ * stops the runtime it uses on its own: one bounded stop, the unit every process and
+ * resource stop in the runtime uses. The command contract is to honour the abort
+ * signal promptly; this is what keeps a handler that does not from making the
+ * invocation impossible to interrupt.
+ * @returns The wind-down window, in milliseconds.
+ */
+function commandWindDownMs(): number {
+  return resourceStepStopBudgetMs();
+}
+
+/**
+ * Narrow a shutdown reason to the process signals a command stops on.
+ * @param reason - Reason the shutdown was requested with.
+ * @returns The signal, or `undefined` when the reason is not one.
+ */
+function toCommandAbortSignal(reason: string): CommandAbortSignal | undefined {
+  return CLI_COMMAND_ABORT_SIGNALS.find((signal) => signal === reason);
 }
 
 /**
  * Create a process-backed signal context for local CLI execution.
  *
- * Registers one-shot handlers for command-abort process signals. Each handler
- * aborts the returned `signal` and sets the conventional signal exit code.
- * This intentionally gives command `finally` blocks a chance to dispose
- * embedded runtimes instead of letting Node terminate immediately.
- * The caller **must** invoke `cleanup()` when command dispatch finishes so the
- * listeners are removed if no signal was received.
- * @returns Signal context and a `cleanup` function to remove registered signal listeners.
+ * Built on the host shutdown coordinator: its listeners stay installed until the
+ * command has finished ({@link ProcessCommandSignalContext.finish}), so a signal
+ * that arrives while the embedded runtime is being stopped joins the shutdown in
+ * progress instead of taking the default action and ending the process in the
+ * middle of it. The first signal aborts the returned `signal` with the signal's
+ * name as reason and sets the conventional signal exit code; this gives command
+ * `finally` blocks a chance to dispose embedded runtimes instead of letting
+ * Node terminate immediately.
+ *
+ * The shutdown is bounded, stage by stage. The handler gets one wind-down window
+ * to return after the abort; the embedded runtime is then stopped inside the bound
+ * its provider reports. A stage that does not finish is named, the next one still
+ * runs, and the process ends with status 1 once every stage has been handled.
+ * @returns Signal context; the caller **must** invoke `finish()` when command dispatch finishes.
  */
 export function createProcessCommandSignalContext(): ProcessCommandSignalContext {
   const controller = new AbortController();
-  let cleaned = false;
-  const listeners = CLI_COMMAND_ABORT_SIGNALS.map((signal) => {
-    const listener: NodeJS.SignalsListener = () => onSignal(signal);
-    process.once(signal, listener);
-    return { signal, listener };
+  let stopBudgetMs: (() => number | undefined) | undefined;
+  let disposeEmbedded: (() => Promise<void>) | undefined;
+  let provisioningPending = false;
+  let markHandlerSettled!: () => void;
+  const handlerSettled = new Promise<void>((resolve) => {
+    markHandlerSettled = resolve;
   });
-  const cleanup = (): void => {
-    if (cleaned) return;
-    cleaned = true;
-    for (const { signal, listener } of listeners) {
-      process.off(signal, listener);
-    }
-  };
-  const onSignal = (signal: CommandAbortSignal) => {
-    if (!controller.signal.aborted) {
-      cleanup();
-      controller.abort(signal);
+
+  const shutdown = installHostShutdown({
+    label: 'cli',
+    signals: CLI_COMMAND_ABORT_SIGNALS,
+    steps: [
+      {
+        name: 'command',
+        // While the embedded bus is still being provisioned there is no handler to wind down
+        // and the stage returns at once; the boot is cancelled and bounded by the next stage.
+        budgetMs: () => outerBoundMs(commandWindDownMs()),
+        run: () => (provisioningPending ? undefined : handlerSettled),
+      },
+      {
+        name: 'embedded runtime',
+        // A provider that reports no bound (or none while it is running) leaves the invocation
+        // with the router's default: one bounded stop.
+        budgetMs: () => outerBoundMs(stopBudgetMs?.() ?? resourceStepStopBudgetMs()),
+        run: () => disposeEmbedded?.(),
+      },
+    ],
+    onRequest: (reason) => {
+      const signal = toCommandAbortSignal(reason);
+      if (signal === undefined) return;
       process.exitCode = CLI_COMMAND_SIGNAL_EXIT_CODES[signal];
-    }
-  };
+      controller.abort(signal);
+    },
+  });
 
   return {
     signal: controller.signal,
-    cleanup,
+    onStopBudget: (read) => {
+      stopBudgetMs = read;
+    },
+    adoptEmbeddedBus: (pending) => {
+      provisioningPending = true;
+      const done = (): void => {
+        provisioningPending = false;
+      };
+      pending.then(done, done);
+      let disposing: Promise<void> | undefined;
+      disposeEmbedded = () => {
+        disposing ??= (async () => {
+          // A provisioning that a signal cancelled cleanly has no handle and nothing to dispose. Any
+          // other rejection (a failed rollback of the cancelled boot, a failed provisioning) reaches
+          // the shutdown, which must end with failure: the dispatcher drops its copy of it once the
+          // signal has aborted.
+          const handle = await pending.catch((error: unknown) => {
+            if (readCancellation(error, controller.signal)?.length === 0) return null;
+            throw error;
+          });
+          await handle?.dispose();
+        })().catch((error: unknown) => {
+          disposing = undefined;
+          throw error;
+        });
+        return disposing;
+      };
+      return disposeEmbedded;
+    },
+    handlerSettled: () => markHandlerSettled(),
+    finish: async () => {
+      markHandlerSettled();
+      shutdown.release();
+      await shutdown.finished();
+    },
   };
 }
 
@@ -197,6 +315,22 @@ export async function disposeResolvedBusForCommand(resolved: ResolvedCliBus | un
 }
 
 /**
+ * Finish one command invocation: declare the handler settled, dispose what the
+ * command owns, and give the process signals back. Every dispatcher calls it
+ * from its `finally` block.
+ * @param resolved - Resolved bus handle for the current invocation, if one was created.
+ * @param signalContext - Signal context of the invocation.
+ */
+export async function finishCommand(
+  resolved: ResolvedCliBus | undefined,
+  signalContext: ProcessCommandSignalContext,
+): Promise<void> {
+  signalContext.handlerSettled();
+  await disposeResolvedBusForCommand(resolved);
+  await signalContext.finish();
+}
+
+/**
  * Create the process-backed command context for local CLI execution.
  *
  * By default this creates its own signal context. Command dispatchers that
@@ -207,7 +341,7 @@ export async function disposeResolvedBusForCommand(resolved: ResolvedCliBus | un
  * @param args - Parsed command arguments.
  * @param bus - Connected bus instance.
  * @param signalContext - Optional pre-created signal context for this invocation.
- * @returns Context and a `cleanup` function to remove the registered signal listeners.
+ * @returns Context and a `finish` function that gives the process signals back.
  */
 export function createProcessCommandContext<TArgs>(
   args: TArgs,
@@ -229,7 +363,7 @@ export function createProcessCommandContext<TArgs>(
 
   return {
     context,
-    cleanup: signalContext.cleanup,
+    finish: signalContext.finish,
   };
 }
 
