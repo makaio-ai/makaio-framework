@@ -122,15 +122,15 @@ describe('Cross-transport priority dispatch', () => {
       );
 
       // Note: This test stubs transport.send() to throw NoHandlerError directly
-      // rather than feeding through a real registry; see cross-transport-cursor-e2e.test.ts (Test G)
+      // rather than feeding through a real registry; see cross-transport-cursor-e2e.test.ts (Tests G and H)
       // for the end-to-end coverage with real registries on both sides.
 
       // Remote transport advertised at priorities 300 and 200.
       // Returns NoHandlerError to signal "chain exhausted at the remote node" so
-      // dispatch continues to the next entry in the merged list.
+      // dispatch continues past every entry of that transport.
       const remoteTransport = createRecordingTransport('remote-ab', (message) => {
         if (message.type === 'request') {
-          order.push('remote-send');
+          order.push(`remote-send:${String(message.priority)}`);
           return new NoHandlerError('crossDispatch.compute');
         }
         return true;
@@ -147,9 +147,9 @@ describe('Cross-transport priority dispatch', () => {
 
         const result = await MakaioBus.request(CrossDispatchSubjects.compute, { value: 1 });
 
-        // The transport should be called twice: once for the 300 entry, once for 200.
-        // Both return NoHandlerError so dispatch falls through to local-100.
-        expect(order).toEqual(['local-400', 'remote-send', 'remote-send', 'local-100']);
+        // One hop with the local-400 cursor covers the transport's whole chain, so
+        // its 200 entry is not re-sent; NoHandlerError falls through to local-100.
+        expect(order).toEqual(['local-400', 'remote-send:400', 'local-100']);
         expect(result.result).toBe(100);
       } finally {
         unregister();

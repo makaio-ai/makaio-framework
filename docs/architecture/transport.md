@@ -357,9 +357,15 @@ The dispatcher walks this list from highest to lowest priority:
    done. If it calls `next()`, advance to the next entry.
 2. **Remote entry** — send a `BusRequestMessage` to that transport with a
    `priority` cursor. The remote node starts its own dispatch chain from that
-   priority downward.
+   priority downward. A node entered with a cursor never forwards a larger one.
 3. If the remote returns `NoHandlerError`, the local chain continues to the
-   next entry.
+   next entry. A transport is sent at most one hop per walk on this node,
+   whether that hop returned `NoHandlerError` or failed: it already ran the
+   remote node's whole chain below the cursor, so the transport's later entries
+   in the walk are skipped. A skipped entry still counts as a passed priority
+   when the cursor for the next hop is derived. A nested walk entered with a
+   lower cursor is a new walk and may hop to the same transport for its
+   remaining entries.
 4. If no handler in the entire chain produces a result, `NoHandlerError` is
    thrown (or `{ handled: false }` for `requestOptional`).
 
