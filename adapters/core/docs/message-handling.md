@@ -83,6 +83,19 @@ const result = await MakaioBus.request(AdapterSubjects.infer, {
 console.log(result.text);
 ```
 
+`infer` fails closed: it resolves only when the inference turn completes. A provider error,
+cancellation, or failed completion transform rejects the request; its `cause` is a
+`TurnNotCompletedError` (exported from `@makaio/ai-adapters-core`) that carries the terminal
+`outcome` and keeps the original failure as its own `cause`. An output that still violates
+`responseSchema` after retry and enforcement rejects with a schema-violation error. Callers never
+receive a failure as empty or partial `text`.
+
+The same rule applies to structured-output retries on agent turns: when a retry turn does not
+complete, the original turn ends with the retry's terminal outcome (`error` with the provider error,
+or `cancelled`) and no message, and validation reports `failed` with the failure in its errors. The
+failure is never passed to enforcement as empty output, and the invalid first attempt is never
+reported as the turn's answer.
+
 ## Message Shape
 
 `initialMessage` and `AgentSubjects.sendMessage.message` accept either a plain string or a

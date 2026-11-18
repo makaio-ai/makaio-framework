@@ -15,6 +15,7 @@ import type {
   ConnectorStartOptions,
 } from '../agent/types.js';
 import type { PlatformDefaults } from '../types/ai-adapter-init-options.js';
+import { requireCompletedTurnText } from '../message-handle/index.js';
 import type { ExtractSubjectPayload, ExtractSubjectResponse, RequestContext } from '@makaio/core';
 import {
   AdapterSubjects,
@@ -107,6 +108,9 @@ export interface HandleInferDeps<TBus extends ScopedBus<string>, TConnector exte
  *
  * Creates an ephemeral connector, executes inference, extracts text, and
  * cleans up. The ephemeral agent ID is never registered in the agent registry.
+ * Fails closed: the request resolves only when the inference turn completes
+ * (and, with `responseSchema`, its output validates); any other terminal
+ * outcome rejects with the original failure as cause.
  * @param ctx - Request context with InferRequest payload
  * @param deps - Adapter-provided dependencies for connector creation
  */
@@ -243,9 +247,8 @@ async function executeInitializedInference<TBus extends ScopedBus<string>, TConn
     ...(responseSchema !== undefined && { responseSchema }),
   };
   const startResult = await connector.start(normalizedMessage, startOptions);
-  const result = await startResult.messageHandle.waitForCompletion();
-  const text = result.result?.message ?? '';
-  if (responseSchema === undefined || result.outcome !== 'completed') {
+  const text = requireCompletedTurnText(await startResult.messageHandle.waitForCompletion());
+  if (responseSchema === undefined) {
     return text;
   }
   return validateInferStructuredOutput({ connector, manager, responseSchema, startResult, text });
@@ -319,8 +322,7 @@ async function validateInferStructuredOutput<TBus extends ScopedBus<string>, TCo
         },
       };
       const retryHandle = await connector.sendMessage(startResult.messageHandle.message, retryOptions);
-      const retryResult = await retryHandle.waitForCompletion();
-      return retryResult.result?.message ?? '';
+      return requireCompletedTurnText(await retryHandle.waitForCompletion());
     },
   });
   if (validated.structuredOutputValidation.status === 'failed') {

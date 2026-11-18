@@ -22,7 +22,7 @@ import { EPHEMERAL_CLEANUP_COMPLETION_TIMEOUT_MS } from '../ai-adapter-start-han
 import { createAdapterNamespace } from '../../factory/create-adapter-namespace.js';
 import { AIAgent } from '../../agent/ai-agent.js';
 import { AIAgentConnector } from '../../connector/agent-connector.js';
-import { MessageHandle } from '../../message-handle/index.js';
+import { MessageHandle, type MessageResult } from '../../message-handle/index.js';
 import type {
   AIAgentConfig,
   AgentStartResult,
@@ -34,6 +34,8 @@ import type { AIAdapterConfig } from '../types.js';
 import type { NormalizedMessageInput } from '../../utils/normalizeMessageInput.js';
 import type { AdapterProviderDefinition } from '../../types/provider-definition.js';
 import { createTestProviderAuth } from '../../__tests__/__fixtures__/adapter-provider-auth.js';
+// Imported through the public entry point: callers must be able to narrow an infer rejection.
+import { TurnNotCompletedError } from '@makaio/ai-adapters-core';
 import { registerAgentRowStorage, registerStartReservationAuthority } from './shared.js';
 
 type TestBus = ReturnType<typeof createMockScopedBus>['bus'];
@@ -60,6 +62,12 @@ interface ConnectorBehavior {
   throwOnInitialize?: Error;
   throwOnStart?: Error;
   throwOnClose?: Error;
+  /** Fail the started turn asynchronously through the connector's real `handleError` path. */
+  failAfterStart?: Error;
+  /** Terminal result of the started turn; defaults to completing with `inferredText`. */
+  startResult?: MessageResult;
+  /** Terminal result of a structured-output retry turn; defaults to completing with `retryInferredText`. */
+  retryResult?: MessageResult;
   completeOnStart?: boolean;
   onInitialize?: () => void;
   onStart?: () => void;
@@ -112,11 +120,17 @@ class ConfigurableConnector extends AIAgentConnector {
 
     const handle = new MessageHandle('infer-msg', message, 'enqueue');
     this.startedHandles.push(handle);
-    if (this.behavior.completeOnStart ?? true) {
-      handle.markCompleted({
-        outcome: 'completed',
-        result: { message: this.behavior.inferredText },
-      });
+    const asyncFailure = this.behavior.failAfterStart;
+    if (asyncFailure) {
+      this.pendingMessageHandle = handle;
+      setImmediate(() => this.handleError(asyncFailure));
+    } else if (this.behavior.completeOnStart ?? true) {
+      handle.markCompleted(
+        this.behavior.startResult ?? {
+          outcome: 'completed',
+          result: { message: this.behavior.inferredText },
+        },
+      );
     }
 
     return {
@@ -130,7 +144,8 @@ class ConfigurableConnector extends AIAgentConnector {
     message: NormalizedMessageInput,
     options?: ConnectorSendMessageOptions,
   ): Promise<MessageHandle> {
-    if (this.behavior.retryInferredText === undefined) {
+    const retryInferredText = this.behavior.retryInferredText;
+    if (retryInferredText === undefined && this.behavior.retryResult === undefined) {
       throw new Error('sendMessage should not be called in infer tests');
     }
 
@@ -141,10 +156,12 @@ class ConfigurableConnector extends AIAgentConnector {
       message,
       options?.deliveryMode ?? 'enqueue',
     );
-    handle.markCompleted({
-      outcome: 'completed',
-      result: { message: this.behavior.retryInferredText },
-    });
+    handle.markCompleted(
+      this.behavior.retryResult ?? {
+        outcome: 'completed',
+        result: { message: retryInferredText },
+      },
+    );
     return handle;
   }
 
@@ -992,6 +1009,127 @@ describe('AIAdapter.handleInfer', () => {
       expect.objectContaining({ message: 'start failed' }),
       expect.objectContaining({ message: 'close failed' }),
     ]);
+    expect(capture.connectors[0]?.closeCalls).toBe(1);
+  });
+
+  it('rejects infer when the provider fails the turn after start', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    const providerFailure = new Error('rate limit exceeded');
+    adapter = createTestAdapter({ inferredText: '', failAfterStart: providerFailure }, capture);
+    await adapter.init();
+
+    try {
+      const error = await MakaioBus.request(AdapterSubjects.infer, {
+        adapterId: adapter.adapterId,
+        prompt: 'infer this',
+      }).catch((cause: unknown) => cause);
+
+      expect(error).toBeInstanceOf(RequestError);
+      expect((error as RequestError).message).toContain('rate limit exceeded');
+      expect((error as RequestError).cause).toBeInstanceOf(TurnNotCompletedError);
+      expect((error as RequestError).cause).toMatchObject({
+        name: 'TurnNotCompletedError',
+        outcome: 'error',
+        cause: providerFailure,
+      });
+      expect(capture.connectors[0]?.closeCalls).toBe(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      label: 'cancelled turn without responseSchema',
+      startResult: { outcome: 'cancelled', result: { message: 'partial answer' } } satisfies MessageResult,
+      withSchema: false,
+    },
+    {
+      label: 'error outcome that still carries partial text with responseSchema',
+      startResult: {
+        outcome: 'error',
+        error: 'provider reported an error after partial output',
+        result: { message: '{"answer":"partial"}' },
+      } satisfies MessageResult,
+      withSchema: true,
+    },
+  ])('rejects infer instead of returning text for a $label', async ({ startResult, withSchema }) => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    const enforceHandler = vi.fn();
+    MakaioBus.on(AgentSubjects.structuredOutput.enforce, (ctx) => {
+      enforceHandler();
+      ctx.setResult({ enforced: true, output: '{"answer":"enforced"}' });
+    });
+    adapter = createTestAdapter({ inferredText: '', startResult }, capture);
+    await adapter.init();
+
+    const error = await MakaioBus.request(AdapterSubjects.infer, {
+      adapterId: adapter.adapterId,
+      prompt: 'infer this',
+      ...(withSchema && {
+        responseSchema: {
+          schema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] },
+          name: 'answer_schema',
+        },
+      }),
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(RequestError);
+    expect((error as RequestError).cause).toMatchObject({
+      name: 'TurnNotCompletedError',
+      outcome: startResult.outcome,
+    });
+    expect(enforceHandler).not.toHaveBeenCalled();
+    expect(capture.connectors[0]?.closeCalls).toBe(1);
+  });
+
+  it('rejects infer when a structured-output retry turn fails instead of validating empty output', async () => {
+    const capture = {
+      configFactoryInputs: [] as ConfigFactoryInput<TestBus>[],
+      connectors: [] as ConfigurableConnector[],
+      agentConfigs: [] as Array<AIAgentConfig<TestBus, ConfigurableConnector>>,
+    };
+    MakaioBus.on(AgentSubjects.structuredOutput.retryPolicy, (ctx) => {
+      ctx.setResult({ maxRetries: 1 });
+    });
+    const enforceHandler = vi.fn();
+    MakaioBus.on(AgentSubjects.structuredOutput.enforce, (ctx) => {
+      enforceHandler();
+      ctx.setResult({ enforced: true, output: '{"answer":"enforced"}' });
+    });
+    const retryFailure = new Error('rate limit exceeded on retry');
+    adapter = createTestAdapter(
+      { inferredText: '{"answer":7}', retryResult: { outcome: 'error', error: retryFailure } },
+      capture,
+    );
+    await adapter.init();
+
+    const error = await MakaioBus.request(AdapterSubjects.infer, {
+      adapterId: adapter.adapterId,
+      prompt: 'classify this',
+      responseSchema: {
+        schema: { type: 'object', properties: { answer: { type: 'string' } }, required: ['answer'] },
+        name: 'answer_schema',
+      },
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(RequestError);
+    expect((error as RequestError).cause).toMatchObject({
+      name: 'TurnNotCompletedError',
+      outcome: 'error',
+      cause: retryFailure,
+    });
+    expect(capture.connectors[0]?.sendMessageCalls).toBe(1);
+    expect(enforceHandler).not.toHaveBeenCalled();
     expect(capture.connectors[0]?.closeCalls).toBe(1);
   });
 
