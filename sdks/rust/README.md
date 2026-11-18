@@ -9,7 +9,9 @@ This client exposes the protocol bus surface for WebSocket and newline-delimited
 transports:
 
 - strongly typed wire envelopes for `event`, `request`, `response`, `broadcast`, `broadcast-response`, `heartbeat`,
-  `subscribe`, `unsubscribe`, `subscribe-sync-complete`, and HMAC auth frames
+  `subscribe`, `unsubscribe`, `subscribe-sync-complete`, and HMAC auth frames; inbound frames with a
+  `type` this SDK version does not know decode as `BusMessage::Unknown` and are skipped instead of
+  closing the connection
 - an async `BusClient` with `connect`, `connect_with_options`, `from_stdio`, `close`, `emit`, `request`,
   `subscribe`, and `on_request`
 - generated subject constants and typed subject descriptors from `sdks/manifest/makaio-bus-protocol.json`

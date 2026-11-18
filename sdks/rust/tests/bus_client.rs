@@ -118,6 +118,27 @@ fn serializes_and_deserializes_wire_envelopes() {
 }
 
 #[test]
+fn unknown_types_decode_as_unknown_while_malformed_frames_still_fail() {
+    assert_eq!(
+        serde_json::from_value::<BusMessage>(json!({ "type": "future-type", "foo": 1 }))
+            .expect("unknown type should decode"),
+        BusMessage::Unknown
+    );
+    assert!(
+        serde_json::from_value::<BusMessage>(json!({ "type": "response" })).is_err(),
+        "known type with an invalid shape must still fail"
+    );
+    assert!(
+        serde_json::from_value::<BusMessage>(json!({ "foo": 1 })).is_err(),
+        "frame without a type must still fail"
+    );
+    assert!(
+        serde_json::to_value(BusMessage::Unknown).is_err(),
+        "unknown frames must never be sent"
+    );
+}
+
+#[test]
 fn subject_constants_match_manifest_catalog() {
     assert_eq!(subjects::agent::MESSAGE, "agent.message");
     assert_eq!(subjects::approval::REQUEST, "approval.request");
@@ -159,9 +180,15 @@ fn conformance_message_refs_resolve_and_deserialize() {
             let message = messages
                 .get(message_ref)
                 .unwrap_or_else(|| panic!("{case_id} references missing fixture {message_ref}"));
-            serde_json::from_value::<BusMessage>(message.clone()).unwrap_or_else(|error| {
-                panic!("{message_ref} should deserialize as BusMessage: {error}")
-            });
+            let decoded =
+                serde_json::from_value::<BusMessage>(message.clone()).unwrap_or_else(|error| {
+                    panic!("{message_ref} should deserialize as BusMessage: {error}")
+                });
+            assert_ne!(
+                decoded,
+                BusMessage::Unknown,
+                "{case_id}: {message_ref} must decode as a known BusMessage variant"
+            );
         }
     }
 }
@@ -2342,6 +2369,57 @@ async fn reconnect_replays_local_subscriptions() {
     server
         .await
         .expect("reconnect server task should complete without panicking");
+}
+
+#[tokio::test]
+async fn unknown_message_types_are_skipped_without_closing_connection() {
+    let server = serve_once(|mut ws| async move {
+        let request = match read_bus_message(&mut ws).await {
+            BusMessage::Request(request) => request,
+            other => panic!("expected request, received {other:?}"),
+        };
+
+        let subscription_ack = serde_json::to_string(&conformance_message("subscription-ack"))
+            .expect("subscription-ack fixture should serialize");
+        ws.send(Message::Text(subscription_ack.into()))
+            .await
+            .expect("subscription-ack frame should send");
+        ws.send(Message::Text(r#"{"type":"future-type","foo":1}"#.into()))
+            .await
+            .expect("future-type frame should send");
+
+        send_bus_message(
+            &mut ws,
+            BusMessage::Response(ResponseMessage {
+                correlation_id: request.correlation_id,
+                result: Some(json!({ "ok": true })),
+                error: None,
+            }),
+        )
+        .await;
+
+        match read_bus_message(&mut ws).await {
+            BusMessage::Event(event) => assert_eq!(event.payload, json!({ "toolName": "after" })),
+            other => panic!("expected event after unknown frames, received {other:?}"),
+        }
+    })
+    .await;
+
+    let bus = BusClient::connect(&server.url)
+        .await
+        .expect("client should connect");
+    let result = bus
+        .request(subjects::tool::LIST, json!({ "scope": "workspace" }))
+        .await
+        .expect("request should resolve after unknown frames are skipped");
+    assert_eq!(result, json!({ "ok": true }));
+
+    bus.emit(subjects::tool::STARTED, json!({ "toolName": "after" }))
+        .await
+        .expect("connection should stay open after unknown frames");
+
+    bus.close().await.expect("client should close");
+    server.assert_completed().await;
 }
 
 #[tokio::test]
