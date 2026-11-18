@@ -383,8 +383,14 @@ impl BusTransportError {
 }
 
 /// Strongly typed Makaio wire message envelope.
+///
+/// Decoding follows the tolerant-reader rule: a frame whose `type` is not listed here decodes as
+/// [`BusMessage::Unknown`] instead of failing, while a malformed frame of a known type still fails.
+/// The enum is `#[non_exhaustive]` so that modelling a new wire type later does not break
+/// downstream matches.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
+#[non_exhaustive]
 pub enum BusMessage {
     #[serde(rename = "event")]
     Event(EventMessage),
@@ -410,6 +416,11 @@ pub enum BusMessage {
     AuthResponse(AuthResponseMessage),
     #[serde(rename = "auth-result")]
     AuthResult(AuthResultMessage),
+    /// Inbound frame with a `type` this SDK version does not know, such as an additive protocol
+    /// extension. The client read loop skips it without closing the connection; the strict
+    /// auth handshake still rejects it. It can never be sent.
+    #[serde(other, skip_serializing)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1174,7 +1185,8 @@ impl BusClient {
                 | BusMessage::BroadcastResponse(_)
                 | BusMessage::AuthChallenge(_)
                 | BusMessage::AuthResponse(_)
-                | BusMessage::AuthResult(_) => {}
+                | BusMessage::AuthResult(_)
+                | BusMessage::Unknown => {}
             }
         }
 
