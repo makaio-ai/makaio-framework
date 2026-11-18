@@ -12,7 +12,8 @@
  *
  * CI shards are mapped to named Vitest projects and selected via --project:
  *   yarn vitest run --project Core         # core/ + storage/
- *   yarn vitest run --project Platform     # platforms/ runtimes/ transports/ …
+ *   yarn vitest run --project Platform-Runtime     # platforms/ runtimes/
+ *   yarn vitest run --project Platform-Subsystems  # subsystems/ transports/ scripts/ …
  *
  * Usage:
  *   yarn test                              # all projects, default categories
