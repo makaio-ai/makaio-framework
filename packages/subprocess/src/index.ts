@@ -13,6 +13,7 @@ export type {
   TransportStatus,
 } from './types.js';
 export { notifyObserver } from './notify-listeners.js';
+export { processStopBudgetMs } from './stop-budget.js';
 export { createJsonRpcClient } from './json-rpc-client.js';
 export type { IJsonRpcClient, ServerRequestHandler, NotificationHandler } from './json-rpc-client.js';
 export { createProcessLifecycle } from './process-lifecycle.js';
@@ -20,6 +21,7 @@ export type {
   ProcessLifecycleOptions,
   ProcessLifecycleHandle,
   ProcessRunOutcome,
+  ProcessStartOptions,
   ProcessState,
   RestartDecision,
   RestartPolicy,

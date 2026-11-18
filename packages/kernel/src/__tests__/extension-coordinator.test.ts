@@ -4810,6 +4810,117 @@ describe('ExtensionCoordinator', () => {
     });
   });
 
+  describe('startAll cancellation', () => {
+    it('stops starting packages once the signal aborts, and shutdown still destroys the started ones', async () => {
+      const controller = new AbortController();
+      const cancelled = new Error('boot cancelled');
+      const destroyed: string[] = [];
+      const started: string[] = [];
+
+      const coordinator = new ExtensionCoordinator(bus, { extensionContextBase: TEST_PKG_CTX_BASE });
+      coordinator.load([
+        makePackage('first', {
+          create: (ctx) =>
+            makeMockService(
+              ctx.bus,
+              () => {
+                started.push('first');
+                controller.abort(cancelled);
+              },
+              () => {
+                destroyed.push('first');
+              },
+            ),
+        }),
+        makePackage('second', {
+          dependencies: [dep('first')],
+          create: (ctx) =>
+            makeMockService(ctx.bus, () => {
+              started.push('second');
+            }),
+        }),
+      ]);
+
+      await expect(coordinator.startAll({ signal: controller.signal })).rejects.toBe(cancelled);
+      await coordinator.shutdown();
+
+      expect(started).toEqual(['first']);
+      expect(destroyed).toEqual(['first']);
+    });
+
+    it.each([
+      ['non-critical', false],
+      ['critical', true],
+    ])('ends a %s service that is waiting in init() when the signal aborts, destroys it and rejects with the reason', async (_, critical) => {
+      const controller = new AbortController();
+      const cancelled = new Error('boot cancelled');
+      const destroyed: string[] = [];
+      let waiting: (() => void) | undefined;
+
+      const coordinator = new ExtensionCoordinator(bus, { extensionContextBase: TEST_PKG_CTX_BASE });
+      coordinator.load([
+        makePackage('waits', {
+          critical,
+          create: () => ({
+            // A wait that only the signal ends: the readiness it waits for never comes.
+            init: ({ signal } = {}) =>
+              new Promise<void>((_resolve, reject) => {
+                waiting?.();
+                signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+              }),
+            destroy: () => void destroyed.push('waits'),
+          }),
+        }),
+      ]);
+      const waitingForInit = new Promise<void>((resolve) => {
+        waiting = resolve;
+      });
+
+      const started = coordinator.startAll({ signal: controller.signal });
+      await waitingForInit;
+      controller.abort(cancelled);
+
+      // The reason, not the extension's failure, whatever its criticality.
+      await expect(started).rejects.toBe(cancelled);
+      expect(destroyed).toEqual(['waits']);
+      await coordinator.shutdown();
+    });
+
+    it('hands init() a signal that follows the boot signal, not yet aborted while the start is not cancelled', async () => {
+      const controller = new AbortController();
+      let seen: AbortSignal | undefined;
+      const coordinator = new ExtensionCoordinator(bus, { extensionContextBase: TEST_PKG_CTX_BASE });
+      coordinator.load([
+        makePackage('observes', {
+          create: () => ({
+            init: ({ signal } = {}) => {
+              seen = signal;
+            },
+          }),
+        }),
+      ]);
+
+      await coordinator.startAll({ signal: controller.signal });
+
+      expect(seen?.aborted).toBe(false);
+      // The coordinator's shutdown is combined with it, so it follows the boot signal.
+      controller.abort();
+      expect(seen?.aborted).toBe(true);
+      await coordinator.shutdown();
+    });
+
+    it('starts every package when the signal never aborts', async () => {
+      const controller = new AbortController();
+      const coordinator = new ExtensionCoordinator(bus, { extensionContextBase: TEST_PKG_CTX_BASE });
+      coordinator.load([makePackage('only', { create: (ctx) => makeMockService(ctx.bus) })]);
+
+      await coordinator.startAll({ signal: controller.signal });
+
+      expect(coordinator.list().find((e) => e.name === 'only')?.state).toBe('active');
+      await coordinator.shutdown();
+    });
+  });
+
   // ---------------------------------------------------------------------------
   // runMigrations callback
   // ---------------------------------------------------------------------------

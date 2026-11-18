@@ -7,8 +7,13 @@
  * @packageDocumentation
  */
 
-import type { IMakaioBus } from '@makaio/bus-core';
-import type { MakaioNodeExtension, NodeExtensionContext, ExtensionServiceLifecycle } from '@makaio/contracts';
+import { DEFAULT_REQUEST_TIMEOUT_MS, type IMakaioBus } from '@makaio/bus-core';
+import type {
+  ExtensionInitOptions,
+  MakaioNodeExtension,
+  NodeExtensionContext,
+  ExtensionServiceLifecycle,
+} from '@makaio/contracts';
 import { createBusNamespace } from '@makaio/core';
 import { descriptorToBasePackage } from './descriptor-to-package.js';
 import type { DetachedDescriptor } from '@makaio/contracts/extension';
@@ -16,10 +21,13 @@ import type { StdioServerTransport } from '@makaio/bus-transport-stdio';
 import {
   createProcessLifecycle,
   describeTransportEnd,
+  processStopBudgetMs,
   type ProcessLifecycleHandle,
   type ProcessRunOutcome,
+  type ProcessStopTiming,
 } from '@makaio/subprocess';
 import type { McpClientBridgeHandle } from '@makaio/subsystem-mcp-http-server';
+import { abortableWait } from '@makaio/utils';
 import { z } from 'zod';
 
 const DetachedLifecycleContextSchema = z.object({
@@ -105,6 +113,32 @@ function buildDetachedLifecycleContext(
   };
 }
 
+/**
+ * The limits the stop of one detached extension runs under. The services
+ * enforce exactly these values and report their sum as their stop window, so
+ * what the host waits for and what the stop is held to cannot drift apart.
+ */
+interface DetachedStopLimits {
+  /** Time the extension has to answer its lifecycle `destroy` request. */
+  readonly destroyRequestTimeoutMs: number;
+  /** Stop timing of the child: `shutdownTimeoutMs` is its graceful stage; the rest are the subprocess defaults. */
+  readonly stopTiming: ProcessStopTiming;
+  /** Longest the whole stop takes: the request, then the bounded stop of the child, which follow one another. */
+  readonly budgetMs: number;
+}
+
+/**
+ * Resolve the stop limits of a detached extension from its descriptor.
+ * @param descriptor - Detached extension descriptor.
+ * @returns The limits the extension's stop is held to.
+ */
+function resolveDetachedStopLimits(descriptor: DetachedDescriptor): DetachedStopLimits {
+  const { shutdownTimeoutMs } = descriptor.transport;
+  const stopTiming: ProcessStopTiming = { killGraceMs: shutdownTimeoutMs };
+  const destroyRequestTimeoutMs = shutdownTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+  return { destroyRequestTimeoutMs, stopTiming, budgetMs: destroyRequestTimeoutMs + processStopBudgetMs(stopTiming) };
+}
+
 // ---------------------------------------------------------------------------
 // Per-transport service implementations
 // ---------------------------------------------------------------------------
@@ -117,6 +151,8 @@ function buildDetachedLifecycleContext(
  * registration and the child process are torn down during destroy.
  */
 class BusStdioExtensionService implements ExtensionServiceLifecycle {
+  public readonly stopBudgetMs: number;
+  private readonly stopLimits: DetachedStopLimits;
   private readonly descriptor: DetachedDescriptor;
   private readonly ctx: RuntimeNodeExtensionContext;
   private readonly extensionPath: string;
@@ -138,6 +174,8 @@ class BusStdioExtensionService implements ExtensionServiceLifecycle {
     this.ctx = ctx;
     this.extensionPath = extensionPath;
     this.getLifecycleSubjects = createDetachedLifecycleSubjectResolver(ctx, descriptor.name);
+    this.stopLimits = resolveDetachedStopLimits(descriptor);
+    this.stopBudgetMs = this.stopLimits.budgetMs;
   }
 
   /**
@@ -147,8 +185,15 @@ class BusStdioExtensionService implements ExtensionServiceLifecycle {
    *
    * Registering before awaiting `ready` ensures that subscribe frames sent
    * by the child during the handshake are not dropped.
+   *
+   * The handshake waits and the `init` request end when the host cancels the
+   * start (`options.signal`); the failure path then stops the child like any
+   * other failed start.
+   * @param options - Start options; see {@link ExtensionInitOptions}.
    */
-  public async init(): Promise<void> {
+  public async init(options: ExtensionInitOptions = {}): Promise<void> {
+    const { signal } = options;
+    signal?.throwIfAborted();
     const { StdioServerTransport } = await import('@makaio/bus-transport-stdio');
     const { transport: transportConfig } = this.descriptor;
     const lifecycleSubjects = this.getLifecycleSubjects();
@@ -163,7 +208,7 @@ class BusStdioExtensionService implements ExtensionServiceLifecycle {
         processName: this.descriptor.name,
       },
       // The descriptor's stop window bounds the transport's stop, not only the destroy request.
-      stopTiming: { killGraceMs: transportConfig.shutdownTimeoutMs },
+      stopTiming: this.stopLimits.stopTiming,
     });
 
     let unregister: (() => void) | null = null;
@@ -171,8 +216,8 @@ class BusStdioExtensionService implements ExtensionServiceLifecycle {
       const registration = this.ctx.bus.registerTransport(transport);
       unregister = registration.unregister;
       await transport.connect();
-      await transport.ready;
-      await registration.ready;
+      await abortableWait(transport.ready, signal);
+      await abortableWait(registration.ready, signal);
 
       this.transport = transport;
       this.unregister = unregister;
@@ -183,7 +228,7 @@ class BusStdioExtensionService implements ExtensionServiceLifecycle {
           config: this.ctx.config ?? this.descriptor.config?.defaults,
           context: buildDetachedLifecycleContext(this.ctx),
         },
-        { timeout: transportConfig.healthTimeoutMs },
+        { timeout: transportConfig.healthTimeoutMs, signal },
       );
     } catch (error) {
       unregister?.();
@@ -205,7 +250,7 @@ class BusStdioExtensionService implements ExtensionServiceLifecycle {
         await this.ctx.bus.request(
           lifecycleSubjects.destroy,
           { reason: 'runtime-shutdown' },
-          { timeout: this.descriptor.transport.shutdownTimeoutMs },
+          { timeout: this.stopLimits.destroyRequestTimeoutMs },
         );
       } catch (error) {
         console.warn(
@@ -239,6 +284,8 @@ class BusStdioExtensionService implements ExtensionServiceLifecycle {
  * is lost for good.
  */
 class ProcessLifecycleExtensionService implements ExtensionServiceLifecycle {
+  public readonly stopBudgetMs: number;
+  private readonly stopLimits: DetachedStopLimits;
   private readonly descriptor: DetachedDescriptor;
   private readonly ctx: RuntimeNodeExtensionContext;
   private readonly extensionPath: string;
@@ -255,12 +302,19 @@ class ProcessLifecycleExtensionService implements ExtensionServiceLifecycle {
     this.ctx = ctx;
     this.extensionPath = extensionPath;
     this.getLifecycleSubjects = createDetachedLifecycleSubjectResolver(ctx, descriptor.name);
+    this.stopLimits = resolveDetachedStopLimits(descriptor);
+    this.stopBudgetMs = this.stopLimits.budgetMs;
   }
 
   /**
-   * Spawn the child process and wait for it to signal readiness.
+   * Spawn the child process and wait for it to signal readiness, then send the
+   * `init` request. Both waits end when the host cancels the start
+   * (`options.signal`): the lifecycle is stopped through its own `stop()`, which
+   * also stops the child.
+   * @param options - Start options; see {@link ExtensionInitOptions}.
    */
-  public async init(): Promise<void> {
+  public async init(options: ExtensionInitOptions = {}): Promise<void> {
+    const { signal } = options;
     const { transport: transportConfig } = this.descriptor;
     if (!this.ctx.busUrl) {
       throw new Error(
@@ -284,15 +338,15 @@ class ProcessLifecycleExtensionService implements ExtensionServiceLifecycle {
         processName: this.descriptor.name,
       },
       healthTimeoutMs: transportConfig.healthTimeoutMs,
-      stopTiming: { killGraceMs: transportConfig.shutdownTimeoutMs },
+      stopTiming: this.stopLimits.stopTiming,
       restartPolicy: 'restartPolicy' in transportConfig ? transportConfig.restartPolicy : undefined,
       onReady: () => this.initializeRestartedGeneration(),
       onExit: (outcome) => this.reportUnrequestedEnd(outcome),
     });
 
     try {
-      await this.lifecycle.start();
-      await this.requestInit();
+      await this.lifecycle.start({ signal });
+      await this.requestInit(signal);
     } catch (error) {
       await this.lifecycle.stop();
       this.lifecycle = null;
@@ -302,16 +356,17 @@ class ProcessLifecycleExtensionService implements ExtensionServiceLifecycle {
 
   /**
    * Send the host's lifecycle `init` request to the current generation.
+   * @param signal - Cancels the wait for the reply.
    * @returns Promise that settles with the request.
    */
-  private async requestInit(): Promise<void> {
+  private async requestInit(signal?: AbortSignal): Promise<void> {
     await this.ctx.bus.request(
       this.getLifecycleSubjects().init,
       {
         config: this.ctx.config ?? this.descriptor.config?.defaults,
         context: buildDetachedLifecycleContext(this.ctx),
       },
-      { timeout: this.descriptor.transport.healthTimeoutMs },
+      { timeout: this.descriptor.transport.healthTimeoutMs, signal },
     );
   }
 
@@ -368,7 +423,7 @@ class ProcessLifecycleExtensionService implements ExtensionServiceLifecycle {
         await this.ctx.bus.request(
           lifecycleSubjects.destroy,
           { reason: 'runtime-shutdown' },
-          { timeout: this.descriptor.transport.shutdownTimeoutMs },
+          { timeout: this.stopLimits.destroyRequestTimeoutMs },
         );
       } catch (error) {
         console.warn(

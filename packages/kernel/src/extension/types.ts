@@ -103,6 +103,14 @@ export interface ExtensionCoordinatorOptions {
   /** Hosted surface category used to apply package gating. Defaults to `'headless'`. */
   surface?: ExtensionRuntimeSurface;
   /**
+   * Stop window, in milliseconds, of an extension whose service declares none
+   * (`ExtensionServiceLifecycle.stopBudgetMs`). Every extension is stopped
+   * within a window of its own, so this is the unit a host that owns child
+   * processes derives from its subprocess stop timing. Defaults to
+   * {@link DEFAULT_EXTENSION_STOP_BUDGET_MS}.
+   */
+  defaultStopBudgetMs?: number;
+  /**
    * Host launcher command embedded into client wiring installed from warning actions.
    *
    * Defaults to `'makaio'` for framework-only hosts. Hosts pass their
@@ -308,6 +316,18 @@ export interface ExtensionEntry {
   extensionManaged: boolean;
   /** Instantiated service, present after successful `create + init`. */
   service?: ExtensionService;
+  /**
+   * Service that `create` returned and that is not (yet) a running service:
+   * its `init` is still running, or a start or enable that failed could not
+   * destroy it. Not exposed to other extensions, but owned by the entry from the
+   * moment it exists: a start the host cancels destroys it within the window it
+   * declares, so that window counts towards
+   * {@link ExtensionCoordinator.stopBudgetMs} while it is held. Cleared when
+   * `init` settles (into {@link ExtensionEntry.service} on success) or when it
+   * was destroyed; a `destroy` that failed leaves it here for the shutdown to
+   * retry and report.
+   */
+  pendingService?: ExtensionService;
   /** Cleanup returned by `storage.registerHandlers`, if any. */
   storageCleanup?: () => void;
   /**

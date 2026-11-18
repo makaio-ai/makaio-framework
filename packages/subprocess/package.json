@@ -14,12 +14,13 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@makaio/core": "workspace:*"
+    "@makaio/core": "workspace:*",
+    "@makaio/utils": "workspace:*"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "@types/node": "^24.3.0",
-    "tsdown": "0.23.0"
+    "tsdown": "0.22.0"
   },
   "publishConfig": {
     "exports": {

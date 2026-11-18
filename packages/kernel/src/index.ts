@@ -18,7 +18,9 @@ export type {
 
 export { BootNamespace, BootSubjects } from './boot-namespace.js';
 export { ServiceSkipError } from './service-skip-error.js';
-export { createShutdownSequence } from './shutdown.js';
+export { cancellationRejection, readCancellation } from './cancellation.js';
+export { createShutdownSequence, runBoundedShutdownSteps, shutdownBudgetMs } from './shutdown.js';
+export type { BoundedShutdownStep, ShutdownSequence } from './shutdown.js';
 
 export type {
   ContributionProcessor,

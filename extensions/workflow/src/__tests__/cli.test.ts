@@ -31,6 +31,7 @@ const bootMock = vi.fn<
   Promise.resolve({
     bus: mockBus,
     shutdown: shutdownMock,
+    stopBudgetMs: () => 0,
     port: 0,
     host: '127.0.0.1',
     machineId: 'test-machine-id',

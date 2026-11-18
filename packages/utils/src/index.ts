@@ -1,5 +1,14 @@
 export { DeferredPromise } from './deferred-promise.js';
 export {
+  abortableWait,
+  boundedWait,
+  boundedWaitReread,
+  OUTER_BOUND_HEADROOM_MS,
+  outerBoundMs,
+} from './bounded-wait.js';
+export type { BoundedWaitOutcome, RereadWaitOutcome } from './bounded-wait.js';
+export { isNonNegativeFinite, nonNegativeOption } from './non-negative-option.js';
+export {
   CLI_COMMAND_ABORT_SIGNALS,
   CLI_COMMAND_SIGNAL_EXIT_CODES,
   CLI_EXIT_CODES,

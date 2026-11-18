@@ -1,4 +1,5 @@
 import type { MakaioRuntime } from '@makaio/runtime-node';
+import { outerBoundMs } from '@makaio/utils';
 import type { BunServer } from './http-server-utils.js';
 
 /** Options for a Bun composition root shutdown handler. */
@@ -6,10 +7,17 @@ export interface BunGracefulShutdownOptions {
   /** Log prefix without brackets, e.g. `server` or `relay`. */
   readonly label: string;
   /** Runtime handle returned by `bootMakaioRuntime`. */
-  readonly runtime: Pick<MakaioRuntime, 'shutdown'>;
+  readonly runtime: Pick<MakaioRuntime, 'shutdown' | 'stopBudgetMs'>;
   /** Bun server owned by the composition root. */
   readonly bunServer: BunServer;
-  /** Force-exit timeout in milliseconds. Defaults to 10 seconds. */
+  /**
+   * Force-exit timeout in milliseconds. Defaults to the runtime's own bound,
+   * `runtime.stopBudgetMs()` plus the headroom of an outer bound
+   * (`outerBoundMs`), read when the shutdown starts: the runtime bounds each
+   * of its stops itself, so this timer is a backstop, never the thing that
+   * limits a stop within the runtime's contract. An override below that bound
+   * can end the process while a cleanup is still within its declared window.
+   */
   readonly timeoutMs?: number;
   /** Process exit hook, primarily for tests. Defaults to `process.exit`. */
   readonly exit?: (code: number) => never;
@@ -17,11 +25,15 @@ export interface BunGracefulShutdownOptions {
 
 /**
  * Create an idempotent signal shutdown handler for Bun composition roots.
+ *
+ * TODO(FACT-464): Bun hosts still lack persistent signal handlers (a second
+ * signal during the shutdown takes the default action), cancellation of a boot
+ * in flight, and `SIGHUP` handling; `makaio serve` has them through
+ * `installHostShutdown`.
  * @param options - Runtime, server, and logging configuration.
  * @returns Signal handler suitable for `process.once`.
  */
 export function createGracefulShutdown(options: BunGracefulShutdownOptions): (signal: string) => Promise<void> {
-  const timeoutMs = options.timeoutMs ?? 10_000;
   const exit = options.exit ?? ((code: number): never => process.exit(code));
   let isShuttingDown = false;
 
@@ -30,6 +42,9 @@ export function createGracefulShutdown(options: BunGracefulShutdownOptions): (si
     isShuttingDown = true;
     console.info(`[${options.label}] ${signal} received, shutting down...`);
 
+    // Read now, not when the handler is created: the runtime's bound is the sum
+    // over the extensions that actually started.
+    const timeoutMs = options.timeoutMs ?? outerBoundMs(options.runtime.stopBudgetMs());
     // Keep this timer ref'ed while shutdown is in progress. It is the ownership
     // guard that turns a hung runtime shutdown into a deterministic non-zero exit.
     const forceExit = setTimeout(() => {

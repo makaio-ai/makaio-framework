@@ -48,8 +48,26 @@ import { closeEnabledExtensionEntries } from './extension-entry-closure.js';
 import { runExtensionMigrations, type ExtensionMigrationRunner } from './extension-migration-runner.js';
 import { runExtensionHealthCheck, type ExtensionHealthHost } from './extension-health-runner.js';
 import { collectExtensionSurfaces, extensionsWithHttp } from './extension-surface-collector.js';
-import { shutdownExtensions } from './extension-shutdown-runner.js';
+import {
+  resolveDefaultStopBudgetMs,
+  shutdownExtensions,
+  totalExtensionStopBudgetMs,
+  type ExtensionShutdownHost,
+} from './extension-shutdown-runner.js';
 import { startExtensionEntry } from './extension-start-runner.js';
+
+/** Options of {@link ExtensionCoordinator.startAll}. */
+export interface ExtensionStartOptions {
+  /**
+   * Cancels the start: it is checked before each package starts, and an aborted
+   * signal ends the start with the signal's reason. It is also handed to each
+   * service's `init()` (see `ExtensionInitOptions`), so a service that is
+   * waiting when the signal aborts can end its wait; the start then ends with
+   * the signal's reason whatever the extension's criticality. The packages
+   * started so far stay active until {@link ExtensionCoordinator.shutdown}.
+   */
+  readonly signal?: AbortSignal;
+}
 
 /**
  * Manages optional extensions through a unified lifecycle with per-extension state
@@ -97,6 +115,7 @@ export class ExtensionCoordinator {
     | Omit<KernelExtensionContext, 'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension'>
     | undefined;
   private readonly runtimeEnvironment: RuntimeEnvironment | undefined;
+  private readonly defaultStopBudgetMs: number;
 
   /**
    * AbortController signalling graceful shutdown to all active packages.
@@ -155,6 +174,7 @@ export class ExtensionCoordinator {
     this.db = options.db;
     this.extensionContextBase = options.extensionContextBase;
     this.runtimeEnvironment = options.runtimeEnvironment;
+    this.defaultStopBudgetMs = resolveDefaultStopBudgetMs(options.defaultStopBudgetMs);
     this.persistEnabled = options.persistEnabled;
     this.loadEnabled = options.loadEnabled;
     this.loadConfig = options.loadConfig;
@@ -388,10 +408,13 @@ export class ExtensionCoordinator {
    * to start unless the package declares `critical: true`.
    *
    * Single-use: calling this method twice on the same instance throws.
+   * @param options - Start options; see {@link ExtensionStartOptions}.
    * @throws Error if called more than once, before {@link load}, or when a
    *   critical package fails.
+   * @throws The signal's reason when `options.signal` aborted before every
+   *   package started.
    */
-  public async startAll(): Promise<void> {
+  public async startAll(options: ExtensionStartOptions = {}): Promise<void> {
     if (this.shutdownRequested) {
       throw new Error('ExtensionCoordinator.startAll() called after shutdown(). The coordinator is terminal.');
     }
@@ -406,11 +429,20 @@ export class ExtensionCoordinator {
     }
     this.started = true;
 
-    await this.enqueueLifecycle(() => this.startAllInLifecycleLane());
+    await this.enqueueLifecycle(() => this.startAllInLifecycleLane(options.signal));
   }
 
-  /** Run the admitted startup transition in the coordinator lifecycle lane. */
-  private async startAllInLifecycleLane(): Promise<void> {
+  /**
+   * Run the admitted startup transition in the coordinator lifecycle lane.
+   * @param bootSignal - Cancels the start, between two packages and inside a service's `init()`; the coordinator's shutdown cancels it too.
+   */
+  private async startAllInLifecycleLane(bootSignal: AbortSignal | undefined): Promise<void> {
+    // A start ends with whichever comes first: the boot's own cancellation or
+    // the coordinator's shutdown.
+    const signal =
+      bootSignal === undefined
+        ? this.shutdownController.signal
+        : AbortSignal.any([bootSignal, this.shutdownController.signal]);
     const bootProgress = new BootProgressObserver(this.bus, this.loadOrder.length);
     this.rpcCleanups.push(() => bootProgress.dispose());
 
@@ -422,6 +454,7 @@ export class ExtensionCoordinator {
       });
 
       for (const name of this.loadOrder) {
+        signal?.throwIfAborted();
         const entry = this.entries.get(name);
         if (!entry) continue;
         await startExtensionEntry(
@@ -432,6 +465,7 @@ export class ExtensionCoordinator {
             contributionProcessors: this.contributionProcessors,
             contextHost: this.createExtensionContextHost(),
             bootProgress,
+            signal,
           },
           name,
           entry,
@@ -484,6 +518,35 @@ export class ExtensionCoordinator {
     return shutdownPromise;
   }
 
+  /**
+   * Longest time {@link shutdown} takes for the extensions as they are now.
+   *
+   * Every extension is stopped within a window of its own and they are stopped
+   * one after the other, so this is the sum of the windows of the extensions
+   * that hold something to stop (an extension that never started, failed or was
+   * skipped adds nothing). It follows the state of the coordinator: read it when
+   * the shutdown is about to run, not before the extensions have started.
+   * @returns The bound, in milliseconds.
+   */
+  public stopBudgetMs(): number {
+    return totalExtensionStopBudgetMs(this.createExtensionShutdownHost());
+  }
+
+  /**
+   * Build the coordinator state {@link shutdownExtensions} and
+   * {@link totalExtensionStopBudgetMs} work on.
+   * @returns The shutdown host view of this coordinator.
+   */
+  private createExtensionShutdownHost(): ExtensionShutdownHost {
+    return {
+      entries: this.entries,
+      loadOrder: this.loadOrder,
+      contributionProcessors: this.contributionProcessors,
+      contextHost: this.createExtensionContextHost(),
+      defaultStopBudgetMs: this.defaultStopBudgetMs,
+    };
+  }
+
   /** Run shutdown after every lifecycle transition admitted before shutdown. */
   private async shutdownInLifecycleLane(): Promise<void> {
     const failures: unknown[] = [];
@@ -499,12 +562,7 @@ export class ExtensionCoordinator {
     this.warningActionMap.clear();
 
     try {
-      await shutdownExtensions({
-        entries: this.entries,
-        loadOrder: this.loadOrder,
-        contributionProcessors: this.contributionProcessors,
-        contextHost: this.createExtensionContextHost(),
-      });
+      await shutdownExtensions(this.createExtensionShutdownHost());
     } catch (error) {
       if (error instanceof AggregateError) {
         extensionShutdownSummary = error.message;

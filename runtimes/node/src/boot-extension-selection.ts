@@ -1,6 +1,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { isRuntimeOwnershipFieldClaimed, type ExtensionConfigProvider } from '@makaio/contracts';
 import {
+  type BoundedShutdownStep,
   ExtensionCoordinator,
   coalesceExtensionOverrides,
   filterEligibleExtensions,
@@ -17,20 +18,25 @@ import {
   ToolRegistryToken,
 } from '@makaio/services-core';
 import type { ShutdownStep } from './boot-phase.js';
+import { resourceStep } from './runtime-stop-budget.js';
 import { isExtensionEnabled } from './extension-enablement-store.js';
 import { getExtensionPackageSource } from './extension-package-provenance.js';
 import type { LoadedAutomationCronSchedulerHostPolicy } from './load-extensions.js';
 
 /**
- * Add host-provided cleanup callbacks to the shared shutdown list.
+ * Add host-provided cleanup callbacks to the shared shutdown list. A host
+ * cleanup may close anything, so each runs as a resource step: inside the
+ * window of one bounded stop.
  * @param shutdownSteps - Runtime shutdown list.
+ * @param name - Name the report of a failing cleanup uses.
  * @param cleanup - Optional cleanup or cleanup list returned by a host hook.
  */
 export function collectHostCleanups(
-  shutdownSteps: ShutdownStep[],
+  shutdownSteps: BoundedShutdownStep[],
+  name: string,
   cleanup: void | ShutdownStep | readonly ShutdownStep[],
 ): void {
-  shutdownSteps.push(...normalizeHostCleanups(cleanup));
+  shutdownSteps.push(...normalizeHostCleanups(cleanup).map((run) => resourceStep(name, run)));
 }
 
 /**
@@ -660,17 +666,18 @@ export function registerExtensionBootContributions(
       const contribution = pkg.runtimeBoot;
       if (!contribution) continue;
 
-      collectHostCleanups(
-        cleanups,
-        contribution.configure({
-          bus,
-          registerContributionProcessor: (processor) => {
-            cleanups.push(coordinator.registerContributionProcessor(processor));
-          },
-          forEachActiveExtension: (callback) => {
-            coordinator.forEachActiveExtension(callback);
-          },
-        }),
+      cleanups.push(
+        ...normalizeHostCleanups(
+          contribution.configure({
+            bus,
+            registerContributionProcessor: (processor) => {
+              cleanups.push(coordinator.registerContributionProcessor(processor));
+            },
+            forEachActiveExtension: (callback) => {
+              coordinator.forEachActiveExtension(callback);
+            },
+          }),
+        ),
       );
     }
   } catch (error) {

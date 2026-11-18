@@ -12,6 +12,7 @@ import {
   type ExtensionContextHost,
   resolveExtensionEntryConfig,
 } from './extension-context-builder.js';
+import { createAndInitService, releaseService } from './extension-shutdown-runner.js';
 import { transitionPackageEntry } from './state-transition.js';
 import { runContributionProcessors } from './contribution-processor-runner.js';
 import { registerPackageTrayMenuEntry, unregisterPackageTrayMenuEntry } from './tray-menu-entry-bridge.js';
@@ -455,6 +456,10 @@ async function persistForUnloadedName(
     : { success: true, outcome: 'applied', reason };
 }
 
+/** Why a re-enable is refused while the entry still owns a service it could not destroy. */
+const RETAINED_SERVICE_MESSAGE =
+  'A previous instance of the service could not be destroyed; it is retained until shutdown';
+
 /**
  * Marks a re-enable attempt as failed: records the reason on the entry, logs
  * it, and transitions the entry to `'failed'`.
@@ -555,6 +560,10 @@ async function enableExtension(
     return failReEnable(host, entry, name, addressabilityError);
   }
 
+  // A previous instance whose `destroy` failed is still owned by the entry for
+  // the shutdown to retry; creating a second one would orphan it.
+  if (entry.pendingService !== undefined) return failReEnable(host, entry, name, RETAINED_SERVICE_MESSAGE);
+
   entry.enabled = true;
   entry.error = undefined;
   transitionPackageEntry(host.bus, entry, 'initializing');
@@ -597,8 +606,7 @@ async function enableExtension(
     // Q2: Contribution activation is part of extension activation.
     // Hard failures transition the extension to `failed`. The runner already
     // rolled back previously-invoked processors before re-throwing.
-    await cleanupFailedEnable(name, entry.service, storageCleanup, entry);
-    entry.service = undefined;
+    await cleanupFailedEnable(name, storageCleanup, entry);
     entry.error = getErrorString(err);
     console.error(`[ExtensionCoordinator] Extension "${name}" contribution processing failed:`, err);
     transitionPackageEntry(host.bus, entry, 'failed');
@@ -649,15 +657,14 @@ async function reinitializeService(
   const { create } = entry.pkg;
   if (!create) return true;
 
-  let service: Awaited<ReturnType<typeof create>> | undefined;
   try {
-    const pkgCtx = buildExtensionContext(host, entry, config);
-    service = await create(pkgCtx);
-    await service.init?.();
-    entry.service = service;
+    // The coordinator's shutdown signal is the cancellation that applies to a
+    // re-enable: a shutdown that is queued behind this `init` in the lifecycle
+    // lane can only start once it ends.
+    await createAndInitService(name, entry, buildExtensionContext(host, entry, config), host.signal);
     return true;
   } catch (err) {
-    await cleanupFailedEnable(name, service, storageCleanup, entry);
+    await cleanupFailedEnable(name, storageCleanup, entry);
     if (err instanceof ServiceSkipError) {
       if (!entry.pkg.critical) {
         entry.error = err.reason;
@@ -813,23 +820,19 @@ async function disableExtension(
 }
 
 /**
- * Destroy a partially created service and clean up storage after a failed enable.
+ * Destroy the service of a failed enable and clean up storage. A service whose
+ * `destroy` fails stays owned by the entry (see {@link releaseService}), so the
+ * shutdown that follows destroys it again and reports the failure.
  * @param name - Extension name for log messages.
- * @param service - Service instance returned by `pkg.create`, if any.
  * @param storageCleanup - Storage cleanup callback, if any.
- * @param entry - Extension entry whose storageCleanup field is cleared.
+ * @param entry - Extension entry whose service and storageCleanup are released.
  */
 async function cleanupFailedEnable(
   name: string,
-  service: { destroy?(): Promise<void> | void } | undefined,
   storageCleanup: (() => void) | undefined,
   entry: ExtensionEntry,
 ): Promise<void> {
-  try {
-    await service?.destroy?.();
-  } catch (destroyErr) {
-    console.error(`[ExtensionCoordinator] Service cleanup error after failed enable of "${name}":`, destroyErr);
-  }
+  await releaseService(name, entry, 'enable');
   try {
     storageCleanup?.();
   } catch (cleanupErr) {

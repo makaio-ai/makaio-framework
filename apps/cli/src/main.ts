@@ -188,11 +188,13 @@ export function createProgram(
     .option('-p, --port <port>', 'HTTP/WebSocket port', parsePort, 6252)
     .option('--host <host>', 'Bind address override')
     .option('--lan-bind', 'Bind on all interfaces for LAN access (enables E2E auth)')
-    .action(async (opts: { port: number; host?: string; lanBind?: boolean }) => {
+    .option('--ignore-hangup', 'Keep running when the terminal hangs up (SIGHUP) instead of shutting down')
+    .action(async (opts: { port: number; host?: string; lanBind?: boolean; ignoreHangup?: boolean }) => {
       await serve({
         port: opts.port,
         host: opts.host,
         lanBind: opts.lanBind,
+        hangup: opts.ignoreHangup ? 'ignore' : 'shutdown',
         peerSigningKeyResolver: serveConfig?.peerSigningKeyResolver,
         boot: serveConfig?.boot,
       });
