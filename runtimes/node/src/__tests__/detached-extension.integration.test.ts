@@ -1,11 +1,17 @@
 /**
- * Integration tests for the full detached-extension bus-stdio lifecycle.
+ * Integration tests for the full detached-extension bus-stdio lifecycle, and
+ * for the process lifecycle of a bus-websocket extension.
  *
  * These tests exercise the real subprocess spawn path:
  *   DetachedDescriptor → createDetachedExtensionPackage
  *     → BusStdioExtensionService.init()
  *       → StdioServerTransport (spawn tsx fixture)
  *         ↔ StdioClientTransport (in fixture process)
+ *
+ * A bus-websocket child connects back to the bus on its own; the tests here
+ * cover the host's half with real `node -e` children (readiness on stdout, the
+ * process group, the bounded stop and restarts) and answer the host's lifecycle
+ * requests on the host bus itself.
  *
  * No mocks are used for transport or subprocess layers. Tests verify:
  * - Successful process spawn and subscribe-sync handshake.
@@ -14,9 +20,11 @@
  * - Clean teardown via destroy().
  */
 
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createBusInstance, type BusTransport, type IMakaioBus } from '@makaio/bus-core';
 import type { DetachedDescriptor } from '@makaio/contracts/extension';
 import type { NodeExtensionContext, ExtensionServiceLifecycle, ExtensionService } from '@makaio/contracts';
@@ -297,5 +305,229 @@ describe('detached extension integration (bus-stdio)', () => {
 
     // Transport must be removed from the registry.
     expect(bus.getContext().transportRegistry.all()).toHaveLength(0);
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------------------
+// bus-websocket
+// ---------------------------------------------------------------------------
+
+/**
+ * A child that records its PID in the file named by `MAKAIO_TEST_PIDS` and
+ * becomes ready. With `MAKAIO_TEST_GRANDCHILD` set it first starts a grandchild
+ * in its process group and records that PID too. Its first run exits with code
+ * 1 shortly after readiness when `MAKAIO_TEST_CRASH_ONCE` names a marker file
+ * that does not exist yet.
+ */
+const WEBSOCKET_CHILD_SCRIPT = `
+const fs = require('node:fs');
+let grandchild = null;
+if (process.env.MAKAIO_TEST_GRANDCHILD !== undefined) {
+  const spawned = require('node:child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  spawned.unref();
+  grandchild = spawned.pid;
+}
+fs.writeFileSync(process.env.MAKAIO_TEST_PIDS, JSON.stringify({ pid: process.pid, grandchild }));
+const marker = process.env.MAKAIO_TEST_CRASH_ONCE;
+const crash = marker !== undefined && !fs.existsSync(marker);
+if (crash) fs.writeFileSync(marker, 'crashed');
+process.stdout.write('{"ready":true}\\n', () => { if (crash) setTimeout(() => process.exit(1), 100); });
+setInterval(() => {}, 1000);
+`;
+
+/**
+ * Build a bus-websocket descriptor for a `node -e` child.
+ * @param script - Child source.
+ * @param env - Child environment.
+ * @param extra - Transport fields to override.
+ * @returns A detached descriptor for the lifecycle under test.
+ */
+function makeWebSocketDescriptor(
+  script: string,
+  env: Record<string, string>,
+  extra: { healthTimeoutMs?: number; restartPolicy?: 'none' | 'on-crash' | 'always' } = {},
+): DetachedDescriptor {
+  return {
+    name: 'test-detached',
+    displayName: 'Test Detached Extension',
+    version: '1.0.0',
+    makaio: { framework: '>=0.1.0' },
+    execution: 'detached',
+    transport: {
+      type: 'bus-websocket',
+      command: process.execPath,
+      args: ['-e', script],
+      env,
+      healthTimeoutMs: 10_000,
+      shutdownTimeoutMs: 500,
+      ...extra,
+    },
+  };
+}
+
+/**
+ * Report whether a process still exists; an unreaped zombie still counts.
+ * @param pid - Process to probe.
+ * @returns `false` once the process is gone.
+ */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(error instanceof Error && 'code' in error && error.code === 'ESRCH');
+  }
+}
+
+describe('detached extension integration (bus-websocket process lifecycle)', () => {
+  let service: ExtensionServiceLifecycle | undefined;
+  let workDir: string | undefined;
+  const strayPids = new Set<number>();
+
+  afterEach(async () => {
+    await service?.destroy?.();
+    service = undefined;
+    for (const pid of strayPids) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // Already gone.
+      }
+    }
+    strayPids.clear();
+    if (workDir !== undefined) rmSync(workDir, { recursive: true, force: true });
+    workDir = undefined;
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * Create a bus that answers the lifecycle requests itself, and a service for `descriptor`.
+   * @param descriptor - Descriptor of the extension under test.
+   * @param failInitsFrom - 1-based number of the first init request the bus rejects; default: none.
+   * @returns The service and the init requests the bus answered.
+   */
+  async function createService(
+    descriptor: DetachedDescriptor,
+    failInitsFrom = Number.POSITIVE_INFINITY,
+  ): Promise<{
+    service: ExtensionServiceLifecycle;
+    inits: unknown[];
+  }> {
+    const bus = createBusInstance();
+    const LifecycleSubjects = registerLifecycleSubjects(bus);
+    const inits: unknown[] = [];
+    bus.on(LifecycleSubjects.init, (request) => {
+      inits.push(request.payload);
+      // The n-th init request (1-based) and every later one is rejected.
+      if (inits.length >= failInitsFrom) throw new Error('init rejected by test');
+      request.setResult({ ready: true });
+    });
+    bus.on(LifecycleSubjects.destroy, (request) => {
+      request.setResult({ stopped: true });
+    });
+    const ctx = { ...makeTestContext(bus), busUrl: 'ws://127.0.0.1:9' };
+    const pkg = createDetachedExtensionPackage(descriptor, FIXTURES_DIR);
+    return { service: await resolveService(pkg.create!(ctx)), inits };
+  }
+
+  /**
+   * Read the PIDs the current child recorded, and register them for cleanup.
+   * @param pidsFile - File named by `MAKAIO_TEST_PIDS`.
+   * @returns The child's and the grandchild's PID.
+   */
+  function readPids(pidsFile: string): { pid: number; grandchild: number | null } {
+    const pids = JSON.parse(readFileSync(pidsFile, 'utf8')) as { pid: number; grandchild: number | null };
+    strayPids.add(pids.pid);
+    if (pids.grandchild !== null) strayPids.add(pids.grandchild);
+    return pids;
+  }
+
+  it('becomes ready on a JSON object, sends init once, and stops the whole group on destroy()', async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), 'makaio-detached-ws-'));
+    const pidsFile = path.join(workDir, 'pids.json');
+    const created = await createService(
+      makeWebSocketDescriptor(WEBSOCKET_CHILD_SCRIPT, { MAKAIO_TEST_PIDS: pidsFile, MAKAIO_TEST_GRANDCHILD: '1' }),
+    );
+    service = created.service;
+
+    await service.init!();
+    const { pid, grandchild } = readPids(pidsFile);
+    expect(created.inits).toHaveLength(1);
+    expect(isAlive(pid)).toBe(true);
+
+    await service.destroy!();
+    service = undefined;
+
+    await waitFor(() => !isAlive(pid) && (grandchild === null || !isAlive(grandchild)), 5_000);
+  }, 30_000);
+
+  it('fails init() at the health timeout when the readiness line is not a JSON object, and stops the child', async () => {
+    workDir = mkdtempSync(path.join(tmpdir(), 'makaio-detached-ws-'));
+    const pidsFile = path.join(workDir, 'pids.json');
+    const script = `require('node:fs').writeFileSync(process.env.MAKAIO_TEST_PIDS, JSON.stringify({ pid: process.pid, grandchild: null })); process.stdout.write('"ready"\\n'); setInterval(() => {}, 1000);`;
+    const created = await createService(
+      makeWebSocketDescriptor(script, { MAKAIO_TEST_PIDS: pidsFile }, { healthTimeoutMs: 1_000 }),
+    );
+    service = created.service;
+
+    await expect(service.init!()).rejects.toThrow('health timeout');
+    service = undefined;
+
+    const { pid } = readPids(pidsFile);
+    expect(created.inits).toHaveLength(0);
+    await waitFor(() => !isAlive(pid), 5_000);
+  }, 30_000);
+
+  it('initialises a generation the restart policy started, and logs the crash that caused it', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    workDir = mkdtempSync(path.join(tmpdir(), 'makaio-detached-ws-'));
+    const pidsFile = path.join(workDir, 'pids.json');
+    const created = await createService(
+      makeWebSocketDescriptor(
+        WEBSOCKET_CHILD_SCRIPT,
+        { MAKAIO_TEST_PIDS: pidsFile, MAKAIO_TEST_CRASH_ONCE: path.join(workDir, 'crashed') },
+        { restartPolicy: 'on-crash' },
+      ),
+    );
+    service = created.service;
+
+    await service.init!();
+    const first = readPids(pidsFile);
+    expect(created.inits).toHaveLength(1);
+
+    // The first generation crashes shortly after readiness and is restarted.
+    await waitFor(() => created.inits.length === 2, 15_000);
+    expect(readPids(pidsFile).pid).not.toBe(first.pid);
+    expect(warnSpy.mock.calls.flat().join('\n')).toContain(
+      '[extensions] test-detached: generation 1 ended unexpectedly: exited with code 1',
+    );
+  }, 30_000);
+
+  it('stops a restarted generation whose init request fails, and reports the failure', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    workDir = mkdtempSync(path.join(tmpdir(), 'makaio-detached-ws-'));
+    const pidsFile = path.join(workDir, 'pids.json');
+    const created = await createService(
+      makeWebSocketDescriptor(
+        WEBSOCKET_CHILD_SCRIPT,
+        { MAKAIO_TEST_PIDS: pidsFile, MAKAIO_TEST_CRASH_ONCE: path.join(workDir, 'crashed') },
+        { restartPolicy: 'on-crash' },
+      ),
+      2,
+    );
+    service = created.service;
+
+    await service.init!();
+    const first = readPids(pidsFile);
+
+    // Generation 1 crashes and is restarted; the init request of generation 2 fails.
+    await waitFor(() => created.inits.length === 2, 15_000);
+    const second = readPids(pidsFile);
+    expect(second.pid).not.toBe(first.pid);
+
+    // The generation that never received its configuration must not keep running.
+    await waitFor(() => !isAlive(second.pid), 5_000);
+    expect(errorSpy.mock.calls.flat().join('\n')).toContain('init of restarted generation 2 failed');
   }, 30_000);
 });

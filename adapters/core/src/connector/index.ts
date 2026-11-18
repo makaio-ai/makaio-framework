@@ -16,6 +16,7 @@ export {
   reportRepeatTeardown,
   runBestEffortStage,
   stageFailure,
+  type ExitObservation,
   type ObservedExitOptions,
 } from './teardown-observation.js';
 export { GenerationRetirementLedger, type SupersededGeneration } from './generation-retirement.js';

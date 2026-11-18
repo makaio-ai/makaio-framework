@@ -10,7 +10,8 @@ import {
   withTimeout,
   type GenerationRetirementLedger,
 } from '@makaio/ai-adapters-core';
-import type { StdioTransport } from '../utils/createStdioTransport.js';
+import { describeTransportEnd, type IJsonlTransport, type TransportEnd } from '@makaio/subprocess';
+import { APP_SERVER_PROCESS_NAME } from '../utils/createStdioTransport.js';
 
 /** Stable, credential-free connector shutdown failure categories. */
 export type CodexConnectorCloseErrorReason = 'archive-failed' | 'client-close-failed';
@@ -27,21 +28,21 @@ export class CodexConnectorCloseError extends Error {
 }
 
 /**
- * Build the error that carries an exit this connector asked for into its own
+ * Build the error that carries an end this connector asked for into its own
  * local finalisation.
  *
- * Such an exit is deliberately kept out of the error channel — the connector
+ * Such an end is deliberately kept out of the error channel — the connector
  * caused it, so it is not evidence of a fault — but the turn it interrupted
  * still has to be completed, its processing paused and its open tool calls
  * cleared. Those effects are reached through the error path, so the path needs
  * an error; this one names the requested shutdown as its cause rather than
- * pretending the child died unexpectedly.
- * @param code - Exit code reported by the child, or `null` for a signalled exit
+ * pretending the child died unexpectedly. Like every end description it names
+ * codes and signals only, never protocol content.
+ * @param end - The end report, with cause `requested`
  * @returns Error describing the requested shutdown for local finalisation
  */
-export function requestedShutdownExitError(code: number | null): Error {
-  const suffix = code === null ? 'by signal' : `with code ${code}`;
-  return new Error(`Codex app-server exited ${suffix} after a shutdown this connector requested.`);
+export function requestedShutdownError(end: TransportEnd): Error {
+  return new Error(`${APP_SERVER_PROCESS_NAME} ${describeTransportEnd(end)}`);
 }
 
 /** Milliseconds a close waits for the provider to acknowledge thread archival. */
@@ -75,7 +76,7 @@ export async function archiveCodexThread(
 }
 
 interface CodexConnectionAbortOperations {
-  /** Close the active JSON-RPC client and its owned transport. */
+  /** Request the end of the connection: close the JSON-RPC client and the transport the connector holds. */
   readonly closeClient: () => void;
   /** Remove connector-local plaintext authentication. */
   readonly discardAuth: () => void;
@@ -177,7 +178,25 @@ export function reportAfterCodexTermination(note: CodexTerminalTeardownNote): Co
  * closing the JSON-RPC client closes the transport, which signals the child, and
  * the transport settles its own exit observation. Awaiting that observation
  * inside the exit budget is the difference between having asked for a
- * termination and having watched one.
+ * termination and having watched one. The observation is `exitObserved`, never
+ * the end report: the report also arrives for a stop that gave up watching.
+ *
+ * The report is returned only once the transport's end report has been
+ * delivered, which is a separate wait from the exit observation: the end report
+ * follows the exit by the drain of the child's remaining stdout, and the
+ * connector's local finalisation of a requested end (completing the turn the
+ * shutdown interrupted) runs on that report. Returning on the exit alone would
+ * let `close()` resolve while the interrupted message handle is still pending.
+ * The finalisation reacts to the end report from a subscription made when the
+ * generation was wired, ahead of this wait, so the report's reactions run in
+ * that order and the finalisation has completed when this wait resumes. The wait
+ * is unbounded here by design: `ended` fulfils exactly once and never rejects,
+ * and the transport bounds every phase before it (kill grace, post-kill
+ * observation, drain), an end it could not observe included. That bound holds
+ * only for an end somebody requested, so the connector's close stage requests
+ * the end of the transport it holds itself (`requestEnd` of the connection manager), whether or
+ * not a client that would have done so exists; this function never waits for
+ * an end the connector did not ask for.
  *
  * Two weaker answers, both honest. A connector holding no owned transport — a
  * harness that injected its client — never spawned a process, so no end of one
@@ -189,7 +208,7 @@ export function reportAfterCodexTermination(note: CodexTerminalTeardownNote): Co
  * @returns The class this shutdown may claim.
  */
 export async function reportCodexShutdown(
-  transport: StdioTransport | undefined,
+  transport: IJsonlTransport | undefined,
   generations: GenerationRetirementLedger,
 ): Promise<ConnectorTeardownResult> {
   const observed: ConnectorTeardownResult =
@@ -198,6 +217,8 @@ export async function reportCodexShutdown(
           evidence: 'detached',
           detail: 'This connector owned no app-server process, so no end of one was observable.',
         }
-      : await reportObservedExit({ exited: transport.exited, resource: 'The codex app-server process' });
+      : await reportObservedExit({ exited: transport.exitObserved, resource: 'The codex app-server process' });
+  // The classification above is evidence; this is completion. See the paragraph on the end report.
+  await transport?.ended;
   return generations.capReport(observed);
 }

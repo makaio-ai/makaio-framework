@@ -2,9 +2,11 @@
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { spawnOptionsForOwnership } from '@makaio/subprocess';
 import { boundedByDeadline, buildSpawnCommand } from './command-construction.js';
 import type { ScenarioInvocation } from './command-construction.js';
 import { fixtureFilePath, readFixture, writeFixture } from './fixtures.js';
+import { CLEANUP_COMPLETE, killProcessTree, terminateSpawned, type RunCleanup } from './process-tree-cleanup.js';
 import {
   evaluateOracle,
   finalResponseContainsMarker,
@@ -30,6 +32,8 @@ export interface ScenarioRunResult {
   readonly stdout: string;
   readonly stderr: string;
   readonly timedOut: boolean;
+  /** What the run knows about the processes the provider started; see {@link RunCleanup}. */
+  readonly cleanup: RunCleanup;
 }
 
 /**
@@ -110,40 +114,86 @@ export async function writeScenarioHookConfig(params: {
   return { settingsPath, capturePath, mcpConfigPath };
 }
 
+/** Upper bound for the exit and the closing pipes after the hard-deadline kill. */
+const POST_KILL_SETTLE_MS = 5_000;
+
 /**
- * Terminates the direct child and, on POSIX, every process in its process group.
- * @param child - Spawned provider process.
- * @returns A promise that resolves after a kill signal has been issued.
+ * The default tree termination of a platform.
+ * @param platform - Platform whose termination rules apply.
+ * @returns {@link killProcessTree} bound to the platform.
  */
-async function killProcessTree(child: ReturnType<typeof spawn>): Promise<void> {
-  if (!child.pid) return;
-  if (process.platform !== 'win32') {
-    try {
-      process.kill(-child.pid, 'SIGKILL');
-      return;
-    } catch {
-      // The child can exit between the timeout and group termination attempt.
-    }
-  }
-  child.kill('SIGKILL');
+function terminationFor(platform: NodeJS.Platform): (pid: number, exitObserved: boolean) => Promise<RunCleanup> {
+  return (pid, exitObserved) => killProcessTree(pid, exitObserved, platform);
+}
+
+/** Timing and termination of {@link runCommand}; the defaults are the probe driver's own. */
+export interface RunCommandOptions {
+  /**
+   * Time the exit and the closing pipes get once the tree termination has
+   * finished. Default: {@link POST_KILL_SETTLE_MS}.
+   */
+  readonly postKillSettleMs?: number;
+  /**
+   * Terminates the provider process and what it started, or reports why it
+   * could not; must be bounded. Default: {@link killProcessTree}. A run waits
+   * for it to finish before its post-kill settle time starts, so a slow
+   * termination (a `taskkill` on Windows, a quiescence proof) never eats into
+   * the time the exit and the pipes are given. It must not signal a POSIX
+   * group once `exitObserved` is `true`.
+   */
+  readonly terminateTree?: (pid: number, exitObserved: boolean) => Promise<RunCleanup>;
+  /**
+   * Platform whose termination rules the default {@link killProcessTree} applies.
+   * Default: the host's. A seam for tests that simulate Windows on a POSIX host.
+   */
+  readonly platform?: NodeJS.Platform;
 }
 
 /**
  * Spawns one CLI in a process group and enforces its hard deadline.
+ *
+ * Every phase is bounded. When the child ends before the deadline, its group's
+ * quiescence is proven (observed, never signalled: the exit is observed) before
+ * the run returns, since a descendant with redirected stdio outlives the leader's
+ * `close`. Windows has no such proof and can no longer address the tree of an
+ * exited provider, so there the cleanup is `incomplete` (`tree-not-addressable`).
+ * At the deadline the run is marked timed out and the tree is terminated (or,
+ * once the provider's exit was observed, only observed; see
+ * {@link killProcessTree}). The run never ends before that termination has finished, not
+ * even when the provider exits by itself meanwhile, and a termination that
+ * fails fails the run. Once it has finished, the exit and the closing
+ * pipes get {@link POST_KILL_SETTLE_MS}. A pipe still held after that (by a
+ * descendant that left the process group, or one that outlived a provider whose
+ * exit was observed before the deadline, since a group is not signalled after
+ * that) is released, and the output captured so far is returned: a timed-out
+ * run's output is partial by definition, and the result's `cleanup` is
+ * `incomplete` (`pipes-held`) instead of silently succeeding. An exit that is
+ * still unobserved then fails the run instead of returning a result. Every end
+ * (a result, a failed spawn, a failed kill, an unobserved exit) goes through one
+ * settlement that clears the timers and releases the pipes; a child whose exit
+ * was not observed is unreferenced, so it cannot keep the host alive.
  * @param command - Provider command including environment, cwd, and deadline.
- * @returns Exit state and bounded stdout/stderr capture.
+ * @param options - Post-kill settle time and tree termination; see {@link RunCommandOptions}.
+ * @returns Exit state, bounded stdout/stderr capture and what is known about the
+ *   processes the provider started (`cleanup`).
  */
-export async function runCommand(command: ReturnType<typeof buildSpawnCommand>): Promise<{
+export async function runCommand(
+  command: ReturnType<typeof buildSpawnCommand>,
+  options: RunCommandOptions = {},
+): Promise<{
   exitCode: number | null;
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  cleanup: RunCleanup;
 }> {
+  const { postKillSettleMs = POST_KILL_SETTLE_MS, platform = process.platform } = options;
+  const { terminateTree = terminationFor(platform) } = options;
   return new Promise((resolve, reject) => {
     const child = spawn(command.executable, [...command.args], {
       cwd: command.cwd,
       env: command.env,
-      detached: process.platform !== 'win32',
+      ...spawnOptionsForOwnership('process-group'),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -151,18 +201,90 @@ export async function runCommand(command: ReturnType<typeof buildSpawnCommand>):
     let timedOut = false;
     child.stdout?.setEncoding('utf8').on('data', (chunk: string) => (stdout += chunk));
     child.stderr?.setEncoding('utf8').on('data', (chunk: string) => (stderr += chunk));
+    const exitObserved = (): boolean => child.exitCode !== null || child.signalCode !== null;
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    /** The tree termination the hard deadline started; defined from then on, and every end joins it. */
+    let termination: Promise<void> | undefined;
+    /** What the termination reported; `incomplete` is widened to `pipes-held` when a pipe stays held. */
+    let cleanup: RunCleanup = CLEANUP_COMPLETE;
+    /**
+     * End the run once: clear the timers, release the pipes, and unreference a
+     * child whose exit was not observed. A later event finds the run settled.
+     * @param outcome - The exit code to resolve with, or the error to reject with.
+     * @param heldPipes - Whether a pipe was still held when the run was cut off.
+     */
+    const settle = (
+      outcome: { readonly exitCode: number | null } | { readonly error: Error },
+      heldPipes = false,
+    ): void => {
+      if (settled) return;
+      settled = true;
+      if (heldPipes && cleanup.kind === 'complete') cleanup = { kind: 'incomplete', reason: 'pipes-held' };
+      clearTimeout(timer);
+      clearTimeout(settleTimer);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      if (!exitObserved()) child.unref();
+      if ('error' in outcome) reject(outcome.error);
+      else resolve({ exitCode: outcome.exitCode, stdout, stderr, timedOut, cleanup });
+    };
+    /**
+     * Start the tree termination, once.
+     * @returns The pending termination.
+     */
+    const startTermination = (): Promise<void> => {
+      clearTimeout(timer);
+      termination = terminateSpawned(child.pid, exitObserved(), terminateTree).then((reported) => {
+        cleanup = reported;
+      });
+      return termination;
+    };
+    /**
+     * End the run with the failure of the tree termination.
+     * @param thrown
+     */
+    const failTermination = (thrown: unknown): void =>
+      settle({ error: thrown instanceof Error ? thrown : new Error(String(thrown)) });
+    /**
+     * End the run because the child closed or failed, once the tree termination
+     * the hard deadline started has finished: the caller removes the workspace
+     * the descendants may still write to as soon as the run returns. A failed
+     * termination ends the run with its failure, not with the child's outcome.
+     * @param outcome - What the child's own event reported.
+     */
+    const endRun = (outcome: { readonly exitCode: number | null } | { readonly error: Error }): void => {
+      // Every platform reports what it knows about the tree of an exited provider.
+      termination ??= startTermination();
+      termination.then(() => settle(outcome), failTermination);
+    };
+    /** Give the exit and the closing pipes their bounded time; started once the tree termination finished. */
+    const awaitSettlement = (): void => {
+      if (settled) return;
+      settleTimer = setTimeout(() => {
+        // The exit is observed while a pipe is still held (by a descendant that
+        // left the group): the captured output is returned as it is.
+        if (exitObserved()) {
+          settle({ exitCode: child.exitCode }, true);
+          return;
+        }
+        settle({
+          error: new Error(
+            `Provider process ${String(child.pid)} did not exit within ${postKillSettleMs}ms of its kill`,
+          ),
+        });
+      }, postKillSettleMs);
+    };
     const timer = setTimeout(() => {
+      if (termination !== undefined) return;
       timedOut = true;
-      void killProcessTree(child);
+      // The settle time starts only after the termination finished: a termination
+      // that takes long (a bounded `taskkill`, a quiescence proof) must not use it up.
+      // A tree that could not be killed may never close, so that failure ends the run.
+      startTermination().then(awaitSettlement, failTermination);
     }, command.timeoutMs);
-    child.once('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.once('close', (exitCode) => {
-      clearTimeout(timer);
-      resolve({ exitCode, stdout, stderr, timedOut });
-    });
+    child.once('error', (error) => endRun({ error }));
+    child.once('close', (exitCode) => endRun({ exitCode }));
   });
 }
 

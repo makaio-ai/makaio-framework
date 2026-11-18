@@ -1,9 +1,68 @@
 export { createJsonlTransport } from './jsonl-transport.js';
-export type { IJsonlTransport, MessageListener, ErrorListener, SubprocessSpawnOptions } from './types.js';
+export type {
+  IJsonlTransport,
+  JsonlChannel,
+  JsonlTransportOptions,
+  ListenerErrorPolicy,
+  MessageListener,
+  ProcessStopTiming,
+  SpawnEnvMode,
+  StderrMode,
+  SubprocessSpawnOptions,
+  TransportCloseOptions,
+  TransportStatus,
+} from './types.js';
+export { notifyObserver } from './notify-listeners.js';
 export { createJsonRpcClient } from './json-rpc-client.js';
 export type { IJsonRpcClient, ServerRequestHandler, NotificationHandler } from './json-rpc-client.js';
 export { createProcessLifecycle } from './process-lifecycle.js';
-export type { ProcessLifecycleOptions, ProcessLifecycleHandle, ProcessState } from './process-lifecycle.js';
-export { decodeJsonlChunk } from './jsonl-framing.js';
-export type { JsonlDecodeResult } from './jsonl-framing.js';
-export { notifyListeners } from './notify-listeners.js';
+export type {
+  ProcessLifecycleOptions,
+  ProcessLifecycleHandle,
+  ProcessRunOutcome,
+  ProcessState,
+  RestartDecision,
+  RestartPolicy,
+  RunReadiness,
+} from './process-lifecycle.js';
+export type { RestartBudgetOptions } from './restart-budget.js';
+export { createJsonlDecoder, describeJsonlDrops } from './jsonl-framing.js';
+export type {
+  JsonlDecoder,
+  JsonlDecoderOptions,
+  JsonlDecodeBatch,
+  JsonlDecodeEnd,
+  JsonlLineDrops,
+} from './jsonl-framing.js';
+export { describeProcessExit, describeTransportEnd, mayHaveLeftProcesses } from './process-end.js';
+export type {
+  CommunicationFailure,
+  DrainOutcome,
+  EndCause,
+  FinalLinePolicy,
+  ObservedProcessExit,
+  ProcessExit,
+  ProcessTreeEvidence,
+  StdoutEndPolicy,
+  TransportEnd,
+  TreeQuiescenceGap,
+  UnobservedExitReason,
+} from './process-end.js';
+export {
+  proveProcessGroupQuiescence,
+  signalOwnedProcesses,
+  spawnOptionsForOwnership,
+  terminateWindowsProcessTree,
+  WindowsTreeTerminationError,
+} from './process-tree.js';
+export type {
+  GroupQuiescenceGap,
+  GroupQuiescenceOptions,
+  GroupQuiescenceProof,
+  OwnershipSpawnOptions,
+  ProcessSignalPort,
+  SignalDelivery,
+  StopOwnership,
+  WindowsTreeTerminationFailure,
+  WindowsTreeTerminationOptions,
+} from './process-tree.js';

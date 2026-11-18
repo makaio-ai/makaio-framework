@@ -1,0 +1,8 @@
+---
+"@makaio/framework": minor
+---
+
+A new run or session starts only after the previous one has ended, so a child is never started beside one that is still being stopped. This is a behaviour change: `connect()` and `start()` may now wait.
+
+- `createProcessLifecycle`: `start()` after a health timeout replaced a run (the run is still being stopped, and its kill grace can last seconds) awaits that run's end report before it spawns. The state stays `crashed` meanwhile and the new generation only appears when the run spawns. A `stop()` or another `start()` that comes first overtakes the waiting call, which rejects (`Process start aborted while the previous run was ending`) without spawning anything. `stop()` therefore never resolves `stopped` while a superseded run is still stopping, and a run's end is always the current run's end: the earlier statement that a replaced run reports its own end after `stop()` resolved no longer applies. The wait is bounded by the stop timing, and an unobserved exit ends it like any other end (an explicit `start()` after it stays allowed).
+- `StdioServerTransport.connect()` awaits the stops that `disconnect()` has requested before it spawns the next child. `connect()` only waits while such a stop is pending; with none it spawns at once, as before. A `disconnect()` that arrives during the wait cancels the waiting `connect()`, which rejects with `connect() cancelled by disconnect()` and spawns nothing; a second `connect()` during the wait rejects with `already connecting`. The transport keeps one new field for this (`pendingConnect`), because the wait is the only point where `disconnect()` can arrive while no session exists yet. The existing end promises are awaited, no second tracking set is added.

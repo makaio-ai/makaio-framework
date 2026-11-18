@@ -80,6 +80,7 @@ describe('pinned agent-client binary preparation', () => {
         stdout: '',
         stderr: '',
         timedOut: false,
+        cleanup: { kind: 'complete' },
         fixtureDiffs: [],
       }),
     );

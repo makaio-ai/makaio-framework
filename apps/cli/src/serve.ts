@@ -327,6 +327,13 @@ export async function serve(options: ServeOptions): Promise<void> {
     throw err;
   }
 
+  // Detached extension children run in process groups of their own, so these
+  // signals reach the host only; the runtime's shutdown stops the children. A
+  // terminal hangup (`SIGHUP`) and a second Ctrl-C during a slow shutdown still
+  // end the host with the default action and leave its children to exit on
+  // their own (stdin closing). Handling `SIGHUP` here would also override an
+  // ignored `SIGHUP` inherited from `nohup`, so whether serve takes it over is
+  // a host policy decision, not part of the children's stop contract.
   process.once('SIGTERM', () => void shutdown());
   process.once('SIGINT', () => void shutdown());
 }

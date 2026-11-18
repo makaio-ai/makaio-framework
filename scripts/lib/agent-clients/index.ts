@@ -63,6 +63,7 @@ export type { ProbeWorkspace } from './workspace.js';
 
 export { runCommand, runScenario, writeScenarioHookConfig } from './runner.js';
 export type { ScenarioRunResult } from './runner.js';
+export type { RunCleanup } from './process-tree-cleanup.js';
 
 export { extractExactVersion, resolveExecutable, validateBinaryVersion } from './version-validation.js';
 export type { VersionValidationResult } from './version-validation.js';

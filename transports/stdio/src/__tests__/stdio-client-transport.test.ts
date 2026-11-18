@@ -544,7 +544,7 @@ describe('StdioClientTransport', () => {
 
       expect(errors).toHaveLength(1);
       // The exact message proves the raw line (and its token) is not echoed.
-      expect(errors[0]?.message).toBe('Failed to parse 1 stdio JSONL line(s)');
+      expect(errors[0]?.message).toBe('Dropped 1 malformed JSONL line(s) from stdin');
 
       unsubscribe();
       hostIn.end();
@@ -568,6 +568,82 @@ describe('StdioClientTransport', () => {
 
       unsubscribe();
       hostIn.end();
+    });
+
+    it('delivers a message whose multibyte character is split across stdin chunks', async () => {
+      const { transport, hostIn, hostOut } = createTestTransport();
+      transports.push(transport);
+
+      await connectAndSync(transport, hostIn, hostOut);
+
+      const received: BusMessage[] = [];
+      transport.onReceive(async (msg) => {
+        received.push(msg);
+      });
+      const event: BusEventMessage = {
+        type: 'event',
+        subject: 'adapter.init',
+        namespace: 'adapter',
+        payload: { name: 'Grüße 💡 €' },
+        messageId: 'evt-utf8',
+      };
+      const bytes = Buffer.from(encodeBusMessage(event), 'utf8');
+      const cut = bytes.indexOf(0xf0) + 2;
+
+      hostIn.write(bytes.subarray(0, cut));
+      hostIn.write(bytes.subarray(cut));
+
+      expect(received).toEqual([event]);
+
+      hostIn.end();
+    });
+
+    it('reports an unterminated final line when stdin ends, without its content', async () => {
+      const { transport, hostIn, hostOut } = createTestTransport();
+      transports.push(transport);
+
+      await connectAndSync(transport, hostIn, hostOut);
+
+      const errors: Error[] = [];
+      transport.onError((error) => {
+        errors.push(error);
+      });
+      const disconnected = new Promise<void>((resolve) => {
+        transport.onDisconnected = () => resolve();
+      });
+
+      hostIn.write('{"type":"event","token":"secret-value"}');
+      hostIn.end();
+      await disconnected;
+
+      expect(errors.map((error) => error.message)).toEqual([
+        'Dropped an unterminated final line (39 chars) from stdin',
+      ]);
+    });
+
+    it('isolates a throwing onDisconnected when stdin ends: logged, no uncaught exception', async () => {
+      const { transport, hostIn, hostOut } = createTestTransport();
+      transports.push(transport);
+      await connectAndSync(transport, hostIn, hostOut);
+
+      const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const observerFailure = new Error('observer failed');
+      const called = Promise.withResolvers<void>();
+      transport.onDisconnected = () => {
+        called.resolve();
+        throw observerFailure;
+      };
+
+      try {
+        hostIn.end();
+        await called.promise;
+        expect(errorLog).toHaveBeenCalledWith(
+          expect.stringContaining('onDisconnected observer threw'),
+          observerFailure,
+        );
+      } finally {
+        errorLog.mockRestore();
+      }
     });
 
     it('continues error fan-out when an error observer throws', async () => {

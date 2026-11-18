@@ -108,8 +108,13 @@ export { normalizeAppServerEvent } from './event-normalizers.js';
 export type { NormalizationContext } from './event-normalizers.js';
 
 // Export utilities (stdio transport, JSON-RPC client)
-export { createJsonRpcClient, createStdioTransport, formatMessageHistory } from './utils/index.js';
-export type { JsonRpcClient, StdioMessage, StdioTransport } from './utils/index.js';
+export {
+  APP_SERVER_STOP_TIMING,
+  createJsonRpcClient,
+  createStdioTransport,
+  formatMessageHistory,
+} from './utils/index.js';
+export type { AppServerStopTiming, CodexStdioTransportOptions, JsonRpcClient } from './utils/index.js';
 
 // Export generated protocol types (Thread/Turn/Item hierarchy)
 export { v2 } from './protocol/generated/index.js';

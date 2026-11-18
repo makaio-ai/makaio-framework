@@ -2,11 +2,12 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildChildEnvironment } from '../lib/agent-clients/command-construction.js';
 import type { SpawnCommand } from '../lib/agent-clients/command-construction.js';
 import { fixtureFilePath, writeFixture } from '../lib/agent-clients/fixtures.js';
 import { getManifest } from '../lib/agent-clients/manifests.js';
+import type { RunCleanup } from '../lib/agent-clients/process-tree-cleanup.js';
 import { runCommand, runScenario, writeScenarioHookConfig } from '../lib/agent-clients/runner.js';
 import type { ProbeScenario, ScenarioFixture, ScenarioManifest } from '../lib/agent-clients/types.js';
 import { cleanupProbeWorkspace, createProbeWorkspace } from '../lib/agent-clients/workspace.js';
@@ -660,7 +661,14 @@ describe('native probe driver', () => {
               terminal: 'ok',
             };
             await writeFixture({ baseDir: params.fixturesDir, fixture });
-            return { fixture, fixtureDiffs: [], stdout: '', stderr: '', timedOut: false };
+            return {
+              fixture,
+              fixtureDiffs: [],
+              stdout: '',
+              stderr: '',
+              timedOut: false,
+              cleanup: { kind: 'complete' },
+            };
           },
         },
       );
@@ -748,6 +756,7 @@ describe('native probe driver', () => {
             stdout: '',
             stderr: '',
             timedOut: false,
+            cleanup: { kind: 'complete' },
           }),
         },
       );
@@ -765,6 +774,66 @@ describe('native probe driver', () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  describe('incomplete cleanup of a scenario', () => {
+    /**
+     * Verify the first Codex scenario with a run that reports the given cleanup.
+     * @param cleanup - Cleanup the injected scenario run reports.
+     * @returns The aggregate probe result.
+     */
+    async function probeWithCleanup(cleanup: RunCleanup): ReturnType<typeof runProbe> {
+      return runProbe(
+        {
+          provider: 'codex',
+          credentialMode: 'access-token',
+          updateFixtures: false,
+          maxScenarios: 1,
+          maxWallClockSeconds: 60,
+        },
+        {
+          executablePath: '/fake/codex',
+          validateBinaryVersion: async ({ pinnedVersion }) => ({ valid: true, pinnedVersion }),
+          runScenario: async (params) => ({
+            fixture: {
+              schemaVersion: 4,
+              provider: 'codex',
+              cliVersion: getManifest('codex').pinnedVersion,
+              scenarioId: params.scenario.id,
+              events: [],
+              oracle: params.scenario.oracle,
+              oraclePassed: true,
+              exitCode: 0,
+              terminal: 'ok',
+            },
+            fixtureDiffs: [],
+            stdout: '',
+            stderr: '',
+            timedOut: false,
+            cleanup,
+          }),
+        },
+      );
+    }
+
+    it('reports a Windows tree that cannot be addressed as a warning, not a failure', async () => {
+      const result = await probeWithCleanup({ kind: 'incomplete', reason: 'tree-not-addressable' });
+
+      expect(result.failures.filter((failure) => failure.includes('provider processes'))).toEqual([]);
+      expect(result.warnings).toEqual([
+        expect.stringContaining('provider processes may still run (tree-not-addressable)'),
+      ]);
+    });
+
+    it('still fails the scenario for every other incomplete cleanup', async () => {
+      const result = await probeWithCleanup({ kind: 'incomplete', reason: 'poll-timeout' });
+
+      expect(result.passed).toBe(false);
+      expect(result.failures).toContainEqual(
+        expect.stringContaining('provider processes may still run (poll-timeout)'),
+      );
+      expect(result.warnings).toEqual([]);
+    });
   });
 
   it('creates an executable shim and provider-native config without inherited secret paths', async () => {
@@ -792,6 +861,340 @@ describe('native probe driver', () => {
     const startedAt = Date.now();
     const result = await runCommand(command);
     expect(result.timedOut).toBe(true);
+    expect(result.cleanup).toEqual({ kind: 'complete' });
     expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
+
+  /**
+   * A command that outlives a 50 ms deadline, for the group-kill tests below.
+   * @returns A fresh spawn command.
+   */
+  function overrunningCommand(): SpawnCommand {
+    return {
+      executable: 'sh',
+      args: ['-c', 'sleep 5'],
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH! },
+      timeoutMs: 50,
+    };
+  }
+
+  // Waits out the runner's fixed post-kill settle bound (5 s): the probe driver
+  // has no option for it, and this case pins exactly that bound.
+  it.runIf(process.platform !== 'win32')(
+    'returns after a bounded wait when a descendant outside the group holds stdout past the kill',
+    async () => {
+      const escapee = `
+const escapee = require('node:child_process').spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], {
+  detached: true,
+  stdio: ['ignore', 'inherit', 'ignore'],
+});
+escapee.unref();
+process.stdout.write('escapee:' + escapee.pid + '\\n');
+setInterval(() => {}, 1000);
+`;
+      const command: SpawnCommand = {
+        executable: process.execPath,
+        args: ['-e', escapee],
+        cwd: process.cwd(),
+        env: { PATH: process.env.PATH! },
+        timeoutMs: 300,
+      };
+      let result: Awaited<ReturnType<typeof runCommand>> | undefined;
+      try {
+        const startedAt = Date.now();
+        result = await runCommand(command);
+        expect(result.timedOut).toBe(true);
+        expect(result.stdout).toMatch(/^escapee:\d+/);
+        // The group kill succeeded, but a pipe stayed held: the run says so.
+        expect(result.cleanup).toEqual({ kind: 'incomplete', reason: 'pipes-held' });
+        expect(Date.now() - startedAt).toBeLessThan(10_000);
+      } finally {
+        const pid = Number(/escapee:(\d+)/.exec(result?.stdout ?? '')?.[1]);
+        if (Number.isInteger(pid) && pid > 1) {
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            // Already gone.
+          }
+        }
+      }
+    },
+    20_000,
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'starts the post-kill settle time only after the tree termination finished',
+    async () => {
+      // A termination that takes longer than the settle time (as a bounded
+      // `taskkill` can) and then kills the group for real. With the settle timer
+      // armed concurrently it would expire first and fail the run although the
+      // child exits right after the termination; started afterwards, the exit is
+      // observed inside the settle time.
+      const terminationMs = 600;
+      const postKillSettleMs = 300;
+      let terminationFinishedAt = 0;
+      const result = await runCommand(overrunningCommand(), {
+        postKillSettleMs,
+        terminateTree: async (pid) => {
+          await new Promise((resolve) => setTimeout(resolve, terminationMs));
+          process.kill(-pid, 'SIGKILL');
+          terminationFinishedAt = Date.now();
+          return { kind: 'complete' };
+        },
+      });
+      expect(result.timedOut).toBe(true);
+      expect(terminationFinishedAt).toBeGreaterThan(0);
+    },
+    20_000,
+  );
+
+  /**
+   * A command that passes its 50 ms deadline and then exits by itself, before a
+   * slow termination has finished.
+   * @returns A fresh spawn command.
+   */
+  function exitsDuringTerminationCommand(): SpawnCommand {
+    return { ...overrunningCommand(), args: ['-c', 'sleep 0.2'] };
+  }
+
+  // The caller removes the disposable workspace as soon as the run returns, so a
+  // provider that exits by itself while its tree termination is still running
+  // must not end the run before the descendants are terminated.
+  it.runIf(process.platform !== 'win32')(
+    'joins the running tree termination when the provider exits by itself after the deadline',
+    async () => {
+      let terminationFinishedAt = 0;
+      const result = await runCommand(exitsDuringTerminationCommand(), {
+        terminateTree: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 600));
+          terminationFinishedAt = Date.now();
+          return { kind: 'complete' };
+        },
+      });
+      const returnedAt = Date.now();
+      expect(result.timedOut).toBe(true);
+      expect(terminationFinishedAt).toBeGreaterThan(0);
+      expect(returnedAt).toBeGreaterThanOrEqual(terminationFinishedAt);
+    },
+    20_000,
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'fails the run with the termination failure when the provider exited before the termination failed',
+    async () => {
+      await expect(
+        runCommand(exitsDuringTerminationCommand(), {
+          terminateTree: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 600));
+            throw new Error('taskkill failed');
+          },
+        }),
+      ).rejects.toThrow('taskkill failed');
+    },
+    20_000,
+  );
+
+  // The group of a provider whose exit was observed is no longer signalled: its
+  // number is reserved only while the group has a member, and a probe cannot
+  // prove the group it found is still the provider's (`process-tree.ts`).
+  it.runIf(process.platform !== 'win32')(
+    'does not kill the group of a provider that exited before the deadline, and reports the incomplete cleanup',
+    async () => {
+      const leaderThatLeavesAMember = `
+const member = require('node:child_process').spawn(
+  process.execPath,
+  ['-e', "console.log('member:' + process.pid); setInterval(() => {}, 1000)"],
+  { stdio: ['ignore', 'inherit', 'ignore'] },
+);
+member.unref();
+setTimeout(() => process.exit(0), 150);
+`;
+      const command: SpawnCommand = {
+        executable: process.execPath,
+        args: ['-e', leaderThatLeavesAMember],
+        cwd: process.cwd(),
+        env: { PATH: process.env.PATH! },
+        timeoutMs: 600,
+      };
+      const kill = process.kill.bind(process);
+      const groupSignals: string[] = [];
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (typeof pid === 'number' && pid < 0 && signal !== 0) groupSignals.push(String(signal));
+        return kill(pid, signal);
+      });
+      let member: number | undefined;
+      try {
+        const result = await runCommand(command, { postKillSettleMs: 300 });
+        member = Number(/member:(\d+)/.exec(result.stdout)?.[1]);
+        expect(result.timedOut).toBe(true);
+        expect(result.exitCode).toBe(0);
+        expect(groupSignals).toEqual([]);
+        expect(() => kill(member!, 0)).not.toThrow();
+        expect(result.cleanup).toEqual({ kind: 'incomplete', reason: 'poll-timeout' });
+      } finally {
+        killSpy.mockRestore();
+        if (member !== undefined && Number.isInteger(member)) {
+          try {
+            kill(member, 'SIGKILL');
+          } catch {
+            // Already gone.
+          }
+        }
+      }
+    },
+    20_000,
+  );
+
+  // `cleanup: complete` needs the group's quiescence proved on every completion
+  // path, not only after a deadline: a descendant with redirected stdio does not
+  // hold the pipes, so the leader's `close` fires while it still runs.
+  it.runIf(process.platform !== 'win32')(
+    'reports incomplete cleanup, without a signal, when a provider exits before the deadline leaving a same-group descendant with redirected stdio',
+    async () => {
+      const leaderThatLeavesAQuietMember = `
+const member = require('node:child_process').spawn(
+  process.execPath,
+  ['-e', 'setInterval(() => {}, 1000)'],
+  { stdio: 'ignore' },
+);
+member.unref();
+console.log('member:' + member.pid);
+`;
+      const command: SpawnCommand = {
+        executable: process.execPath,
+        args: ['-e', leaderThatLeavesAQuietMember],
+        cwd: process.cwd(),
+        env: { PATH: process.env.PATH! },
+        timeoutMs: 30_000,
+      };
+      const kill = process.kill.bind(process);
+      const signals: string[] = [];
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (typeof pid === 'number' && signal !== 0) signals.push(String(signal));
+        return kill(pid, signal);
+      });
+      let member: number | undefined;
+      try {
+        const result = await runCommand(command);
+        member = Number(/member:(\d+)/.exec(result.stdout)?.[1]);
+        expect(result.timedOut).toBe(false);
+        expect(result.exitCode).toBe(0);
+        expect(() => kill(member!, 0)).not.toThrow();
+        expect(result.cleanup).toEqual({ kind: 'incomplete', reason: 'poll-timeout' });
+        expect(signals).toEqual([]);
+      } finally {
+        killSpy.mockRestore();
+        if (member !== undefined && Number.isInteger(member)) {
+          try {
+            kill(member, 'SIGKILL');
+          } catch {
+            // Already gone.
+          }
+        }
+      }
+    },
+    20_000,
+  );
+
+  // Simulated through the `platform` seam: an exited Windows provider's tree is
+  // addressed by a PID the host may reuse, so nothing can prove it empty.
+  it.runIf(process.platform !== 'win32')(
+    'reports incomplete cleanup (tree-not-addressable) when a Windows provider exits before the deadline',
+    async () => {
+      const result = await runCommand(
+        {
+          executable: 'sh',
+          args: ['-c', 'echo done'],
+          cwd: process.cwd(),
+          env: { PATH: process.env.PATH! },
+          timeoutMs: 30_000,
+        },
+        { platform: 'win32' },
+      );
+      expect(result).toMatchObject({
+        timedOut: false,
+        exitCode: 0,
+        cleanup: { kind: 'incomplete', reason: 'tree-not-addressable' },
+      });
+    },
+    20_000,
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'reports complete cleanup when the group is empty once the provider exited before the deadline',
+    async () => {
+      const result = await runCommand({
+        executable: 'sh',
+        args: ['-c', 'echo done'],
+        cwd: process.cwd(),
+        env: { PATH: process.env.PATH! },
+        timeoutMs: 30_000,
+      });
+      expect(result).toMatchObject({ timedOut: false, exitCode: 0, cleanup: { kind: 'complete' } });
+    },
+    20_000,
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'keeps waiting for close after a denied group kill once the group is proven quiescent',
+    async () => {
+      const kill = process.kill.bind(process);
+      let denied = 0;
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (typeof pid === 'number' && pid < 0 && signal === 'SIGKILL') {
+          // The kill takes effect, yet the host answers EPERM, as Darwin does for a zombie-only group.
+          kill(pid, signal);
+          denied += 1;
+          throw Object.assign(new Error('group kill denied'), { code: 'EPERM' });
+        }
+        return kill(pid, signal);
+      });
+      try {
+        expect(await runCommand(overrunningCommand())).toMatchObject({ timedOut: true });
+        expect(denied).toBe(1);
+      } finally {
+        killSpy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== 'win32')(
+    'fails the run when a denied group kill leaves live processes behind',
+    async () => {
+      const kill = process.kill.bind(process);
+      let groupPid = 0;
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (typeof pid === 'number' && pid < 0 && signal === 'SIGKILL') {
+          groupPid = -pid;
+          throw Object.assign(new Error('group kill denied'), { code: 'EPERM' });
+        }
+        return kill(pid, signal);
+      });
+      // Handles that keep a host alive: the child process and its pipes.
+      const processHandles = (): number =>
+        process.getActiveResourcesInfo().filter((type) => type === 'ProcessWrap' || type === 'PipeWrap').length;
+      const baseline = processHandles();
+      try {
+        await expect(runCommand(overrunningCommand())).rejects.toThrow('(denied, poll-timeout)');
+        // The child survived the denied kill; the failed run released its pipes
+        // and unreferenced it, so it cannot keep the host alive.
+        expect(groupPid).toBeGreaterThan(0);
+        expect(() => kill(groupPid, 0)).not.toThrow();
+        // A destroyed pipe still counts as active until the loop turn that runs
+        // its close callback, which follows the check phase; whether such a turn
+        // happened to pass before this point depended on what the previous case
+        // left running in the background.
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(processHandles()).toBeLessThanOrEqual(baseline);
+      } finally {
+        killSpy.mockRestore();
+        try {
+          if (groupPid !== 0) kill(-groupPid, 'SIGKILL');
+        } catch {
+          // The group already ended.
+        }
+      }
+    },
+  );
 });

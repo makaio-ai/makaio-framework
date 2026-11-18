@@ -15,8 +15,8 @@ import type { ClientExecutionContext } from '@makaio/contracts/client';
 import type { AIReasoningLevel, NativeForkDirective } from '@makaio/contracts';
 import { CodexAppServerConnector } from '../connector.js';
 import { CodexAppServerNamespace } from '../namespaces/index.js';
+import type { IJsonlTransport, ObservedProcessExit, TransportEnd, TransportStatus } from '@makaio/subprocess';
 import type { JsonRpcClient, ServerRequestHandler, NotificationHandler } from '../utils/jsonRpcClient.js';
-import type { StdioTransport } from '../utils/createStdioTransport.js';
 import type { ServerRequest } from '../protocol/generated/index.js';
 
 /**
@@ -55,6 +55,11 @@ export class MockJsonRpcClient implements JsonRpcClient {
   notificationHandlers = new Map<string, NotificationHandler>();
   serverRequestHandler: ServerRequestHandler | null = null;
   closed = false;
+  /**
+   * Runs when the client is closed. A real client owns its transport, so closing
+   * it ends the transport; a test that injects a transport models that here.
+   */
+  onClose: () => void = () => undefined;
 
   async request<T>(method: string, params: unknown): Promise<T> {
     this.sentRequests.push({ method, params });
@@ -84,6 +89,7 @@ export class MockJsonRpcClient implements JsonRpcClient {
   close(): void {
     this.closed = true;
     this.operations.push({ kind: 'close' });
+    this.onClose();
   }
 
   async receiveNotification(method: string, params: unknown): Promise<void> {
@@ -170,10 +176,16 @@ export interface CreateConnectorTestContextOptions {
   /** Optional JSON-RPC client override for failure/reconnect tests. */
   jsonRpcClient?: MockJsonRpcClient;
   /**
-   * Optional stdio transport override, for tests that drive the connector's exit
-   * observation without spawning a child.
+   * Build the connector without an injected client, as a real connection starts
+   * out: the client is created on first connect. `mockJsonRpcClient` is then
+   * only a stand-in the connector never sees.
    */
-  transport?: StdioTransport;
+  withoutJsonRpcClient?: boolean;
+  /**
+   * Optional app-server transport override, for tests that drive the connector's
+   * consumption of an end without spawning a child.
+   */
+  transport?: IJsonlTransport;
 }
 
 /**
@@ -196,7 +208,7 @@ export async function createConnectorTestContext(
     model: 'claude-3-5-sonnet-20241022',
     cwd: tempCwd,
     env: options.env ?? {},
-    jsonRpcClient: mockJsonRpcClient,
+    ...(options.withoutJsonRpcClient !== true && { jsonRpcClient: mockJsonRpcClient }),
     clientId: 'codex',
     ...(options.clientExecution !== undefined && { clientExecution: options.clientExecution }),
     ...(options.adapterAuth !== undefined && { adapterAuth: options.adapterAuth }),
@@ -301,4 +313,75 @@ export async function startConnectorWithTurn(
     threadId: 'thread-123',
     turn: createMockTurn(),
   });
+}
+
+/** An app-server transport whose end and exit observation the test publishes. */
+export interface FakeAppServerTransport {
+  /** The transport, in the shape the connector speaks through. */
+  readonly transport: IJsonlTransport;
+  /** Publish the child's observed exit on `exitObserved`. */
+  readonly publishExit: (exit?: ObservedProcessExit) => void;
+  /** Publish the end report on `ended`. */
+  readonly publishEnd: (end: TransportEnd) => void;
+}
+
+/**
+ * Build an app-server transport whose end the test controls.
+ *
+ * For the suites that drive the connector's *consumption* of an end report and
+ * an exit observation; the transport's own production of both is driven through
+ * real children in the transport suite.
+ * @param close - Behaviour of `close()` before it returns the end report, e.g. a throw.
+ * @returns The transport and the controls that settle its promises.
+ */
+export function createFakeAppServerTransport(close: () => void = () => undefined): FakeAppServerTransport {
+  const ended = Promise.withResolvers<TransportEnd>();
+  const exitObserved = Promise.withResolvers<ObservedProcessExit>();
+  let status: TransportStatus = 'writable';
+  const transport: IJsonlTransport = {
+    send: () => undefined,
+    close: () => {
+      close();
+      return ended.promise;
+    },
+    onMessage: () => () => undefined,
+    ended: ended.promise,
+    exitObserved: exitObserved.promise,
+    get status() {
+      return status;
+    },
+  };
+  return {
+    transport,
+    publishExit: (exit = { kind: 'exited', code: null, signal: 'SIGTERM' }) => exitObserved.resolve(exit),
+    publishEnd: (end) => {
+      status = 'ended';
+      ended.resolve(end);
+    },
+  };
+}
+
+// Each package that consumes `@makaio/subprocess` keeps its own small end-report
+// builder (this one, the JSON-RPC client suite's `endReport`) and process probe
+// (the stdio server suite's `isAlive`). Sharing a dozen lines across packages
+// would need a published test-support entry of `@makaio/subprocess`, a public
+// surface that has to stay stable for every consumer; these builders only
+// restate the `TransportEnd` type, which the compiler already keeps in step.
+/**
+ * Build an end report for a child that exited, as a transport reports it.
+ * @param cause - Cause the transport derived.
+ * @param exit - How the child ended.
+ * @returns A complete end report with a drained channel and no tree ownership.
+ */
+export function transportEnd(
+  cause: TransportEnd['cause'],
+  exit: TransportEnd['exit'] = { kind: 'exited', code: null, signal: 'SIGTERM' },
+): TransportEnd {
+  return {
+    cause,
+    exit,
+    drain: { kind: 'complete', discardedChars: 0 },
+    communicationFailure: undefined,
+    tree: { kind: 'not-owned' },
+  };
 }

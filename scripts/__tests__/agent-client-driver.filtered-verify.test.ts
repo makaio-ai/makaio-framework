@@ -58,7 +58,7 @@ function stubRunScenario(
       terminal: 'ok',
     };
     if (options.writeStaged) await writeFixture({ baseDir: params.fixturesDir, fixture });
-    return { fixture, fixtureDiffs: [], stdout: '', stderr: '', timedOut: false };
+    return { fixture, fixtureDiffs: [], stdout: '', stderr: '', timedOut: false, cleanup: { kind: 'complete' } };
   };
 }
 
@@ -143,7 +143,7 @@ describe('native probe verify-mode effect coverage', () => {
     const result = await verifyScenarios(provider, [selected.id], stubRunScenario(provider, { executed }));
 
     expect(executed).toEqual([selected.id]);
-    expect(result).toEqual({ passed: true, scenariosExecuted: 1, failures: [] });
+    expect(result).toEqual({ passed: true, scenariosExecuted: 1, failures: [], warnings: [] });
   });
 
   it('fails a --scenario verify run of a multi-effect event only for the missing sentinel', async () => {
@@ -172,7 +172,7 @@ describe('native probe verify-mode effect coverage', () => {
     );
 
     expect(executed).toEqual([selected.id]);
-    expect(result).toEqual({ passed: true, scenariosExecuted: 1, failures: [] });
+    expect(result).toEqual({ passed: true, scenariosExecuted: 1, failures: [], warnings: [] });
   });
 
   it('passes a --scenario verify run on the selected scenario evidence alone', async () => {
@@ -234,7 +234,7 @@ describe('native probe verify-mode effect coverage', () => {
     );
 
     expect(executed).toEqual([first!.id]);
-    expect(result).toEqual({ passed: true, scenariosExecuted: 1, failures: [] });
+    expect(result).toEqual({ passed: true, scenariosExecuted: 1, failures: [], warnings: [] });
   });
 
   it('fails a --scenario verify run that misses only the selected pair', async () => {
@@ -313,6 +313,7 @@ describe('native probe verify-mode effect coverage', () => {
         passed: false,
         scenariosExecuted: providerManifest.scenarios.length,
         failures: [`Missing live behavior evidence for ${effectKey(omitted)}`],
+        warnings: [],
       });
       await expect(fs.readFile(manifestPath, 'utf8')).resolves.toBe(original);
       await expect(

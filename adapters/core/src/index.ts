@@ -134,7 +134,7 @@ export {
 } from './agent/index.js';
 /** @public */
 export { GenerationRetirementLedger } from './agent/index.js';
-export type { ObservedExitOptions, SupersededGeneration } from './agent/index.js';
+export type { ExitObservation, ObservedExitOptions, SupersededGeneration } from './agent/index.js';
 export type {
   ClosableConnectorRuntime,
   ConnectorReplacementSettlement,

@@ -1,5 +1,6 @@
 /** Connector consumption tests for centrally prepared Codex runtime config. */
 
+import type { SpawnOptions } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,23 +12,18 @@ import { CodexAppServerConnector } from '../connector.js';
 import { CodexAppServerNamespace } from '../namespaces/index.js';
 import { createApiKeyAdapterAuth } from './shared.js';
 
-/** Minimal child-process surface required by createStdioTransport. */
-class MockSubprocess {
-  stdin = { write: vi.fn() };
-  stdout = { on: vi.fn() };
-  stderr = { on: vi.fn() };
-  on = vi.fn();
-  kill = vi.fn();
-  exitCode: number | null = null;
-  signalCode: NodeJS.Signals | null = null;
-}
-
-const mockSpawn = vi.fn();
+// The production spawn boundary: records the finalized inputs, then starts a
+// harmless real child in place of the selected binary, so the transport runs its
+// real spawn path without running a real codex.
+const mockSpawn = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:child_process')>();
+  mockSpawn.mockImplementation((_command: string, _args: readonly string[], options: SpawnOptions) =>
+    original.spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], options),
+  );
   return {
     ...original,
-    spawn: (...args: unknown[]) => mockSpawn(...args),
+    spawn: mockSpawn,
   };
 });
 
@@ -76,7 +72,6 @@ async function makeConnector(
   const bus = await CodexAppServerNamespace.scopedBus();
   const cwd = mkdtempSync(join(tmpdir(), 'codex-central-runtime-test-'));
   tempDirectories.push(cwd);
-  mockSpawn.mockReturnValue(new MockSubprocess());
 
   const connector = new CodexAppServerConnector({
     bus,

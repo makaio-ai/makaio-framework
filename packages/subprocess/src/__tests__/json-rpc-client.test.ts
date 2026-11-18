@@ -1,22 +1,29 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { createJsonRpcClient } from '../json-rpc-client.js';
-import type { IJsonlTransport, MessageListener, ErrorListener } from '../types.js';
+import type { JsonlChannel, MessageListener } from '../types.js';
+import type { TransportEnd } from '../process-end.js';
 import type { IJsonRpcClient } from '../json-rpc-client.js';
 
 // ---------------------------------------------------------------------------
 // Fake transport
 // ---------------------------------------------------------------------------
 
-interface FakeTransport extends IJsonlTransport {
+/**
+ * Message channel double for the client's own dispatch and settlement rules. The
+ * channel's production of messages and of its end report is driven through real
+ * children in `json-rpc-over-jsonl.test.ts`.
+ */
+interface FakeTransport extends JsonlChannel {
   simulateMessage(msg: unknown): void;
-  simulateError(error: Error): void;
+  /** Publish the end report, as a transport does once its end is decided. */
+  publishEnd(end: TransportEnd): void;
   readonly sent: object[];
   readonly closeCount: number;
 }
 
 function createFakeTransport(): FakeTransport {
   const messageListeners = new Set<MessageListener>();
-  const errorListeners = new Set<ErrorListener>();
+  const ended = Promise.withResolvers<TransportEnd>();
   const sent: object[] = [];
   let closeCount = 0;
 
@@ -24,25 +31,20 @@ function createFakeTransport(): FakeTransport {
     send(message: object): void {
       sent.push(message);
     },
-    close(): void {
+    close(): Promise<TransportEnd> {
       closeCount += 1;
+      return ended.promise;
     },
     onMessage(listener: MessageListener): () => void {
       messageListeners.add(listener);
       return () => messageListeners.delete(listener);
     },
-    onError(listener: ErrorListener): () => void {
-      errorListeners.add(listener);
-      return () => errorListeners.delete(listener);
-    },
-    get process(): never {
-      return undefined as never;
-    },
+    ended: ended.promise,
     simulateMessage(msg: unknown): void {
       for (const l of messageListeners) l(msg);
     },
-    simulateError(error: Error): void {
-      for (const l of errorListeners) l(error);
+    publishEnd(end: TransportEnd): void {
+      ended.resolve(end);
     },
     get sent(): object[] {
       return sent;
@@ -50,6 +52,25 @@ function createFakeTransport(): FakeTransport {
     get closeCount(): number {
       return closeCount;
     },
+  };
+}
+
+/**
+ * Build an end report for a child that exited.
+ * @param cause - Cause the transport derived.
+ * @param exit - How the child ended.
+ * @returns A complete end report with a drained channel and no tree ownership.
+ */
+function endReport(
+  cause: TransportEnd['cause'],
+  exit: TransportEnd['exit'] = { kind: 'exited', code: null, signal: 'SIGTERM' },
+): TransportEnd {
+  return {
+    cause,
+    exit,
+    drain: { kind: 'complete', discardedChars: 0 },
+    communicationFailure: undefined,
+    tree: { kind: 'not-owned' },
   };
 }
 
@@ -226,6 +247,30 @@ describe('createJsonRpcClient', () => {
       }).not.toThrow();
       expect(laterHandler).toHaveBeenCalledWith('event', { ok: true });
     });
+
+    it('delivers a notification to exactly the handlers registered when it arrived', () => {
+      const transport = createFakeTransport();
+      const client = createJsonRpcClient(transport);
+      const calls: string[] = [];
+      const added = vi.fn();
+      let unsubscribeSecond: () => void = () => undefined;
+
+      client.onNotification('event', () => {
+        calls.push('first');
+        // Neither change may alter who receives the message already in dispatch.
+        unsubscribeSecond();
+        client.onNotification('event', added);
+      });
+      unsubscribeSecond = client.onNotification('event', () => calls.push('second'));
+
+      transport.simulateMessage({ jsonrpc: '2.0', method: 'event', params: {} });
+      expect(calls).toEqual(['first', 'second']);
+      expect(added).not.toHaveBeenCalled();
+
+      transport.simulateMessage({ jsonrpc: '2.0', method: 'event', params: {} });
+      expect(calls).toEqual(['first', 'second', 'first']);
+      expect(added).toHaveBeenCalledOnce();
+    });
   });
 
   describe('onServerRequest()', () => {
@@ -380,18 +425,53 @@ describe('createJsonRpcClient', () => {
       await expect(p2).rejects.toThrow('JSON-RPC client closed');
     });
 
-    it('closes the client when the transport emits an error', async () => {
+    it('closes the client on an unexpected end: pending requests reject with the end, later ones at once', async () => {
       const transport = createFakeTransport();
       const client = createJsonRpcClient(transport);
 
       const p1 = client.request('pending', {});
 
-      transport.simulateError(new Error('transport died'));
+      transport.publishEnd(endReport('unexpected', { kind: 'exited', code: 3, signal: null }));
 
-      await expect(p1).rejects.toThrow('transport died');
+      await expect(p1).rejects.toThrow('JSON-RPC transport ended unexpectedly: exited with code 3');
       await expect(client.request('later', {})).rejects.toThrow('JSON-RPC client is closed');
       expect(transport.sent).toHaveLength(1);
+    });
+
+    it('settles pending requests when the transport was stopped by someone else', async () => {
+      const transport = createFakeTransport();
+      const client = createJsonRpcClient(transport);
+
+      const p1 = client.request('pending', {}, 0);
+
+      transport.publishEnd(endReport('requested'));
+
+      await expect(p1).rejects.toThrow('JSON-RPC transport stopped on request: exited with signal SIGTERM');
+      await expect(client.request('later', {})).rejects.toThrow('JSON-RPC client is closed');
+    });
+
+    it('keeps the immediate closed rejection when the client itself closes before the end', async () => {
+      const transport = createFakeTransport();
+      const client = createJsonRpcClient(transport);
+
+      const p1 = client.request('pending', {}, 0);
+      client.close();
+      transport.publishEnd(endReport('requested'));
+
+      await expect(p1).rejects.toThrow('JSON-RPC client closed');
       expect(transport.closeCount).toBe(1);
+    });
+
+    it('does not close a transport that already ended', async () => {
+      const transport = createFakeTransport();
+      const client = createJsonRpcClient(transport);
+
+      transport.publishEnd(endReport('unexpected'));
+      await flushDispatch();
+      await expect(client.request('later', {})).rejects.toThrow('JSON-RPC client is closed');
+      client.close();
+
+      expect(transport.closeCount).toBe(0);
     });
 
     it('detaches from transport so no further messages are dispatched after close', () => {
