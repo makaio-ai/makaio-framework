@@ -161,6 +161,18 @@ describe('broadcast() options.transports behavior', () => {
     MakaioBus.__resetHandlers?.();
   });
 
+  it.each([
+    -1,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+  ])('rejects timeout %s with a RangeError before anything is sent', async (timeout) => {
+    // Only `0` means "no timeout"; an invalid budget never reaches a transport.
+    await expect(MakaioBus.broadcast(BroadcastSubjects.remoteRequest, { q: 'ping' }, { timeout })).rejects.toThrow(
+      RangeError,
+    );
+    expect(primary.messages).toHaveLength(0);
+  });
+
   // -------------------------------------------------------------------------
   // 1. Default (no options.transports)
   // -------------------------------------------------------------------------

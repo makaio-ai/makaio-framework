@@ -8,13 +8,17 @@
  * Test scenarios:
  * - Event broadcast from server to multiple clients
  * - Request-response pattern across client-server
+ * - Server-initiated request routing never re-sends a request whose outcome is unknown
+ *   and keeps every attempt inside the caller's budget
  */
 
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect } from 'vitest';
+import type { WebSocketServer } from 'ws';
 import { WebSocketClientTransport } from '../ws-client-transport.js';
 import { ServerTransport } from '../server-transport.js';
-import type { BusMessage } from '@makaio/bus-core';
-import { createTestServer, waitForMessageCount } from './test-utils.js';
+import type { BusMessage, BusRequestMessage } from '@makaio/bus-core';
+import { NO_HANDLER_ERROR_CODE, NoHandlerError, TimeoutError } from '@makaio/bus-core';
+import { createTestServer, waitForCondition, waitForMessageCount } from './test-utils.js';
 
 // ============================================================================
 // EVENT BROADCAST E2E
@@ -216,5 +220,161 @@ describe('Request-response E2E', () => {
     } finally {
       await new Promise<void>((resolve) => wss.close(() => resolve()));
     }
+  });
+});
+
+// ============================================================================
+// SERVER-INITIATED REQUEST ROUTING E2E
+// ============================================================================
+
+describe('Server-initiated request routing E2E', () => {
+  const subject = 'action';
+  const namespace = 'test';
+
+  let wss: WebSocketServer;
+  let serverTransport: ServerTransport;
+  let clients: WebSocketClientTransport[];
+  /** Requests received per client, in client connection order. */
+  let received: BusRequestMessage[][];
+
+  const totalReceived = (): number => received.reduce((sum, requests) => sum + requests.length, 0);
+
+  /**
+   * Build a server-initiated request envelope.
+   * @param correlationId - Correlation ID chosen by the caller
+   * @returns Request envelope for `test.action`
+   */
+  function makeRequest(correlationId: string): BusRequestMessage {
+    return { type: 'request', namespace, subject, payload: {}, correlationId, messageId: `msg-${correlationId}` };
+  }
+
+  /**
+   * Answer the request a client received with "no handler" for `test.action`.
+   * @param clientIndex - Index of the answering client
+   */
+  async function answerNoHandler(clientIndex: number): Promise<void> {
+    await clients[clientIndex].send({
+      type: 'response',
+      correlationId: received[clientIndex][0].correlationId,
+      error: {
+        message: 'No handler registered for request subject "test.action"',
+        code: NO_HANDLER_ERROR_CODE,
+        data: { subject: 'test.action' },
+      },
+    });
+  }
+
+  beforeEach(async () => {
+    const server = await createTestServer();
+    wss = server.wss;
+    serverTransport = new ServerTransport({ websocket: wss });
+    await serverTransport.connect();
+
+    // Two clients advertise the same request handler and record what reaches them.
+    clients = [];
+    received = [];
+    for (let index = 0; index < 2; index++) {
+      const client = new WebSocketClientTransport({ url: `ws://localhost:${server.port}`, autoReconnect: false });
+      const requests: BusRequestMessage[] = [];
+      client.onReceive(async (msg) => {
+        if (msg.type === 'request') requests.push(msg);
+      });
+      await client.connect();
+      // Resolves on the server's subscription-ack, so routing state is applied.
+      await client.subscribe(`${namespace}.${subject}`, undefined, [0]);
+      clients.push(client);
+      received.push(requests);
+    }
+  });
+
+  afterEach(async () => {
+    await Promise.all(clients.map((client) => client.disconnect()));
+    await serverTransport.disconnect();
+  });
+
+  it('does not re-send a timed-out request to the next interested client', async () => {
+    // The first client receives the request but never answers in time. The
+    // caller sees a timeout of its request subject and budget, not of the
+    // internal attempt correlation ID.
+    const error = await serverTransport.send(makeRequest('corr-timeout'), 100).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(TimeoutError);
+    expect(error).toMatchObject({ subject: 'test.action', timeoutMs: 100 });
+
+    // A timeout is not evidence that the handler did not run: the request
+    // must not reach a second client after the caller saw the timeout.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(totalReceived()).toBe(1);
+  });
+
+  it('cancels the in-flight attempt and stops routing when the caller cancels', async () => {
+    // timeout 0: only cancellation can settle the request.
+    const outcome = serverTransport.send(makeRequest('corr-cancel'), 0).then(
+      () => 'resolved',
+      (error: unknown) => error,
+    );
+    await waitForCondition(() => totalReceived() === 1, 500, 'request never reached a client');
+
+    const cancellation = new Error('caller cancelled');
+    serverTransport.cancelRequest('corr-cancel', cancellation);
+    const settled = await Promise.race([outcome, new Promise((resolve) => setTimeout(() => resolve('pending'), 200))]);
+    expect(settled).toBe(cancellation);
+
+    // A late "no handler" reply for the cancelled attempt must not move the
+    // request on to the next client.
+    await answerNoHandler(received.findIndex((requests) => requests.length === 1));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(totalReceived()).toBe(1);
+  });
+
+  it('gives the next client only the remaining budget after a late no-handler answer', async () => {
+    const timeout = 400;
+    const answerDelay = 300;
+    const startedAt = Date.now();
+    const outcome = serverTransport.send({ ...makeRequest('corr-late'), timeout }, timeout).then(
+      () => 'resolved',
+      (error: unknown) => error,
+    );
+    await waitForCondition(() => totalReceived() === 1, 500, 'request never reached a client');
+    const firstIndex = received.findIndex((requests) => requests.length === 1);
+
+    // The first client spends most of the budget before reporting no handler.
+    await new Promise((resolve) => setTimeout(resolve, answerDelay));
+    await answerNoHandler(firstIndex);
+    const secondIndex = 1 - firstIndex;
+    await waitForCondition(() => received[secondIndex].length === 1, 500, 'request never moved on');
+
+    // The next client anchors its deadline from the wire budget, so it must not
+    // get a fresh full timeout. Slack covers timer/clock rounding only.
+    const slack = 5;
+    const wireTimeout = received[secondIndex][0].timeout;
+    expect(wireTimeout).toBeGreaterThan(0);
+    expect(wireTimeout).toBeLessThanOrEqual(timeout - answerDelay + slack);
+
+    // The server stops waiting at the shared deadline, not one full timeout
+    // later, and reports the caller's subject and budget.
+    const error = await outcome;
+    expect(Date.now() - startedAt).toBeLessThan(timeout + answerDelay);
+    expect(error).toBeInstanceOf(TimeoutError);
+    expect(error).toMatchObject({ subject: 'test.action', timeoutMs: timeout });
+  });
+
+  it('propagates a no-handler cancellation reason unchanged instead of classifying it', async () => {
+    // timeout 0: only answers and cancellation can settle the request.
+    const outcome = serverTransport.send(makeRequest('corr-cancel-no-handler'), 0).then(
+      () => 'resolved',
+      (error: unknown) => error,
+    );
+    await waitForCondition(() => totalReceived() === 1, 500, 'request never reached a client');
+    const firstIndex = received.findIndex((requests) => requests.length === 1);
+    await answerNoHandler(firstIndex);
+    const secondIndex = 1 - firstIndex;
+    await waitForCondition(() => received[secondIndex].length === 1, 500, 'request never moved on');
+
+    // A cancellation reason shaped like a no-handler answer for the same
+    // subject is still the caller's cancellation, not a client response.
+    const cancellation = new NoHandlerError('test.action');
+    serverTransport.cancelRequest('corr-cancel-no-handler', cancellation);
+    const settled = await Promise.race([outcome, new Promise((resolve) => setTimeout(() => resolve('pending'), 200))]);
+    expect(settled).toBe(cancellation);
   });
 });

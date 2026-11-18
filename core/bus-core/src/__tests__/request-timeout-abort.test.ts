@@ -114,4 +114,21 @@ describe('request timeout=0 with AbortSignal', () => {
     expect(transport.lastTimeout).toBe(0);
     expect(transport.cancelled).toHaveLength(1);
   });
+
+  it.each([
+    -1,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+  ])('rejects timeout %s with a RangeError before anything is dispatched', async (timeout) => {
+    MakaioBus.getContext().remoteRequestHandlers.set('requestTimeoutAbort.wait', [
+      { transport: 'pending', priority: 0 },
+    ]);
+
+    // Only `0` means "no timeout": an invalid budget must not reach the
+    // transport, where the request would outlive the caller's rejection.
+    await expect(MakaioBus.request(RequestTimeoutSubjects.wait, { value: 'x' }, { timeout })).rejects.toThrow(
+      RangeError,
+    );
+    expect(transport.lastTimeout).toBeUndefined();
+  });
 });
