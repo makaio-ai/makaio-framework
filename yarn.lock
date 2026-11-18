@@ -3696,34 +3696,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@libsql/client@npm:^0.18.0":
-  version: 0.18.0
-  resolution: "@libsql/client@npm:0.18.0"
-  dependencies:
-    "@libsql/core": "npm:^0.18.0"
-    "@libsql/hrana-client": "npm:^0.10.0"
-    js-base64: "npm:^3.7.5"
-    libsql: "npm:^0.5.28"
-    promise-limit: "npm:^2.7.0"
-  checksum: 10c0/3492699b754be04b186bc64139ea400f0458ab5a25e37712f802b18cb22f07d851579b62be6ca1fc89121ebb062aac03c4a3bc6b9c51b10cd32df21fde39d726
-  languageName: node
-  linkType: hard
-
 "@libsql/core@npm:^0.17.4":
   version: 0.17.4
   resolution: "@libsql/core@npm:0.17.4"
   dependencies:
     js-base64: "npm:^3.7.5"
   checksum: 10c0/907abad154a940da4168878f330b69a39793098617d94929ca685a2ac5d18304f3751fe1b235303de8435097d232cb5d9e7476022329808faa436aeff8fb2b64
-  languageName: node
-  linkType: hard
-
-"@libsql/core@npm:^0.18.0":
-  version: 0.18.0
-  resolution: "@libsql/core@npm:0.18.0"
-  dependencies:
-    js-base64: "npm:^3.7.5"
-  checksum: 10c0/f5478302191376e04dc3c5e9e42f7c53414f90ed015e30867a55c06a6b94bb7854022463768aa6652aba879ea264be265bff9134eeb7f2d1dae35b343b1ff41f
   languageName: node
   linkType: hard
 
@@ -4120,9 +4098,9 @@ __metadata:
     "@makaio/utils": "workspace:*"
     ajv: "npm:^8.17.1"
     emittery: "npm:^1.2.0"
-    tsdown: "npm:0.23.0"
+    tsdown: "npm:0.22.0"
     type-fest: "npm:^5.2.0"
-    zod: "npm:4.6.5"
+    zod: "npm:4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -4135,8 +4113,8 @@ __metadata:
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/core": "workspace:*"
-    tsdown: "npm:0.23.0"
-    zod: "npm:4.6.5"
+    tsdown: "npm:0.22.0"
+    zod: "npm:4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -4533,25 +4511,25 @@ __metadata:
     "@makaio/utils": "workspace:*"
     "@napi-rs/keyring": "npm:^1.0.0"
     "@types/d3-shape": "npm:^3.1.7"
-    "@types/react": "npm:^19.3.0"
+    "@types/react": "npm:^19.2.15"
     d3-shape: "npm:^3.2.0"
     drizzle-kit: "npm:^0.31.8"
     drizzle-orm: "npm:0.45.4"
     ink: "npm:^6.0.0"
     ink-testing-library: "npm:^3.0.0"
-    react: "npm:^19.3.0"
-    react-dom: "npm:^19.3.0"
-    smol-toml: "npm:^1.9.1"
-    tsdown: "npm:0.23.0"
-    tsx: "npm:^4.23.15"
+    react: "npm:^19.2.6"
+    react-dom: "npm:^19.2.6"
+    smol-toml: "npm:^1.7.0"
+    tsdown: "npm:0.22.0"
+    tsx: "npm:^4.23.1"
     typescript: "npm:^6.0.3"
     unrun: "npm:^0.3.0"
     vitest: "npm:4.1.10"
-    zod: "npm:4.6.5"
+    zod: "npm:4.4.3"
   peerDependencies:
     "@makaio/bus-core": "*"
-    react: ^19.3.0
-    react-dom: ^19.3.0
+    react: ^19.2.6
+    react-dom: ^19.2.6
   languageName: unknown
   linkType: soft
 
@@ -4830,11 +4808,11 @@ __metadata:
     drizzle-kit: "npm:^0.31.8"
     drizzle-orm: "npm:0.45.4"
     nanoid: "npm:5.1.11"
-    tsdown: "npm:0.23.0"
-    tsx: "npm:^4.23.15"
+    tsdown: "npm:0.22.0"
+    tsx: "npm:^4.23.1"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.10"
-    zod: "npm:4.6.5"
+    zod: "npm:4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -4999,7 +4977,7 @@ __metadata:
     "@vitest/browser-playwright": "npm:4.1.7"
     "@vitest/coverage-v8": "npm:^4.1.7"
     chalk: "npm:^5.6.2"
-    drizzle-orm: "npm:0.45.2"
+    drizzle-orm: "npm:0.45.4"
     emittery: "npm:^1.2.0"
     eslint: "npm:^9.33.0"
     eslint-plugin-import: "npm:^2.32.0"
@@ -5050,19 +5028,19 @@ __metadata:
   resolution: "@makaio/framework@workspace:packages/framework"
   dependencies:
     "@hono/node-server": "npm:^1.14.1"
-    "@libsql/client": "npm:^0.18.0"
+    "@libsql/client": "npm:^0.17.4"
     ajv: "npm:^8.18.0"
     ajv-formats: "npm:^3.0.1"
     drizzle-orm: "npm:^0.45.4"
     execa: "npm:^9.5.2"
     glob: "npm:13.0.6"
-    hono: "npm:^4.13.13"
+    hono: "npm:^4.12.23"
     node-pty: "npm:^1.2.0-beta.8"
-    piscina: "npm:^5.3.2"
-    tsx: "npm:^4.23.15"
+    piscina: "npm:^5.1.4"
+    tsx: "npm:^4.22.3"
     type-fest: "npm:^5.2.0"
-    ws: "npm:^8.22.0"
-    zod: "npm:4.6.5"
+    ws: "npm:^8.21.0"
+    zod: "npm:4.4.3"
   peerDependencies:
     "@modelcontextprotocol/sdk": ^1.29.0
     "@types/react-grid-layout": ^1.3.5
@@ -5199,7 +5177,7 @@ __metadata:
     drizzle-orm: "npm:0.45.4"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.10"
-    zod: "npm:4.6.5"
+    zod: "npm:4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5463,18 +5441,18 @@ __metadata:
     drizzle-orm: "npm:0.45.4"
     execa: "npm:^9.5.2"
     glob: "npm:13.0.6"
-    hono: "npm:^4.13.13"
-    minimatch: "npm:^10.2.6"
+    hono: "npm:^4.12.23"
+    minimatch: "npm:^10.0.3"
     node-pty: "npm:^1.2.0-beta.8"
-    piscina: "npm:^5.3.2"
+    piscina: "npm:^5.1.4"
     proper-lockfile: "npm:^4.1.2"
-    tsdown: "npm:0.23.0"
-    tsx: "npm:^4.23.15"
+    tsdown: "npm:0.22.0"
+    tsx: "npm:^4.22.3"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.10"
-    ws: "npm:^8.22.0"
-    yaml: "npm:^2.9.1"
-    zod: "npm:4.6.5"
+    ws: "npm:^8.21.0"
+    yaml: "npm:^2.9.0"
+    zod: "npm:4.4.3"
   peerDependencies:
     "@makaio/framework": "workspace:*"
   languageName: unknown
@@ -5530,8 +5508,8 @@ __metadata:
     ajv-formats: "npm:^3.0.1"
     croner: "npm:^10.0.1"
     drizzle-orm: "npm:0.45.4"
-    tsdown: "npm:0.23.0"
-    zod: "npm:4.6.5"
+    tsdown: "npm:0.22.0"
+    zod: "npm:4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5539,7 +5517,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/services-log-import@workspace:services/log-import"
   dependencies:
-    "@libsql/client": "npm:^0.18.0"
+    "@libsql/client": "npm:^0.17.4"
     "@makaio/ai-adapters-claude-shared": "workspace:*"
     "@makaio/ai-adapters-core": "workspace:*"
     "@makaio/build-tooling": "workspace:*"
@@ -5554,10 +5532,10 @@ __metadata:
     "@makaio/test-utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     drizzle-orm: "npm:0.45.4"
-    tsdown: "npm:0.23.0"
-    tsx: "npm:^4.23.15"
+    tsdown: "npm:0.22.0"
+    tsx: "npm:^4.23.1"
     type-fest: "npm:^4.31.0"
-    zod: "npm:4.6.5"
+    zod: "npm:4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5640,7 +5618,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/storage-drizzle@workspace:storage/drizzle"
   dependencies:
-    "@libsql/client": "npm:^0.18.0"
+    "@libsql/client": "npm:^0.17.4"
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
@@ -5649,7 +5627,7 @@ __metadata:
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     drizzle-orm: "npm:0.45.4"
-    tsdown: "npm:0.23.0"
+    tsdown: "npm:0.22.0"
   languageName: unknown
   linkType: soft
 
@@ -5678,7 +5656,7 @@ __metadata:
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     drizzle-kit: "npm:^0.31.8"
-    drizzle-orm: "npm:0.45.2"
+    drizzle-orm: "npm:0.45.4"
     tsx: "npm:^4.23.1"
   languageName: unknown
   linkType: soft
@@ -5694,9 +5672,9 @@ __metadata:
     "@types/node": "npm:^24.3.0"
     drizzle-kit: "npm:^0.31.8"
     drizzle-orm: "npm:0.45.4"
-    pg: "npm:^8.23.1"
-    tsdown: "npm:0.23.0"
-    tsx: "npm:^4.23.15"
+    pg: "npm:^8.22.0"
+    tsdown: "npm:0.22.0"
+    tsx: "npm:^4.22.4"
     typescript: "npm:^6.0.3"
   peerDependencies:
     "@makaio/framework": "workspace:*"
@@ -5744,10 +5722,10 @@ __metadata:
     "@makaio/utils": "workspace:*"
     "@types/node": "npm:^24.3.0"
     drizzle-orm: "npm:0.45.4"
-    tsdown: "npm:0.23.0"
-    tsx: "npm:^4.23.15"
+    tsdown: "npm:0.22.0"
+    tsx: "npm:^4.22.3"
     vitest: "npm:4.1.10"
-    zod: "npm:4.6.5"
+    zod: "npm:4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5801,12 +5779,12 @@ __metadata:
     "@makaio/storage-core": "workspace:*"
     "@makaio/storage-drizzle": "workspace:*"
     "@makaio/test-utils": "workspace:*"
-    "@types/ws": "npm:^8.18.2"
+    "@types/ws": "npm:^8.5.10"
     drizzle-orm: "npm:0.45.4"
     node-pty: "npm:^1.2.0-beta.8"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.10"
-    ws: "npm:^8.22.0"
+    ws: "npm:^8.21.0"
   languageName: unknown
   linkType: soft
 
@@ -5830,9 +5808,9 @@ __metadata:
     "@types/node": "npm:^24.3.0"
     ajv: "npm:^8.18.0"
     drizzle-orm: "npm:0.45.4"
-    tsdown: "npm:0.23.0"
+    tsdown: "npm:0.22.0"
     vitest: "npm:4.1.10"
-    zod: "npm:4.6.5"
+    zod: "npm:4.4.3"
   languageName: unknown
   linkType: soft
 
@@ -5840,7 +5818,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@makaio/test-utils@workspace:packages/test-utils"
   dependencies:
-    "@libsql/client": "npm:^0.18.0"
+    "@libsql/client": "npm:^0.17.4"
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
@@ -5848,8 +5826,8 @@ __metadata:
     "@makaio/storage-pg": "workspace:*"
     "@types/node": "npm:^24.3.0"
     drizzle-orm: "npm:0.45.4"
-    tsdown: "npm:0.23.0"
-    tsx: "npm:^4.23.15"
+    tsdown: "npm:0.22.0"
+    tsx: "npm:^4.23.1"
     vitest: "npm:4.1.10"
   languageName: unknown
   linkType: soft
@@ -9831,7 +9809,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/ws@npm:^8.18.2":
+"@types/ws@npm:^8.18.2, @types/ws@npm:^8.5.10":
   version: 8.18.2
   resolution: "@types/ws@npm:8.18.2"
   dependencies:
@@ -13823,101 +13801,6 @@ __metadata:
   bin:
     drizzle-kit: bin.cjs
   checksum: 10c0/83edbf8db1e94c734eab92db09ee2e4b00875d18b50b62e61c8e768a636f3ddb4071050cccf54fe55c2efc19ee79e350e5fe6060906153ffbd7d7534e2590115
-  languageName: node
-  linkType: hard
-
-"drizzle-orm@npm:0.45.2":
-  version: 0.45.2
-  resolution: "drizzle-orm@npm:0.45.2"
-  peerDependencies:
-    "@aws-sdk/client-rds-data": ">=3"
-    "@cloudflare/workers-types": ">=4"
-    "@electric-sql/pglite": ">=0.2.0"
-    "@libsql/client": ">=0.10.0"
-    "@libsql/client-wasm": ">=0.10.0"
-    "@neondatabase/serverless": ">=0.10.0"
-    "@op-engineering/op-sqlite": ">=2"
-    "@opentelemetry/api": ^1.4.1
-    "@planetscale/database": ">=1.13"
-    "@prisma/client": "*"
-    "@tidbcloud/serverless": "*"
-    "@types/better-sqlite3": "*"
-    "@types/pg": "*"
-    "@types/sql.js": "*"
-    "@upstash/redis": ">=1.34.7"
-    "@vercel/postgres": ">=0.8.0"
-    "@xata.io/client": "*"
-    better-sqlite3: ">=7"
-    bun-types: "*"
-    expo-sqlite: ">=14.0.0"
-    gel: ">=2"
-    knex: "*"
-    kysely: "*"
-    mysql2: ">=2"
-    pg: ">=8"
-    postgres: ">=3"
-    sql.js: ">=1"
-    sqlite3: ">=5"
-  peerDependenciesMeta:
-    "@aws-sdk/client-rds-data":
-      optional: true
-    "@cloudflare/workers-types":
-      optional: true
-    "@electric-sql/pglite":
-      optional: true
-    "@libsql/client":
-      optional: true
-    "@libsql/client-wasm":
-      optional: true
-    "@neondatabase/serverless":
-      optional: true
-    "@op-engineering/op-sqlite":
-      optional: true
-    "@opentelemetry/api":
-      optional: true
-    "@planetscale/database":
-      optional: true
-    "@prisma/client":
-      optional: true
-    "@tidbcloud/serverless":
-      optional: true
-    "@types/better-sqlite3":
-      optional: true
-    "@types/pg":
-      optional: true
-    "@types/sql.js":
-      optional: true
-    "@upstash/redis":
-      optional: true
-    "@vercel/postgres":
-      optional: true
-    "@xata.io/client":
-      optional: true
-    better-sqlite3:
-      optional: true
-    bun-types:
-      optional: true
-    expo-sqlite:
-      optional: true
-    gel:
-      optional: true
-    knex:
-      optional: true
-    kysely:
-      optional: true
-    mysql2:
-      optional: true
-    pg:
-      optional: true
-    postgres:
-      optional: true
-    prisma:
-      optional: true
-    sql.js:
-      optional: true
-    sqlite3:
-      optional: true
-  checksum: 10c0/deb4a0230a79b1ff8c61365808bdb06a78e9e32171625f1c61d791dec445fad5cd9bc4ce2e6175b0ff1be7fb913310b2fd07b94a2cbe8027581b7d99469b8060
   languageName: node
   linkType: hard
 
@@ -20770,7 +20653,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"pg@npm:^8.23.1":
+"pg@npm:^8.22.0":
   version: 8.23.1
   resolution: "pg@npm:8.23.1"
   dependencies:
@@ -20843,7 +20726,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"piscina@npm:^5.3.2":
+"piscina@npm:^5.1.4":
   version: 5.3.2
   resolution: "piscina@npm:5.3.2"
   dependencies:
@@ -21476,6 +21359,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"react-dom@npm:^19.2.6":
+  version: 19.3.1
+  resolution: "react-dom@npm:19.3.1"
+  dependencies:
+    scheduler: "npm:^0.28.0"
+  peerDependencies:
+    react: ^19.3.1
+  checksum: 10c0/382700916313b2ebc46acee80642f300bb8601eac6a9e7fefade5b8b30e66b05bf3aaa56a3c964589fcd578d27b486e847470c2697d879264e766661ff49fac7
+  languageName: node
+  linkType: hard
+
 "react-dom@npm:^19.3.0":
   version: 19.3.0
   resolution: "react-dom@npm:19.3.0"
@@ -21627,6 +21521,13 @@ __metadata:
     loose-envify: "npm:^1.1.0"
     object-assign: "npm:^4.1.1"
   checksum: 10c0/07ae8959acf1596f0550685102fd6097d461a54a4fd46a50f88a0cd7daaa97fdd6415de1dcb4bfe0da6aa43221a6746ce380410fa848acc60f8ac41f6649c148
+  languageName: node
+  linkType: hard
+
+"react@npm:^19.2.6":
+  version: 19.3.1
+  resolution: "react@npm:19.3.1"
+  checksum: 10c0/f0ed036d1223562c09c8347858ca712733ea6e27a30db709ee9c3f3f176d3e9e767afce735d59956addf3d030102e256bba82dea635fc1bdb0e01107e98fef10
   languageName: node
   linkType: hard
 
@@ -23071,7 +22972,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"smol-toml@npm:^1.8.0, smol-toml@npm:^1.9.0, smol-toml@npm:^1.9.1":
+"smol-toml@npm:^1.7.0, smol-toml@npm:^1.8.0, smol-toml@npm:^1.9.0, smol-toml@npm:^1.9.1":
   version: 1.9.1
   resolution: "smol-toml@npm:1.9.1"
   checksum: 10c0/8acccf7bbc063f29405f58f5014ab39bf4eb9d7f0e000e5e3f140f7d4d6ead5696681a7c15260d1f2910213012c0af43b31a05bf94f704b0bdf39989fba08c02

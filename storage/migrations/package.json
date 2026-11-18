@@ -22,7 +22,7 @@
   "dependencies": {
     "@makaio/storage-drizzle": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "drizzle-orm": "0.45.2"
+    "drizzle-orm": "0.45.4"
   },
   "devDependencies": {
     "@makaio/storage-pg": "workspace:*",
