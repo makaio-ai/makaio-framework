@@ -18,7 +18,7 @@
     "@makaio/kernel": "workspace:*",
     "@makaio/runtime-node": "workspace:*",
     "@makaio/utils": "workspace:*",
-    "hono": "^4.12.27",
+    "hono": "^4.13.16",
     "ws": "^8.21.1"
   },
   "license": "MIT",
