@@ -1,18 +1,35 @@
-name: Dependabot auto-merge
+name: Dependabot labels
 
 on:
   pull_request:
 
 permissions:
+  # contents: write is kept for the "Turn off auto-merge" step: GitHub's documentation
+  # does not state which permissions the disablePullRequestAutoMerge mutation needs,
+  # and enabling auto-merge required contents: write.
   contents: write
   issues: write
   pull-requests: write
 
 jobs:
-  auto-merge:
+  label:
     runs-on: ubuntu-latest
     if: github.actor == 'dependabot[bot]'
     steps:
+      # Pull requests that had auto-merge enabled by the former auto-merge step keep it
+      # until it is turned off explicitly. `gh pr merge --disable-auto` does not document
+      # its behaviour when auto-merge is off, so the step checks first.
+      - name: Turn off auto-merge
+        run: |
+          if [[ "$(gh pr view "$PR_URL" --json autoMergeRequest --jq '.autoMergeRequest != null')" == "true" ]]; then
+            gh pr merge --disable-auto "$PR_URL"
+          else
+            echo "Auto-merge is not enabled."
+          fi
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Add skip:changeset label
         run: gh pr edit "$PR_URL" --add-label "skip:changeset"
         env:
@@ -52,7 +69,7 @@ jobs:
               echo "$adapter_sdk_names"
               echo "EOF"
             } >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping auto-merge — adapter SDK dependency update: $adapter_sdk_names"
+            echo "::notice::Adapter SDK dependency update: $adapter_sdk_names"
           else
             echo "matched=false" >> "$GITHUB_OUTPUT"
           fi
@@ -63,15 +80,6 @@ jobs:
           gh label create "adapter-sdk" --description "External SDK used by adapter implementations" --color "5319E7" --force
           gh label create "needs:conformance-tests" --description "Requires adapter conformance test coverage before merge" --color "D93F0B" --force
           gh pr edit "$PR_URL" --add-label "adapter-sdk,needs:conformance-tests"
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Auto-merge patch and minor updates
-        if: >-
-          steps.metadata.outputs.update-type != 'version-update:semver-major' &&
-          steps.adapter-sdk-check.outputs.matched != 'true'
-        run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
