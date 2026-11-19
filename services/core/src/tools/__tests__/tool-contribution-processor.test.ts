@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import type { ExtensionToken } from '@makaio/contracts';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { defineTool, defineToolset, toolSuccess } from '@makaio/tools-core';
@@ -38,23 +39,17 @@ function makeToolset(name: string): Toolset {
  */
 function makeContext(registry?: ToolRegistry): KernelExtensionContext {
   const bus = createBusInstance();
-  return {
-    bus,
-    identity: {
-      extensionName: 'pkg-tools',
-    } as KernelExtensionContext['identity'],
+  return makeStubNodeExtensionContext(bus, {
+    identity: stubExtensionIdentity('pkg-tools'),
     platform: 'linux',
     homedir: '/home/test',
     makaioHome: '/home/test/.makaio',
     dataDir: '/home/test/.makaio/extensions/pkg-tools',
     username: 'test',
     machineId: 'machine-1',
-    signal: new AbortController().signal,
-    tryImport: async () => null,
     getService: <T>(token: ExtensionToken<T>): T | undefined =>
       (token.name === ToolRegistryToken.name ? registry : undefined) as T | undefined,
-    hasExtension: () => false,
-  };
+  });
 }
 
 describe('createToolContributionProcessor', () => {

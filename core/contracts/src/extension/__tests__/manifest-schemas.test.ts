@@ -73,6 +73,20 @@ describe('ExtensionManifestSchema', () => {
     expect(result.success).toBe(false);
   });
 
+  it('rejects a dot-segment name with the shared schema message', () => {
+    const result = ExtensionManifestSchema.safeParse({ name: '..', displayName: 'My Extension' });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toBe('Extension name must not be a dot-segment');
+  });
+
+  it('rejects a path-separator name with the shared schema message', () => {
+    const result = ExtensionManifestSchema.safeParse({ name: 'foo/bar', displayName: 'My Extension' });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.message).toBe(
+      'Extension name must be a plain identifier or an npm-scoped name (@scope/pkg)',
+    );
+  });
+
   it('rejects a manifest with missing displayName', () => {
     const result = ExtensionManifestSchema.safeParse({ name: 'my-extension' });
     expect(result.success).toBe(false);

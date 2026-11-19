@@ -1,3 +1,4 @@
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import { describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { ExtensionArtifactViewBuildersContribution } from '@makaio/contracts/materialization';
@@ -17,11 +18,8 @@ import { makeBuilder } from './helpers.js';
  */
 function makeContext(registry?: ArtifactViewBuilderRegistry): KernelExtensionContext {
   const bus = createBusInstance();
-  return {
-    bus,
-    identity: {
-      extensionName: 'test-ext',
-    } as KernelExtensionContext['identity'],
+  return makeStubNodeExtensionContext(bus, {
+    identity: stubExtensionIdentity('test-ext'),
     platform: 'linux',
     homedir: '/home/test',
     makaioHome: '/home/test/.makaio',
@@ -33,7 +31,7 @@ function makeContext(registry?: ArtifactViewBuilderRegistry): KernelExtensionCon
     getService: <T>(token: ExtensionToken<T>): T | undefined =>
       (token.name === ArtifactViewBuilderRegistryToken.name ? registry : undefined) as T | undefined,
     hasExtension: () => false,
-  };
+  });
 }
 
 /**

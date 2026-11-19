@@ -10,6 +10,7 @@
  * @see {@link MakaioExtension} for the executable extension of these types.
  */
 
+import { ExtensionNameSchema } from '@makaio/core';
 import { z } from 'zod';
 import type { BrowserEntrypoint } from './browser-entrypoint.js';
 import { BrowserEntrypointSchema } from './browser-entrypoint.js';
@@ -652,14 +653,7 @@ export interface ExtensionManifest {
 
 /** Zod schema for {@link ExtensionManifest}. */
 export const ExtensionManifestSchema = z.object({
-  name: z
-    .string()
-    .min(1)
-    .regex(/^(@[^/\\]+\/)?[^/\\]+$/, 'Extension name must be a plain identifier or an npm-scoped name (@scope/pkg)')
-    .refine((n) => {
-      const parts = n.startsWith('@') ? n.split('/') : [n];
-      return parts.every((p) => p !== '.' && p !== '..');
-    }, 'Extension name must not be a dot-segment'),
+  name: ExtensionNameSchema,
   displayName: z.string().min(1),
   version: VersionLiteralSchema,
   surface: z.enum(['interactive', 'headless', 'any']).optional(),

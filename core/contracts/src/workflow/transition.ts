@@ -148,8 +148,8 @@ export interface ExtensionTransitionRulesContribution {
   /**
    * Transition rule definitions contributed by this extension.
    *
-   * All IDs must be prefixed with `'<extensionName>.'` (enforced by the
-   * contribution processor). Duplicate IDs hard-fail activation.
+   * All IDs must be owned by the extension as `localContributionName` defines it (prefix `'<extensionName>.'` and a non-empty rest)
+   * (enforced by the contribution processor). Duplicate IDs hard-fail activation.
    */
   readonly rules: readonly TransitionRuleDefinition[];
 }
@@ -193,7 +193,7 @@ export interface ExtensionTransitionActionsContribution {
    * {@link TransitionActionInvocationSchema}. Values are factories
    * called once per rule dispatch to produce a fresh handler.
    *
-   * All keys must be prefixed with `'<extensionName>.'`.
+   * All keys must be owned by the extension as `localContributionName` defines it (prefix `'<extensionName>.'` and a non-empty rest).
    */
   readonly actions: Readonly<Record<string, TransitionActionFactory>>;
 }

@@ -162,6 +162,72 @@ describe('resolveExportedPackageCritical', () => {
     }
   });
 
+  it('warns and resolves undefined when an array export contains a prefix-matching variant of the descriptor name', async () => {
+    const modulePath = path.join(tempDir, 'server.mjs');
+    await fs.writeFile(
+      modulePath,
+      `export default [\n` +
+        `  { name: 'ns-ext', displayName: 'X', version: '1.0.0' },\n` +
+        `  { name: 'ns-extx.child', displayName: 'X', version: '1.0.0' },\n` +
+        `];\n`,
+    );
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const critical = await resolveExportedPackageCritical(modulePath, 'ns-ext', '[test] ns-ext');
+
+      expect(critical).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("outside descriptor namespace 'ns-ext'"));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('warns and resolves undefined when an array export contains a package named exactly the descriptor plus a dot', async () => {
+    const modulePath = path.join(tempDir, 'server.mjs');
+    await fs.writeFile(
+      modulePath,
+      `export default [\n` +
+        `  { name: 'ns-ext', displayName: 'X', version: '1.0.0' },\n` +
+        `  { name: 'ns-ext.', displayName: 'X', version: '1.0.0' },\n` +
+        `];\n`,
+    );
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const critical = await resolveExportedPackageCritical(modulePath, 'ns-ext', '[test] ns-ext');
+
+      expect(critical).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("outside descriptor namespace 'ns-ext'"));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('reports a worker error, not the namespace reason, for an out-of-namespace package with a non-cloneable critical value', async () => {
+    // Known deliberate difference: the worker clones every package of a match before the main thread
+    // checks the namespace, so the clone failure surfaces first. The result is undefined either way.
+    const modulePath = path.join(tempDir, 'server.mjs');
+    await fs.writeFile(
+      modulePath,
+      `export default [\n` +
+        `  { name: 'ns-ext', displayName: 'Ns', version: '1.0.0' },\n` +
+        `  { name: 'unrelated-package', displayName: 'Unrelated', version: '1.0.0', critical: () => true },\n` +
+        `];\n`,
+    );
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const critical = await resolveExportedPackageCritical(modulePath, 'ns-ext', '[test] ns-ext');
+
+      expect(critical).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('outside descriptor namespace'));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('warns and resolves undefined, never the raw value, when the exported critical field is not a boolean', async () => {
     const modulePath = path.join(tempDir, 'server.mjs');
     await fs.writeFile(

@@ -5,6 +5,7 @@ import {
   AutomationTriggerSubjects,
   createAutomationTriggerDescriptor,
 } from '@makaio/contracts';
+import { localContributionName } from '@makaio/core';
 import { BaseService } from '@makaio/service-base';
 import { deepFreeze, SerialLane } from '@makaio/utils';
 
@@ -61,11 +62,7 @@ interface RegisteredAutomationTrigger {
  * descriptor snapshot) is validated before either index changes, so a failing
  * batch leaves no partial registration.
  *
- * The registry supports dot-qualified owner names such as `makaio.clients-core`:
- * a trigger kind must start with `<owner>.` (with a trailing dot), which
- * permits `makaio.clients-core.profile-changed` for owner `makaio.clients-core`.
- * Npm-scoped owners use that same exact-prefix rule: `@acme/review.review-posted`
- * belongs to owner `@acme/review`, not a prefix-matching variant.
+ * The ownership rule (dotted and npm-scoped owners included) lives in `localContributionName`.
  *
  * Whole-batch replacement: each `register` call replaces that owner's entire
  * previously registered batch atomically. An empty batch removes the owner's
@@ -307,7 +304,6 @@ export class AutomationTriggerRegistry extends BaseService {
     owner: string,
     definitions: readonly AutomationTriggerType[],
   ): readonly RegisteredAutomationTrigger[] {
-    const prefix = `${owner}.`;
     const pendingKinds = new Set<string>();
     // Kinds the current owner already owns — needed to allow replacement without
     // triggering a false cross-owner collision.
@@ -316,9 +312,9 @@ export class AutomationTriggerRegistry extends BaseService {
     const registered: RegisteredAutomationTrigger[] = [];
 
     for (const definition of definitions) {
-      const localName = definition.kind.startsWith(prefix) ? definition.kind.slice(prefix.length) : undefined;
+      const localName = localContributionName(owner, definition.kind);
       if (localName === undefined || !AutomationTriggerLocalNameSchema.safeParse(localName).success) {
-        throw new Error(`Automation trigger kind '${definition.kind}' must be namespaced by owner '${prefix}'`);
+        throw new Error(`Automation trigger kind '${definition.kind}' must be namespaced by owner '${owner}.'`);
       }
       if (pendingKinds.has(definition.kind)) {
         throw new Error(`Duplicate automation trigger kind '${definition.kind}' in batch from '${owner}'`);

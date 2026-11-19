@@ -1,10 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { NodeExtensionContext as ExtensionContext } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
-import type { KernelMakaioExtension as MakaioExtension } from '../extension/types.js';
+import type { ExtensionContextBase, KernelMakaioExtension as MakaioExtension } from '../extension/types.js';
 import { KernelSubjects } from '../namespace/index.js';
 
 // ---------------------------------------------------------------------------
@@ -46,13 +45,10 @@ function makePackage(
 }
 
 /**
- * Minimal {@link ExtensionContext} fields (excluding coordinator-owned and
+ * Minimal {@link ExtensionContextBase} fields (excluding coordinator-owned and
  * bus-owned fields) for test coordinators.
  */
-const TEST_PKG_CTX_BASE: Omit<
-  ExtensionContext,
-  'bus' | 'identity' | 'getService' | 'dataDir' | 'signal' | 'hasExtension'
-> = {
+const TEST_PKG_CTX_BASE: ExtensionContextBase = {
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

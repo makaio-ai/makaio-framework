@@ -15,6 +15,7 @@ import type {
 } from '@makaio/contracts/client';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { createBusInstance } from '@makaio/bus-core';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import { ClientHookProviderContractRegistry } from '../client-hook-provider-contract-registry.js';
 import { ClientHookResponseRegistry } from '../client-hook-response-registry.js';
 import { createClientHookResponseContributionProcessor } from '../client-hook-response-contribution-processor.js';
@@ -71,23 +72,14 @@ function makeContributor(
  * @returns Context stub satisfying the contribution processor's needs.
  */
 function makeContext(): KernelExtensionContext {
-  const bus = createBusInstance();
-  return {
-    bus,
-    identity: {
-      extensionName: 'test-ext',
-    } as KernelExtensionContext['identity'],
-    platform: 'linux',
+  return makeStubNodeExtensionContext(createBusInstance(), {
+    identity: stubExtensionIdentity('test-ext'),
     homedir: '/home/test',
     makaioHome: '/home/test/.makaio',
     dataDir: '/home/test/.makaio/extensions/test-ext',
     username: 'test',
     machineId: 'machine-1',
-    signal: new AbortController().signal,
-    tryImport: async () => null,
-    getService: () => undefined,
-    hasExtension: () => false,
-  };
+  });
 }
 
 /**

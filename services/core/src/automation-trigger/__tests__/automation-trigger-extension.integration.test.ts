@@ -10,7 +10,7 @@ import {
   type AutomationTriggerListener,
 } from '@makaio/contracts';
 import { ExtensionCoordinator } from '@makaio/kernel';
-import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel';
+import type { ExtensionContextBase, KernelMakaioExtension } from '@makaio/kernel';
 import {
   AutomationTriggerBindingRuntimeToken,
   AutomationTriggerRegistryToken,
@@ -28,10 +28,7 @@ import { createAutomationTriggerContributionProcessor } from '../automation-trig
  * Minimal {@link KernelExtensionContext} fields (excluding coordinator-owned
  * and bus-owned fields) for test coordinators.
  */
-const TEST_PKG_CTX_BASE: Omit<
-  KernelExtensionContext,
-  'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension'
-> = {
+const TEST_PKG_CTX_BASE: ExtensionContextBase = {
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

@@ -2,17 +2,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import { MakaioBus } from '@makaio/bus-core';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import { BaseService } from '@makaio/service-base';
-import { ExtensionDescriptorSchema, type NodeExtensionContext as ExtensionContext } from '@makaio/contracts';
+import { ExtensionDescriptorSchema } from '@makaio/contracts';
 import { accountManagerPackage } from '../package.js';
 import { AccountManager } from '../account-manager.js';
 import { hasEnabledAutoActivationSource } from '../account-manager-types.js';
 import type { AutoActivationConfig } from '../account-manager-types.js';
 
-const baseCtx: Omit<ExtensionContext<IMakaioBus>, 'platform'> = {
-  bus: MakaioBus,
-  identity: Object.freeze({ extensionName: 'account-manager' }) as ExtensionContext<IMakaioBus>['identity'],
+const baseCtx = makeStubNodeExtensionContext(MakaioBus, {
+  identity: stubExtensionIdentity('account-manager'),
   homedir: '/tmp/test-home',
   makaioHome: path.join('/tmp/test-home', '.makaio'),
   dataDir: path.join('/tmp/test-home', '.makaio', 'data', 'account-manager'),
@@ -23,7 +23,7 @@ const baseCtx: Omit<ExtensionContext<IMakaioBus>, 'platform'> = {
   tryImport: async (_specifier) => null,
   signal: new AbortController().signal,
   hasExtension: (_name) => false,
-};
+});
 
 describe('accountManagerPackage', () => {
   it('has correct name and displayName', () => {

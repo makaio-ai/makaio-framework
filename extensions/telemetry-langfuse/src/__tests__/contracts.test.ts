@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { dep, parseExtensionDescriptor } from '@makaio/contracts';
 import { TelemetryOtelServiceToken } from '@makaio/extension-telemetry-otel';
 import { ServiceSkipError } from '@makaio/kernel';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import { TelemetryLangfuseConfigSchema } from '../config.js';
 import { telemetryLangfusePackage } from '../index.js';
 
@@ -14,22 +15,19 @@ import { telemetryLangfusePackage } from '../index.js';
  * @returns Runtime context for factory contract tests.
  */
 function createFactoryContext(telemetryOtelService: unknown): NodeExtensionContext<IMakaioBus> {
-  return {
-    bus: MakaioBus,
-    identity: { extensionName: 'telemetry-langfuse' } as NodeExtensionContext<IMakaioBus>['identity'],
+  return makeStubNodeExtensionContext(MakaioBus, {
+    identity: stubExtensionIdentity('telemetry-langfuse'),
     dataDir: '/tmp/telemetry-langfuse-test',
     machineId: 'test-machine',
     config: { enabled: true },
     getService: <T>(token: ExtensionToken<T>): T | undefined =>
       token.name === TelemetryOtelServiceToken.name ? (telemetryOtelService as T) : undefined,
-    tryImport: async () => null,
-    signal: new AbortController().signal,
     hasExtension: (name) => name === 'telemetry-otel',
     platform: process.platform,
     homedir: '/tmp',
     makaioHome: '/tmp/.makaio',
     username: 'test',
-  };
+  });
 }
 
 /**

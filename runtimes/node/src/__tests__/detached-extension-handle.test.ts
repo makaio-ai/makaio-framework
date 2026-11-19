@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBusInstance, DEFAULT_REQUEST_TIMEOUT_MS, type IMakaioBus } from '@makaio/bus-core';
-import type { NodeExtensionContext } from '@makaio/contracts';
+import { createBusInstance, DEFAULT_REQUEST_TIMEOUT_MS } from '@makaio/bus-core';
 import type { DetachedDescriptor, ExtensionServiceLifecycle } from '@makaio/contracts/extension';
 import { processStopBudgetMs } from '@makaio/subprocess';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import { createDetachedExtensionPackage } from '../detached-extension-handle.js';
 import { isMakaioExtensionLike } from '../load-extensions.js';
 
@@ -211,22 +211,17 @@ describe('createDetachedExtensionPackage', () => {
         }),
         FAKE_EXTENSION_PATH,
       );
-      const mockCtx: NodeExtensionContext<IMakaioBus> = {
-        bus,
+      const mockCtx = makeStubNodeExtensionContext(bus, {
         busUrl: 'ws://127.0.0.1:1234/bus',
         config: { enabled: true },
         dataDir: '/tmp/my-ws-ext',
-        getService: () => undefined,
-        hasExtension: () => false,
         homedir: '/tmp',
-        identity: { extensionName: 'my-ws-ext' } as NodeExtensionContext<IMakaioBus>['identity'],
+        identity: stubExtensionIdentity('my-ws-ext'),
         machineId: 'machine-1',
         makaioHome: '/tmp/.makaio',
         platform: process.platform,
-        signal: new AbortController().signal,
-        tryImport: async () => null,
         username: 'test',
-      };
+      });
       const service = pkg.create!(mockCtx) as ExtensionServiceLifecycle;
 
       await service.init?.();

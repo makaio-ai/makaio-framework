@@ -8,16 +8,21 @@
  * {@link NodeExtensionContext}.
  * @example
  * ```ts
- * import { makeStubExtensionContext } from '@makaio/test-utils';
+ * import { makeStubNodeExtensionContext } from '@makaio/test-utils';
  * import { MakaioBus } from '@makaio/bus-core';
  *
- * const ctx = makeStubExtensionContext(MakaioBus);
- * const nodeCtx: NodeExtensionContext = { ...ctx, bus: MakaioBus, platform: process.platform, homedir: '/tmp', makaioHome: '/tmp/.makaio', username: 'test' };
+ * const nodeCtx = makeStubNodeExtensionContext(MakaioBus, { username: 'alice' });
  * ```
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionContext } from '@makaio/contracts';
+import type {
+  ExtensionContext,
+  NodeExtensionContext,
+  OpenContributionEntryOf,
+  OpenContributionReader,
+  OpenContributionSet,
+} from '@makaio/contracts';
 
 /** Minimal process shape used without importing Node modules into browser tests. */
 interface ProcessLike {
@@ -50,25 +55,85 @@ function createStubDataDir(): string {
 }
 
 /**
+ * Build the identity a stub context carries for an extension name.
+ *
+ * The identity brand cannot be minted outside the kernel, so this is the one
+ * place in tests that casts it. Use it instead of spelling the cast at call sites.
+ * @param name - Extension name the identity should carry.
+ * @returns An identity with the given `extensionName`.
+ */
+export function stubExtensionIdentity(name: string): ExtensionContext['identity'] {
+  return { extensionName: name } as ExtensionContext['identity'];
+}
+
+/**
  * Build a minimal {@link ExtensionContext} for invoking storage handler
  * registration functions in tests.
  *
  * Only the structural fields required by the interface are populated with
  * safe defaults. No real services are wired.
  * @param bus - Bus instance to place on the context.
+ * @param overrides - Fields that replace the defaults.
  * @returns A stub context suitable for handler registration.
  */
-export function makeStubExtensionContext(bus: IMakaioBus): ExtensionContext {
+export function makeStubExtensionContext(
+  bus: IMakaioBus,
+  overrides: Partial<ExtensionContext<IMakaioBus>> = {},
+): ExtensionContext<IMakaioBus> {
   return {
     bus,
     machineId: 'test-machine-id',
     dataDir: createStubDataDir(),
-    identity: {
-      extensionName: 'test.stub',
-    } as ExtensionContext['identity'],
+    identity: stubExtensionIdentity('test.stub'),
     getService: () => undefined,
     tryImport: async () => null,
     signal: new AbortController().signal,
     hasExtension: () => false,
+    openContributions: makeStubOpenContributionReader(),
+    ...overrides,
+  };
+}
+
+/**
+ * Build a minimal {@link NodeExtensionContext} for tests.
+ *
+ * Same defaults as {@link makeStubExtensionContext} plus inert Node fields:
+ * `platform` is the fixed literal `'linux'`, `homedir` and `makaioHome` live
+ * under the stub data directory, and `username` is `'test'`.
+ * @param bus - Bus instance to place on the context.
+ * @param overrides - Fields that replace the defaults.
+ * @returns A stub Node extension context.
+ */
+export function makeStubNodeExtensionContext(
+  bus: IMakaioBus,
+  overrides: Partial<NodeExtensionContext<IMakaioBus>> = {},
+): NodeExtensionContext<IMakaioBus> {
+  // The base is built without overrides on purpose: `homedir` and `makaioHome` stay in the
+  // unique stub temp directory even when a caller pins `dataDir` through `overrides`.
+  const base = makeStubExtensionContext(bus);
+  return {
+    ...base,
+    platform: 'linux',
+    homedir: base.dataDir,
+    makaioHome: `${base.dataDir}/.makaio`,
+    username: 'test',
+    ...overrides,
+  };
+}
+
+/**
+ * Build an {@link OpenContributionReader} over a fixed map of sets per kind.
+ *
+ * `of` returns the sets given for that kind, or an empty array. It performs no
+ * ownership check, unlike the kernel's reader.
+ * @param sets - Sets per contribution kind.
+ * @returns A reader over the fixed map.
+ */
+export function makeStubOpenContributionReader(
+  sets: Readonly<Record<string, ReadonlyArray<OpenContributionSet>>> = {},
+): OpenContributionReader {
+  return {
+    // The map is untyped by design; the stub trusts the caller's entries to match the kind.
+    of: (kind) => (sets[kind] ?? []) as ReadonlyArray<OpenContributionSet<OpenContributionEntryOf<typeof kind>>>,
   };
 }

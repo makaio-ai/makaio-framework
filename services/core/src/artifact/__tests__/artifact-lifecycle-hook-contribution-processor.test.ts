@@ -2,27 +2,23 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { defineArtifactKind, defineArtifactLifecycleHooks, type ExtensionToken } from '@makaio/contracts';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { ArtifactLifecycleHookRegistryToken } from '../../framework-packages.js';
 import { ArtifactLifecycleHookRegistry } from '../artifact-lifecycle-hook-registry.js';
 import { createArtifactLifecycleHookContributionProcessor } from '../artifact-lifecycle-hook-contribution-processor.js';
 
 function makeContext(bus: IMakaioBus, registry?: ArtifactLifecycleHookRegistry): KernelExtensionContext {
-  return {
-    bus,
-    identity: { extensionName: 'planner' } as KernelExtensionContext['identity'],
-    platform: 'linux',
+  return makeStubNodeExtensionContext(bus, {
+    identity: stubExtensionIdentity('planner'),
     homedir: '/home/test',
     makaioHome: '/home/test/.makaio',
     dataDir: '/home/test/.makaio/extensions/planner',
     username: 'test',
     machineId: 'machine-1',
-    signal: new AbortController().signal,
-    tryImport: async () => null,
     getService: <T>(token: ExtensionToken<T>): T | undefined =>
       (token.name === ArtifactLifecycleHookRegistryToken.name ? registry : undefined) as T | undefined,
-    hasExtension: () => false,
-  };
+  });
 }
 
 describe('createArtifactLifecycleHookContributionProcessor', () => {

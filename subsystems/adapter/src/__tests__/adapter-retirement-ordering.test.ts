@@ -7,13 +7,9 @@
  */
 import { describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import {
-  SessionOwnershipStorageSubjects,
-  type MakaioNodeExtension,
-  type NodeExtensionContext,
-} from '@makaio/contracts';
+import { SessionOwnershipStorageSubjects, type MakaioNodeExtension } from '@makaio/contracts';
 import type { AdapterFile, ProviderConfigFile } from '@makaio/contracts/config';
-import { ExtensionCoordinator } from '@makaio/kernel';
+import { ExtensionCoordinator, type ExtensionContextBase } from '@makaio/kernel';
 import { SessionToken, MakaioSessionService } from '@makaio/services-core';
 import type {
   AdapterFileConfigSet,
@@ -46,10 +42,7 @@ class EmptyAdapterConfigRepository implements IAdapterConfigRepository {
   }
 }
 
-const EXTENSION_CONTEXT: Omit<
-  NodeExtensionContext,
-  'bus' | 'identity' | 'getService' | 'dataDir' | 'signal' | 'hasExtension'
-> = {
+const EXTENSION_CONTEXT: ExtensionContextBase = {
   platform: 'linux',
   homedir: '/tmp',
   makaioHome: '/tmp/.makaio',

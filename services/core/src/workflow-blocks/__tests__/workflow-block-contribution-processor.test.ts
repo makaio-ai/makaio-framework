@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import type { ExtensionToken } from '@makaio/contracts';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { WorkflowBlockRegistryToken } from '../../framework-packages.js';
@@ -9,23 +10,17 @@ import { WorkflowBlockRegistry } from '../workflow-block-registry.js';
 
 function makeContext(registry?: WorkflowBlockRegistry): KernelExtensionContext {
   const bus = createBusInstance();
-  return {
-    bus,
-    identity: {
-      extensionName: 'alpha',
-    } as KernelExtensionContext['identity'],
+  return makeStubNodeExtensionContext(bus, {
+    identity: stubExtensionIdentity('alpha'),
     platform: 'linux',
     homedir: '/home/test',
     makaioHome: '/home/test/.makaio',
     dataDir: '/home/test/.makaio/extensions/alpha',
     username: 'test',
     machineId: 'machine-1',
-    signal: new AbortController().signal,
-    tryImport: async () => null,
     getService: <T>(token: ExtensionToken<T>): T | undefined =>
       (token.name === WorkflowBlockRegistryToken.name ? registry : undefined) as T | undefined,
-    hasExtension: () => false,
-  };
+  });
 }
 
 function makePackage(): KernelMakaioExtension {

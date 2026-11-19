@@ -13,11 +13,16 @@ import {
   type ProviderDefinition,
   type TrayManifest,
 } from '@makaio/contracts';
-import type { KernelMakaioExtension as MakaioExtension, ExtensionEntry } from '../extension/types.js';
+import type {
+  ExtensionContextBase,
+  KernelMakaioExtension as MakaioExtension,
+  ExtensionEntry,
+} from '../extension/types.js';
 import { TrayMenuEntrySchema, TrayMenuSubjects, TrayMenuEntry } from '@makaio/services-core/tray-menu';
 import { extensionToken } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
+import { OpenContributionIndex } from '../extension/open-contribution-index.js';
 import { handleSetEnabled, type ToggleHost } from '../extension/extension-toggle.js';
 import { createExtensionIdentity } from '../extension/extension-identity-builder.js';
 import { ExtensionSubjects } from '../observability/extension-namespace.js';
@@ -137,16 +142,13 @@ function makeCliContribution(name: string): NonNullable<MakaioExtension['cli']> 
 }
 
 /**
- * Minimal {@link ExtensionContext} fields (excluding coordinator-owned and
+ * Minimal {@link ExtensionContextBase} fields (excluding coordinator-owned and
  * bus-owned fields) for test coordinators.
  *
  * Provides the platform-specific context required by packages with a `create`
  * factory without coupling the test to real OS values.
  */
-const TEST_PKG_CTX_BASE: Omit<
-  ExtensionContext,
-  'bus' | 'identity' | 'getService' | 'dataDir' | 'signal' | 'hasExtension'
-> = {
+const TEST_PKG_CTX_BASE: ExtensionContextBase = {
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',
@@ -1431,6 +1433,7 @@ describe('ExtensionCoordinator', () => {
      */
     function makeToggleHost(entry: ExtensionEntry): { host: ToggleHost; persistEnabled: ReturnType<typeof vi.fn> } {
       const persistEnabled = vi.fn(async (_name: string, _enabled: boolean) => undefined);
+      const openContributionIndex = new OpenContributionIndex();
       const host: ToggleHost = {
         bus,
         db: undefined,
@@ -1445,6 +1448,7 @@ describe('ExtensionCoordinator', () => {
         contributionProcessors: [],
         runHealthCheck: async () => undefined,
         emitWarningsForEntry: async () => undefined,
+        openContributionReaderFor: (name) => openContributionIndex.readerFor(name),
       };
       return { host, persistEnabled };
     }

@@ -1,13 +1,13 @@
 import path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { EXTENSION_DATA_DIR_SEGMENT, encodeExtensionNameAsPathSegment } from '@makaio/contracts';
-import type { ExtensionOperatorConfigSource, ExtensionToken } from '@makaio/contracts';
+import type { ExtensionOperatorConfigSource, ExtensionToken, OpenContributionReader } from '@makaio/contracts';
 import {
   type ExtensionConfigResolution,
   type ExtensionConfigResolutionMode,
   resolveConfigOutcome,
 } from './resolve-config.js';
-import type { ExtensionEntry, KernelExtensionContext } from './types.js';
+import type { ExtensionContextBase, ExtensionEntry, KernelExtensionContext } from './types.js';
 
 /**
  * Coordinator surface required to resolve extension config and create extension contexts.
@@ -22,12 +22,10 @@ export interface ExtensionContextHost {
   /**
    * Node platform/user context supplied by the composition root.
    *
-   * Omits coordinator-owned fields (`config`, `signal`, `hasExtension`) that
+   * Omits coordinator-owned fields (`config`, `signal`, `hasExtension`, `openContributions`) that
    * are assembled by `buildExtensionContext` from the host interface.
    */
-  readonly extensionContextBase:
-    | Omit<KernelExtensionContext, 'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension'>
-    | undefined;
+  readonly extensionContextBase: ExtensionContextBase | undefined;
   /** Optional stored-config loader keyed by extension name. */
   readonly loadConfig: ((name: string) => Record<string, unknown> | undefined) | undefined;
   /**
@@ -53,6 +51,15 @@ export interface ExtensionContextHost {
    * @returns `true` when the named extension is active.
    */
   readonly hasActiveExtension: (name: string) => boolean;
+  /**
+   * Create the open-contribution reader bound to one extension.
+   *
+   * Forwarded into each extension context as `openContributions`; the reader only
+   * answers for contribution kinds the named extension owns.
+   * @param name - Name of the extension receiving the reader.
+   * @returns Reader bound to `name`.
+   */
+  readonly openContributionReaderFor: (name: string) => OpenContributionReader;
   /**
    * Retrieve an active extension service by name.
    * @param name - Extension name.
@@ -246,6 +253,7 @@ export function buildExtensionContext(
     getService: <T>(token: ExtensionToken<T>): T | undefined => host.getExtensionService(token.name),
     signal: host.signal,
     hasExtension: host.hasActiveExtension,
+    openContributions: host.openContributionReaderFor(extensionName),
     ...(config !== undefined ? { config } : {}),
   };
 }

@@ -404,6 +404,68 @@ starts. They never substitute for one another.
 
 ---
 
+## Declaring your own contribution kind
+
+When other extensions should be able to add entries to something your extension owns, declare a
+contribution kind instead of inventing a new manifest field. A kind is a key of the form
+`<your-extension-name>.<kind>`. The example below uses `acme.host` as the declaring extension and
+`acme.host.widgets` as the kind.
+
+Any extension contributes entries by listing them under that key in `openContributions`:
+
+```typescript
+import type { MakaioExtension } from '@makaio/contracts';
+
+const contributor: MakaioExtension = {
+  name: 'acme.charts',
+  displayName: 'Acme Charts',
+  openContributions: {
+    'acme.host.widgets': [{ id: 'bar-chart', title: 'Bar chart' }],
+  },
+};
+```
+
+Only the declaring extension reads the entries, through `ctx.openContributions.of(kind)`. It
+checks the content of each entry itself; the host verifies only that the key is a contribution
+name and the value is an array, and never looks inside an entry:
+
+```typescript
+import type { MakaioExtension } from '@makaio/contracts';
+
+const host: MakaioExtension = {
+  name: 'acme.host',
+  displayName: 'Acme Host',
+  create: (ctx) => {
+    const listWidgets = () =>
+      ctx.openContributions
+        .of('acme.host.widgets')
+        .flatMap((set) => set.entries)
+        .filter(isWidget); // your own check; entries are `unknown` until you narrow them
+    return { listWidgets };
+  },
+};
+```
+
+To type the entries, augment `MakaioContributionKinds` from `@makaio/contracts` with the kind and
+the shape of one entry. Reading a kind your extension does not own throws.
+
+`of` returns the entries of the extensions that are active at the moment of the call. Extensions
+start and stop while the host runs, so do not cache the result: call `of` where you need the
+entries. A contribution to a kind whose declaring extension is not active is not an error; the
+coordinator logs one warning per such kind at the end of start-up.
+
+### The ownership rule
+
+An extension may only contribute a name that starts with `<its own name>.` followed by a
+non-empty local part. This one rule applies to reaction names, automation trigger kinds, workflow
+block names, transition rule ids, transition action keys, the package names of a multi-package
+export, and open contribution keys. Owner names may contain dots, and npm-scoped owners follow the
+same prefix match. A name that consists only of the prefix (`acme.host.`) is rejected. The rule is
+implemented once, as `localContributionName(owner, name)` from `@makaio/contracts`, which returns
+the local part or `undefined`.
+
+---
+
 ## Artifact View Builders
 
 Extensions can shape how artifacts render as provider-neutral views. There are two

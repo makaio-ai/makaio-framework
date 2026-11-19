@@ -2,6 +2,7 @@ import type { MakaioBusLike } from '@makaio/core';
 import type { CredentialRef } from '../config/credential-ref.js';
 import type { ExtensionToken } from './extension-token.js';
 import type { ExtensionIdentity } from './extension-lifecycle.js';
+import type { OpenContributionReader } from './open-contributions.js';
 
 /**
  * Host-supplied capability for resolving credential references at extension init time.
@@ -105,6 +106,13 @@ export interface ExtensionContext<TBus extends MakaioBusLike = MakaioBusLike> {
    * @returns `true` when the extension is active.
    */
   readonly hasExtension: (name: string) => boolean;
+  /**
+   * The entries other extensions contributed for the kinds this extension declares.
+   *
+   * The result of each read is the state at the call: do not cache it, because
+   * extensions start and stop while the host runs.
+   */
+  readonly openContributions: OpenContributionReader;
 }
 
 /**

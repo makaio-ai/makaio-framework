@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import type { AdapterContribution } from '@makaio/contracts';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { createAdapterSubsystemContributionProcessor } from '../adapter-subsystem-contribution-factory.js';
@@ -41,9 +42,8 @@ const PKG_WITH_ADAPTERS: KernelMakaioExtension = {
 };
 
 /** Minimal extension context stub. */
-const STUB_CTX: KernelExtensionContext = {
-  bus: createBusInstance(),
-  identity: Object.freeze({ extensionName: 'test-adapter-pkg' }) as KernelExtensionContext['identity'],
+const STUB_CTX: KernelExtensionContext = makeStubNodeExtensionContext(createBusInstance(), {
+  identity: stubExtensionIdentity('test-adapter-pkg'),
   platform: process.platform,
   homedir: '/tmp',
   makaioHome: '/tmp/.makaio',
@@ -51,11 +51,7 @@ const STUB_CTX: KernelExtensionContext = {
   username: 'test-user',
   machineId: 'test-machine',
   config: undefined,
-  getService: () => undefined,
-  tryImport: async () => null,
-  signal: new AbortController().signal,
-  hasExtension: () => false,
-};
+});
 
 describe('createAdapterSubsystemContributionProcessor', () => {
   describe('filter', () => {

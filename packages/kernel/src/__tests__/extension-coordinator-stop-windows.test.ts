@@ -1,22 +1,21 @@
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionDependency, ExtensionServiceLifecycle, NodeExtensionContext } from '@makaio/contracts';
+import type { ExtensionDependency, ExtensionServiceLifecycle } from '@makaio/contracts';
 import { OUTER_BOUND_HEADROOM_MS, outerBoundMs } from '@makaio/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readCancellation } from '../cancellation.js';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
 import { DEFAULT_EXTENSION_STOP_BUDGET_MS } from '../extension/extension-shutdown-runner.js';
-import type { KernelMakaioExtension } from '../extension/types.js';
+import type { ExtensionContextBase, KernelMakaioExtension } from '../extension/types.js';
 
 /** Host fields the coordinator needs to build the context of an extension with a service. */
-const CTX_BASE: Omit<NodeExtensionContext, 'bus' | 'identity' | 'getService' | 'dataDir' | 'signal' | 'hasExtension'> =
-  {
-    platform: 'linux',
-    homedir: '/home/test',
-    makaioHome: '/home/test/.makaio',
-    username: 'test',
-    machineId: 'machine-1',
-    tryImport: async () => null,
-  };
+const CTX_BASE: ExtensionContextBase = {
+  platform: 'linux',
+  homedir: '/home/test',
+  makaioHome: '/home/test/.makaio',
+  username: 'test',
+  machineId: 'machine-1',
+  tryImport: async () => null,
+};
 
 /**
  * Build an extension whose service does what the test needs on `destroy()`.
