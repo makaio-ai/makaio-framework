@@ -68,3 +68,18 @@ export type {
   WindowsTreeTerminationFailure,
   WindowsTreeTerminationOptions,
 } from './process-tree.js';
+export { INVALID_LAUNCH_TIMEOUT_MESSAGE, isValidLaunchTimeoutMs, launch } from './launch.js';
+export { launchForOutput } from './launch-for-output.js';
+export type { LaunchForOutputOptions, LaunchForOutputResult } from './launch-for-output.js';
+export type {
+  LaunchCapturedOutput,
+  LaunchFunction,
+  LaunchGroupFacts,
+  LaunchOptions,
+  LaunchOutput,
+  LaunchRefusal,
+  LaunchResult,
+  LaunchStatus,
+  LaunchedProcess,
+} from './launch.js';
+export type { StopHost } from './stop-escalation.js';

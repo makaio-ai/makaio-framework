@@ -143,9 +143,9 @@ shared service lifecycle behavior, inspect `packages/service-base` before adding
 | `packages/utils`            | `@makaio/utils`            | Utility primitives: DeferredPromise, timeouts, JSON extraction. Zero internal deps. |
 | `packages/file-watcher`     | `@makaio/file-watcher`     | Polling file watcher with cursor-based change tracking. Zero internal deps.         |
 | `packages/evidence-git-file-resolver` | `@makaio/evidence-git-file-resolver` | Resolves pinned Git-file evidence through a caller-provided source reader. |
-| `packages/machine-identity` | `@makaio/machine-identity` | Persistent ECDH + signing key pairs for device authentication. Zero internal deps.  |
+| `packages/machine-identity` | `@makaio/machine-identity` | Persistent ECDH + signing key pairs for device authentication. Depends only on `@makaio/subprocess`. |
 | `packages/type-lens`        | `@makaio/type-lens`        | TypeScript AST indexer and symbol graph engine. Zero internal deps.                 |
-| `packages/subprocess`       | `@makaio/subprocess`       | Subprocess lifecycle and JSONL-framed JSON-RPC communication.                       |
+| `packages/subprocess`       | `@makaio/subprocess`       | Subprocess lifecycle, bounded command launch with process-group evidence, and JSONL-framed JSON-RPC communication. |
 | `packages/expression`       | `@makaio/expression`       | Jexl-based expression evaluation and template interpolation for workflows.          |
 | `packages/rules`            | `@makaio/rules`            | Condition schemas and rule evaluator using expressions.                             |
 | `packages/hooks`            | `@makaio/hooks`            | Typed interceptors for MakaioBus message lifecycle (PreTurn, PostTurn, PreToolUse). |

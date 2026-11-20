@@ -717,7 +717,7 @@ describe('generic workload invocation', () => {
       preparation: {
         prepare: async () => ({
           binding: { workspaceRoot, sourceRoots: [] },
-          runSetup: async () => ({ status: 'completed' as const, exitCode: 0 }),
+          runSetup: async () => ({ status: 'completed' as const }),
           release: async () => {
             releases += 1;
             throw new Error('cleanup failed');
@@ -978,7 +978,10 @@ describe('generic workload invocation', () => {
           binding: { workspaceRoot, sourceRoots: [] },
           runSetup: async () => {
             controller.abort();
-            return { status: 'stop-failed' as const, exitCode: null };
+            return {
+              status: 'stop-failed' as const,
+              exit: { kind: 'unobserved' as const, reason: 'observation-timeout' as const },
+            };
           },
           release: async () => {},
         }),

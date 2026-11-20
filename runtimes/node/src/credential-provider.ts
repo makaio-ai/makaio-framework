@@ -1,6 +1,4 @@
-import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
-import { promisify } from 'node:util';
 import type { IDirectChannel, IMakaioBus } from '@makaio/bus-core';
 import { openChannel, ChannelClosedError } from '@makaio/bus-core';
 import type { CredentialRef } from '@makaio/contracts/config';
@@ -8,6 +6,7 @@ import { parseStoredCredentialRef } from '@makaio/contracts/config';
 import { CredentialSubjects } from '@makaio/contracts';
 import type { CredentialResolver } from '@makaio/contracts/extension';
 import { resolveCredentialRef } from '@makaio/ai-adapters-core/config';
+import { launch as realLaunch, launchForOutput, type LaunchFunction } from '@makaio/subprocess';
 
 /**
  * Credential provider for resolving credential references.
@@ -18,7 +17,16 @@ import { resolveCredentialRef } from '@makaio/ai-adapters-core/config';
  */
 export type CredentialProvider = CredentialResolver;
 
-const execFileAsync = promisify(execFile);
+/** Longest run time of one keychain lookup. */
+const KEYCHAIN_TIMEOUT_MS = 10_000;
+/** Longest captured keychain output (a credential is short). */
+const KEYCHAIN_OUTPUT_LIMIT_BYTES = 64 * 1024;
+
+/** Options of {@link NodeCredentialProvider}. */
+export interface NodeCredentialProviderOptions {
+  /** Process start for the keychain lookup; defaults to the real `launch`. */
+  readonly launch?: LaunchFunction;
+}
 
 /**
  * Node.js credential provider.
@@ -26,6 +34,16 @@ const execFileAsync = promisify(execFile);
  * Resolves env:, file:, and keychain: credential references.
  */
 export class NodeCredentialProvider implements CredentialProvider {
+  private readonly launch: LaunchFunction;
+
+  /**
+   * Create a provider.
+   * @param options - Optional process start for the keychain lookup
+   */
+  public constructor(options: NodeCredentialProviderOptions = {}) {
+    this.launch = options.launch ?? realLaunch;
+  }
+
   /**
    * Resolve a credential reference to its plaintext value.
    *
@@ -44,7 +62,7 @@ export class NodeCredentialProvider implements CredentialProvider {
       return null;
     }
     return resolveCredentialRef(ref, {
-      resolveKeychain: this.resolveKeychain,
+      resolveKeychain: (service, account) => this.resolveKeychain(service, account),
       readFile: async (path) => {
         try {
           return await fs.readFile(path, 'utf-8');
@@ -59,12 +77,19 @@ export class NodeCredentialProvider implements CredentialProvider {
   }
 
   private async resolveKeychain(service: string, account: string): Promise<string | null> {
-    try {
-      const { stdout } = await execFileAsync('security', ['find-generic-password', '-s', service, '-a', account, '-w']);
-      return stdout.trim() || null;
-    } catch {
-      return null;
-    }
+    // The output is a credential: it is returned to the caller only, never logged.
+    const outcome = await launchForOutput(
+      {
+        command: 'security',
+        cwd: process.cwd(),
+        args: ['find-generic-password', '-s', service, '-a', account, '-w'],
+        envMode: 'merge',
+        timeoutMs: KEYCHAIN_TIMEOUT_MS,
+        outputLimitBytes: KEYCHAIN_OUTPUT_LIMIT_BYTES,
+      },
+      this.launch,
+    );
+    return outcome.ok ? outcome.stdout.trim() || null : null;
   }
 }
 

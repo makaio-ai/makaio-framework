@@ -1,14 +1,11 @@
 import * as fs from 'node:fs/promises';
-import { execFile } from 'node:child_process';
 import * as path from 'node:path';
 import { devNull } from 'node:os';
-import { promisify } from 'node:util';
+import { INVALID_LAUNCH_TIMEOUT_MESSAGE, isValidLaunchTimeoutMs, launch, launchForOutput } from '@makaio/subprocess';
 import { z } from 'zod';
 import { isCooperativeCancellation } from '../cooperative-cancellation.js';
-import { isValidSetupCommandTimeoutMs, runSetupCommand } from './setup-command.js';
 import type { LocalWorkspaceSourceRealizer } from './workspace-preparation.js';
 
-const execFileAsync = promisify(execFile);
 const gitConfiguration = ['-c', `core.attributesFile=${devNull}`];
 
 const gitInput = z
@@ -52,7 +49,7 @@ async function resolveGitRepository(
 
 /**
  * Check the fetched object itself, without peeling tags into different identities.
- * This fixed plumbing query bounds its direct process, not a process-group cleanup barrier.
+ * The fixed plumbing query runs as a bounded launch with a small capture limit.
  * @param destination - Acquired repository containing the selected object.
  * @param revision - Exact immutable object identifier.
  * @param env - Git environment overrides shared with acquisition commands.
@@ -66,23 +63,18 @@ async function requireCommitObject(
   timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<void> {
-  let objectType: string;
-  try {
-    const result = await execFileAsync('git', [...gitConfiguration, 'cat-file', '-t', revision], {
-      cwd: destination,
-      env: { ...process.env, ...env },
-      signal,
-      timeout: timeoutMs,
-      maxBuffer: 1024,
-      shell: false,
-      killSignal: 'SIGKILL',
-      encoding: 'utf8',
-    });
-    objectType = result.stdout.trim();
-  } catch (error) {
-    if (isCooperativeCancellation(error, signal)) throw error;
-    throw new Error('Git source object inspection failed');
-  }
+  const inspected = await launchForOutput({
+    command: 'git',
+    args: [...gitConfiguration, 'cat-file', '-t', revision],
+    cwd: destination,
+    env,
+    envMode: 'merge',
+    timeoutMs,
+    signal,
+    outputLimitBytes: 1024,
+  });
+  if (!inspected.ok) throw new Error('Git source object inspection failed');
+  const objectType = inspected.stdout.trim();
   if (objectType !== 'commit') throw new Error('Git source revision must identify a commit object');
 }
 
@@ -94,8 +86,8 @@ async function requireCommitObject(
  * @returns Source strategy consuming the existing kind/input instruction seam.
  */
 export function createLocalGitSourceRealizer(options: LocalGitSourceOptions): LocalWorkspaceSourceRealizer {
-  if (!isValidSetupCommandTimeoutMs(options.timeoutMs)) {
-    throw new Error('Git command timeout must be an integer between 1 and 2147483647 milliseconds');
+  if (!isValidLaunchTimeoutMs(options.timeoutMs)) {
+    throw new Error(INVALID_LAUNCH_TIMEOUT_MESSAGE);
   }
   if (process.platform === 'win32') throw new Error('Local Git source preparation requires a POSIX host');
   return async ({ source, destination, signal }) => {
@@ -105,7 +97,7 @@ export function createLocalGitSourceRealizer(options: LocalGitSourceOptions): Lo
     const repositoryPath = await resolveGitRepository(options, input.repositoryId, signal);
     signal?.throwIfAborted();
     // Git variables inherited from a parent repository must not redirect writes
-    // outside this source root. Undefined overrides survive the command runner's env merge.
+    // outside this source root. Undefined overrides survive the launcher's env merge.
     const env = {
       ...Object.fromEntries(
         Object.keys(process.env)
@@ -129,12 +121,16 @@ export function createLocalGitSourceRealizer(options: LocalGitSourceOptions): Lo
       if (args[0] === 'checkout') {
         await requireCommitObject(destination, input.revision, env, options.timeoutMs, signal);
       }
-      const result = await runSetupCommand({
-        workspaceRoot: destination,
-        signal,
+      const result = await launch({
+        command: 'git',
+        args: [...gitConfiguration, ...args],
+        cwd: destination,
         env,
-        recipe: { command: 'git', args: [...gitConfiguration, ...args], env: {}, timeoutMs: options.timeoutMs },
-      });
+        envMode: 'merge',
+        timeoutMs: options.timeoutMs,
+        signal,
+        output: { kind: 'ignore' },
+      }).result;
       if (result.status === 'cancelled') signal?.throwIfAborted();
       if (result.status !== 'completed') throw new Error(`Git source ${args[0]} ${result.status}`);
     }

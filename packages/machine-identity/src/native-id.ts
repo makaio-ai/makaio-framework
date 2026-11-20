@@ -1,7 +1,35 @@
-import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import { launch as realLaunch, launchForOutput, type LaunchFunction } from '@makaio/subprocess';
 
 const EXEC_TIMEOUT_MS = 5_000;
+const OUTPUT_LIMIT_BYTES = 64 * 1024;
+
+/**
+ * Run one OS command through the launcher and return its stdout.
+ * The working directory is the host's current one, as it was with the synchronous `execFileSync` this replaces.
+ * @param launch - Process start port
+ * @param command - Executable to start
+ * @param args - Arguments of the command
+ * @returns Captured stdout, or `undefined` when the command did not complete successfully
+ */
+async function readCommandOutput(
+  launch: LaunchFunction,
+  command: string,
+  args: readonly string[],
+): Promise<string | undefined> {
+  const outcome = await launchForOutput(
+    {
+      command,
+      args,
+      cwd: process.cwd(),
+      envMode: 'merge',
+      timeoutMs: EXEC_TIMEOUT_MS,
+      outputLimitBytes: OUTPUT_LIMIT_BYTES,
+    },
+    launch,
+  );
+  return outcome.ok ? outcome.stdout : undefined;
+}
 
 /**
  * Validate and normalize machine ID values before they become identity seeds.
@@ -29,17 +57,18 @@ export function normalizeMachineId(value: string | undefined): string | undefine
  *
  * Returns `undefined` when the platform is unrecognized or the OS call fails,
  * allowing callers to fall back to a generated or cached identifier.
+ * @param launch - Process start port for the OS commands; defaults to the real `launch`
  * @returns Hardware machine identifier, or `undefined` on failure.
  */
-export function getNativeHardwareMachineId(): string | undefined {
+export async function getNativeHardwareMachineId(launch: LaunchFunction = realLaunch): Promise<string | undefined> {
   try {
     switch (process.platform) {
       case 'darwin':
-        return readMacOsId();
+        return await readMacOsId(launch);
       case 'linux':
         return readLinuxId();
       case 'win32':
-        return readWindowsId();
+        return await readWindowsId(launch);
       default:
         return undefined;
     }
@@ -50,14 +79,12 @@ export function getNativeHardwareMachineId(): string | undefined {
 
 /**
  * Read the macOS platform UUID from IOKit via `ioreg`.
+ * @param launch - Process start port
  * @returns IOPlatformUUID value, or `undefined` when not found.
  */
-function readMacOsId(): string | undefined {
-  const output = execFileSync('/usr/sbin/ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], {
-    encoding: 'utf-8',
-    timeout: EXEC_TIMEOUT_MS,
-  });
-  const match = /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(output);
+async function readMacOsId(launch: LaunchFunction): Promise<string | undefined> {
+  const output = await readCommandOutput(launch, '/usr/sbin/ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice']);
+  const match = /"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(output ?? '');
   return normalizeMachineId(match?.[1]);
 }
 
@@ -81,14 +108,17 @@ function readLinuxId(): string | undefined {
 
 /**
  * Read the Windows MachineGuid from the Cryptography registry key.
+ * @param launch - Process start port
  * @returns MachineGuid value, or `undefined` when not found.
  */
-function readWindowsId(): string | undefined {
+async function readWindowsId(launch: LaunchFunction): Promise<string | undefined> {
   const regExe = `${process.env['SystemRoot'] ?? 'C:\\Windows'}\\System32\\reg.exe`;
-  const output = execFileSync(regExe, ['query', 'HKLM\\SOFTWARE\\Microsoft\\Cryptography', '/v', 'MachineGuid'], {
-    encoding: 'utf-8',
-    timeout: EXEC_TIMEOUT_MS,
-  });
-  const match = /MachineGuid\s+REG_SZ\s+([^\r\n]+)/.exec(output);
+  const output = await readCommandOutput(launch, regExe, [
+    'query',
+    'HKLM\\SOFTWARE\\Microsoft\\Cryptography',
+    '/v',
+    'MachineGuid',
+  ]);
+  const match = /MachineGuid\s+REG_SZ\s+([^\r\n]+)/.exec(output ?? '');
   return normalizeMachineId(match?.[1]);
 }

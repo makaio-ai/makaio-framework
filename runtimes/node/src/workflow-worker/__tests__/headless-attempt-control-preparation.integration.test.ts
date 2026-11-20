@@ -487,8 +487,8 @@ describe('runHeadlessWorkflowWorker attempt-control — R2: cancel during pendin
 describe('runHeadlessWorkflowWorker attempt-control — R4: missing driver stop proof', () => {
   it.todo(
     'reports setup-process-group/unconfirmed when the driver cannot prove quiescence — ' +
-      'BLOCKED: suppressing the ps probe is not enough, because stopRemainingGroup ' +
-      '(setup-command.ts:141-153) still concludes quiesced as soon as kill(-pid, 0) ' +
+      'BLOCKED: suppressing the ps probe is not enough, because the group proof ' +
+      'still concludes quiescent as soon as kill(-pid, 0) ' +
       'returns ESRCH, which a SIGKILLed group reaches far inside its 2 s deadline; ' +
       'an unconfirmed observation needs a process that survives SIGKILL.',
   );
@@ -614,8 +614,8 @@ describe('runHeadlessWorkflowWorker attempt-control — R5: setup exits naturall
     // ── Assert 4: report operationId matches the admitted workload operation ─
     expect(evidence?.report?.operationId).toBe(workloadAdmission?.operationId);
 
-    // Note: the setup driver observation (processGroup.outcome === 'exited') is
-    // recorded by the control state machine but is not surfaced in the
+    // Note: the setup group facts (tree quiescent, no signal delivered) are
+    // recorded by the control state machine but are not surfaced in the
     // cancellation control evidence — the cancel arrived during workload, so the
     // control report describes the workload boundary, not the setup observation.
     // The indirect proof is that workload-invocation was admitted, which requires

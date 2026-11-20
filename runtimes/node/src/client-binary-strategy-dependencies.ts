@@ -14,14 +14,17 @@
 import * as fs from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 import * as path from 'node:path';
-import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { promisify } from 'node:util';
+import {
+  launch as realLaunch,
+  launchForOutput,
+  type LaunchForOutputResult,
+  type LaunchFunction,
+  type LaunchResult,
+} from '@makaio/subprocess';
 import type { StrategyDependencies } from '@makaio/subsystem-client';
-
-const execFileAsync = promisify(execFile);
 
 /** Default timeout for metadata fetches such as version indexes and manifests. */
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
@@ -35,6 +38,12 @@ const DEFAULT_EXEC_TIMEOUT_MS = 2 * 60_000;
 /** Default timeout for archive extraction subprocesses. */
 const DEFAULT_EXTRACT_TIMEOUT_MS = 5 * 60_000;
 
+/** Longest captured output (stdout and stderr together) of an archive tool, in bytes. */
+const EXTRACT_OUTPUT_LIMIT_BYTES = 64 * 1024;
+
+/** Longest captured output (stdout and stderr together) of a generic host command, in bytes. */
+const EXEC_OUTPUT_LIMIT_BYTES = 10 * 1024 * 1024;
+
 /**
  * Timeout configuration for Node managed-binary strategy dependencies.
  */
@@ -47,6 +56,8 @@ export interface NodeClientBinaryStrategyDependencyOptions {
   execTimeoutMs?: number;
   /** Timeout in milliseconds for `tar` / `unzip` extraction subprocesses. */
   extractTimeoutMs?: number;
+  /** Start of host commands (`tar`, `unzip`, `exec`); defaults to the real `launch`. Tests pass their own. */
+  launch?: LaunchFunction;
 }
 
 /**
@@ -114,6 +125,51 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
 }
 
 /**
+ * Run one host command to its end without a shell, with a bounded run time and bounded captured output.
+ * @param launch - Start of the command (port at the operating-system boundary).
+ * @param command - The executable to run.
+ * @param args - Positional arguments passed to the executable.
+ * @param options - Working directory and environment entries merged on top of `process.env`.
+ * @param timeoutMs - Longest run time in milliseconds.
+ * @param outputLimitBytes - Longest captured output (stdout and stderr together), in bytes.
+ * @returns The captured output, or the launch result that explains why there is none.
+ */
+function runHostCommand(
+  launch: LaunchFunction,
+  command: string,
+  args: readonly string[],
+  options: { cwd?: string; env?: Record<string, string> } | undefined,
+  timeoutMs: number,
+  outputLimitBytes: number,
+): Promise<LaunchForOutputResult> {
+  // TODO(FACT-381): Windows command shims (.cmd) are not resolved without a shell; decided together with the CLI detection.
+  return launchForOutput(
+    {
+      command,
+      args,
+      cwd: options?.cwd ?? process.cwd(),
+      env: options?.env,
+      envMode: 'merge',
+      timeoutMs,
+      outputLimitBytes,
+    },
+    launch,
+  );
+}
+
+/**
+ * Describe why a launched command did not complete. Names the status and, for a non-zero exit, the code;
+ * `launch` itself carries no command text.
+ * @param result - A launch result whose status is not `completed`.
+ * @returns A short reason.
+ */
+function describeLaunchFailure(result: LaunchResult): string {
+  const exitCode = result.exit?.kind === 'exited' ? result.exit.code : null;
+  const detail = exitCode === null ? '' : ` (exit code ${exitCode})`;
+  return `${result.message ?? result.status}${detail}`;
+}
+
+/**
  * Extract an archive at `archivePath` into `destDir`, enriching subprocess
  * errors with the archive path, destination directory, and stderr output.
  *
@@ -122,51 +178,44 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
  * @param destDir - Absolute directory to extract into.
  * @param format - Archive type (`'tar.gz'` or `'zip'`).
  * @param timeoutMs - Timeout in milliseconds for the extraction subprocess
+ * @param launch - Start of the host command; defaults to the real `launch`.
  */
 async function extractArchive(
   archivePath: string,
   destDir: string,
   format: 'tar.gz' | 'zip',
   timeoutMs: number,
+  launch: LaunchFunction = realLaunch,
 ): Promise<void> {
   await fsPromises.mkdir(destDir, { recursive: true });
 
-  if (format === 'tar.gz') {
-    await execFileAsync('tar', ['-xzf', archivePath, '-C', destDir], { timeout: timeoutMs }).catch(
-      (err: NodeJS.ErrnoException & { stderr?: string }) => {
-        if (err.code === 'ENOENT') {
-          throw new Error('tar extraction failed: host executable "tar" was not found on PATH');
-        }
-        throw new Error(
-          `tar extraction failed: ${archivePath} → ${destDir}\nstderr: ${err.stderr ?? ''}\n${String(err.message)}`,
-        );
-      },
-    );
-  } else {
-    await execFileAsync('unzip', ['-q', archivePath, '-d', destDir], { timeout: timeoutMs }).catch(
-      (err: NodeJS.ErrnoException & { stderr?: string }) => {
-        if (err.code === 'ENOENT') {
-          throw new Error('zip extraction failed: host executable "unzip" was not found on PATH');
-        }
-        throw new Error(
-          `unzip extraction failed: ${archivePath} → ${destDir}\nstderr: ${err.stderr ?? ''}\n${String(err.message)}`,
-        );
-      },
-    );
+  const tool = format === 'tar.gz' ? 'tar' : 'unzip';
+  const args = format === 'tar.gz' ? ['-xzf', archivePath, '-C', destDir] : ['-q', archivePath, '-d', destDir];
+  const outcome = await runHostCommand(launch, tool, args, { cwd: destDir }, timeoutMs, EXTRACT_OUTPUT_LIMIT_BYTES);
+  if (outcome.ok) return;
+  const { result } = outcome;
+
+  if (result.refusal === 'command-not-found') {
+    const label = format === 'tar.gz' ? 'tar' : 'zip';
+    throw new Error(`${label} extraction failed: host executable "${tool}" was not found on PATH`);
   }
+  throw new Error(
+    `${tool} extraction failed: ${archivePath} → ${destDir}\nstderr: ${result.output?.stderr ?? ''}\n${describeLaunchFailure(result)}`,
+  );
 }
 
 /**
  * Execute a command without a shell, returning trimmed stdout.
  *
- * Uses `node:child_process.execFile` so no shell expansion occurs on the
- * arguments. Stderr is included in the thrown error message on non-zero exit.
+ * Uses `launch` so no shell expansion occurs on the arguments. Stderr is
+ * included in the thrown error message when the command does not complete.
  * @param command - The executable to run.
  * @param args - Positional arguments passed to the executable.
  * @param options - Optional execution options. `cwd` sets the working
  *   directory; `env` is merged on top of `process.env` when present
  *   (when absent `process.env` is inherited unchanged).
  * @param timeoutMs - Timeout in milliseconds for the subprocess.
+ * @param launch - Start of the host command; defaults to the real `launch`.
  * @returns Trimmed stdout string.
  */
 async function execCommand(
@@ -174,20 +223,18 @@ async function execCommand(
   args: string[],
   options: { cwd?: string; env?: Record<string, string> } | undefined,
   timeoutMs: number,
+  launch: LaunchFunction = realLaunch,
 ): Promise<string> {
-  const { stdout } = await execFileAsync(command, args, {
-    cwd: options?.cwd,
-    env: options?.env === undefined ? process.env : { ...process.env, ...options.env },
-    shell: false,
-    timeout: timeoutMs,
-  }).catch((err: NodeJS.ErrnoException & { stderr?: string; stdout?: string }) => {
-    if (err.code === 'ENOENT') {
-      throw new Error(`Command failed: host executable "${command}" was not found on PATH`);
-    }
-    const stderrText = err.stderr ?? '';
-    throw new Error(`Command failed: ${command} ${args.join(' ')}\nstderr: ${stderrText}\n${String(err.message)}`);
-  });
-  return (stdout ?? '').trim();
+  const outcome = await runHostCommand(launch, command, args, options, timeoutMs, EXEC_OUTPUT_LIMIT_BYTES);
+  if (outcome.ok) return outcome.stdout.trim();
+  const { result } = outcome;
+
+  if (result.refusal === 'command-not-found') {
+    throw new Error(`Command failed: host executable "${command}" was not found on PATH`);
+  }
+  throw new Error(
+    `Command failed: ${command} ${args.join(' ')}\nstderr: ${result.output?.stderr ?? ''}\n${describeLaunchFailure(result)}`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +250,7 @@ async function execCommand(
  * - File downloads: streamed via `node:stream` `pipeline` with backpressure.
  * - Archive extraction: host `tar -xzf` for `tar.gz`, host `unzip -q` for `zip`.
  * - File cleanup: `node:fs/promises.rm` with `{ force: true }`.
- * - Subprocess: `node:child_process.execFile` (no shell, stderr in errors).
+ * - Subprocess: `launch` from `@makaio/subprocess` (no shell, stderr in errors).
  * - Checksum: `node:crypto.createHash` streaming.
  * - Directory removal: `node:fs/promises.rm` with `{ recursive: true, force: true }`.
  * @param options - Optional timeout overrides for tests or constrained hosts
@@ -213,6 +260,7 @@ export function createNodeClientBinaryStrategyDependencies(
   options: NodeClientBinaryStrategyDependencyOptions = {},
 ): StrategyDependencies {
   const { fetchTimeoutMs, downloadTimeoutMs, execTimeoutMs, extractTimeoutMs } = resolveTimeouts(options);
+  const { launch } = options;
 
   return {
     /**
@@ -307,15 +355,15 @@ export function createNodeClientBinaryStrategyDependencies(
      * Execute a command without a shell and return trimmed stdout.
      *
      * Delegates to the module-level {@link execCommand} helper which uses
-     * `node:child_process.execFile` (no shell, stderr in errors, optional
-     * working directory and environment merge).
+     * `launch` (no shell, stderr in errors, optional working directory and
+     * environment merge).
      * @param command - The executable to run.
      * @param args - Positional arguments passed to the executable.
      * @param options - Optional execution options.
      * @returns Trimmed stdout string.
      */
     exec(command: string, args: string[], options?: { cwd?: string; env?: Record<string, string> }): Promise<string> {
-      return execCommand(command, args, options, execTimeoutMs);
+      return execCommand(command, args, options, execTimeoutMs, launch);
     },
 
     /**
@@ -329,7 +377,7 @@ export function createNodeClientBinaryStrategyDependencies(
      * @param format - Archive type (`'tar.gz'` or `'zip'`).
      */
     async extractArchive(archivePath: string, destDir: string, format: 'tar.gz' | 'zip'): Promise<void> {
-      await extractArchive(archivePath, destDir, format, extractTimeoutMs);
+      await extractArchive(archivePath, destDir, format, extractTimeoutMs, launch);
     },
 
     /**

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { LaunchGroupFacts } from '@makaio/subprocess';
 import { deriveAttemptControlConclusion, type AttemptControlState } from '../attempt-control-conclusion.js';
 
 const NOW = new Date('2026-09-10T12:00:00.000Z');
@@ -166,12 +167,57 @@ describe('deriveAttemptControlConclusion', () => {
     expect(result.conclusion.evidence.code).toBeUndefined();
   });
 
+  it('concludes a not-owned tree like a missing observation (unsupported)', () => {
+    const result = deriveAttemptControlConclusion(
+      baseState({
+        cancelReceived: true,
+        admittedOperation: { kind: 'workspace-preparation', operationId: 'prep-4c' },
+        conclusion: {
+          kind: 'workspace-preparation',
+          operationId: 'prep-4c',
+          setup: { pid: 5, tree: { kind: 'not-owned' }, signalDelivered: false, observedAt: OBSERVED_AT },
+        },
+      }),
+      NOW,
+    );
+    expect(result).not.toBe('pending');
+    if (result === 'pending') return;
+    expect(result.conclusion.status).toBe('unsupported');
+    expect(result.conclusion.evidence.summary).toBe('setup driver supplied no process-group observation');
+    expect(result.conclusion.evidence.code).toBeUndefined();
+  });
+
   it.each([
-    ['signalled-and-quiesced', 'achieved'],
-    ['exited', 'achieved'],
-    ['signalled-unconfirmed', 'unconfirmed'],
-    ['unsignalled-unconfirmed', 'unconfirmed'],
-  ] as const)('maps the %s driver outcome onto a %s setup-process-group conclusion', (outcome, status) => {
+    [
+      'signalled-and-quiesced',
+      { tree: { kind: 'quiescent' }, signalDelivered: true },
+      'achieved',
+      'setup process group signalled; group proven quiescent afterwards',
+    ],
+    [
+      'exited',
+      { tree: { kind: 'quiescent' }, signalDelivered: false },
+      'achieved',
+      'setup process group leader exited; whole group proven quiescent',
+    ],
+    [
+      'signalled-unconfirmed',
+      { tree: { kind: 'unproven', reason: 'poll-timeout' }, signalDelivered: true },
+      'unconfirmed',
+      'setup process group signalled; quiescence not proven (quiescence poll timed out)',
+    ],
+    [
+      'unsignalled-unconfirmed',
+      { tree: { kind: 'unproven', reason: 'poll-timeout' }, signalDelivered: false },
+      'unconfirmed',
+      'setup process group could not be signalled; quiescence not proven (quiescence poll timed out)',
+    ],
+  ] as const satisfies readonly (readonly [
+    string,
+    Pick<LaunchGroupFacts, 'tree' | 'signalDelivered'>,
+    string,
+    string,
+  ])[])('maps the %s group facts onto a %s setup-process-group conclusion', (outcome, facts, status, summary) => {
     const result = deriveAttemptControlConclusion(
       baseState({
         cancelReceived: true,
@@ -179,7 +225,7 @@ describe('deriveAttemptControlConclusion', () => {
         conclusion: {
           kind: 'workspace-preparation',
           operationId: 'prep-5',
-          setup: { outcome, pid: 1234, observedAt: OBSERVED_AT },
+          setup: { ...facts, pid: 1234, observedAt: OBSERVED_AT },
         },
       }),
       NOW,
@@ -192,7 +238,7 @@ describe('deriveAttemptControlConclusion', () => {
     expect(result.conclusion.evidence.code).toBe(outcome);
     // The driver's own instant is the observation, not the derivation instant.
     expect(result.conclusion.evidence.observedAt).toBe(OBSERVED_AT.toISOString());
-    expect(result.conclusion.evidence.summary.length).toBeGreaterThan(0);
+    expect(result.conclusion.evidence.summary).toBe(summary);
   });
 
   it('renders the unproven cause into the summary of an unconfirmed stop', () => {
@@ -203,7 +249,12 @@ describe('deriveAttemptControlConclusion', () => {
         conclusion: {
           kind: 'workspace-preparation',
           operationId: 'prep-6',
-          setup: { outcome: 'signalled-unconfirmed', cause: 'ps-unavailable', pid: 42, observedAt: OBSERVED_AT },
+          setup: {
+            pid: 42,
+            tree: { kind: 'unproven', reason: 'ps-unavailable' },
+            signalDelivered: true,
+            observedAt: OBSERVED_AT,
+          },
         },
       }),
       NOW,
@@ -211,7 +262,9 @@ describe('deriveAttemptControlConclusion', () => {
     expect(result).not.toBe('pending');
     if (result === 'pending') return;
     expect(result.conclusion.status).toBe('unconfirmed');
-    expect(result.conclusion.evidence.summary).toContain('ps unavailable');
+    expect(result.conclusion.evidence.summary).toBe(
+      'setup process group signalled; quiescence not proven (ps unavailable on this host)',
+    );
     // Durable evidence summaries are bounded by BoundedRecoveryEvidenceSchema.
     expect(result.conclusion.evidence.summary.length).toBeLessThanOrEqual(512);
   });
@@ -225,7 +278,7 @@ describe('deriveAttemptControlConclusion', () => {
         conclusion: {
           kind: 'workspace-preparation',
           operationId: 'prep-7',
-          setup: { outcome: 'exited', pid: 7, observedAt: OBSERVED_AT },
+          setup: { pid: 7, tree: { kind: 'quiescent' }, signalDelivered: false, observedAt: OBSERVED_AT },
         },
       }),
       NOW,

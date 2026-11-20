@@ -3,7 +3,7 @@ import type {
   ExecutionAttemptOperationAdmitRefusalReason,
   ExecutionAttemptOperationKind,
 } from '@makaio/contracts';
-import type { SetupProcessGroupObservation } from '../workspace-preparation/setup-command.js';
+import type { LaunchGroupFacts, ProcessTreeEvidence, TreeQuiescenceGap } from '@makaio/subprocess';
 
 // ─────────────────────────────────────────────────────────────
 // Observed facts
@@ -25,8 +25,11 @@ export type AdmittedOperationKind = Extract<
  *   the absence of a live group is proven, not unknown.
  * `'no-observation'`: the driver threw before handing over any result, so it
  *   supplied no process-group fact either way.
+ * `LaunchGroupFacts`: the facts the launcher recorded about the group it owned.
+ *   A launch always owns its group and never reports `tree.kind === 'not-owned'`;
+ *   should that ever arrive, it is concluded like `'no-observation'`.
  */
-export type SetupConclusion = 'not-started' | 'no-spawn' | 'no-observation' | SetupProcessGroupObservation;
+export type SetupConclusion = 'not-started' | 'no-spawn' | 'no-observation' | LaunchGroupFacts;
 
 /**
  * The one terminal fact an admitted operation concludes with.
@@ -77,32 +80,51 @@ export interface AttemptControlState {
 // The German exception for Atlassian-facing copy does NOT apply to any string
 // in this module: durable control evidence is machine-facing framework data.
 
-/** Summary per driver outcome; the driver records the outcome, this renders it. */
+/** Tree evidence of a launched group: everything but `not-owned`. */
+type OwnedTreeEvidence = Exclude<ProcessTreeEvidence, { readonly kind: 'not-owned' }>;
+
+/** Outcome code of an owned process group, derived from the launcher's facts. */
+type SetupOutcome = 'exited' | 'signalled-and-quiesced' | 'signalled-unconfirmed' | 'unsignalled-unconfirmed';
+
+/** Summary per outcome; the launcher records facts, this renders them. */
 const OUTCOME_SUMMARY = {
   exited: 'setup process group leader exited; whole group proven quiescent',
   'signalled-and-quiesced': 'setup process group signalled; group proven quiescent afterwards',
   'signalled-unconfirmed': 'setup process group signalled; quiescence not proven',
   'unsignalled-unconfirmed': 'setup process group could not be signalled; quiescence not proven',
-} as const;
+} as const satisfies Record<SetupOutcome, string>;
 
 /** Why quiescence stayed unproven, appended to the outcome summary. */
 const CAUSE_SUMMARY = {
   'poll-timeout': 'quiescence poll timed out',
   'ps-unavailable': 'ps unavailable on this host',
   'signal-error': 'a cleanup signal failed',
-} as const;
+  'no-termination': 'no termination was requested for the process tree',
+} as const satisfies Record<TreeQuiescenceGap, string>;
 
 /**
- * Render the bounded, non-empty summary of one driver observation.
+ * Derive the one outcome code of an owned group from the two facts it rests on.
+ * @param tree - Evidence about the group; the caller has excluded `not-owned`.
+ * @param signalDelivered - Whether a stop-phase signal reached an existing group.
+ * @returns The outcome code used for the summary, the status and the evidence code.
+ */
+function deriveSetupOutcome(tree: OwnedTreeEvidence, signalDelivered: boolean): SetupOutcome {
+  if (tree.kind === 'quiescent') return signalDelivered ? 'signalled-and-quiesced' : 'exited';
+  return signalDelivered ? 'signalled-unconfirmed' : 'unsignalled-unconfirmed';
+}
+
+/**
+ * Render the bounded, non-empty summary of one setup outcome.
  *
  * Both parts are fixed literals, so the result stays far inside the durable
  * evidence summary limit without truncation.
- * @param observation - Raw driver-recorded process-group fact.
- * @returns Human-readable summary of the outcome and, when present, its cause.
+ * @param outcome - Outcome code derived from the launcher's facts.
+ * @param tree - Evidence about the group; its reason is the cause when unproven.
+ * @returns Human-readable summary of the outcome and, when unproven, its cause.
  */
-function renderSetupSummary(observation: SetupProcessGroupObservation): string {
-  const outcome = OUTCOME_SUMMARY[observation.outcome];
-  return observation.cause === undefined ? outcome : `${outcome} (${CAUSE_SUMMARY[observation.cause]})`;
+function renderSetupSummary(outcome: SetupOutcome, tree: OwnedTreeEvidence): string {
+  const summary = OUTCOME_SUMMARY[outcome];
+  return tree.kind === 'unproven' ? `${summary} (${CAUSE_SUMMARY[tree.reason]})` : summary;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -239,7 +261,7 @@ function concludeSetupBoundary(operationId: string, setup: SetupConclusion, now:
       observedAt: now,
     });
   }
-  if (setup === 'no-observation') {
+  if (setup === 'no-observation' || setup.tree.kind === 'not-owned') {
     return conclude({
       operationId,
       status: 'unsupported',
@@ -249,17 +271,15 @@ function concludeSetupBoundary(operationId: string, setup: SetupConclusion, now:
       observedAt: now,
     });
   }
+  const outcome = deriveSetupOutcome(setup.tree, setup.signalDelivered);
   return conclude({
     operationId,
-    status:
-      setup.outcome === 'signalled-unconfirmed' || setup.outcome === 'unsignalled-unconfirmed'
-        ? 'unconfirmed'
-        : 'achieved',
+    status: outcome === 'signalled-unconfirmed' || outcome === 'unsignalled-unconfirmed' ? 'unconfirmed' : 'achieved',
     boundary: 'setup-process-group',
     source: 'setup-driver',
-    summary: renderSetupSummary(setup),
+    summary: renderSetupSummary(outcome, setup.tree),
     observedAt: setup.observedAt,
-    code: setup.outcome,
+    code: outcome,
   });
 }
 

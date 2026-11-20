@@ -2,15 +2,18 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { ExecutionAttemptWorkspaceBinding, WorkspaceRequirement } from '@makaio/contracts';
 import { assertContainedIn, assertNoSymlinkEscape } from '../workflow-worker/local-directory-materializer.js';
-import { runSetupCommand, type SetupCommandResult } from './setup-command.js';
+import { launch, type LaunchResult } from '@makaio/subprocess';
+
+/** Time between the stop request and the kill of a Setup process group. */
+const SETUP_KILL_GRACE_MS = 200;
+/** Time to wait for the proof that a stopped Setup process group is gone. */
+const SETUP_EXIT_OBSERVATION_MS = 2_000;
 
 /**
  * First failed setup command, or successful completion of the complete frozen recipe.
- * Inherits `processGroup` from `SetupCommandResult` — present when a process was spawned.
+ * Carries the launcher's result of that command; `group` is present when a process was spawned.
  */
-export interface WorkspaceSetupResult extends SetupCommandResult {
-  readonly commandIndex?: number;
-}
+export type WorkspaceSetupResult = LaunchResult & { readonly commandIndex?: number };
 
 /** Setup inputs supplied by the host, not stored in the portable workspace requirement. */
 export interface WorkspaceSetupOptions {
@@ -132,25 +135,45 @@ function createHandle(
     binding,
     async runSetup(options = {}) {
       if (released !== undefined || setupActive || !safeToRelease) throw new Error('Workspace setup is unavailable');
-      if (options.signal?.aborted) return { status: 'cancelled', exitCode: null };
+      if (options.signal?.aborted) return { status: 'cancelled' };
       setupActive = true;
       try {
-        let lastResult: SetupCommandResult | undefined;
+        let lastResult: LaunchResult = { status: 'completed' };
         for (const [commandIndex, recipe] of requirement.setup.entries()) {
-          const result = await runSetupCommand({ ...options, recipe, workspaceRoot });
+          // Releasing a workspace needs a proof that its process group went quiet, which Windows cannot give.
+          if (process.platform === 'win32') {
+            return {
+              status: 'spawn-failed',
+              refusal: 'unsupported-platform',
+              message: 'Setup process groups require a POSIX host',
+              commandIndex,
+            };
+          }
+          const result = await launch({
+            command: recipe.command,
+            args: recipe.args,
+            cwd: workspaceRoot,
+            env: { ...recipe.env, ...options.env },
+            envMode: 'merge',
+            timeoutMs: recipe.timeoutMs,
+            // A Setup command is authored by the workspace owner and may run long. Its stop
+            // timing is stated here instead of inherited, so a change of the launcher default
+            // cannot change it unnoticed. The values are the ones Setup has always used: a
+            // stop asks once, kills the whole process group after 200 ms, and then waits up
+            // to 2 s for the proof that nothing is left.
+            killGraceMs: SETUP_KILL_GRACE_MS,
+            exitObservationMs: SETUP_EXIT_OBSERVATION_MS,
+            signal: options.signal,
+            output: { kind: 'ignore' },
+          }).result;
           lastResult = result;
           safeToRelease = result.status !== 'stop-failed';
           if (result.status !== 'completed') return { ...result, commandIndex };
         }
-        // Commands run strictly sequentially, and each runSetupCommand resolves
-        // only after its own process group is proven quiescent or reported
-        // stop-failed. Any non-completed status returns from inside the loop, so
-        // reaching here means every command completed and the last command's
-        // observation is the recipe's own process-group fact.
-        const processGroup = lastResult?.processGroup;
-        return processGroup !== undefined
-          ? { status: 'completed', exitCode: 0, processGroup }
-          : { status: 'completed', exitCode: 0 };
+        // Commands run strictly sequentially, and each launch settles only after its own process group is
+        // proven quiescent or reported stop-failed. Any non-completed status returns from inside the loop,
+        // so reaching here means every command completed; the last command's result is the recipe's.
+        return lastResult;
       } finally {
         setupActive = false;
       }
