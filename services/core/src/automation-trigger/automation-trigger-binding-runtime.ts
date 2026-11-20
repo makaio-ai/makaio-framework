@@ -6,6 +6,7 @@ import type {
   AutomationTriggerListener,
   AutomationTriggerSubscription,
   AutomationTriggerType,
+  JsonSchema,
   JsonValue,
 } from '@makaio/contracts';
 import { JsonRecordSchema, JsonValueSchema, createAutomationTriggerDescriptor } from '@makaio/contracts';
@@ -45,6 +46,13 @@ export interface PreparedAutomationTriggerBinding {
   readonly bindingKey: string;
   /** Whether this trigger's event output has an object root suitable for workflows. */
   readonly workflowCompatible: boolean;
+  /**
+   * JSON Schema of the events this trigger emits, as advertised by its descriptor.
+   *
+   * Lets a caller check a payload-reading condition against the real event shape
+   * before subscribing. Every registered trigger has one.
+   */
+  readonly eventSchema: JsonSchema;
   /**
    * Attaches a listener using this prepared registration and parameter snapshot.
    * @param listener - Listener invoked for every validated emitted event.
@@ -294,9 +302,11 @@ export class AutomationTriggerBindingRuntime {
       bindingKey: createCanonicalBindingKey(binding.kind, params),
     };
 
+    const descriptor = createAutomationTriggerDescriptor(registration.type);
     return {
       bindingKey: state.bindingKey,
-      workflowCompatible: createAutomationTriggerDescriptor(registration.type).workflowCompatible,
+      workflowCompatible: descriptor.workflowCompatible,
+      eventSchema: descriptor.eventSchema,
       subscribe: (listener) => this.subscribePrepared(state, listener),
     };
   }

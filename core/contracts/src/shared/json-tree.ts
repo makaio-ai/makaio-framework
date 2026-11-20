@@ -28,6 +28,31 @@ export function isJsonObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * JSON value types, with integers folded into `number`.
+ */
+export type JsonValueType = 'string' | 'number' | 'boolean' | 'null' | 'array' | 'object';
+
+/**
+ * JSON value type of a value.
+ * @param value - JSON value.
+ * @returns Its type.
+ */
+export function jsonValueType(value: unknown): JsonValueType {
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  switch (typeof value) {
+    case 'string':
+      return 'string';
+    case 'number':
+      return 'number';
+    case 'boolean':
+      return 'boolean';
+    default:
+      return 'object';
+  }
+}
+
+/**
  * Compare two JSON trees by value.
  *
  * Key order is not part of a JSON object's identity, so two objects with the
@@ -59,6 +84,35 @@ export function readPropertyPath(value: unknown, path: readonly string[]): unkno
   for (const key of path) {
     if (!isJsonObject(current) || !Object.hasOwn(current, key)) return undefined;
     current = ownValue(current, key);
+  }
+  return current;
+}
+
+const ARRAY_INDEX_SEGMENT = /^(?:0|[1-9]\d*)$/;
+
+/**
+ * Read a value by dot-notation path from a JSON tree.
+ *
+ * Only own properties are read, so `constructor`, `__proto__`, `toString` and
+ * `hasOwnProperty` are never found through the prototype chain. A numeric segment
+ * (`items.0.name`) indexes an array; any other segment on an array, any segment on a
+ * primitive, and every missing step give `undefined`.
+ * @param value - Value to start from.
+ * @param path - Dot-separated property names and array indexes.
+ * @returns The value at that path, or `undefined` when any step does not resolve.
+ */
+export function readDotPath(value: unknown, path: string): unknown {
+  let current = value;
+  for (const segment of path.split('.')) {
+    if (Array.isArray(current)) {
+      if (!ARRAY_INDEX_SEGMENT.test(segment) || !Object.hasOwn(current, segment)) return undefined;
+      current = Reflect.get(current, segment);
+    } else if (isJsonObject(current)) {
+      if (!Object.hasOwn(current, segment)) return undefined;
+      current = ownValue(current, segment);
+    } else {
+      return undefined;
+    }
   }
   return current;
 }

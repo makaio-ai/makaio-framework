@@ -185,7 +185,7 @@ export class TransitionPipelineService extends BaseService {
    * When dispatch succeeds and the action type is `workflow.start`, the in-memory
    * depth counter for the artifact is incremented so subsequent events in the same
    * execution chain are correctly depth-checked.
-   * @param entry - The prepared rule (definition + pre-parsed condition) to evaluate.
+   * @param entry - The prepared rule (definition + registration-time findings) to evaluate.
    * @param eventType - The artifact event type.
    * @param contextBase - Partial evaluation context from the event payload.
    * @param artifactKey - Composite `${kind}:${id}` key for depth tracking.
@@ -198,7 +198,8 @@ export class TransitionPipelineService extends BaseService {
     artifactKey: string,
     incomingDepth: number,
   ): Promise<void> {
-    const { rule, condition } = entry;
+    const { rule } = entry;
+    const condition = rule.when;
     const context: TransitionEvaluationContext = {
       ...contextBase,
       _transition: {
@@ -209,18 +210,15 @@ export class TransitionPipelineService extends BaseService {
     };
 
     if (condition !== undefined) {
-      // Build a plain evaluation record for the rules engine. Spreading the typed context
-      // into a plain Record<string, unknown> is intentional: `evaluate()` needs an
-      // index-signature type that the typed interface cannot satisfy structurally.
-      const evalContext: Record<string, unknown> = { ...context };
-      let matches: boolean;
-      try {
-        matches = evaluate(condition, evalContext);
-      } catch (error) {
-        console.error(`[TransitionPipelineService] Condition evaluation error for rule '${rule.id}':`, error);
+      const outcome = evaluate(condition, context);
+      // A failed condition is reported and the rule does not fire.
+      if ('error' in outcome) {
+        console.error(
+          `[TransitionPipelineService] Condition evaluation error for rule '${rule.id}' at '${outcome.error.path}': ${outcome.error.message}`,
+        );
         return;
       }
-      if (!matches) return;
+      if (!outcome.matched) return;
     }
 
     try {

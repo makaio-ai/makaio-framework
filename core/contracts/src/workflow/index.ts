@@ -267,6 +267,7 @@ export {
   iterate,
   iterateChain,
   loop,
+  payloadField,
   station,
 } from './authoring-exports.js';
 export { defineWorkflow } from './authoring.js';
@@ -306,7 +307,7 @@ export { defineWorkflowBundle } from './bundle.js';
 export type { WorkflowBundle } from './bundle.js';
 export {
   TransitionActionInvocationSchema,
-  TransitionConditionSchema,
+  TransitionEvaluationContextSchemas,
   TransitionEventTypeSchema,
   TransitionRuleDefinitionSchema,
 } from './transition.js';
@@ -316,8 +317,8 @@ export type {
   TransitionActionFactory,
   TransitionActionHandler,
   TransitionActionInvocation,
-  TransitionCondition,
   TransitionEvaluationContext,
+  TransitionEvaluationContextOf,
   TransitionEventType,
   TransitionRuleDefinition,
 } from './transition.js';

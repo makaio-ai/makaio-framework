@@ -1,3 +1,4 @@
+import * as contracts from '@makaio/contracts/shared';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
@@ -5,52 +6,12 @@ import {
   ExpressionConditionSchema,
   FieldConditionSchema,
   FieldOperatorSchema,
-  JsonObjectSchema,
   JsonValueSchema,
   RuleSchema,
   RuleSetOptionsSchema,
-  ScalarValueSchema,
   type Condition,
   type Rule,
 } from '../index.js';
-
-// ---------------------------------------------------------------------------
-// ScalarValueSchema
-// ---------------------------------------------------------------------------
-
-describe('ScalarValueSchema', () => {
-  it('accepts a string', () => {
-    expect(ScalarValueSchema.parse('hello')).toBe('hello');
-  });
-
-  it('accepts a finite number', () => {
-    expect(ScalarValueSchema.parse(3.14)).toBe(3.14);
-  });
-
-  it('accepts a boolean', () => {
-    expect(ScalarValueSchema.parse(true)).toBe(true);
-  });
-
-  it('accepts null', () => {
-    expect(ScalarValueSchema.parse(null)).toBeNull();
-  });
-
-  it('rejects Infinity', () => {
-    expect(ScalarValueSchema.safeParse(Infinity).success).toBe(false);
-  });
-
-  it('rejects NaN', () => {
-    expect(ScalarValueSchema.safeParse(NaN).success).toBe(false);
-  });
-
-  it('rejects an object', () => {
-    expect(ScalarValueSchema.safeParse({ key: 'val' }).success).toBe(false);
-  });
-
-  it('rejects an array', () => {
-    expect(ScalarValueSchema.safeParse(['a']).success).toBe(false);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // JsonValueSchema
@@ -96,24 +57,6 @@ describe('JsonValueSchema', () => {
 
   it('rejects Infinity nested inside an object', () => {
     expect(JsonValueSchema.safeParse({ nested: [1, Infinity] }).success).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// JsonObjectSchema
-// ---------------------------------------------------------------------------
-
-describe('JsonObjectSchema', () => {
-  it('accepts a flat object', () => {
-    expect(JsonObjectSchema.parse({ a: 1, b: 'text' })).toEqual({ a: 1, b: 'text' });
-  });
-
-  it('accepts an object with null values', () => {
-    expect(JsonObjectSchema.parse({ x: null })).toEqual({ x: null });
-  });
-
-  it('rejects a non-object', () => {
-    expect(JsonObjectSchema.safeParse('string').success).toBe(false);
   });
 });
 
@@ -182,6 +125,54 @@ describe('FieldOperatorSchema', () => {
 
   it('accepts $glob', () => {
     expect(FieldOperatorSchema.parse({ $glob: '**/*.ts' })).toEqual({ $glob: '**/*.ts' });
+  });
+
+  it('accepts $eq with an object operand', () => {
+    expect(FieldOperatorSchema.parse({ $eq: { a: [1, { b: null }] } })).toEqual({ $eq: { a: [1, { b: null }] } });
+  });
+
+  it('accepts $ne with a list operand', () => {
+    expect(FieldOperatorSchema.parse({ $ne: [1, 'two'] })).toEqual({ $ne: [1, 'two'] });
+  });
+
+  it('accepts $lt with a number', () => {
+    expect(FieldOperatorSchema.parse({ $lt: 5 })).toEqual({ $lt: 5 });
+  });
+
+  it('accepts $lte with a date-time string', () => {
+    expect(FieldOperatorSchema.parse({ $lte: '2026-01-01T00:00:00Z' })).toEqual({ $lte: '2026-01-01T00:00:00Z' });
+  });
+
+  it('accepts $gt with a number', () => {
+    expect(FieldOperatorSchema.parse({ $gt: -1.5 })).toEqual({ $gt: -1.5 });
+  });
+
+  it('accepts $gte with a string', () => {
+    expect(FieldOperatorSchema.parse({ $gte: 'abc' })).toEqual({ $gte: 'abc' });
+  });
+
+  it('accepts $empty: true', () => {
+    expect(FieldOperatorSchema.parse({ $empty: true })).toEqual({ $empty: true });
+  });
+
+  it('accepts $empty: false', () => {
+    expect(FieldOperatorSchema.parse({ $empty: false })).toEqual({ $empty: false });
+  });
+
+  it.each(['$lt', '$lte', '$gt', '$gte'])('rejects %s with a boolean operand', (op) => {
+    expect(FieldOperatorSchema.safeParse({ [op]: true }).success).toBe(false);
+  });
+
+  it.each(['$lt', '$lte', '$gt', '$gte'])('rejects %s with a non-finite number', (op) => {
+    expect(FieldOperatorSchema.safeParse({ [op]: Infinity }).success).toBe(false);
+  });
+
+  it('rejects $empty with a non-boolean value', () => {
+    expect(FieldOperatorSchema.safeParse({ $empty: 'yes' }).success).toBe(false);
+  });
+
+  it('rejects $lt combined with another operator (strict mode)', () => {
+    expect(FieldOperatorSchema.safeParse({ $lt: 1, $gt: 0 }).success).toBe(false);
   });
 
   it('rejects an object combining two operators (strict mode)', () => {
@@ -329,6 +320,44 @@ describe('ConditionSchema — invalid shapes', () => {
 
   it('rejects a field condition with an empty field name', () => {
     expect(ConditionSchema.safeParse({ field: '', operator: 'x' }).success).toBe(false);
+  });
+});
+
+describe('ConditionSchema — new operators in conditions', () => {
+  it('accepts field conditions using the comparison and $empty operators', () => {
+    const cond: Condition = {
+      $and: [
+        { field: 'invoice.total', operator: { $gte: 10 } },
+        { field: 'invoice.notes', operator: { $empty: false } },
+      ],
+    };
+    expect(ConditionSchema.parse(cond)).toEqual(cond);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Re-exports from @makaio/contracts/shared
+// ---------------------------------------------------------------------------
+
+describe('re-exports from @makaio/contracts/shared', () => {
+  it('ConditionSchema is the same object', () => {
+    expect(ConditionSchema).toBe(contracts.ConditionSchema);
+  });
+
+  it('FieldOperatorSchema is the same object', () => {
+    expect(FieldOperatorSchema).toBe(contracts.FieldOperatorSchema);
+  });
+
+  it('FieldConditionSchema is the same object', () => {
+    expect(FieldConditionSchema).toBe(contracts.FieldConditionSchema);
+  });
+
+  it('ExpressionConditionSchema is the same object', () => {
+    expect(ExpressionConditionSchema).toBe(contracts.ExpressionConditionSchema);
+  });
+
+  it('JsonValueSchema is the same object', () => {
+    expect(JsonValueSchema).toBe(contracts.JsonValueSchema);
   });
 });
 

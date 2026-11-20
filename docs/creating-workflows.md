@@ -325,12 +325,10 @@ multi-step sub-pipeline.
 ```typescript
 // .makaio/workflows/review.ts
 import {
-  BusEventWorkflowTrigger,
   defineWorkflow,
   station,
   delegateToRole,
 } from '@makaio/contracts';
-import { ArtifactSubjects } from '@makaio/contracts';
 import { z } from 'zod';
 
 // ── Schemas ────────────────────────────────────────────────────
@@ -405,12 +403,8 @@ async function postApprovalHandler(ctx) {
 
 const reviewWorkflow = defineWorkflow('review', {
   name: 'Implementation Review',
-  triggers: [
-    BusEventWorkflowTrigger({
-      subject: ArtifactSubjects['status.changed'],
-      filter: { 'artifact.kind': 'implementation-plan', 'event.current': 'ready-for-review' },
-    }),
-  ],
+  // No declared triggers: started directly (`makaio workflow run`, `workflow.start`).
+  triggers: [],
 })
   .input(ReviewInputSchema)
   .config(ReviewConfigSchema)
@@ -564,7 +558,7 @@ is started only by invoking it directly.
 
 Every declared trigger is a binding onto a registered automation trigger type: the type owns
 the live source (a bus subscription, a schedule, a webhook listener) and validates the
-binding's `params`, while `filter` and `filterExpression` stay with the workflow. Two
+binding's `params`, while the optional `when` condition stays with the workflow. Two
 workflows binding the same type with the same params share one source.
 
 ### Bus Event Trigger
@@ -577,7 +571,7 @@ import { GitSubjects } from '@makaio/services-core/git/namespace';
 
 BusEventWorkflowTrigger({
   subject: GitSubjects.checkout,
-  filter: { /* optional structural filter */ },
+  when: { field: 'payload.currentBranch', operator: { $startsWith: 'release/' } },
 })
 ```
 
@@ -606,7 +600,7 @@ import { GithubWebhookTrigger } from 'some-extension/triggers';
 
 AutomationWorkflowTrigger(GithubWebhookTrigger, {
   params: { event: 'push' },
-  filterExpression: 'payload.ref == "refs/heads/main"',
+  when: { $expr: 'payload.ref == "refs/heads/main"' },
 })
 ```
 
@@ -616,11 +610,54 @@ There is no manual trigger type: a workflow with `triggers: []` is simply one th
 starts on its own. Run it with `makaio workflow run`, or start it over the bus with
 `workflow.start`.
 
-### Filtering
+### Conditions (`when`)
 
-`filter` (structural) and `filterExpression` (a jexl expression over `payload`) are evaluated
-by the workflow engine after the source has emitted, so they never change what the shared
-source observes. Both are optional, and both must pass when both are present.
+Every authoring helper except `CronWorkflowTrigger` accepts an optional `when`, a `Condition`
+from `@makaio/rules` (field comparisons, `$and` / `$or` / `$not`, and `$expr` jexl expressions).
+The workflow engine evaluates it after the source has emitted, so it never changes what the
+shared source observes. A binding without `when` fires on every event the trigger emits.
+
+The evaluation context is `{ payload }`, where `payload` is the emitted event payload, so field
+paths and expressions start with `payload.` (`payload.currentBranch`, not `currentBranch`).
+
+```typescript
+BusEventWorkflowTrigger({
+  subject: GitSubjects.checkout,
+  when: {
+    $and: [
+      { field: 'payload.currentBranch', operator: { $startsWith: 'release/' } },
+      { field: 'payload.worktree', operator: { $exists: true } },
+    ],
+  },
+})
+```
+
+Inside a plain `Condition` the `field` is an untyped string. `payloadField<TPayload>(path, operator)`
+builds the same field condition with the path checked against the payload type, so a typo fails
+at compile time. Take the payload type from the binding with `ExtractTriggerPayload`:
+
+```typescript
+import { BusEventWorkflowTrigger, payloadField } from '@makaio/contracts';
+import type { ExtractTriggerPayload } from '@makaio/contracts';
+
+const checkout = BusEventWorkflowTrigger({ subject: GitSubjects.checkout });
+type CheckoutPayload = ExtractTriggerPayload<typeof checkout>;
+
+BusEventWorkflowTrigger({
+  subject: GitSubjects.checkout,
+  when: payloadField<CheckoutPayload>('currentBranch', 'main'),
+})
+```
+
+The condition is also checked against the trigger's event schema: when the reconciler installs the
+binding, and when `makaio workflow run` awaits the trigger. A condition that cannot hold for that
+schema (for example a field path the event does not have) is rejected at that point. If a
+condition cannot be evaluated against a particular event, the engine logs the failing node and
+the trigger does not fire for that event.
+
+The former `filter` and `filterExpression` keys no longer exist. A persisted binding that still
+carries either one is rejected with an error that names `when`; the replacement for
+`filterExpression` is `when: { $expr: '...' }`.
 
 ---
 

@@ -7,8 +7,8 @@ import {
   busBackedAutomationTriggers,
 } from '@makaio/services-core/automation-trigger';
 import {
-  compileWorkflowTriggerBindingFilter,
   assertWorkflowTriggerPayload,
+  compileWorkflowTriggerCondition,
 } from '@makaio/subsystem-workflow-engine/workflow-trigger-binding-consumer';
 import type { RuntimeLoadedWorkflow } from './types.js';
 
@@ -18,8 +18,9 @@ import type { RuntimeLoadedWorkflow } from './types.js';
 // Await mode lets a worker start with an empty trigger payload and block until
 // one of the workflow's declared trigger bindings fires. It is a *consumer* of
 // automation triggers, exactly like the engine's reconciler, and applies the same
-// binding semantics: canonical parameter validation by the trigger type, then the
-// consumer-owned `filter` and `filterExpression`.
+// binding semantics: canonical parameter validation by the trigger type, a
+// schema-aware check of the consumer-owned `when` condition against the trigger's
+// event schema, then evaluation of `when` against each emitted payload.
 //
 // The worker is an isolated process with no extension host, so it activates
 // bus-backed trigger types over its own bus rather than resolving a host-owned
@@ -75,8 +76,10 @@ function createWorkerTriggerResolver(bus: IMakaioBus): AutomationTriggerResolver
  * @param signal - Abort signal for cooperative cancellation.
  * @returns The first matching payload, or `undefined` when no binding could be
  *   subscribed in this worker.
- * @throws When a resolvable binding cannot be subscribed, when a
- *   `filterExpression` cannot be compiled, or when `signal` aborts first.
+ * @throws When a resolvable binding cannot be subscribed, when a binding's
+ *   `when` condition has an error finding against the trigger's event schema, or
+ *   when `signal` aborts first. A `when` that cannot be evaluated against an
+ *   emitted payload is logged and leaves the await pending.
  */
 async function awaitFirstTriggerEvent(
   bus: IMakaioBus,
@@ -99,7 +102,15 @@ async function awaitFirstTriggerEvent(
       console.warn(`${LOG_PREFIX} skipping binding '${binding.kind}': its event payload does not have an object root.`);
       return [];
     }
-    return [{ binding, prepared }];
+    // Checked before anything subscribes, so an invalid `when` fails the await up front.
+    const { matches, warnings } = compileWorkflowTriggerCondition(binding, prepared.eventSchema);
+    for (const finding of warnings) {
+      console.warn(
+        `${LOG_PREFIX} binding '${binding.kind}': condition warning ${finding.code} at '${finding.path}': ` +
+          finding.message,
+      );
+    }
+    return [{ binding, prepared, matches }];
   });
   if (subscribable.length === 0) {
     await runtime.close();
@@ -123,10 +134,17 @@ async function awaitFirstTriggerEvent(
       // Every binding is subscribed before the first event is awaited, so an
       // unsubscribable binding fails the await instead of silently narrowing it.
       await Promise.all(
-        subscribable.map(async ({ binding, prepared }) => {
-          const matches = compileWorkflowTriggerBindingFilter(binding);
+        subscribable.map(async ({ binding, prepared, matches }) => {
           await prepared.subscribe((event) => {
-            if (!matches(event.payload)) return;
+            const outcome = matches(event.payload);
+            if ('error' in outcome) {
+              console.error(
+                `${LOG_PREFIX} binding '${binding.kind}': 'when' could not be evaluated at ` +
+                  `'${outcome.error.path}': ${outcome.error.message}`,
+              );
+              return;
+            }
+            if (!outcome.matched) return;
             matched.resolve(assertWorkflowTriggerPayload(event.payload));
           });
         }),

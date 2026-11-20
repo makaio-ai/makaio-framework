@@ -343,12 +343,13 @@ const extension: MakaioExtension = {
 ### Consuming a trigger
 
 Consumers bind by data, not by code — `{ kind, params }`, plus whatever conditions that consumer
-supports. A workflow, for example, declares:
+supports. A workflow binding carries an optional `when` condition, evaluated over `{ payload }`.
+A workflow, for example, declares:
 
 ```typescript
 AutomationWorkflowTrigger(stormWarning, {
   params: { region: 'eu-west' },
-  filterExpression: 'payload.severity > 3',
+  when: payloadField<{ severity: number }>('severity', { $gt: 3 }),
 });
 ```
 

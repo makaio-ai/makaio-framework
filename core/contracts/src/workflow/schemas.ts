@@ -1,6 +1,5 @@
 /* eslint max-lines: ["error", { "max": 420, "skipBlankLines": true, "skipComments": true }] */
 import { z } from 'zod';
-import type { PayloadFilter } from '@makaio/core';
 import {
   JsonObjectContractSchema,
   JsonRecordSchema,
@@ -15,48 +14,38 @@ import { CompletionModeSchema, ContextModeSchema } from '../subagent/schemas.js'
 import { AIReasoningLevelSchema } from '../model/index.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 import { WorkflowDelegateResultFinalizerIdSchema, WorkflowFinalizerIdSchema } from './finalization.js';
+import { ConditionSchema } from '../shared/condition.js';
+import type { Condition } from '../shared/condition.js';
 import { WorkerRequirementsSchema } from '../capabilities/worker/index.js';
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Automation Trigger Binding
 // ─────────────────────────────────────────────────────────────
 
-/** Primitive value union shared by filter operators. */
-const PrimitiveSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
-
 /**
- * Zod schema for a single filter operator value.
+ * Marker for a removed trigger-binding key.
  *
- * Mirrors the `FilterOperator` type from `@makaio/core`:
- * a primitive (equality) or one of the operator objects
- * (`$in`, `$ne`, `$exists`, `$startsWith`, `$endsWith`).
+ * The key stays in the schema as `never`, so a binding that still carries it fails to
+ * parse with a message naming the replacement instead of the key being stripped
+ * silently, which would turn a filtered trigger into an unfiltered one.
  */
-const FilterOperatorSchema = z.union([
-  PrimitiveSchema,
-  z.object({ $in: z.array(PrimitiveSchema) }).strict(),
-  z.object({ $ne: PrimitiveSchema }).strict(),
-  z.object({ $exists: z.boolean() }).strict(),
-  z.object({ $startsWith: z.string() }).strict(),
-  z.object({ $endsWith: z.string() }).strict(),
-]);
-
-/**
- * Zod schema for a `PayloadFilter` value — a record of field paths
- * to filter operators. Mirrors `PayloadFilter` from `@makaio/core`.
- */
-const PayloadFilterSchema = z.record(z.string(), FilterOperatorSchema);
+const RemovedTriggerFilterKeySchema = z
+  .never({
+    error: 'The trigger binding key was removed; use `when` (a Condition evaluated over `{ payload }`) instead.',
+  })
+  .optional();
 
 /**
  * Persisted workflow trigger binding.
  *
  * A workflow references an automation trigger by canonical {@link AutomationTriggerBinding.kind}
- * and supplies the trigger-type parameters in `params`. `filter` and
- * `filterExpression` are **consumer-owned**: they narrow an already-validated
- * event after the trigger source activated, so they never belong to the trigger
- * type's own parameter schema.
+ * and supplies the trigger-type parameters in `params`. `when` is **consumer-owned**: it
+ * narrows an already-validated event after the trigger source activated, so it never
+ * belongs to the trigger type's own parameter schema.
  *
- * Unknown keys are stripped rather than rejected so the compile-time-only
- * phantom payload carrier on authored triggers never reaches storage.
+ * The legacy keys `filter` and `filterExpression` are parse errors that name `when`.
+ * Other unknown keys are stripped so the compile-time-only phantom payload carrier on
+ * authored triggers never reaches storage.
  */
 export const WorkflowAutomationTriggerBindingSchema = z.object({
   /** Canonical trigger kind: `<extension-name>.<local-name>`. */
@@ -64,33 +53,25 @@ export const WorkflowAutomationTriggerBindingSchema = z.object({
   /** JSON-safe parameter schema input parsed before trigger activation. */
   params: JsonRecordSchema,
   /**
-   * Structural payload filter using `PayloadFilter` operators.
+   * Condition the emitted event must satisfy for the trigger to fire.
    *
-   * Supports equality, `$in`, `$ne`, `$exists`, `$startsWith`, `$endsWith`.
-   * All key-operator pairs must match (AND logic).
-   * Supports dot-notation paths for nested fields (e.g., `'raw.msg.type'`).
-   * Omit to accept every event the trigger emits.
+   * The evaluation context is `{ payload }`, where `payload` is the emitted trigger event
+   * payload, so field paths start with `payload.`. Omit to accept every event the trigger emits.
    */
-  filter: PayloadFilterSchema.optional(),
-  /**
-   * jexl expression for complex filter conditions.
-   * Evaluated after `filter` passes (AND semantics).
-   * The expression context provides a `payload` variable
-   * containing the emitted trigger event payload.
-   * @example `"payload.count > 5 && payload.branch == 'main'"`
-   */
-  filterExpression: z.string().optional(),
+  when: ConditionSchema.optional(),
+  /** Removed; use `when`. A present key is a parse error. */
+  filter: RemovedTriggerFilterKeySchema,
+  /** Removed; use `when` with an `$expr` condition. A present key is a parse error. */
+  filterExpression: RemovedTriggerFilterKeySchema,
 });
 
 /**
  * Persisted workflow trigger binding — an automation trigger binding plus the
- * consumer-owned event filters applied by the workflow engine.
+ * consumer-owned event condition applied by the workflow engine.
  */
 export interface WorkflowAutomationTriggerBinding extends AutomationTriggerBinding {
-  /** Structural payload filter applied to the emitted trigger event. */
-  readonly filter?: PayloadFilter;
-  /** jexl expression evaluated after {@link filter} passes. */
-  readonly filterExpression?: string;
+  /** Condition evaluated against `{ payload }` for the emitted trigger event. */
+  readonly when?: Condition;
 }
 
 // ─────────────────────────────────────────────────────────────

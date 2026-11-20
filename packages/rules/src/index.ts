@@ -1,29 +1,39 @@
 export type {
+  ConditionFinding,
+  ConditionOutcome,
+} from '@makaio/contracts/shared';
+export {
+  ConditionFindingSchema,
+  ConditionOutcomeSchema,
+} from '@makaio/contracts/shared';
+export type {
   AndCondition,
   Condition,
   CompoundCondition,
   ExpressionCondition,
   FieldCondition,
   FieldOperator,
-  JsonObject,
   JsonObjectShape,
-  JsonPrimitive,
   JsonValue,
   NotCondition,
   OrCondition,
   Rule,
   RuleSetOptions,
-  ScalarValue,
+  RuleSetOutcome,
 } from './types.js';
 export {
   ConditionSchema,
   ExpressionConditionSchema,
   FieldConditionSchema,
   FieldOperatorSchema,
-  JsonObjectSchema,
   JsonValueSchema,
   RuleSchema,
   RuleSetOptionsSchema,
-  ScalarValueSchema,
 } from './schemas.js';
 export { evaluate, evaluateRules } from './evaluator.js';
+export {
+  assertValidCondition,
+  ConditionValidationError,
+  type ValidateConditionInput,
+  validateCondition,
+} from './validate.js';

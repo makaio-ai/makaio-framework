@@ -21,6 +21,7 @@
     "@makaio/contracts": "workspace:*",
     "@makaio/core": "workspace:*",
     "@makaio/expression": "workspace:*",
+    "@makaio/rules": "workspace:*",
     "@makaio/service-base": "workspace:*",
     "@makaio/services-core": "workspace:*",
     "@makaio/storage-core": "workspace:*",

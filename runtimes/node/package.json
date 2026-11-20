@@ -48,6 +48,7 @@
     "@makaio/platform-macos": "workspace:*",
     "@makaio/preferences": "workspace:*",
     "@makaio/providers": "workspace:*",
+    "@makaio/rules": "workspace:*",
     "@makaio/service-base": "workspace:*",
     "@makaio/services-core": "workspace:*",
     "@makaio/services-log-import": "workspace:*",

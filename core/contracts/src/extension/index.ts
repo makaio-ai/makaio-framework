@@ -170,7 +170,7 @@ export type {
   ExtensionOperatorConfigSource,
   ExtensionOperatorConfigValue,
 } from './extension-operator-config.js';
-export { getBootstrapAssetKey } from './contributions/index.js';
+export { getBootstrapAssetKey, ToolCallFormatterInputSchema } from './contributions/index.js';
 export type {
   ActionCategory,
   ActionCategoryMap,

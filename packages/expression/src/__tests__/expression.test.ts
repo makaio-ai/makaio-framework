@@ -113,6 +113,62 @@ describe('compile', () => {
     await expect(compiled.eval(ctx1)).resolves.toBe('production');
     await expect(compiled.eval(ctx2)).resolves.toBe('staging');
   });
+
+  it.each(['', '   ', '(', '((', ' ( ( '])('rejects %j, which contains no operand', (source) => {
+    expect(() => compile(source)).toThrow(/contains no operand/);
+  });
+
+  it.each(['a + (b', 'f(a', ')', '(a))'])('rejects the syntax error in %j', (source) => {
+    expect(() => compile(source)).toThrow();
+  });
+
+  it.each([
+    '(a',
+    '(a == 1',
+    '((a',
+    '((a)',
+    '(!a',
+    '(f(x)',
+    '(a | upper',
+    'a ? b : (c',
+    'a ? b : (c + d',
+  ])('rejects the unbalanced source %j', (source) => {
+    expect(() => compile(source)).toThrow();
+  });
+
+  it.each([
+    ['trigger.count > 5 ? "big" : "small"', 'big'],
+    ['trigger.count > 50 ? "big" : trigger.count > 5 ? "mid" : "small"', 'mid'],
+    ['{ a: trigger.count }.a', 10],
+    ['[1, trigger.count]', [1, 10]],
+    ['items[.x > 1].x', 3],
+    ['-5 + trigger.count', 5],
+    ['(-5)', -5],
+    ['trigger.name|replace("t", "T")', 'TesT'],
+    ['"(" == "("', true],
+    ['"it\\\'s (" + trigger.name', "it\\'s (test"],
+  ])('compiles the valid form %j', (source, expected) => {
+    expect(compile(source).evalSync({ ...createTestContext(), items: [{ x: 1 }, { x: 3 }] })).toEqual(expected);
+  });
+
+  it.each(['trigger.name|nosuch', 'nosuch(1)'])('rejects the unregistered callee in %j', (source) => {
+    expect(() => compile(source)).toThrow(/unknown (transform|function)/);
+  });
+
+  it('compiles a registered custom transform', () => {
+    expect(compile('[{ k: 1 }]|pluck("k")').evalSync({})).toEqual([1]);
+  });
+
+  it.each([
+    ['(trigger.count + 5) * 2', 30],
+    ['((trigger.count))', 10],
+    ['trigger.name|upper', 'TEST'],
+    ['(trigger.name|upper) == "TEST"', true],
+    ['"(" + trigger.name', '(test'],
+    ['trigger.name == "(("', false],
+  ])('compiles the valid expression %j', (source, expected) => {
+    expect(compile(source).evalSync(createTestContext())).toBe(expected);
+  });
 });
 
 describe('resolveTemplate', () => {

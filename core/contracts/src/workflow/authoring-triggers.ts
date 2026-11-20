@@ -1,7 +1,9 @@
-import type { ExtractSubjectPayload, PayloadFilter, SubjectDefinition, TypedPayloadFilter } from '@makaio/core';
+import type { ExtractSubjectPayload, SubjectDefinition } from '@makaio/core';
 import { getFullSubjectForSubjectDefinition } from '@makaio/core';
+import type { Paths } from 'type-fest';
 import { z } from 'zod';
 import type { AutomationTriggerParams, DefinedAutomationTrigger } from '../automation-trigger/definition.js';
+import type { Condition, FieldCondition, FieldOperator } from '../shared/condition.js';
 import { JsonRecordSchema } from '../shared/json-value.js';
 import type { JsonValue } from '../shared/json-value.js';
 import type { WorkflowAutomationTriggerBinding } from './schemas.js';
@@ -28,7 +30,8 @@ export const DEFAULT_CRON_TIMEZONE = 'UTC';
  * the payload type its trigger emits.
  *
  * The phantom field exists only in the type system: authoring helpers never
- * write it and `WorkflowAutomationTriggerBindingSchema` strips unknown keys, so
+ * write it and `WorkflowAutomationTriggerBindingSchema` strips unknown keys (other
+ * than the removed `filter` and `filterExpression`, which it rejects), so
  * the persisted binding stays exactly {@link WorkflowAutomationTriggerBinding}.
  * @typeParam TPayload - The trigger event payload type
  */
@@ -55,48 +58,61 @@ export type TriggerPayloadFromTriggers<TTriggers extends readonly WorkflowTrigge
   TTriggers extends readonly WorkflowTriggerDef<unknown>[] ? ExtractTriggerPayload<TTriggers[number]> : never;
 
 /**
- * Consumer-owned event filters shared by every authoring wrapper.
+ * Consumer-owned event condition shared by every authoring wrapper.
  *
- * These narrow an event **after** the trigger source validated and emitted it,
- * which is why they are not part of any trigger type's parameter schema.
- * @typeParam TPayload - The trigger event payload type
+ * It narrows an event **after** the trigger source validated and emitted it, which is
+ * why it is not part of any trigger type's parameter schema.
  */
-interface TriggerFilterOptions<TPayload> {
-  /** Optional structural payload filter (AND semantics). */
-  readonly filter?: TypedPayloadFilter<TPayload>;
-  /** Optional jexl expression for complex filter conditions. */
-  readonly filterExpression?: string;
+interface TriggerConditionOptions {
+  /**
+   * Condition the emitted event must satisfy. The evaluation context is `{ payload }`,
+   * so field paths start with `payload.`; {@link payloadField} builds such a leaf with
+   * the path checked against the payload type.
+   */
+  readonly when?: Condition;
+}
+
+/**
+ * Builds a field condition over the trigger event payload, with the path checked
+ * against the payload type at compile time.
+ *
+ * Inside a plain `when: Condition` the `field` is an untyped string, so a typo in a
+ * payload path would only surface at runtime. This helper keeps the check where the
+ * payload type is known; it returns `{ field: 'payload.' + path, operator }`.
+ * @param path - Dot-notation path into the trigger event payload
+ * @param operator - Comparison to perform against the resolved payload value
+ * @returns A field condition addressing `payload.<path>`
+ * @typeParam TPayload - The trigger event payload type, supplied explicitly or via `ExtractTriggerPayload`
+ * @example
+ * ```typescript
+ * const when = payloadField<GitCheckoutPayload>('isNewWorktree', true);
+ * ```
+ */
+export function payloadField<TPayload>(path: Paths<TPayload> & string, operator: FieldOperator): FieldCondition {
+  return { field: `payload.${path}`, operator };
 }
 
 /**
  * Builds the persisted binding produced by every authoring wrapper.
  *
- * Centralizing construction keeps the optional-field spreads and the single
- * widening of the typed filter to its persisted `PayloadFilter` shape in one
- * place. Wrappers pass their own options object straight through as `filters`
- * rather than re-spreading the two optional fields at the call site — the
- * conditional spread belongs to whichever code actually builds the binding, and
- * doing it twice is how the two copies drift when a third filter field appears.
+ * Centralizing construction keeps the optional-field spread and the phantom payload
+ * type in one place. Wrappers pass their own options object straight through as
+ * `options` rather than re-spreading the optional field at the call site.
  * @param kind - Canonical automation trigger kind
  * @param params - Detached JSON-safe schema input persisted for activation
- * @param filters - Consumer-owned event filters, read from the wrapper's options
+ * @param options - Consumer-owned event condition, read from the wrapper's options
  * @returns The persisted binding carrying the phantom payload type
  * @typeParam TPayload - The trigger event payload type
  */
 function createTriggerBinding<TPayload>(
   kind: string,
   params: AutomationTriggerParams,
-  filters: TriggerFilterOptions<TPayload>,
+  options: TriggerConditionOptions,
 ): WorkflowTriggerDef<TPayload> {
   return {
     kind,
     params,
-    ...(filters.filter !== undefined && {
-      // `TypedPayloadFilter` only constrains which keys are addressable; the
-      // persisted binding stores the same operators under the untyped record.
-      filter: filters.filter as PayloadFilter,
-    }),
-    ...(filters.filterExpression !== undefined && { filterExpression: filters.filterExpression }),
+    ...(options.when !== undefined && { when: options.when }),
   };
 }
 
@@ -109,7 +125,7 @@ function createTriggerBinding<TPayload>(
  * runtime applies defaults and transforms exactly once when it activates the
  * trigger.
  * @param definition - The automation trigger contributed by an extension
- * @param options - Activation params plus consumer-owned event filters
+ * @param options - Activation params plus the consumer-owned event condition
  * @returns A typed workflow trigger binding
  * @typeParam TParamsSchema - Live Zod schema for the trigger's parameters
  * @typeParam TEventSchema - Live Zod schema for the trigger's emitted event
@@ -117,7 +133,7 @@ function createTriggerBinding<TPayload>(
  * ```typescript
  * const trigger = AutomationWorkflowTrigger(GithubPullRequestOpenedTrigger, {
  *   params: { repository: 'makaio-ai/makaio' },
- *   filterExpression: "payload.baseRef == 'develop'",
+ *   when: { field: 'payload.baseRef', operator: 'develop' },
  * });
  * ```
  */
@@ -129,7 +145,7 @@ export function AutomationWorkflowTrigger<
   options: {
     /** Trigger-type parameters, validated against `definition.paramsSchema`. */
     readonly params: z.input<TParamsSchema>;
-  } & TriggerFilterOptions<z.output<TEventSchema>>,
+  } & TriggerConditionOptions,
 ): WorkflowTriggerDef<z.output<TEventSchema>> {
   const persistedParams = JsonRecordSchema.parse(options.params);
   definition.paramsSchema.parse(persistedParams);
@@ -146,7 +162,7 @@ export function AutomationWorkflowTrigger<
  * ```typescript
  * const trigger = BusEventWorkflowTrigger({
  *   subject: GitNamespace.subjects.checkout,
- *   filter: { isNewWorktree: true },
+ *   when: { field: 'payload.isNewWorktree', operator: true },
  * });
  * ```
  */
@@ -157,7 +173,7 @@ export function BusEventWorkflowTrigger<S extends SubjectDefinition>(
       ? {
           /** The bus subject to subscribe to. */
           readonly subject: S;
-        } & TriggerFilterOptions<ExtractSubjectPayload<S>>
+        } & TriggerConditionOptions
       : never,
 ): WorkflowTriggerDef<ExtractSubjectPayload<S>> {
   return createTriggerBinding<ExtractSubjectPayload<S>>(
@@ -210,7 +226,7 @@ export function CronWorkflowTrigger(options: {
   /** IANA timezone string; defaults to {@link DEFAULT_CRON_TIMEZONE}. */
   readonly timezone?: string;
 }): WorkflowTriggerDef<CronTriggerPayload> {
-  // No consumer-owned filters: a cron firing carries only the occurrence it
+  // No consumer-owned condition: a cron firing carries only the occurrence it
   // served, so there is nothing meaningful to filter it on.
   return createTriggerBinding<CronTriggerPayload>(
     CRON_AUTOMATION_TRIGGER_KIND,

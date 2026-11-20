@@ -6,27 +6,28 @@ import type {
   WorkflowAutomationTriggerBinding,
   WorkflowDefinition,
 } from '@makaio/contracts';
-import {
-  AutomationTriggerSubjects,
-  CRON_AUTOMATION_TRIGGER_KIND,
-  WorkflowAutomationTriggerBindingSchema,
-  WorkflowSubjects,
-} from '@makaio/contracts';
+import { AutomationTriggerSubjects, WorkflowAutomationTriggerBindingSchema, WorkflowSubjects } from '@makaio/contracts';
 import type { AutomationTriggerBindingRuntime } from '@makaio/services-core/automation-trigger';
 import { SerialLane } from '@makaio/utils';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import {
-  compileWorkflowTriggerBindingFilter,
   assertWorkflowTriggerPayload,
-  type WorkflowTriggerPayloadPredicate,
+  type WorkflowTriggerConditionEvaluator,
 } from './workflow-trigger-binding-consumer.js';
+import {
+  type AcquisitionFailurePolicy,
+  compileActivationPlan,
+  isEligibleConsumer,
+  LOG_PREFIX,
+  type PreparedBinding,
+  type PreflightEntry,
+  preflightOrReject,
+  resolveRuntimeBinding,
+} from './workflow-trigger-preflight.js';
 
 // ─────────────────────────────────────────────────────────────
 // Internal types
 // ─────────────────────────────────────────────────────────────
-
-/** Log prefix for reconciler diagnostics. */
-const LOG_PREFIX = '[WorkflowTriggerReconciler]';
 
 /**
  * One consumer of a declarative trigger binding, indexed by its stable consumer
@@ -41,8 +42,8 @@ const LOG_PREFIX = '[WorkflowTriggerReconciler]';
 interface ConsumerRecord {
   /** Schema-validated binding this consumer subscribes to. */
   readonly binding: WorkflowAutomationTriggerBinding;
-  /** Compiled `filter` + `filterExpression` predicate. */
-  readonly matches: WorkflowTriggerPayloadPredicate;
+  /** Compiled evaluator of the binding's `when` condition. */
+  readonly matches: WorkflowTriggerConditionEvaluator;
   /**
    * Handle released when the consumer is refreshed or dropped.
    *
@@ -56,48 +57,38 @@ interface ConsumerRecord {
   subscription: AutomationTriggerSubscription | undefined;
 }
 
-/**
- * What a failed acquisition means for the consumer that was being refreshed.
- *
- * - `keep-last-good` — a definition refresh failed to activate. The workflow's
- *   previous subscriptions stay live, because a workflow that cannot express its
- *   new trigger must not silently lose the trigger it already had.
- * - `drop-unavailable` — a registry change made the contributing trigger type
- *   unresolvable. The stale handle is released and forgotten, so no executable
- *   closure survives a deregistration and nothing can start the workflow until
- *   the type is registered again.
- */
-type AcquisitionFailurePolicy = 'keep-last-good' | 'drop-unavailable';
-
 // ─────────────────────────────────────────────────────────────
 // Pure helpers
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Validates a definition's trigger array and compiles its filters as one batch.
+ * Validates a definition's trigger array as one batch.
  *
  * Batch-atomic on purpose: a single unusable binding invalidates a refresh
  * before any subscription is touched, which lets the caller keep a workflow's
  * last-good subscriptions. A cold start may then retry bindings individually,
- * because it has no prior batch to preserve.
+ * because it has no prior batch to preserve. The `when` conditions are the
+ * second half of the same batch: they need the binding runtime, so
+ * {@link preflightConditions} checks them before the first consumer is touched.
  * @param triggers - Persisted trigger bindings of one workflow definition.
  * @returns Prepared bindings in declaration order.
- * @throws When any binding fails schema validation or carries an
- *   `filterExpression` that cannot be compiled.
+ * @throws When any binding fails schema validation. A `when` is not checked
+ *   here: it needs the trigger's event schema, which only the binding runtime
+ *   can supply.
  */
-function prepareBindings(triggers: readonly WorkflowAutomationTriggerBinding[]): readonly ConsumerRecord[] {
+function prepareBindings(triggers: readonly WorkflowAutomationTriggerBinding[]): readonly PreparedBinding[] {
   return triggers.map(prepareBinding);
 }
 
 /**
- * Validates and compiles one declarative binding.
+ * Validates one declarative binding.
  * @param trigger - Persisted trigger binding to prepare.
- * @returns The subscription record to use for that binding.
- * @throws When the binding or its `filterExpression` is invalid.
+ * @returns The prepared binding.
+ * @throws When the binding fails schema validation, which includes the removed
+ *   `filter` and `filterExpression` keys.
  */
-function prepareBinding(trigger: WorkflowAutomationTriggerBinding): ConsumerRecord {
-  const binding = WorkflowAutomationTriggerBindingSchema.parse(trigger);
-  return { binding, matches: compileWorkflowTriggerBindingFilter(binding), subscription: undefined };
+function prepareBinding(trigger: WorkflowAutomationTriggerBinding): PreparedBinding {
+  return { binding: WorkflowAutomationTriggerBindingSchema.parse(trigger) };
 }
 
 /**
@@ -118,7 +109,7 @@ function prepareDefinitionBindings(
   workflow: WorkflowDefinition,
   hasLiveConsumers: boolean,
   kinds?: ReadonlySet<string>,
-): readonly (ConsumerRecord | undefined)[] | undefined {
+): readonly (PreparedBinding | undefined)[] | undefined {
   const triggers = workflow.triggers ?? [];
   try {
     if (kinds === undefined) return prepareBindings(triggers);
@@ -148,22 +139,6 @@ function prepareDefinitionBindings(
 }
 
 /**
- * Whether this workflow scope may consume the prepared trigger binding.
- *
- * Cron bindings on global definitions are deliberately inactive: there is no
- * single-host authority for a global schedule, so activating one in every
- * workflow-engine host would start the same workflow multiple times. Other
- * trigger kinds remain eligible at global scope because their sources already
- * define their own delivery authority.
- * @param workflow - Workflow definition that declares the binding.
- * @param binding - Prepared trigger binding to evaluate.
- * @returns `true` when the reconciler should attach a consumer.
- */
-function isEligibleConsumer(workflow: WorkflowDefinition, binding: WorkflowAutomationTriggerBinding): boolean {
-  return workflow.scope.type !== 'global' || binding.kind !== CRON_AUTOMATION_TRIGGER_KIND;
-}
-
-/**
  * Releases consumers whose declaration disappeared or became ineligible.
  *
  * During a changed-kind-scoped registry replay, declarations outside the exact
@@ -177,7 +152,7 @@ function isEligibleConsumer(workflow: WorkflowDefinition, binding: WorkflowAutom
  */
 async function detachOutdatedConsumers(
   workflow: WorkflowDefinition,
-  prepared: readonly (ConsumerRecord | undefined)[],
+  prepared: readonly (PreparedBinding | undefined)[],
   kinds: ReadonlySet<string> | undefined,
   consumers: Map<number, ConsumerRecord> | undefined,
 ): Promise<void> {
@@ -538,11 +513,16 @@ export class WorkflowTriggerReconciler {
     if (prepared === undefined) return;
 
     // Eligibility is a consumer concern and is evaluated after preparation so
-    // malformed bindings still follow the same last-good policy. Remove an
-    // existing consumer before resolving a runtime: its subscription owns its
-    // issuing runtime, so an external → global scope transition must detach even
-    // while no replacement runtime is available.
+    // malformed bindings still follow the same last-good policy. The runtime is
+    // resolved first only so a refresh with live consumers can check every
+    // condition before any consumer is touched. Removal then does not depend on
+    // it: a subscription owns its issuing runtime, so an external → global scope
+    // transition must detach even while no replacement runtime is available.
     const existingConsumers = this.consumers.get(workflow.id);
+    const runtime = this.resolveRuntime();
+    const preflight = preflightOrReject(runtime, onFailure, existingConsumers, workflow, prepared, kinds);
+    if (preflight === 'rejected') return;
+    const plans = preflight;
     await detachOutdatedConsumers(workflow, prepared, kinds, existingConsumers);
     if (existingConsumers?.size === 0) this.consumers.delete(workflow.id);
 
@@ -554,7 +534,6 @@ export class WorkflowTriggerReconciler {
     );
     if (!hasEligibleConsumer) return;
 
-    const runtime = this.resolveRuntime();
     if (runtime === undefined) {
       if (prepared.length > 0) {
         console.warn(
@@ -578,7 +557,15 @@ export class WorkflowTriggerReconciler {
       if (next === undefined) continue;
       if (!isEligibleConsumer(workflow, next.binding)) continue;
       if (kinds !== undefined && !kinds.has(next.binding.kind)) continue;
-      await this.refreshConsumerWithinLane(runtime, workflow.id, triggerIndex, next, consumers, onFailure);
+      await this.refreshConsumerWithinLane(
+        runtime,
+        workflow.id,
+        triggerIndex,
+        next,
+        consumers,
+        onFailure,
+        plans?.get(triggerIndex),
+      );
     }
 
     if (consumers.size === 0) this.consumers.delete(workflow.id);
@@ -589,21 +576,23 @@ export class WorkflowTriggerReconciler {
    * @param runtime - Live binding runtime.
    * @param workflowId - Workflow owning this consumer.
    * @param triggerIndex - Position of the binding in the definition.
-   * @param next - Prepared consumer record to install.
+   * @param prepared - Prepared binding to install as the consumer.
    * @param consumers - Mutable consumer index of this workflow.
    * @param onFailure - Policy applied when the acquisition fails.
+   * @param preflight - Outcome of the batch preflight for this binding, when the
+   *   refresh ran one. Reused so nothing is prepared or compiled twice.
    * @returns Resolves once the consumer has settled.
    */
   private async refreshConsumerWithinLane(
     runtime: AutomationTriggerBindingRuntime,
     workflowId: string,
     triggerIndex: number,
-    next: ConsumerRecord,
+    prepared: PreparedBinding,
     consumers: Map<number, ConsumerRecord>,
     onFailure: AcquisitionFailurePolicy,
+    preflight?: PreflightEntry,
   ): Promise<void> {
     const current = consumers.get(triggerIndex);
-    const listener = this.createListener(workflowId, triggerIndex, next);
 
     // Who may start this workflow while the acquisition is in flight, decided
     // structurally rather than by timing, by asking the runtime which activation
@@ -624,13 +613,17 @@ export class WorkflowTriggerReconciler {
     //   would gain nothing and designating both would double-start.
     try {
       const liveKey = current?.subscription?.bindingKey;
-      const preparedBinding = runtime.prepareBinding(next.binding);
-      if (preparedBinding === undefined) {
-        throw new Error(`Automation trigger kind '${next.binding.kind}' is not registered`);
+      if (preflight !== undefined && 'failure' in preflight) throw preflight.failure;
+      const { preparedBinding, matches, warnings } =
+        preflight ?? compileActivationPlan(prepared.binding, resolveRuntimeBinding(runtime, prepared.binding));
+      for (const finding of warnings) {
+        console.warn(
+          `${LOG_PREFIX} trigger ${triggerIndex} of workflow "${workflowId}": condition warning ` +
+            `${finding.code} at '${finding.path}': ${finding.message}`,
+        );
       }
-      if (!preparedBinding.workflowCompatible) {
-        throw new Error(`Automation trigger kind '${next.binding.kind}' does not emit an object-root payload`);
-      }
+      const next: ConsumerRecord = { binding: prepared.binding, matches, subscription: undefined };
+      const listener = this.createListener(workflowId, triggerIndex, next);
       const designateBeforeSubscribe = liveKey === undefined || liveKey !== preparedBinding.bindingKey;
       if (designateBeforeSubscribe) consumers.set(triggerIndex, next);
 
@@ -654,7 +647,7 @@ export class WorkflowTriggerReconciler {
       if (onFailure === 'keep-last-good') {
         console.error(
           `${LOG_PREFIX} keeping last-good trigger ${triggerIndex} of workflow "${workflowId}": ` +
-            `binding '${next.binding.kind}' could not be activated`,
+            `binding '${prepared.binding.kind}' could not be activated`,
           error,
         );
         return;
@@ -662,7 +655,7 @@ export class WorkflowTriggerReconciler {
 
       console.warn(
         `${LOG_PREFIX} dropping trigger ${triggerIndex} of workflow "${workflowId}": ` +
-          `binding '${next.binding.kind}' is no longer available`,
+          `binding '${prepared.binding.kind}' is no longer available`,
         error,
       );
       consumers.delete(triggerIndex);
@@ -692,7 +685,7 @@ export class WorkflowTriggerReconciler {
    * The listener first checks that its own record is still the designated one for
    * this consumer key, so a listener that has been superseded or dropped can
    * neither double-start a workflow during a refresh overlap nor start one after
-   * its trigger type went away. Consumer-owned filters run next, then the payload
+   * its trigger type went away. The consumer-owned `when` condition runs next, then the payload
    * is projected onto the `triggerPayload` contract.
    *
    * Every failure is logged against this consumer's identity and swallowed: a
@@ -709,14 +702,14 @@ export class WorkflowTriggerReconciler {
     return async (event) => {
       if (this.consumers.get(workflowId)?.get(triggerIndex) !== record) return;
 
-      let matched: boolean;
-      try {
-        matched = record.matches(event.payload);
-      } catch (error) {
-        console.error(`${LOG_PREFIX} filter evaluation failed for ${describe}:`, error);
+      const outcome = record.matches(event.payload);
+      if ('error' in outcome) {
+        console.error(
+          `${LOG_PREFIX} condition evaluation failed for ${describe} at '${outcome.error.path}': ${outcome.error.message}`,
+        );
         return;
       }
-      if (!matched) return;
+      if (!outcome.matched) return;
 
       try {
         await this.bus.request(WorkflowSubjects.start, {

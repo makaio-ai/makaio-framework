@@ -24,6 +24,7 @@ import { WorkflowDefinitionSchema, WorkflowLoopNodeSchema } from '../schemas.js'
 import { validateNoNestedLoops } from '../loop.js';
 import { defineWorkflowBundle } from '../bundle.js';
 import { defineAutomationTrigger } from '../../automation-trigger/definition.js';
+import { payloadField } from '../authoring-triggers.js';
 import type { ExtractTriggerPayload } from '../authoring-triggers.js';
 
 const GitNamespace = createBusNamespace('git', {
@@ -46,23 +47,66 @@ describe('workflow trigger helpers', () => {
   it('serializes typed bus event triggers to an automation trigger binding', () => {
     const trigger = BusEventWorkflowTrigger({
       subject: GitNamespace.subjects.checkout,
-      filter: { isNewWorktree: true },
-      filterExpression: "payload.mainWorktree == '/repos/makaio'",
+      when: {
+        $and: [
+          payloadField<{ isNewWorktree: boolean }>('isNewWorktree', true),
+          { $expr: "payload.mainWorktree == '/repos/makaio'" },
+        ],
+      },
     });
 
     expect(trigger).toEqual({
       kind: 'makaio.bus-event',
       params: { subject: getFullSubjectForSubjectDefinition(GitNamespace.subjects.checkout) },
-      filter: { isNewWorktree: true },
-      filterExpression: "payload.mainWorktree == '/repos/makaio'",
+      when: {
+        $and: [
+          { field: 'payload.isNewWorktree', operator: true },
+          { $expr: "payload.mainWorktree == '/repos/makaio'" },
+        ],
+      },
     });
   });
 
-  it('omits consumer-owned filter fields when they are not supplied', () => {
+  it('omits the when key when no condition is supplied', () => {
     expect(BusEventWorkflowTrigger({ subject: GitNamespace.subjects.checkout })).toEqual({
       kind: 'makaio.bus-event',
       params: { subject: 'git.checkout' },
     });
+  });
+
+  it('does not add a when key to an automation trigger without a condition', () => {
+    const definition = defineAutomationTrigger({
+      kind: 'demo.plain',
+      label: 'Plain',
+      description: 'Emits nothing special.',
+      categories: [],
+      paramsSchema: z.object({}),
+      eventSchema: z.object({ latencyMs: z.number() }),
+      activate: async () => async () => undefined,
+    });
+
+    expect(AutomationWorkflowTrigger(definition, { params: {} })).not.toHaveProperty('when');
+  });
+
+  it('builds a payload field condition addressing payload.<path>', () => {
+    type CheckoutPayload = { isNewWorktree: boolean; nested: { depth: number } };
+
+    expect(payloadField<CheckoutPayload>('isNewWorktree', true)).toEqual({
+      field: 'payload.isNewWorktree',
+      operator: true,
+    });
+    expect(payloadField<CheckoutPayload>('nested.depth', { $exists: true })).toEqual({
+      field: 'payload.nested.depth',
+      operator: { $exists: true },
+    });
+  });
+
+  it('rejects a payload path that is not part of the payload type at compile time', () => {
+    // @ts-expect-error 'isNewWorktre' is not a path of the payload type
+    const typo = payloadField<{ isNewWorktree: boolean }>('isNewWorktre', true);
+
+    // The helper stays a pure string builder at runtime; the guard is the compile-time check.
+    expect(typo.field).toBe('payload.isNewWorktre');
   });
 
   it('creates a cron trigger binding with a default timezone', () => {
@@ -99,13 +143,13 @@ describe('workflow trigger helpers', () => {
 
     const trigger = AutomationWorkflowTrigger(definition, {
       params: { endpoint: 'https://example.test' },
-      filter: { latencyMs: { $exists: true } },
+      when: payloadField<{ latencyMs: number }>('latencyMs', { $exists: true }),
     });
 
     expect(trigger).toEqual({
       kind: 'demo.pinged',
       params: { endpoint: 'https://example.test' },
-      filter: { latencyMs: { $exists: true } },
+      when: { field: 'payload.latencyMs', operator: { $exists: true } },
     });
     expectTypeOf<ExtractTriggerPayload<typeof trigger>>().toEqualTypeOf<{ latencyMs: number }>();
   });

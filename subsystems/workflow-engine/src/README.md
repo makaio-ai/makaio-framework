@@ -68,11 +68,15 @@ workflow CRUD events and `automation-triggers.changed` events as refresh signals
 Refreshes acquire the replacement binding before releasing the previous one, so a
 shared source is never torn down mid-refresh.
 
-`filter` and `filterExpression` are consumer-owned: they narrow an event a trigger
-has already validated, and are compiled by
+`when` is consumer-owned: it is a `Condition` evaluated over `{ payload }` that narrows an
+event a trigger has already validated, and is compiled by
 `src/workflow-trigger-binding-consumer.ts` (also exported from the
 `@makaio/subsystem-workflow-engine/workflow-trigger-binding-consumer` subpath so the
-worker's await mode applies identical semantics).
+worker's await mode applies identical semantics). When a binding is installed, the reconciler
+checks `when` against the trigger's event schema and rejects it on an error finding. An
+evaluation error at event time is logged against the consumer and the trigger does not fire.
+A persisted binding that still carries the removed `filter` or `filterExpression` key is
+rejected with an error naming `when`.
 
 ## Usage
 

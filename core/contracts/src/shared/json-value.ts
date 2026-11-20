@@ -480,3 +480,6 @@ export const JsonRecordSchema: z.ZodType<Record<string, JsonValue>, Record<strin
  * For non-schema JSON records (e.g. parameter maps), use {@link JsonRecordSchema}.
  */
 export const JsonSchemaRecordSchema: z.ZodType<Record<string, JsonValue>, Record<string, JsonValue>> = JsonRecordSchema;
+
+/** A JSON Schema document, held as a JSON record. */
+export type JsonSchema = z.infer<typeof JsonSchemaRecordSchema>;

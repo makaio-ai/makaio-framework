@@ -1,5 +1,7 @@
+import type { JsonValue } from '@makaio/contracts/shared';
 import { describe, expect, it } from 'vitest';
-import { evaluate, evaluateRules, type Condition, type Rule } from '../index.js';
+import { evaluateRules, type Condition, type Rule } from '../index.js';
+import { errorOf, matched } from './support.js';
 
 const CACHE_STRESS_COUNT = 260;
 
@@ -20,7 +22,7 @@ function runCacheStress(callback: (index: number) => void): void {
  * @param expected - Expected boolean result.
  */
 function expectEvaluation(condition: Condition, context: Record<string, unknown>, expected: boolean): void {
-  expect(evaluate(condition, context)).toBe(expected);
+  expect(matched(condition, context)).toBe(expected);
 }
 
 // ---------------------------------------------------------------------------
@@ -29,11 +31,11 @@ function expectEvaluation(condition: Condition, context: Record<string, unknown>
 
 describe('edge cases — empty context', () => {
   it('field condition against empty context returns false for equality', () => {
-    expect(evaluate({ field: 'x', operator: 'value' }, {})).toBe(false);
+    expect(matched({ field: 'x', operator: 'value' }, {})).toBe(false);
   });
 
   it('$exists: false matches a missing field in an empty context', () => {
-    expect(evaluate({ field: 'x', operator: { $exists: false } }, {})).toBe(true);
+    expect(matched({ field: 'x', operator: { $exists: false } }, {})).toBe(true);
   });
 
   it('$and with failing field condition against empty context returns false', () => {
@@ -43,12 +45,12 @@ describe('edge cases — empty context', () => {
         { field: 'b', operator: 2 },
       ],
     };
-    expect(evaluate(condition, {})).toBe(false);
+    expect(matched(condition, {})).toBe(false);
   });
 
   it('$expr accessing missing variable evaluates without throwing', () => {
     // jexl returns undefined for missing variables; Boolean(undefined) = false
-    expect(evaluate({ $expr: 'missing > 0' }, {})).toBe(false);
+    expect(matched({ $expr: 'missing > 0' }, {})).toBe(false);
   });
 });
 
@@ -62,16 +64,16 @@ describe('edge cases — deeply nested context', () => {
   };
 
   it('resolves a five-level deep path', () => {
-    expect(evaluate({ field: 'l1.l2.l3.l4.l5', operator: 'found' }, deep)).toBe(true);
+    expect(matched({ field: 'l1.l2.l3.l4.l5', operator: 'found' }, deep)).toBe(true);
   });
 
   it('returns false for a six-level path on a five-level deep object', () => {
-    expect(evaluate({ field: 'l1.l2.l3.l4.l5.l6', operator: { $exists: true } }, deep)).toBe(false);
+    expect(matched({ field: 'l1.l2.l3.l4.l5.l6', operator: { $exists: true } }, deep)).toBe(false);
   });
 
   it('traversal stops at null mid-path and reports missing', () => {
     const ctx = { a: { b: null } };
-    expect(evaluate({ field: 'a.b.c', operator: { $exists: true } }, ctx)).toBe(false);
+    expect(matched({ field: 'a.b.c', operator: { $exists: true } }, ctx)).toBe(false);
   });
 });
 
@@ -85,8 +87,8 @@ describe('edge cases — large context', () => {
     for (let i = 0; i < 100; i++) {
       ctx[`field_${String(i)}`] = i;
     }
-    expect(evaluate({ field: 'field_50', operator: 50 }, ctx)).toBe(true);
-    expect(evaluate({ field: 'field_99', operator: 99 }, ctx)).toBe(true);
+    expect(matched({ field: 'field_50', operator: 50 }, ctx)).toBe(true);
+    expect(matched({ field: 'field_99', operator: 99 }, ctx)).toBe(true);
   });
 });
 
@@ -98,7 +100,7 @@ describe('edge cases — glob LRU cache', () => {
   it('evaluates the same glob pattern consistently across many calls', () => {
     const pattern = '**/*.spec.ts';
     for (let i = 0; i < 10; i++) {
-      expect(evaluate({ field: 'file', operator: { $glob: pattern } }, { file: 'src/foo.spec.ts' })).toBe(true);
+      expect(matched({ field: 'file', operator: { $glob: pattern } }, { file: 'src/foo.spec.ts' })).toBe(true);
     }
   });
 
@@ -107,7 +109,7 @@ describe('edge cases — glob LRU cache', () => {
     runCacheStress((i) => {
       const pattern = `prefix_${String(i)}/**/*.ts`;
       const path = `prefix_${String(i)}/src/file.ts`;
-      expect(evaluate({ field: 'p', operator: { $glob: pattern } }, { p: path })).toBe(true);
+      expect(matched({ field: 'p', operator: { $glob: pattern } }, { p: path })).toBe(true);
     });
   });
 });
@@ -120,7 +122,7 @@ describe('edge cases — expression LRU cache', () => {
   it('evaluates many distinct expressions without error (exercises eviction)', () => {
     runCacheStress((i) => {
       const expr = `value == ${String(i)}`;
-      expect(evaluate({ $expr: expr }, { value: i })).toBe(true);
+      expect(matched({ $expr: expr }, { value: i })).toBe(true);
     });
   });
 });
@@ -131,19 +133,19 @@ describe('edge cases — expression LRU cache', () => {
 
 describe('edge cases — numeric boundary values', () => {
   it('matches 0 exactly', () => {
-    expect(evaluate({ field: 'n', operator: 0 }, { n: 0 })).toBe(true);
+    expect(matched({ field: 'n', operator: 0 }, { n: 0 })).toBe(true);
   });
 
   it('does not match 0 against false (strict equality)', () => {
-    expect(evaluate({ field: 'n', operator: 0 }, { n: false })).toBe(false);
+    expect(matched({ field: 'n', operator: 0 }, { n: false })).toBe(false);
   });
 
   it('matches negative numbers', () => {
-    expect(evaluate({ field: 'n', operator: -1 }, { n: -1 })).toBe(true);
+    expect(matched({ field: 'n', operator: -1 }, { n: -1 })).toBe(true);
   });
 
   it('matches a floating-point value exactly', () => {
-    expect(evaluate({ field: 'n', operator: 3.14 }, { n: 3.14 })).toBe(true);
+    expect(matched({ field: 'n', operator: 3.14 }, { n: 3.14 })).toBe(true);
   });
 });
 
@@ -196,7 +198,7 @@ describe('edge cases — boolean context values', () => {
 // ---------------------------------------------------------------------------
 
 describe('edge cases — evaluateRules with no matches', () => {
-  it('returns empty array when no rule conditions match', () => {
+  it('reports no matched and no failed rules when no condition matches', () => {
     const rules: Rule<{ label: string }>[] = [
       {
         id: '1',
@@ -215,7 +217,9 @@ describe('edge cases — evaluateRules with no matches', () => {
         enabled: true,
       },
     ];
-    expect(evaluateRules(rules, { x: 1, y: 'yes' })).toHaveLength(0);
+    const outcome = evaluateRules(rules, { x: 1, y: 'yes' });
+    expect(outcome.matched).toHaveLength(0);
+    expect(outcome.failed).toHaveLength(0);
   });
 });
 
@@ -233,8 +237,8 @@ describe('edge cases — $not with nested compound', () => {
         ],
       },
     };
-    expect(evaluate(condition, { a: 1, b: 2 })).toBe(false);
-    expect(evaluate(condition, { a: 99, b: 99 })).toBe(true);
+    expect(matched(condition, { a: 1, b: 2 })).toBe(false);
+    expect(matched(condition, { a: 99, b: 99 })).toBe(true);
   });
 });
 
@@ -244,16 +248,80 @@ describe('edge cases — $not with nested compound', () => {
 
 describe('edge cases — $expr result coercion', () => {
   it('empty-string equality expression is truthy (jexl: "" == "" → true)', () => {
-    expect(evaluate({ $expr: '"" == ""' }, {})).toBe(true);
+    expect(matched({ $expr: '"" == ""' }, {})).toBe(true);
   });
 
   it('empty-string expression result is falsy after boolean coercion', () => {
-    expect(evaluate({ $expr: '""' }, {})).toBe(false);
+    expect(matched({ $expr: '""' }, {})).toBe(false);
   });
 
   it('undefined variable equals null in jexl loose equality (returns true)', () => {
     // In jexl, undefined == null evaluates truthy (loose equality semantics),
     // so Boolean(true) === true.
-    expect(evaluate({ $expr: 'missing == null' }, {})).toBe(true);
+    expect(matched({ $expr: 'missing == null' }, {})).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inherited property paths
+// ---------------------------------------------------------------------------
+
+describe('edge cases — inherited property paths', () => {
+  const context = { a: { b: 1 }, items: [{ name: 'first' }] };
+
+  it.each(['constructor', '__proto__', 'toString', 'a.hasOwnProperty'])('treats %s as absent', (field) => {
+    expectEvaluation({ field, operator: { $exists: false } }, context, true);
+    expectEvaluation({ field, operator: { $exists: true } }, context, false);
+    expectEvaluation({ field, operator: { $eq: 'x' } }, context, false);
+    expectEvaluation({ field, operator: { $ne: 'x' } }, context, true);
+  });
+
+  it('still indexes arrays with numeric segments', () => {
+    expectEvaluation({ field: 'items.0.name', operator: 'first' }, context, true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Evaluation never throws
+// ---------------------------------------------------------------------------
+
+describe('edge cases — evaluation never throws', () => {
+  it('reports a throwing own getter as an error at the field node', () => {
+    const context = {
+      get boom(): never {
+        throw new Error('getter failed');
+      },
+    };
+    expect(errorOf({ field: 'boom', operator: 'x' }, context)).toEqual({ path: '', message: 'getter failed' });
+  });
+
+  it('reports a throwing Proxy trap with the path of the failing node', () => {
+    const context = {
+      p: new Proxy(
+        { x: 1 },
+        {
+          get(): never {
+            throw new Error('trap failed');
+          },
+        },
+      ),
+    };
+    expect(errorOf({ $and: [{ field: 'p.x', operator: 'x' }] }, context)).toEqual({
+      path: '$and[0]',
+      message: 'trap failed',
+    });
+  });
+
+  it('reports a cyclic value compared with a cyclic operand as an error', () => {
+    const operand: { [key: string]: JsonValue } = {};
+    operand['self'] = operand;
+    const value: Record<string, unknown> = {};
+    value['self'] = value;
+    expect(errorOf({ field: 'v', operator: { $eq: operand } }, { v: value }).path).toBe('');
+  });
+
+  it('reports a $glob pattern over 65,536 characters as an error', () => {
+    const pattern = 'a'.repeat(65_537);
+    expect(errorOf({ field: 'f', operator: { $glob: pattern } }, { f: 'a' }).path).toBe('');
   });
 });

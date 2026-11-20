@@ -5,6 +5,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import {
   defineAutomationTrigger,
   AutomationWorkflowTrigger,
+  createAutomationTriggerDescriptor,
   JsonValueSchema,
   toAutomationTriggerType,
   type AutomationTriggerActivationContext,
@@ -445,6 +446,22 @@ describe('AutomationTriggerBindingRuntime', () => {
       await scalar.emit('ping');
 
       expect(firstEvent(listener).payload).toBe('ping');
+    });
+
+    it('exposes the descriptor event schema on the prepared binding', async () => {
+      const scalar = createProbe({
+        kind: 'demo.scalar-schema',
+        paramsSchema: z.object({}),
+        eventSchema: z.string(),
+      });
+      await registry.register('demo', [assignment.type, scalar.type]);
+
+      const object = runtime.prepareBinding({ kind: 'demo.assignment', params: { projectKey: 'shop' } });
+      expect(object?.eventSchema).toEqual(createAutomationTriggerDescriptor(assignment.type).eventSchema);
+      expect(object?.eventSchema).toMatchObject({ type: 'object', properties: { issueId: { type: 'string' } } });
+
+      const plain = runtime.prepareBinding({ kind: 'demo.scalar-schema', params: {} });
+      expect(plain?.eventSchema).toMatchObject({ type: 'string' });
     });
 
     it('accepts schema input from typed emit and delivers transformed output', async () => {

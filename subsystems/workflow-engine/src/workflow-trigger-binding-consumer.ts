@@ -7,52 +7,99 @@
  * the worker's await mode alike — applies identical semantics.
  */
 
-import { matchesFilter } from '@makaio/bus-core';
 import type { JsonValue, WorkflowAutomationTriggerBinding } from '@makaio/contracts';
-import { compile } from '@makaio/expression';
+import type { JsonSchema } from '@makaio/contracts/shared';
+import { assertValidCondition, type ConditionFinding, type ConditionOutcome, evaluate } from '@makaio/rules';
 
 /**
- * Predicate deciding whether one emitted trigger payload passes a workflow
- * binding's consumer-owned filters.
+ * Evaluator deciding whether one emitted trigger payload satisfies a workflow
+ * binding's consumer-owned `when` condition.
  * @param payload - Payload of an automation trigger event.
- * @returns `true` when the payload passes every declared filter.
- * @throws When the compiled `filterExpression` fails at evaluation time.
+ * @returns A matched outcome, or an error outcome carrying the findings when the
+ *   condition could not be evaluated against this payload. Never throws.
  */
-export type WorkflowTriggerPayloadPredicate = (payload: JsonValue) => boolean;
+export type WorkflowTriggerConditionEvaluator = (payload: JsonValue) => ConditionOutcome;
 
 /**
- * Compiles the consumer-owned filters of a workflow trigger binding.
- *
- * `filter` and `filterExpression` are consumer semantics: they narrow an event
- * that an automation trigger has already validated and emitted, so they are
- * evaluated here rather than by the trigger source. Both are ANDed, structural
- * filter first, and a binding that declares neither yields a predicate that
- * accepts every payload.
- *
- * The expression is compiled eagerly so an unparseable expression fails at
- * reconciliation time — where a caller can keep its last-good subscriptions —
- * instead of silently behaving like "no expression" on every event.
- *
- * Evaluation failures are **not** swallowed: the predicate throws so each caller
- * can attribute the failure to its own consumer identity before deciding to skip
- * the event.
- * @param binding - Persisted workflow trigger binding.
- * @returns Predicate applying the binding's filters to an emitted payload.
- * @throws When `filterExpression` cannot be compiled.
+ * A compiled `when` condition and the warnings its registration-time check produced.
  */
-export function compileWorkflowTriggerBindingFilter(
+export interface CompiledWorkflowTriggerCondition {
+  /** Evaluator of the binding's `when` against an emitted payload. */
+  readonly matches: WorkflowTriggerConditionEvaluator;
+  /** Warning findings of the check; the caller reports them once, through its own logger. */
+  readonly warnings: readonly ConditionFinding[];
+}
+
+/** Schema keywords whose values are instance data, not schemas; references inside them are data. */
+const DATA_KEYWORDS: ReadonlySet<string> = new Set(['const', 'enum', 'default', 'examples']);
+
+/** JSON pointer of the event schema inside the context wrapper. */
+const PAYLOAD_POINTER = '#/properties/payload';
+
+/**
+ * Deep-copies a schema node, moving every local reference under {@link PAYLOAD_POINTER}.
+ *
+ * Only string-valued `$ref`s starting with `#` are rewritten, so a property that is
+ * itself named `$ref` (its value is a schema object) is copied unchanged, and the
+ * values of data keywords are copied verbatim.
+ * @param node - Schema node or any nested JSON value.
+ * @returns The rebased copy.
+ */
+function rebaseLocalRefs(node: JsonValue): JsonValue {
+  if (Array.isArray(node)) return node.map(rebaseLocalRefs);
+  if (node === null || typeof node !== 'object') return node;
+  const copy: Record<string, JsonValue> = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key === '$ref' && typeof value === 'string' && value.startsWith('#')) {
+      copy[key] = `${PAYLOAD_POINTER}${value.slice(1)}`;
+    } else {
+      copy[key] = DATA_KEYWORDS.has(key) || value === undefined ? value : rebaseLocalRefs(value);
+    }
+  }
+  return copy;
+}
+
+/**
+ * Checks and compiles the consumer-owned `when` condition of a workflow trigger binding.
+ *
+ * `when` is a consumer semantic: it narrows an event that an automation trigger
+ * has already validated and emitted, so it is evaluated here rather than by the
+ * trigger source. The evaluation context is `{ payload }`; the condition is
+ * checked against a closed context schema that wraps the trigger's event schema
+ * under a required `payload` key, so no consumer can skip the check. A binding
+ * without `when` yields an evaluator that matches every payload.
+ *
+ * Evaluation failures are **not** thrown: they come back as an error outcome so
+ * each caller can attribute the failure to its own consumer identity before
+ * deciding to skip the event.
+ * @param binding - Persisted workflow trigger binding.
+ * @param eventSchema - Event schema of the trigger the binding resolved to.
+ * @returns Evaluator applying the binding's `when` to an emitted payload, and the check's warnings.
+ * @throws When the condition has an error finding against the event schema; the
+ *   message lists every error and contains `does not fit the event schema`.
+ */
+export function compileWorkflowTriggerCondition(
   binding: WorkflowAutomationTriggerBinding,
-): WorkflowTriggerPayloadPredicate {
-  const { filter, filterExpression } = binding;
-  const expression = filterExpression === undefined ? undefined : compile(filterExpression);
-
-  if (filter === undefined && expression === undefined) return () => true;
-
-  return (payload) => {
-    if (filter !== undefined && !matchesFilter(payload, filter)) return false;
-    if (expression === undefined) return true;
-    return Boolean(expression.evalSync({ payload }));
-  };
+  eventSchema: JsonSchema,
+): CompiledWorkflowTriggerCondition {
+  const { when } = binding;
+  if (when === undefined) return { matches: () => ({ matched: true }), warnings: [] };
+  // Invariant: the wrapper, not the event schema, is the reference root of the context.
+  // Local references of the event schema (`#`, `#/$defs/…`, `#/definitions/…`) are rebased
+  // onto its `payload` position so they keep resolving to the event schema.
+  const warnings = assertValidCondition(
+    {
+      condition: when,
+      context: {
+        type: 'object',
+        properties: { payload: rebaseLocalRefs(eventSchema) },
+        required: ['payload'],
+        additionalProperties: false,
+      },
+    },
+    `Trigger condition 'when' of kind '${binding.kind}' does not fit the event schema`,
+  );
+  return { matches: (payload) => evaluate(when, { payload }), warnings };
 }
 
 /**

@@ -146,7 +146,7 @@ export type {
 export { createFilteredBus } from './filtered-bus.js';
 export type { IFilteredBus } from './filtered-bus.js';
 
-export { matchesFilter, mergeFilters, getPath } from './utils/payload-filter.js';
+export { matchesFilter, mergeFilters } from './utils/payload-filter.js';
 export { DEFAULT_REQUEST_TIMEOUT_MS, DEFAULT_READINESS_TIMEOUT_MS } from './types/options.js';
 export { resolveInboundRequestBudget } from './methods/request/request-budget.js';
 export { OnceAbortError } from './methods/once.js';

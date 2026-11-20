@@ -1,10 +1,12 @@
 import {
+  TransitionEvaluationContextSchemas,
   TransitionRuleDefinitionSchema,
+  zodSchemaToJsonRecord,
+  type JsonSchema,
   type TransitionEventType,
   type TransitionRuleDefinition,
 } from '@makaio/contracts';
-import type { Condition } from '@makaio/rules';
-import { ConditionSchema } from '@makaio/rules';
+import { assertValidCondition, type Condition, type ConditionFinding } from '@makaio/rules';
 import type { z } from 'zod';
 
 // ─────────────────────────────────────────────────────────────
@@ -18,18 +20,57 @@ interface SourceSnapshot {
 }
 
 /**
- * A {@link TransitionRuleDefinition} with its optional `when` condition
- * pre-parsed at registration time so the pipeline avoids re-parsing on
+ * A {@link TransitionRuleDefinition} whose optional `when` condition was
+ * checked at registration time so the pipeline does not re-check it on
  * every incoming artifact event.
  */
 export interface PreparedTransitionRule {
   /** The original serializable rule definition. */
   readonly rule: TransitionRuleDefinition;
-  /**
-   * Pre-parsed condition produced by `ConditionSchema.parse(rule.when)`.
-   * `undefined` when the rule has no `when` clause — it always matches.
-   */
-  readonly condition: Condition | undefined;
+  /** Warnings of the registration-time condition check; empty when the rule has no condition. */
+  readonly findings: readonly ConditionFinding[];
+}
+
+// ─────────────────────────────────────────────────────────────
+// Condition check
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * JSON Schema of the evaluation context a rule's `when` condition reads, per event type.
+ *
+ * Derived from `TransitionEvaluationContextSchemas`, which lists exactly the keys the pipeline
+ * builds for each event. Objects are closed (an unknown key is an `unknown-field` finding),
+ * except `artifact.data`, which is free-form and open.
+ */
+const CONDITION_CONTEXT_BY_EVENT: Record<TransitionEventType, JsonSchema> = {
+  'artifact.created': zodSchemaToJsonRecord(TransitionEvaluationContextSchemas['artifact.created']),
+  'artifact.revised': zodSchemaToJsonRecord(TransitionEvaluationContextSchemas['artifact.revised']),
+  'artifact.status.changed': zodSchemaToJsonRecord(TransitionEvaluationContextSchemas['artifact.status.changed']),
+};
+
+/**
+ * Check a rule's condition against the context schema of its event type.
+ * @param rule - Rule whose `when` condition is checked
+ * @param condition - The rule's condition
+ * @returns The warnings of the check
+ * @throws If the check reports a finding with severity `error`
+ */
+function checkCondition(rule: TransitionRuleDefinition, condition: Condition): ConditionFinding[] {
+  return assertValidCondition(
+    { condition, context: CONDITION_CONTEXT_BY_EVENT[rule.on] },
+    `TransitionRuleRegistry: invalid condition in rule '${rule.id}'`,
+  );
+}
+
+/**
+ * Log the warnings of a committed rule once.
+ * @param ruleId - Rule the warnings belong to
+ * @param warnings - Warnings of the rule's condition check
+ */
+function logWarnings(ruleId: string, warnings: readonly ConditionFinding[]): void {
+  if (warnings.length === 0) return;
+  const details = warnings.map((finding) => `${finding.code} at '${finding.path}'`).join(', ');
+  console.warn(`TransitionRuleRegistry: rule '${ruleId}' has condition warnings: ${details}`);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -93,7 +134,8 @@ export class TransitionRuleRegistry {
     if (prepared.length === 0) return;
 
     for (const preparedRule of prepared) {
-      const { rule } = preparedRule;
+      const { rule, findings } = preparedRule;
+      logWarnings(rule.id, findings);
       this.ruleIdSet.add(rule.id);
       const bucket = this.rulesByEventType.get(rule.on) ?? [];
       bucket.push(preparedRule);
@@ -151,8 +193,8 @@ export class TransitionRuleRegistry {
    * Return all enabled prepared rules matching the given event type.
    *
    * Returns a shallow copy of the internal bucket to prevent external mutation.
-   * Each entry carries the original rule definition alongside its pre-parsed
-   * condition so the pipeline avoids re-parsing per event.
+   * Each entry carries the original rule definition alongside the
+   * warnings of its registration-time condition check.
    * @param eventType - Artifact event type to query.
    * @returns Enabled prepared rules registered for the event type.
    */
@@ -198,10 +240,8 @@ export class TransitionRuleRegistry {
         throw new Error(`TransitionRuleRegistry: duplicate rule ID '${rule.id}' from source '${sourceKey}'`);
       }
       pendingRuleIds.add(rule.id);
-      prepared.push({
-        rule,
-        condition: rule.when !== undefined ? ConditionSchema.parse(rule.when) : undefined,
-      });
+      const findings = rule.when !== undefined ? checkCondition(rule, rule.when) : [];
+      prepared.push({ rule, findings });
     }
     return prepared;
   }

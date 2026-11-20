@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { evaluate, type Condition } from '../index.js';
+import type { Condition } from '../index.js';
+import { errorOf, matched } from './support.js';
 
 // ---------------------------------------------------------------------------
 // Field condition — dot-notation path resolution
@@ -7,43 +8,43 @@ import { evaluate, type Condition } from '../index.js';
 
 describe('field condition — dot-notation path resolution', () => {
   it('resolves a top-level field', () => {
-    expect(evaluate({ field: 'status', operator: 'active' }, { status: 'active' })).toBe(true);
+    expect(matched({ field: 'status', operator: 'active' }, { status: 'active' })).toBe(true);
   });
 
   it('resolves a two-level nested path', () => {
-    expect(evaluate({ field: 'a.b', operator: 'deep' }, { a: { b: 'deep' } })).toBe(true);
+    expect(matched({ field: 'a.b', operator: 'deep' }, { a: { b: 'deep' } })).toBe(true);
   });
 
   it('resolves a three-level nested path', () => {
-    expect(evaluate({ field: 'a.b.c', operator: 42 }, { a: { b: { c: 42 } } })).toBe(true);
+    expect(matched({ field: 'a.b.c', operator: 42 }, { a: { b: { c: 42 } } })).toBe(true);
   });
 
   it('resolves array index as a path segment', () => {
-    expect(evaluate({ field: 'items.0.name', operator: 'alpha' }, { items: [{ name: 'alpha' }] })).toBe(true);
+    expect(matched({ field: 'items.0.name', operator: 'alpha' }, { items: [{ name: 'alpha' }] })).toBe(true);
   });
 
   it('returns undefined (fails match) when traversal stops at null', () => {
-    expect(evaluate({ field: 'a.b', operator: { $exists: true } }, { a: null })).toBe(false);
+    expect(matched({ field: 'a.b', operator: { $exists: true } }, { a: null })).toBe(false);
   });
 
   it('returns undefined when traversal stops at undefined intermediate', () => {
-    expect(evaluate({ field: 'a.b.c', operator: { $exists: true } }, { a: { b: undefined } })).toBe(false);
+    expect(matched({ field: 'a.b.c', operator: { $exists: true } }, { a: { b: undefined } })).toBe(false);
   });
 
   it('returns undefined for a completely missing field', () => {
-    expect(evaluate({ field: 'nonexistent', operator: { $exists: true } }, {})).toBe(false);
+    expect(matched({ field: 'nonexistent', operator: { $exists: true } }, {})).toBe(false);
   });
 
   it('returns undefined when a non-object blocks deeper traversal (primitive leaf)', () => {
-    expect(evaluate({ field: 'leaf.child', operator: { $exists: false } }, { leaf: 'string-value' })).toBe(true);
+    expect(matched({ field: 'leaf.child', operator: { $exists: false } }, { leaf: 'string-value' })).toBe(true);
   });
 
   it('resolves correctly when path contains a numeric-looking segment', () => {
-    expect(evaluate({ field: 'map.123', operator: 'value' }, { map: { '123': 'value' } })).toBe(true);
+    expect(matched({ field: 'map.123', operator: 'value' }, { map: { '123': 'value' } })).toBe(true);
   });
 
   it('returns undefined when root context is missing the first segment', () => {
-    expect(evaluate({ field: 'x.y', operator: 'z' }, {})).toBe(false);
+    expect(matched({ field: 'x.y', operator: 'z' }, {})).toBe(false);
   });
 });
 
@@ -62,7 +63,7 @@ describe('$and compound condition', () => {
         { field: 'b', operator: 2 },
       ],
     };
-    expect(evaluate(condition, { a: 1, b: 2 })).toBe(true);
+    expect(matched(condition, { a: 1, b: 2 })).toBe(true);
   });
 
   it('returns false when one child is false', () => {
@@ -72,7 +73,7 @@ describe('$and compound condition', () => {
         { field: 'b', operator: 99 },
       ],
     };
-    expect(evaluate(condition, { a: 1, b: 2 })).toBe(false);
+    expect(matched(condition, { a: 1, b: 2 })).toBe(false);
   });
 
   it('returns false when all children are false', () => {
@@ -82,16 +83,17 @@ describe('$and compound condition', () => {
         { field: 'b', operator: 99 },
       ],
     };
-    expect(evaluate(condition, { a: 1, b: 2 })).toBe(false);
+    expect(matched(condition, { a: 1, b: 2 })).toBe(false);
   });
 
-  it('short-circuits: does not evaluate second child when first fails', () => {
-    // The second operand is a malformed $expr that would throw if reached.
+  it('does not hide an error behind a false first child', () => {
+    // All operands are evaluated; the malformed $expr surfaces as an error.
     const condition: Condition = {
       $and: [{ field: 'a', operator: 'wrong' }, { $expr: '(' }],
     };
-    // First child fails → short-circuit: no throw
-    expect(evaluate(condition, { a: 'right' })).toBe(false);
+    const error = errorOf(condition, { a: 'right' });
+    expect(error.path).toBe('$and[1].$expr');
+    expect(error.message).not.toBe('');
   });
 
   it('evaluates second child when first succeeds (no short-circuit of truthy)', () => {
@@ -101,12 +103,12 @@ describe('$and compound condition', () => {
         { field: 'b', operator: 2 },
       ],
     };
-    expect(evaluate(condition, { a: 'right', b: 2 })).toBe(true);
+    expect(matched(condition, { a: 'right', b: 2 })).toBe(true);
   });
 
   it('supports single-element $and', () => {
     const condition: Condition = { $and: [{ field: 'x', operator: 5 }] };
-    expect(evaluate(condition, { x: 5 })).toBe(true);
+    expect(matched(condition, { x: 5 })).toBe(true);
   });
 
   it('supports $and nested inside another $and', () => {
@@ -121,8 +123,8 @@ describe('$and compound condition', () => {
         { field: 'c', operator: 3 },
       ],
     };
-    expect(evaluate(condition, { a: 1, b: 2, c: 3 })).toBe(true);
-    expect(evaluate(condition, { a: 1, b: 9, c: 3 })).toBe(false);
+    expect(matched(condition, { a: 1, b: 2, c: 3 })).toBe(true);
+    expect(matched(condition, { a: 1, b: 9, c: 3 })).toBe(false);
   });
 });
 
@@ -138,7 +140,7 @@ describe('$or compound condition', () => {
         { field: 'b', operator: 2 },
       ],
     };
-    expect(evaluate(condition, { a: 1, b: 2 })).toBe(true);
+    expect(matched(condition, { a: 1, b: 2 })).toBe(true);
   });
 
   it('returns false when all children are false', () => {
@@ -148,16 +150,17 @@ describe('$or compound condition', () => {
         { field: 'b', operator: 99 },
       ],
     };
-    expect(evaluate(condition, { a: 1, b: 2 })).toBe(false);
+    expect(matched(condition, { a: 1, b: 2 })).toBe(false);
   });
 
-  it('returns true when first child is true (short-circuit)', () => {
-    // Second operand is a malformed $expr that would throw if reached.
+  it('does not hide an error behind a true first child', () => {
+    // All operands are evaluated; the malformed $expr surfaces as an error.
     const condition: Condition = {
       $or: [{ field: 'a', operator: 'right' }, { $expr: '(' }],
     };
-    // First child succeeds → short-circuit: no throw
-    expect(evaluate(condition, { a: 'right' })).toBe(true);
+    const error = errorOf(condition, { a: 'right' });
+    expect(error.path).toBe('$or[1].$expr');
+    expect(error.message).not.toBe('');
   });
 
   it('returns true when only the last child is true', () => {
@@ -168,12 +171,12 @@ describe('$or compound condition', () => {
         { field: 'c', operator: 3 },
       ],
     };
-    expect(evaluate(condition, { a: 1, b: 2, c: 3 })).toBe(true);
+    expect(matched(condition, { a: 1, b: 2, c: 3 })).toBe(true);
   });
 
   it('supports single-element $or', () => {
     const condition: Condition = { $or: [{ field: 'x', operator: 5 }] };
-    expect(evaluate(condition, { x: 5 })).toBe(true);
+    expect(matched(condition, { x: 5 })).toBe(true);
   });
 
   it('supports $or nested inside $and', () => {
@@ -188,8 +191,8 @@ describe('$or compound condition', () => {
         },
       ],
     };
-    expect(evaluate(condition, { env: 'prod', branch: 'main' })).toBe(true);
-    expect(evaluate(condition, { env: 'prod', branch: 'feature' })).toBe(false);
+    expect(matched(condition, { env: 'prod', branch: 'main' })).toBe(true);
+    expect(matched(condition, { env: 'prod', branch: 'feature' })).toBe(false);
   });
 });
 
@@ -200,18 +203,18 @@ describe('$or compound condition', () => {
 describe('$not compound condition', () => {
   it('negates a true field condition to false', () => {
     const condition: Condition = { $not: { field: 'status', operator: 'active' } };
-    expect(evaluate(condition, { status: 'active' })).toBe(false);
+    expect(matched(condition, { status: 'active' })).toBe(false);
   });
 
   it('negates a false field condition to true', () => {
     const condition: Condition = { $not: { field: 'status', operator: 'inactive' } };
-    expect(evaluate(condition, { status: 'active' })).toBe(true);
+    expect(matched(condition, { status: 'active' })).toBe(true);
   });
 
   it('double-negation restores the original boolean', () => {
     const condition: Condition = { $not: { $not: { field: 'x', operator: 1 } } };
-    expect(evaluate(condition, { x: 1 })).toBe(true);
-    expect(evaluate(condition, { x: 2 })).toBe(false);
+    expect(matched(condition, { x: 1 })).toBe(true);
+    expect(matched(condition, { x: 2 })).toBe(false);
   });
 
   it('negates a compound $and', () => {
@@ -223,14 +226,14 @@ describe('$not compound condition', () => {
         ],
       },
     };
-    expect(evaluate(condition, { a: 1, b: 2 })).toBe(false);
-    expect(evaluate(condition, { a: 1, b: 9 })).toBe(true);
+    expect(matched(condition, { a: 1, b: 2 })).toBe(false);
+    expect(matched(condition, { a: 1, b: 9 })).toBe(true);
   });
 
   it('negates an $expr condition', () => {
     const condition: Condition = { $not: { $expr: 'score > 10' } };
-    expect(evaluate(condition, { score: 5 })).toBe(true);
-    expect(evaluate(condition, { score: 15 })).toBe(false);
+    expect(matched(condition, { score: 5 })).toBe(true);
+    expect(matched(condition, { score: 15 })).toBe(false);
   });
 });
 
@@ -257,10 +260,10 @@ describe('deeply nested compound conditions', () => {
       ],
     };
 
-    expect(evaluate(condition, { env: 'prod', branch: 'main', ready: true, hotfix: false })).toBe(true);
-    expect(evaluate(condition, { env: 'prod', branch: 'feature', ready: false, hotfix: true })).toBe(true);
-    expect(evaluate(condition, { env: 'prod', branch: 'feature', ready: false, hotfix: false })).toBe(false);
-    expect(evaluate(condition, { env: 'staging', branch: 'main', ready: true, hotfix: false })).toBe(false);
+    expect(matched(condition, { env: 'prod', branch: 'main', ready: true, hotfix: false })).toBe(true);
+    expect(matched(condition, { env: 'prod', branch: 'feature', ready: false, hotfix: true })).toBe(true);
+    expect(matched(condition, { env: 'prod', branch: 'feature', ready: false, hotfix: false })).toBe(false);
+    expect(matched(condition, { env: 'staging', branch: 'main', ready: true, hotfix: false })).toBe(false);
   });
 });
 
@@ -270,57 +273,61 @@ describe('deeply nested compound conditions', () => {
 
 describe('$expr expression condition', () => {
   it('evaluates a simple numeric comparison', () => {
-    expect(evaluate({ $expr: 'score > 5' }, { score: 10 })).toBe(true);
-    expect(evaluate({ $expr: 'score > 5' }, { score: 3 })).toBe(false);
+    expect(matched({ $expr: 'score > 5' }, { score: 10 })).toBe(true);
+    expect(matched({ $expr: 'score > 5' }, { score: 3 })).toBe(false);
   });
 
   it('evaluates a string equality expression', () => {
-    expect(evaluate({ $expr: 'env == "prod"' }, { env: 'prod' })).toBe(true);
-    expect(evaluate({ $expr: 'env == "prod"' }, { env: 'dev' })).toBe(false);
+    expect(matched({ $expr: 'env == "prod"' }, { env: 'prod' })).toBe(true);
+    expect(matched({ $expr: 'env == "prod"' }, { env: 'dev' })).toBe(false);
   });
 
   it('accesses nested context properties', () => {
-    expect(evaluate({ $expr: 'meta.version > 2' }, { meta: { version: 3 } })).toBe(true);
-    expect(evaluate({ $expr: 'meta.version > 2' }, { meta: { version: 1 } })).toBe(false);
+    expect(matched({ $expr: 'meta.version > 2' }, { meta: { version: 3 } })).toBe(true);
+    expect(matched({ $expr: 'meta.version > 2' }, { meta: { version: 1 } })).toBe(false);
   });
 
   it('evaluates a logical AND expression', () => {
-    expect(evaluate({ $expr: 'a > 0 && b > 0' }, { a: 1, b: 1 })).toBe(true);
-    expect(evaluate({ $expr: 'a > 0 && b > 0' }, { a: 1, b: 0 })).toBe(false);
+    expect(matched({ $expr: 'a > 0 && b > 0' }, { a: 1, b: 1 })).toBe(true);
+    expect(matched({ $expr: 'a > 0 && b > 0' }, { a: 1, b: 0 })).toBe(false);
   });
 
   it('evaluates a pipe transform expression (upper)', () => {
-    expect(evaluate({ $expr: 'name|upper == "ALICE"' }, { name: 'alice' })).toBe(true);
-    expect(evaluate({ $expr: 'name|upper == "ALICE"' }, { name: 'bob' })).toBe(false);
+    expect(matched({ $expr: 'name|upper == "ALICE"' }, { name: 'alice' })).toBe(true);
+    expect(matched({ $expr: 'name|upper == "ALICE"' }, { name: 'bob' })).toBe(false);
   });
 
   it('returns false when expression evaluates to a falsy non-boolean', () => {
     // 0 is falsy → Boolean(0) === false
-    expect(evaluate({ $expr: '0' }, {})).toBe(false);
+    expect(matched({ $expr: '0' }, {})).toBe(false);
   });
 
   it('returns true when expression evaluates to a truthy non-boolean', () => {
     // 1 is truthy → Boolean(1) === true
-    expect(evaluate({ $expr: '1' }, {})).toBe(true);
+    expect(matched({ $expr: '1' }, {})).toBe(true);
   });
 
   it('evaluates expression using full context object', () => {
-    expect(evaluate({ $expr: 'count == 3' }, { count: 3, extra: 'ignored' })).toBe(true);
+    expect(matched({ $expr: 'count == 3' }, { count: 3, extra: 'ignored' })).toBe(true);
   });
 
   it('evaluates the same expression consistently across repeated evaluations', () => {
     const condition = { $expr: 'value * 2 == 4' };
-    expect(evaluate(condition, { value: 2 })).toBe(true);
-    expect(evaluate(condition, { value: 3 })).toBe(false);
-    expect(evaluate(condition, { value: 2 })).toBe(true);
+    expect(matched(condition, { value: 2 })).toBe(true);
+    expect(matched(condition, { value: 3 })).toBe(false);
+    expect(matched(condition, { value: 2 })).toBe(true);
   });
 
-  it('throws when expression is malformed', () => {
-    expect(() => evaluate({ $expr: '(' }, {})).toThrow();
+  it('returns an error when expression is malformed', () => {
+    const error = errorOf({ $expr: '(' }, {});
+    expect(error.path).toBe('$expr');
+    expect(error.message).not.toBe('');
   });
 
-  it('throws on binary operator with missing operand', () => {
-    expect(() => evaluate({ $expr: 'x +' }, {})).toThrow();
+  it('returns an error on binary operator with missing operand', () => {
+    const error = errorOf({ $expr: 'x +' }, {});
+    expect(error.path).toBe('$expr');
+    expect(error.message).not.toBe('');
   });
 });
 
@@ -333,25 +340,25 @@ describe('mixed field and expression conditions', () => {
     const condition: Condition = {
       $and: [{ field: 'env', operator: 'prod' }, { $expr: 'score >= 5' }],
     };
-    expect(evaluate(condition, { env: 'prod', score: 5 })).toBe(true);
-    expect(evaluate(condition, { env: 'prod', score: 4 })).toBe(false);
-    expect(evaluate(condition, { env: 'dev', score: 10 })).toBe(false);
+    expect(matched(condition, { env: 'prod', score: 5 })).toBe(true);
+    expect(matched(condition, { env: 'prod', score: 4 })).toBe(false);
+    expect(matched(condition, { env: 'dev', score: 10 })).toBe(false);
   });
 
   it('combines a field glob and $expr inside $or', () => {
     const condition: Condition = {
       $or: [{ field: 'path', operator: { $glob: '**/*.ts' } }, { $expr: 'forceInclude == true' }],
     };
-    expect(evaluate(condition, { path: 'src/index.ts', forceInclude: false })).toBe(true);
-    expect(evaluate(condition, { path: 'src/index.js', forceInclude: true })).toBe(true);
-    expect(evaluate(condition, { path: 'src/index.js', forceInclude: false })).toBe(false);
+    expect(matched(condition, { path: 'src/index.ts', forceInclude: false })).toBe(true);
+    expect(matched(condition, { path: 'src/index.js', forceInclude: true })).toBe(true);
+    expect(matched(condition, { path: 'src/index.js', forceInclude: false })).toBe(false);
   });
 
   it('uses $not around a $expr', () => {
     const condition: Condition = {
       $and: [{ field: 'status', operator: 'active' }, { $not: { $expr: 'disabled == true' } }],
     };
-    expect(evaluate(condition, { status: 'active', disabled: false })).toBe(true);
-    expect(evaluate(condition, { status: 'active', disabled: true })).toBe(false);
+    expect(matched(condition, { status: 'active', disabled: false })).toBe(true);
+    expect(matched(condition, { status: 'active', disabled: true })).toBe(false);
   });
 });

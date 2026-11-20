@@ -27,7 +27,7 @@ jexl.addTransform('pluck', pluck);
 /**
  * Result of compiling a jexl expression for repeated evaluation.
  *
- * Context is an {@link ExpressionContext} because compiled expressions are used
+ * The context is any object, as in jexl's own typing, because compiled expressions are used
  * by multiple domains with different variable maps.
  */
 export interface CompiledExpression {
@@ -36,13 +36,13 @@ export interface CompiledExpression {
    * @param context - variable map passed to the expression
    * @returns evaluated result
    */
-  evalSync(context: ExpressionContext): unknown;
+  evalSync(context: object): unknown;
   /**
    * Evaluate the compiled expression asynchronously.
    * @param context - variable map passed to the expression
    * @returns evaluated result
    */
-  eval(context: ExpressionContext): Promise<unknown>;
+  eval(context: object): Promise<unknown>;
 }
 
 /**
@@ -66,16 +66,71 @@ export function evaluate(expr: string, context: ExpressionContext): Promise<unkn
 }
 
 /**
+ * Reject a source that jexl compiles although a `)` is missing.
+ *
+ * jexl's parser finishes an open group silently when the enclosing parser has no node yet
+ * (start of the source, `else` branch of a ternary). Wrapping the source in `0||(...)` opens
+ * the group after an operand, where a missing `)` makes the parse fail. A valid expression
+ * stays valid inside parentheses.
+ * @param expr - jexl expression string that already compiled on its own
+ * @throws When the wrapped source does not compile.
+ */
+function assertBalanced(expr: string): void {
+  try {
+    jexl.compile(`0||(${expr})`);
+  } catch {
+    throw new Error(`Expression has unbalanced parentheses: ${JSON.stringify(expr)}`);
+  }
+}
+
+/**
+ * Reject a `FunctionCall` node whose transform or function is not registered.
+ * Walks enumerable own values only; `_parent` links are non-enumerable, so the walk cannot cycle.
+ * @param node - syntax tree node, array, or primitive
+ * @throws When an unregistered transform or function is called.
+ */
+function assertKnownCallees(node: unknown): void {
+  if (node === null || typeof node !== 'object') {
+    return;
+  }
+  if ('type' in node && node.type === 'FunctionCall' && 'name' in node && typeof node.name === 'string') {
+    const isTransform = 'pool' in node && node.pool === 'transforms';
+    const known = isTransform ? jexl.getTransform(node.name) : jexl.getFunction(node.name);
+    if (known === undefined) {
+      throw new Error(`Expression uses unknown ${isTransform ? 'transform' : 'function'} '${node.name}'`);
+    }
+  }
+  for (const child of Object.values(node)) {
+    assertKnownCallees(child);
+  }
+}
+
+/**
  * Compile a jexl expression for repeated evaluation.
  * Returns a compiled expression object with evalSync/eval methods.
  * Use this for hot paths (e.g., trigger filter evaluation).
+ *
+ * A source without any operand (empty, whitespace only, or only opening parentheses
+ * such as `((`) is rejected here; jexl itself compiles it to an empty syntax tree that
+ * fails only at evaluation.
+ *
+ * Two further holes in jexl's parser are closed here: a group left open at the start of the
+ * source or in the `else` branch of a ternary (`(a`, `a ? b : (c`) compiles silently, and a
+ * transform or function that is not registered fails only at evaluation.
  * @param expr - jexl expression string
  * @returns compiled expression
+ * @throws When the expression has a syntax error, unbalanced parentheses, no operand, or
+ *   names an unregistered transform or function.
  */
 export function compile(expr: string): CompiledExpression {
   const compiled = jexl.compile(expr);
+  if (compiled._ast === null || compiled._ast === undefined) {
+    throw new Error(`Expression contains no operand: ${JSON.stringify(expr)}`);
+  }
+  assertBalanced(expr);
+  assertKnownCallees(compiled._ast);
   return {
-    evalSync: (context: ExpressionContext) => compiled.evalSync(context),
-    eval: (context: ExpressionContext) => compiled.eval(context),
+    evalSync: (context: object) => compiled.evalSync(context),
+    eval: (context: object) => compiled.eval(context),
   };
 }
