@@ -29,6 +29,7 @@ import { createBusInstance, type BusTransport, type IMakaioBus } from '@makaio/b
 import type { DetachedDescriptor } from '@makaio/contracts/extension';
 import type { NodeExtensionContext, ExtensionServiceLifecycle, ExtensionService } from '@makaio/contracts';
 import { createBusNamespace } from '@makaio/core';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import { createDetachedExtensionPackage } from '../detached-extension-handle.js';
 import { z } from 'zod';
 
@@ -75,23 +76,16 @@ function makeTestDescriptor(): DetachedDescriptor {
  * @returns Minimal node extension context for testing.
  */
 function makeTestContext(bus: ReturnType<typeof createBusInstance>): NodeExtensionContext<IMakaioBus> {
-  return {
-    bus,
+  return makeStubNodeExtensionContext(bus, {
     machineId: 'test-machine-id',
     dataDir: '/tmp/test-detached-ext',
     config: { enabled: true },
-    identity: {
-      extensionName: 'test-detached',
-    } as NodeExtensionContext<IMakaioBus>['identity'],
-    getService: () => undefined,
-    tryImport: async () => null,
-    signal: new AbortController().signal,
-    hasExtension: () => false,
+    identity: stubExtensionIdentity('test-detached'),
     platform: process.platform,
     homedir: '/tmp',
     makaioHome: '/tmp/.makaio',
     username: 'test',
-  };
+  });
 }
 
 /**

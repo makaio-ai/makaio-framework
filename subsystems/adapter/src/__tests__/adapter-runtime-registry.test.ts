@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { MakaioBus } from '@makaio/bus-core';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import {
   AdapterSubjects,
   ProviderDefinitionSchema,
@@ -34,20 +35,15 @@ import { cloneAdapterClientRefs, resolveDefaultClientId } from '../adapter-clien
 import type { AdapterInitOptions, AdapterInstance, LoadedAdapter } from '../adapter-runtime-types.js';
 import { createStubCoordinator, TEST_MACHINE_ID, TEST_PLATFORM_DEFAULTS } from './test-utils.js';
 
-const TEST_EXTENSION_CONTEXT: KernelExtensionContext = {
-  bus: MakaioBus,
-  identity: { extensionName: 'test-extension' } as KernelExtensionContext['identity'],
+const TEST_EXTENSION_CONTEXT: KernelExtensionContext = makeStubNodeExtensionContext(MakaioBus, {
+  identity: stubExtensionIdentity('test-extension'),
   platform: process.platform,
   homedir: '/tmp',
   makaioHome: '/tmp/.makaio',
   username: 'test-user',
   dataDir: '/tmp/test-extension',
   machineId: TEST_MACHINE_ID,
-  getService: () => undefined,
-  tryImport: async () => null,
-  signal: new AbortController().signal,
-  hasExtension: () => false,
-};
+});
 
 /** Test composition with an explicit ownership-authority incarnation. */
 class AdapterSubsystemService extends RuntimeAdapterSubsystemService {

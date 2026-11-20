@@ -4,7 +4,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
 import type { ExtensionService, ExtensionToken, NodeExtensionContext } from '@makaio/contracts';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
-import { makeStubExtensionContext } from '@makaio/test-utils';
+import { makeStubNodeExtensionContext } from '@makaio/test-utils';
 import { z } from 'zod';
 import {
   BUS_EVENT_AUTOMATION_TRIGGER_KIND,
@@ -39,16 +39,10 @@ const { subjects: PackageLifecycleSubjects } = MakaioBus.registerNamespace(
  * @returns Node extension context for `workflowEnginePackage.create`.
  */
 function createNodeContext(runtime?: AutomationTriggerBindingRuntime): NodeExtensionContext<IMakaioBus> {
-  return {
-    ...makeStubExtensionContext(MakaioBus),
-    bus: MakaioBus,
-    platform: process.platform,
-    homedir: '/tmp',
-    makaioHome: '/tmp/.makaio-test',
-    username: 'test',
+  return makeStubNodeExtensionContext(MakaioBus, {
     getService: <T>(token: ExtensionToken<T>): T | undefined =>
       token.name === AutomationTriggerBindingRuntimeToken.name ? (runtime as T | undefined) : undefined,
-  };
+  });
 }
 
 function expectWorkflowEngineService(service: ExtensionService | undefined): asserts service is WorkflowEngineService {

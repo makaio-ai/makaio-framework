@@ -1,22 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import type { KernelExtensionContext } from '@makaio/kernel/extension';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import subagentPackage from '../server.js';
 
-const testContext: KernelExtensionContext = {
-  bus: MakaioBus,
-  identity: { extensionName: 'subagent' } as KernelExtensionContext['identity'],
+const testContext: KernelExtensionContext = makeStubNodeExtensionContext(MakaioBus, {
+  identity: stubExtensionIdentity('subagent'),
   dataDir: '/tmp/makaio-subagent-test',
   machineId: 'test-machine',
-  getService: () => undefined,
-  tryImport: async () => null,
-  signal: new AbortController().signal,
-  hasExtension: () => false,
   platform: process.platform,
   homedir: '/tmp',
   makaioHome: '/tmp/.makaio',
   username: 'test',
-};
+});
 
 describe('subagent extension package', () => {
   it('contributes parent and child subagent toolsets', () => {

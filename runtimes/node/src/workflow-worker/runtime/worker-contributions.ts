@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { NodeExtensionContext } from '@makaio/contracts';
 import type { Toolset } from '@makaio/tools-core';
 
 /**
@@ -24,6 +25,8 @@ export interface WorkerRuntimeContributions {
  */
 interface ExtensionModuleShape {
   readonly tools?: {
+    // `unknown` on purpose: the worker context carries an optional `bus` (see
+    // `WorkerToolsetContext`), so it is not assignable to `NodeExtensionContext`.
     readonly createToolsets: (ctx: unknown) => Toolset[];
   };
 }
@@ -85,6 +88,24 @@ function resolveExtensionExport(
 }
 
 /**
+ * Context handed to `tools.createToolsets()` in the worker.
+ *
+ * Every required key of {@link NodeExtensionContext} except three known gaps:
+ * - `bus` is optional in the worker (see {@link WorkerRuntimeContributionLoadOptions}).
+ * - `config` is present only for an extension that declares a `configSchema`;
+ *   the worker loads no schema, so it passes none.
+ * - `identity` is a branded value minted by the kernel coordinator; the worker
+ *   cannot mint one without a cast, so the plain `{ extensionName }` object
+ *   stays outside the check.
+ * A new required key on the contract makes {@link createWorkerToolsetContext}
+ * fail to compile until it is supplied here.
+ */
+type WorkerToolsetContext = Omit<NodeExtensionContext, 'bus' | 'config' | 'identity'> & {
+  readonly bus?: IMakaioBus;
+  readonly identity: { readonly extensionName: string };
+};
+
+/**
  * Minimal context passed to `tools.createToolsets()` in the worker environment.
  *
  * Workers expose their local bus and cancellation signal, but not the host
@@ -93,7 +114,7 @@ function resolveExtensionExport(
  * @param options - Worker-local runtime surfaces exposed during extraction.
  * @returns Context object passed to extension toolset factories.
  */
-function createWorkerToolsetContext(options?: WorkerRuntimeContributionLoadOptions): Readonly<Record<string, unknown>> {
+function createWorkerToolsetContext(options?: WorkerRuntimeContributionLoadOptions): WorkerToolsetContext {
   return Object.freeze({
     bus: options?.bus,
     identity: Object.freeze({ extensionName: '__worker__' }),
@@ -109,7 +130,14 @@ function createWorkerToolsetContext(options?: WorkerRuntimeContributionLoadOptio
       throw new Error('Worker-local contribution context does not expose host services.');
     },
     hasExtension: () => false,
-  });
+    openContributions: {
+      of: () => {
+        throw new Error(
+          'Open contributions are not available in the workflow worker: no extension is activated there.',
+        );
+      },
+    },
+  } satisfies WorkerToolsetContext);
 }
 
 /**

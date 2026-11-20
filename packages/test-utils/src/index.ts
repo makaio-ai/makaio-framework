@@ -11,4 +11,9 @@ export {
   type MockScopedBusResult,
 } from './bus-test-harness.js';
 
-export { makeStubExtensionContext } from './stub-extension-context.js';
+export {
+  makeStubExtensionContext,
+  makeStubNodeExtensionContext,
+  makeStubOpenContributionReader,
+  stubExtensionIdentity,
+} from './stub-extension-context.js';

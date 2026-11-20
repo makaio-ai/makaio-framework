@@ -27,6 +27,7 @@
 import * as fs from 'node:fs/promises';
 import { Worker } from 'node:worker_threads';
 import { pathToFileURL } from 'node:url';
+import { isOwnNameOrContribution } from '@makaio/core';
 import type { PackageInfo } from './schemas.js';
 
 /**
@@ -78,9 +79,16 @@ const IMPORT_WORKER_TIMEOUT_MS = 10_000;
  * (`@makaio/contracts`, also consumed by `@makaio/runtime-node`'s
  * `normalizePackageExport`) enforces on a server entry's default export: every
  * array entry must carry `name`/`displayName`/`version`, array entries must be
- * uniquely named, every array entry must stay within the descriptor's
- * namespace (the descriptor name itself or a `${descriptorName}.` prefix), and
- * a single-object export's `name` must equal the descriptor name. This text
+ * uniquely named, and
+ * a single-object export's `name` must equal the descriptor name. The
+ * namespace rule (every array entry is the descriptor name itself or owned by
+ * it) is not mirrored in this text: the main thread applies it to the `'match'`
+ * message through `isOwnNameOrContribution` (`@makaio/core`), see
+ * {@link importOwnPackageViaWorker}. One deliberate difference follows: the
+ * worker clones every accepted package for the `'match'` message, so an
+ * out-of-namespace package that carries a non-cloneable `critical` is reported
+ * as a failed import instead of as outside the namespace; both resolve
+ * `undefined` with a warning. This text
  * cannot import `normalizeExtensionManifestExport` itself: the exported
  * package this worker inspects may carry non-cloneable values (functions,
  * class instances) that cannot cross back to the main thread via
@@ -237,15 +245,6 @@ const { parentPort, workerData } = require('node:worker_threads');
 
       if (!packages.some((pkg) => pkg.name === descriptorName)) {
         parentPort.postMessage({ kind: 'no-match' });
-        return;
-      }
-
-      if (packages.some((pkg) => pkg.name !== descriptorName && !pkg.name.startsWith(descriptorName + '.'))) {
-        parentPort.postMessage({
-          kind: 'invalid',
-          reason:
-            "default export array contains package names outside descriptor namespace '" + descriptorName + "', skipping",
-        });
         return;
       }
     } else {
@@ -415,6 +414,16 @@ async function importOwnPackageViaWorker(
       if (!isWorkerResultMessage(message)) {
         console.warn(`${label}: server entry import worker returned an unexpected message shape`);
         settle(undefined);
+        return;
+      }
+      if (
+        message.kind === 'match' &&
+        message.packages.some((pkg) => !isOwnNameOrContribution(descriptorName, pkg.name))
+      ) {
+        settle({
+          kind: 'invalid',
+          reason: `default export array contains package names outside descriptor namespace '${descriptorName}', skipping`,
+        });
         return;
       }
       settle(message);

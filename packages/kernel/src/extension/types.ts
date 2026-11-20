@@ -39,6 +39,19 @@ export type InstalledExtensionCatalogSource = () => Promise<readonly InstalledEx
 /** Concrete Node runtime context supplied by the kernel coordinator. */
 export type KernelExtensionContext = NodeExtensionContext<IMakaioBus>;
 
+/**
+ * Host-supplied Node fields of {@link KernelExtensionContext}: everything the
+ * composition root provides once for all extensions.
+ *
+ * Omits the fields the coordinator owns and assembles per extension at
+ * context-build time (`bus`, `identity`, `getService`, `dataDir`, `config`,
+ * `signal`, `hasExtension`, `openContributions`).
+ */
+export type ExtensionContextBase = Omit<
+  KernelExtensionContext,
+  'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension' | 'openContributions'
+>;
+
 /** Concrete executable extension shape loaded by the kernel coordinator. */
 export type KernelMakaioExtension = MakaioExtension<KernelExtensionContext>;
 
@@ -126,13 +139,10 @@ export interface ExtensionCoordinatorOptions {
    * Required when any loaded extension declares a `create` factory. When absent,
    * extensions with `create` will fail to start.
    *
-   * Omit `config`, `signal`, and `hasExtension` — those are coordinator-owned
+   * Omit `config`, `signal`, `hasExtension`, and `openContributions` — those are coordinator-owned
    * and assembled per extension at context-build time.
    */
-  extensionContextBase?: Omit<
-    KernelExtensionContext,
-    'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension'
-  >;
+  extensionContextBase?: ExtensionContextBase;
   /**
    * Host-provided runtime environment snapshot used to evaluate extension
    * {@link RuntimeRequirement} gates during {@link ExtensionCoordinator.load}.

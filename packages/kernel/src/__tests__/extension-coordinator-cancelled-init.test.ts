@@ -1,19 +1,18 @@
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import type { ExtensionInitOptions, ExtensionServiceLifecycle, NodeExtensionContext } from '@makaio/contracts';
+import type { ExtensionInitOptions, ExtensionServiceLifecycle } from '@makaio/contracts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
-import type { KernelMakaioExtension } from '../extension/types.js';
+import type { ExtensionContextBase, KernelMakaioExtension } from '../extension/types.js';
 
 /** Host fields the coordinator needs to build the context of an extension with a service. */
-const CTX_BASE: Omit<NodeExtensionContext, 'bus' | 'identity' | 'getService' | 'dataDir' | 'signal' | 'hasExtension'> =
-  {
-    platform: 'linux',
-    homedir: '/home/test',
-    makaioHome: '/home/test/.makaio',
-    username: 'test',
-    machineId: 'machine-1',
-    tryImport: async () => null,
-  };
+const CTX_BASE: ExtensionContextBase = {
+  platform: 'linux',
+  homedir: '/home/test',
+  makaioHome: '/home/test/.makaio',
+  username: 'test',
+  machineId: 'machine-1',
+  tryImport: async () => null,
+};
 
 /** What the services of {@link probe} observed, and how they are told to behave. */
 interface Probe {

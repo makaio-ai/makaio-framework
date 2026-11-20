@@ -6,7 +6,7 @@ import { createBusNamespace, getFullSubjectForSubjectDefinition } from '@makaio/
 import { BUS_EVENT_AUTOMATION_TRIGGER_KIND, createAutomationTriggerDescriptor } from '@makaio/contracts';
 import type { AutomationTriggerEvent } from '@makaio/contracts';
 import { ExtensionCoordinator } from '@makaio/kernel';
-import type { KernelExtensionContext } from '@makaio/kernel';
+import type { ExtensionContextBase } from '@makaio/kernel';
 import type { AutomationTriggerBindingRuntime } from '../automation-trigger-binding-runtime.js';
 import { createBusEventAutomationTrigger } from '../builtins/bus-event-trigger.js';
 import { createAutomationTriggerContributionProcessor } from '../automation-trigger-contribution-processor.js';
@@ -25,10 +25,7 @@ import { automationTriggerBuiltinsPackage } from '../builtins/package.js';
  * Minimal {@link KernelExtensionContext} fields (excluding coordinator-owned
  * and bus-owned fields) for test coordinators.
  */
-const TEST_PKG_CTX_BASE: Omit<
-  KernelExtensionContext,
-  'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension'
-> = {
+const TEST_PKG_CTX_BASE: ExtensionContextBase = {
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

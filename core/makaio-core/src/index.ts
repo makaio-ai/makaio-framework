@@ -64,7 +64,14 @@ export type {
 } from './observability/index.js';
 
 // Types
-export { isOperatorObject, WildcardSubjectKey } from './types/index.js';
+export {
+  ContributionNameSchema,
+  ExtensionNameSchema,
+  isOperatorObject,
+  isOwnNameOrContribution,
+  localContributionName,
+  WildcardSubjectKey,
+} from './types/index.js';
 export type {
   AnyHandler,
   AnyMessageContext,
@@ -113,5 +120,7 @@ export type {
   WildcardSubjectDefinition,
   WildcardUnifiedHandler,
   BusLikeEmitOptions,
+  ContributionName,
+  ExtensionName,
   MakaioBusLike,
 } from './types/index.js';

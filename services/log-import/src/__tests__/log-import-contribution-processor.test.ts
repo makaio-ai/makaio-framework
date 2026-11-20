@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import type { LogOrchestratorConfig } from '@makaio/ai-adapters-core';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { LogImportRegistry } from '../log-import-registry.js';
@@ -14,21 +15,17 @@ import { createMockImporter } from './test-helpers.js';
  */
 function makeContext(registry?: LogImportRegistry): KernelExtensionContext {
   const bus = createBusInstance();
-  return {
-    bus,
-    identity: { extensionName: 'pkg-log' } as KernelExtensionContext['identity'],
+  return makeStubNodeExtensionContext(bus, {
+    identity: stubExtensionIdentity('pkg-log'),
     platform: 'linux',
     homedir: '/home/test',
     makaioHome: '/home/test/.makaio',
     dataDir: '/home/test/.makaio/pkg-log',
     username: 'test',
     machineId: 'machine-1',
-    signal: new AbortController().signal,
-    tryImport: async () => null,
     getService: ((token) =>
       token.name === LogImportRegistryToken.name ? registry : undefined) as KernelExtensionContext['getService'],
-    hasExtension: () => false,
-  };
+  });
 }
 
 /** Minimal LogImporterClass constructor used across tests. */

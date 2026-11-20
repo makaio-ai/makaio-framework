@@ -7,7 +7,7 @@ import {
   MAX_OPERATOR_CONFIG_FILE_NAME_BYTES,
 } from '../extension-name-path-segment.js';
 
-/** Extension names spanning every shape the manifest name rule accepts. */
+/** Extension names spanning every shape `ExtensionNameSchema` accepts. */
 const ROUND_TRIP_NAMES = [
   'gateway',
   'account-manager',

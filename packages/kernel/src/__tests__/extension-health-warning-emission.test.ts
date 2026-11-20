@@ -2,13 +2,13 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
-import type { ExtensionWarning, NodeExtensionContext as ExtensionContext } from '@makaio/contracts';
+import type { ExtensionWarning } from '@makaio/contracts';
 import type { ToastPayload } from '@makaio/contracts/toast';
 import { ToastSubjects } from '@makaio/contracts/toast';
 import { BaseService } from '@makaio/service-base';
 import { z } from 'zod';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
-import type { KernelMakaioExtension as MakaioExtension } from '../extension/types.js';
+import type { ExtensionContextBase, KernelMakaioExtension as MakaioExtension } from '../extension/types.js';
 import { WARNING_ACTION_ID } from '../extension/warning-action-dispatcher.js';
 
 // ---------------------------------------------------------------------------
@@ -16,12 +16,9 @@ import { WARNING_ACTION_ID } from '../extension/warning-action-dispatcher.js';
 // ---------------------------------------------------------------------------
 
 /**
- * Minimal {@link ExtensionContext} base for test coordinators.
+ * Minimal {@link ExtensionContextBase} base for test coordinators.
  */
-const TEST_PKG_CTX_BASE: Omit<
-  ExtensionContext,
-  'bus' | 'identity' | 'getService' | 'dataDir' | 'signal' | 'hasExtension'
-> = {
+const TEST_PKG_CTX_BASE: ExtensionContextBase = {
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

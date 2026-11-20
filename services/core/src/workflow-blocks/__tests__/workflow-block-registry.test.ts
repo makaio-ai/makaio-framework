@@ -167,6 +167,22 @@ describe('WorkflowBlockRegistry', () => {
     await registry.destroy();
   });
 
+  it('rejects a block named exactly the extension prefix with an empty local part', async () => {
+    const bus = createBusInstance();
+    const registry = new WorkflowBlockRegistry(bus);
+    await registry.init();
+    const [step] = makeBlocks('alpha').steps ?? [];
+    if (!step) throw new Error('Test fixture must include a step block');
+
+    await expect(
+      Promise.resolve().then(() =>
+        registry.register('alpha', { steps: [{ ...step, metadata: { ...step.metadata, name: 'alpha.' } }] }),
+      ),
+    ).rejects.toThrow("Workflow block 'alpha.' must be namespaced by extension 'alpha.'");
+
+    await registry.destroy();
+  });
+
   it('rejects step run outputSchema fields that are not JSON-safe in the catalog response schema', async () => {
     const bus = createBusInstance();
     const registry = new WorkflowBlockRegistry(bus);

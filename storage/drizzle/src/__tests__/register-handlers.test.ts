@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import type { MakaioNodeExtension, NodeExtensionContext as ExtensionContext } from '@makaio/contracts';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import { registerDrizzleHandlers } from '../register-handlers';
 import type { MakaioDatabase } from '../types';
 
@@ -10,20 +11,15 @@ import type { MakaioDatabase } from '../types';
  * @returns Extension context with stable test identity and platform fields.
  */
 function makeExtensionContext(bus: IMakaioBus): ExtensionContext<IMakaioBus> {
-  return {
-    bus,
-    identity: { extensionName: 'storage-test' } as ExtensionContext<IMakaioBus>['identity'],
+  return makeStubNodeExtensionContext(bus, {
+    identity: stubExtensionIdentity('storage-test'),
     platform: 'linux',
     homedir: '/home/test',
     makaioHome: '/home/test/.makaio',
     dataDir: '/home/test/.makaio/storage-test',
     username: 'test',
     machineId: 'machine-1',
-    getService: () => undefined,
-    tryImport: async () => null,
-    signal: new AbortController().signal,
-    hasExtension: () => false,
-  };
+  });
 }
 
 describe('registerDrizzleHandlers', () => {

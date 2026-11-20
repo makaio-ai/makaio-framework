@@ -58,6 +58,18 @@ describe('loadWorkerRuntimeContributions', () => {
     expect(result.toolsets[0]?.metadata.name).toBe('present');
   });
 
+  it('throws a clear error when a toolset factory reads open contributions', async () => {
+    const readerEntrypoint = path.join(root, 'reader.mjs');
+    await fs.writeFile(
+      readerEntrypoint,
+      `export default { name: 'reader', displayName: 'Reader', tools: { createToolsets: (ctx) => { ctx.openContributions.of('some.kind'); return []; } } };`,
+    );
+
+    await expect(loadWorkerRuntimeContributions([readerEntrypoint])).rejects.toThrow(
+      'Open contributions are not available in the workflow worker',
+    );
+  });
+
   it('fails closed when a verified entrypoint cannot import', async () => {
     await expect(loadWorkerRuntimeContributions([toolsEntrypoint, brokenEntrypoint])).rejects.toThrow(
       'module load failure',

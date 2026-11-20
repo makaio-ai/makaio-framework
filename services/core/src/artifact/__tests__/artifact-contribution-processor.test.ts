@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionToken } from '@makaio/contracts';
 import { ArtifactSubjects, defineArtifactKind } from '@makaio/contracts';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { ArtifactSchemaRegistryToken } from '../packages.js';
 import { createArtifactKindContributionProcessor } from '../artifact-contribution-processor.js';
@@ -20,23 +21,16 @@ import { ArtifactSchemaRegistry } from '../artifact-schema-registry.js';
  * @returns Minimal kernel extension context stub.
  */
 function makeContext(bus: IMakaioBus, registry?: ArtifactSchemaRegistry): KernelExtensionContext {
-  return {
-    bus,
-    identity: {
-      extensionName: 'planner',
-    } as KernelExtensionContext['identity'],
-    platform: 'linux',
+  return makeStubNodeExtensionContext(bus, {
+    identity: stubExtensionIdentity('planner'),
     homedir: '/home/test',
     makaioHome: '/home/test/.makaio',
     dataDir: '/home/test/.makaio/extensions/planner',
     username: 'test',
     machineId: 'machine-1',
-    signal: new AbortController().signal,
-    tryImport: async () => null,
     getService: <T>(token: ExtensionToken<T>): T | undefined =>
       (token.name === ArtifactSchemaRegistryToken.name ? registry : undefined) as T | undefined,
-    hasExtension: () => false,
-  };
+  });
 }
 
 describe('createArtifactKindContributionProcessor', () => {

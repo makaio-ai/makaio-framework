@@ -16,6 +16,7 @@ import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import type { CredentialResolver } from '@makaio/contracts';
 import type { CredentialRef } from '@makaio/contracts/config';
 import type { ExtensionService, ExtensionToken, NodeExtensionContext } from '@makaio/contracts/extension';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import { Hono } from 'hono';
 import { gatewayExtension } from '../index.js';
 import { GatewayNamespace, GatewaySubjects } from '../contracts/index.js';
@@ -109,22 +110,19 @@ function createContext(
   signal: AbortSignal,
   credentials: CredentialResolver,
 ): NodeExtensionContext<IMakaioBus> {
-  return {
-    bus,
-    identity: Object.freeze({ extensionName: 'gateway' }) as NodeExtensionContext<IMakaioBus>['identity'],
+  return makeStubNodeExtensionContext(bus, {
+    identity: stubExtensionIdentity('gateway'),
     dataDir: '/tmp/gateway-e2e',
     machineId: 'e2e-machine',
     config,
     getService: <T>(_token: ExtensionToken<T>): T | undefined => undefined,
-    tryImport: async () => null,
     signal,
-    hasExtension: () => false,
     platform: process.platform,
     homedir: '/tmp',
     makaioHome: '/tmp/.makaio',
     username: 'e2e',
     credentials,
-  };
+  });
 }
 
 let upstream: Upstream;

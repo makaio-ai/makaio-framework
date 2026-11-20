@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { NodeExtensionContext as ExtensionContext } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import { ServiceSkipError } from '../service-skip-error.js';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
-import type { ContributionProcessor, KernelMakaioExtension as MakaioExtension } from '../extension/types.js';
+import type {
+  ExtensionContextBase,
+  ContributionProcessor,
+  KernelMakaioExtension as MakaioExtension,
+} from '../extension/types.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -51,13 +54,10 @@ class TrackingService extends BaseService {
 }
 
 /**
- * Minimal {@link ExtensionContext} fields (excluding coordinator-owned and
+ * Minimal {@link ExtensionContextBase} fields (excluding coordinator-owned and
  * bus-owned fields) for test coordinators.
  */
-const TEST_PKG_CTX_BASE: Omit<
-  ExtensionContext,
-  'bus' | 'identity' | 'getService' | 'dataDir' | 'signal' | 'hasExtension'
-> = {
+const TEST_PKG_CTX_BASE: ExtensionContextBase = {
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

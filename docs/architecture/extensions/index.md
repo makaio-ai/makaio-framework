@@ -538,6 +538,19 @@ order triggers within one composition pass, so a `transform` trigger can consume
 trigger already collected via `context.gathered`. Prefixes must be unique across the resolved
 manifest.
 
+### Open contributions (`openContributions`)
+
+An extension can declare its own contribution kind, keyed `<declaring extension>.<kind>`, and any
+extension can contribute entries under that key through `MakaioExtension.openContributions`. The
+kernel checks only the shape (keys are contribution names, values are arrays) and keeps an index
+of the entries; it never interprets one. Only the declaring extension reads them, through
+`ctx.openContributions.of(kind)`, which returns the state at the time of the call and must not be
+cached. A kind with entries but no active declaring extension produces one start-up warning.
+Names contributed anywhere (reactions, trigger kinds, workflow block names, transition rule ids
+and action keys, exported package names, open keys) share one ownership rule: the name starts with
+`<owner>.` and has a non-empty local part; owners may contain dots. See
+[Creating Extensions](../../creating-extensions#declaring-your-own-contribution-kind).
+
 ---
 
 ## `surface` — execution affinity

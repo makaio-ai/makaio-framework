@@ -1,6 +1,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { RegisteredStepBlock, WorkflowBlockCollection, WorkflowBlockMetadata } from '@makaio/contracts';
 import { WorkflowBlocksSubjects, zodSchemaToJsonRecord } from '@makaio/contracts';
+import { localContributionName } from '@makaio/core';
 import { BaseService } from '@makaio/service-base';
 
 /**
@@ -142,9 +143,8 @@ export class WorkflowBlockRegistry extends BaseService {
   }
 
   private assertExtensionNamespace(extensionName: string, metadata: WorkflowBlockMetadata): void {
-    const prefix = `${extensionName}.`;
-    if (!metadata.name.startsWith(prefix)) {
-      throw new Error(`Workflow block '${metadata.name}' must be namespaced by extension '${prefix}'`);
+    if (localContributionName(extensionName, metadata.name) === undefined) {
+      throw new Error(`Workflow block '${metadata.name}' must be namespaced by extension '${extensionName}.'`);
     }
   }
 }

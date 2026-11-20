@@ -1,3 +1,4 @@
+import { localContributionName } from '@makaio/core';
 import type { ContributionProcessor } from '@makaio/kernel';
 import { TransitionPipelineToken } from '../framework-packages.js';
 
@@ -84,13 +85,14 @@ export function createTransitionContributionProcessor(): ContributionProcessor {
  * Assert that all rule IDs are prefixed with the extension namespace.
  * @param extensionName - Extension name used as namespace prefix.
  * @param rules - Rules to validate.
- * @throws If any rule ID does not start with `'<extensionName>.'`.
+ * @throws If any rule ID is not `'<extensionName>.'` followed by a non-empty name.
  */
 function assertRuleNamespace(extensionName: string, rules: readonly { id: string }[]): void {
-  const prefix = `${extensionName}.`;
   for (const rule of rules) {
-    if (!rule.id.startsWith(prefix)) {
-      throw new Error(`TransitionContributionProcessor: rule '${rule.id}' must be namespaced by extension '${prefix}'`);
+    if (localContributionName(extensionName, rule.id) === undefined) {
+      throw new Error(
+        `TransitionContributionProcessor: rule '${rule.id}' must be namespaced by extension '${extensionName}.'`,
+      );
     }
   }
 }
@@ -99,14 +101,13 @@ function assertRuleNamespace(extensionName: string, rules: readonly { id: string
  * Assert that all action type keys are prefixed with the extension namespace.
  * @param extensionName - Extension name used as namespace prefix.
  * @param actions - Action factories map to validate.
- * @throws If any action type key does not start with `'<extensionName>.'`.
+ * @throws If any action type key is not `'<extensionName>.'` followed by a non-empty name.
  */
 function assertActionNamespace(extensionName: string, actions: Readonly<Record<string, unknown>>): void {
-  const prefix = `${extensionName}.`;
   for (const key of Object.keys(actions)) {
-    if (!key.startsWith(prefix)) {
+    if (localContributionName(extensionName, key) === undefined) {
       throw new Error(
-        `TransitionContributionProcessor: action type '${key}' must be namespaced by extension '${prefix}'`,
+        `TransitionContributionProcessor: action type '${key}' must be namespaced by extension '${extensionName}.'`,
       );
     }
   }

@@ -3,6 +3,7 @@ import type { MakaioBusLike, RegistrableBusNamespaceDefinition } from '@makaio/c
 import type { ExtensionManifest, StorageManifest } from './manifest.js';
 import type { ExtensionContext, NodeExtensionContext } from './extension-context.js';
 import type { ExtensionService } from './extension-lifecycle.js';
+import type { OpenContributions } from './open-contributions.js';
 import type { ExtensionRuntimeOwnership } from './extension-runtime-boot.js';
 import type { ExtensionCliContribution } from './extension-cli.js';
 import type {
@@ -531,8 +532,8 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * When present, the runtime calls `createAutomationTriggers(ctx)` during
    * extension activation and registers the returned
    * {@link AutomationTriggerType}s with the automation trigger registry.
-   * Trigger `kind` values must be prefixed with the contributing extension's
-   * name; the registry enforces this at contribution time.
+   * Trigger `kind` values must be owned by the extension as `localContributionName` defines it (prefix `'<extensionName>.'` and a non-empty rest);
+   * the registry enforces this at contribution time.
    *
    * Trigger definitions carry live Zod parameter and event schemas plus a
    * trusted `activate` factory — they are runtime values and must never be
@@ -553,8 +554,8 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * processor reads `transitionRules.rules` during extension activation and
    * registers each rule with {@link TransitionRuleRegistry}.
    *
-   * All rule IDs must be prefixed with `'<extensionName>.'`. Duplicate IDs
-   * across all sources hard-fail activation.
+   * All rule IDs must be owned by the extension as `localContributionName` defines it (prefix `'<extensionName>.'` and a non-empty rest).
+   * Duplicate IDs across all sources hard-fail activation.
    *
    * The `transition-pipeline` service must be started before any extension
    * that declares transition rules.
@@ -568,8 +569,8 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * `workflow.start` action. The transition contribution processor registers
    * each factory with {@link TransitionActionRegistry} during extension activation.
    *
-   * All action type keys must be prefixed with `'<extensionName>.'`. Duplicate
-   * type keys across all sources hard-fail activation.
+   * All action type keys must be owned by the extension as `localContributionName` defines it (prefix `'<extensionName>.'` and a non-empty rest).
+   * Duplicate type keys across all sources hard-fail activation.
    */
   readonly transitionActions?: ExtensionTransitionActionsContribution;
 
@@ -581,6 +582,22 @@ export interface MakaioExtension<THostContext extends ExtensionContext = NodeExt
    * subjects, then reference them here for documentation and introspection.
    */
   readonly namespace?: ExtensionNamespaceContribution;
+
+  /**
+   * Open slot: entries this extension contributes to contribution kinds declared
+   * by any extension.
+   *
+   * Each key is `<declaring extension>.<kind>`; each value is an array of entries.
+   * Any extension may contribute entries under a key. Only the declaring
+   * extension (the one whose name is the key's prefix) reads and checks them,
+   * through `ExtensionContext.openContributions`. The host checks only the shape
+   * of the slot (keys are contribution names, values are arrays) and does not
+   * interpret any entry.
+   *
+   * This is unrelated to {@link MakaioExtension.contributions}, which is the strict
+   * discovery manifest.
+   */
+  readonly openContributions?: OpenContributions;
 
   // ---------------------------------------------------------------------------
   // UI contribution surfaces

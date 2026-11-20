@@ -54,6 +54,14 @@ export type {
 
 export type { InferSchemaPayload, InferSubjectMeta } from './type-helpers.js';
 
+export type { ContributionName, ExtensionName } from './names.js';
+export {
+  ContributionNameSchema,
+  ExtensionNameSchema,
+  isOwnNameOrContribution,
+  localContributionName,
+} from './names.js';
+
 export type { WildcardSubject, WildcardSubjectDefinition } from './wildcards.js';
 export { WildcardSubjectKey } from './wildcards.js';
 

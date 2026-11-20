@@ -3,6 +3,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionOperatorConfigSource, ExtensionService, ExtensionToken, TrayManifest } from '@makaio/contracts';
 import type { ExtensionWarningAction } from '@makaio/contracts/extension';
 import type { CliContribution } from '../cli/types.js';
+import { createOpenContributionProcessor, OpenContributionIndex } from './open-contribution-index.js';
 import { BootProgressObserver } from './boot-progress-observer.js';
 import { registerWarningActionHandler } from './warning-action-dispatcher.js';
 import { registerCoordinatorRpcHandlers } from './coordinator-rpc-handlers.js';
@@ -29,6 +30,7 @@ import { resolveBootEnabledNames } from './extension-boot-enablement.js';
 import type {
   ContributionProcessor,
   ExtensionCoordinatorOptions,
+  ExtensionContextBase,
   ExtensionEntry,
   ExtensionRuntimeSurface,
   InstalledExtensionCatalogSource,
@@ -111,9 +113,7 @@ export class ExtensionCoordinator {
   private readonly bus: IMakaioBus;
   private readonly surface: ExtensionRuntimeSurface;
   private readonly db: unknown;
-  private readonly extensionContextBase:
-    | Omit<KernelExtensionContext, 'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension'>
-    | undefined;
+  private readonly extensionContextBase: ExtensionContextBase | undefined;
   private readonly runtimeEnvironment: RuntimeEnvironment | undefined;
   private readonly defaultStopBudgetMs: number;
 
@@ -136,6 +136,8 @@ export class ExtensionCoordinator {
   private lifecycleTail: Promise<void> = Promise.resolve();
   private rpcCleanups: Array<() => void> = [];
   private readonly contributionProcessors: ContributionProcessor[] = [];
+  /** Open-slot entries of active extensions; fed by the processor registered in the constructor. */
+  private readonly openContributionIndex = new OpenContributionIndex();
 
   /**
    * Transient map from composite key (`toastId:actionId`) to the corresponding
@@ -183,6 +185,7 @@ export class ExtensionCoordinator {
     this.extensionManagedNames = options.extensionManagedNames;
     this.frameworkPackageNames = options.frameworkPackageNames;
     this.installedCatalog = options.installedCatalog;
+    this.contributionProcessors.push(createOpenContributionProcessor(this.openContributionIndex));
     this.rpcCleanups.push(
       registerWarningActionHandler(this.bus, this.warningActionMap, options.launcherCommand ?? 'makaio'),
     );
@@ -481,6 +484,15 @@ export class ExtensionCoordinator {
       );
 
       await emitWarnings({ bus: this.bus, entries: this.entries, warningActionMap: this.warningActionMap });
+
+      // Health warnings belong to an extension entry; an unclaimed kind has no owner entry to attach to.
+      const activeNames = [...this.entries].filter(([, entry]) => entry.state === 'active').map(([name]) => name);
+      for (const kind of this.openContributionIndex.unclaimedKinds(activeNames)) {
+        console.warn(
+          '[ExtensionCoordinator] Open contribution kind "%s" has entries but no active extension owns it',
+          kind,
+        );
+      }
     } finally {
       bootProgress.complete();
     }
@@ -934,6 +946,7 @@ export class ExtensionCoordinator {
       operatorConfig: this.operatorConfig,
       signal: this.shutdownController.signal,
       hasActiveExtension: (name: string): boolean => this.hasActiveExtension(name),
+      openContributionReaderFor: (name: string) => this.openContributionIndex.readerFor(name),
       getExtensionService: <T>(name: string): T | undefined => this.getExtensionService<T>(name),
     };
   }

@@ -61,6 +61,20 @@ export type {
   WindowStyle,
 } from './manifest.js';
 export type { BrowserEntrypoint } from './browser-entrypoint.js';
+export {
+  ContributionNameSchema,
+  ExtensionNameSchema,
+  isOwnNameOrContribution,
+  localContributionName,
+} from '@makaio/core';
+export type { ContributionName, ExtensionName } from '@makaio/core';
+export type {
+  MakaioContributionKinds,
+  OpenContributionEntryOf,
+  OpenContributionReader,
+  OpenContributionSet,
+  OpenContributions,
+} from './open-contributions.js';
 export { extensionToken } from './extension-token.js';
 export type { ExtensionToken } from './extension-token.js';
 export { isExtensionManifestLike, normalizeExtensionManifestExport } from './normalize-extension-export.js';

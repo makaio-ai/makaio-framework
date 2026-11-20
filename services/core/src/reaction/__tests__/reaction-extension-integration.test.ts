@@ -4,7 +4,7 @@ import { createBusInstance } from '@makaio/bus-core';
 import { createReactionRuleRef, defineReaction } from '@makaio/contracts';
 import type { ReactionExecutionContext } from '@makaio/contracts';
 import { ExtensionCoordinator } from '@makaio/kernel';
-import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel';
+import type { ExtensionContextBase, KernelMakaioExtension } from '@makaio/kernel';
 import { ReactionRegistryToken, reactionRegistryPackage } from '../packages.js';
 import type { ReactionRegistry } from '../reaction-registry.js';
 import { createReactionContributionProcessor } from '../reaction-contribution-processor.js';
@@ -13,10 +13,7 @@ import { createReactionContributionProcessor } from '../reaction-contribution-pr
  * Minimal {@link KernelExtensionContext} fields (excluding coordinator-owned
  * and bus-owned fields) for test coordinators.
  */
-const TEST_PKG_CTX_BASE: Omit<
-  KernelExtensionContext,
-  'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension'
-> = {
+const TEST_PKG_CTX_BASE: ExtensionContextBase = {
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

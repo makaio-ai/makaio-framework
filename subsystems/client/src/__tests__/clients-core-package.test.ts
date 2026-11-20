@@ -16,6 +16,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
 import { ClientSubjects, createClientDefinition } from '@makaio/contracts/client';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import { createPluginTestDb, type PluginTestDbContext } from '@makaio/test-utils/drizzle-harness';
 import type { KernelExtensionContext } from '@makaio/kernel/extension';
 import { z } from 'zod';
@@ -64,22 +65,12 @@ const UNMANAGED_DEFINITION = createClientDefinition({
  * @returns Minimal package context
  */
 function makeTestExtensionContext(bus: IMakaioBus): KernelExtensionContext {
-  return {
-    bus,
+  return makeStubNodeExtensionContext(bus, {
     makaioHome: '/opt/makaio/test',
-    platform: 'linux',
     homedir: '/home/test',
-    username: 'test',
-    machineId: 'test-machine-id',
     dataDir: '/opt/makaio/test/clients-core',
-    identity: {
-      extensionName: 'makaio.clients-core',
-    } as KernelExtensionContext['identity'],
-    getService: () => undefined,
-    tryImport: async (_specifier) => null,
-    signal: new AbortController().signal,
-    hasExtension: (_name) => false,
-  };
+    identity: stubExtensionIdentity('makaio.clients-core'),
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -32,7 +32,9 @@ Root exports are bus and extension-context test helpers only:
 - `createMockGlobalBus(namespace?)` — Full mock for adapter/agent tests (adds once, scoped, __onAny, getContext, registerNamespace, getSchema)
 - `createMockScopedBus(namespace?)` — Mock `ScopedBus<string>` for adapter-internal tests
 - `createTestBusInstance()` — Real bus instance for integration tests. Payload schema validation applies for namespaces registered in that bus context.
-- `makeStubExtensionContext(bus)` — Minimal extension context for service and package tests
+- `makeStubExtensionContext(bus, overrides?)` — Minimal extension context for service and package tests
+- `makeStubNodeExtensionContext(bus, overrides?)` — Same plus inert Node fields (`platform: 'linux'`, `homedir`, `makaioHome`, `username`)
+- `makeStubOpenContributionReader(sets?)` — Open-contribution reader over a fixed map; no ownership check
 
 **Root types:**
 - `MockBusResult` / `MockGlobalBusResult` / `MockScopedBusResult`
@@ -86,6 +88,11 @@ it('stores and retrieves', async () => {
 `makeStubExtensionContext(bus)` requires an explicit bus so tests do not hide which bus instance
 storage handlers are registered against. The stub fills only the structural context fields needed
 by handler registration; it does not wire real services.
+
+`makeStubNodeExtensionContext(bus, overrides)` adds the inert Node fields (`platform`, `homedir`,
+`makaioHome`, `username`), and `makeStubOpenContributionReader(sets)` builds a reader over fixed
+sets. `stubExtensionIdentity(name)` is the one place that mints the branded identity for a stub
+context; use it for `identity` overrides instead of casting at the call site.
 
 ## Architecture
 

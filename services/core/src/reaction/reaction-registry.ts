@@ -8,6 +8,7 @@ import type {
   ReactionRuleRef,
 } from '@makaio/contracts';
 import { ReactionDescriptorSchema } from '@makaio/contracts';
+import { localContributionName } from '@makaio/core';
 import { BaseService } from '@makaio/service-base';
 import { getErrorString } from '@makaio/utils';
 
@@ -467,15 +468,14 @@ export class ReactionRegistry extends BaseService {
     extensionName: string,
     reactions: readonly ReactionDefinition[],
   ): readonly RegisteredReaction[] {
-    const prefix = `${extensionName}.`;
     const pendingKinds = new Set<string>();
     const ownedKinds = new Set(
       this.definitionsByExtension.get(extensionName)?.map((reaction) => reaction.descriptor.kind),
     );
     const registered: RegisteredReaction[] = [];
     for (const reaction of reactions) {
-      if (!reaction.kind.startsWith(prefix) || reaction.kind.length === prefix.length) {
-        throw new Error(`Reaction '${reaction.kind}' must be namespaced by extension '${prefix}'`);
+      if (localContributionName(extensionName, reaction.kind) === undefined) {
+        throw new Error(`Reaction '${reaction.kind}' must be namespaced by extension '${extensionName}.'`);
       }
       if (pendingKinds.has(reaction.kind)) {
         throw new Error(`Reaction kind collision: '${reaction.kind}' appears twice in batch from '${extensionName}'`);

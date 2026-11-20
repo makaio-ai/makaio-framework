@@ -17,7 +17,7 @@ import {
   type ICodeExecutionProvider,
 } from '@makaio/contracts';
 import type { ExtensionToken, NodeExtensionContext } from '@makaio/contracts';
-import { makeStubExtensionContext } from '@makaio/test-utils';
+import { makeStubNodeExtensionContext } from '@makaio/test-utils';
 import { DeferredPromise } from '@makaio/utils';
 import { CapabilityService } from '../../capability/capability-service.js';
 import { CapabilityToken } from '../../capability/package.js';
@@ -809,16 +809,10 @@ describe('CodeExecutionService', () => {
       hostBus: IMakaioBus,
       registry: CapabilityService | undefined,
     ): NodeExtensionContext<IMakaioBus> {
-      return {
-        ...makeStubExtensionContext(hostBus),
-        bus: hostBus,
-        platform: process.platform,
-        homedir: '/tmp',
-        makaioHome: '/tmp/.makaio-test',
-        username: 'test',
+      return makeStubNodeExtensionContext(hostBus, {
         getService: <T>(token: ExtensionToken<T>): T | undefined =>
           token.name === CapabilityToken.name ? (registry as T | undefined) : undefined,
-      };
+      });
     }
 
     /**

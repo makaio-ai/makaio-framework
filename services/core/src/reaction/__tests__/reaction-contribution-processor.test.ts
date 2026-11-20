@@ -1,3 +1,4 @@
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
@@ -9,11 +10,8 @@ import { createReactionContributionProcessor } from '../reaction-contribution-pr
 
 function makeContext(registry?: ReactionRegistry): KernelExtensionContext {
   const bus = createBusInstance();
-  return {
-    bus,
-    identity: {
-      extensionName: 'alpha',
-    } as KernelExtensionContext['identity'],
+  return makeStubNodeExtensionContext(bus, {
+    identity: stubExtensionIdentity('alpha'),
     platform: 'linux',
     homedir: '/home/test',
     makaioHome: '/home/test/.makaio',
@@ -25,7 +23,7 @@ function makeContext(registry?: ReactionRegistry): KernelExtensionContext {
     getService: <T>(token: ExtensionToken<T>): T | undefined =>
       (token.name === ReactionRegistryToken.name ? registry : undefined) as T | undefined,
     hasExtension: () => false,
-  };
+  });
 }
 
 /**

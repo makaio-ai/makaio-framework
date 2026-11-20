@@ -9,7 +9,7 @@ import type {
 } from '@makaio/contracts';
 import { AutomationTriggerSubjects, CRON_AUTOMATION_TRIGGER_KIND, DEFAULT_CRON_TIMEZONE } from '@makaio/contracts';
 import { ExtensionCoordinator } from '@makaio/kernel';
-import type { KernelExtensionContext } from '@makaio/kernel';
+import type { ExtensionContextBase } from '@makaio/kernel';
 import { AutomationTriggerBindingRuntime } from '../automation-trigger-binding-runtime.js';
 import type { AutomationTriggerResolver } from '../automation-trigger-binding-runtime.js';
 import { createAutomationTriggerContributionProcessor } from '../automation-trigger-contribution-processor.js';
@@ -33,10 +33,7 @@ const noopListener: AutomationTriggerListener = async () => {};
  * Minimal {@link KernelExtensionContext} fields the coordinator does not own,
  * for the boot-ordering suite.
  */
-const CRON_TEST_PKG_CTX_BASE: Omit<
-  KernelExtensionContext,
-  'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension'
-> = {
+const CRON_TEST_PKG_CTX_BASE: ExtensionContextBase = {
   platform: 'linux',
   homedir: '/home/test',
   makaioHome: '/home/test/.makaio',

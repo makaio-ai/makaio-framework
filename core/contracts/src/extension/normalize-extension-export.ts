@@ -14,6 +14,8 @@
  * neither consumer re-derives them.
  * @packageDocumentation
  */
+import { isOwnNameOrContribution } from '@makaio/core';
+
 import type { ExtensionManifest } from './manifest.js';
 
 /**
@@ -44,7 +46,8 @@ export function isExtensionManifestLike<T extends ExtensionManifest = ExtensionM
  * must keep every package under the descriptor's namespace, using the
  * descriptor name exactly or a dot-prefixed child name such as
  * `example-extension.settings`, must include a package named exactly
- * `descriptorName`, and must not repeat a package name.
+ * `descriptorName`, and must not repeat a package name. A child name with an empty
+ * local part (`'<descriptor>.'`) is rejected as outside the namespace.
  * @typeParam T - Concrete executable package shape to narrow the result to.
  * @param value - Default export from the server entrypoint.
  * @param descriptorName - Descriptor package name every entry must be anchored to.
@@ -82,7 +85,7 @@ export function normalizeExtensionManifestExport<T extends ExtensionManifest = E
       return undefined;
     }
 
-    if (packages.some((pkg) => pkg.name !== descriptorName && !pkg.name.startsWith(`${descriptorName}.`))) {
+    if (packages.some((pkg) => !isOwnNameOrContribution(descriptorName, pkg.name))) {
       onInvalid(
         `default export array contains package names outside descriptor namespace '${descriptorName}', skipping`,
       );

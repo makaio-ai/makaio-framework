@@ -1,3 +1,4 @@
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionToken } from '@makaio/contracts';
 import { defineFacetNamespace, FacetSubjects } from '@makaio/contracts/facet';
@@ -19,11 +20,8 @@ import { FacetNamespaceRegistry } from '../facet-namespace-registry.js';
  * @returns Minimal kernel extension context stub.
  */
 function makeContext(bus: IMakaioBus, registry?: FacetNamespaceRegistry): KernelExtensionContext {
-  return {
-    bus,
-    identity: {
-      extensionName: 'test-ext',
-    } as KernelExtensionContext['identity'],
+  return makeStubNodeExtensionContext(bus, {
+    identity: stubExtensionIdentity('test-ext'),
     platform: 'linux',
     homedir: '/home/test',
     makaioHome: '/home/test/.makaio',
@@ -35,7 +33,7 @@ function makeContext(bus: IMakaioBus, registry?: FacetNamespaceRegistry): Kernel
     getService: <T>(token: ExtensionToken<T>): T | undefined =>
       (token.name === FacetNamespaceRegistryToken.name ? registry : undefined) as T | undefined,
     hasExtension: () => false,
-  };
+  });
 }
 
 describe('createFacetNamespaceContributionProcessor', () => {
