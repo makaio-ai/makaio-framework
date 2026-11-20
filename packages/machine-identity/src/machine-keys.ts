@@ -98,7 +98,7 @@ async function resolveEffectiveMachineId(cachedId: string | undefined): Promise<
     return cachedId;
   }
 
-  const nativeId = getNativeHardwareMachineId();
+  const nativeId = await getNativeHardwareMachineId();
   if (nativeId) {
     return nativeId;
   }

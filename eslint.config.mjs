@@ -6,6 +6,7 @@ import preferBusFilter from './scripts/eslint-rules/prefer-bus-filter.js';
 import noSubjectBracketNotation from './scripts/eslint-rules/no-subject-bracket-notation.js';
 import {
   createBaseConfig,
+  createProcessStartGuard,
   createProviderKeyPublicationGuard,
   createRehydrateProducerGuard,
 } from './scripts/eslint-base.mjs';
@@ -33,4 +34,9 @@ export default tseslint.config(
   // one that wins for the files it covers.
   ...createRehydrateProducerGuard(),
   ...createProviderKeyPublicationGuard(),
+
+  // ─── Process starts go through the launcher ──────────────────────────────
+  //
+  // A custom rule in its own plugin namespace, so it replaces no other layer's list.
+  ...createProcessStartGuard(),
 );

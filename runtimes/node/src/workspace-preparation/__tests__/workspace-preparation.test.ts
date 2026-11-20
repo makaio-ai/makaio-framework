@@ -32,7 +32,9 @@ describe('local workspace preparation', () => {
     await fs.writeFile(sibling, 'retained');
     const handle = await bindLocalWorkspace({ workspaceRoot, requirement: requirement() });
     expect(handle.binding).toEqual({ workspaceRoot: await fs.realpath(workspaceRoot), sourceRoots: [] });
-    expect(await handle.runSetup()).toEqual({ status: 'completed', exitCode: 0 });
+    const emptyResult = await handle.runSetup();
+    expect(emptyResult).toEqual({ status: 'completed' });
+    expect(emptyResult.group).toBeUndefined();
     await handle.release();
     await fs.mkdir(workspaceRoot);
     await handle.release();
@@ -173,8 +175,12 @@ describe('local workspace preparation', () => {
       }),
     });
     const setupResult = await handle.runSetup();
-    expect(setupResult).toMatchObject({ status: 'failed', exitCode: 7, commandIndex: 1 });
-    expect(setupResult.processGroup).toBeDefined();
+    expect(setupResult).toMatchObject({
+      status: 'failed',
+      exit: { kind: 'exited', code: 7 },
+      group: { tree: { kind: 'quiescent' } },
+      commandIndex: 1,
+    });
     expect(await fs.readFile(path.join(workspaceRoot, 'first'), 'utf8')).toBe('ready');
     await expect(fs.stat(path.join(workspaceRoot, 'never'))).rejects.toMatchObject({ code: 'ENOENT' });
     await handle.release();

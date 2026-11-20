@@ -228,6 +228,7 @@ function readFrameworkPackageVersion(repoRelativePath: string): string {
  * @returns Script source.
  */
 function buildRunWithModeScript(): string {
+  // Generated text for the emitted repo, not an import here: the process-start guard does not see it; the script inherits stdio (FACT-384).
   return [
     "import { spawn } from 'node:child_process';",
     '',

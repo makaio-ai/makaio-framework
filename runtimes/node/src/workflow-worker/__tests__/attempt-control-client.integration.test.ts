@@ -355,7 +355,7 @@ describe('attempt control client — integration', () => {
     h.controlEndpoint.observer.operationConcluded({
       kind: 'workspace-preparation',
       operationId,
-      setup: { outcome: 'signalled-and-quiesced', pid: 12345, observedAt: new Date() },
+      setup: { pid: 12345, tree: { kind: 'quiescent' }, signalDelivered: true, observedAt: new Date() },
     });
 
     await h.controlEndpoint.settle();
@@ -395,7 +395,12 @@ describe('attempt control client — integration', () => {
     h.controlEndpoint.observer.operationConcluded({
       kind: 'workspace-preparation',
       operationId,
-      setup: { outcome: 'signalled-unconfirmed', cause: 'poll-timeout', pid: 99999, observedAt: new Date() },
+      setup: {
+        pid: 99999,
+        tree: { kind: 'unproven', reason: 'poll-timeout' },
+        signalDelivered: true,
+        observedAt: new Date(),
+      },
     });
 
     await h.controlEndpoint.settle();

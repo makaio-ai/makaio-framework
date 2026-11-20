@@ -127,6 +127,7 @@ class JsonlTransport implements IJsonlTransport {
     const cleanEnv = Object.fromEntries(
       Object.entries(env ?? {}).filter((entry): entry is [string, string] => entry[1] !== undefined),
     );
+    // TODO(FACT-384): build the environment with the launcher's merge so undefined removes an inherited variable here too.
     this.child = spawn(command, [...args], {
       cwd,
       env: options.envMode === 'replace' ? cleanEnv : { ...process.env, ...cleanEnv },

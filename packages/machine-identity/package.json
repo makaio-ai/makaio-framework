@@ -12,6 +12,9 @@
     "build": "tsdown",
     "test": "vitest run"
   },
+  "dependencies": {
+    "@makaio/subprocess": "workspace:*"
+  },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",
     "tsdown": "0.22.0"

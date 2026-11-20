@@ -668,12 +668,9 @@ branch, so the trigger payload's `repoPath` is the new worktree path.
 // .makaio/personal/workflows/worktree-bootstrap.ts
 import { defineWorkflow, BusEventWorkflowTrigger } from '@makaio/contracts';
 import { GitSubjects } from '@makaio/services-core/git/namespace';
-import { execFile } from 'node:child_process';
+import { launch } from '@makaio/framework/node/subprocess';
 import { access, copyFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
 
 const workflow = defineWorkflow('worktree-bootstrap', {
   name: 'Copy gitignored files to new worktrees',
@@ -682,8 +679,20 @@ const workflow = defineWorkflow('worktree-bootstrap', {
 
 workflow.station('resolve-worktrees', async (ctx) => {
   const { repoPath } = ctx.trigger as { repoPath: string };
-  const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain'], { cwd: repoPath });
-  const worktrees = stdout
+  // One bounded command: no shell, a run-time limit and a limit on the captured output.
+  const { result } = launch({
+    command: 'git',
+    args: ['worktree', 'list', '--porcelain'],
+    cwd: repoPath,
+    envMode: 'merge',
+    timeoutMs: 10_000,
+    output: { kind: 'capture', limitBytes: 1024 * 1024 },
+  });
+  const listed = await result;
+  if (listed.status !== 'completed' || listed.output === undefined) {
+    throw new Error(`git worktree list did not complete (${listed.status})`);
+  }
+  const worktrees = listed.output.stdout
     .split('\n\n')
     .map((block) => block.match(/^worktree (.+)$/m)?.[1])
     .filter((p): p is string => p !== undefined);

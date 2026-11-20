@@ -144,7 +144,7 @@ export class WindowsTreeTerminationError extends Error {
 }
 
 /** Signal primitive of the host. `process.kill` is resolved per call, never captured. */
-const hostProcessSignals: ProcessSignalPort = {
+export const hostProcessSignals: ProcessSignalPort = {
   kill: (pid, signal) => {
     process.kill(pid, signal);
   },
@@ -258,6 +258,7 @@ export async function proveProcessGroupQuiescence(
   assertPosixHost('Proving a process group quiescent');
   const port = options.port ?? hostProcessSignals;
   const { signal } = options;
+  // TODO(FACT-384): validate the timeout here as launch does (whole milliseconds, 1..2147483647); callers pass constants today.
   const deadline = Date.now() + options.timeoutMs;
   let psMissing = false;
   // The remaining budget is read once per round, so a `ps` query never gets a

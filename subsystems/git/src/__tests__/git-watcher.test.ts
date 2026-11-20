@@ -61,6 +61,75 @@ describe('GitWatcher', { timeout: 30_000 }, () => {
     }
   });
 
+  it('parses a NUL-separated commit line with spaces and quotes in the subject from real git output', async () => {
+    const repo = await createTestRepoWithCommit('git-watcher-nul-line-test-');
+    let unsubscribe: (() => void) | null = null;
+    try {
+      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+
+      const commitEvents: Array<{ hash: string; message: string; author: string; email: string; timestamp: string }> =
+        [];
+      unsubscribe = bus.on(GitSubjects.commit, (ctx) => {
+        commitEvents.push(ctx.payload);
+      });
+
+      const subject = `fix: say "hello   world" and 'bye' $HOME`;
+      await fs.writeFile(path.join(repo.repoPath, 'quoted-subject.txt'), 'quoted\n');
+      await repo.git.add('quoted-subject.txt');
+      await repo.git.commit(subject);
+      const head = (await repo.git.log({ maxCount: 1 })).latest!.hash;
+      const branch = (await repo.git.branchLocal()).current;
+
+      await bus.emit(FsSubjects.changed, {
+        path: path.join(repo.repoPath, '.git', 'refs', 'heads', branch),
+        kind: 'change',
+      });
+
+      await vi.waitUntil(() => commitEvents.length > 0, { timeout: 5000, interval: 50 });
+
+      expect(commitEvents[0]).toMatchObject({
+        hash: head,
+        message: subject,
+        author: 'Test User',
+        email: 'test@test.local',
+      });
+      expect(Number.isNaN(Date.parse(commitEvents[0]!.timestamp))).toBe(false);
+    } finally {
+      unsubscribe?.();
+      await repo.cleanup();
+    }
+  });
+
+  it('does not execute a branch name with shell metacharacters', async () => {
+    const repo = await createTestRepoWithCommit('git-watcher-metachar-test-');
+    let unsubscribe: (() => void) | null = null;
+    try {
+      await bus.request(GitSubjects.addRepo, { repoPath: repo.repoPath });
+
+      const checkoutEvents: Array<{ currentBranch: string }> = [];
+      unsubscribe = bus.on(GitSubjects.checkout, (ctx) => {
+        checkoutEvents.push({ currentBranch: ctx.payload.currentBranch });
+      });
+
+      const sentinel = path.join(repo.repoPath, 'executed');
+      const branchName = 'pwn;touch${IFS}executed;$(touch${IFS}executed)`touch${IFS}executed`&|\'"';
+      await repo.git.raw(['checkout', '-b', branchName]);
+
+      await bus.emit(FsSubjects.changed, {
+        path: path.join(repo.repoPath, '.git', 'HEAD'),
+        kind: 'change',
+      });
+
+      await vi.waitUntil(() => checkoutEvents.length > 0, { timeout: 5000, interval: 50 });
+
+      expect(checkoutEvents[0]?.currentBranch).toBe(branchName);
+      await expect(fs.access(sentinel)).rejects.toThrow();
+    } finally {
+      unsubscribe?.();
+      await repo.cleanup();
+    }
+  });
+
   it('falls back to parent watcher when the most specific watcher cannot interpret a path', async () => {
     const repo = await createTestRepoWithCommit('git-watcher-routing-test-');
     const worktreePath = path.join(path.dirname(repo.repoPath), `wt-${Date.now()}`);

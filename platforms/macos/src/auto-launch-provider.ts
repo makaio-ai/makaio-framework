@@ -1,11 +1,13 @@
 import type { IAutoLaunchProvider } from '@makaio/contracts';
-import { execFile } from 'node:child_process';
+import { launch as realLaunch, launchForOutput, type LaunchFunction } from '@makaio/subprocess';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
-const execFileAsync = promisify(execFile);
+/** Longest run time of one `launchctl` command. */
+const LAUNCHCTL_TIMEOUT_MS = 10_000;
+/** Longest captured output of `launchctl load` (read for the error text), in bytes. */
+const LAUNCHCTL_OUTPUT_LIMIT_BYTES = 64 * 1024;
 
 const APP_BUNDLE_MARKER = '.app/Contents/';
 
@@ -22,6 +24,8 @@ export interface MacOSAutoLaunchProviderOptions {
   readonly appName: string;
   /** Absolute path to the `.app` bundle registered as a Login Item. */
   readonly appPath: string;
+  /** Starts `launchctl`; defaults to the real `launch` (tests pass their own). */
+  readonly launch?: LaunchFunction;
 }
 
 /** Inputs for resolving the current host's auto-launch target. */
@@ -157,6 +161,7 @@ export class MacOSAutoLaunchProvider implements IAutoLaunchProvider {
 
   private readonly appName: string;
   private readonly appPath: string;
+  private readonly launch: LaunchFunction;
 
   /**
    * @param options - Login Item identity and target bundle path.
@@ -164,6 +169,7 @@ export class MacOSAutoLaunchProvider implements IAutoLaunchProvider {
   public constructor(options: MacOSAutoLaunchProviderOptions) {
     this.appName = options.appName;
     this.appPath = options.appPath;
+    this.launch = options.launch ?? realLaunch;
   }
 
   /**
@@ -186,7 +192,23 @@ export class MacOSAutoLaunchProvider implements IAutoLaunchProvider {
       await this.tryBootout();
 
       await writeFile(plistPath, plistContent, 'utf-8');
-      await execFileAsync('launchctl', ['load', '-w', plistPath]);
+      const loaded = await launchForOutput(
+        {
+          command: 'launchctl',
+          args: ['load', '-w', plistPath],
+          // `execFile` inherited the host's working directory; keep that.
+          cwd: process.cwd(),
+          envMode: 'merge',
+          timeoutMs: LAUNCHCTL_TIMEOUT_MS,
+          outputLimitBytes: LAUNCHCTL_OUTPUT_LIMIT_BYTES,
+        },
+        this.launch,
+      );
+      if (!loaded.ok) {
+        const { result } = loaded;
+        const detail = result.output?.stderr.trim() ?? result.message ?? '';
+        throw new Error(`launchctl load failed (${result.status})${detail.length > 0 ? `: ${detail}` : ''}`);
+      }
 
       return { enabled: true };
     } catch (err) {
@@ -242,15 +264,19 @@ export class MacOSAutoLaunchProvider implements IAutoLaunchProvider {
   }
 
   /**
-   * Attempt to bootout a loaded LaunchAgent. Failures are silently ignored.
+   * Attempt to bootout a loaded LaunchAgent. The outcome is ignored: the agent may not be loaded.
+   * `launch` settles with a result and does not reject, so there is nothing to catch.
    */
   private async tryBootout(): Promise<void> {
-    try {
-      const uid = process.getuid?.() ?? 501;
-      await execFileAsync('launchctl', ['bootout', `gui/${String(uid)}/${LAUNCH_AGENT_LABEL}`]);
-    } catch {
-      // Agent may not be loaded — this is expected.
-    }
+    const uid = process.getuid?.() ?? 501;
+    await this.launch({
+      command: 'launchctl',
+      args: ['bootout', `gui/${String(uid)}/${LAUNCH_AGENT_LABEL}`],
+      cwd: process.cwd(),
+      envMode: 'merge',
+      timeoutMs: LAUNCHCTL_TIMEOUT_MS,
+      output: { kind: 'ignore' },
+    }).result;
   }
 }
 

@@ -410,10 +410,10 @@ async function prepareWorkspace(
       handle,
     );
   }
-  // A returned result without a process group proves no setup process was
-  // spawned under this operation (SetupCommandResult contract), which is not
+  // A returned result without group facts proves no setup process was
+  // spawned under this operation (LaunchResult contract), which is not
   // the same as a driver that handed over no observation at all.
-  const concluded = concludedPreparation(operationId, setupStatus.processGroup ?? 'no-spawn');
+  const concluded = concludedPreparation(operationId, setupStatus.group ?? 'no-spawn');
   // Conclusion recorded before any Authority await so a failed report cannot strand the durable Cancel.
   options.control?.operationConcluded(concluded);
   const setupOutcome = setupFailureOutcome(setupStatus);

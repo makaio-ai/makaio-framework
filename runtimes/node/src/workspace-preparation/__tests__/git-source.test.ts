@@ -405,6 +405,46 @@ describe('local Git source realization', () => {
     });
   });
 
+  it('rethrows the abort reason when cancelled during the object inspection', async () => {
+    // A real executable named `git` ahead of the real one on PATH: it holds only the `cat-file` query open.
+    const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim();
+    const shimDirectory = path.join(temporaryRoot, 'shim');
+    const started = path.join(temporaryRoot, 'inspection-started');
+    await fs.mkdir(shimDirectory);
+    await fs.writeFile(
+      path.join(shimDirectory, 'git'),
+      `#!/bin/sh\nfor argument in "$@"; do\n  if [ "$argument" = cat-file ]; then\n    : > '${started}'\n    sleep 30\n    exit 0\n  fi\ndone\nexec '${realGit}' "$@"\n`,
+      { mode: 0o755 },
+    );
+    vi.stubEnv('PATH', `${shimDirectory}${path.delimiter}${process.env.PATH ?? ''}`);
+    const abort = new AbortController();
+    const reason = new Error('stop object inspection');
+    try {
+      const binding = bindLocalWorkspace({
+        workspaceRoot,
+        requirement: requirement(),
+        signal: abort.signal,
+        realizeSource: createLocalGitSourceRealizer({ timeoutMs: 20_000, resolveRepository: async () => repository }),
+      });
+      const outcome = binding.catch((error: unknown) => error);
+      for (let attempt = 0; attempt < 400; attempt += 1) {
+        if (
+          await fs.stat(started).then(
+            () => true,
+            () => false,
+          )
+        )
+          break;
+        await delay(25);
+      }
+      await expect(fs.stat(started)).resolves.toBeDefined();
+      abort.abort(reason);
+      expect(await outcome).toBe(reason);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  }, 20_000);
+
   it('rejects failed checkout of a valid commit and retains partial files without a binding', async () => {
     const gitOptions = { cwd: repository, encoding: 'utf8' as const };
     const blob = execFileSync('git', ['rev-parse', `${firstRevision}:content.txt`], gitOptions).trim();

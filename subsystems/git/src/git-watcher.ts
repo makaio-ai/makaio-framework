@@ -1,8 +1,7 @@
-import { exec } from 'child_process';
 import * as fs from 'node:fs/promises';
 import path from 'path';
-import { promisify } from 'util';
 import type { IMakaioBus } from '@makaio/bus-core';
+import { launch as realLaunch, launchForOutput, type LaunchFunction } from '@makaio/subprocess';
 import { GitHookSubjects, type GitHookCoveredOperation } from '@makaio/contracts';
 import { GitSubjects } from './namespace.js';
 import type {
@@ -30,7 +29,10 @@ interface RepoWatcher {
   watchId: string;
 }
 
-const execAsync = promisify(exec);
+/** Longest time a single git command may run. */
+const GIT_TIMEOUT_MS = 30_000;
+/** Largest combined stdout and stderr, in bytes, kept from a git command. */
+const GIT_OUTPUT_LIMIT_BYTES = 10 * 1024 * 1024;
 
 /** Types of git operations that can be detected from .git file changes. */
 export type GitOperationType = 'commit' | 'checkout' | 'staging' | 'merge' | 'rebase';
@@ -47,14 +49,29 @@ interface FileChange {
 }
 
 /**
- * Execute a git command and return trimmed stdout.
- * @param cmd - The git command to execute (without 'git' prefix).
+ * Execute a git command without a shell and return trimmed stdout.
+ * @param args - The git arguments, passed verbatim (without the 'git' command itself).
  * @param cwd - The working directory to execute the command in.
+ * @param launch - Starts the process; defaults to the real `launch`.
  * @returns The trimmed stdout from the command.
  */
-async function git(cmd: string, cwd: string): Promise<string> {
-  const { stdout } = await execAsync(`git ${cmd}`, { cwd });
-  return stdout.trim();
+async function git(args: readonly string[], cwd: string, launch: LaunchFunction = realLaunch): Promise<string> {
+  const outcome = await launchForOutput(
+    {
+      command: 'git',
+      args,
+      cwd,
+      envMode: 'merge',
+      timeoutMs: GIT_TIMEOUT_MS,
+      outputLimitBytes: GIT_OUTPUT_LIMIT_BYTES,
+    },
+    launch,
+  );
+  if (!outcome.ok) {
+    // Fixed text: the arguments and the command's output stay out of the error.
+    throw new Error(`git command ended with status ${outcome.result.status}`);
+  }
+  return outcome.stdout.trim();
 }
 
 /**
@@ -396,8 +413,10 @@ export class GitWatcher {
 
   private async emitCommitEvent(watcher: RepoWatcher, worktree: string | undefined): Promise<void> {
     const cwd = await this.getWorkingDir(watcher, worktree);
-    const commitInfo = await git('log -1 --format="%H%x00%s%x00%an%x00%ae%x00%aI"', cwd);
-    const branch = await git('rev-parse --abbrev-ref HEAD', cwd);
+    const [commitInfo, branch] = await Promise.all([
+      git(['log', '-1', '--format=%H%x00%s%x00%an%x00%ae%x00%aI'], cwd),
+      git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd),
+    ]);
     const [hash, message, author, email, timestamp] = commitInfo.split('\x00');
     const payload: GitCommitEvent = {
       repoPath: watcher.repoRoot,
@@ -414,7 +433,7 @@ export class GitWatcher {
 
   private async emitCheckoutEvent(watcher: RepoWatcher, worktree: string | undefined): Promise<void> {
     const cwd = await this.getWorkingDir(watcher, worktree);
-    const currentBranch = await git('rev-parse --abbrev-ref HEAD', cwd);
+    const currentBranch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
     const payload: GitCheckoutEvent = {
       repoPath: watcher.repoRoot,
       currentBranch,
@@ -426,7 +445,7 @@ export class GitWatcher {
 
   private async emitStagingEvent(watcher: RepoWatcher, worktree: string | undefined): Promise<void> {
     const cwd = await this.getWorkingDir(watcher, worktree);
-    const output = await git('diff --cached --name-only', cwd);
+    const output = await git(['diff', '--cached', '--name-only'], cwd);
     const staged = output.split('\n').filter((f) => f.length > 0);
     const payload: GitStagingEvent = {
       repoPath: watcher.repoRoot,
@@ -439,15 +458,14 @@ export class GitWatcher {
 
   private async emitMergeEvent(watcher: RepoWatcher, worktree: string | undefined): Promise<void> {
     const cwd = await this.getWorkingDir(watcher, worktree);
-    const targetBranch = await git('rev-parse --abbrev-ref HEAD', cwd);
-    let sourceBranch = 'unknown';
-    try {
-      const mergeHead = await git('rev-parse MERGE_HEAD', cwd);
-      sourceBranch = await git(`name-rev --name-only ${mergeHead}`, cwd);
-    } catch {
-      /* MERGE_HEAD may not exist */
-    }
-    const mergeCommit = await git('rev-parse HEAD', cwd);
+    const [targetBranch, sourceBranch, mergeCommit] = await Promise.all([
+      git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd),
+      git(['rev-parse', 'MERGE_HEAD'], cwd)
+        .then((mergeHead) => git(['name-rev', '--name-only', mergeHead], cwd))
+        // MERGE_HEAD may not exist
+        .catch(() => 'unknown'),
+      git(['rev-parse', 'HEAD'], cwd),
+    ]);
     const payload: GitMergeEvent = {
       repoPath: watcher.repoRoot,
       sourceBranch,
@@ -461,10 +479,10 @@ export class GitWatcher {
 
   private async emitRebaseEvent(watcher: RepoWatcher, worktree: string | undefined): Promise<void> {
     const cwd = await this.getWorkingDir(watcher, worktree);
-    const branch = await git('rev-parse --abbrev-ref HEAD', cwd);
+    const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
     let onto = 'unknown';
     try {
-      onto = await git('rev-parse --abbrev-ref REBASE_HEAD~1', cwd);
+      onto = await git(['rev-parse', '--abbrev-ref', 'REBASE_HEAD~1'], cwd);
     } catch {
       /* May fail during rebase */
     }
@@ -486,7 +504,7 @@ export class GitWatcher {
     if (event === 'added') {
       try {
         worktreePath = await resolveWorktreePathFromGitDirFile(gitDirFile);
-        branch = await git('rev-parse --abbrev-ref HEAD', worktreePath);
+        branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath);
       } catch {
         /* Worktree info may not be available yet */
       }

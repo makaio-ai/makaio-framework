@@ -16,6 +16,7 @@ import tseslint from 'typescript-eslint';
 import importPlugin from 'eslint-plugin-import';
 import { jsdoc } from 'eslint-plugin-jsdoc';
 import tsdoc from 'eslint-plugin-tsdoc';
+import noDirectProcessStart from './eslint-rules/no-direct-process-start.js';
 
 // Keys are ESLint rule IDs disabled because Biome now owns the same checks.
 // Several Biome equivalents use different names, e.g. no-fallthrough maps to
@@ -185,6 +186,12 @@ export function createProviderKeyPublicationGuard(basePath) {
   ];
 }
 
+/** The restriction that keeps the raw rehydrate dispatch primitive private to `reserved-rehydrate.ts`. */
+const REHYDRATE_DISPATCH_IMPORT_PATTERN = {
+  regex: 'rehydrate-dispatch',
+  message: 'dispatchAgentRehydrate is the raw primitive runReservedRehydrate owns; call runReservedRehydrate instead.',
+};
+
 /**
  * The one-producer gate for `adapter.rehydrateAgent`.
  *
@@ -241,19 +248,99 @@ export function createRehydrateProducerGuard(basePath) {
       files: ['services/core/src/session/**/*.ts'],
       ignores: ['services/core/src/session/handlers/reserved-rehydrate.ts'],
       rules: {
-        'no-restricted-imports': [
-          'error',
-          {
-            patterns: [
-              {
-                regex: 'rehydrate-dispatch',
-                message:
-                  'dispatchAgentRehydrate is the raw primitive runReservedRehydrate owns; call runReservedRehydrate instead.',
-              },
-            ],
-          },
-        ],
+        'no-restricted-imports': ['error', { patterns: [REHYDRATE_DISPATCH_IMPORT_PATTERN] }],
       },
+    },
+  ];
+}
+
+/**
+ * Framework process-start sites that are deliberately outside the launcher, as
+ * concrete files relative to the framework root. Every entry names its reason.
+ * Exported so that the guard's test can prove every entry still exists: a deleted
+ * file left on this list would silently widen the exemption to whatever is
+ * written at that path next.
+ *
+ * Long-lived children with piped streams wait on the launcher with streams
+ * (FACT-384). The three follow-ups carry their own issue.
+ */
+export const PROCESS_START_EXEMPT_FILES = [
+  // stdin and streams the launcher does not offer yet; follow-up FACT-382.
+  'extensions/claude-code-statusline/src/cli/handler.ts',
+  // Windows shims the launcher does not resolve; follow-up FACT-381.
+  'runtimes/node/src/cli-detection/cli-detection-service.ts',
+  // @makaio/utils cannot depend on @makaio/subprocess (cycle); follow-up FACT-380 moves it.
+  'packages/utils/src/keychain.ts',
+  // Long-lived children with piped streams; waits on the launcher with streams (FACT-384).
+  'adapters/implementations/claude-code-cli/src/utils/createStdioTransport.ts',
+  'adapters/shared/acp-client/src/connection.ts',
+  'adapters/shared/acp-client/src/terminal-manager.ts',
+  // Interactive shell and pseudo-terminal sessions: long-lived children with streams (FACT-384).
+  'extensions/shell/src/manager/shell-instance.ts',
+  // Not listed, because the guard never sees it (plain JavaScript, and lint ignores it in every config): the
+  // child of this backend, `subsystems/native-session-supervisor/src/pty/bridge/pty-bridge.cjs`, a PTY bridge
+  // and the one real process start outside the TypeScript sources. Same reason as the entry below (FACT-384).
+  'subsystems/native-session-supervisor/src/pty/node-bridge-backend.ts',
+  'subsystems/native-session-supervisor/src/pty/node-pty-backend.ts',
+  // Synchronous bounded calls; launch is asynchronous.
+  'subsystems/native-session-supervisor/src/pty/tmux-backend.ts',
+  'subsystems/native-session-supervisor/src/pty/tmux-commands.ts',
+  // Detached launches of the application and of a user-facing opener: long-lived children (FACT-384).
+  'apps/cli/src/app-launch.ts',
+  'apps/cli/src/open-command.ts',
+  'apps/electrobun/src/main/main.ts',
+  'extensions/client-commands/src/cli/profile-handler.ts',
+  // Test helper that ships under src/ and drives a real tmux.
+  'adapters/implementations/claude-code-tmux/src/test/index.ts',
+  // Build-time script under src/, not shipped code; the one `execFileSync` is justified as staying.
+  'storage/migrations/src/generate-migrations.ts',
+];
+
+/** The rule is registered under its own plugin name; one object, so that every mount of the guard shares it. */
+const PROCESS_START_PLUGIN = { rules: { 'no-direct-process-start': noDirectProcessStart } };
+
+/**
+ * Keep process starts in shipped sources behind the launcher.
+ *
+ * `launch` from `@makaio/subprocess` is the one way to run a bounded command:
+ * it owns the process group, the time and output limits and the evidence that
+ * nothing outlives the command. A second `spawn` or `execFile` in shipped code
+ * re-grows the divergent drivers the launcher replaced, so a process-starting
+ * module (`node:child_process`, `child_process`, `execa`, `node-pty`) reached
+ * by static import, re-export, `import()`, `require` or `createRequire`, and
+ * `Bun.spawn`, `Bun.spawnSync` and `Bun.$`, in TypeScript sources (`.ts`, `.tsx`)
+ * under any `src/` is an error. Plain JavaScript files are outside the guard:
+ * it does not lint them. The one real process start among them is the PTY bridge
+ * child of `node-bridge-backend.ts`, recorded next to that entry of `PROCESS_START_EXEMPT_FILES`.
+ * Type-only imports are allowed: they start nothing.
+ *
+ * Exempt: the launcher package itself (`packages/subprocess/src`), tests and
+ * fixtures, and the files in `exemptFiles`. The rule is syntactic and a review
+ * aid, not a proof: a `Bun` handle passed through a typed local is invisible to it.
+ *
+ * It is a custom rule in its own plugin namespace, not `no-restricted-imports`:
+ * that rule takes its whole list at once and the last layer wins, so mounting it
+ * from several configs would wipe out the other import restrictions.
+ * @param basePath - Directory these sources sit in, for a config that mounts
+ *   them from an outer root. Omit when the config lives beside them.
+ * @param exemptFiles - Files relative to the lint root that stay outside the guard.
+ * @returns The flat-config layers enforcing the gate.
+ */
+export function createProcessStartGuard(basePath, exemptFiles = PROCESS_START_EXEMPT_FILES) {
+  const mount = basePath === undefined ? {} : { basePath };
+  return [
+    {
+      ...mount,
+      files: ['**/src/**/*.{ts,tsx}'],
+      ignores: [
+        'packages/subprocess/src/**',
+        ...exemptFiles,
+        '**/*.test.{ts,tsx}',
+        '**/__tests__/**',
+        '**/*.fixture.{ts,tsx}',
+      ],
+      plugins: { 'process-start': PROCESS_START_PLUGIN },
+      rules: { 'process-start/no-direct-process-start': 'error' },
     },
   ];
 }

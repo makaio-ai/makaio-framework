@@ -1,3 +1,5 @@
+import type { LaunchResult, LaunchStatus } from '@makaio/subprocess';
+import { recordingLaunch } from '@makaio/subprocess/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MacOSAutoLaunchProvider, resolveMacOSAutoLaunchTarget } from '../auto-launch-provider.js';
 
@@ -18,23 +20,6 @@ vi.mock('node:fs/promises', () => ({
   rm: (path: string, options: { force: boolean }) => rmMock(path, options),
 }));
 
-const execFileMock =
-  vi.fn<
-    (
-      file: string,
-      args: readonly string[],
-      callback: (error: Error | null, stdout: string, stderr: string) => void,
-    ) => void
-  >();
-
-vi.mock('node:child_process', () => ({
-  execFile: (
-    file: string,
-    args: readonly string[],
-    callback: (error: Error | null, stdout: string, stderr: string) => void,
-  ) => execFileMock(file, args, callback),
-}));
-
 vi.mock('node:os', () => ({
   homedir: () => TEST_HOME,
 }));
@@ -43,24 +28,21 @@ vi.mock('node:os', () => ({
 // Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Configure `execFileMock` to succeed (invoke callback with no error).
- */
-function execFileSucceeds(): void {
-  execFileMock.mockImplementation((_file, _args, callback) => {
-    callback(null, '', '');
-  });
-}
+const COMPLETED: LaunchResult = { status: 'completed' };
 
-/**
- * Configure `execFileMock` to fail with the given message.
- * @param message - The error message for the callback.
- */
-function execFileFails(message: string): void {
-  execFileMock.mockImplementation((_file, _args, callback) => {
-    callback(new Error(message), '', '');
-  });
-}
+/** A completed `launchctl load`: it runs with captured output, so a real completed run carries it. */
+const LOADED: LaunchResult = { status: 'completed', output: { stdout: '', stderr: '' } };
+
+/** The bounds both `launchctl` calls must carry. */
+const EXPECTED_BOUNDS = {
+  command: 'launchctl',
+  cwd: process.cwd(),
+  envMode: 'merge',
+  timeoutMs: 10_000,
+} as const;
+
+/** The argument of `bootout`, as the provider derives it from the running user. */
+const EXPECTED_BOOTOUT_ARGS = ['bootout', `gui/${String(process.getuid?.() ?? 501)}/ai.makaio.app`];
 
 /**
  * Extract the plist content from the last `writeFile` call.
@@ -135,9 +117,9 @@ describe('MacOSAutoLaunchProvider', () => {
     it('writes a LaunchAgent plist and loads it via launchctl', async () => {
       mkdirMock.mockResolvedValue(undefined);
       writeFileMock.mockResolvedValue(undefined);
-      execFileSucceeds();
+      const port = recordingLaunch(COMPLETED, LOADED);
 
-      const provider = new MacOSAutoLaunchProvider(options);
+      const provider = new MacOSAutoLaunchProvider({ ...options, launch: port.launch });
       const result = await provider.enable(false);
 
       expect(result).toEqual({ enabled: true });
@@ -158,16 +140,22 @@ describe('MacOSAutoLaunchProvider', () => {
       expect(writtenContent).toContain('<string>-a</string>');
       expect(writtenContent).not.toContain('-jga');
 
-      // launchctl load is called.
-      expect(execFileMock).toHaveBeenCalledWith('launchctl', ['load', '-w', EXPECTED_PLIST_PATH], expect.any(Function));
+      // bootout first (output discarded), then load (output captured, 64 KiB).
+      expect(port.calls).toEqual([
+        { ...EXPECTED_BOUNDS, args: EXPECTED_BOOTOUT_ARGS, output: { kind: 'ignore' } },
+        {
+          ...EXPECTED_BOUNDS,
+          args: ['load', '-w', EXPECTED_PLIST_PATH],
+          output: { kind: 'capture', limitBytes: 64 * 1024 },
+        },
+      ]);
     });
 
     it('writes a plist with hidden flags when hidden=true', async () => {
       mkdirMock.mockResolvedValue(undefined);
       writeFileMock.mockResolvedValue(undefined);
-      execFileSucceeds();
 
-      const provider = new MacOSAutoLaunchProvider(options);
+      const provider = new MacOSAutoLaunchProvider({ ...options, launch: recordingLaunch().launch });
       await provider.enable(true);
 
       expect(writtenPlistContent()).toContain('<string>-jga</string>');
@@ -176,62 +164,89 @@ describe('MacOSAutoLaunchProvider', () => {
     it('defaults hidden to true', async () => {
       mkdirMock.mockResolvedValue(undefined);
       writeFileMock.mockResolvedValue(undefined);
-      execFileSucceeds();
 
-      const provider = new MacOSAutoLaunchProvider(options);
+      const provider = new MacOSAutoLaunchProvider({ ...options, launch: recordingLaunch().launch });
       await provider.enable();
 
       expect(writtenPlistContent()).toContain('<string>-jga</string>');
     });
 
-    it('returns an error when launchctl load fails', async () => {
+    it.each<LaunchStatus>([
+      'failed',
+      'cancelled',
+      'timed-out',
+      'output-limit',
+      'spawn-failed',
+      'stop-failed',
+    ])('returns an error naming the status when launchctl load ends %s', async (status) => {
       mkdirMock.mockResolvedValue(undefined);
       writeFileMock.mockResolvedValue(undefined);
-      // First call: bootout (succeeds). Second call: load (fails).
-      execFileMock
-        .mockImplementationOnce((_file, _args, callback) => {
-          callback(null, '', '');
-        })
-        .mockImplementationOnce((_file, _args, callback) => {
-          callback(new Error('launchctl load failed'), '', '');
-        });
+      // First call: bootout (completes). Second call: load (does not complete).
+      const port = recordingLaunch(COMPLETED, { status });
 
-      const provider = new MacOSAutoLaunchProvider(options);
+      const provider = new MacOSAutoLaunchProvider({ ...options, launch: port.launch });
+      const result = await provider.enable();
+
+      expect(result).toEqual({ enabled: false, error: `launchctl load failed (${status})` });
+    });
+
+    it('appends the trimmed stderr of launchctl load to the error', async () => {
+      mkdirMock.mockResolvedValue(undefined);
+      writeFileMock.mockResolvedValue(undefined);
+      const port = recordingLaunch(COMPLETED, {
+        status: 'failed',
+        output: { stdout: '', stderr: 'Load failed: 5: Input/output error\n' },
+      });
+
+      const provider = new MacOSAutoLaunchProvider({ ...options, launch: port.launch });
       const result = await provider.enable();
 
       expect(result).toEqual({
         enabled: false,
-        error: 'launchctl load failed',
+        error: 'launchctl load failed (failed): Load failed: 5: Input/output error',
       });
+    });
+
+    it('ignores the outcome of bootout and still loads the agent', async () => {
+      mkdirMock.mockResolvedValue(undefined);
+      writeFileMock.mockResolvedValue(undefined);
+      const port = recordingLaunch({ status: 'failed' }, LOADED);
+
+      const provider = new MacOSAutoLaunchProvider({ ...options, launch: port.launch });
+      const result = await provider.enable();
+
+      expect(result).toEqual({ enabled: true });
+      expect(port.calls.map((call) => call.args?.[0])).toEqual(['bootout', 'load']);
     });
 
     it('attempts to bootout before writing the plist', async () => {
       mkdirMock.mockResolvedValue(undefined);
-      writeFileMock.mockResolvedValue(undefined);
-      execFileSucceeds();
+      writeFileMock.mockImplementation(() => {
+        // The bootout call must already be recorded when the plist is written.
+        expect(port.calls.map((call) => call.args?.[0])).toEqual(['bootout']);
+        return Promise.resolve();
+      });
+      const port = recordingLaunch();
 
-      const provider = new MacOSAutoLaunchProvider(options);
+      const provider = new MacOSAutoLaunchProvider({ ...options, launch: port.launch });
       await provider.enable();
 
-      // First exec call should be bootout.
-      const calls = execFileMock.mock.calls;
-      expect(calls[0][0]).toBe('launchctl');
-      expect(calls[0][1]).toEqual(expect.arrayContaining(['bootout']));
+      expect(writeFileMock).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('disable', () => {
     it('boots out the agent and removes the plist file', async () => {
       rmMock.mockResolvedValue(undefined);
-      execFileSucceeds();
+      const port = recordingLaunch();
 
-      const provider = new MacOSAutoLaunchProvider(options);
+      const provider = new MacOSAutoLaunchProvider({ ...options, launch: port.launch });
       const result = await provider.disable();
 
       expect(result).toEqual({ disabled: true });
 
-      // bootout is called.
-      expect(execFileMock).toHaveBeenCalledWith('launchctl', expect.arrayContaining(['bootout']), expect.any(Function));
+      // bootout is the only launchctl call.
+      expect(port.calls).toEqual([{ ...EXPECTED_BOUNDS, args: EXPECTED_BOOTOUT_ARGS, output: { kind: 'ignore' } }]);
 
       // plist is removed.
       expect(rmMock).toHaveBeenCalledWith(EXPECTED_PLIST_PATH, {
@@ -241,19 +256,18 @@ describe('MacOSAutoLaunchProvider', () => {
 
     it('succeeds even when bootout fails (agent not loaded)', async () => {
       rmMock.mockResolvedValue(undefined);
-      execFileFails('Could not find specified service');
+      const port = recordingLaunch({ status: 'failed' });
 
-      const provider = new MacOSAutoLaunchProvider(options);
+      const provider = new MacOSAutoLaunchProvider({ ...options, launch: port.launch });
       const result = await provider.disable();
 
       expect(result).toEqual({ disabled: true });
     });
 
     it('returns an error when plist removal fails', async () => {
-      execFileSucceeds();
       rmMock.mockRejectedValue(new Error('Permission denied'));
 
-      const provider = new MacOSAutoLaunchProvider(options);
+      const provider = new MacOSAutoLaunchProvider({ ...options, launch: recordingLaunch().launch });
       const result = await provider.disable();
 
       expect(result).toEqual({
@@ -315,11 +329,10 @@ describe('MacOSAutoLaunchProvider', () => {
     it('returns enabled=true after enable() with special characters in path', async () => {
       mkdirMock.mockResolvedValue(undefined);
       writeFileMock.mockResolvedValue(undefined);
-      execFileSucceeds();
-
       const provider = new MacOSAutoLaunchProvider({
         appName: 'App & <Test>',
         appPath: '/Applications/App & <Test>.app',
+        launch: recordingLaunch().launch,
       });
       await provider.enable(false);
 
@@ -334,9 +347,7 @@ describe('MacOSAutoLaunchProvider', () => {
     it('produces valid XML with the correct label', async () => {
       mkdirMock.mockResolvedValue(undefined);
       writeFileMock.mockResolvedValue(undefined);
-      execFileSucceeds();
-
-      const provider = new MacOSAutoLaunchProvider(options);
+      const provider = new MacOSAutoLaunchProvider({ ...options, launch: recordingLaunch().launch });
       await provider.enable(false);
 
       const content = writtenPlistContent();
@@ -349,11 +360,10 @@ describe('MacOSAutoLaunchProvider', () => {
     it('escapes XML special characters in app path', async () => {
       mkdirMock.mockResolvedValue(undefined);
       writeFileMock.mockResolvedValue(undefined);
-      execFileSucceeds();
-
       const provider = new MacOSAutoLaunchProvider({
         appName: 'App & <Test>',
         appPath: '/Applications/App & <Test>.app',
+        launch: recordingLaunch().launch,
       });
       await provider.enable(false);
 

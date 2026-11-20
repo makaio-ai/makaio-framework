@@ -18,6 +18,14 @@ export const DEFAULT_KILL_GRACE_MS = 5_000;
 export const DEFAULT_EXIT_OBSERVATION_MS = 2_000;
 
 /**
+ * Time between `SIGTERM` and `SIGKILL` of a bounded command (`launch`). Short: a command that
+ * outlived its own bound is not given time to wind down.
+ */
+export const LAUNCH_KILL_GRACE_MS = 200;
+/** Time a bounded command's exit is awaited after the forceful stage, and its output drained after the exit. */
+export const LAUNCH_EXIT_OBSERVATION_MS = 2_000;
+
+/**
  * Longest time one owned child takes to end once its stop was requested: the
  * forceful stage's delivery, the exit observation after it, and the output
  * drain after the exit. Every phase is bounded by its own limit, so the sum is

@@ -180,6 +180,7 @@ function shellQuote(value: string): string {
 function writeHookWrapperScript(busUrl: string, cursorDir: string): string {
   const cliEntry = resolveCliEntryPath();
   const wrapperPath = path.join(cursorDir, 'makaio-pretooluse-hook.mjs');
+  // Generated text for the emitted wrapper, not an import here: the process-start guard does not see it; the wrapper needs streams (FACT-384).
   const wrapperSource = [
     "import { spawn } from 'node:child_process';",
     `const cliEntry = ${JSON.stringify(cliEntry)};`,

@@ -23,6 +23,7 @@
     "@makaio/bus-core": "workspace:*",
     "@makaio/contracts": "workspace:*",
     "@makaio/service-base": "workspace:*",
+    "@makaio/subprocess": "workspace:*",
     "@makaio/tools-core": "workspace:*",
     "picomatch": "^4.0.5",
     "simple-git": "^3.28.0"

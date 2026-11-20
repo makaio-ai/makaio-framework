@@ -510,6 +510,14 @@
       "types": "./dist/node/machine-identity/index.d.mts",
       "default": "./dist/node/machine-identity/index.mjs"
     },
+    "./node/subprocess": {
+      "types": "./dist/node/subprocess/index.d.mts",
+      "default": "./dist/node/subprocess/index.mjs"
+    },
+    "./node/subprocess/testing": {
+      "types": "./dist/node/subprocess/testing/index.d.mts",
+      "default": "./dist/node/subprocess/testing/index.mjs"
+    },
     "./testing": {
       "types": "./dist/testing/index.d.mts",
       "default": "./dist/testing/index.mjs"

@@ -12,6 +12,7 @@ import * as fsPromises from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { recordingLaunch } from '@makaio/subprocess/testing';
 import { createNodeClientBinaryStrategyDependencies } from '../client-binary-strategy-dependencies.js';
 
 // ---------------------------------------------------------------------------
@@ -374,6 +375,142 @@ describe('createNodeClientBinaryStrategyDependencies', () => {
       const nonExistent = path.join(tmpDir, 'ghost');
 
       await expect(deps.removeDirectory(nonExistent)).resolves.toBeUndefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // host command failures (exact error texts)
+  // -------------------------------------------------------------------------
+
+  describe('host command failures', () => {
+    it('names command, arguments, stderr, and exit code for a non-zero exit (real process)', async () => {
+      await expect(deps.exec('node', ['-e', 'process.stderr.write("oops"); process.exit(3)'])).rejects.toThrow(
+        new Error(
+          'Command failed: node -e process.stderr.write("oops"); process.exit(3)\nstderr: oops\nfailed (exit code 3)',
+        ),
+      );
+    });
+
+    it('names the missing executable (real process)', async () => {
+      const missing = 'makaio-no-such-executable-3f9c1a';
+
+      await expect(deps.exec(missing, [])).rejects.toThrow(
+        new Error(`Command failed: host executable "${missing}" was not found on PATH`),
+      );
+    });
+
+    it('reports a timeout with its status and the stderr captured so far', async () => {
+      const { launch, calls } = recordingLaunch({
+        status: 'timed-out',
+        exit: { kind: 'exited', code: null, signal: 'SIGTERM' },
+        output: { stdout: '', stderr: 'slow' },
+      });
+      const timeoutDeps = createNodeClientBinaryStrategyDependencies({ execTimeoutMs: 25, launch });
+
+      await expect(timeoutDeps.exec('slow-tool', ['--flag'])).rejects.toThrow(
+        new Error('Command failed: slow-tool --flag\nstderr: slow\ntimed-out'),
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        command: 'slow-tool',
+        args: ['--flag'],
+        envMode: 'merge',
+        timeoutMs: 25,
+        output: { kind: 'capture', limitBytes: 10 * 1024 * 1024 },
+      });
+    });
+
+    it('reports output over the limit with the fixed launch message', async () => {
+      const { launch } = recordingLaunch({
+        status: 'output-limit',
+        exit: { kind: 'exited', code: null, signal: 'SIGTERM' },
+        output: { stdout: 'partial', stderr: '' },
+        message: 'The command exceeded the output limit',
+      });
+      const limitDeps = createNodeClientBinaryStrategyDependencies({ launch });
+
+      await expect(limitDeps.exec('noisy', [])).rejects.toThrow(
+        new Error('Command failed: noisy \nstderr: \nThe command exceeded the output limit'),
+      );
+    });
+
+    it('names the exit code next to the launch message', async () => {
+      const { launch } = recordingLaunch({
+        status: 'stop-failed',
+        exit: { kind: 'exited', code: 7, signal: null },
+        output: { stdout: '', stderr: 'e' },
+        message: 'The process group of the command was not proven stopped',
+      });
+      const stopDeps = createNodeClientBinaryStrategyDependencies({ launch });
+
+      await expect(stopDeps.exec('tool', ['a', 'b'])).rejects.toThrow(
+        new Error(
+          'Command failed: tool a b\nstderr: e\nThe process group of the command was not proven stopped (exit code 7)',
+        ),
+      );
+    });
+
+    it('returns trimmed stdout and passes cwd and env through the port', async () => {
+      const { launch, calls } = recordingLaunch({
+        status: 'completed',
+        exit: { kind: 'exited', code: 0, signal: null },
+        output: { stdout: ' out \n', stderr: '' },
+      });
+      const portDeps = createNodeClientBinaryStrategyDependencies({ launch });
+
+      await expect(portDeps.exec('tool', [], { cwd: tmpDir, env: { A: 'b' } })).resolves.toBe('out');
+      expect(calls[0]).toMatchObject({ cwd: tmpDir, env: { A: 'b' } });
+    });
+
+    it.each([
+      ['tar.gz', 'tar', 'tar'],
+      ['zip', 'unzip', 'zip'],
+    ] as const)('names the missing %s extractor', async (format, tool, label) => {
+      const { launch } = recordingLaunch({
+        status: 'spawn-failed',
+        refusal: 'command-not-found',
+        message: 'The command was not found',
+      });
+      const extractDeps = createNodeClientBinaryStrategyDependencies({ launch });
+
+      await expect(extractDeps.extractArchive('a.archive', path.join(tmpDir, 'out'), format)).rejects.toThrow(
+        new Error(`${label} extraction failed: host executable "${tool}" was not found on PATH`),
+      );
+    });
+
+    it('reports a failed extraction with archive, destination, stderr, and exit code', async () => {
+      const { launch, calls } = recordingLaunch({
+        status: 'failed',
+        exit: { kind: 'exited', code: 2, signal: null },
+        output: { stdout: '', stderr: 'bad archive' },
+      });
+      const extractDeps = createNodeClientBinaryStrategyDependencies({ extractTimeoutMs: 40, launch });
+      const destDir = path.join(tmpDir, 'out');
+
+      await expect(extractDeps.extractArchive('/x/a.tar.gz', destDir, 'tar.gz')).rejects.toThrow(
+        new Error(`tar extraction failed: /x/a.tar.gz → ${destDir}\nstderr: bad archive\nfailed (exit code 2)`),
+      );
+      expect(calls[0]).toMatchObject({
+        command: 'tar',
+        args: ['-xzf', '/x/a.tar.gz', '-C', destDir],
+        cwd: destDir,
+        timeoutMs: 40,
+        output: { kind: 'capture', limitBytes: 64 * 1024 },
+      });
+    });
+
+    it('reports an extraction timeout', async () => {
+      const { launch } = recordingLaunch({
+        status: 'timed-out',
+        exit: { kind: 'exited', code: null, signal: 'SIGTERM' },
+        output: { stdout: '', stderr: '' },
+      });
+      const extractDeps = createNodeClientBinaryStrategyDependencies({ launch });
+      const destDir = path.join(tmpDir, 'out');
+
+      await expect(extractDeps.extractArchive('/x/a.zip', destDir, 'zip')).rejects.toThrow(
+        new Error(`unzip extraction failed: /x/a.zip → ${destDir}\nstderr: \ntimed-out`),
+      );
     });
   });
 });

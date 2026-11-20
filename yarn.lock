@@ -4838,6 +4838,7 @@ __metadata:
     "@makaio/kernel": "workspace:*"
     "@makaio/service-base": "workspace:*"
     "@makaio/services-core": "workspace:*"
+    "@makaio/subprocess": "workspace:*"
     "@types/node": "npm:^24.3.0"
     execa: "npm:^9.5.2"
     tsdown: "npm:0.22.0"
@@ -5280,6 +5281,7 @@ __metadata:
   resolution: "@makaio/machine-identity@workspace:packages/machine-identity"
   dependencies:
     "@makaio/build-tooling": "workspace:*"
+    "@makaio/subprocess": "workspace:*"
     tsdown: "npm:0.22.0"
   languageName: unknown
   linkType: soft
@@ -5299,6 +5301,7 @@ __metadata:
     "@makaio/build-tooling": "workspace:*"
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
+    "@makaio/subprocess": "workspace:*"
     "@types/node": "npm:^24.3.0"
     tsdown: "npm:0.22.0"
   languageName: unknown
@@ -5877,6 +5880,7 @@ __metadata:
     "@makaio/bus-core": "workspace:*"
     "@makaio/contracts": "workspace:*"
     "@makaio/service-base": "workspace:*"
+    "@makaio/subprocess": "workspace:*"
     "@makaio/tools-core": "workspace:*"
     "@types/node": "npm:^24.3.0"
     "@types/picomatch": "npm:^4.0.3"

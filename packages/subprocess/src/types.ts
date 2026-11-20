@@ -7,7 +7,8 @@ import type { StopHost } from './stop-escalation.js';
  * @param command - Executable command (absolute path or PATH-resolved name).
  * @param args - Command-line arguments.
  * @param cwd - Working directory.
- * @param env - Environment variables (undefined values are filtered out).
+ * @param env - Environment variables (undefined values are filtered out). A launch that merges the host
+ *   environment lets `undefined` remove an inherited entry; on Windows names match case-insensitively there.
  * @param processName - Human-readable label for diagnostics and error messages.
  */
 export interface SubprocessSpawnOptions {
@@ -20,7 +21,8 @@ export interface SubprocessSpawnOptions {
 
 /**
  * How the `env` of {@link SubprocessSpawnOptions} becomes the child's environment.
- * `merge`: the host environment, overridden by `env`.
+ * `merge`: the host environment, overridden by `env`; an `undefined` value removes the inherited entry
+ * (on Windows, whatever its letter case).
  * `replace`: `env` alone; nothing of the host environment is inherited.
  */
 export type SpawnEnvMode = 'merge' | 'replace';

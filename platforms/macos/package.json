@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
-    "@makaio/contracts": "workspace:*"
+    "@makaio/contracts": "workspace:*",
+    "@makaio/subprocess": "workspace:*"
   },
   "devDependencies": {
     "@makaio/build-tooling": "workspace:*",

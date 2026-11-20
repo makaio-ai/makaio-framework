@@ -62,6 +62,13 @@ describe('FRAMEWORK_DIST_SUBPATHS', () => {
     expect(entry?.packageName).toBe('@makaio/machine-identity');
     expect(entry?.sourceDist).toBe('packages/machine-identity/dist');
   });
+
+  it('includes the node subprocess subpath for bounded command launch', () => {
+    const entry = FRAMEWORK_DIST_SUBPATHS.find((e) => e.subpath === 'node/subprocess');
+    expect(entry).toBeDefined();
+    expect(entry?.packageName).toBe('@makaio/subprocess');
+    expect(entry?.sourceDist).toBe('packages/subprocess/dist');
+  });
 });
 
 describe('FRAMEWORK_BUILD_PACKAGE_NAMES', () => {
@@ -230,5 +237,11 @@ describe('getFrameworkPublicPackageByName', () => {
     const entry = getFrameworkPublicPackageByName('@makaio/machine-identity');
     expect(entry?.frameworkSubpath).toBe('node/machine-identity');
     expect(entry?.packageRoot).toBe('packages/machine-identity');
+  });
+
+  it('resolves @makaio/subprocess to the node subprocess subpath', () => {
+    const entry = getFrameworkPublicPackageByName('@makaio/subprocess');
+    expect(entry?.frameworkSubpath).toBe('node/subprocess');
+    expect(entry?.packageRoot).toBe('packages/subprocess');
   });
 });

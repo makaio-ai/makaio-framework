@@ -248,7 +248,6 @@ export type {
   InstalledAttemptControlEndpoint,
   AttemptControlLastReport,
 } from './workflow-worker/index.js';
-export type { SetupProcessGroupObservation } from './workspace-preparation/index.js';
 // Opt-in CodeExecution provider. It is never registered implicitly: the
 // composing host decides whether a runtime may execute submitted code, and it
 // executes trusted code only — a worker thread is not an isolation boundary.
