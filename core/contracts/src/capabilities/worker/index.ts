@@ -60,3 +60,5 @@ export { ProviderAllocationRefError, createAllocationRefCodec } from './allocati
 export type { ProviderAllocationRefCodec } from './allocation-ref-codec.js';
 export { boundedProviderEvidence } from './bounded-evidence.js';
 export { registerWorkerProvider, unregisterWorkerProvider } from './register.js';
+export { ISOLATION_LEVELS, IsolationLevelSchema, holdsAtLeast } from './isolation.js';
+export type { IsolationLevel } from './isolation.js';

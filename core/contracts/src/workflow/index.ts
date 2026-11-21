@@ -324,3 +324,7 @@ export type {
 } from './transition.js';
 export { validateNoNestedLoops } from './loop.js';
 export type { LoopGateContext, LoopGateHandler } from './loop.js';
+export { JobRunIdSchema, StepIdSchema } from './identifiers.js';
+export type { JobRunId, StepId } from './identifiers.js';
+export { JobRunLifecycleStateSchema } from './job-run-lifecycle.js';
+export type { JobRunLifecycleState } from './job-run-lifecycle.js';

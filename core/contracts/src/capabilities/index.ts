@@ -204,6 +204,8 @@ export type {
   WorkerRuntimeConnection,
   WorkerRequirements,
 } from './worker/index.js';
+export { ISOLATION_LEVELS, IsolationLevelSchema, holdsAtLeast } from './worker/index.js';
+export type { IsolationLevel } from './worker/index.js';
 export {
   GIT_HOOK_EVENTS_CAPABILITY_ID,
   GitHookCoveredOperationSchema,
