@@ -19,7 +19,7 @@ import {
   spawnOptionsForOwnership,
   type ProcessSignalPort,
 } from './process-tree.js';
-import { LAUNCH_EXIT_OBSERVATION_MS, LAUNCH_KILL_GRACE_MS } from './stop-budget.js';
+import { LAUNCH_DRAIN_TIMEOUT_MS, LAUNCH_EXIT_OBSERVATION_MS, LAUNCH_KILL_GRACE_MS } from './stop-budget.js';
 import { startStopEscalation, windowsTreeEvidence, type StopEscalation, type StopHost } from './stop-escalation.js';
 import type { ProcessStopTiming, SpawnEnvMode, SubprocessSpawnOptions } from './types.js';
 
@@ -361,7 +361,8 @@ class Run {
   }
 
   /**
-   * The leader exited: no further signal, and the pipes get a bounded drain.
+   * The leader exited: no further signal, and the pipes get a bounded drain. The bound is fixed; the stop
+   * timing of the command does not shorten it.
    * @param exit - How the leader ended.
    */
   private onExit(exit: LeaderExit): void {
@@ -371,7 +372,7 @@ class Run {
     this.drainTimer = setTimeout(() => {
       this.destroyPipes();
       this.settle(exit);
-    }, this.options.exitObservationMs ?? LAUNCH_EXIT_OBSERVATION_MS);
+    }, LAUNCH_DRAIN_TIMEOUT_MS);
   }
 
   /**

@@ -202,6 +202,39 @@ describe('launch', () => {
       expect(await launched?.result).toMatchObject({ status: 'spawn-failed', refusal: 'spawn-error' });
       expect(launched?.pid).toBeUndefined();
     });
+
+    it.runIf(isPosix)(
+      'captures what a descendant writes after the leader exited, whatever the exit observation time',
+      async () => {
+        // The grandchild holds the leader's stdout. The leader exits only once the grandchild reported that it
+        // runs, so the grandchild's start-up time is not part of the drain. The grandchild writes only once
+        // this test released it. The release is decided in the launcher's own process. On POSIX an exited
+        // leader answers the probe until this runtime reaped it, and the runtime emits the exit to the
+        // launcher in the same callback, so a timer that finds the PID gone runs after the launcher observed
+        // the exit. The release follows 50 ms later: a drain timer armed with the exit observation time of 0
+        // has fired by then.
+        const grandchild =
+          "const probe=setInterval(()=>{if(require('fs').existsSync('release')){clearInterval(probe);process.stdout.write('late')}},20);process.send('ready')";
+        const leader = `const child=require('child_process').spawn(process.execPath,['-e',${JSON.stringify(grandchild)}],{stdio:['ignore','inherit','ignore','ipc']});child.once('message',()=>{child.disconnect();child.unref();process.stdout.write('early')})`;
+        const launched = run(leader, { exitObservationMs: 0, output: { kind: 'capture', limitBytes: 1024 } });
+        const leaderPid = launched.pid;
+        if (leaderPid === undefined) throw new Error('the leader was not spawned');
+        let release: NodeJS.Timeout | undefined;
+        const probe = setInterval(() => {
+          if (isAlive(leaderPid)) return;
+          clearInterval(probe);
+          release = setTimeout(() => void fs.writeFile(path.join(workspaceRoot, 'release'), 'go'), 50);
+        }, 10);
+        try {
+          const result = await launched.result;
+          expect(result.status).toBe('completed');
+          expect(result.output).toMatchObject({ stdout: 'earlylate', stderr: '' });
+        } finally {
+          clearInterval(probe);
+          clearTimeout(release);
+        }
+      },
+    );
   });
 
   describe('command, working directory and environment', () => {

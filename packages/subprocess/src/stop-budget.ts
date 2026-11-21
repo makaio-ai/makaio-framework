@@ -22,8 +22,13 @@ export const DEFAULT_EXIT_OBSERVATION_MS = 2_000;
  * outlived its own bound is not given time to wind down.
  */
 export const LAUNCH_KILL_GRACE_MS = 200;
-/** Time a bounded command's exit is awaited after the forceful stage, and its output drained after the exit. */
+/** Time a bounded command's exit is awaited after the forceful stage. */
 export const LAUNCH_EXIT_OBSERVATION_MS = 2_000;
+/**
+ * Longest time a bounded command's output is drained after its leader exited. Fixed: no stop timing shortens
+ * it, so what a descendant still writes shortly after the leader's exit is captured.
+ */
+export const LAUNCH_DRAIN_TIMEOUT_MS = 2_000;
 
 /**
  * Longest time one owned child takes to end once its stop was requested: the
