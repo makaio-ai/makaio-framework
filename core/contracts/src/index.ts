@@ -678,6 +678,8 @@ export type {
   WorkerRuntimeConnection,
   WorkerRequirements,
 } from './capabilities/index.js';
+export { ISOLATION_LEVELS, IsolationLevelSchema, holdsAtLeast } from './capabilities/index.js';
+export type { IsolationLevel } from './capabilities/index.js';
 export { CapabilitySubjects } from './capability/index.js';
 export type {
   ICapabilityBasedService,
@@ -1328,6 +1330,10 @@ export type { WorkflowRunContext } from './workflow/index.js';
 export { walkWorkflowDefinition } from './workflow/index.js';
 export type { WalkContext, WalkRelationship, WorkflowNodeVisitor } from './workflow/index.js';
 export { projectWorkflowGraph } from './workflow/index.js';
+export { JobRunIdSchema, StepIdSchema } from './workflow/index.js';
+export type { JobRunId, StepId } from './workflow/index.js';
+export { JobRunLifecycleStateSchema } from './workflow/index.js';
+export type { JobRunLifecycleState } from './workflow/index.js';
 export type {
   ProjectedEdge,
   ProjectedEdgeKind,
