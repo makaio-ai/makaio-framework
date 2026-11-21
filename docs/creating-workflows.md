@@ -106,6 +106,30 @@ const workflow = defineWorkflow('my-workflow', {
 export default workflow;
 ```
 
+#### `extensions`: declarations addressed to extensions
+
+`options.extensions` is a record keyed by extension name. Each value is JSON that belongs to
+the extension named by its key; the workflow core stores the record unchanged and interprets
+none of it. An extension that understands its entry reads it from `definition.extensions`.
+
+```typescript
+const workflow = defineWorkflow('my-workflow', {
+  name: 'My Workflow',
+  extensions: {
+    '@acme/review': { requiredApprovals: 2 },
+  },
+});
+```
+
+- A key must be a valid extension name: a plain identifier or an npm-scoped name
+  (`@scope/pkg`). `defineWorkflow` throws on an invalid key.
+- A value must be plain JSON. A record that could not be stored unchanged is rejected rather than
+  altered: an own `__proto__` key at any depth, an object that is not a plain object, a symbol or
+  non-enumerable key, an extra property on an array.
+- A definition without declarations omits the field. An empty record (`{}`) is kept as an empty record.
+- Saving a definition replaces the whole stored record: an entry that is not sent is removed,
+  and a save without `extensions` removes the record.
+
 ### `.input(schema)` / `.config(schema)` / `.output(schema)`
 
 Declare Zod schemas for the workflow's input parameters, static configuration, and primary

@@ -232,6 +232,13 @@
       "when": 1790540488160,
       "tag": "0032_agent_tool_lists",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1795263644243,
+      "tag": "0033_workflow_definition_extensions",
+      "breakpoints": true
     }
   ]
 }

@@ -1,10 +1,12 @@
 /* eslint max-lines: ["error", { "max": 420, "skipBlankLines": true, "skipComments": true }] */
 import { z } from 'zod';
+import { ExtensionNameSchema } from '@makaio/core';
 import {
   JsonObjectContractSchema,
   JsonRecordSchema,
   JsonSchemaRecordSchema,
   JsonValueSchema,
+  rejectingLossyJsonValues,
 } from '../shared/json-value.js';
 import { AutomationTriggerKindSchema } from '../automation-trigger/schemas.js';
 import type { AutomationTriggerBinding } from '../automation-trigger/definition.js';
@@ -838,6 +840,23 @@ const ExecutableSourceSchema = z.discriminatedUnion('kind', [
 // ─────────────────────────────────────────────────────────────
 
 /**
+ * Declarations addressed to extensions: opaque JSON keyed by extension name.
+ *
+ * Each value is interpreted only by the extension it is addressed to; the
+ * workflow core stores and forwards the record unchanged and interprets none of
+ * it. A value the parse would rewrite (a `__proto__` own key at any depth, or a
+ * non-plain object) is rejected rather than silently altered; see
+ * {@link rejectingLossyJsonValues}.
+ */
+const WorkflowExtensionsSchema = rejectingLossyJsonValues(z.record(ExtensionNameSchema, JsonValueSchema), {
+  prototypeKey: '"__proto__" is not a valid extension name or declaration key',
+  nonPlainObject: 'extension declarations must be plain JSON objects and arrays',
+  symbolKey: 'extension declarations carry a symbol-keyed property, which cannot be transported as JSON',
+  nonEnumerableKey: 'extension declarations carry a non-enumerable property, which the record parse would drop',
+  extraArrayKey: 'extension declarations must not contain an array with extra own properties',
+});
+
+/**
  * Persisted workflow definition in the pipeline-primitive model.
  *
  * The `root` field replaces the old flat `steps` DAG with a structured
@@ -909,6 +928,15 @@ export const WorkflowDefinitionSchema = z.object({
    * Stored as an opaque JSON record; ignored by the executor.
    */
   canvasLayout: z.record(z.string(), JsonValueSchema).optional(),
+  /**
+   * Declarations addressed to extensions, keyed by extension name.
+   *
+   * Each entry is an opaque JSON value that only the named extension validates and
+   * interprets; the workflow core stores and forwards it unchanged and interprets none.
+   * A storage write replaces the whole map: omitting it removes every entry.
+   * A record that could not be stored unchanged is rejected, not altered.
+   */
+  extensions: WorkflowExtensionsSchema.optional(),
   /**
    * Provenance record tracking how and where this workflow definition originated.
    *

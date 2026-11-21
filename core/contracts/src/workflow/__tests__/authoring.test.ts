@@ -247,6 +247,39 @@ describe('defineWorkflow', () => {
     expect(workflow.definition).not.toHaveProperty('successFinalizerId');
   });
 
+  it('copies the extensions option into the definition', () => {
+    const extensions = { 'makaio.clients-core': { follow: true }, '@acme/review': [1, 'a'] };
+    const workflow = defineWorkflow('extended-flow', { extensions });
+
+    expect(workflow.definition.extensions).toEqual(extensions);
+  });
+
+  it('throws at the defineWorkflow call when an extension name is invalid', () => {
+    expect(() => defineWorkflow('bad-extension-flow', { extensions: { 'a/b': { follow: true } } })).toThrow();
+    expect(() => defineWorkflow('dot-segment-flow', { extensions: { '..': true } })).toThrow();
+  });
+
+  it('omits extensions from the definition when the option is not configured', () => {
+    const workflow = defineWorkflow('plain-extension-flow');
+
+    expect(workflow.definition).not.toHaveProperty('extensions');
+  });
+
+  it('does not expose extension or extensions methods on the builder', () => {
+    const workflow = defineWorkflow('no-extension-method-flow');
+
+    // The type check is the assertion for the builder's type: an unused `@ts-expect-error` fails it.
+    // @ts-expect-error The builder has no `extension` member; extensions are an option of defineWorkflow.
+    const extension: unknown = workflow.extension;
+    // @ts-expect-error The builder has no `extensions` member; extensions are an option of defineWorkflow.
+    const extensions: unknown = workflow.extensions;
+
+    expect(extension).toBeUndefined();
+    expect(extensions).toBeUndefined();
+    expect(Reflect.get(workflow, 'extension')).not.toBeTypeOf('function');
+    expect(Reflect.get(workflow, 'extensions')).not.toBeTypeOf('function');
+  });
+
   it('station appends station nodes to the root sequence', () => {
     const workflow = defineWorkflow('fn-flow');
     workflow.station('compute', () => ({ value: 42 }));

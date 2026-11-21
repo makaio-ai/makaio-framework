@@ -82,6 +82,8 @@ export const workflowDefinitionsDual = defineDualTable(
     updatedAt: c.epochMs('updated_at').notNull(),
     /** Canvas layout hints for the visual editor (JSON object). */
     canvasLayout: c.jsonCol<Record<string, JsonValue>>('canvas_layout'),
+    /** Declarations addressed to extensions, keyed by extension name (JSON object). */
+    extensions: c.jsonCol<NonNullable<WorkflowDefinition['extensions']>>('extensions'),
     /**
      * Provenance record for extension-synced definitions (JSON).
      * Absent on locally-authored definitions.

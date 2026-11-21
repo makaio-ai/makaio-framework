@@ -302,6 +302,46 @@ describe('workflow storage handlers', () => {
     expect(fetched?.successFinalizerId).toBeUndefined();
   });
 
+  it('replaces definition extensions on every save and removes them when a save omits them', async () => {
+    const extensions = { gateway: { lane: 'intake', retries: 2 }, '@acme/review': ['a', 'b'] };
+    const workflow = {
+      ...createWorkflowDefinition({ id: 'workflow-extensions-replace' }),
+      extensions,
+    } satisfies WorkflowDefinition;
+    const updatedEvents: WorkflowDefinition[] = [];
+    const unsubscribe = MakaioBus.on(WorkflowSubjects.definition.updated, (ctx) => {
+      updatedEvents.push(ctx.payload);
+    });
+
+    try {
+      await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
+      const { workflow: first } = await MakaioBus.request(WorkflowStorageSubjects.get, { id: workflow.id });
+      expect(first?.extensions).toEqual(extensions);
+
+      // A save replaces the record: the entry that is not sent is gone, nothing is merged.
+      await MakaioBus.request(WorkflowStorageSubjects.set, {
+        workflow: { ...workflow, extensions: { gateway: extensions.gateway } },
+      });
+      const { workflow: second } = await MakaioBus.request(WorkflowStorageSubjects.get, { id: workflow.id });
+      expect(second?.extensions).toEqual({ gateway: extensions.gateway });
+
+      const { workflows } = await MakaioBus.request(WorkflowStorageSubjects.list, {});
+      expect(workflows.find((item) => item.id === workflow.id)?.extensions).toEqual({
+        gateway: extensions.gateway,
+      });
+      expect(updatedEvents.at(-1)?.extensions).toEqual({ gateway: extensions.gateway });
+
+      await MakaioBus.request(WorkflowStorageSubjects.set, {
+        workflow: { id: workflow.id, name: workflow.name, root: workflow.root, scope: workflow.scope },
+      });
+      const { workflow: third } = await MakaioBus.request(WorkflowStorageSubjects.get, { id: workflow.id });
+      expect(third?.extensions).toBeUndefined();
+      expect(updatedEvents.at(-1)?.extensions).toBeUndefined();
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('preserves optional definition fields when omitted from an update payload', async () => {
     const workflow = {
       ...createWorkflowDefinition({

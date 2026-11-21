@@ -1,4 +1,5 @@
 import { eq, and, getTableColumns, sql } from 'drizzle-orm';
+import type { SQLiteUpdateSetSource } from 'drizzle-orm/sqlite-core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { JsonValue, WorkflowDefinition } from '@makaio/contracts';
 import { resolveSchema, serializeDatabaseOperation, type MakaioDatabase } from '@makaio/storage-drizzle';
@@ -30,6 +31,7 @@ function mapDefinition(row: DbDefinitionRow): WorkflowDefinition {
     triggers: row.triggers ?? undefined,
     scope: fromScopeColumns(row),
     canvasLayout: (row.canvasLayout as WorkflowDefinition['canvasLayout']) ?? undefined,
+    extensions: row.extensions ?? undefined,
     source: (row.source as WorkflowDefinition['source']) ?? undefined,
     executableSource: (row.executableSource as WorkflowDefinition['executableSource']) ?? undefined,
     requirements: (row.requirements as WorkflowDefinition['requirements']) ?? undefined,
@@ -57,6 +59,7 @@ function toDefinitionDbValues(workflow: WorkflowDefinition, now: number): Insert
     artifact: workflow.artifact ?? null,
     triggers: workflow.triggers ?? null,
     canvasLayout: (workflow.canvasLayout as Record<string, JsonValue> | undefined) ?? null,
+    extensions: workflow.extensions ?? null,
     source: workflow.source ?? null,
     executableSource: workflow.executableSource ?? null,
     requirements: workflow.requirements ?? null,
@@ -66,6 +69,49 @@ function toDefinitionDbValues(workflow: WorkflowDefinition, now: number): Insert
     ...scopeColumns,
   };
   return values;
+}
+
+/**
+ * Builds the `SET` clause for updating an existing `workflow_definitions` row.
+ *
+ * Per-column rule: `name`, `root`, `updatedAt`, `state`, `extensions`, `executableSource`, `requirements`,
+ * `successFinalizerId` and the scope columns always take the incoming value; `description`, `inputSchema`,
+ * `configSchema`, `outputSchema`, `artifact`, `triggers`, `canvasLayout` and `source` keep the stored value when the
+ * incoming value is null; `createdAt` is always preserved.
+ * @param values - Incoming column values from {@link toDefinitionDbValues}
+ * @param columns - Table columns, used to reference the stored values
+ * @param now - Current epoch milliseconds for `updatedAt`
+ * @param scope - Scope of the workflow being written
+ * @returns Update source for the `workflow_definitions` table
+ */
+function toDefinitionUpdateSet(
+  values: InsertWorkflowDefinition,
+  columns: WorkflowDefinitionsTable['_']['columns'],
+  now: number,
+  scope: WorkflowDefinition['scope'],
+): SQLiteUpdateSetSource<WorkflowDefinitionsTable> {
+  return {
+    name: values.name,
+    root: values.root,
+    updatedAt: now,
+    // Preserve the original createdAt — do not overwrite with `now`.
+    createdAt: sql`COALESCE(${columns.createdAt}, ${now})`,
+    // Optional fields: keep existing DB value when incoming value is null.
+    description: values.description !== null ? values.description : sql`${columns.description}`,
+    inputSchema: values.inputSchema !== null ? values.inputSchema : sql`${columns.inputSchema}`,
+    configSchema: values.configSchema !== null ? values.configSchema : sql`${columns.configSchema}`,
+    outputSchema: values.outputSchema !== null ? values.outputSchema : sql`${columns.outputSchema}`,
+    state: values.state,
+    artifact: values.artifact !== null ? values.artifact : sql`${columns.artifact}`,
+    triggers: values.triggers !== null ? values.triggers : sql`${columns.triggers}`,
+    canvasLayout: values.canvasLayout !== null ? values.canvasLayout : sql`${columns.canvasLayout}`,
+    extensions: values.extensions,
+    source: values.source !== null ? values.source : sql`${columns.source}`,
+    executableSource: values.executableSource,
+    requirements: values.requirements,
+    successFinalizerId: values.successFinalizerId,
+    ...toScopeColumns(scope),
+  };
 }
 
 /**
@@ -98,27 +144,7 @@ export function registerDefinitionHandlers(bus: IMakaioBus, db: MakaioDatabase):
 
       const [updatedRow] = await db
         .update(workflowDefinitions)
-        .set({
-          name: values.name,
-          root: values.root,
-          updatedAt: now,
-          // Preserve the original createdAt — do not overwrite with `now`.
-          createdAt: sql`COALESCE(${columns.createdAt}, ${now})`,
-          // Optional fields: keep existing DB value when incoming value is null.
-          description: values.description !== null ? values.description : sql`${columns.description}`,
-          inputSchema: values.inputSchema !== null ? values.inputSchema : sql`${columns.inputSchema}`,
-          configSchema: values.configSchema !== null ? values.configSchema : sql`${columns.configSchema}`,
-          outputSchema: values.outputSchema !== null ? values.outputSchema : sql`${columns.outputSchema}`,
-          state: values.state,
-          artifact: values.artifact !== null ? values.artifact : sql`${columns.artifact}`,
-          triggers: values.triggers !== null ? values.triggers : sql`${columns.triggers}`,
-          canvasLayout: values.canvasLayout !== null ? values.canvasLayout : sql`${columns.canvasLayout}`,
-          source: values.source !== null ? values.source : sql`${columns.source}`,
-          executableSource: values.executableSource,
-          requirements: values.requirements,
-          successFinalizerId: values.successFinalizerId,
-          ...toScopeColumns(workflow.scope),
-        })
+        .set(toDefinitionUpdateSet(values, columns, now, workflow.scope))
         .where(eq(workflowDefinitions.id, workflow.id))
         .returning();
       return updatedRow ? { kind: 'updated' as const, row: updatedRow } : undefined;
