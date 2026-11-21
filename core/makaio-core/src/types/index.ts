@@ -27,6 +27,31 @@ export type {
   TransportReceiveContext,
 } from './message.js';
 
+export type { CallClaim, MakaioPartyKind, Party, PartyKind, PartyRef } from './party.js';
+export {
+  CallClaimSchema,
+  isCallClaim,
+  isInProcessCaller,
+  MAKAIO_CLI_LOCAL_PARTY_KIND,
+  MAKAIO_E2E_PEER_PARTY_KIND,
+  MAKAIO_EXTENSION_PARTY_KIND,
+  MAKAIO_HOST_PARTY_KIND,
+  MAKAIO_LOOPBACK_PARTY_KIND,
+  MAKAIO_WORKER_THREAD_PARTY_KIND,
+  MAKAIO_JOB_RUN_PARTY_KIND,
+  MAKAIO_RULES_PARTY_KIND,
+  MAKAIO_ANONYMOUS_PARTY_KIND,
+  MAKAIO_WITNESSED_ACCOUNT_PARTY_KIND,
+  MAKAIO_WORKER_PROVIDER_PARTY_KIND,
+  MAKAIO_STEP_EXECUTION_PARTY_KIND,
+  CorePartyKind,
+  PartyRefSchema,
+  PartySchema,
+} from './party.js';
+
+export type { CallContext, CallContextRecord, CrossHostMetadata, OwnWorkPurpose } from './call-context.js';
+export { CallContextRecordSchema, CrossHostMetadataSchema } from './call-context.js';
+
 export type {
   EventSchema,
   RequestSchema,
