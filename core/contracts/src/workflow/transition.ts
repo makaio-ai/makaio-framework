@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { ArtifactRevision } from '../artifact/schemas.js';
+import { ArtifactRefSchema, ArtifactRevisionSchema, type ArtifactRevision } from '../artifact/schemas.js';
+import { ConditionSchema } from '../shared/condition.js';
 import { JsonValueSchema } from '../shared/json-value.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -16,30 +17,6 @@ import { JsonValueSchema } from '../shared/json-value.js';
 export const TransitionEventTypeSchema = z.enum(['artifact.created', 'artifact.revised', 'artifact.status.changed']);
 
 export type TransitionEventType = z.infer<typeof TransitionEventTypeSchema>;
-
-// ─────────────────────────────────────────────────────────────
-// Transition Condition
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Serializable condition evaluated against an artifact event payload.
- *
- * Stored as an opaque JSON record in the contracts layer. The pipeline
- * service interprets this using `@makaio/rules` at evaluation time,
- * supporting field comparisons, `$and`/`$or`/`$not` combinators, and
- * `$expr` jexl expression strings.
- *
- * Evaluation context shape:
- * - `artifact` — the `ArtifactRevision` involved in the event
- * - `previous` — the previous `ArtifactRef` for `artifact.revised` events
- * - `previousArtifact` — the resolved previous `ArtifactRevision` for
- *   `artifact.revised` events when the artifact store can provide it
- * - `path` — the status path for `artifact.status.changed` events
- * - `current` — the new status value for `artifact.status.changed` events
- */
-export const TransitionConditionSchema = z.record(z.string(), JsonValueSchema);
-
-export type TransitionCondition = z.infer<typeof TransitionConditionSchema>;
 
 // ─────────────────────────────────────────────────────────────
 // Transition Action Invocation
@@ -109,16 +86,25 @@ export const TransitionRuleDefinitionSchema = z.object({
    */
   on: TransitionEventTypeSchema,
   /**
-   * Structural condition evaluated against the event context.
+   * Condition evaluated against the event context.
    *
-   * When present and the condition evaluates falsy, the action is not dispatched.
+   * When present and the condition does not match, the action is not dispatched.
    * When omitted, the rule fires for every matching event type.
    *
-   * The condition is an opaque JSON record interpreted by `@makaio/rules`
-   * at evaluation time. See {@link TransitionConditionSchema} for the
-   * supported operator vocabulary.
+   * The condition is a `Condition`, evaluated by `@makaio/rules`.
+   *
+   * Evaluation context shape: see {@link TransitionEvaluationContextSchemas}, one schema
+   * per `on`. The registry checks the condition against the schema of the rule's `on`.
+   * - `artifact` — the `ArtifactRevision` involved in the event
+   * - `previous` — the previous `ArtifactRef` for `artifact.revised` events, the previous
+   *   status value for `artifact.status.changed` events
+   * - `previousArtifact` — the resolved previous `ArtifactRevision` for
+   *   `artifact.revised` events when the artifact store can provide it
+   * - `path` — the status path for `artifact.status.changed` events
+   * - `current` — the new status value for `artifact.status.changed` events
+   * - `_transition` — loop-protection metadata (`ruleId`, `eventType`, `depth`)
    */
-  when: TransitionConditionSchema.optional(),
+  when: ConditionSchema.optional(),
   /**
    * Action to dispatch when the rule matches.
    */
@@ -202,8 +188,60 @@ export interface ExtensionTransitionActionsContribution {
 // Evaluation Context
 // ─────────────────────────────────────────────────────────────
 
+/** Loop-protection metadata the pipeline injects into every evaluation context. */
+const TransitionMetadataSchema = z.object({
+  /** The transition rule ID that fired this action. */
+  ruleId: z.string(),
+  /** The artifact event type that matched the rule. */
+  eventType: TransitionEventTypeSchema,
+  /** Depth counter tracking recursive transition invocations. */
+  depth: z.number(),
+});
+
+/**
+ * Evaluation context per rule event type: exactly the keys the transition pipeline
+ * builds for that event (`TransitionPipelineService`), required where always present.
+ *
+ * - `artifact` and `_transition` are present for every event.
+ * - `previous` is the previous artifact ref on `artifact.revised`; `previousArtifact` only
+ *   appears there when the store resolves the previous revision.
+ * - `path` is always present on `artifact.status.changed`. `previous` and `current` may both
+ *   be absent (initial set, clear), so a negation on them needs an `$exists: true` guard in
+ *   the same `$and`, and `{ $exists: false }` is the way to ask for the missing side.
+ *
+ * `artifact.data` is free-form and stays open; every other object is closed, so a typo
+ * in a condition field is caught when the rule is registered.
+ *
+ * The registry derives the JSON Schema a rule's `when` condition is checked against from
+ * the entry of the rule's `on`.
+ */
+export const TransitionEvaluationContextSchemas = {
+  'artifact.created': z.object({
+    artifact: ArtifactRevisionSchema,
+    _transition: TransitionMetadataSchema,
+  }),
+  'artifact.revised': z.object({
+    artifact: ArtifactRevisionSchema,
+    previous: ArtifactRefSchema,
+    previousArtifact: ArtifactRevisionSchema.optional(),
+    _transition: TransitionMetadataSchema,
+  }),
+  'artifact.status.changed': z.object({
+    artifact: ArtifactRevisionSchema,
+    path: z.string(),
+    previous: z.unknown().optional(),
+    current: z.unknown().optional(),
+    _transition: TransitionMetadataSchema,
+  }),
+} satisfies Record<TransitionEventType, z.ZodType>;
+
 /**
  * Context object passed to condition evaluation and action dispatch.
+ *
+ * The merged view over {@link TransitionEvaluationContextSchemas}: action handlers see one
+ * shape for all events, so the per-event keys are optional here. A union of the inferred
+ * types would not allow reading `path` or `current` without narrowing. The type-level
+ * assertion below keeps this interface in step with the schemas.
  *
  * The pipeline builds this from the incoming artifact event payload so
  * that rules can reference `artifact`, `previous`, `path`, and `current`
@@ -267,3 +305,15 @@ export interface TransitionEvaluationContext {
     readonly depth: number;
   };
 }
+
+type AssignableToContext<T extends TransitionEvaluationContext> = T;
+
+/**
+ * Context type of one event, as inferred from its schema.
+ *
+ * Fails to compile when a schema in {@link TransitionEvaluationContextSchemas} stops being
+ * assignable to {@link TransitionEvaluationContext}.
+ */
+export type TransitionEvaluationContextOf<E extends TransitionEventType> = AssignableToContext<
+  z.infer<(typeof TransitionEvaluationContextSchemas)[E]>
+>;

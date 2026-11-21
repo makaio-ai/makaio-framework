@@ -11,7 +11,6 @@ export type {
   ContextRule,
   ContextRuleAction,
   ContextRuleChangedEvent,
-  ContextRuleCondition,
   ContextRuleInput,
   ContextRuleListQuery,
   ContextRuleResolutionRequest,

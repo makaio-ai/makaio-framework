@@ -4,39 +4,10 @@
  * Provides runtime matching of payloads against declarative filter specs.
  * Supports dot-notation paths and filter operators ($in, $ne, $exists, $startsWith, $endsWith).
  */
+import { readDotPath } from '@makaio/contracts';
 import { type FilterOperator, isOperatorObject, type PayloadFilter } from '@makaio/core';
 
 type Primitive = string | number | boolean | null;
-
-/**
- * Get a nested value from an object using dot-notation path.
- * @param obj - Object to traverse
- * @param path - Dot-notation path (e.g., 'raw.msg.type')
- * @returns Value at path, or undefined if not found
- * @example
- * ```typescript
- * const obj = { raw: { msg: { type: 'event' } } };
- * getPath(obj, 'raw.msg.type'); // 'event'
- * getPath(obj, 'raw.missing'); // undefined
- * ```
- */
-export function getPath(obj: unknown, path: string): unknown {
-  if (obj === null || obj === undefined) {
-    return undefined;
-  }
-
-  const parts = path.split('.');
-  let current: unknown = obj;
-
-  for (const part of parts) {
-    if (current === null || current === undefined || typeof current !== 'object') {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[part];
-  }
-
-  return current;
-}
 
 /**
  * Check if a value matches a filter operator.
@@ -104,7 +75,7 @@ function matchOperator(actual: unknown, operator: FilterOperator): boolean {
  */
 export function matchesFilter(payload: unknown, filter: PayloadFilter): boolean {
   for (const [path, operator] of Object.entries(filter)) {
-    const actual = getPath(payload, path);
+    const actual = readDotPath(payload, path);
     if (!matchOperator(actual, operator)) {
       return false;
     }

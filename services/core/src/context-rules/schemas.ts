@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ConditionSchema as RuleConditionSchema } from '@makaio/rules/schemas';
+import { ConditionSchema } from '@makaio/contracts';
 import { MANAGED_INSTRUCTION_FILE_TARGETS } from './types.js';
 import type {
   ContextRule,
@@ -126,7 +126,7 @@ const ContextRuleInputBaseSchema = z
     id: z.string().min(1),
     name: z.string().min(1),
     description: z.string().optional(),
-    condition: RuleConditionSchema,
+    condition: ConditionSchema,
     action: ContextRuleActionSchema,
     priority: z.number(),
     enabled: z.boolean(),

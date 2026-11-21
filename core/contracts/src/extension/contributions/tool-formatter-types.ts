@@ -7,7 +7,8 @@
  * @packageDocumentation
  */
 
-import type { PayloadFilter } from '@makaio/core';
+import { z } from 'zod';
+import type { Condition } from '../../shared/condition.js';
 
 /** Discriminated content types for formatted tool call output. */
 export type PluginTransformedContentType = 'markdown';
@@ -34,17 +35,26 @@ export interface PluginFormattedToolCallOutput {
   outputContent?: PluginTransformedContent;
 }
 
-/** Input shape passed to a formatter's `format` function. */
-export interface PluginToolCallFormatterInput {
+/**
+ * Input shape passed to a formatter's `format` function.
+ *
+ * Also the context a formatter's `when` condition is evaluated over, and the schema the
+ * registry checks that condition against: the root is closed, so a field the formatter
+ * input does not have (a typo, or `toolCallId`) is rejected at registration.
+ */
+export const ToolCallFormatterInputSchema = z.strictObject({
   /** Name of the tool being called. */
-  toolName: string;
+  toolName: z.string(),
   /** Arguments passed to the tool. */
-  args: Record<string, unknown>;
+  args: z.record(z.string(), z.unknown()),
   /** Current status of the tool call. */
-  status: 'pending' | 'running' | 'completed' | 'error';
+  status: z.enum(['pending', 'running', 'completed', 'error']),
   /** Output from the tool when the call has completed. */
-  output?: string;
-}
+  output: z.string().optional(),
+});
+
+/** @see {@link ToolCallFormatterInputSchema} */
+export type PluginToolCallFormatterInput = z.infer<typeof ToolCallFormatterInputSchema>;
 
 /**
  * A tool call formatter declaration contributed by a package.
@@ -57,12 +67,14 @@ export interface ToolCallFormatterDeclaration {
   /** Unique identifier for this formatter. */
   id: string;
   /**
-   * Declarative filter matched against the tool call input shape.
+   * Condition that selects the tool calls this formatter applies to.
    *
-   * Uses a `PayloadFilter` with dot-path support (e.g. `'args.subagent_type'`).
-   * All conditions are ANDed.
+   * Evaluated over the formatter input object itself: `toolName`, `args`, `status`, and
+   * `output` are at the root, with no `payload.` prefix. Field paths use dot notation,
+   * for example `args.subagent_type`. A condition that cannot be evaluated (a failing
+   * `$expr`) means the formatter does not apply.
    */
-  filter: PayloadFilter;
+  when: Condition;
   /**
    * Priority for ordering when multiple formatters match.
    *

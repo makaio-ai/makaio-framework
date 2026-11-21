@@ -12,6 +12,12 @@ declare module 'jexl' {
   /** A compiled jexl expression ready for repeated evaluation. */
   export class Expression {
     /**
+     * Syntax tree set by `compile()`; `null` when the source holds no operand
+     * (empty, whitespace only, or only opening parentheses). Not part of jexl's
+     * documented API: read only to reject such sources at compile time.
+     */
+    public readonly _ast?: object | null;
+    /**
      * Evaluate the expression asynchronously.
      * @param context - variable map passed to the expression
      */
@@ -56,6 +62,18 @@ declare module 'jexl' {
      * @param fn - function implementation
      */
     public addFunction(name: string, fn: (...args: unknown[]) => unknown): void;
+    /**
+     * Look up a registered transform.
+     * @param name - transform name
+     * @returns the transform, or `undefined` when none is registered under that name
+     */
+    public getTransform(name: string): ((...args: unknown[]) => unknown) | undefined;
+    /**
+     * Look up a registered function.
+     * @param name - function name
+     * @returns the function, or `undefined` when none is registered under that name
+     */
+    public getFunction(name: string): ((...args: unknown[]) => unknown) | undefined;
     /**
      * Add a binary operator.
      * @param operator - operator symbol

@@ -61,6 +61,7 @@ export type {
   WidgetSize as PageWidgetSize,
 } from './page-types.js';
 
+export { ToolCallFormatterInputSchema } from './tool-formatter-types.js';
 export type {
   ToolCallFormatterDeclaration,
   PluginFormattedToolCallOutput,

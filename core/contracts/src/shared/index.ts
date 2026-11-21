@@ -11,11 +11,43 @@ export {
   type JsonFidelityViolation,
   type JsonFidelityViolationKind,
   type JsonBoundarySnapshot,
+  type JsonSchema,
   type JsonValue,
   type LossyJsonValueMessages,
 } from './json-value.js';
+export {
+  ConditionErrorSchema,
+  ConditionFindingSchema,
+  ConditionOutcomeSchema,
+  ConditionScalarValueSchema,
+  ConditionSchema,
+  ExpressionConditionSchema,
+  FieldConditionSchema,
+  FieldOperatorSchema,
+  type AndCondition,
+  type CompoundCondition,
+  type Condition,
+  type ConditionError,
+  type ConditionFinding,
+  type ConditionOutcome,
+  type ConditionScalarValue,
+  type ExpressionCondition,
+  type FieldCondition,
+  type FieldOperator,
+  type NotCondition,
+  type OrCondition,
+} from './condition.js';
 export { zodSchemaToJsonRecord } from './zod-json-schema.js';
-export { defineOwnValue, isJsonObject, jsonEquals, ownValue, readPropertyPath } from './json-tree.js';
+export {
+  defineOwnValue,
+  isJsonObject,
+  type JsonValueType,
+  jsonEquals,
+  jsonValueType,
+  ownValue,
+  readDotPath,
+  readPropertyPath,
+} from './json-tree.js';
 
 /**
  * Content source for binary data or external resources.

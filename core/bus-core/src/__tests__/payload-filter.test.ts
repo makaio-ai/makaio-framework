@@ -1,15 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { matchesFilter, getPath } from '../utils/payload-filter.js';
+import { readDotPath } from '@makaio/contracts';
+import { matchesFilter } from '../utils/payload-filter.js';
 
 describe('payload-filter', () => {
-  describe('getPath', () => {
+  describe('readDotPath', () => {
     it('should get nested values', () => {
       const obj = { a: { b: { c: 'value' } } };
-      expect(getPath(obj, 'a.b.c')).toBe('value');
+      expect(readDotPath(obj, 'a.b.c')).toBe('value');
     });
 
     it('should return undefined for missing paths', () => {
-      expect(getPath({ a: 1 }, 'b')).toBeUndefined();
+      expect(readDotPath({ a: 1 }, 'b')).toBeUndefined();
     });
   });
 
@@ -71,6 +72,26 @@ describe('payload-filter', () => {
           kind: 'change',
         }),
       ).toBe(false);
+    });
+  });
+
+  describe('inherited property paths', () => {
+    const payload = { a: { b: 1 }, items: [{ name: 'first' }] };
+    const inherited = ['constructor', '__proto__', 'toString', 'a.hasOwnProperty'];
+
+    it.each(inherited)('treats %s as absent for $exists', (path) => {
+      expect(matchesFilter(payload, { [path]: { $exists: false } })).toBe(true);
+      expect(matchesFilter(payload, { [path]: { $exists: true } })).toBe(false);
+    });
+
+    it.each(inherited)('does not match %s for equality or $ne against a value', (path) => {
+      expect(matchesFilter(payload, { [path]: 'x' })).toBe(false);
+      expect(matchesFilter(payload, { [path]: { $ne: 'x' } })).toBe(true);
+    });
+
+    it('still resolves numeric array segments', () => {
+      expect(matchesFilter(payload, { 'items.0.name': 'first' })).toBe(true);
+      expect(readDotPath(payload, 'items.0.name')).toBe('first');
     });
   });
 });

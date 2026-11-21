@@ -7,8 +7,8 @@
  * @packageDocumentation
  */
 
-import type { JsonObject, Rule } from '@makaio/rules';
-import type { SubjectTelemetryAttributeValue } from '@makaio/contracts';
+import type { Rule } from '@makaio/rules';
+import type { JsonValue, SubjectTelemetryAttributeValue } from '@makaio/contracts';
 
 /** OTel span kind narrowed to the subset produced by this extension. */
 export type SpanDraftKind = 'internal' | 'client';
@@ -86,10 +86,10 @@ export interface SpanDraft {
  * Additional OTel attributes merged into the span before export. The
  * {@link attributes} map holds serializable OTel attribute values restricted
  * to primitives and homogeneous arrays (enforced at runtime by the companion
- * Zod schema). The type extends {@link JsonObject} so it satisfies the
+ * Zod schema). The type extends JSON object record so it satisfies the
  * `Rule<TAction extends JsonObjectShape>` constraint.
  */
-export interface SpanEnricherAction extends JsonObject {
+export interface SpanEnricherAction extends Record<string, JsonValue> {
   /**
    * OTel scalar attributes to merge into the target span.
    *

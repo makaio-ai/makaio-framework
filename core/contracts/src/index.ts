@@ -989,13 +989,23 @@ export type {
   UsageMetrics,
 } from './session/index.js';
 export {
+  ConditionErrorSchema,
+  ConditionFindingSchema,
+  ConditionOutcomeSchema,
+  ConditionScalarValueSchema,
+  ConditionSchema,
+  ExpressionConditionSchema,
+  FieldConditionSchema,
+  FieldOperatorSchema,
   EntityUIConfigSchema,
   ERROR_CATEGORIES,
   ErrorCategorySchema,
   defineOwnValue,
   isJsonObject,
   jsonEquals,
+  jsonValueType,
   ownValue,
+  readDotPath,
   readPropertyPath,
   snapshotJsonBoundary,
   JSON_BOUNDARY_MAX_CONTAINER_NESTING,
@@ -1010,8 +1020,20 @@ export {
   zodSchemaToJsonRecord,
 } from './shared/index.js';
 export type {
+  AndCondition,
+  CompoundCondition,
+  Condition,
+  ConditionError,
+  ConditionFinding,
+  ConditionOutcome,
+  ConditionScalarValue,
   ContentSource,
   CustomFieldDefinition,
+  ExpressionCondition,
+  FieldCondition,
+  FieldOperator,
+  NotCondition,
+  OrCondition,
   EntityUIConfig,
   ErrorCategory,
   FieldDefinition,
@@ -1022,6 +1044,7 @@ export type {
   JsonFidelityViolation,
   JsonFidelityViolationKind,
   JsonBoundarySnapshot,
+  JsonSchema,
   JsonValue,
   LossyJsonValueMessages,
   Message,
@@ -1352,6 +1375,7 @@ export {
   iterate,
   iterateChain,
   loop,
+  payloadField,
   station,
 } from './workflow/index.js';
 export type {
@@ -1392,7 +1416,7 @@ export type {
 export { WorkflowBlocksNamespace, WorkflowBlocksSchemas, WorkflowBlocksSubjects } from './workflow-blocks/index.js';
 export {
   TransitionActionInvocationSchema,
-  TransitionConditionSchema,
+  TransitionEvaluationContextSchemas,
   TransitionEventTypeSchema,
   TransitionRuleDefinitionSchema,
 } from './workflow/index.js';
@@ -1402,8 +1426,8 @@ export type {
   TransitionActionFactory,
   TransitionActionHandler,
   TransitionActionInvocation,
-  TransitionCondition,
   TransitionEvaluationContext,
+  TransitionEvaluationContextOf,
   TransitionEventType,
   TransitionRuleDefinition,
 } from './workflow/index.js';
@@ -1561,6 +1585,7 @@ export {
   ExtensionWarningEntrySchema,
   ExtensionWarningSchema,
   getBootstrapAssetKey,
+  ToolCallFormatterInputSchema,
   getExtensionWarningActionLabel,
   isDetachedDescriptor,
   isExtensionManifestLike,

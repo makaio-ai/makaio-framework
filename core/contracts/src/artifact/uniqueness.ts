@@ -186,6 +186,7 @@ export function resolveDataPathValue(
   data: Record<string, unknown> | undefined,
   path: string,
 ): { value: unknown } | undefined {
+  // Not `readPropertyPath`: callers must tell a present `undefined` value from an absent path.
   let current: unknown = data;
   for (const key of path.split('.')) {
     if (current === null || typeof current !== 'object' || Array.isArray(current) || !Object.hasOwn(current, key)) {

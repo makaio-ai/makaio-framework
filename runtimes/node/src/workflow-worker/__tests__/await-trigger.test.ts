@@ -3,7 +3,11 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import { createBusInstance } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
 import type { WorkflowDefinition, WorkflowWorkerConfig } from '@makaio/contracts';
-import { BUS_EVENT_AUTOMATION_TRIGGER_KIND, CRON_AUTOMATION_TRIGGER_KIND } from '@makaio/contracts';
+import {
+  BUS_EVENT_AUTOMATION_TRIGGER_KIND,
+  CRON_AUTOMATION_TRIGGER_KIND,
+  WorkflowAutomationTriggerBindingSchema,
+} from '@makaio/contracts';
 import { z } from 'zod';
 import { resolveAwaitTriggerConfig } from '../await-trigger.js';
 
@@ -117,7 +121,7 @@ describe('resolveAwaitTriggerConfig', () => {
     expect(resolved).toBe(config);
   });
 
-  it('resolves with the first payload passing both filter and filterExpression', async () => {
+  it('resolves with the first payload satisfying the binding when condition', async () => {
     const bus = makeBus();
     let resolved: WorkflowWorkerConfig | undefined;
 
@@ -127,8 +131,12 @@ describe('resolveAwaitTriggerConfig', () => {
         {
           kind: BUS_EVENT_AUTOMATION_TRIGGER_KIND,
           params: { subject: 'demo.started' },
-          filter: { branch: 'main' },
-          filterExpression: 'payload.count > 5',
+          when: {
+            $and: [
+              { field: 'payload.branch', operator: 'main' },
+              { field: 'payload.count', operator: { $gt: 5 } },
+            ],
+          },
         },
       ]),
       bus,
@@ -139,8 +147,8 @@ describe('resolveAwaitTriggerConfig', () => {
     });
 
     // Retried so the await is subscribed before the decisive emit. The first two
-    // payloads must be rejected — by the structural filter and by the jexl
-    // expression respectively — so a leaking filter surfaces as the wrong payload.
+    // payloads must each fail one operand of the condition, so a leaking operand
+    // surfaces as the wrong payload.
     await vi.waitFor(async () => {
       await bus.emit(DemoStarted, { branch: 'feature', count: 9 });
       await bus.emit(DemoStarted, { branch: 'main', count: 1 });
@@ -149,6 +157,77 @@ describe('resolveAwaitTriggerConfig', () => {
     });
 
     expect((await pending).triggerPayload).toEqual({ branch: 'main', count: 9 });
+  });
+
+  it('rejects before subscribing when the when condition fails the event schema check', async () => {
+    const bus = makeBus();
+    const on = vi.spyOn(bus, 'on');
+
+    // The bus-event payload schema is an open record, so only the closed `{ payload }` root can fail:
+    // `branch` is not `payload.branch`, and the context admits no other first segment.
+    await expect(
+      resolveAwaitTriggerConfig(
+        makeConfig(),
+        makeLoaded([
+          {
+            kind: BUS_EVENT_AUTOMATION_TRIGGER_KIND,
+            params: { subject: 'demo.started' },
+            when: { field: 'branch', operator: 'main' },
+          },
+        ]),
+        bus,
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow(/unknown-root/);
+
+    expect(on).not.toHaveBeenCalled();
+  });
+
+  it('keeps waiting after a when condition that errors at run time and resolves on a later match', async () => {
+    const bus = makeBus();
+    let resolved: WorkflowWorkerConfig | undefined;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      // Compiles and passes the schema check, but parsing malformed JSON
+      // fails while evaluating a payload with `count` 1.
+      const pending = resolveAwaitTriggerConfig(
+        makeConfig(),
+        makeLoaded([
+          {
+            kind: BUS_EVENT_AUTOMATION_TRIGGER_KIND,
+            params: { subject: 'demo.started' },
+            when: { $expr: "payload.count == 1 ? '{bad'|parseJson : payload.count == 2" },
+          },
+        ]),
+        bus,
+        new AbortController().signal,
+      ).then((value) => {
+        resolved = value;
+        return value;
+      });
+
+      await vi.waitFor(async () => {
+        await bus.emit(DemoStarted, { branch: 'main', count: 1 });
+        expect(error).toHaveBeenCalledWith(expect.stringContaining('could not be evaluated'));
+      });
+      expect(resolved).toBeUndefined();
+
+      await bus.emit(DemoStarted, { branch: 'main', count: 2 });
+      expect((await pending).triggerPayload).toEqual({ branch: 'main', count: 2 });
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it.each(['filter', 'filterExpression'])('rejects a binding carrying the removed %s key', (key) => {
+    const result = WorkflowAutomationTriggerBindingSchema.safeParse({
+      kind: BUS_EVENT_AUTOMATION_TRIGGER_KIND,
+      params: { subject: 'demo.started' },
+      [key]: key === 'filter' ? { branch: 'main' } : 'payload.count > 5',
+    });
+
+    expect(result.success).toBe(false);
   });
 
   it('ignores scalar bus events and resolves only with an object-root payload', async () => {

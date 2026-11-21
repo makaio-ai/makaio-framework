@@ -319,6 +319,20 @@ async function emitOn(source: TestSource, channel: string, payload: TestEvent | 
 // Suite
 // ─────────────────────────────────────────────────────────────
 
+/**
+ * Persisted bindings that still carry a removed trigger filter key.
+ *
+ * Declared as plain objects so they reach storage without a cast: the binding
+ * type no longer admits these keys, but stored rows from before the change can.
+ */
+const legacyBindings = {
+  filter: { kind: TEST_KIND, params: { channel: 'legacy' }, filter: { value: 1 } },
+  filterExpression: { kind: TEST_KIND, params: { channel: 'legacy' }, filterExpression: 'payload.value > 1' },
+};
+
+/** `when` that names a payload field no test trigger emits. */
+const UNFIT_WHEN = { field: 'payload.missing', operator: 1 } as const;
+
 /** Captured `WorkflowSubjects.start` request. */
 interface CapturedStart {
   /** Workflow the reconciler asked to start. */
@@ -392,8 +406,10 @@ describe('WorkflowTriggerReconciler', () => {
   }
 
   it('shares one activation between two workflows and starts them independently', async () => {
-    await store('wf-alpha', [{ kind: TEST_KIND, params: { channel: 'main' }, filter: { value: { $in: [1, 2] } } }]);
-    await store('wf-beta', [{ kind: TEST_KIND, params: { channel: 'main' }, filterExpression: 'payload.value > 5' }]);
+    await store('wf-alpha', [
+      { kind: TEST_KIND, params: { channel: 'main' }, when: { field: 'payload.value', operator: { $in: [1, 2] } } },
+    ]);
+    await store('wf-beta', [{ kind: TEST_KIND, params: { channel: 'main' }, when: { $expr: 'payload.value > 5' } }]);
 
     await reconciler.init();
 
@@ -654,7 +670,7 @@ describe('WorkflowTriggerReconciler', () => {
 
   it('leaves a persisted scalar-output binding inactive without activating its source', async () => {
     await store('wf-scalar', [
-      { kind: TEST_SCALAR_KIND, params: { channel: 'scalar' }, filterExpression: 'payload == "fire"' },
+      { kind: TEST_SCALAR_KIND, params: { channel: 'scalar' }, when: { $expr: 'payload == "fire"' } },
     ]);
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
@@ -712,13 +728,13 @@ describe('WorkflowTriggerReconciler', () => {
     await reconciler.init();
     expect(source.lifecycle).toEqual(['activate:good']);
 
-    // A binding whose filterExpression cannot compile invalidates the whole
-    // refresh: the workflow keeps the subscriptions it already had. The broken
+    // A binding that fails schema parsing (here the removed `filterExpression`
+    // key) invalidates the whole refresh: the workflow keeps the subscriptions it already had. The broken
     // definition is persisted first, because the refresh reads storage rather
     // than trusting the event payload.
     const broken = createWorkflowDefinition({
       id: 'wf-guard',
-      triggers: [{ kind: TEST_KIND, params: { channel: 'broken' }, filterExpression: 'payload.((' }],
+      triggers: [legacyBindings.filterExpression],
     });
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: broken });
     await MakaioBus.emit(WorkflowSubjects.definition.updated, broken);
@@ -731,11 +747,8 @@ describe('WorkflowTriggerReconciler', () => {
     expect(starts[0]?.workflowId).toBe('wf-guard');
   });
 
-  it('activates valid persisted siblings when a cold-start binding has an invalid filter expression', async () => {
-    await store('wf-cold-invalid-sibling', [
-      { kind: TEST_KIND, params: { channel: 'invalid' }, filterExpression: 'payload.((' },
-      { kind: TEST_KIND, params: { channel: 'valid' } },
-    ]);
+  it('activates valid persisted siblings when a cold-start binding carries a removed filter key', async () => {
+    await store('wf-cold-invalid-sibling', [legacyBindings.filter, { kind: TEST_KIND, params: { channel: 'valid' } }]);
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     try {
@@ -778,6 +791,269 @@ describe('WorkflowTriggerReconciler', () => {
     } finally {
       error.mockRestore();
     }
+  });
+
+  describe('trigger binding condition', () => {
+    it('starts the workflow only for events the `when` condition matches', async () => {
+      await store('wf-when', [
+        { kind: TEST_KIND, params: { channel: 'when' }, when: { field: 'payload.value', operator: { $gte: 5 } } },
+      ]);
+      await reconciler.init();
+      expect(reconciler.activeConsumerCount()).toBe(1);
+
+      await emitOn(source, 'when', { channel: 'when', value: 1 });
+      expect(starts).toHaveLength(0);
+
+      await emitOn(source, 'when', { channel: 'when', value: 9 });
+      await vi.waitFor(() => expect(starts).toHaveLength(1));
+      expect(starts[0]).toEqual({ workflowId: 'wf-when', triggerPayload: { channel: 'when', value: 9 } });
+    });
+
+    it('reports a run-time evaluation error once with the consumer identity and keeps handling events', async () => {
+      // Compiles, so the schema check only warns; it fails at run time for large values.
+      await store('wf-runtime-error', [
+        {
+          kind: TEST_KIND,
+          params: { channel: 'rt' },
+          when: { $expr: "payload.value > 5 ? '{bad'|parseJson : true" },
+        },
+      ]);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      try {
+        await reconciler.init();
+        expect(reconciler.activeConsumerCount()).toBe(1);
+
+        await emitOn(source, 'rt', { channel: 'rt', value: 9 });
+
+        expect(starts).toHaveLength(0);
+        expect(error).toHaveBeenCalledTimes(1);
+        const [message] = error.mock.calls[0] ?? [];
+        expect(message).toEqual(expect.stringContaining('condition evaluation failed'));
+        expect(message).toEqual(expect.stringContaining(`trigger 0 ('${TEST_KIND}') of workflow "wf-runtime-error"`));
+        expect(message).toEqual(expect.stringContaining("'$expr'"));
+
+        await emitOn(source, 'rt', { channel: 'rt', value: 1 });
+        await vi.waitFor(() => expect(starts).toHaveLength(1));
+        expect(starts[0]).toEqual({ workflowId: 'wf-runtime-error', triggerPayload: { channel: 'rt', value: 1 } });
+        expect(error).toHaveBeenCalledTimes(1);
+      } finally {
+        error.mockRestore();
+      }
+    });
+
+    it('installs no listener on a cold start when `when` does not fit the event schema', async () => {
+      await store('wf-cold-unfit', [{ kind: TEST_KIND, params: { channel: 'unfit' }, when: UNFIT_WHEN }]);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      try {
+        await reconciler.init();
+
+        expect(reconciler.activeConsumerCount()).toBe(0);
+        expect(source.live).toHaveLength(0);
+        expect(source.lifecycle).toEqual([]);
+        // The condition is checked once the event schema is known, not while parsing.
+        expect(error).toHaveBeenCalledWith(
+          expect.stringContaining('keeping last-good trigger 0'),
+          expect.objectContaining({ message: expect.stringContaining('does not fit the event schema') }),
+        );
+        expect(error).not.toHaveBeenCalledWith(expect.stringContaining('leaving invalid trigger'), expect.anything());
+      } finally {
+        error.mockRestore();
+      }
+    });
+
+    it('keeps the last-good listener when a refresh brings a `when` that does not fit the event schema', async () => {
+      await store('wf-refresh-unfit', [{ kind: TEST_KIND, params: { channel: 'good' } }]);
+      await reconciler.init();
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+      try {
+        const unfit = createWorkflowDefinition({
+          id: 'wf-refresh-unfit',
+          triggers: [{ kind: TEST_KIND, params: { channel: 'next' }, when: UNFIT_WHEN }],
+        });
+        await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: unfit });
+        await MakaioBus.emit(WorkflowSubjects.definition.updated, unfit);
+
+        await vi.waitFor(() =>
+          expect(error).toHaveBeenCalledWith(
+            expect.stringContaining('keeping last-good triggers for workflow'),
+            expect.anything(),
+          ),
+        );
+        expect(reconciler.activeConsumerCount()).toBe(1);
+        expect(source.lifecycle).toEqual(['activate:good']);
+
+        await emitOn(source, 'good', { channel: 'good', value: 1 });
+        await vi.waitFor(() => expect(starts).toHaveLength(1));
+        expect(starts[0]?.workflowId).toBe('wf-refresh-unfit');
+      } finally {
+        error.mockRestore();
+      }
+    });
+
+    describe('a refresh with live consumers is batch-atomic for conditions', () => {
+      /**
+       * Stores `before`, starts the reconciler, stores and announces `after`, and
+       * waits for the batch rejection log.
+       * @param id - Workflow identifier.
+       * @param before - Triggers live before the refresh.
+       * @param after - Triggers of the refreshed definition.
+       * @returns Resolves once the reconciler has logged the rejection.
+       */
+      async function refreshExpectingRejection(
+        id: string,
+        before: WorkflowDefinitionOptions['triggers'],
+        after: WorkflowDefinitionOptions['triggers'],
+      ): Promise<void> {
+        await store(id, before);
+        await reconciler.init();
+        const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+        try {
+          const next = createWorkflowDefinition({ id, triggers: after });
+          await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: next });
+          await MakaioBus.emit(WorkflowSubjects.definition.updated, next);
+          await vi.waitFor(() =>
+            expect(error).toHaveBeenCalledWith(
+              expect.stringContaining('keeping last-good triggers for workflow'),
+              expect.anything(),
+            ),
+          );
+          const batchLogs = error.mock.calls.filter(([message]) =>
+            String(message).includes('keeping last-good triggers for workflow'),
+          );
+          expect(batchLogs).toHaveLength(1);
+        } finally {
+          error.mockRestore();
+        }
+      }
+
+      it('touches no consumer when a later binding has an unfit `when`', async () => {
+        await refreshExpectingRejection(
+          'wf-batch-unfit',
+          [
+            { kind: TEST_KIND, params: { channel: 'a' } },
+            { kind: TEST_KIND, params: { channel: 'b' } },
+          ],
+          [
+            { kind: TEST_KIND, params: { channel: 'a2' } },
+            { kind: TEST_KIND, params: { channel: 'b' }, when: UNFIT_WHEN },
+          ],
+        );
+
+        expect(source.lifecycle).toEqual(['activate:a', 'activate:b']);
+        expect(reconciler.activeConsumerCount()).toBe(2);
+        await emitOn(source, 'a', { channel: 'a', value: 1 });
+        await vi.waitFor(() => expect(starts).toHaveLength(1));
+        expect(starts[0]?.workflowId).toBe('wf-batch-unfit');
+      });
+
+      it('does not release a removed binding when another binding is unfit', async () => {
+        await refreshExpectingRejection(
+          'wf-batch-removal',
+          [
+            { kind: TEST_KIND, params: { channel: 'a' } },
+            { kind: TEST_KIND, params: { channel: 'b' } },
+            { kind: TEST_KIND, params: { channel: 'c' } },
+          ],
+          [
+            { kind: TEST_KIND, params: { channel: 'a' } },
+            { kind: TEST_KIND, params: { channel: 'b' }, when: UNFIT_WHEN },
+          ],
+        );
+
+        expect(source.lifecycle).toEqual(['activate:a', 'activate:b', 'activate:c']);
+        expect(reconciler.activeConsumerCount()).toBe(3);
+      });
+
+      it('touches no consumer when a later binding has an `$expr` syntax error', async () => {
+        await refreshExpectingRejection(
+          'wf-batch-syntax',
+          [
+            { kind: TEST_KIND, params: { channel: 'a' } },
+            { kind: TEST_KIND, params: { channel: 'b' } },
+          ],
+          [
+            { kind: TEST_KIND, params: { channel: 'a2' } },
+            { kind: TEST_KIND, params: { channel: 'b' }, when: { $expr: 'payload.value >' } },
+          ],
+        );
+
+        expect(source.lifecycle).toEqual(['activate:a', 'activate:b']);
+        expect(reconciler.activeConsumerCount()).toBe(2);
+        await emitOn(source, 'a', { channel: 'a', value: 1 });
+        await vi.waitFor(() => expect(starts).toHaveLength(1));
+      });
+    });
+
+    it('does not block activation on warning findings', async () => {
+      await store('wf-warning', [
+        { kind: TEST_KIND, params: { channel: 'warn' }, when: { $expr: 'payload.value > 1' } },
+      ]);
+      await reconciler.init();
+
+      expect(reconciler.activeConsumerCount()).toBe(1);
+      await emitOn(source, 'warn', { channel: 'warn', value: 2 });
+      await vi.waitFor(() => expect(starts).toHaveLength(1));
+    });
+
+    it('drops the consumer when a registry change makes its `when` unfit for the event schema', async () => {
+      await store('wf-drop-unfit', [
+        { kind: TEST_KIND, params: { channel: 'drop' }, when: { field: 'payload.value', operator: { $gte: 1 } } },
+      ]);
+      await reconciler.init();
+      expect(source.lifecycle).toEqual(['activate:drop']);
+
+      const narrowed = toAutomationTriggerType(
+        defineAutomationTrigger({
+          kind: TEST_KIND,
+          label: 'Narrowed Test Pulse',
+          description: 'Stops emitting the field the persisted condition reads.',
+          categories: ['Test'],
+          paramsSchema: z.object({ channel: z.string().min(1) }),
+          eventSchema: z.object({ channel: z.string() }),
+          activate: async () => () => undefined,
+        }),
+      );
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      try {
+        await registry.register(TEST_OWNER, [narrowed, ...source.types.filter((type) => type.kind !== TEST_KIND)]);
+
+        await vi.waitFor(() => expect(reconciler.activeConsumerCount()).toBe(0));
+        expect(source.lifecycle).toEqual(['activate:drop', 'cleanup:drop']);
+        expect(source.live).toHaveLength(0);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('no longer available'), expect.anything());
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it.each([
+      'filter',
+      'filterExpression',
+    ] as const)('rejects the removed `%s` key while parsing, before any event schema is consulted', async (key) => {
+      await store('wf-legacy', [legacyBindings[key], { kind: TEST_KIND, params: { channel: 'valid' } }]);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const prepareBinding = vi.spyOn(runtime, 'prepareBinding');
+
+      try {
+        await reconciler.init();
+
+        expect(reconciler.activeConsumerCount()).toBe(1);
+        expect(source.live.map(({ channel }) => channel)).toEqual(['valid']);
+        expect(error).toHaveBeenCalledWith(
+          expect.stringContaining('leaving invalid trigger 0 of workflow "wf-legacy" inactive'),
+          expect.anything(),
+        );
+        // The legacy binding never reached the binding runtime.
+        expect(prepareBinding.mock.calls.map(([binding]) => binding.params)).toEqual([{ channel: 'valid' }]);
+      } finally {
+        prepareBinding.mockRestore();
+        error.mockRestore();
+      }
+    });
   });
 
   it('drops handles when the contributing trigger type is deregistered and restores them on re-registration', async () => {
@@ -1003,14 +1279,14 @@ describe('WorkflowTriggerReconciler', () => {
     expect(reconciler.activeConsumerCount()).toBe(2);
     expect(source.live.map(({ channel }) => channel)).toEqual(['recover']);
 
-    // Storage can contain an invalid filter before a registry signal arrives.
+    // Storage can contain an invalid binding before a registry signal arrives.
     // Replaying TEST_OWNER must not compile OTHER_OWNER's binding: its existing
     // consumer remains last-good while the stopped TEST_OWNER source recovers.
     const invalidSibling = createWorkflowDefinition({
       id: definition.id,
       triggers: [
         { kind: TEST_KIND, params: { channel: 'recover' } },
-        { kind: OTHER_KIND, params: { channel: 'untouched' }, filterExpression: 'payload.((' },
+        { ...legacyBindings.filterExpression, kind: OTHER_KIND, params: { channel: 'untouched' } },
       ],
     });
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: invalidSibling });

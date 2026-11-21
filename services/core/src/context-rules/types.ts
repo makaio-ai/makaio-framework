@@ -1,5 +1,4 @@
-import type { z } from 'zod';
-import type { ConditionSchema as RuleConditionSchema } from '@makaio/rules/schemas';
+import type { Condition } from '@makaio/contracts';
 
 /**
  * Default turn-context bucket used for rules that inject additional context.
@@ -60,11 +59,6 @@ export type ManagedInstructionFileTarget = (typeof MANAGED_INSTRUCTION_FILE_TARG
 export type ContextRuleScope = 'global' | 'project' | 'session';
 
 /**
- * Any condition supported by context-rule resolution.
- */
-export type ContextRuleCondition = z.infer<typeof RuleConditionSchema>;
-
-/**
  * Rule action that injects rendered content into turn context.
  */
 export interface TurnContextRuleAction {
@@ -116,7 +110,7 @@ export interface ContextRuleInput extends ContextRuleScopeFields {
   /** Optional description for diagnostics or UI display. */
   description?: string;
   /** Predicate tree that decides whether the rule matches. */
-  condition: ContextRuleCondition;
+  condition: Condition;
   /** Delivery action attached to matching rules. */
   action: ContextRuleAction;
   /** Deterministic ordering key for matching rules. */

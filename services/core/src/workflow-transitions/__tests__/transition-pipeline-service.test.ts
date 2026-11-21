@@ -189,6 +189,59 @@ describe('TransitionPipelineService', () => {
     await service.destroy();
   });
 
+  it('fires on a status change without previous only for the rule that asks for the missing side', async () => {
+    const bus: IMakaioBus = createBusInstance();
+    const service = new TransitionPipelineService(bus);
+    const artifactRef = {
+      refClass: 'artifact',
+      kind: 'implementation-plan',
+      id: 'artifact-1',
+      revision: 'rev-1',
+    } as const;
+    bus.on(ArtifactSubjects.resolve, (ctx) => {
+      ctx.setResult({ artifact: makeArtifact() });
+    });
+    await service.init();
+    const fired: string[] = [];
+    for (const id of ['guarded-negation', 'previous-absent']) {
+      service.actionRegistry.register(`pkg-${id}`, {
+        [`pkg-${id}.capture`]: () => ({
+          async execute() {
+            fired.push(id);
+          },
+        }),
+      });
+    }
+    service.ruleRegistry.register('pkg-guarded-negation', [
+      {
+        id: 'pkg-guarded-negation.rule',
+        on: 'artifact.status.changed',
+        when: {
+          $and: [
+            { field: 'previous', operator: { $exists: true } },
+            { field: 'previous', operator: { $ne: 'draft' } },
+          ],
+        },
+        action: { type: 'pkg-guarded-negation.capture' },
+        enabled: true,
+      },
+    ]);
+    service.ruleRegistry.register('pkg-previous-absent', [
+      {
+        id: 'pkg-previous-absent.rule',
+        on: 'artifact.status.changed',
+        when: { field: 'previous', operator: { $exists: false } },
+        action: { type: 'pkg-previous-absent.capture' },
+        enabled: true,
+      },
+    ]);
+
+    await bus.emit(ArtifactSubjects.status.changed, { artifact: artifactRef, path: '/data/status', current: 'triage' });
+
+    expect(fired).toEqual(['previous-absent']);
+    await service.destroy();
+  });
+
   it('skips status transition evaluation when the artifact ref cannot be resolved', async () => {
     const bus: IMakaioBus = createBusInstance();
     const service = new TransitionPipelineService(bus);
@@ -224,6 +277,44 @@ describe('TransitionPipelineService', () => {
     expect(dispatchCount).toBe(0);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Could not resolve status transition artifact'));
     warn.mockRestore();
+    await service.destroy();
+  });
+
+  it('reports a failed condition, skips that rule, and still fires the next rule of the same event', async () => {
+    const bus: IMakaioBus = createBusInstance();
+    const service = new TransitionPipelineService(bus);
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const fired: string[] = [];
+    await service.init();
+    service.actionRegistry.register('pkg-transition', {
+      'pkg-transition.capture': () => ({
+        async execute(_invocation, context) {
+          fired.push(context._transition.ruleId);
+        },
+      }),
+    });
+    service.ruleRegistry.register('pkg-transition', [
+      {
+        id: 'pkg-transition.broken-condition',
+        on: 'artifact.created',
+        when: { $expr: "'{bad'|parseJson" },
+        action: { type: 'pkg-transition.capture' },
+        enabled: true,
+      },
+      {
+        id: 'pkg-transition.healthy',
+        on: 'artifact.created',
+        action: { type: 'pkg-transition.capture' },
+        enabled: true,
+      },
+    ]);
+
+    await bus.emit(ArtifactSubjects.created, { artifact: makeArtifact() });
+
+    expect(logError).toHaveBeenCalledTimes(1);
+    expect(logError.mock.calls[0]?.[0]).toContain('pkg-transition.broken-condition');
+    expect(fired).toStrictEqual(['pkg-transition.healthy']);
+    logError.mockRestore();
     await service.destroy();
   });
 });

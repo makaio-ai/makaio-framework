@@ -12,6 +12,7 @@ export {
   CronWorkflowTrigger,
   CRON_AUTOMATION_TRIGGER_KIND,
   DEFAULT_CRON_TIMEZONE,
+  payloadField,
 } from './authoring-triggers.js';
 export type {
   ArtifactContext,
