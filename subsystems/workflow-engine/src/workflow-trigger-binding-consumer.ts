@@ -7,7 +7,7 @@
  * the worker's await mode alike — applies identical semantics.
  */
 
-import type { JsonValue, WorkflowAutomationTriggerBinding } from '@makaio/contracts';
+import { defineOwnValue, type JsonValue, type WorkflowAutomationTriggerBinding } from '@makaio/contracts';
 import type { JsonSchema } from '@makaio/contracts/shared';
 import { assertValidCondition, type ConditionFinding, type ConditionOutcome, evaluate } from '@makaio/rules';
 
@@ -33,27 +33,64 @@ export interface CompiledWorkflowTriggerCondition {
 /** Schema keywords whose values are instance data, not schemas; references inside them are data. */
 const DATA_KEYWORDS: ReadonlySet<string> = new Set(['const', 'enum', 'default', 'examples']);
 
+/**
+ * Schema keywords whose value is a name table: a map from an arbitrary name to a schema.
+ * Every entry of such a map is a schema regardless of what it is named, so a payload
+ * property (or `$defs`/`definitions` entry) named like a {@link DATA_KEYWORDS} member is
+ * still a schema, not instance data.
+ *
+ * `dependencies` is the draft-07 predecessor of `dependentSchemas`/`dependentRequired`:
+ * each of its entries is *either* a schema or an array of property names. Treating it as
+ * a name table is still correct for the array case: the array-traversal branch of
+ * {@link rebaseLocalRefs} recurses into each element, and a string element is returned
+ * unchanged because it is not an object or array, so the property-name array survives
+ * untouched.
+ */
+const NAME_TABLE_KEYWORDS: ReadonlySet<string> = new Set([
+  'properties',
+  'patternProperties',
+  '$defs',
+  'definitions',
+  'dependentSchemas',
+  'dependencies',
+]);
+
 /** JSON pointer of the event schema inside the context wrapper. */
 const PAYLOAD_POINTER = '#/properties/payload';
 
 /**
  * Deep-copies a schema node, moving every local reference under {@link PAYLOAD_POINTER}.
  *
- * Only string-valued `$ref`s starting with `#` are rewritten, so a property that is
- * itself named `$ref` (its value is a schema object) is copied unchanged, and the
- * values of data keywords are copied verbatim.
+ * Only string-valued `$ref`s starting with `#` are rewritten. A property named `$ref` is not
+ * taken for a reference: it is not special-cased, so its schema is rebased like any other
+ * name-table entry rather than copied unchanged. The values of data keywords are copied
+ * verbatim. The {@link DATA_KEYWORDS} exception
+ * applies only while `node`'s own keys are schema keywords: inside a
+ * {@link NAME_TABLE_KEYWORDS} map, every entry is a schema no matter what it is
+ * named, so the exception does not apply there. Every entry is written with
+ * {@link defineOwnValue} so an own key named `__proto__` is preserved as a normal
+ * member instead of reassigning the copy's prototype.
  * @param node - Schema node or any nested JSON value.
+ * @param isNameTable - Whether `node`'s own entries are name-table entries (name → schema),
+ *   as opposed to schema-keyword entries (keyword → value). Defaults to `false`, the
+ *   top-level schema-keyword case.
  * @returns The rebased copy.
  */
-function rebaseLocalRefs(node: JsonValue): JsonValue {
-  if (Array.isArray(node)) return node.map(rebaseLocalRefs);
+function rebaseLocalRefs(node: JsonValue, isNameTable = false): JsonValue {
+  if (Array.isArray(node)) return node.map((item) => rebaseLocalRefs(item));
   if (node === null || typeof node !== 'object') return node;
   const copy: Record<string, JsonValue> = {};
   for (const [key, value] of Object.entries(node)) {
-    if (key === '$ref' && typeof value === 'string' && value.startsWith('#')) {
-      copy[key] = `${PAYLOAD_POINTER}${value.slice(1)}`;
+    if (isNameTable) {
+      defineOwnValue(copy, key, value === undefined ? value : rebaseLocalRefs(value, false));
+    } else if (key === '$ref' && typeof value === 'string' && value.startsWith('#')) {
+      defineOwnValue(copy, key, `${PAYLOAD_POINTER}${value.slice(1)}`);
     } else {
-      copy[key] = DATA_KEYWORDS.has(key) || value === undefined ? value : rebaseLocalRefs(value);
+      defineOwnValue(
+        copy,
+        key,
+        DATA_KEYWORDS.has(key) || value === undefined ? value : rebaseLocalRefs(value, NAME_TABLE_KEYWORDS.has(key)),
+      );
     }
   }
   return copy;
