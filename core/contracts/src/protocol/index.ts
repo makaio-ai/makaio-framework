@@ -3,7 +3,6 @@ export { defaultRustModelChecker } from './export-manifest-rust-checker.js';
 export { formatProtocolExportAuditIssues } from './export-manifest-audit-utils.js';
 export { sortJsonValue } from './export-manifest-json-utils.js';
 export type {
-  JsonObject,
   MakaioProtocolEventSubject,
   MakaioProtocolManifest,
   MakaioProtocolRequestSubject,

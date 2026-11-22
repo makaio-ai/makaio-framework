@@ -130,6 +130,11 @@ export { registerDrizzleHandlers, type DrizzleHandlerRegistration } from './regi
 // Dialect schema variants — twins resolved per handle at registration time
 export { defineDialectSchema, resolveSchema, type DialectSchema, type PostgresTwinSchema, type Equal } from './dialect';
 
+// Host-owned transaction database — the guarded host handle, its query-context reader,
+// and the typed error raised on transaction misuse
+export { createHostDatabase, getTransactionQueryContext } from './host-database';
+export { HostTransactionError, type HostTransactionErrorCode, type TransactionQueryContext } from './host-transaction';
+
 // Dual-table factory — one column definition builds both dialect table objects,
 // replacing hand-written twin schema files
 export {

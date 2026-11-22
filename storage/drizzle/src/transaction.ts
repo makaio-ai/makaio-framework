@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { isUnboundBunSqliteHandle } from './engine/sqlite/unbound-bun-handle';
 import { isHandleHeldByCaller } from './raw-sql';
 import { ReentrantOperationError } from './reentrant-operation-error';
 import type { MakaioDatabase } from './types';
@@ -205,7 +206,8 @@ export async function serializeDatabaseOperation<T>(db: MakaioDatabase, operatio
  * the callback's awaits. At runtime under Bun, `db` is a `BunSQLiteDatabase`
  * cast to `MakaioDatabase`, whose native transaction would commit at the
  * callback's first `await`; the SQLite client factory binds it to this
- * contract.
+ * contract, and a handle that was never bound this way is rejected instead of
+ * silently losing atomicity.
  *
  * **Isolation contract (SQLite handles only):** while a transaction is open
  * on a handle, statements issued on that handle from outside the callback —
@@ -237,8 +239,17 @@ export async function serializeDatabaseOperation<T>(db: MakaioDatabase, operatio
  * @param callback - Transaction work to execute
  * @returns Result returned by the callback
  * @throws ReentrantOperationError when called from inside work holding the handle.
+ * @throws Error when `db` is a bun-sqlite handle whose `transaction()` was never
+ *   bound to this atomicity contract (see {@link isUnboundBunSqliteHandle}).
  */
 export async function executeTransaction<T>(db: MakaioDatabase, callback: TransactionCallback<T>): Promise<T> {
+  if (isUnboundBunSqliteHandle(db)) {
+    throw new Error(
+      'executeTransaction received an unbound bun-sqlite handle: its transaction() commits at the ' +
+        "callback's first await instead of holding across every awaited statement. Create the handle " +
+        'with createDatabaseClient instead of a hand-rolled drizzle-orm/bun-sqlite instance.',
+    );
+  }
   return serializeDatabaseOperation(db, () => db.transaction(callback));
 }
 

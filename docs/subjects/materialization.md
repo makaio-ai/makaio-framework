@@ -48,7 +48,7 @@ Type: Request (RPC)
 |-------|------|----------|
 | `affordance` | `{ kind: "own-view"; } \| { kind: "inline"; hostRelation: string; } \| { kind: "entry"; via?: string \| undefined; collection?: string \| undefined; }` | yes |
 | `level` | `"link" \| "summary" \| "full"` | yes |
-| `params` | `Record<string, unknown> \| undefined` | no |
+| `params` | `JsonObject \| undefined` | no |
 | `ref` | `{ refClass: "artifact"; kind: string; id: string; revision: string; }` | yes |
 
 **Response:**
@@ -120,7 +120,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `bindings` | `{ id: string; provider: string; namespace: string; target: { kind: "label"; prefix?: string \| undefined; } \| { kind: "field"; name: string; fieldId?: string \| undefined; } \| { kind: "issue-type"; name: string; typeId?: string \| undefined; } \| { kind: "body-fragment"; slot: string; } \| { kind: "comment"; template: string; }; appliesTo: ("artifact" \| "workpiece" \| "surface")[]; valueMapping?: Record<string, string> \| undefined; description?: string \| undefined; params?: Record<string, unknown> \| undefined; }[]` | yes |
+| `bindings` | `{ id: string; provider: string; namespace: string; target: { kind: "label"; prefix?: string \| undefined; } \| { kind: "field"; name: string; fieldId?: string \| undefined; } \| { kind: "issue-type"; name: string; typeId?: string \| undefined; } \| { kind: "body-fragment"; slot: string; } \| { kind: "comment"; template: string; }; appliesTo: ("artifact" \| "workpiece" \| "surface")[]; valueMapping?: Record<string, string> \| undefined; description?: string \| undefined; params?: JsonObject \| undefined; }[]` | yes |
 
 ### <a id="materialization.surfaceBinding.register"></a>`materialization.surfaceBinding.register` (rpc)
 
@@ -138,7 +138,7 @@ Type: Request (RPC)
 | `description` | `string \| undefined` | no |
 | `id` | `string` | yes |
 | `namespace` | `string` | yes |
-| `params` | `Record<string, unknown> \| undefined` | no |
+| `params` | `JsonObject \| undefined` | no |
 | `provider` | `string` | yes |
 | `target` | `{ kind: "label"; prefix?: string \| undefined; } \| { kind: "field"; name: string; fieldId?: string \| undefined; } \| { kind: "issue-type"; name: string; typeId?: string \| undefined; } \| { kind: "body-fragment"; slot: string; } \| { kind: "comment"; template: string; }` | yes |
 | `valueMapping` | `Record<string, string> \| undefined` | no |

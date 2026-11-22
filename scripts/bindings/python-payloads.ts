@@ -1,12 +1,12 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type {
-  JsonObject,
   MakaioProtocolEventSubject,
   MakaioProtocolManifest,
   MakaioProtocolRequestSubject,
   MakaioProtocolSubject,
 } from '../../core/contracts/src/protocol/types.js';
+import type { JsonObject } from '../../core/contracts/src/shared/json-value.js';
 import { PYTHON_PAYLOADS_DIR } from '../lib/sdk-generation-paths.js';
 
 // ---------------------------------------------------------------------------

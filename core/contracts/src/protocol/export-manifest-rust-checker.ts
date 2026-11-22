@@ -1,4 +1,5 @@
-import type { JsonObject, MakaioProtocolSubject, ProtocolExportAuditCheckResult } from './types.js';
+import type { JsonObject } from '../shared/json-value.js';
+import type { MakaioProtocolSubject, ProtocolExportAuditCheckResult } from './types.js';
 import { isJsonObject } from './export-manifest-json-utils.js';
 
 /**

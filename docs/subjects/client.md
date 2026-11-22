@@ -625,7 +625,7 @@ Type: Request (RPC)
 | `kind` | `string` | yes |
 | `locator` | `{ kind: "session"; sessionId: string; } \| { kind: "adapter-session"; adapterSessionId: string; } \| { kind: "both"; sessionId: string; adapterSessionId: string; }` | yes |
 | `observedAt` | `number` | yes |
-| `payload` | `Record<string, unknown>` | yes |
+| `payload` | `JsonObject` | yes |
 | `source` | `string` | yes |
 
 **Response:**

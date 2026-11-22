@@ -11,11 +11,11 @@ next: false
 
 | Metric | Count |
 |--------|-------|
-| Namespaces | 104 |
-| Subjects | 981 (367 events, 614 RPCs) |
-| framework | 99 |
+| Namespaces | 108 |
+| Subjects | 992 (369 events, 623 RPCs) |
+| framework | 103 |
 | extension | 5 |
-| kind: bus | 74 |
+| kind: bus | 78 |
 | kind: adapter | 7 |
 | kind: client | 2 |
 | kind: extension | 3 |
@@ -69,6 +69,10 @@ next: false
 | [`kernel:boot`](./kernel-boot.md) | bus | 7 | 6E / 1R |
 | [`kernel:cli`](./kernel-cli.md) | bus | 2 | 0E / 2R |
 | [`kernel:extension`](./kernel-extension.md) | bus | 9 | 3E / 6R |
+| [`makaio:access`](./makaio-access.md) | bus | 2 | 1E / 1R |
+| [`makaio:journal`](./makaio-journal.md) | bus | 5 | 0E / 5R |
+| [`makaio:rights`](./makaio-rights.md) | bus | 3 | 1E / 2R |
+| [`makaio:subjects`](./makaio-subjects.md) | bus | 1 | 0E / 1R |
 | [`materialization`](./materialization.md) | bus | 6 | 3E / 3R |
 | [`mcp`](./mcp.md) | bus | 9 | 6E / 3R |
 | [`modelRegistry:public`](./modelregistry-public.md) | bus | 1 | 0E / 1R |

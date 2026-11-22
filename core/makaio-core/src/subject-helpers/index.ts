@@ -2,6 +2,7 @@ export { nestSubjectDefinitions, getFullSubjectForSubjectDefinition } from './ne
 export type { BusSubjects, NestedSubjectDefinitions, FlatSubjectDefinitions } from './nest-subject-definitions.js';
 export { createNamespaceWildcardSubject } from './namespace-wildcard-subject.js';
 export { splitSubjectKey } from './split-subject-key.js';
+export { isSubjectName, isSubjectPattern } from './subject-grammar.js';
 export type { SubjectKeySegments } from './split-subject-key.js';
 export { isRequestSchema } from './is-request-schema.js';
 export { localSubject, isLocalSchema } from './is-local-schema.js';

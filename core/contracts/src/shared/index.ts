@@ -10,6 +10,7 @@ export {
   rejectingLossyJsonValues,
   type JsonFidelityViolation,
   type JsonFidelityViolationKind,
+  type JsonObject,
   type JsonBoundarySnapshot,
   type JsonSchema,
   type JsonValue,

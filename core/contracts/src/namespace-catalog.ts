@@ -4,6 +4,7 @@ import { AgentNamespace } from './agent/namespace.js';
 import { AgentResolutionNamespace } from './agent-resolution/namespace.js';
 import { ApprovalNamespace } from './approval/namespace.js';
 import { ArtifactNamespace } from './artifact/index.js';
+import { AccessNamespace } from './access/namespace.js';
 import { AutomationTriggerNamespace } from './automation-trigger/namespace.js';
 import { CanonicalModelNamespace } from './canonical-model/namespace.js';
 import { CapabilityNamespace } from './capability/namespace.js';
@@ -16,9 +17,12 @@ import { FacetNamespace } from './facet/namespace.js';
 import { MaterializationNamespace } from './materialization/namespace.js';
 import { HarnessNamespace } from './harness/namespace.js';
 import { HostNamespace } from './host/namespace.js';
+import { JournalNamespace } from './journal/namespace.js';
+import { SubjectDirectoryNamespace } from './journal/subject-directory-namespace.js';
 import { McpNamespace } from './mcp/namespace.js';
 import { NativeSessionSupervisorNamespace } from './native-session-supervisor/namespace.js';
 import { PlatformNamespace } from './platform/namespace.js';
+import { RightsNamespace } from './rights/namespace.js';
 import { GitHookNamespace } from './capabilities/git-hooks/namespace.js';
 import { ReviewNamespace } from './capabilities/review/namespace.js';
 import { SessionNamespace } from './session/namespace.js';
@@ -60,6 +64,7 @@ import { SkillStorageNamespace } from './skill/storage-namespace.js';
 // heterogeneous elements into BusNamespaceDefinition<string, ...>, so an explicit
 // widening cast is required for registerNamespaces() compatibility.
 export const FrameworkContractNamespaces: readonly RegistrableBusNamespaceDefinition[] = [
+  AccessNamespace,
   AdapterNamespace,
   AgentNamespace,
   AgentResolutionNamespace,
@@ -78,13 +83,16 @@ export const FrameworkContractNamespaces: readonly RegistrableBusNamespaceDefini
   MaterializationNamespace,
   HarnessNamespace,
   HostNamespace,
+  JournalNamespace,
   McpNamespace,
   NativeSessionSupervisorNamespace,
   PlatformNamespace,
   ReviewNamespace,
+  RightsNamespace,
   SessionNamespace,
   SkillNamespace,
   SubagentNamespace,
+  SubjectDirectoryNamespace,
   SubjectTelemetryNamespace,
   ToastNamespace,
   ToolNamespace,

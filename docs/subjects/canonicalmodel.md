@@ -42,7 +42,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `adapterConfig` | `Record<string, unknown> \| undefined` | no |
+| `adapterConfig` | `JsonObject \| undefined` | no |
 | `adapterId` | `string \| undefined` | no |
 | `adapterName` | `string` | yes |
 | `allowedDirectories` | `string[] \| undefined` | no |

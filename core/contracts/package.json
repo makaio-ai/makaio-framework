@@ -29,6 +29,13 @@
     "./context-projection": "./src/context-projection/index.ts",
     "./harness": "./src/harness/index.ts",
     "./host": "./src/host/index.ts",
+    "./host-database": "./src/host-database/index.ts",
+    "./journal": "./src/journal/index.ts",
+    "./rights": "./src/rights/index.ts",
+    "./access": "./src/access/index.ts",
+    "./boundary": "./src/boundary/index.ts",
+    "./rules": "./src/rules/index.ts",
+    "./credential": "./src/credential/index.ts",
     "./extension": "./src/extension/index.ts",
     "./model-registry": "./src/model-registry/index.ts",
     "./provider": "./src/provider/index.ts",
@@ -133,6 +140,34 @@
       "./host": {
         "types": "./dist/host/index.d.ts",
         "default": "./dist/host/index.mjs"
+      },
+      "./host-database": {
+        "types": "./dist/host-database/index.d.ts",
+        "default": "./dist/host-database/index.mjs"
+      },
+      "./journal": {
+        "types": "./dist/journal/index.d.ts",
+        "default": "./dist/journal/index.mjs"
+      },
+      "./rights": {
+        "types": "./dist/rights/index.d.ts",
+        "default": "./dist/rights/index.mjs"
+      },
+      "./access": {
+        "types": "./dist/access/index.d.ts",
+        "default": "./dist/access/index.mjs"
+      },
+      "./boundary": {
+        "types": "./dist/boundary/index.d.ts",
+        "default": "./dist/boundary/index.mjs"
+      },
+      "./rules": {
+        "types": "./dist/rules/index.d.ts",
+        "default": "./dist/rules/index.mjs"
+      },
+      "./credential": {
+        "types": "./dist/credential/index.d.ts",
+        "default": "./dist/credential/index.mjs"
       },
       "./extension": {
         "types": "./dist/extension/index.d.ts",

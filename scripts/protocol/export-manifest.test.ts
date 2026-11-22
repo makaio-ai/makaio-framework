@@ -1,5 +1,5 @@
 import { MakaioBus } from '@makaio/bus-core';
-import { createBusNamespace } from '@makaio/core';
+import { createBusNamespace, localSubject, PartySchema } from '@makaio/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { FrameworkContractNamespaces, FrameworkStorageNamespaces } from '../../core/contracts/src/namespace-catalog.js';
@@ -14,12 +14,14 @@ MakaioBus.registerNamespaces(FrameworkContractNamespaces);
 MakaioBus.registerNamespaces(FrameworkStorageNamespaces);
 import { PublicProtocolNamespaces } from '../../core/contracts/src/protocol/index.js';
 import type {
-  JsonObject,
   MakaioProtocolManifest,
   MakaioProtocolSubject,
+  ProtocolExportAuditReport,
+  ProtocolExportSubjectAudit,
   ProtocolNamespaceCatalog,
   RustModelRepresentabilityChecker,
 } from '../../core/contracts/src/protocol/index.js';
+import type { JsonObject } from '../../core/contracts/src/shared/json-value.js';
 
 function getSubject(manifest: MakaioProtocolManifest, fullSubject: string): MakaioProtocolSubject {
   const subject = manifest.subjects.find((entry) => entry.fullSubject === fullSubject);
@@ -35,6 +37,24 @@ function getEmbeddedSchemas(subject: MakaioProtocolSubject): JsonObject[] {
   }
 
   return [subject.payloadSchema];
+}
+
+/**
+ * Collect audited subjects that can leave their process but have no JSON Schema form.
+ * The registry records each subject's `localSubject` marker as `local`; a local subject
+ * is delivered only in-process, so its payload need not export.
+ * @param audit - Auto-discovery audit report
+ * @returns Cross-process subjects whose JSON Schema export did not pass
+ */
+function crossProcessJsonSchemaFailures(audit: ProtocolExportAuditReport): ProtocolExportSubjectAudit[] {
+  const localSubjects = new Set(
+    discoverRegisteredProtocolSubjects()
+      .filter((subject) => subject.local)
+      .map((subject) => subject.fullSubject),
+  );
+  return audit.subjects.filter(
+    (subject) => !localSubjects.has(subject.fullSubject) && subject.jsonSchema.status !== 'passed',
+  );
 }
 
 describe('protocol manifest export', () => {
@@ -156,9 +176,26 @@ describe('protocol manifest export', () => {
       rustModel: { status: 'passed' },
     });
 
-    // Auto-discovery only reports currently registered subjects, and all
-    // registered subjects must export cleanly.
-    expect(audit.subjects.every((subject) => subject.jsonSchema.status === 'passed')).toBe(true);
+    // Auto-discovery only reports currently registered subjects. Every subject that
+    // can leave its process must export cleanly.
+    expect(crossProcessJsonSchemaFailures(audit)).toEqual([]);
+  });
+
+  it('fails the audit for a cross-process subject whose payload carries party claims', () => {
+    const namespace = 'protocol-manifest-party-claims';
+    const payload = z.object({ party: PartySchema });
+    // Registered after the clean-audit test above, so it does not affect that assertion.
+    MakaioBus.registerNamespace(
+      createBusNamespace(namespace, {
+        crossProcess: payload,
+        inProcess: localSubject(payload),
+      }),
+    );
+
+    const failures = crossProcessJsonSchemaFailures(auditProtocolExport());
+
+    expect(failures.map((subject) => subject.fullSubject)).toContain(`${namespace}.crossProcess`);
+    expect(failures.map((subject) => subject.fullSubject)).not.toContain(`${namespace}.inProcess`);
   });
 
   it('rejects schemas with non-representable Rust patterns using the default checker', () => {

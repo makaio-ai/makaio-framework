@@ -1,7 +1,5 @@
 import type { SchemaRecord } from '@makaio/core';
-
-/** JSON object used for embedded JSON Schema documents. */
-export type JsonObject = Record<string, unknown>;
+import type { JsonObject } from '../shared/json-value.js';
 
 /** Protocol manifest emitted for language-specific SDK generation. */
 export interface MakaioProtocolManifest {

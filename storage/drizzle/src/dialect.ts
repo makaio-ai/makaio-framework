@@ -20,6 +20,7 @@
 
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
 import type { PgTable } from 'drizzle-orm/pg-core';
+import type { TransactionQueryContext } from './host-transaction';
 import { getDatabaseDialect, type MakaioDatabase } from './types';
 
 /**
@@ -94,6 +95,23 @@ export function defineDialectSchema<
 }
 
 /**
+ * Distinguish a transaction query context from a database handle.
+ *
+ * A query context carries one of the `StorageDialect` values in `dialect`; a
+ * drizzle database handle carries drizzle's dialect object in the same
+ * property (`this.dialect = dialect` in drizzle's `db.js`), which is not part
+ * of its public typings — hence the `in` check and the comparison against the
+ * known values.
+ * @param source - Database handle or transaction query context.
+ * @returns `true` when `source` is a transaction query context.
+ */
+function isTransactionQueryContext(
+  source: MakaioDatabase<Record<string, unknown>> | TransactionQueryContext,
+): source is TransactionQueryContext {
+  return 'dialect' in source && (source.dialect === 'sqlite' || source.dialect === 'postgres');
+}
+
+/**
  * Resolve the dialect-correct table objects for a database handle.
  *
  * {@link DialectSchema} is a per-dialect table registry keyed by
@@ -111,6 +129,29 @@ export function defineDialectSchema<
 export function resolveSchema<TSqlite extends Record<string, SQLiteTable>>(
   db: MakaioDatabase<Record<string, unknown>>,
   schema: DialectSchema<TSqlite>,
+): TSqlite;
+/**
+ * Resolve the dialect-correct table objects for a transaction query context.
+ *
+ * Selects explicitly by `context.dialect`; unlike the database-handle form it
+ * never falls back to SQLite, because a query context always names its dialect.
+ * @param context - Transaction query context carrying the active dialect.
+ * @param schema - Dialect schema built by {@link defineDialectSchema}.
+ * @returns The table record for the context's dialect.
+ */
+export function resolveSchema<TSqlite extends Record<string, SQLiteTable>>(
+  context: TransactionQueryContext,
+  schema: DialectSchema<TSqlite>,
+): TSqlite;
+/**
+ * Implementation of both {@link resolveSchema} signatures.
+ * @param source - Database handle or transaction query context.
+ * @param schema - Dialect schema built by {@link defineDialectSchema}.
+ * @returns The table record for the active dialect.
+ */
+export function resolveSchema<TSqlite extends Record<string, SQLiteTable>>(
+  source: MakaioDatabase<Record<string, unknown>> | TransactionQueryContext,
+  schema: DialectSchema<TSqlite>,
 ): TSqlite {
-  return schema[getDatabaseDialect(db)];
+  return schema[isTransactionQueryContext(source) ? source.dialect : getDatabaseDialect(source)];
 }

@@ -18,6 +18,7 @@
  */
 import type { HandleGate } from './handle-gate';
 import { createSiblingQueue } from './nested-transactions';
+import { markBunSqliteHandleBound } from './unbound-bun-handle';
 import { attachSecondaryFailure } from './secondary-failure';
 
 /** Native `bun:sqlite` statement surface drizzle's bun-sqlite session executes. */
@@ -188,6 +189,8 @@ async function runWithinBoundary<T>(
  * transaction on a connection that is already in one into a savepoint) and
  * releases it as soon as the callback returns, which leaves the boundary in
  * charge.
+ * Marks `scope` as bound (see `isUnboundBunSqliteHandle`) once its
+ * `transaction` is replaced.
  * @param scope - Handle or transaction context whose `transaction` is replaced.
  * @param connection - Connection the boundary statements are issued on.
  * @param depth - Nesting level of the transactions `scope` opens.
@@ -211,6 +214,7 @@ function bindTransaction(
         }),
       ),
     );
+  markBunSqliteHandleBound(scope);
 }
 
 /**
