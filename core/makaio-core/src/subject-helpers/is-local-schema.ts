@@ -1,18 +1,18 @@
-import type { EventSchema, LocalSubjectSchema, RequestSchema, SubjectSchema } from '../types/index.js';
+import type { EventSchema, JournalOrSelf, LocalSubjectSchema, RequestSchema, SubjectSchema } from '../types/index.js';
+import { inspectSubjectSchema } from './inspect-subject-schema.js';
 
 /**
- * Check if a schema is wrapped as a local subject.
+ * Check if a schema is wrapped as a local subject, directly or underneath a
+ * journal wrapper.
+ *
+ * A journal wrapper around a local subject narrows to the whole outer schema:
+ * it is never claimed to be a bare {@link LocalSubjectSchema}.
  * @param schema - The schema to check
- * @returns True if the schema is a LocalSubjectSchema wrapper
+ * @returns True if the schema is a LocalSubjectSchema wrapper, or a journal
+ *   wrapper around one
  */
-export function isLocalSchema(schema: SubjectSchema): schema is LocalSubjectSchema {
-  return (
-    typeof schema === 'object' &&
-    schema !== null &&
-    '__local' in schema &&
-    schema.__local === true &&
-    'schema' in schema
-  );
+export function isLocalSchema(schema: SubjectSchema): schema is JournalOrSelf<LocalSubjectSchema> {
+  return inspectSubjectSchema(schema).marks.local;
 }
 
 /**

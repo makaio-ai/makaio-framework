@@ -352,6 +352,183 @@ describe('extractNamespaces', () => {
     ]);
   });
 
+  it('extracts nested wrapper fields and origin for journal over localSubject(event)', () => {
+    const root = createTempProject({
+      'schemas.ts': `
+        interface TestSchema<Input, Output> {
+          readonly _input: Input;
+          readonly _output: Output;
+        }
+
+        /** Inner schema description. */
+        export const SomeSchema: TestSchema<{ id: string }, never> = undefined as never;
+      `,
+      'namespace.ts': `
+        import { SomeSchema } from './schemas.js';
+
+        declare const MakaioBus: {
+          registerNamespace(prefix: string, schemas: unknown): { subjects: unknown };
+        };
+        declare function localSubject<T>(schema: T): { __local: true; schema: T };
+        declare function journalSubject<T>(
+          schema: T,
+          options: unknown,
+        ): { __journal: true; schema: T; options: unknown };
+
+        export const DemoSchemas = {
+          wrapped: journalSubject(localSubject(SomeSchema), {}),
+        };
+        export const DemoNamespace = MakaioBus.registerNamespace('demo', DemoSchemas);
+      `,
+    });
+
+    const namespaces = extractNamespaces(createAnalysisProgram(root), root);
+
+    // Proves the compiler-type traversal reaches through the journal layer AND the
+    // local layer to the actual base schema: the payload field and `event` kind are
+    // only observable if the traversal unwrapped both layers instead of stopping at
+    // the outer journal wrapper (which carries neither `_input` nor `request`/`response`).
+    expect(namespaces[0]?.subjects).toMatchObject([
+      {
+        key: 'wrapped',
+        type: 'event',
+        schemaFile: 'schemas.ts',
+        description: 'Inner schema description.',
+        payload: [{ name: 'id', type: 'string', required: true }],
+      },
+    ]);
+  });
+
+  it('extracts nested wrapper fields and subject kind for journal over localSubject(request)', () => {
+    const root = createTempProject({
+      'namespace.ts': `
+        interface TestSchema<Input, Output> {
+          readonly _input: Input;
+          readonly _output: Output;
+        }
+
+        declare const MakaioBus: {
+          registerNamespace(prefix: string, schemas: unknown): { subjects: unknown };
+        };
+        declare function localSubject<T>(schema: T): { __local: true; schema: T };
+        declare function journalSubject<T>(
+          schema: T,
+          options: unknown,
+        ): { __journal: true; schema: T; options: unknown };
+        declare const RequestSchema: TestSchema<{ id: string }, never>;
+        declare const ResponseSchema: TestSchema<never, { ok: boolean }>;
+
+        export const DemoSchemas = {
+          resolve: journalSubject(localSubject({ request: RequestSchema, response: ResponseSchema }), {}),
+        };
+        export const DemoNamespace = MakaioBus.registerNamespace('demo', DemoSchemas);
+      `,
+    });
+
+    const namespaces = extractNamespaces(createAnalysisProgram(root), root);
+
+    expect(namespaces[0]?.subjects).toMatchObject([
+      {
+        key: 'resolve',
+        type: 'rpc',
+        request: [{ name: 'id', type: 'string', required: true }],
+        response: [{ name: 'ok', type: 'boolean', required: true }],
+      },
+    ]);
+  });
+
+  it('extracts nested wrapper fields and subject kind for journal over defaultTransports(request, literal policy)', () => {
+    const root = createTempProject({
+      'namespace.ts': `
+        interface TestSchema<Input, Output> {
+          readonly _input: Input;
+          readonly _output: Output;
+        }
+
+        declare const MakaioBus: {
+          registerNamespace(prefix: string, schemas: unknown): { subjects: unknown };
+        };
+        declare function defaultTransports<T, D extends 'all' | 'local-only'>(
+          schema: T,
+          policy: D,
+        ): { __defaultTransports: D; schema: T };
+        declare function journalSubject<T>(
+          schema: T,
+          options: unknown,
+        ): { __journal: true; schema: T; options: unknown };
+        declare const RequestSchema: TestSchema<{ id: string }, never>;
+        declare const ResponseSchema: TestSchema<never, { ok: boolean }>;
+
+        export const DemoSchemas = {
+          resolve: journalSubject(
+            defaultTransports({ request: RequestSchema, response: ResponseSchema }, 'local-only'),
+            {},
+          ),
+        };
+        export const DemoNamespace = MakaioBus.registerNamespace('demo', DemoSchemas);
+      `,
+    });
+
+    const namespaces = extractNamespaces(createAnalysisProgram(root), root);
+
+    expect(namespaces[0]?.subjects).toMatchObject([
+      {
+        key: 'resolve',
+        type: 'rpc',
+        request: [{ name: 'id', type: 'string', required: true }],
+        response: [{ name: 'ok', type: 'boolean', required: true }],
+      },
+    ]);
+  });
+
+  it('extracts nested wrapper fields and subject kind for journal over defaultTransports(request, union policy)', () => {
+    const root = createTempProject({
+      'namespace.ts': `
+        interface TestSchema<Input, Output> {
+          readonly _input: Input;
+          readonly _output: Output;
+        }
+
+        declare const MakaioBus: {
+          registerNamespace(prefix: string, schemas: unknown): { subjects: unknown };
+        };
+        type TransportRoutingDefault = 'all' | 'local-only';
+        declare function defaultTransports<T, D extends TransportRoutingDefault>(
+          schema: T,
+          policy: D,
+        ): { __defaultTransports: D; schema: T };
+        declare function journalSubject<T>(
+          schema: T,
+          options: unknown,
+        ): { __journal: true; schema: T; options: unknown };
+        declare const RequestSchema: TestSchema<{ id: string }, never>;
+        declare const ResponseSchema: TestSchema<never, { ok: boolean }>;
+        // Typed as the union, not a narrowed literal: the policy argument's type is
+        // 'all' | 'local-only', the exact shape a single-literal check misses.
+        declare const policy: TransportRoutingDefault;
+
+        export const DemoSchemas = {
+          resolve: journalSubject(
+            defaultTransports({ request: RequestSchema, response: ResponseSchema }, policy),
+            {},
+          ),
+        };
+        export const DemoNamespace = MakaioBus.registerNamespace('demo', DemoSchemas);
+      `,
+    });
+
+    const namespaces = extractNamespaces(createAnalysisProgram(root), root);
+
+    expect(namespaces[0]?.subjects).toMatchObject([
+      {
+        key: 'resolve',
+        type: 'rpc',
+        request: [{ name: 'id', type: 'string', required: true }],
+        response: [{ name: 'ok', type: 'boolean', required: true }],
+      },
+    ]);
+  });
+
   it('classifies host-local request wrappers as RPC subjects', () => {
     const root = createTempProject({
       'namespace.ts': `

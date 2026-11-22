@@ -8,11 +8,7 @@ import {
 } from '../types/index.js';
 import { createNamespaceWildcardSubject } from './namespace-wildcard-subject.js';
 import { isRequestSchema } from './is-request-schema.js';
-import { isChannelSchema } from './is-channel-schema.js';
-import { isLocalSchema } from './is-local-schema.js';
-import { isHostLocalRequestSchema } from './host-local-request-schema.js';
-import { isDefaultTransportsSchema } from './default-transports-schema.js';
-import { unwrapSchema } from './unwrap-schema.js';
+import { inspectSubjectSchema } from './inspect-subject-schema.js';
 
 /**
  * Recursively nests a flat record of dotted keys into a hierarchical object type.
@@ -99,14 +95,12 @@ export function nestSubjectDefinitions<Domain extends string, T extends Record<s
       current = current[parts[i]] as Record<string, unknown>;
     }
 
-    // Check if schema is wrapped as local, channel, or host-local-request and unwrap for type detection
-    const local = isLocalSchema(schema);
-    const channel = isChannelSchema(schema);
-    const hostLocalRequest = isHostLocalRequestSchema(schema);
-    const subjectDefaultTransports = isDefaultTransportsSchema(schema)
-      ? schema.__defaultTransports
-      : namespaceDefaultTransports;
-    const innerSchema = unwrapSchema(schema);
+    // One inspection reads the schema's routing marks and unwraps it for type detection.
+    const { schema: innerSchema, marks } = inspectSubjectSchema(schema);
+    const local = marks.local;
+    const channel = marks.channel;
+    const hostLocalRequest = marks.hostLocalRequest;
+    const subjectDefaultTransports = marks.defaultTransports ?? namespaceDefaultTransports;
 
     const definition: PartialDeep<SubjectDefinition> = {
       subject: key,

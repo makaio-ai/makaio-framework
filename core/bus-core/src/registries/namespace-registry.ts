@@ -3,14 +3,11 @@ import { z } from 'zod';
 import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 
 import type { BusNamespace } from '../types/namespace.js';
-import { isChannelSchema } from '../utils/channel-schema.js';
-import { isCollectorOnlySchema, isHostLocalRequestSchema } from '@makaio/core';
+import { inspectSubjectSchema } from '@makaio/core';
 import { isRequestSchema } from '../utils/is-request-schema.js';
-import { isLocalSchema } from '../utils/local-schema.js';
-import { unwrapSchema } from '../utils/unwrap-schema.js';
 import {
   type SubjectRoutingMetadata,
-  buildNamespaceRoutingMetadata,
+  buildNamespaceRoutingMetadataFromInspections,
   failOnRoutingMetadataCollision,
 } from './routing-metadata.js';
 import {
@@ -22,6 +19,7 @@ import type {
   BaseSubjectSchema,
   BusNamespaceDefinition,
   FilterablePayloadIntersection,
+  JournalOptions,
   NamespaceRegistrationOptions,
   RegistrableBusNamespaceDefinition,
   SchemaViolationReport,
@@ -29,6 +27,7 @@ import type {
   SubjectRecord,
   SubjectRecordFromSchemaRecord,
   SubjectSchema,
+  SubjectSchemaInspection,
 } from '@makaio/core';
 
 /**
@@ -162,6 +161,8 @@ export interface RegisteredSubjectSchema {
   channel: boolean;
   /** Whether the subject was registered through `hostLocalRequest()`. */
   hostLocalRequest: boolean;
+  /** Journal declaration of a `journalSubject()`-wrapped subject, if any. */
+  journal?: JournalOptions;
 }
 
 const getScopedBus = async <
@@ -252,16 +253,38 @@ function schemaFingerprint(schema: BaseSubjectSchema): string | BaseSubjectSchem
 }
 
 /**
- * Build the comparable runtime schema map for one namespace registration.
+ * Build one schema inspection per subject in a namespace registration.
+ *
+ * Runs a single {@link inspectSubjectSchema} traversal per subject, reused by
+ * both schema-drift comparison and per-subject registration, so each
+ * subject's wrapper layers are read exactly once per registration.
  * @param schemas - Raw subject schemas from a namespace definition.
- * @returns Subject schemas keyed by canonical subject key.
+ * @returns Schema inspections keyed by canonical subject key.
  */
-function buildNamespaceSubjectSchemas(schemas: Record<string, SubjectSchema>): ReadonlyMap<string, BaseSubjectSchema> {
-  const subjectSchemas = new Map<string, BaseSubjectSchema>();
+function buildNamespaceInspections(
+  schemas: Record<string, SubjectSchema>,
+): ReadonlyMap<string, SubjectSchemaInspection<BaseSubjectSchema>> {
+  const inspections = new Map<string, SubjectSchemaInspection<BaseSubjectSchema>>();
   for (const [subject, schema] of Object.entries(schemas)) {
-    subjectSchemas.set(subject, unwrapSchema(schema));
+    inspections.set(subject, inspectSubjectSchema(schema));
   }
-  return subjectSchemas;
+  return inspections;
+}
+
+/**
+ * Project a namespace's schema inspections to the comparable runtime schema
+ * map used for duplicate-registration schema-drift warnings.
+ * @param inspections - Schema inspections keyed by canonical subject key.
+ * @returns Unwrapped subject schemas keyed by canonical subject key.
+ */
+function schemasFromInspections(
+  inspections: ReadonlyMap<string, SubjectSchemaInspection<BaseSubjectSchema>>,
+): ReadonlyMap<string, BaseSubjectSchema> {
+  const schemas = new Map<string, BaseSubjectSchema>();
+  for (const [subject, inspection] of inspections) {
+    schemas.set(subject, inspection.schema);
+  }
+  return schemas;
 }
 
 /**
@@ -313,8 +336,10 @@ export const createNamespaceRegistry = () => {
   // Internal registry for subject schemas (always unwrapped)
   const subjectSchemas = new Map<string, BaseSubjectSchema>();
   const registeredSubjects = new Map<string, RegisteredSubjectSchema>();
-  // Full subject keys registered with subject wrappers. Wrapper flags are
-  // stripped by unwrapSchema, so routing metadata is tracked separately.
+  // Full subject keys registered with subject wrappers. The wrapper marks
+  // read during registration (see `inspectSubjectSchema`) determine routing
+  // behavior, but the schema stored for lookup is the unwrapped payload
+  // schema, so each routing flag is tracked in its own set here.
   const localSubjects = new Set<string>();
   const collectorOnlySubjects = new Set<string>();
   const hostLocalRequestSubjects = new Set<string>();
@@ -343,8 +368,9 @@ export const createNamespaceRegistry = () => {
       Schemas
     > {
       const { name: domain, schemas, options } = definition;
-      const incomingSubjectSchemas = buildNamespaceSubjectSchemas(schemas);
-      const incomingRoutingMetadata = buildNamespaceRoutingMetadata(schemas);
+      const incomingInspections = buildNamespaceInspections(schemas);
+      const incomingSubjectSchemas = schemasFromInspections(incomingInspections);
+      const incomingRoutingMetadata = buildNamespaceRoutingMetadataFromInspections(incomingInspections);
 
       // Type alias for the computed FilterPayload - evaluated at registration time
       type Subjects = SubjectRecordFromSchemaRecord<Schemas>;
@@ -376,13 +402,10 @@ export const createNamespaceRegistry = () => {
       namespaceSubjectSchemas.set(domain, incomingSubjectSchemas);
       namespaceRoutingMetadata.set(domain, incomingRoutingMetadata);
 
-      for (const [subject, schema] of Object.entries(schemas)) {
+      for (const [subject, inspection] of incomingInspections) {
         const fullSubjectKey = `${domain}.${subject}`;
-        const local = isLocalSchema(schema);
-        const collectorOnly = isCollectorOnlySchema(schema);
-        const channel = isChannelSchema(schema);
-        const hostLocalRequest = isHostLocalRequestSchema(schema);
-        const unwrappedSchema = incomingSubjectSchemas.get(subject) ?? unwrapSchema(schema);
+        const { local, collectorOnly, channel, hostLocalRequest, journal } = inspection.marks;
+        const unwrappedSchema = inspection.schema;
         // Store unwrapped schema so getSchema/isRequestSubject work correctly
         subjectSchemas.set(fullSubjectKey, unwrappedSchema);
         registeredSubjects.set(fullSubjectKey, {
@@ -394,9 +417,8 @@ export const createNamespaceRegistry = () => {
           collectorOnly,
           channel,
           hostLocalRequest,
+          journal,
         });
-        // Track locality before unwrapping — isLocalSchema checks __local which
-        // is stripped by unwrapSchema.
         if (local) {
           localSubjects.add(fullSubjectKey);
         }
@@ -446,7 +468,9 @@ export const createNamespaceRegistry = () => {
     },
     /**
      * Get the schema for a registered subject.
-     * Returns the unwrapped schema (LocalSubjectSchema and ChannelSubjectSchema wrappers are removed during registration).
+     * Returns the unwrapped schema: every routing wrapper (`localSubject()`, `channelSubject()`,
+     * `collectorOnlySubject()`, `hostLocalRequest()`, `journalSubject()`, `defaultTransports()`)
+     * is removed during registration, leaving only the underlying event or request schema.
      * @param subject - Subject identifier (e.g., "adapter.getCapabilities")
      * @returns Schema if found, undefined otherwise
      */
@@ -469,10 +493,12 @@ export const createNamespaceRegistry = () => {
     /**
      * Get the full registration record for a subject.
      * @param subject - Fully-qualified subject identifier (e.g., "adapter.getCapabilities")
-     * @returns Registration record if found, undefined otherwise
+     * @returns A copy of the registration record if found (replacing one of its
+     *   fields does not change the registry), undefined otherwise
      */
     getRegisteredSubject(subject: string): RegisteredSubjectSchema | undefined {
-      return registeredSubjects.get(subject);
+      const entry = registeredSubjects.get(subject);
+      return entry === undefined ? undefined : { ...entry };
     },
     /**
      * Check if a subject is registered as a request subject.
@@ -487,9 +513,12 @@ export const createNamespaceRegistry = () => {
     /**
      * Check if a subject was registered as a local-only subject.
      *
-     * Local subjects must never be routed over transports. The `__local` flag
-     * is stripped by `unwrapSchema`, so locality is tracked in a separate set
-     * populated at registration time.
+     * Local subjects must never be routed over transports. The `__local`
+     * routing mark is read from the subject's wrapper layer during
+     * registration — including a `localSubject()` wrapped under a
+     * `journalSubject()` layer — and the registered schema itself carries no
+     * wrapper, so locality is tracked in a separate set populated at
+     * registration time.
      * @param subject - Full subject identifier (e.g., "widget.register")
      * @returns True if the subject was wrapped with `localSubject()`
      */

@@ -1,18 +1,18 @@
-import type { CollectorOnlySubjectSchema, EventSchema, SubjectSchema } from '../types/index.js';
+import type { CollectorOnlySubjectSchema, EventSchema, JournalOrSelf, SubjectSchema } from '../types/index.js';
+import { inspectSubjectSchema } from './inspect-subject-schema.js';
 
 /**
- * Check if a schema is wrapped as a collector-only subject.
+ * Check if a schema is wrapped as a collector-only subject, directly or
+ * underneath a journal wrapper.
+ *
+ * A journal wrapper around a collector-only subject narrows to the whole outer
+ * schema: it is never claimed to be a bare {@link CollectorOnlySubjectSchema}.
  * @param schema - The schema to check.
- * @returns True if the schema is a CollectorOnlySubjectSchema wrapper.
+ * @returns True if the schema is a CollectorOnlySubjectSchema wrapper, or a
+ *   journal wrapper around one.
  */
-export function isCollectorOnlySchema(schema: SubjectSchema): schema is CollectorOnlySubjectSchema {
-  return (
-    typeof schema === 'object' &&
-    schema !== null &&
-    '__collectorOnly' in schema &&
-    schema.__collectorOnly === true &&
-    'schema' in schema
-  );
+export function isCollectorOnlySchema(schema: SubjectSchema): schema is JournalOrSelf<CollectorOnlySubjectSchema> {
+  return inspectSubjectSchema(schema).marks.collectorOnly;
 }
 
 /**

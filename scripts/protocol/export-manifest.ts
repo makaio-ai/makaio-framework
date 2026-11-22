@@ -1,12 +1,5 @@
 import { MakaioBus } from '@makaio/bus-core';
-import {
-  isChannelSchema,
-  isCollectorOnlySchema,
-  isHostLocalRequestSchema,
-  isLocalSchema,
-  isRequestSchema,
-  unwrapSchema,
-} from '@makaio/core';
+import { inspectSubjectSchema, isRequestSchema } from '@makaio/core';
 import type {
   MakaioProtocolEventSubject,
   MakaioProtocolManifest,
@@ -93,8 +86,8 @@ function exportRegisteredSubject(subject: RegisteredSubjectSchema): MakaioProtoc
 }
 
 /**
- * Resolve a cataloged subject against the runtime registry.
- * @param registeredSubjects - Runtime subject lookup table
+ * Resolve a cataloged subject into exportable metadata, unwrapping any
+ * journal and routing wrappers through a single inspection.
  * @param catalogEntry - Catalog entry that selected the subject
  * @param subject - Subject key to resolve
  * @returns Runtime metadata for the selected subject
@@ -106,16 +99,17 @@ function resolveCatalogSubject(catalogEntry: ProtocolNamespaceCatalogEntry, subj
 
   const fullSubject = `${catalogEntry.namespace}.${subject}`;
   const schema = catalogEntry.schemas[subject];
+  const { schema: baseSchema, marks } = inspectSubjectSchema(schema);
 
   return {
     namespace: catalogEntry.namespace,
     subject,
     fullSubject,
-    schema: unwrapSchema(schema),
-    local: isLocalSchema(schema),
-    collectorOnly: isCollectorOnlySchema(schema),
-    channel: isChannelSchema(schema),
-    hostLocalRequest: isHostLocalRequestSchema(schema),
+    schema: baseSchema,
+    local: marks.local,
+    collectorOnly: marks.collectorOnly,
+    channel: marks.channel,
+    hostLocalRequest: marks.hostLocalRequest,
   };
 }
 

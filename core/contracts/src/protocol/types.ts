@@ -1,4 +1,4 @@
-import type { SchemaRecord } from '@makaio/core';
+import type { SubjectSchema } from '@makaio/core';
 import type { JsonObject } from '../shared/json-value.js';
 
 /** Protocol manifest emitted for language-specific SDK generation. */
@@ -109,8 +109,8 @@ export interface ProtocolExportOptions {
 export interface ProtocolNamespaceCatalogEntry {
   /** Registered namespace to publish from. */
   namespace: string;
-  /** Source schemas owned by `@makaio/contracts`. */
-  schemas: SchemaRecord;
+  /** Subject schemas of the namespace, any `SubjectSchema`; readers resolve base schema and marks via `inspectSubjectSchema`. */
+  schemas: Record<string, SubjectSchema>;
   /** Optional named subset of schema keys to publish. */
   subjects?: readonly string[];
 }

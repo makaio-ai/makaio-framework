@@ -69,6 +69,16 @@ export type {
   BaseSubjectSchema,
   SubjectSchema,
   SchemaRecord,
+  RoutedSubjectSchema,
+  OlderVersionStrategy,
+  SubjectSuggestedFor,
+  JournalOptions,
+  EventJournalOptions,
+  RequestJournalOptions,
+  JournalSubjectSchema,
+  JournalOrSelf,
+  BaseOf,
+  MarksOf,
 } from './schema.js';
 
 export type {

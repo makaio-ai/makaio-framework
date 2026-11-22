@@ -1,9 +1,17 @@
 import * as ts from 'typescript';
 
 import { relativeInventoryPath } from './path-utils.js';
+import { unwrapSubjectSchema } from './subject-schema-type.js';
 import type { NamespaceKind, SubjectEntry, SubjectField } from './types.js';
 
-const SUBJECT_WRAPPER_FUNCTIONS = new Set(['channelSubject', 'localSubject']);
+const SUBJECT_WRAPPER_FUNCTIONS = new Set([
+  'channelSubject',
+  'localSubject',
+  'collectorOnlySubject',
+  'hostLocalRequest',
+  'defaultTransports',
+  'journalSubject',
+]);
 const MAX_EXPANDED_OBJECT_FIELDS = 20;
 
 export interface SubjectExtractionOptions {
@@ -160,30 +168,6 @@ function extractSubjectsFromImport(
   }
 
   return [];
-}
-
-/**
- * Unwraps a subject schema wrapper type,
- * returning the inner schema type. Returns the original type unchanged if
- * it is not a wrapper.
- *
- * Wrappers are identified by their marker property combined with a `schema`
- * property.
- * @param type - The TypeScript type to inspect.
- * @param checker - The TypeScript type checker for property resolution.
- * @returns The unwrapped base schema type, or the original type if not wrapped.
- */
-function unwrapSubjectSchema(type: ts.Type, checker: ts.TypeChecker): ts.Type {
-  const hasLocalFlag = type.getProperty('__local') !== undefined;
-  const hasChannelFlag = type.getProperty('__channel') !== undefined;
-  const hasHostLocalRequestFlag = type.getProperty('__hostLocalRequest') !== undefined;
-
-  if (!hasLocalFlag && !hasChannelFlag && !hasHostLocalRequestFlag) return type;
-
-  const schemaProp = type.getProperty('schema');
-  if (!schemaProp) return type;
-
-  return checker.getTypeOfSymbol(schemaProp);
 }
 
 /**
@@ -430,7 +414,9 @@ function resolvePropertyOrigin(prop: ts.Symbol, checker: ts.TypeChecker): ts.Sym
 }
 
 /**
- * Finds the schema identifier in a schema-record property initializer.
+ * Finds the schema identifier in a schema-record property initializer,
+ * peeling through nested wrapper calls (e.g. `journalSubject(localSubject(Foo), …)`)
+ * until it reaches the referenced schema identifier.
  * @param initializer - The property initializer to inspect.
  * @returns The referenced schema identifier, or `undefined` when unsupported.
  */
@@ -442,7 +428,7 @@ function getSchemaOriginIdentifier(initializer: ts.Expression): ts.Identifier | 
   if (!SUBJECT_WRAPPER_FUNCTIONS.has(initializer.expression.text)) return undefined;
 
   const [firstArg] = initializer.arguments;
-  return firstArg && ts.isIdentifier(firstArg) ? firstArg : undefined;
+  return firstArg ? getSchemaOriginIdentifier(firstArg) : undefined;
 }
 
 /**

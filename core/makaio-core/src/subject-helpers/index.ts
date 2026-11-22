@@ -11,3 +11,6 @@ export { channelSubject, isChannelSchema } from './is-channel-schema.js';
 export { hostLocalRequest, isHostLocalRequestSchema } from './host-local-request-schema.js';
 export { defaultTransports, isDefaultTransportsSchema } from './default-transports-schema.js';
 export { unwrapSchema } from './unwrap-schema.js';
+export { journalSubject } from './journal-subject-schema.js';
+export { inspectSubjectSchema } from './inspect-subject-schema.js';
+export type { SubjectMarks, SubjectSchemaInspection, SubjectSchemaLayer } from './inspect-subject-schema.js';
