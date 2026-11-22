@@ -26,6 +26,8 @@ export {
   unwrapSchema,
   createNamespaceWildcardSubject,
   splitSubjectKey,
+  isSubjectName,
+  isSubjectPattern,
 } from './subject-helpers/index.js';
 export type {
   BusSubjects,
@@ -65,6 +67,7 @@ export type {
 
 // Types
 export {
+  BusDeliveryMetadataSchema,
   CallClaimSchema,
   CallContextRecordSchema,
   ContributionNameSchema,
@@ -74,7 +77,9 @@ export {
   isInProcessCaller,
   isOperatorObject,
   isOwnNameOrContribution,
+  JsonValueSchema,
   localContributionName,
+  MAKAIO_BUS_DELIVERY_READER,
   MAKAIO_CLI_LOCAL_PARTY_KIND,
   MAKAIO_E2E_PEER_PARTY_KIND,
   MAKAIO_EXTENSION_PARTY_KIND,
@@ -114,6 +119,7 @@ export type {
   IConfigStorage,
   InferSchemaPayload,
   InferSubjectMeta,
+  JsonValue,
   LocalSubjectSchema,
   BaseMessageContext,
   MessageOrigin,
@@ -139,6 +145,7 @@ export type {
   WildcardContext,
   WildcardSubjectDefinition,
   WildcardUnifiedHandler,
+  BusDeliveryMetadata,
   BusLikeEmitOptions,
   CallClaim,
   CallContext,

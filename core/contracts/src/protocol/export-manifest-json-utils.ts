@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { JsonObject } from './types.js';
+import type { JsonObject } from '../shared/json-value.js';
 import { compareStrings } from './export-manifest-string-utils.js';
 
 /**

@@ -132,6 +132,39 @@ describe('PartyRefSchema and PartySchema', () => {
     expect(CallClaimSchema.safeParse({ a: [1] }).success).toBe(true);
     expect(CallClaimSchema.safeParse(undefined).success).toBe(false);
   });
+
+  it('CallClaimSchema rejects cycles, proxies over non-plain targets, dates and NaN without throwing', () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const rejected: unknown[] = [cyclic, new Proxy(new Date(), {}), new Date(), Number.NaN];
+    for (const value of rejected) {
+      expect(() => CallClaimSchema.safeParse(value)).not.toThrow();
+      expect(CallClaimSchema.safeParse(value).success).toBe(false);
+    }
+  });
+
+  it('CallClaimSchema and PartySchema accept a deeply shared reference graph', () => {
+    let value: unknown = {};
+    for (let depth = 0; depth < 40; depth++) {
+      value = { a: value, b: value };
+    }
+    expect(CallClaimSchema.safeParse(value).success).toBe(true);
+    expect(PartySchema.safeParse({ kind: 'acme.user', id: '1', claims: { x: value } }).success).toBe(true);
+  });
+
+  it('CallClaimSchema and PartySchema accept 100000-deep nesting without throwing', () => {
+    let array: unknown[] = [];
+    let object: Record<string, unknown> = {};
+    for (let i = 0; i < 100_000; i += 1) {
+      array = [array];
+      object = { a: object };
+    }
+    for (const value of [array, object]) {
+      expect(() => CallClaimSchema.safeParse(value)).not.toThrow();
+      expect(CallClaimSchema.safeParse(value).success).toBe(true);
+      expect(PartySchema.safeParse({ kind: 'acme.user', id: '1', claims: { x: value } }).success).toBe(true);
+    }
+  });
 });
 
 describe('isCallClaim rejects non-plain shapes', () => {

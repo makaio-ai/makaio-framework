@@ -210,6 +210,34 @@
       "types": "./dist/contracts/timeout/index.d.mts",
       "default": "./dist/contracts/timeout/index.mjs"
     },
+    "./contracts/host-database": {
+      "types": "./dist/contracts/host-database/index.d.mts",
+      "default": "./dist/contracts/host-database/index.mjs"
+    },
+    "./contracts/journal": {
+      "types": "./dist/contracts/journal/index.d.mts",
+      "default": "./dist/contracts/journal/index.mjs"
+    },
+    "./contracts/rights": {
+      "types": "./dist/contracts/rights/index.d.mts",
+      "default": "./dist/contracts/rights/index.mjs"
+    },
+    "./contracts/access": {
+      "types": "./dist/contracts/access/index.d.mts",
+      "default": "./dist/contracts/access/index.mjs"
+    },
+    "./contracts/boundary": {
+      "types": "./dist/contracts/boundary/index.d.mts",
+      "default": "./dist/contracts/boundary/index.mjs"
+    },
+    "./contracts/rules": {
+      "types": "./dist/contracts/rules/index.d.mts",
+      "default": "./dist/contracts/rules/index.mjs"
+    },
+    "./contracts/credential": {
+      "types": "./dist/contracts/credential/index.d.mts",
+      "default": "./dist/contracts/credential/index.mjs"
+    },
     "./contracts/variant": {
       "types": "./dist/contracts/variant/index.d.mts",
       "default": "./dist/contracts/variant/index.mjs"

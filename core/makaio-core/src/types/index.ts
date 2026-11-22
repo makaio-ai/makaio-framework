@@ -27,6 +27,12 @@ export type {
   TransportReceiveContext,
 } from './message.js';
 
+export type { JsonValue } from './json-value.js';
+export { JsonValueSchema } from './json-value.js';
+
+export type { BusDeliveryMetadata } from './bus-delivery.js';
+export { BusDeliveryMetadataSchema, MAKAIO_BUS_DELIVERY_READER } from './bus-delivery.js';
+
 export type { CallClaim, MakaioPartyKind, Party, PartyKind, PartyRef } from './party.js';
 export {
   CallClaimSchema,
