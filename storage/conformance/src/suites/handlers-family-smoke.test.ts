@@ -120,6 +120,36 @@ describeStorageConformance('handlers-family-smoke', (config) => {
       expect(getResult.workflow?.name).toBe(workflow.name);
     });
 
+    it('replaces definition extensions on every save and keeps an empty record distinct from absent', async () => {
+      const base = makeWorkflowDefinition();
+      const gateway = { lane: 'intake', retries: 2, tags: ['a', { deep: [1, null] }], note: null };
+      const extensions = { gateway, '@acme/review': ['x', 'y'] };
+      const readBack = async () => {
+        const { workflow } = await MakaioBus.request(WorkflowStorageSubjects.get, { id: base.id });
+        return workflow;
+      };
+
+      await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: { ...base, extensions } });
+      expect((await readBack())?.extensions).toEqual(extensions);
+
+      // A save replaces the record: the retained entry takes its new value, the entry that is not
+      // sent is gone, nothing is merged.
+      const changed = { gateway: { lane: 'review', tags: [] } };
+      await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: { ...base, extensions: changed } });
+      expect((await readBack())?.extensions).toEqual(changed);
+      const { workflows } = await MakaioBus.request(WorkflowStorageSubjects.list, {});
+      expect(workflows.find((item) => item.id === base.id)?.extensions).toEqual(changed);
+
+      // An empty record is stored as an empty record, not as an absent one.
+      await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: { ...base, extensions: {} } });
+      expect((await readBack())?.extensions).toEqual({});
+
+      await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: base });
+      const omitted = await readBack();
+      expect(omitted).not.toBeNull();
+      expect(omitted?.extensions).toBeUndefined();
+    });
+
     it('registers and settles an external execution with an exact WorkLog frame', async () => {
       const executionId = `wfx-ext-conformance-${crypto.randomUUID()}`;
       const frameId = `${executionId}:station`;

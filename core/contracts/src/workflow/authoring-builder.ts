@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ExtensionName } from '@makaio/core';
 import type { JsonValue } from '../shared/json-value.js';
 import type { WorkflowArtifactBinding, WorkflowDefinition, WorkflowNode, WorkflowSourceLocation } from './schemas.js';
 import type { WorkflowFinalizerId } from './finalization.js';
@@ -342,6 +343,11 @@ export interface DefineWorkflowOptions<
   readonly triggers?: TTriggers;
   /** Definition-owned finalizer selected after a successful workflow execution. */
   readonly successFinalizerId?: WorkflowFinalizerId;
+  /**
+   * Declarations addressed to extensions, keyed by extension name. Copied into
+   * `definition.extensions`; the workflow core interprets none of them.
+   */
+  readonly extensions?: Readonly<Record<ExtensionName, JsonValue>>;
 }
 
 // ─────────────────────────────────────────────────────────────

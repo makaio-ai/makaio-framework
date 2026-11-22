@@ -12,6 +12,7 @@ import type {
   WorkflowStationNode,
   WorkflowAutomationTriggerBinding,
 } from './schemas.js';
+import { WorkflowDefinitionSchema } from './schemas.js';
 import type { IterateHandler, StationHandler } from './authoring-context.js';
 import type { LoopGateHandler } from './loop.js';
 import { validateNoNestedLoops } from './loop.js';
@@ -498,7 +499,7 @@ function createWorkflowBuilder<TTriggerPayload, TState extends JsonValue | undef
  * The builder also satisfies {@link BuiltWorkflow} so it can be passed to
  * {@link defineWorkflowBundle} directly.
  * @param id - Unique workflow definition identifier
- * @param options - Optional initial workflow metadata (name, description, triggers)
+ * @param options - Optional initial workflow metadata (name, description, triggers, successFinalizerId, extensions)
  * @returns A {@link WorkflowBuilder} instance
  * @example
  * ```typescript
@@ -527,6 +528,9 @@ export function defineWorkflow<const TTriggers extends readonly WorkflowTriggerD
     ...(options?.description !== undefined && { description: options.description }),
     ...(options?.successFinalizerId !== undefined && {
       successFinalizerId: WorkflowFinalizerIdSchema.parse(options.successFinalizerId),
+    }),
+    ...(options?.extensions !== undefined && {
+      extensions: WorkflowDefinitionSchema.shape.extensions.parse(options.extensions),
     }),
     root: { id: `${id}__root`, type: 'sequence', nodes: rootNodes },
     triggers,

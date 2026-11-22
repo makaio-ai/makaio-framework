@@ -740,6 +740,147 @@ describe('WorkflowDefinitionSchema', () => {
     expect(def.state?.initial).toEqual({ tier: 'T1', selectedReviewers: [] });
     expect(def.state?.schema).toBeDefined();
   });
+
+  describe('extensions', () => {
+    const root = { id: 'root', type: 'sequence', nodes: [] };
+
+    it('parses two extension entries with different JSON shapes and returns them unchanged', () => {
+      const extensions = {
+        gateway: { lane: 'review', limits: { retries: 2, enabled: true } },
+        '@acme/review': [['T1', 'T2'], { nested: [1, null, 'x'] }],
+      };
+
+      const def = WorkflowDefinitionSchema.parse({ id: 'with-extensions', root, extensions });
+
+      expect(def.extensions).toEqual(extensions);
+    });
+
+    it.each(['../x', '..'])('rejects the invalid extension name %j with a path pointing at extensions', (name) => {
+      const result = WorkflowDefinitionSchema.safeParse({
+        id: 'bad-extension-name',
+        root,
+        extensions: { [name]: { any: 'value' } },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.length).toBeGreaterThan(0);
+        expect(result.error.issues.every((issue) => issue.path[0] === 'extensions')).toBe(true);
+      }
+    });
+
+    it('parses a definition without extensions and leaves the key out of the result', () => {
+      const def = WorkflowDefinitionSchema.parse({ id: 'no-extensions', root });
+
+      expect('extensions' in def).toBe(false);
+    });
+
+    it('drops an unknown top-level key silently while keeping extensions', () => {
+      const def = WorkflowDefinitionSchema.parse({
+        id: 'unknown-key',
+        root,
+        extensions: { gateway: { lane: 'review' } },
+        notADefinitionField: 'dropped',
+      });
+
+      expect(def.extensions).toEqual({ gateway: { lane: 'review' } });
+      expect('notADefinitionField' in def).toBe(false);
+    });
+
+    it('rejects an own "__proto__" key of the extensions record instead of dropping it', () => {
+      const extensions: unknown = JSON.parse('{"__proto__": {"lane": "review"}, "gateway": {"lane": "review"}}');
+
+      const result = WorkflowDefinitionSchema.safeParse({ id: 'proto-key', root, extensions });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toHaveLength(1);
+        expect(result.error.issues[0]?.path).toEqual(['extensions', '__proto__']);
+        expect(result.error.issues[0]?.message).toBe('"__proto__" is not a valid extension name or declaration key');
+      }
+    });
+
+    it('rejects an own "__proto__" key nested deep inside an extension value', () => {
+      const gateway: unknown = JSON.parse('{"limits": {"inner": [{"__proto__": {"polluted": true}}]}}');
+
+      const result = WorkflowDefinitionSchema.safeParse({ id: 'nested-proto-key', root, extensions: { gateway } });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toHaveLength(1);
+        expect(result.error.issues[0]?.path).toEqual(['extensions', 'gateway', 'limits', 'inner', 0, '__proto__']);
+        expect(result.error.issues[0]?.message).toBe('"__proto__" is not a valid extension name or declaration key');
+      }
+    });
+
+    it('parses every ordinary JSON shape and returns a record equal to the input', () => {
+      const extensions = {
+        gateway: {
+          text: 'review',
+          integer: 3,
+          fraction: -1.5,
+          zero: 0,
+          enabled: true,
+          disabled: false,
+          nothing: null,
+          emptyObject: {},
+          emptyArray: [],
+          nested: { deeper: { list: [1, 'two', null, { three: [3] }, [], {}] } },
+        },
+        '@acme/review': ['T1', 7, false, null, { a: { b: {} } }, [[]]],
+        plain: 'string',
+        count: 42,
+        flag: false,
+        none: null,
+      };
+
+      const def = WorkflowDefinitionSchema.parse({ id: 'all-json-shapes', root, extensions });
+
+      expect(def.extensions).toStrictEqual(extensions);
+    });
+
+    it('parses an empty extensions record to an empty record', () => {
+      const def = WorkflowDefinitionSchema.parse({ id: 'empty-extensions', root, extensions: {} });
+
+      expect(def.extensions).toStrictEqual({});
+    });
+
+    it.each<[string, () => unknown, readonly (string | number)[], string]>([
+      [
+        'a non-plain object',
+        () => ({ gateway: new Map([['lane', 'review']]) }),
+        ['extensions', 'gateway'],
+        'extension declarations must be plain JSON objects and arrays',
+      ],
+      [
+        'a symbol-keyed property',
+        () => ({ gateway: { [Symbol('hidden')]: 1, lane: 'review' } }),
+        ['extensions', 'gateway'],
+        'extension declarations carry a symbol-keyed property, which cannot be transported as JSON',
+      ],
+      [
+        'a non-enumerable property',
+        () => ({ gateway: Object.defineProperty({ lane: 'review' }, 'hidden', { value: 1, enumerable: false }) }),
+        ['extensions', 'gateway', 'hidden'],
+        'extension declarations carry a non-enumerable property, which the record parse would drop',
+      ],
+      [
+        'an array with an extra own property',
+        () => ({ gateway: Object.assign(['T1'], { extra: 1 }) }),
+        ['extensions', 'gateway', 'extra'],
+        'extension declarations must not contain an array with extra own properties',
+      ],
+    ])('rejects %s in an extension value with the declared message', (_case, build, path, message) => {
+      const result = WorkflowDefinitionSchema.safeParse({ id: 'lossy-shape', root, extensions: build() });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues).toHaveLength(1);
+        expect(result.error.issues[0]?.path).toEqual(path);
+        expect(result.error.issues[0]?.message).toBe(message);
+      }
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
