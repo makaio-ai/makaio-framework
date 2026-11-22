@@ -1,18 +1,20 @@
-import type { HostLocalRequestSubjectSchema, RequestSchema, SubjectSchema } from '../types/index.js';
+import type { HostLocalRequestSubjectSchema, JournalOrSelf, RequestSchema, SubjectSchema } from '../types/index.js';
+import { inspectSubjectSchema } from './inspect-subject-schema.js';
 
 /**
- * Check if a schema is wrapped as a host-local request subject.
+ * Check if a schema is wrapped as a host-local request subject, directly or
+ * underneath a journal wrapper.
+ *
+ * A journal wrapper around a host-local request narrows to the whole outer
+ * schema: it is never claimed to be a bare {@link HostLocalRequestSubjectSchema}.
  * @param schema - The schema to check
- * @returns True if the schema is a HostLocalRequestSubjectSchema wrapper
+ * @returns True if the schema is a HostLocalRequestSubjectSchema wrapper, or a
+ *   journal wrapper around one
  */
-export function isHostLocalRequestSchema(schema: SubjectSchema): schema is HostLocalRequestSubjectSchema {
-  return (
-    typeof schema === 'object' &&
-    schema !== null &&
-    '__hostLocalRequest' in schema &&
-    schema.__hostLocalRequest === true &&
-    'schema' in schema
-  );
+export function isHostLocalRequestSchema(
+  schema: SubjectSchema,
+): schema is JournalOrSelf<HostLocalRequestSubjectSchema> {
+  return inspectSubjectSchema(schema).marks.hostLocalRequest;
 }
 
 /**

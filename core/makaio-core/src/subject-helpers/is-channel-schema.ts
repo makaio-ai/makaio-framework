@@ -1,18 +1,18 @@
-import type { ChannelSubjectSchema, EventSchema, RequestSchema, SubjectSchema } from '../types/index.js';
+import type { ChannelSubjectSchema, EventSchema, JournalOrSelf, RequestSchema, SubjectSchema } from '../types/index.js';
+import { inspectSubjectSchema } from './inspect-subject-schema.js';
 
 /**
- * Check if a schema is wrapped as a channel subject.
+ * Check if a schema is wrapped as a channel subject, directly or underneath a
+ * journal wrapper.
+ *
+ * A journal wrapper around a channel subject narrows to the whole outer schema:
+ * it is never claimed to be a bare {@link ChannelSubjectSchema}.
  * @param schema - The schema to check
- * @returns True if the schema is a ChannelSubjectSchema wrapper
+ * @returns True if the schema is a ChannelSubjectSchema wrapper, or a journal
+ *   wrapper around one
  */
-export function isChannelSchema(schema: SubjectSchema): schema is ChannelSubjectSchema {
-  return (
-    typeof schema === 'object' &&
-    schema !== null &&
-    '__channel' in schema &&
-    schema.__channel === true &&
-    'schema' in schema
-  );
+export function isChannelSchema(schema: SubjectSchema): schema is JournalOrSelf<ChannelSubjectSchema> {
+  return inspectSubjectSchema(schema).marks.channel;
 }
 
 /**

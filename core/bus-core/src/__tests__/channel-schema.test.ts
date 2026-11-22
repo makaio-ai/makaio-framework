@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
+import type { ChannelSubjectSchema, JournalSubjectSchema, SubjectSchema } from '@makaio/core';
 import { channelSubject } from '../index.js';
 import { isChannelSchema, unwrapChannelSchema } from '../utils/channel-schema.js';
 import { isLocalSchema, localSubject } from '../utils/local-schema.js';
@@ -39,6 +40,46 @@ describe('channel-schema utilities', () => {
   it('unwrapChannelSchema returns inner request schema', () => {
     const wrapped = channelSubject(requestSchema);
     expect(unwrapChannelSchema(wrapped)).toBe(requestSchema);
+  });
+
+  it('unwrapChannelSchema returns inner event schema from a journal-wrapped channel event', () => {
+    const journalOverChannelEvent: JournalSubjectSchema<ChannelSubjectSchema<typeof eventSchema>> = {
+      __journal: true,
+      schema: channelSubject(eventSchema),
+      options: { retention: 'volatile' },
+    };
+
+    expect(unwrapChannelSchema(journalOverChannelEvent)).toBe(eventSchema);
+  });
+
+  it('unwrapChannelSchema returns inner request schema from a journal-wrapped channel request', () => {
+    const journalOverChannelRequest: JournalSubjectSchema<ChannelSubjectSchema<typeof requestSchema>> = {
+      __journal: true,
+      schema: channelSubject(requestSchema),
+      options: {},
+    };
+
+    expect(unwrapChannelSchema(journalOverChannelRequest)).toBe(requestSchema);
+  });
+
+  it('narrows SubjectSchema to unwrap a channel schema without a cast', () => {
+    function unwrapIfChannel(s: SubjectSchema): ReturnType<typeof unwrapChannelSchema> | undefined {
+      if (isChannelSchema(s)) {
+        return unwrapChannelSchema(s);
+      }
+      return undefined;
+    }
+
+    const journalOverChannelEvent: JournalSubjectSchema<ChannelSubjectSchema<typeof eventSchema>> = {
+      __journal: true,
+      schema: channelSubject(eventSchema),
+      options: { retention: 'volatile' },
+    };
+
+    expect(unwrapIfChannel(journalOverChannelEvent)).toBe(eventSchema);
+    expect(unwrapIfChannel(channelSubject(eventSchema))).toBe(eventSchema);
+    expect(unwrapIfChannel(eventSchema)).toBeUndefined();
+    expect(unwrapIfChannel(localSubject(eventSchema))).toBeUndefined();
   });
 
   it('channel and local are mutually exclusive', () => {

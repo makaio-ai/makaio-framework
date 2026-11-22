@@ -116,6 +116,224 @@ describe('ExternalObjectRefSchema parent chain', () => {
     expect(result).not.toThrow();
     expect(result().success).toBe(false);
   });
+
+  it('accepts a valid three-level chain and the result equals the input structurally', () => {
+    const chain = buildParentChain(3);
+
+    const result = ExternalObjectRefSchema.safeParse(chain);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual(chain);
+    }
+  });
+
+  it('rejects a stateful parent getter (first read undefined, later reads a fresh object carrying the same getter) without a RangeError', () => {
+    let reads = 0;
+    const buildStatefulNode = (): Record<string, unknown> => {
+      const node: Record<string, unknown> = { ...validRef };
+      Object.defineProperty(node, 'parent', {
+        enumerable: true,
+        configurable: true,
+        get() {
+          reads += 1;
+          return reads === 1 ? undefined : buildStatefulNode();
+        },
+      });
+      return node;
+    };
+
+    const result = () => ExternalObjectRefSchema.safeParse(buildStatefulNode());
+
+    expect(result).not.toThrow();
+    expect(result().success).toBe(false);
+    expect(reads).toBe(0);
+  });
+
+  it('rejects an accessor parent even when it would return a valid reference', () => {
+    let reads = 0;
+    const node: Record<string, unknown> = { ...validRef };
+    Object.defineProperty(node, 'parent', {
+      enumerable: true,
+      configurable: true,
+      get: () => {
+        reads += 1;
+        return { ...validRef, externalId: 'parent-1' };
+      },
+    });
+
+    expect(ExternalObjectRefSchema.safeParse(node).success).toBe(false);
+    expect(reads).toBe(0);
+  });
+
+  it.each([
+    { label: 'site', field: 'site' },
+    { label: 'url', field: 'url' },
+  ])('rejects a $label whose value is a caller-owned object with a throwing getter, without reading it', ({
+    field,
+  }) => {
+    let reads = 0;
+    const throwingLeaf: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(throwingLeaf, 'constructor', {
+      enumerable: true,
+      configurable: true,
+      get() {
+        reads += 1;
+        throw new Error('caller getter');
+      },
+    });
+    const withThrowingLeaf = { ...validRef, [field]: throwingLeaf };
+
+    const result = () => ExternalObjectRefSchema.safeParse(withThrowingLeaf);
+
+    expect(result).not.toThrow();
+    expect(result().success).toBe(false);
+    expect(reads).toBe(0);
+  });
+
+  it('rejects a revoked Proxy used as the reference, without throwing', () => {
+    const { proxy, revoke } = Proxy.revocable({ ...validRef }, {});
+    revoke();
+
+    const result = () => ExternalObjectRefSchema.safeParse(proxy);
+
+    expect(result).not.toThrow();
+    expect(result().success).toBe(false);
+  });
+
+  it('rejects a Proxy parent whose ownKeys trap throws, without throwing', () => {
+    const node: Record<string, unknown> = { ...validRef };
+    node.parent = new Proxy(
+      { ...validRef, externalId: 'parent-1' },
+      {
+        ownKeys() {
+          throw new Error('ownKeys trap');
+        },
+      },
+    );
+
+    const result = () => ExternalObjectRefSchema.safeParse(node);
+
+    expect(result).not.toThrow();
+    expect(result().success).toBe(false);
+  });
+
+  /**
+   * Builds a callable Proxy whose `getPrototypeOf` trap counts its calls and throws.
+   * @returns The proxy and a reader for the number of trap calls.
+   */
+  function countingCallableProxy(): { proxy: () => void; trapCalls: () => number } {
+    let calls = 0;
+    const proxy = new Proxy(() => {}, {
+      getPrototypeOf() {
+        calls += 1;
+        throw new Error('caller trap');
+      },
+    });
+    return { proxy, trapCalls: () => calls };
+  }
+
+  it('rejects a callable Proxy used as the reference without running its traps', () => {
+    const { proxy, trapCalls } = countingCallableProxy();
+
+    const result = () => ExternalObjectRefSchema.safeParse(proxy);
+
+    expect(result).not.toThrow();
+    expect(result().success).toBe(false);
+    expect(trapCalls()).toBe(0);
+  });
+
+  it('rejects a callable Proxy used as parent without running its traps', () => {
+    const { proxy, trapCalls } = countingCallableProxy();
+
+    const result = () => ExternalObjectRefSchema.safeParse({ ...validRef, parent: proxy });
+
+    expect(result).not.toThrow();
+    expect(result().success).toBe(false);
+    expect(trapCalls()).toBe(0);
+  });
+
+  it('rejects a revoked callable Proxy as the reference and as parent, without throwing', () => {
+    const { proxy, revoke } = Proxy.revocable(() => {}, {});
+    revoke();
+
+    const asReference = () => ExternalObjectRefSchema.safeParse(proxy);
+    const asParent = () => ExternalObjectRefSchema.safeParse({ ...validRef, parent: proxy });
+
+    expect(asReference).not.toThrow();
+    expect(asReference().success).toBe(false);
+    expect(asParent).not.toThrow();
+    expect(asParent().success).toBe(false);
+  });
+
+  it("parses a valid reference without url while a polluted Object.prototype setter and getter for extension never run against this guard's own copies", () => {
+    let extensionGetterCalls = 0;
+    const extensionDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'extension');
+
+    try {
+      Object.defineProperty(Object.prototype, 'extension', {
+        configurable: true,
+        get() {
+          extensionGetterCalls += 1;
+          return 'from-prototype';
+        },
+        // No setter captured here: `extension` is required and present on every
+        // valid reference, so zod's own successful-parse result (an ordinary
+        // object it allocates itself, see `copyLevel`'s TSDoc) assigns it
+        // unconditionally; that one allocation and assignment is zod's, not one
+        // of this guard's null-prototype copies, and is pre-existing, independent
+        // of `copyLevel`/`readParentChain` (reproducible with a bare `z.object()`
+        // schema). This guard's own contract, asserted below, is that reading
+        // `extension` off its own copy — while `copyLevel` builds it and while
+        // the schema validates it — never reaches a polluted `Object.prototype`.
+        set() {
+          /* intentionally empty: see the comment on `get` above */
+        },
+      });
+
+      const result = ExternalObjectRefSchema.safeParse(validRef);
+
+      expect(result.success).toBe(true);
+      expect(extensionGetterCalls).toBe(0);
+    } finally {
+      if (extensionDescriptor) {
+        Object.defineProperty(Object.prototype, 'extension', extensionDescriptor);
+      } else {
+        Reflect.deleteProperty(Object.prototype, 'extension');
+      }
+    }
+  });
+
+  it('parses a valid reference without url while a polluted Object.prototype setter and getter for the absent url never run', () => {
+    let setterCalls = 0;
+    let getterCalls = 0;
+    const urlDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'url');
+
+    try {
+      Object.defineProperty(Object.prototype, 'url', {
+        configurable: true,
+        get() {
+          getterCalls += 1;
+          return 'from-prototype';
+        },
+        set() {
+          setterCalls += 1;
+        },
+      });
+
+      const result = ExternalObjectRefSchema.safeParse(validRef);
+
+      expect(result.success).toBe(true);
+      expect(setterCalls).toBe(0);
+      expect(getterCalls).toBe(0);
+    } finally {
+      if (urlDescriptor) {
+        Object.defineProperty(Object.prototype, 'url', urlDescriptor);
+      } else {
+        Reflect.deleteProperty(Object.prototype, 'url');
+      }
+    }
+  });
 });
 
 describe('CreateTargetSchema', () => {

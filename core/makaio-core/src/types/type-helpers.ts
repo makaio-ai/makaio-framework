@@ -8,31 +8,23 @@
 import { z } from 'zod';
 import { Simplify } from 'type-fest';
 import type {
+  BaseOf,
   ChannelSubjectSchema,
   DefaultTransportsSubjectSchema,
   EventSchema,
   HostLocalRequestSubjectSchema,
   LocalSubjectSchema,
+  MarksOf,
   RequestSchema,
   SubjectSchema,
 } from './schema.js';
 import type { TransportRoutingDefault } from './subjects.js';
 
 /**
- * Unwrap subject schema wrappers if present. Returns the inner schema for
- * wrapped subjects, or the schema as-is otherwise.
+ * Unwrap subject schema wrappers if present. Returns the innermost bare schema for
+ * wrapped subjects (including journal-wrapped ones), or the schema as-is otherwise.
  */
-type UnwrapSchema<S> = S extends { readonly __local: true; readonly schema: infer Inner }
-  ? Inner
-  : S extends { readonly __collectorOnly: true; readonly schema: infer Inner }
-    ? Inner
-    : S extends { readonly __channel: true; readonly schema: infer Inner }
-      ? Inner
-      : S extends { readonly __hostLocalRequest: true; readonly schema: infer Inner }
-        ? Inner
-        : S extends { readonly __defaultTransports: TransportRoutingDefault; readonly schema: infer Inner }
-          ? Inner
-          : S;
+type UnwrapSchema<S> = BaseOf<S>;
 
 /**
  * Infer payload type from schema, including subject metadata wrappers.
@@ -60,6 +52,21 @@ type InferSchemaPayloadInner<S> = S extends {
     : unknown;
 
 /**
+ * True when the routing layer `M` carries the brand of `Wrapper`, false otherwise.
+ * Distributes over unions of `M`.
+ */
+type HasMark<M, Wrapper> = M extends Wrapper ? true : false;
+
+/**
+ * Default transport routing meta of the routing layer `M`: required when the layer
+ * is a `defaultTransports` wrapper, optional otherwise. Distributes over unions of `M`.
+ */
+type DefaultTransportsMeta<M> =
+  M extends DefaultTransportsSubjectSchema<EventSchema | RequestSchema, infer Default>
+    ? { defaultTransports: Default }
+    : { defaultTransports?: TransportRoutingDefault };
+
+/**
  * Compute all subject meta from the original schema in one place.
  *
  * Resolves payload, locality, channel membership, request/event discriminator,
@@ -71,20 +78,18 @@ export type InferSubjectMeta<S extends SubjectSchema, Ns extends string> = {
   /** True when the subject is a request-response pair, false for events. */
   isRequest: UnwrapSchema<S> extends { request: z.ZodType; response: z.ZodType } ? true : false;
   /** True when the subject is wrapped with `localSubject()`. */
-  local: S extends LocalSubjectSchema ? true : false;
+  local: HasMark<MarksOf<S>, LocalSubjectSchema>;
   /** True when the subject is wrapped with `channelSubject()`. */
-  channel: S extends ChannelSubjectSchema ? true : false;
+  channel: HasMark<MarksOf<S>, ChannelSubjectSchema>;
   /**
    * True when the subject is wrapped with `hostLocalRequest()`.
    *
    * Host-local requests accept direct remote ingress but must never be
    * relayed onward to other transports after ingress.
    */
-  hostLocalRequest: S extends HostLocalRequestSubjectSchema ? true : false;
+  hostLocalRequest: HasMark<MarksOf<S>, HostLocalRequestSubjectSchema>;
   /** Inferred payload type (request/response pair or event payload). */
   payload: InferSchemaPayload<S>;
   /** The namespace this subject belongs to. */
   namespace: Ns;
-} & (S extends DefaultTransportsSubjectSchema<EventSchema | RequestSchema, infer Default>
-  ? { defaultTransports: Default }
-  : { defaultTransports?: TransportRoutingDefault });
+} & DefaultTransportsMeta<MarksOf<S>>;

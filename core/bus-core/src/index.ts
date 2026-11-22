@@ -169,7 +169,7 @@ export type { BroadcastContext, BroadcastResult } from './methods/broadcast.js';
 export { localSubject } from './utils/local-schema.js';
 export { collectorOnlySubject } from '@makaio/core';
 export { channelSubject } from './utils/channel-schema.js';
-export { defaultTransports, hostLocalRequest } from '@makaio/core';
+export { defaultTransports, hostLocalRequest, journalSubject } from '@makaio/core';
 
 export type { IDirectChannel, ChannelEndpoint, ChannelEndpointOptions } from './channel/index.js';
 export { SystemChannelSchemas, createChannelEndpoint, openChannel } from './channel/index.js';

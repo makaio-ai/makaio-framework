@@ -1,24 +1,28 @@
 import type {
   DefaultTransportsSubjectSchema,
   EventSchema,
+  JournalOrSelf,
   RequestSchema,
   SubjectSchema,
   TransportRoutingDefault,
 } from '../types/index.js';
+import { inspectSubjectSchema } from './inspect-subject-schema.js';
 
 /**
- * Check if a schema carries a subject-level default transport routing policy.
+ * Check if a schema carries a subject-level default transport routing policy,
+ * directly or underneath a journal wrapper.
+ *
+ * A journal wrapper around a default-transports subject narrows to the whole
+ * outer schema: it is never claimed to be a bare
+ * {@link DefaultTransportsSubjectSchema}.
  * @param schema - The schema to check
- * @returns True if the schema is a DefaultTransportsSubjectSchema wrapper
+ * @returns True if the schema is a DefaultTransportsSubjectSchema wrapper, or a
+ *   journal wrapper around one
  */
-export function isDefaultTransportsSchema(schema: SubjectSchema): schema is DefaultTransportsSubjectSchema {
-  return (
-    typeof schema === 'object' &&
-    schema !== null &&
-    '__defaultTransports' in schema &&
-    (schema.__defaultTransports === 'all' || schema.__defaultTransports === 'local-only') &&
-    'schema' in schema
-  );
+export function isDefaultTransportsSchema(
+  schema: SubjectSchema,
+): schema is JournalOrSelf<DefaultTransportsSubjectSchema> {
+  return inspectSubjectSchema(schema).marks.defaultTransports !== undefined;
 }
 
 /**

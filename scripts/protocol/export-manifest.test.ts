@@ -1,5 +1,6 @@
 import { MakaioBus } from '@makaio/bus-core';
 import { createBusNamespace, localSubject, PartySchema } from '@makaio/core';
+import type { JournalSubjectSchema, LocalSubjectSchema, RequestSchema } from '@makaio/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { FrameworkContractNamespaces, FrameworkStorageNamespaces } from '../../core/contracts/src/namespace-catalog.js';
@@ -273,6 +274,67 @@ describe('protocol manifest export', () => {
     expect(() => exportProtocolManifest({ catalog })).toThrow(
       `${namespace}.get [jsonSchema]: Failed to export JSON Schema for ${namespace}.get`,
     );
+  });
+
+  it('journal wrapping preserves manifest v2', () => {
+    const eventSchema = z.object({ id: z.string() });
+    const requestSchema: RequestSchema = {
+      request: z.object({ id: z.string() }),
+      response: z.object({ ok: z.boolean() }),
+    };
+    const localRequestSchema: LocalSubjectSchema<RequestSchema> = {
+      __local: true,
+      schema: requestSchema,
+    };
+
+    const journalWrappedEvent: JournalSubjectSchema = {
+      __journal: true,
+      schema: eventSchema,
+      options: {},
+    };
+    const journalWrappedLocalRequest: JournalSubjectSchema = {
+      __journal: true,
+      schema: localRequestSchema,
+      options: {},
+    };
+
+    const wrappedNamespace = 'protocol-manifest-journal-wrapped';
+    const bareNamespace = 'protocol-manifest-journal-bare';
+
+    const wrappedCatalog = [
+      {
+        namespace: wrappedNamespace,
+        schemas: { event: journalWrappedEvent, request: journalWrappedLocalRequest },
+        subjects: ['event', 'request'],
+      },
+    ] satisfies ProtocolNamespaceCatalog;
+    const bareCatalog = [
+      {
+        namespace: bareNamespace,
+        schemas: { event: eventSchema, request: localRequestSchema },
+        subjects: ['event', 'request'],
+      },
+    ] satisfies ProtocolNamespaceCatalog;
+
+    const wrappedManifest = exportProtocolManifest({ catalog: wrappedCatalog });
+    const bareManifest = exportProtocolManifest({ catalog: bareCatalog });
+
+    expect(wrappedManifest.version).toBe(2);
+    expect(bareManifest.version).toBe(2);
+
+    const stripIdentity = (subject: MakaioProtocolSubject) => {
+      const { namespace, fullSubject, ...rest } = subject;
+      return rest;
+    };
+
+    const wrappedSubjects = wrappedManifest.subjects.map(stripIdentity);
+    const bareSubjects = bareManifest.subjects.map(stripIdentity);
+
+    expect(wrappedSubjects).toEqual(bareSubjects);
+    expect(wrappedSubjects).toEqual([
+      expect.objectContaining({ subject: 'event', kind: 'event', local: false, channel: false }),
+      expect.objectContaining({ subject: 'request', kind: 'request', local: true, channel: false }),
+    ]);
   });
 
   it('rejects duplicate explicit catalog subjects', () => {

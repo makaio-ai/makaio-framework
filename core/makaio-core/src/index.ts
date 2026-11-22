@@ -23,9 +23,11 @@ export {
   isHostLocalRequestSchema,
   defaultTransports,
   isDefaultTransportsSchema,
+  journalSubject,
   unwrapSchema,
   createNamespaceWildcardSubject,
   splitSubjectKey,
+  inspectSubjectSchema,
   isSubjectName,
   isSubjectPattern,
 } from './subject-helpers/index.js';
@@ -34,6 +36,9 @@ export type {
   NestedSubjectDefinitions,
   FlatSubjectDefinitions,
   SubjectKeySegments,
+  SubjectMarks,
+  SubjectSchemaInspection,
+  SubjectSchemaLayer,
 } from './subject-helpers/index.js';
 
 // Context
@@ -159,4 +164,14 @@ export type {
   ContributionName,
   ExtensionName,
   MakaioBusLike,
+  JournalOrSelf,
+  BaseOf,
+  EventJournalOptions,
+  JournalOptions,
+  JournalSubjectSchema,
+  MarksOf,
+  OlderVersionStrategy,
+  RequestJournalOptions,
+  RoutedSubjectSchema,
+  SubjectSuggestedFor,
 } from './types/index.js';
