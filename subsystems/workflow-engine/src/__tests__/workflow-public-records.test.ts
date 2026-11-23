@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { type WorkflowCodeStepNode, type WorkflowGateNode } from '@makaio/contracts';
+import { SubagentSubjects, type WorkflowAgentStepNode, type WorkflowCodeStepNode } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import {
@@ -95,52 +95,71 @@ describe('workflow public record subjects', () => {
       throw new Error('Workflow executor test setup did not initialize.');
     }
 
+    const agentStep: WorkflowAgentStepNode = {
+      id: 'review',
+      type: 'agent-step',
+      role: 'reviewer',
+      prompt: 'Review the work',
+    };
     const workflow = createWorkflowDefinition({
       id: 'public-runtime-cancelled',
       name: 'Public Runtime Cancelled',
       root: {
         id: 'public-runtime-cancelled-root',
         type: 'sequence',
-        nodes: [
-          {
-            id: 'approval',
-            type: 'gate',
-            prompt: 'Wait for cancellation',
-            autoAction: 'reject',
-            timeoutMs: null,
-          } as WorkflowGateNode,
-        ],
+        nodes: [agentStep],
       },
     });
     await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
 
-    const suspendedPromise = new Promise<string>((resolve) => {
-      const unsubscribe = MakaioBus.on(WorkflowSubjects.gate.suspended, (ctx) => {
-        unsubscribe();
-        resolve(ctx.payload.executionId);
+    const awaitingSubagent = Promise.withResolvers<string>();
+    const releaseSubagent = Promise.withResolvers<void>();
+    const killedSubagents: string[] = [];
+    const cancelledExecutions: string[] = [];
+    const cleanups = [
+      MakaioBus.on(WorkflowSubjects.resolveRole, (ctx) => ctx.setResult({ adapterName: 'claude-code' })),
+      MakaioBus.on(
+        SubagentSubjects.await,
+        async (ctx) => {
+          awaitingSubagent.resolve(ctx.payload.subagentId);
+          await releaseSubagent.promise;
+          ctx.setResult({ status: 'cancelled' });
+        },
+        { priority: 10 },
+      ),
+      MakaioBus.on(
+        SubagentSubjects.kill,
+        (ctx) => {
+          killedSubagents.push(ctx.payload.subagentId);
+          ctx.setResult({ killed: true });
+        },
+        { priority: 10 },
+      ),
+      MakaioBus.on(WorkflowSubjects.execution.cancelled, (ctx) => {
+        cancelledExecutions.push(ctx.payload.executionId);
+      }),
+    ];
+
+    try {
+      const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
+      const subagentId = await awaitingSubagent.promise;
+
+      const cancelResult = await MakaioBus.request(WorkflowSubjects.cancel, {
+        executionId,
+        reason: 'test cancellation',
       });
-    });
-    const cancelledPromise = new Promise<string>((resolve) => {
-      const unsubscribe = MakaioBus.on(WorkflowSubjects.execution.cancelled, (ctx) => {
-        unsubscribe();
-        resolve(ctx.payload.executionId);
-      });
-    });
 
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
-    await expect(suspendedPromise).resolves.toBe(executionId);
+      expect(cancelResult.cancelled).toBe(true);
+      expect(cancelledExecutions).toEqual([executionId]);
+      await vi.waitFor(() => expect(killedSubagents).toEqual([subagentId]));
+      const { execution } = await MakaioBus.request(WorkflowSubjects.getExecution, { executionId });
 
-    const cancelResult = await MakaioBus.request(WorkflowSubjects.cancel, {
-      executionId,
-      reason: 'test cancellation',
-    });
-
-    expect(cancelResult.cancelled).toBe(true);
-    await expect(cancelledPromise).resolves.toBe(executionId);
-    const { execution } = await MakaioBus.request(WorkflowSubjects.getExecution, { executionId });
-
-    expect(execution?.status).toBe('cancelled');
-    expect(execution?.completedAt).toEqual(expect.any(Number));
+      expect(execution?.status).toBe('cancelled');
+      expect(execution?.completedAt).toEqual(expect.any(Number));
+    } finally {
+      releaseSubagent.resolve();
+      for (const cleanup of cleanups) cleanup();
+    }
   });
 
   it('returns execution spans through the public listSpans subject', async () => {
@@ -186,49 +205,6 @@ describe('workflow public record subjects', () => {
         }),
       ]),
     );
-  });
-
-  it('returns gate instances through the public listGateInstances subject', async () => {
-    if (!setup) {
-      throw new Error('Workflow executor test setup did not initialize.');
-    }
-
-    const workflow = createWorkflowDefinition({
-      id: 'public-gate-instance-read',
-      name: 'Public Gate Instance Read',
-      steps: [],
-    });
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
-
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, {
-      workflowId: workflow.id,
-      scope: { type: 'global' },
-    });
-
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
-      gate: {
-        executionId,
-        nodeId: 'approval',
-        frameId: 'frame-approval',
-        schema: {},
-        prompt: 'Approve this execution?',
-        status: 'waiting',
-        autoAction: 'reject',
-        timeoutMs: null,
-        createdAt: Date.now(),
-      },
-    });
-
-    const result = await MakaioBus.request(WorkflowSubjects.listGateInstances, { executionId });
-
-    expect(result.gates).toEqual([
-      expect.objectContaining({
-        executionId,
-        nodeId: 'approval',
-        frameId: 'frame-approval',
-        status: 'waiting',
-      }),
-    ]);
   });
 
   it('round-trips execution links through the public link subjects', async () => {

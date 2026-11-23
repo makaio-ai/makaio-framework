@@ -1,9 +1,10 @@
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { JsonValue, WorkflowFrameState } from '@makaio/contracts';
 import { WorkflowNodeTypeSchema } from '@makaio/contracts';
 import { resolveSchema, serializeDatabaseOperation, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowStorageSubjects } from './namespace.js';
+import { excludeRetainedGateRows } from './retained-rows.js';
 import type { InsertWorkflowExecutionFrame } from './schema.js';
 import { workflowEngineSchema } from './schema.variants.js';
 import { isExecutionBoundAccessAllowed } from '../execution-bound-access.js';
@@ -93,15 +94,22 @@ export function registerFrameHandlers(bus: IMakaioBus, db: MakaioDatabase): () =
     ctx.setResult({ frameId: frame.frameId });
   });
 
+  /** Stored gate rows from before workflow waiting was removed are kept and do not appear in this response; sums may still include their cost. */
   const unsubGetFrame = bus.on(WorkflowStorageSubjects.getFrame, async (ctx) => {
     const rows = await db
       .select()
       .from(workflowExecutionFrames)
-      .where(eq(workflowExecutionFrames.frameId, ctx.payload.frameId))
+      .where(
+        and(
+          eq(workflowExecutionFrames.frameId, ctx.payload.frameId),
+          excludeRetainedGateRows(workflowExecutionFrames.nodeType),
+        ),
+      )
       .limit(1);
     ctx.setResult({ frame: rows[0] ? mapFrame(rows[0]) : null });
   });
 
+  /** Stored gate rows from before workflow waiting was removed are kept and do not appear in this response; sums may still include their cost. */
   const unsubListFrames = bus.on(WorkflowStorageSubjects.listFrames, async (ctx) => {
     if (!isExecutionBoundAccessAllowed(ctx, ctx.payload.executionId)) {
       throw new Error(`Unauthorized: caller is not permitted to list frames for execution: ${ctx.payload.executionId}`);
@@ -109,7 +117,12 @@ export function registerFrameHandlers(bus: IMakaioBus, db: MakaioDatabase): () =
     const rows = await db
       .select()
       .from(workflowExecutionFrames)
-      .where(eq(workflowExecutionFrames.executionId, ctx.payload.executionId))
+      .where(
+        and(
+          eq(workflowExecutionFrames.executionId, ctx.payload.executionId),
+          excludeRetainedGateRows(workflowExecutionFrames.nodeType),
+        ),
+      )
       .orderBy(asc(workflowExecutionFrames.startedAt), asc(workflowExecutionFrames.frameId));
     ctx.setResult({ frames: rows.map(mapFrame) });
   });

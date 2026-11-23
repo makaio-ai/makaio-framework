@@ -101,7 +101,7 @@ export class WorkerRunner implements IWorkflowRunner {
    * @param config - Full workflow worker configuration including source, inputs, and bus info.
    * @param signal - AbortSignal for cooperative cancellation forwarded to the dispatch function.
    * @param manifest - Optional per-call contribution manifest. Overrides the runner's default.
-   * @param options - Optional per-run controls forwarded to dispatch-capable providers.
+   * @param options - Optional control for creating the execution attempt.
    * @returns Explicitly accepted completion after the outcome RPC converges.
    */
   public async run(
@@ -121,7 +121,6 @@ export class WorkerRunner implements IWorkflowRunner {
 
     const resolvedManifest = manifest ?? this.options.manifest;
     const resolvedRequirements = this.options.requirements;
-    const dispatchMetadata = options?.dispatchMetadata;
     signal.throwIfAborted();
     const runContext =
       config.source.kind === 'path' ? await this.options.readRunContext?.(call, config.executionId, signal) : undefined;
@@ -150,7 +149,6 @@ export class WorkerRunner implements IWorkflowRunner {
             config: authorityCommittedConfig,
             ...(resolvedManifest !== undefined && { manifest: resolvedManifest }),
             ...(resolvedRequirements !== undefined && { requirements: resolvedRequirements }),
-            ...(dispatchMetadata !== undefined && { metadata: dispatchMetadata }),
           },
           signal,
         ),

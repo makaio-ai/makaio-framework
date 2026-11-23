@@ -2,7 +2,6 @@ import {
   WORKFLOW_CANCELLED_REASON,
   type IWorkflowRunner,
   type JsonValue,
-  type SuspensionStrategy,
   type WorkflowDefinition,
   type WorkflowRunContext,
   type WorkflowTriggerMode,
@@ -21,7 +20,6 @@ import {
   withExecutionDurableTransition,
 } from './workflow-execution-finalizer.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
-import { parkExecution } from './workflow-execution-pause.js';
 
 /** OS values accepted by {@link WorkflowWorkerConfig}. */
 export type WorkerOs = 'darwin' | 'linux' | 'win32';
@@ -197,8 +195,7 @@ export interface RunnerTaskDeps {
 /**
  * Parameters for building a workflow runner task from a storage-backed definition.
  *
- * Used by {@link buildExecutionTask} and reconstructed from a persisted
- * {@link WorkflowRunContext} when resuming a paused execution.
+ * Used by {@link buildExecutionTask} after a definition-backed start.
  */
 export interface DefinitionRunnerTaskParams {
   executionId: string;
@@ -214,24 +211,8 @@ export interface DefinitionRunnerTaskParams {
   scope: WorkflowDefinition['scope'];
   /** Portable workspace reference for a path-backed source. */
   materializationSpec?: WorkflowWorkerConfig['materializationSpec'];
-  /**
-   * Suspension strategy persisted from the original run context.
-   *
-   * Forwarded to the worker config so resumed executions inherit the same
-   * provider suspension behavior as the initial dispatch. Defaults to
-   * `'wait-in-process'` when absent (executions started before this field
-   * was introduced).
-   */
-  readonly suspensionStrategy?: SuspensionStrategy;
   /** Component that owns the execution's durable terminal transition. */
   readonly terminalAuthority?: WorkflowWorkerConfig['terminalAuthority'];
-  /**
-   * Opaque metadata forwarded to the Worker dispatch request.
-   *
-   * Used by the resume path to signal `{ resume: true }` so providers
-   * applying `exit-and-redispatch` can apply the correct re-dispatch strategy.
-   */
-  dispatchMetadata?: Record<string, unknown>;
 }
 
 /** Parameters for building a workflow runner task from a file source. */
@@ -255,10 +236,9 @@ export interface FileRunnerTaskParams {
  *
  * - `uncommitted`: the runner produced the result but durable lifecycle
  *   transition has not been performed. The host executor must finalize
- *   terminal results or park paused executions.
+ *   the result.
  * - `authority-committed`: the Authority outcome RPC has converged canonical
- *   state. Do not reinterpret that acceptance from current mutable owner state:
- *   a paused subscriber may already have resumed the next attempt.
+ *   state. The runner task only cleans up its local bookkeeping.
  * - `authority-recorded-only`: the owner accepted a technical fact without a
  *   lifecycle projection. Release local task bookkeeping only.
  * @param call - Call context of the message that triggered this execution.
@@ -279,23 +259,18 @@ async function handleRunnerCompletion(
     throw new Error(`Runner completion does not match its invocation '${config.executionId}'`);
   }
   // Authority acceptance is already the owner's decision. Cleanup belongs to
-  // this task's finally block, which cannot remove a resumed successor's entries.
+  // this task's finally block, which checks invocation ownership.
   if (completion.state !== 'uncommitted') return;
   if (deps.activeExecutions.get(config.executionId) !== ownedExecution) return;
 
   // Uncommitted: host executor owns finalization.
-  const { result } = completion;
-  if (result.status === 'paused') {
-    await parkExecution(call, deps.buildFinalizerDeps(), result);
-    return;
-  }
-  await finalizeResolvedRunnerResult(call, deps, result);
+  await finalizeResolvedRunnerResult(call, deps, completion.result);
 }
 
 /**
- * Release only bookkeeping still owned by this invocation, never a fast resume.
+ * Release only bookkeeping still owned by this invocation.
  * @param deps - Shared task registries.
- * @param executionId - Logical execution shared by predecessor and successor.
+ * @param executionId - Logical execution identifier.
  * @param active - Original active execution entry.
  * @param controller - This invocation's cancellation controller.
  */
@@ -331,7 +306,6 @@ function buildFileWorkerConfig(deps: RunnerTaskDeps, params: FileRunnerTaskParam
     env: deps.config.platformDefaults.env ?? {},
     coordinatorSessionId: params.coordinatorSessionId,
     cancelSubject: `workflow.${params.executionId}.cancel`,
-    suspensionStrategy: 'wait-in-process',
     materializationSpec: params.materializationSpec,
   };
 }
@@ -430,7 +404,6 @@ function buildDefinitionWorkerConfig(deps: RunnerTaskDeps, params: DefinitionRun
     env: config.platformDefaults.env ?? {},
     coordinatorSessionId: params.coordinatorSessionId,
     cancelSubject: `workflow.${params.executionId}.cancel`,
-    suspensionStrategy: params.suspensionStrategy ?? 'wait-in-process',
     ...(params.terminalAuthority !== undefined && { terminalAuthority: params.terminalAuthority }),
     ...(params.materializationSpec !== undefined ? { materializationSpec: params.materializationSpec } : {}),
   };
@@ -464,10 +437,7 @@ export function buildExecutionTask(
   workflowAbortControllers.set(executionId, controller);
 
   const workerConfig = buildDefinitionWorkerConfig(deps, params);
-  const runOptions: WorkflowRunnerRunOptions = {
-    ...ownerAdmissionOptions(call, deps, executionId, controller.signal),
-    ...(params.dispatchMetadata === undefined ? {} : { dispatchMetadata: params.dispatchMetadata }),
-  };
+  const runOptions = ownerAdmissionOptions(call, deps, executionId, controller.signal);
 
   return Promise.resolve()
     .then(() => workflowRunner.run(call, workerConfig, controller.signal, undefined, runOptions))
@@ -509,7 +479,7 @@ export function buildExecutionTask(
 
 /**
  * Bind attempt creation to the current single-owner executor's lifecycle queue.
- * The durable status check also rejects work resumed from stale local state.
+ * The durable status check prevents admission from stale local state.
  * This is owner admission, not a distributed lock between arbitrary executors.
  * @param call - Call context of the message that triggered the execution; forwarded by the status read.
  * @param deps - Current owner's shared lifecycle dependencies.
@@ -538,64 +508,4 @@ function ownerAdmissionOptions(
       });
     },
   };
-}
-
-/**
- * Reconstruct {@link DefinitionRunnerTaskParams} from a persisted
- * {@link WorkflowRunContext} and the corresponding workflow definition.
- *
- * Used by the resume path in {@link WorkflowExecutor} to re-dispatch a paused
- * execution through the same runner infrastructure as an initial dispatch,
- * without requiring the caller to reconstruct every field manually.
- *
- * The `options.resume` flag merges the durable run-context dispatch metadata
- * with `{ resume: true }` so Worker dispatch runners can signal the
- * provider that this is a resume, not a fresh dispatch, without dropping the
- * original dispatch target identity. In-process runners ignore it.
- * @param runContext - Persisted run-context snapshot for the paused execution.
- * @param workflow - Workflow definition for the execution.
- * @param options - Optional flags; set `resume: true` for resumed executions.
- * @returns Fully populated runner task params ready for execution dispatch.
- */
-export function buildDefinitionRunnerParamsFromRunContext(
-  runContext: WorkflowRunContext,
-  workflow: WorkflowDefinition,
-  options: { readonly resume?: boolean } = {},
-): DefinitionRunnerTaskParams {
-  const dispatchMetadata = buildRunContextDispatchMetadata(runContext, options);
-
-  return {
-    executionId: runContext.executionId,
-    workflowId: runContext.workflowId,
-    workflow,
-    ...(runContext.definitionSnapshot !== undefined ? { definitionSnapshot: runContext.definitionSnapshot } : {}),
-    source: runContext.source,
-    coordinatorSessionId: runContext.coordinatorSessionId,
-    sanitizedTriggerPayload: runContext.triggerPayload,
-    boundInputs: runContext.inputs,
-    boundConfig: runContext.config ?? {},
-    ...(runContext.artifactRef !== undefined ? { artifactRef: runContext.artifactRef } : {}),
-    scope: runContext.scope,
-    ...(runContext.materializationSpec !== undefined ? { materializationSpec: runContext.materializationSpec } : {}),
-    suspensionStrategy: runContext.suspensionStrategy,
-    // Omission uses the original worker-completion protocol, not Authority ownership.
-    terminalAuthority: runContext.terminalAuthority ?? 'worker',
-    ...(dispatchMetadata !== undefined ? { dispatchMetadata } : {}),
-  };
-}
-
-/**
- * Build dispatch metadata for a task reconstructed from durable run context.
- * @param runContext - Persisted run-context snapshot for the execution.
- * @param options - Resume options for the reconstructed dispatch.
- * @returns Metadata to forward to the runner, or undefined when no metadata is required.
- */
-function buildRunContextDispatchMetadata(
-  runContext: WorkflowRunContext,
-  options: { readonly resume?: boolean },
-): Record<string, unknown> | undefined {
-  if (options.resume === true) {
-    return { ...runContext.dispatchMetadata, resume: true };
-  }
-  return runContext.dispatchMetadata;
 }

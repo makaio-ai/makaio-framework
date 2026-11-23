@@ -1,23 +1,19 @@
 /* eslint max-lines: ["error", { "max": 620, "skipBlankLines": true, "skipComments": true }], max-lines-per-function: ["error", { "max": 130, "skipBlankLines": true, "skipComments": true }] */
 import type { IMakaioBus } from '@makaio/bus-core';
-import { createBusNamespace, isInProcessCaller, localSubject, type CallContext } from '@makaio/core';
-import { z } from 'zod';
+import { isInProcessCaller, type CallContext } from '@makaio/core';
 import {
   SessionSubjects,
   WORKFLOW_CANCELLED_REASON,
   WorkflowError,
   createWorkflowCancelSubject,
   type IWorkflowRunner,
-  type JsonValue,
   type WorkflowDefinition,
   type WorkflowExecution,
   type WorkflowRunResult,
   createWorkflowFinalizerNamespace,
-  requireExecutableRunContext,
 } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import { WorkflowSubjects } from './namespace.js';
-import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { registerDrizzleWorkflowStorage } from './storage/handler.js';
 import {
   DEFAULT_EXECUTOR_CONFIG,
@@ -33,33 +29,22 @@ import {
 import {
   cancelExecution,
   requestExecutionCancellation,
-  withExecutionDurableTransition,
   completeExecutionWithFailure,
   completeExecutionWithSuccess,
   recoverSuccessFinalizations,
   type FinalizerDeps,
   type WorkflowSuccessFinalizer,
 } from './workflow-execution-finalizer.js';
-import { buildDefinitionRunnerParamsFromRunContext, type RunnerTaskDeps } from './workflow-runner-tasks.js';
+import type { RunnerTaskDeps } from './workflow-runner-tasks.js';
 import { startExecution, startFileExecution, type StartExecutionDeps } from './workflow-execution-start.js';
 import { rerunExecution } from './workflow-execution-rerun.js';
-import { launchDefinitionExecutionTask, selectDefinitionExecutionDispatch } from './workflow-definition-dispatch.js';
 import { RuntimeContext, resolveEphemeralPlatformFields } from './runtime/runtime-context.js';
 import { executeSequence } from './runtime/primitive-runtime.js';
-import { assertLoopGateHandlersPresent } from './runtime/loop-gate-handlers.js';
+import { assertLoopCheckHandlersPresent } from './runtime/loop-check-handlers.js';
 import type { NodeOutcome } from './runtime/node-execution.js';
 import { resolveWorkflowArtifactBinding } from './artifact-context/artifact-binding.js';
-import { validateGateResumeDataForSchema } from './runtime/gate-resume-validation.js';
-import { WorkflowGateTimeoutScheduler } from './workflow-gate-timeout-scheduler.js';
 import { normalizeConfig, normalizeStartInput } from './workflow-executor-input-normalization.js';
 import { buildWorkflowRunContext } from './workflow-run-context-builder.js';
-import {
-  assertDurableResumeFramesPresent,
-  isPausedWorkflowExecution,
-  loadUniqueWaitingGateInstance,
-  restorePausedGateAfterResumeFailure,
-  toGateTimeoutPayload,
-} from './workflow-resume-state.js';
 import { registerAuthorityStateBootstrapHandler } from './authority-state-bootstrap.js';
 import { registerOutcomeSubmissionHandler } from './workflow-outcome-submission.js';
 import { registerRuntimeLifecycleHandlers } from './runtime-lifecycle-handlers.js';
@@ -75,16 +60,10 @@ import { acceptWorkflowTechnicalFailure } from './workflow-technical-failure.js'
 import { acceptWorkflowCancellation } from './workflow-cancellation-outcome.js';
 import { acceptWorkflowOwnerOutcome } from './workflow-owner-outcome.js';
 import type { OutcomeConvergenceInput } from './outcome-convergence.js';
-import { registerExecutionTask } from './workflow-execution-task-registration.js';
 import {
   acceptAuthorityRunnerResult as acceptRunnerResult,
   loadAuthorityRunnerContext as loadRunnerContext,
 } from './authority-runner.js';
-
-const GateTimeoutNamespace = createBusNamespace('workflow-gate-timeout', {
-  resume: localSubject({ request: z.object({ executionId: z.string() }), response: z.object({}) }),
-});
-const GateTimeoutSubjects = GateTimeoutNamespace.subjects;
 
 /**
  * Core workflow executor service.
@@ -106,7 +85,6 @@ export class WorkflowExecutor extends BaseService {
   private readonly executionTasks = new Map<string, Promise<void>>();
   private readonly shellAbortControllers = new Map<string, AbortController>();
   private readonly activeRunnerSteps = new Map<string, ActiveRunnerStep>();
-  private readonly gateTimeoutScheduler: WorkflowGateTimeoutScheduler;
   /**
    * Per-execution abort controllers used to cancel workflow-level runners.
    * Keyed by execution ID; only populated when a {@link IWorkflowRunner} is used.
@@ -133,10 +111,6 @@ export class WorkflowExecutor extends BaseService {
   ) {
     super(bus);
     this.config = { ...DEFAULT_EXECUTOR_CONFIG, ...config };
-    // ORIGIN: A timer wakeup enters through a local request so the runner receives a forwardable call.
-    this.gateTimeoutScheduler = new WorkflowGateTimeoutScheduler(bus, async (executionId) => {
-      await bus.request(bus.own('schedule'), GateTimeoutSubjects.resume, { executionId });
-    });
   }
 
   /**
@@ -307,13 +281,8 @@ export class WorkflowExecutor extends BaseService {
    * Register all bus handlers via BaseService lifecycle.
    * Called once by `init()` — idempotency is handled by BaseService.
    */
-  protected async onInit(): Promise<void> {
+  protected onInit(): void {
     this.registerExecutionHandlers();
-    this.bus.registerNamespace(GateTimeoutNamespace);
-    this.registerHandler(GateTimeoutSubjects.resume, async (ctx) => {
-      await this.resumePausedExecution(ctx.call, ctx.payload.executionId);
-      ctx.setResult({});
-    });
     // An authority runner can finish bootstrap while onDestroy drains its
     // admitted execution, so this completion protocol remains available until
     // the drain is finished.
@@ -342,7 +311,6 @@ export class WorkflowExecutor extends BaseService {
     }
     registerWorkflowStorageDelegationHandlers(this.bus).forEach((cleanup) => this.addHandlerCleanup(cleanup));
     registerWorkflowStateHandlers(this.bus).forEach((cleanup) => this.addHandlerCleanup(cleanup));
-    await this.rehydratePausedGateTimeouts();
   }
 
   /**
@@ -387,7 +355,6 @@ export class WorkflowExecutor extends BaseService {
       if (entry.hardKillTimer) clearTimeout(entry.hardKillTimer);
     }
     this.activeRunnerSteps.clear();
-    this.gateTimeoutScheduler.dispose();
     await this.workflowRunner?.dispose?.();
     this.activeExecutions.clear();
   }
@@ -590,62 +557,6 @@ export class WorkflowExecutor extends BaseService {
       const cancelled = await requestExecutionCancellation(ctx.call, this.buildFinalizerDeps(), executionId, reason);
       ctx.setResult({ cancelled });
     });
-
-    this.registerGateTimeoutHandlers();
-
-    // Low-priority fallback: accept gate responses for executions that are
-    // paused in storage but have no active in-process gate-node handler.
-    // Active gate-node handlers registered by the runtime have higher priority
-    // (default 0) and will intercept gate.respond before this fallback runs.
-    this.addHandlerCleanup(
-      this.bus.on(
-        WorkflowSubjects.gate.respond,
-        async (ctx) => {
-          const { executionId, executionAttemptId, gateId, frameId, action, resumeData, reason } = ctx.payload;
-          const accepted = await this.respondToPausedGate(ctx.call, {
-            executionId,
-            executionAttemptId,
-            gateId,
-            frameId,
-            action,
-            resumeData: resumeData as JsonValue,
-            reason,
-          });
-          ctx.setResult({ accepted });
-        },
-        { priority: -100 },
-      ),
-    );
-  }
-
-  /** Register timeout wakeup handlers for parked gates. */
-  private registerGateTimeoutHandlers(): void {
-    this.addHandlerCleanup(
-      this.bus.on(WorkflowSubjects.gate.suspended, (ctx) => {
-        this.gateTimeoutScheduler.schedule(ctx.payload);
-      }),
-    );
-    this.addHandlerCleanup(
-      this.bus.on(WorkflowSubjects.gate.resolved, (ctx) => {
-        this.gateTimeoutScheduler.clear(ctx.payload.executionId, ctx.payload.stepId, ctx.payload.frameId);
-      }),
-    );
-  }
-
-  /**
-   * Rebuild timeout wakeups for exit-based gates left waiting across executor restarts.
-   *
-   * Gate rows persist the effective timeout policy captured when the reviewer
-   * prompt opened, so rehydration does not depend on the current workflow
-   * definition or a definition snapshot being available. Expired deadlines are
-   * scheduled with zero delay and redispatched by the same persisted-gate
-   * timeout path used for live suspensions.
-   */
-  private async rehydratePausedGateTimeouts(): Promise<void> {
-    const { gates } = await this.bus.request(this.bus.own('start'), WorkflowStorageSubjects.listPausedGateTimeouts, {});
-    for (const gate of gates) {
-      this.gateTimeoutScheduler.schedule(toGateTimeoutPayload(gate));
-    }
   }
 
   /**
@@ -656,7 +567,7 @@ export class WorkflowExecutor extends BaseService {
    * delegates to {@link executeSequence} to walk the node tree. The abort
    * controller is registered in `workflowAbortControllers` so the cancel
    * handler can interrupt a running execution.
-   * @param call - Call context of the message that launched or resumed this run.
+   * @param call - Call context of the message that launched this run.
    * @param executionId - The execution ID.
    */
   private async runExecution(call: CallContext, executionId: string): Promise<void> {
@@ -687,9 +598,9 @@ export class WorkflowExecutor extends BaseService {
           undefined,
           artifactBinding,
           { context: this.resolveEphemeralPlatformFields(), env: active.runContext.env },
-          { runtimeLoopGates: active.runtimeLoopGates },
+          { runtimeLoopChecks: active.runtimeLoopChecks },
         );
-        assertLoopGateHandlersPresent(active.workflow, active.runtimeLoopGates);
+        assertLoopCheckHandlersPresent(active.workflow, active.runtimeLoopChecks);
         const expressionCtx = runtimeCtx.buildExpressionContext();
         outcome = await executeSequence(call, active.workflow.root, runtimeCtx, expressionCtx);
       } catch (error) {
@@ -707,10 +618,6 @@ export class WorkflowExecutor extends BaseService {
         await cancelExecution(call, finalizerDeps, executionId, WORKFLOW_CANCELLED_REASON);
       } else if (outcome.status === 'failed') {
         await completeExecutionWithFailure(call, finalizerDeps, active.execution, executionId, outcome.error);
-      } else if (outcome.status === 'paused') {
-        active.execution.status = 'paused';
-        await this.bus.request(call, WorkflowStorageSubjects.setExecution, { execution: active.execution });
-        this.activeExecutions.delete(executionId);
       } else {
         await completeExecutionWithSuccess(
           call,
@@ -723,133 +630,5 @@ export class WorkflowExecutor extends BaseService {
     } finally {
       this.workflowAbortControllers.delete(executionId);
     }
-  }
-
-  /**
-   * Accept a gate response for an execution that is paused in storage.
-   *
-   * Checks that the execution is paused, the response targets a waiting gate
-   * frame directly or by a unique gate node, and the submitted resume data
-   * matches the persisted gate schema. On a valid response, updates the gate
-   * instance to its resolved state and triggers a resume dispatch via
-   * {@link resumePausedExecution}.
-   *
-   * Returns `false` without modifying state when the execution is not paused
-   * or the gate response is ambiguous or invalid, allowing the bus to continue
-   * to the next handler.
-   * @param call - Call context of the gate response message.
-   * @param payload - Gate response payload from the bus request context.
-   * @returns `true` when the gate was accepted and resume dispatched; `false` otherwise.
-   */
-  private async respondToPausedGate(
-    call: CallContext,
-    payload: {
-      readonly executionId: string;
-      readonly executionAttemptId?: string;
-      readonly gateId: string;
-      readonly frameId?: string;
-      readonly action: 'approve' | 'reject';
-      readonly resumeData: JsonValue;
-      readonly reason?: string;
-    },
-  ): Promise<boolean> {
-    const { executionId, executionAttemptId, gateId, frameId, resumeData, reason } = payload;
-    const { execution } = await this.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId });
-    if (!isPausedWorkflowExecution(execution)) return false;
-
-    const gate = await loadUniqueWaitingGateInstance(call, this.bus, { executionId, nodeId: gateId, frameId });
-    if (gate === null) return false;
-    if (executionAttemptId !== gate.executionAttemptId) return false;
-
-    const validation = validateGateResumeDataForSchema(gateId, gate.schema, resumeData);
-    if (!validation.valid) return false;
-
-    const { runContext } = await this.bus.request(call, WorkflowStorageSubjects.getRunContext, { executionId });
-    if (runContext === null) {
-      throw new Error(`[WorkflowExecutor] Run context not found for paused execution: ${executionId}`);
-    }
-    await assertDurableResumeFramesPresent(call, this.bus, runContext);
-
-    const { accepted } = await this.bus.request(call, WorkflowStorageSubjects.resolveWaitingGateInstance, {
-      gate: {
-        ...gate,
-        status: payload.action === 'reject' ? 'rejected' : 'resumed',
-        resumeData,
-        ...(reason !== undefined ? { reason } : {}),
-        resolvedAt: Date.now(),
-      },
-    });
-    if (!accepted) return false;
-
-    try {
-      await this.resumePausedExecution(call, execution.id);
-    } catch (error) {
-      await restorePausedGateAfterResumeFailure(
-        call,
-        this.buildFinalizerDeps(),
-        this.activeExecutions,
-        this.executionTasks,
-        this.workflowAbortControllers,
-        execution,
-        gate,
-        gateId,
-      );
-      throw error;
-    }
-
-    this.gateTimeoutScheduler.clear(executionId, gateId, gate.frameId);
-    return true;
-  }
-
-  /**
-   * Dispatch a paused execution once durable resume state is available.
-   * @param call - Call context of the message or wakeup that resumes the execution.
-   * @param executionId - Execution to resume.
-   */
-  private async resumePausedExecution(call: CallContext, executionId: string): Promise<void> {
-    const { runContext: storedRunContext } = await this.bus.request(call, WorkflowStorageSubjects.getRunContext, {
-      executionId,
-    });
-    if (storedRunContext === null) {
-      throw new Error(`[WorkflowExecutor] Run context not found for paused execution: ${executionId}`);
-    }
-    const runContext = requireExecutableRunContext(storedRunContext);
-
-    const definition: WorkflowDefinition =
-      runContext.definitionSnapshot ??
-      (await this.bus.request(call, WorkflowStorageSubjects.get, { id: runContext.workflowId })).workflow ??
-      (() => {
-        throw new Error(`[WorkflowExecutor] Workflow definition not found for paused execution: ${executionId}`);
-      })();
-
-    await assertDurableResumeFramesPresent(call, this.bus, runContext);
-
-    const params = buildDefinitionRunnerParamsFromRunContext(runContext, definition, { resume: true });
-    const dispatch = selectDefinitionExecutionDispatch(this.buildStartDeps(), params);
-
-    await withExecutionDurableTransition(this.buildFinalizerDeps(), executionId, async () => {
-      // Frame loading may have yielded to cancellation. Re-read under the same
-      // owner boundary that admits the next attempt; never resurrect stale state.
-      const { execution } = await this.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId });
-      if (execution === null)
-        throw new Error(`[WorkflowExecutor] Execution not found for paused execution: ${executionId}`);
-      // Durable paused → running admission excludes duplicate gate/timeout
-      // responses without blocking the next gate during this task's publication.
-      if (execution.status !== 'paused') return;
-      await this.bus.request(call, WorkflowStorageSubjects.setExecution, {
-        execution: { ...execution, status: 'running' },
-      });
-
-      this.activeExecutions.set(executionId, {
-        execution: { ...execution, status: 'running' },
-        workflow: definition,
-        runContext,
-        runtimeHandlers: new Map(),
-        runtimeLoopGates: new Map(),
-      });
-
-      const trackedExecutionTask = launchDefinitionExecutionTask(call, this.buildStartDeps(), params, dispatch);
-      registerExecutionTask(this.executionTasks, executionId, trackedExecutionTask);
-    });
   }
 }

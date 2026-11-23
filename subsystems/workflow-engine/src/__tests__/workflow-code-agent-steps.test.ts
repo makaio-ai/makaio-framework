@@ -84,7 +84,7 @@ function createScenario(): WorkflowScenario {
       ],
       {
         maxRounds: 3,
-        gate: {
+        check: {
           handler: 'check-convergence',
           evaluate: (_input, _config, ctx) => {
             checkedRounds.push(ctx.round);

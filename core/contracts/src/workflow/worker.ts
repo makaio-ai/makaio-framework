@@ -3,7 +3,6 @@ import type { CallContext } from '@makaio/core';
 import { WorkflowDefinitionSchema, WorkflowExecutionScopeSchema } from './schemas.js';
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
-import { SuspensionStrategySchema } from '../worker/suspension.js';
 import { ArtifactRevisionSchema, type ArtifactRevision } from '../artifact/index.js';
 import { WorkerContributionRefSchema, WorkerMaterializationSpecSchema } from '../capabilities/worker/types.js';
 import type { ExecutionAttemptOutcome } from '../execution-attempt/instruction.js';
@@ -127,8 +126,6 @@ export const WorkflowWorkerConfigSchema = z.object({
   coordinatorSessionId: z.string().min(1),
   /** Bus subject the worker subscribes to for cancellation signals. */
   cancelSubject: z.string().min(1),
-  /** Selected provider suspension behavior for this execution. */
-  suspensionStrategy: SuspensionStrategySchema.default('wait-in-process'),
   /** Process that owns durable terminal state and lifecycle publication. */
   terminalAuthority: z.enum(['worker', 'authority']).optional(),
   /** Portable workspace reference retained while a worker starts. */
@@ -187,7 +184,6 @@ interface WorkflowRunResultBase {
  * Result produced when execution completes successfully.
  *
  * Carries an optional {@link ArtifactRevision} written by the workflow.
- * Never carries top-level output, error, reason, or pause identity fields.
  */
 export interface WorkflowCompletedRunResult extends WorkflowRunResultBase {
   /** Completed execution status. */
@@ -200,10 +196,6 @@ export interface WorkflowCompletedRunResult extends WorkflowRunResultBase {
   readonly error?: never;
   /** Reason is only valid on cancelled results. */
   readonly reason?: never;
-  /** Pause identity is only valid for paused results. */
-  readonly pausedAtGateId?: never;
-  /** Pause identity is only valid for paused results. */
-  readonly pausedAtFrameId?: never;
 }
 
 /**
@@ -222,10 +214,6 @@ export interface WorkflowFailedRunResult extends WorkflowRunResultBase {
   readonly output?: never;
   /** Reason is only valid on cancelled results. */
   readonly reason?: never;
-  /** Pause identity is only valid for paused results. */
-  readonly pausedAtGateId?: never;
-  /** Pause identity is only valid for paused results. */
-  readonly pausedAtFrameId?: never;
 }
 
 /**
@@ -244,36 +232,6 @@ export interface WorkflowCancelledRunResult extends WorkflowRunResultBase {
   readonly output?: never;
   /** Error is only valid on failed results. */
   readonly error?: never;
-  /** Pause identity is only valid for paused results. */
-  readonly pausedAtGateId?: never;
-  /** Pause identity is only valid for paused results. */
-  readonly pausedAtFrameId?: never;
-}
-
-/**
- * Result produced when execution parks at a gate and will resume later.
- *
- * Both {@link pausedAtGateId} and {@link pausedAtFrameId} are required to
- * uniquely identify the suspended gate frame for redispatch.
- */
-export interface WorkflowPausedRunResult extends WorkflowRunResultBase {
-  /**
-   * Execution suspended at a gate; the worker has exited and will be
-   * redispatched or resumed when the gate resolves.
-   */
-  readonly status: 'paused';
-  /** Node ID of the gate at which execution paused. */
-  readonly pausedAtGateId: string;
-  /** Frame ID of the suspended gate instance at which execution paused. */
-  readonly pausedAtFrameId: string;
-  /** Artifact is only valid on completed results. */
-  readonly artifact?: never;
-  /** Top-level output is not carried on run results. */
-  readonly output?: never;
-  /** Error is only valid on failed results. */
-  readonly error?: never;
-  /** Reason is only valid on cancelled results. */
-  readonly reason?: never;
 }
 
 /**
@@ -286,16 +244,11 @@ export interface WorkflowPausedRunResult extends WorkflowRunResultBase {
  * - `completed`: finished successfully — carries an optional artifact revision
  * - `failed`: terminated with an error — carries a required error string
  * - `cancelled`: stopped by an abort signal — carries an optional reason
- * - `paused`: parked at a gate — carries required pause identity fields
  *
  * NOTE: A companion {@link WorkflowRunResultSchema} exists for runtime
  * validation. Both definitions must stay in sync.
  */
-export type WorkflowRunResult =
-  | WorkflowCompletedRunResult
-  | WorkflowFailedRunResult
-  | WorkflowCancelledRunResult
-  | WorkflowPausedRunResult;
+export type WorkflowRunResult = WorkflowCompletedRunResult | WorkflowFailedRunResult | WorkflowCancelledRunResult;
 
 /** Base Zod fields shared by all result variants. */
 const WorkflowRunResultBaseSchema = z.object({
@@ -310,9 +263,6 @@ const WorkflowRunResultBaseSchema = z.object({
  *
  * Each variant uses `.strict()` to reject unknown fields (including the
  * former top-level `output` field) at runtime.
- *
- * When `status` is `'paused'`, both `pausedAtGateId` and `pausedAtFrameId`
- * are required to uniquely identify the suspended gate frame.
  */
 export const WorkflowRunResultSchema = z.discriminatedUnion('status', [
   WorkflowRunResultBaseSchema.extend({
@@ -332,14 +282,6 @@ export const WorkflowRunResultSchema = z.discriminatedUnion('status', [
     status: z.literal('cancelled'),
     /** Optional human-readable description of why execution was cancelled. */
     reason: z.string().min(1).optional(),
-  }).strict(),
-  WorkflowRunResultBaseSchema.extend({
-    /** Paused execution status. */
-    status: z.literal('paused'),
-    /** Node ID of the gate at which execution paused. */
-    pausedAtGateId: z.string().min(1),
-    /** Frame ID of the suspended gate instance at which execution paused. */
-    pausedAtFrameId: z.string().min(1),
   }).strict(),
 ]);
 
@@ -376,19 +318,13 @@ export interface WorkflowRunnerRunOptions {
   /**
    * Local owner admission around durable attempt creation only. A runner must
    * release this boundary before dispatching or awaiting the workload outcome.
-   * This callback never travels in worker configuration or dispatch metadata.
+   * The callback stays in the calling process.
    * Direct runner consumers that omit it own their own admission policy.
    * @param create - Creation operation executed only while the owner permits new work.
    * @returns The result of the admitted creation operation.
    * @typeParam T - Creation result retained by the dispatch runner.
    */
   readonly withAttemptCreation?: <T>(create: () => Promise<T>) => Promise<T>;
-  /**
-   * Opaque metadata forwarded to dispatch layers that support it.
-   *
-   * Runners that do not call through Worker dispatch may ignore this.
-   */
-  readonly dispatchMetadata?: z.infer<typeof JsonObjectContractSchema>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -401,8 +337,8 @@ export interface WorkflowRunnerRunOptions {
  * Authority or still needs host-side finalization.
  *
  * - `uncommitted`: the runner produced the result but the durable lifecycle
- *   transition has not been performed. The host executor must finalize or
- *   park the execution (in-process and Piscina runners).
+ *   transition has not been performed. The host executor must finalize the
+ *   execution (in-process and Piscina runners).
  * - `authority-committed`: the Authority outcome RPC has converged canonical
  *   state. The host verifies invocation identity and trusts that acceptance,
  *   without reinterpreting later owner state or invoking a fallback finalizer.

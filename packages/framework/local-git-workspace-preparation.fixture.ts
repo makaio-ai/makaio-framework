@@ -96,7 +96,6 @@ try {
     cancelSubject: 'workflow.installed-headless-git.cancel',
     env: {},
     createdAt: 0,
-    suspensionStrategy: 'wait-in-process',
   };
   const workspace = {
     provisioning: 'create',
@@ -136,7 +135,7 @@ try {
   const offAdmit = registerOperationAdmissionHandler(authorityBus, { bus: authorityBus, authority });
   const offOperations = authorityBus.on(ExecutionAttemptSubjects.operation.admitted, (ctx) => operations.push(ctx.payload.operationKind));
   const offInputs = authorityBus.on(WorkerSubjects.runtime.inputs.get, (ctx) => {
-    ctx.setResult({ runtimeInputs: { workerManifest: runContext.workerManifest, suspensionStrategy: runContext.suspensionStrategy } });
+    ctx.setResult({ runtimeInputs: { workerManifest: runContext.workerManifest } });
   }, { filter: { executionAttemptId: created.executionAttemptId } });
 
   const server = createServer();

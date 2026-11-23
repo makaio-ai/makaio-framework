@@ -56,7 +56,7 @@ function minimalRunContext(overrides: Record<string, unknown> = {}) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// WorkflowRunResult (unchanged from prior plans)
+// WorkflowRunResult
 // ─────────────────────────────────────────────────────────────
 
 describe('WorkflowRunResult', () => {
@@ -112,39 +112,8 @@ describe('WorkflowRunResult', () => {
     expect(completedWithOutput.status).toBe('completed');
   });
 
-  it('requires pause identity only for paused results', () => {
-    const paused: WorkflowRunResult = {
-      executionId: 'wfx-1',
-      workflowId: 'wf-1',
-      status: 'paused',
-      pausedAtGateId: 'approve',
-      pausedAtFrameId: 'frame-approve-1',
-    };
-    const completed: WorkflowRunResult = {
-      executionId: 'wfx-1',
-      workflowId: 'wf-1',
-      status: 'completed',
-    };
-
-    // @ts-expect-error paused results must identify the suspended gate.
-    const missingFrame: WorkflowRunResult = {
-      executionId: 'wfx-1',
-      workflowId: 'wf-1',
-      status: 'paused',
-      pausedAtGateId: 'approve',
-    };
-    // @ts-expect-error non-paused results cannot carry pause identity.
-    const completedWithPauseIdentity: WorkflowRunResult = {
-      executionId: 'wfx-1',
-      workflowId: 'wf-1',
-      status: 'completed',
-      pausedAtGateId: 'approve',
-    };
-
-    expect(paused.pausedAtFrameId).toBe('frame-approve-1');
-    expect(completed.status).toBe('completed');
-    expect(missingFrame.status).toBe('paused');
-    expect(completedWithPauseIdentity.status).toBe('completed');
+  it('models only terminal statuses', () => {
+    expectTypeOf<WorkflowRunResult['status']>().toEqualTypeOf<'completed' | 'failed' | 'cancelled'>();
   });
 });
 
@@ -274,14 +243,6 @@ describe('WorkflowRunResultSchema', () => {
         status: 'cancelled',
         output: { reason: 'cancelled' },
       },
-      {
-        executionId: 'wfx-1',
-        workflowId: 'wf-1',
-        status: 'paused',
-        pausedAtGateId: 'gate-1',
-        pausedAtFrameId: 'frame-1',
-        output: { reason: 'paused' },
-      },
     ]) {
       expect(() => WorkflowRunResultSchema.parse(payload)).toThrow();
     }
@@ -306,52 +267,29 @@ describe('WorkflowRunResultSchema', () => {
     ).toThrow();
   });
 
-  it('accepts paused worker results with frame-aware gate identity', () => {
-    expect(
-      WorkflowRunResultSchema.parse({
-        executionId: 'wfx-1',
-        workflowId: 'wf-1',
-        status: 'paused',
-        pausedAtGateId: 'approve',
-        pausedAtFrameId: 'frame-approve-1',
-      }),
-    ).toMatchObject({
-      status: 'paused',
-      pausedAtFrameId: 'frame-approve-1',
-    });
-  });
-
-  it('rejects paused result without pausedAtGateId', () => {
+  it('rejects a legacy paused worker result', () => {
     expect(() =>
       WorkflowRunResultSchema.parse({
         executionId: 'wfx-1',
         workflowId: 'wf-1',
-        status: 'paused',
-        pausedAtFrameId: 'frame-1',
+        status: 'paused', // legacy-input
+        pausedAtGateId: 'approve', // legacy-input
+        pausedAtFrameId: 'frame-approve-1', // legacy-input
       }),
-    ).toThrow();
+    ).toThrow(/status/);
   });
 
-  it('rejects paused result without pausedAtFrameId', () => {
-    expect(() =>
-      WorkflowRunResultSchema.parse({
-        executionId: 'wfx-1',
-        workflowId: 'wf-1',
-        status: 'paused',
-        pausedAtGateId: 'gate-1',
-      }),
-    ).toThrow();
-  });
-
-  it('rejects non-paused results with pause identity', () => {
-    for (const status of ['completed', 'failed', 'cancelled'] as const) {
+  it('rejects legacy pause identity on every terminal result variant', () => {
+    for (const result of [
+      { executionId: 'wfx-1', workflowId: 'wf-1', status: 'completed' },
+      { executionId: 'wfx-1', workflowId: 'wf-1', status: 'failed', error: 'failed' },
+      { executionId: 'wfx-1', workflowId: 'wf-1', status: 'cancelled' },
+    ] satisfies WorkflowRunResult[]) {
       expect(() =>
         WorkflowRunResultSchema.parse({
-          executionId: 'wfx-1',
-          workflowId: 'wf-1',
-          status,
-          pausedAtGateId: 'gate-1',
-          pausedAtFrameId: 'frame-1',
+          ...result,
+          pausedAtGateId: 'gate-1', // legacy-input
+          pausedAtFrameId: 'frame-1', // legacy-input
         }),
       ).toThrow();
     }
@@ -413,16 +351,6 @@ describe('portable WorkflowWorkerConfig', () => {
     expect(parsed).not.toHaveProperty('context');
   });
 
-  it('carries suspension strategy without durable context', () => {
-    const config = WorkflowWorkerConfigSchema.parse(
-      minimalWorkerConfig({
-        suspensionStrategy: 'exit-and-redispatch',
-      }),
-    );
-
-    expect(config.suspensionStrategy).toBe('exit-and-redispatch');
-  });
-
   it('accepts only explicit workflow trigger modes', () => {
     expect(WorkflowWorkerConfigSchema.parse(minimalWorkerConfig({ triggerMode: 'await-trigger' })).triggerMode).toBe(
       'await-trigger',
@@ -449,16 +377,6 @@ describe('portable WorkflowRunContext', () => {
     expect(parsed).not.toHaveProperty('context');
     // Verify the type doesn't have those old fields
     expectTypeOf<WorkflowRunContext>().not.toHaveProperty('context');
-  });
-
-  it('carries suspension strategy without durable context', () => {
-    const runContext = WorkflowRunContextSchema.parse(
-      minimalRunContext({
-        suspensionStrategy: 'exit-and-redispatch',
-      }),
-    );
-
-    expect(runContext.suspensionStrategy).toBe('exit-and-redispatch');
   });
 
   it('persists only explicit workflow trigger modes', () => {
@@ -824,31 +742,5 @@ describe('WorkerMaterializationSpec mode validation', () => {
         sourcePath: 'src/main.ts',
       }),
     ).toMatchObject({ kind: 'workspace-snapshot' });
-  });
-});
-
-// ─────────────────────────────────────────────────────────────
-// Suspension strategy — portable (no context dependency)
-// ─────────────────────────────────────────────────────────────
-
-describe('suspension strategy in portable config and run context', () => {
-  it('carries suspension strategy through worker config', () => {
-    const config = WorkflowWorkerConfigSchema.parse(
-      minimalWorkerConfig({
-        suspensionStrategy: 'exit-and-redispatch',
-      }),
-    );
-
-    expect(config.suspensionStrategy).toBe('exit-and-redispatch');
-  });
-
-  it('carries suspension strategy through run context', () => {
-    const runContext = WorkflowRunContextSchema.parse(
-      minimalRunContext({
-        suspensionStrategy: 'exit-and-redispatch',
-      }),
-    );
-
-    expect(runContext.suspensionStrategy).toBe('exit-and-redispatch');
   });
 });

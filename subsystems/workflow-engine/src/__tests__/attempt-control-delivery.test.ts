@@ -4,8 +4,6 @@ import {
   ExecutionAttemptNamespace,
   ExecutionAttemptOutcomeSchema,
   ExecutionAttemptSubjects,
-  WorkflowNamespace,
-  WorkflowSubjects,
   type ExecutionAttemptControlReceipt,
   type ExecutionAttemptControlReport,
   type ExecutionAttemptOutcome,
@@ -288,8 +286,6 @@ describe('bounded Attempt Cancel delivery', () => {
 
     const runtimeAIdentity = h.ids.executionAttemptId;
     const runtimeBIdentity = 'attempt-b';
-    h.bus.registerNamespace(WorkflowNamespace);
-    const gateResponseSubject = 'workflow.gate.respond';
     const controlDeliverySubject = 'execution-attempt.control.deliver';
     const operationDeliverySubject = 'execution-attempt.operation.deliver';
     const cleanupRuntimeA = mintWorkflowExecutionBusSecret({
@@ -343,14 +339,12 @@ describe('bounded Attempt Cancel delivery', () => {
       runtimeA.receiveMessage(
         JSON.stringify({
           type: 'subscribe',
-          subjects: { [operationDeliverySubject]: [0], [controlDeliverySubject]: [0], [gateResponseSubject]: [0] },
+          subjects: { [operationDeliverySubject]: [0], [controlDeliverySubject]: [0] },
           deliveryClasses: {
             [operationDeliverySubject]: 'relayable',
             [controlDeliverySubject]: 'relayable',
-            [gateResponseSubject]: 'relayable',
           },
           filters: {
-            [gateResponseSubject]: { executionAttemptId: h.ids.executionAttemptId },
             [operationDeliverySubject]: {
               executionAttemptId: h.ids.executionAttemptId,
               runtimeIncarnationId: h.correlation.runtimeIncarnationId,
@@ -370,18 +364,15 @@ describe('bounded Attempt Cancel delivery', () => {
           subjects: {
             [operationDeliverySubject]: [100],
             [controlDeliverySubject]: [100],
-            [gateResponseSubject]: [100],
           },
           deliveryClasses: {
             [operationDeliverySubject]: 'relayable',
             [controlDeliverySubject]: 'relayable',
-            [gateResponseSubject]: 'relayable',
           },
           filters: forgedFilters
             ? {
                 [operationDeliverySubject]: { executionAttemptId: h.ids.executionAttemptId },
                 [controlDeliverySubject]: { executionAttemptId: h.ids.executionAttemptId },
-                [gateResponseSubject]: { executionAttemptId: h.ids.executionAttemptId },
               }
             : undefined,
         }),
@@ -417,37 +408,6 @@ describe('bounded Attempt Cancel delivery', () => {
         }),
       );
       await expect(operationDelivered).resolves.toEqual({ receipt: 'completed' });
-      runtimeA.clearSentMessages();
-
-      const gateDelivered = h.bus.request(
-        h.bus.own('root'),
-        WorkflowSubjects.gate.respond,
-        {
-          executionId: h.ids.executionId,
-          executionAttemptId: h.ids.executionAttemptId,
-          gateId: 'attempt-gate',
-          action: 'approve',
-          resumeData: { approved: true },
-        },
-        { timeout: 1_000 },
-      );
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      const authorityGateResponse = JSON.parse(runtimeA.sentMessages.at(-1)!);
-      expect(authorityGateResponse).toMatchObject({
-        type: 'request',
-        namespace: 'workflow',
-        subject: 'gate.respond',
-        payload: { executionAttemptId: h.ids.executionAttemptId },
-      });
-      expect(runtimeB.sentMessages).toEqual([]);
-      runtimeA.receiveMessage(
-        JSON.stringify({
-          type: 'response',
-          correlationId: authorityGateResponse.correlationId,
-          result: { accepted: true },
-        }),
-      );
-      await expect(gateDelivered).resolves.toEqual({ accepted: true });
       runtimeA.clearSentMessages();
 
       runtimeB.receiveMessage(

@@ -133,16 +133,14 @@ function buildTree(form: Form, dispatch: Dispatch) {
       type: 'loop',
       maxRounds: 2,
       body: sequence('rounds-body', [codeNode('rounds-code', form)]),
-      gate: { handler: 'check', config: opaquePayload },
+      check: { handler: 'check', config: opaquePayload },
     },
     schemaStep,
   ]);
 }
 
 /** A tree without any station or delegate node; the migration must leave its row byte-identical. */
-const untouchedTree = sequence('root', [
-  { id: 'g', type: 'gate', prompt: 'ok', autoAction: 'approve', timeoutMs: null },
-]);
+const untouchedTree = sequence('root', [{ id: 'g', type: 'code-step' }]);
 
 /**
  * Wrap a tree into a stored definition document.
@@ -357,11 +355,11 @@ describeStorageConformance('workflow step-name data migration', (config) => {
     // must NOT be treated as definition dispatch on either dialect: one with no `kind` key at all, and one
     // with an explicit `kind: null` (a JSON null value for the key, distinct from an absent key); only SQL
     // NULL or `kind: 'definition'` may select definition dispatch.
-    const k4OnlyTree = sequence('root', [roleStation('agent', 'legacy', 'source')]);
+    const roleStationOnlyTree = sequence('root', [roleStation('agent', 'legacy', 'source')]);
     for (const [id, source, tree] of [
       ['wf-definition', null, buildTree('legacy', 'definition')],
       ['wf-source', { kind: 'path', path: '/w/flow.ts' }, buildTree('legacy', 'source')],
-      ['wf-source-k4-only', { kind: 'path', path: '/w/flow-k4.ts' }, k4OnlyTree],
+      ['wf-role-station-only', { kind: 'path', path: '/w/role-station-only.ts' }, roleStationOnlyTree],
       ['wf-source-no-kind', {}, buildTree('legacy', 'source')],
       ['wf-source-null-kind', { kind: null, path: '/w/flow-null.ts' }, buildTree('legacy', 'source')],
       ['wf-untouched', null, untouchedTree],
@@ -478,7 +476,7 @@ describeStorageConformance('workflow step-name data migration', (config) => {
       // An explicit `kind: null` is likewise not `'definition'`: the role station stays ambiguous.
       expect(byId.get('wf-source-null-kind')).toEqual(buildTree('migrated', 'source'));
       // The isolated module-dispatched role-station fixture carries no delegate-agent node at all.
-      expect(byId.get('wf-source-k4-only')).toEqual(k4OnlyTree);
+      expect(byId.get('wf-role-station-only')).toEqual(roleStationOnlyTree);
       expect(byId.get('wf-untouched')).toEqual(parseJson(untouchedBefore[0]?.root));
       if (dialect === 'sqlite') {
         // SQLite stores the text verbatim: a row without a target node is not rewritten at all.
@@ -534,7 +532,7 @@ describeStorageConformance('workflow step-name data migration', (config) => {
       const rejectedIds = [
         'wf-definition',
         'wf-source',
-        'wf-source-k4-only',
+        'wf-role-station-only',
         'wf-source-no-kind',
         'wf-source-null-kind',
       ];
@@ -549,16 +547,17 @@ describeStorageConformance('workflow step-name data migration', (config) => {
       await expect(storage.bus.request(WorkflowStorageSubjects.get, { id: 'wf-definition' })).rejects.toSatisfy(
         (error: unknown) => isDefinitionInvalidError(error) && (error as Error).message.includes('wf-definition'),
       );
-      // 'wf-source-k4-only' carries no delegate-agent node at all: its rejection is isolated proof of the
+      // 'wf-role-station-only' carries no delegate-agent node at all: its rejection is isolated proof of the
       // undecidable role-station rule on its own, separate from the delegate-agent rule above.
-      await expect(storage.bus.request(WorkflowStorageSubjects.get, { id: 'wf-source-k4-only' })).rejects.toSatisfy(
-        (error: unknown) => isDefinitionInvalidError(error) && (error as Error).message.includes('wf-source-k4-only'),
+      await expect(storage.bus.request(WorkflowStorageSubjects.get, { id: 'wf-role-station-only' })).rejects.toSatisfy(
+        (error: unknown) =>
+          isDefinitionInvalidError(error) && (error as Error).message.includes('wf-role-station-only'),
       );
       // Rejected reads retain both the stored row and its migrated root unchanged.
       const afterRejectionReads = await ctx.executor.all<{ id: string; root: unknown }>(
-        sql`SELECT id, root FROM workflow_definitions WHERE id IN ('wf-definition', 'wf-source-k4-only') ORDER BY id`,
+        sql`SELECT id, root FROM workflow_definitions WHERE id IN ('wf-definition', 'wf-role-station-only') ORDER BY id`,
       );
-      expect(afterRejectionReads.map((row) => row.id)).toEqual(['wf-definition', 'wf-source-k4-only']);
+      expect(afterRejectionReads.map((row) => row.id)).toEqual(['wf-definition', 'wf-role-station-only']);
       for (const row of afterRejectionReads) expect(parseJson(row.root)).toEqual(byId.get(row.id));
 
       // Frames, spans, WorkLog rows: delegate frames become agent steps, stations follow their node,

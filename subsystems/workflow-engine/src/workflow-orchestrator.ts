@@ -5,7 +5,7 @@ import type { CallContext } from '@makaio/core';
 import {
   WORKFLOW_CANCELLED_REASON,
   CodeStepHandler,
-  LoopGateHandler,
+  LoopCheckHandler,
   WorkflowZodSchemas,
   WorkflowDefinition,
   WorkflowExecution,
@@ -21,8 +21,7 @@ import { cancelExecution } from './workflow-execution-finalizer.js';
 import { RuntimeContext } from './runtime/runtime-context.js';
 import { executeSequence } from './runtime/primitive-runtime.js';
 import { resolveWorkflowArtifactBinding } from './artifact-context/artifact-binding.js';
-import { buildResumeFrameIndex } from './runtime/resume-frames.js';
-import { assertLoopGateHandlersPresent } from './runtime/loop-gate-handlers.js';
+import { assertLoopCheckHandlersPresent } from './runtime/loop-check-handlers.js';
 import { persistLoadedExecutionStart } from './workflow-execution-start.js';
 import { persistAuthorityLoadedState } from './authority-state-bootstrap.js';
 import { buildWorkflowRunResult, type RuntimeSequenceResult } from './workflow-run-result.js';
@@ -47,8 +46,8 @@ export interface LoadedWorkflow {
    * Used by the orchestrator to dispatch `codeStep`-type nodes.
    */
   readonly runtimeHandlers: ReadonlyMap<string, CodeStepHandler>;
-  /** Loop gate handler functions keyed by handler name. */
-  readonly runtimeLoopGates?: ReadonlyMap<string, LoopGateHandler>;
+  /** Loop check handler functions keyed by handler name. */
+  readonly runtimeLoopChecks?: ReadonlyMap<string, LoopCheckHandler>;
 }
 
 /**
@@ -186,7 +185,7 @@ function bindSignalCancellation(params: SignalCancellationBindingParams): () => 
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Resolve the durable execution start timestamp when a worker is re-dispatched.
+ * Resolve the start timestamp recorded before the worker starts.
  * @param call - Call context of the run.
  * @param bus - Worker-local bus that may expose workflow storage.
  * @param executionId - Execution identifier to inspect.
@@ -202,8 +201,7 @@ async function loadPersistedExecutionStartedAt(
 }
 
 /**
- * Build the live execution row for worker startup while preserving durable
- * execution metadata across exit-based re-dispatches.
+ * Build the live execution row for worker startup while preserving the recorded start timestamp.
  * @param call - Call context of the run.
  * @param bus - Worker-local bus that may expose workflow storage.
  * @param config - Worker configuration for execution identifiers and inputs.
@@ -229,8 +227,7 @@ async function buildRunningExecution(
 }
 
 /**
- * Build an immediate terminal execution row while preserving the original start
- * timestamp when this worker is re-dispatched for a paused execution.
+ * Build an immediate terminal execution row while preserving the recorded start timestamp.
  * @param call - Call context of the run.
  * @param bus - Worker-local bus that may expose workflow storage.
  * @param config - Worker configuration for execution identifiers and inputs.
@@ -265,18 +262,13 @@ async function buildPreRuntimeTerminalExecution(
  * Isolates the RuntimeContext construction, sequence execution, and outcome
  * mapping so {@link runWorkflowOrchestrator} can delegate the runtime body
  * without exceeding the per-function line limit.
- *
- * For re-dispatched executions (identified by `suspensionStrategy` being an
- * exit-based value), persisted frames are loaded from storage and indexed into
- * a {@link ResumeFrameIndex} so the sequence executor can skip already-completed
- * nodes and reuse waiting gate frames without re-opening them.
  * @param call - Call context of the run.
  * @param config - Worker configuration carrying execution identifiers.
  * @param definition - Workflow definition to execute.
  * @param liveExecution - The live execution record.
  * @param runContext - Durable run-context snapshot for this execution.
  * @param runtimeHandlers - Code step handler map for dispatch.
- * @param runtimeLoopGates - Loop gate handler map for convergence checks.
+ * @param runtimeLoopChecks - Loop check handler map for convergence checks.
  * @param bus - Worker-local bus.
  * @param signal - Cancellation signal.
  * @param zodSchemas - Optional file-loaded workflow schemas for artifact validation.
@@ -289,19 +281,11 @@ async function runRuntimeSequence(
   liveExecution: WorkflowExecution,
   runContext: WorkflowRunContext,
   runtimeHandlers: Map<string, CodeStepHandler>,
-  runtimeLoopGates: ReadonlyMap<string, LoopGateHandler>,
+  runtimeLoopChecks: ReadonlyMap<string, LoopCheckHandler>,
   bus: IMakaioBus,
   signal: AbortSignal,
   zodSchemas?: WorkflowZodSchemas,
 ): Promise<RuntimeSequenceResult> {
-  const { executionAttemptId, suspensionStrategy } = config;
-  // For exit-based strategies, load persisted frames from storage so the
-  // sequence executor can skip completed nodes and reuse waiting gate frames.
-  const resumeFrames =
-    suspensionStrategy !== 'wait-in-process'
-      ? await loadResumeFrames(call, config.executionId, bus, { required: true })
-      : undefined;
-
   const artifactBinding = await resolveWorkflowArtifactBinding({
     call,
     definition,
@@ -329,7 +313,7 @@ async function runRuntimeSequence(
       },
       env: config.env,
     },
-    { executionAttemptId, suspensionStrategy, resumeFrames, runtimeLoopGates },
+    { runtimeLoopChecks },
   );
   const expressionCtx = runtimeCtx.buildExpressionContext();
   const outcome = await executeSequence(call, definition.root, runtimeCtx, expressionCtx);
@@ -337,56 +321,10 @@ async function runRuntimeSequence(
   if (outcome.status === 'failed') {
     return { status: 'failed', error: outcome.error };
   }
-  if (outcome.status === 'paused') {
-    return {
-      status: 'paused',
-      pausedAtGateId: outcome.pausedAtGateId,
-      pausedAtFrameId: outcome.pausedAtFrameId,
-    };
-  }
   if (outcome.status === 'cancelled' || signal.aborted) {
     return { status: 'cancelled', reason: WORKFLOW_CANCELLED_REASON };
   }
   return { status: 'completed', artifact: artifactBinding?.current };
-}
-
-/**
- * Load persisted execution frames from storage and build a resume frame index.
- *
- * Returns `undefined` when no frames are found, which is the normal first-run
- * case for exit-based workers. When frame storage is required, missing handlers
- * or storage errors are surfaced so a paused-run resume cannot silently restart
- * as a fresh execution and duplicate side effects.
- * @param call - Call context of the run.
- * @param executionId - Execution identifier to load frames for.
- * @param bus - Worker-local bus.
- * @param options - Resume-frame loading behavior.
- * @returns Populated resume frame index, or `undefined` when no frames exist.
- */
-async function loadResumeFrames(
-  call: CallContext,
-  executionId: string,
-  bus: IMakaioBus,
-  options: { readonly required?: boolean } = {},
-): Promise<ReturnType<typeof buildResumeFrameIndex>> {
-  try {
-    const result = await bus.requestOptional(call, WorkflowStorageSubjects.listFrames, { executionId });
-    if (!result.handled) {
-      if (options.required === true) {
-        throw new Error(`Frame storage handler is required to resume execution '${executionId}'.`);
-      }
-      return undefined;
-    }
-    if (result.data.frames.length === 0) {
-      return undefined;
-    }
-    return buildResumeFrameIndex(result.data.frames);
-  } catch (error) {
-    if (options.required === true) {
-      throw error;
-    }
-    return undefined;
-  }
 }
 
 /**
@@ -414,39 +352,8 @@ function buildWorkerRunContext(config: WorkflowWorkerConfig, definition: Workflo
     cancelSubject: config.cancelSubject,
     env: config.env,
     createdAt: Date.now(),
-    suspensionStrategy: config.suspensionStrategy,
     ...(config.terminalAuthority !== undefined ? { terminalAuthority: config.terminalAuthority } : {}),
     ...(config.materializationSpec !== undefined ? { materializationSpec: config.materializationSpec } : {}),
-  });
-}
-
-/**
- * Persist a paused execution and emit `execution.paused`.
- *
- * Paused is not a terminal status: `completedAt` is not set and the distinct
- * `execution.paused` event (not `execution.completed`) notifies host runners.
- * @param call - Call context of the run.
- * @param bus - Worker-local bus.
- * @param config - Worker configuration carrying execution identifiers.
- * @param liveExecution - The live execution record (mutated to `paused` status).
- * @param pausedAtGateId - Node ID of the gate at which execution paused.
- * @param pausedAtFrameId - Frame ID of the suspended gate instance.
- */
-async function persistPausedExecution(
-  call: CallContext,
-  bus: IMakaioBus,
-  config: WorkflowWorkerConfig,
-  liveExecution: WorkflowExecution,
-  pausedAtGateId: string,
-  pausedAtFrameId: string,
-): Promise<void> {
-  liveExecution.status = 'paused';
-  await bus.request(call, WorkflowStorageSubjects.setExecution, { execution: liveExecution });
-  await bus.emit(call, WorkflowSubjects.execution.paused, {
-    executionId: config.executionId,
-    workflowId: config.workflowId,
-    pausedAtGateId,
-    pausedAtFrameId,
   });
 }
 
@@ -506,7 +413,7 @@ async function emitTerminalExecutionEvent(
  * - Sequential node execution with `when`/`skip` condition evaluation
  * - Parallel branch execution via `parallel` nodes
  * - Iterate/iterate-chain for collection processing
- * - Gate nodes with suspend/resume lifecycle
+ * - Loop nodes with convergence checks
  * - Code step nodes dispatched via `runtimeHandlers`
  *
  * ### Cancellation
@@ -520,7 +427,7 @@ async function emitTerminalExecutionEvent(
  * available, the orchestrator checkpoints the loaded run context before
  * scheduling nodes; the runtime writes frame state on each transition.
  * @param params - Orchestrator parameters including call, config, loaded workflow, bus, and signal.
- * @returns Workflow run result with status `completed`, `failed`, `cancelled`, or `paused`.
+ * @returns Workflow run result with status `completed`, `failed`, or `cancelled`.
  */
 export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams): Promise<WorkflowRunResult> {
   const { call, config, loaded, bus, signal } = params;
@@ -545,7 +452,7 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
   else await persistAuthorityLoadedState(call, bus, runContext, definition);
 
   const runtimeHandlers = new Map<string, CodeStepHandler>(loaded.runtimeHandlers);
-  const runtimeLoopGates = loaded.runtimeLoopGates ?? new Map<string, LoopGateHandler>();
+  const runtimeLoopChecks = loaded.runtimeLoopChecks ?? new Map<string, LoopCheckHandler>();
   const activeExecutions = new Map<string, ActiveExecution>();
   const shellAbortControllers = new Map<string, AbortController>();
   const activeRunnerSteps = new Map<string, ActiveRunnerStep>();
@@ -558,7 +465,7 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
     workflow: definition,
     runContext,
     runtimeHandlers,
-    runtimeLoopGates: new Map(runtimeLoopGates),
+    runtimeLoopChecks: new Map(runtimeLoopChecks),
   });
 
   const releaseSignalCancellation =
@@ -583,7 +490,7 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
 
   try {
     if (definition.root.nodes.length > 0) {
-      assertLoopGateHandlersPresent(definition, runtimeLoopGates);
+      assertLoopCheckHandlersPresent(definition, runtimeLoopChecks);
       result = await runRuntimeSequence(
         call,
         config,
@@ -591,7 +498,7 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
         liveExecution,
         runContext,
         runtimeHandlers,
-        runtimeLoopGates,
+        runtimeLoopChecks,
         bus,
         signal,
         loaded.zodSchemas,
@@ -612,15 +519,6 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
 
   if (signal.aborted || liveExecution.status === 'cancelled') {
     result = { status: 'cancelled', reason: WORKFLOW_CANCELLED_REASON };
-  }
-
-  // Paused executions are not terminal: they have no completedAt and emit a
-  // distinct lifecycle event so host runners can checkpoint state and exit.
-  if (result.status === 'paused') {
-    if (config.terminalAuthority !== 'authority') {
-      await persistPausedExecution(call, bus, config, liveExecution, result.pausedAtGateId, result.pausedAtFrameId);
-    }
-    return buildWorkflowRunResult(config, result);
   }
 
   if (config.terminalAuthority === 'authority') {

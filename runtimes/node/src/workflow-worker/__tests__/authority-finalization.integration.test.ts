@@ -635,7 +635,6 @@ describe('authority delegate result finalization gateway', () => {
           cancelSubject: `workflow.${executionId}.cancel`,
           env: {},
           createdAt: 1,
-          suspensionStrategy: 'wait-in-process' as const,
         },
       }),
     );

@@ -8,17 +8,16 @@ import {
   defineWorkflow,
   codeStep,
   agentStep,
-  gate,
   iterate,
   iterateChain,
   loop,
 } from '../authoring.js';
 import {
   loop as rootLoop,
-  LoopGateOutcomeSchema as RootLoopGateOutcomeSchema,
+  LoopCheckOutcomeSchema as RootLoopCheckOutcomeSchema,
   WorkflowLoopNodeSchema as RootWorkflowLoopNodeSchema,
 } from '../../index.js';
-import type { WorkflowGateNode, WorkflowLoopNode, WorkflowParallelNode, WorkflowSequenceNode } from '../schemas.js';
+import type { WorkflowLoopNode, WorkflowParallelNode, WorkflowSequenceNode } from '../schemas.js';
 import { WorkflowDefinitionSchema, WorkflowLoopNodeSchema } from '../schemas.js';
 import { validateNoNestedLoops } from '../loop.js';
 import { defineWorkflowBundle } from '../bundle.js';
@@ -279,6 +278,13 @@ describe('defineWorkflow', () => {
     expect(Reflect.get(workflow, 'extensions')).not.toBeTypeOf('function');
   });
 
+  it('does not expose a gate method on the builder', () => {
+    const workflow = defineWorkflow('no-gate-method-flow');
+
+    // @ts-expect-error The builder has no gate member.
+    expect(workflow.gate).toBeUndefined();
+  });
+
   it('codeStep appends code-step nodes to the root sequence', () => {
     const workflow = defineWorkflow('fn-flow');
     workflow.codeStep('compute', () => ({ value: 42 }));
@@ -303,34 +309,13 @@ describe('defineWorkflow', () => {
   it('throws on duplicate IDs when addNode reuses an id already claimed by codeStep', () => {
     const workflow = defineWorkflow('dup-node-flow');
     workflow.codeStep('step-a', () => null);
-    const gateNode: WorkflowGateNode = {
-      id: 'step-a',
-      type: 'gate',
-      prompt: 'Approve?',
-      autoAction: 'reject',
-      timeoutMs: null,
-    };
-    expect(() => workflow.addNode(gateNode)).toThrow('Duplicate step ID: step-a');
+    expect(() => workflow.addNode(agentStep('step-a', 'analyst'))).toThrow('Duplicate step ID: step-a');
   });
 
   it('throws on duplicate IDs when addNode is called twice with the same id', () => {
     const workflow = defineWorkflow('dup-addnode-flow');
-    const gateA: WorkflowGateNode = {
-      id: 'gate-a',
-      type: 'gate',
-      prompt: 'Approve?',
-      autoAction: 'reject',
-      timeoutMs: null,
-    };
-    workflow.addNode(gateA);
-    const gateADup: WorkflowGateNode = {
-      id: 'gate-a',
-      type: 'gate',
-      prompt: 'Approve again?',
-      autoAction: 'reject',
-      timeoutMs: null,
-    };
-    expect(() => workflow.addNode(gateADup)).toThrow('Duplicate step ID: gate-a');
+    workflow.addNode(agentStep('step-a', 'analyst'));
+    expect(() => workflow.addNode(agentStep('step-a', 'reviewer'))).toThrow('Duplicate step ID: step-a');
   });
 
   it('recovers trigger payload typing when a trigger is added after defineWorkflow', () => {
@@ -344,26 +329,6 @@ describe('defineWorkflow', () => {
     });
 
     expect(workflow.definition.triggers).toHaveLength(1);
-  });
-
-  it('accepts gate nodes via addNode', () => {
-    const workflow = defineWorkflow('gate-flow');
-    workflow.codeStep('analyze', () => ({ findings: [] }));
-    const approvalNode: WorkflowGateNode = {
-      id: 'approval',
-      type: 'gate',
-      prompt: 'Approve the findings?',
-      autoAction: 'reject',
-      timeoutMs: null,
-    };
-    workflow.addNode(approvalNode);
-    workflow.codeStep('implement', () => ({ done: true }));
-
-    expect(workflow.definition.root.nodes).toHaveLength(3);
-    expect(workflow.definition.root.nodes[1]?.type).toBe('gate');
-    expect(workflow.runtimeHandlers.has('approval')).toBe(false);
-    expect(workflow.runtimeHandlers.has('analyze')).toBe(true);
-    expect(workflow.runtimeHandlers.has('implement')).toBe(true);
   });
 
   it('accepts parallel nodes via addNode', () => {
@@ -747,67 +712,6 @@ describe('fluent builder — parallel nodes', () => {
   });
 });
 
-describe('fluent builder — gate nodes', () => {
-  it('appends a gate node to the root sequence', () => {
-    const workflow = defineWorkflow('gate-fluent').gate('triage', {
-      prompt: 'Triage findings',
-      autoAction: 'reject',
-      timeoutMs: null,
-    });
-
-    const node = workflow.definition.root.nodes[0];
-    expect(node?.type).toBe('gate');
-    expect(node?.id).toBe('triage');
-    expect((node as { prompt?: string }).prompt).toBe('Triage findings');
-  });
-
-  it('captures resume Zod schema in zodSchemas.gates keyed by node ID', () => {
-    const TriageDecisionSchema = z.object({ approved: z.boolean(), reason: z.string() });
-    const workflow = defineWorkflow('gate-schema').gate('triage', {
-      prompt: 'Triage',
-      autoAction: 'approve',
-      timeoutMs: 3_600_000,
-      resume: TriageDecisionSchema,
-    });
-
-    expect(workflow.zodSchemas.gates['triage']).toBe(TriageDecisionSchema);
-  });
-
-  it('converts resume schema to JSON Schema in node.resumeSchema', () => {
-    const TriageSchema = z.object({ approved: z.boolean() });
-    const workflow = defineWorkflow('gate-json-schema').gate('triage', {
-      prompt: 'Approve?',
-      autoAction: 'approve',
-      timeoutMs: null,
-      resume: TriageSchema,
-    });
-
-    const node = workflow.definition.root.nodes[0];
-    expect((node as { resumeSchema?: Record<string, unknown> }).resumeSchema).toBeDefined();
-    expect((node as { resumeSchema?: { type?: string } }).resumeSchema?.type).toBe('object');
-  });
-
-  it('gate without resume schema produces no resumeSchema in node', () => {
-    const workflow = defineWorkflow('gate-no-resume').gate('approve', {
-      prompt: 'Approve?',
-      autoAction: 'approve',
-      timeoutMs: null,
-    });
-
-    const node = workflow.definition.root.nodes[0];
-    expect((node as { resumeSchema?: unknown }).resumeSchema).toBeUndefined();
-  });
-
-  it('does not add gate to runtimeHandlers', () => {
-    const workflow = defineWorkflow('gate-no-handler').gate('approve', {
-      prompt: 'Approve?',
-      autoAction: 'reject',
-      timeoutMs: null,
-    });
-    expect(workflow.runtimeHandlers.has('approve')).toBe(false);
-  });
-});
-
 describe('fluent builder — iterate nodes', () => {
   it('appends an iterate node to the root sequence', () => {
     const handler = () => ({ processed: true }) as const;
@@ -945,12 +849,11 @@ describe('fluent builder — iterateChain nodes', () => {
   });
 });
 
-describe('fluent builder — full chain with all node types', () => {
+describe('fluent builder — full chain', () => {
   const InputSchema = z.object({ items: z.array(z.string()) });
   const ConfigSchema = z.object({ maxRetries: z.number().int() });
   const OutputSchema = z.object({ processed: z.boolean() });
   const ArtifactSchema = z.object({ summary: z.string() });
-  const TriageSchema = z.object({ approved: z.boolean() });
 
   const analyzeHandler = () => ({ findings: [] }) as const;
   const applyHandler = () => ({ done: true }) as const;
@@ -964,17 +867,16 @@ describe('fluent builder — full chain with all node types', () => {
       agentStep('quality-review', 'code-reviewer'),
     ])
     .codeStep('analyze', analyzeHandler)
-    .gate('triage', { prompt: 'Triage findings', resume: TriageSchema, autoAction: 'reject', timeoutMs: null })
     .iterateChain('apply', [codeStep('apply-item', applyHandler)], { collection: 'ctx.outputs.findings' })
     .output(OutputSchema);
 
   it('produces correct node count in root sequence', () => {
-    expect(workflow.definition.root.nodes).toHaveLength(4);
+    expect(workflow.definition.root.nodes).toHaveLength(3);
   });
 
   it('has correct node types in order', () => {
     const types = workflow.definition.root.nodes.map((n) => n.type);
-    expect(types).toEqual(['parallel', 'code-step', 'gate', 'iterate-chain']);
+    expect(types).toEqual(['parallel', 'code-step', 'iterate-chain']);
   });
 
   it('definition is fully JSON-serializable (no functions)', () => {
@@ -989,7 +891,6 @@ describe('fluent builder — full chain with all node types', () => {
     expect(workflow.zodSchemas.config).toBe(ConfigSchema);
     expect(workflow.zodSchemas.output).toBe(OutputSchema);
     expect(workflow.zodSchemas.artifact).toBe(ArtifactSchema);
-    expect(workflow.zodSchemas.gates['triage']).toBe(TriageSchema);
   });
 
   it('runtimeHandlers contains builder code step handler and standalone factory handlers', () => {
@@ -1003,8 +904,7 @@ describe('fluent builder — full chain with all node types', () => {
     expect(workflow.runtimeHandlers.get('apply-item')).toBe(applyHandler);
   });
 
-  it('runtimeHandlers does not contain gate or agent-step entries', () => {
-    expect(workflow.runtimeHandlers.has('triage')).toBe(false);
+  it('runtimeHandlers does not contain agent-step entries', () => {
     expect(workflow.runtimeHandlers.has('quality-review')).toBe(false);
   });
 
@@ -1104,32 +1004,6 @@ describe('standalone factory — agentStep()', () => {
     expect(node.completion).toBe('turn');
     expect(node.allowedTools).toEqual(['artifact.read']);
     expect(node.resultFinalizerId).toBe('artifact.read-wrap');
-  });
-});
-
-describe('standalone factory — gate()', () => {
-  it('creates a gate node', () => {
-    const node = gate('approve', {
-      prompt: 'Approve?',
-      autoAction: 'reject',
-      timeoutMs: null,
-    });
-    expect(node.id).toBe('approve');
-    expect(node.type).toBe('gate');
-    expect(node.autoAction).toBe('reject');
-    expect(node.timeoutMs).toBeNull();
-  });
-
-  it('converts resume schema to JSON Schema in node.resumeSchema', () => {
-    const ResumeSchema = z.object({ approved: z.boolean() });
-    const node = gate('g', {
-      prompt: 'Approve?',
-      autoAction: 'approve',
-      timeoutMs: null,
-      resume: ResumeSchema,
-    });
-    expect(node.resumeSchema).toBeDefined();
-    expect(node.resumeSchema?.type).toBe('object');
   });
 });
 
@@ -1234,7 +1108,22 @@ describe('defineWorkflowBundle', () => {
 // ─────────────────────────────────────────────────────────────
 
 describe('WorkflowDefinitionSchema — loop node', () => {
-  it('parses a gated loop node', () => {
+  it('serializes the exhaustion policy in fluent and standalone loops', () => {
+    const options = {
+      maxRounds: 3,
+      onExhausted: 'complete' as const,
+      check: { handler: 'check', evaluate: () => ({ kind: 'loop' as const }) },
+    };
+    const workflow = defineWorkflow('review-loop').loop('fluent', [], options);
+    workflow.addNode(loop('standalone', [], options));
+
+    expect(WorkflowDefinitionSchema.parse(workflow.definition).root.nodes).toMatchObject([
+      { id: 'fluent', onExhausted: 'complete' },
+      { id: 'standalone', onExhausted: 'complete' },
+    ]);
+  });
+
+  it('parses a loop node with a configured check', () => {
     const parsed = WorkflowDefinitionSchema.parse({
       id: 'review-loop',
       name: 'Review Loop',
@@ -1252,25 +1141,26 @@ describe('WorkflowDefinitionSchema — loop node', () => {
               type: 'sequence',
               nodes: [{ id: 'aggregate', type: 'code-step' }],
             },
-            gate: {
+            check: {
               handler: 'no-open-blockers',
               input: 'frames.aggregate.output',
               config: { blockerSeverities: ['blocker'] },
-              escalation: {
-                title: 'Review loop escalation',
-                prompt: 'The loop reached escalation. Choose the next action.',
-                autoAction: 'reject',
-                timeoutMs: null,
-              },
             },
           },
         ],
       },
     });
-    expect(parsed.root.nodes[0]?.type).toBe('loop');
+    expect(parsed.root.nodes[0]).toMatchObject({
+      type: 'loop',
+      check: {
+        handler: 'no-open-blockers',
+        input: 'frames.aggregate.output',
+        config: { blockerSeverities: ['blocker'] },
+      },
+    });
   });
 
-  it('parses a loop node without optional gate fields', () => {
+  it('parses a loop node without optional check fields', () => {
     const parsed = WorkflowDefinitionSchema.parse({
       id: 'minimal-loop',
       scope: { type: 'global' },
@@ -1287,7 +1177,7 @@ describe('WorkflowDefinitionSchema — loop node', () => {
               type: 'sequence',
               nodes: [{ id: 'attempt', type: 'code-step' }],
             },
-            gate: {
+            check: {
               handler: 'check-success',
             },
           },
@@ -1313,7 +1203,7 @@ describe('validateNoNestedLoops', () => {
         type: 'sequence',
         nodes: [{ id: 'step', type: 'code-step' }],
       },
-      gate: { handler: 'check' },
+      check: { handler: 'check' },
     });
     expect(validateNoNestedLoops(loopNode)).toBeUndefined();
   });
@@ -1336,11 +1226,11 @@ describe('validateNoNestedLoops', () => {
               type: 'sequence',
               nodes: [{ id: 'step', type: 'code-step' }],
             },
-            gate: { handler: 'check' },
+            check: { handler: 'check' },
           },
         ],
       },
-      gate: { handler: 'check' },
+      check: { handler: 'check' },
     });
     const result = validateNoNestedLoops(loopNode);
     expect(result).toBeDefined();
@@ -1374,7 +1264,7 @@ describe('validateNoNestedLoops', () => {
                       type: 'sequence',
                       nodes: [{ id: 'x', type: 'code-step' }],
                     },
-                    gate: { handler: 'check' },
+                    check: { handler: 'check' },
                   },
                 ],
               },
@@ -1382,7 +1272,7 @@ describe('validateNoNestedLoops', () => {
           },
         ],
       },
-      gate: { handler: 'check' },
+      check: { handler: 'check' },
     });
     const result = validateNoNestedLoops(loopNode);
     expect(result).toBeDefined();
@@ -1415,14 +1305,14 @@ describe('validateNoNestedLoops', () => {
                     type: 'sequence',
                     nodes: [{ id: 'y', type: 'code-step' }],
                   },
-                  gate: { handler: 'check' },
+                  check: { handler: 'check' },
                 },
               ],
             },
           },
         ],
       },
-      gate: { handler: 'check' },
+      check: { handler: 'check' },
     });
     const result = validateNoNestedLoops(loopNode);
     expect(result).toBeDefined();
@@ -1455,14 +1345,14 @@ describe('validateNoNestedLoops', () => {
                     type: 'sequence',
                     nodes: [{ id: 'z', type: 'code-step' }],
                   },
-                  gate: { handler: 'check' },
+                  check: { handler: 'check' },
                 },
               ],
             },
           },
         ],
       },
-      gate: { handler: 'check' },
+      check: { handler: 'check' },
     });
     const result = validateNoNestedLoops(loopNode);
     expect(result).toBeDefined();
@@ -1475,10 +1365,10 @@ describe('validateNoNestedLoops', () => {
 // ─────────────────────────────────────────────────────────────
 
 describe('fluent builder — loop nodes', () => {
-  it('appends a serializable loop node and stores gate handler', () => {
+  it('appends a serializable loop node and stores check handler', () => {
     const workflow = defineWorkflow('review-loop').loop('converge', [codeStep('aggregate', () => ({ blockers: [] }))], {
       maxRounds: 3,
-      gate: {
+      check: {
         handler: 'no-open-blockers',
         evaluate: () => ({ kind: 'pass' as const }),
       },
@@ -1488,9 +1378,9 @@ describe('fluent builder — loop nodes', () => {
       id: 'converge',
       type: 'loop',
       maxRounds: 3,
-      gate: { handler: 'no-open-blockers' },
+      check: { handler: 'no-open-blockers' },
     });
-    expect(workflow.runtimeLoopGates.get('no-open-blockers')).toBeTypeOf('function');
+    expect(workflow.runtimeLoopChecks.get('no-open-blockers')).toBeTypeOf('function');
     // body code step handler should be collected
     expect(workflow.runtimeHandlers.get('aggregate')).toBeTypeOf('function');
   });
@@ -1498,7 +1388,7 @@ describe('fluent builder — loop nodes', () => {
   it('creates the body sequence with correct ID convention', () => {
     const workflow = defineWorkflow('loop-body-id').loop('retry', [codeStep('attempt', () => null)], {
       maxRounds: 5,
-      gate: {
+      check: {
         handler: 'check-success',
         evaluate: () => ({ kind: 'pass' as const }),
       },
@@ -1511,38 +1401,26 @@ describe('fluent builder — loop nodes', () => {
     expect(loopNode?.body.nodes[0]?.id).toBe('attempt');
   });
 
-  it('serializes gate input, config, and escalation', () => {
-    const workflow = defineWorkflow('loop-full-gate').loop('converge', [codeStep('work', () => null)], {
+  it('serializes check input and config', () => {
+    const workflow = defineWorkflow('loop-full-check').loop('converge', [codeStep('work', () => null)], {
       maxRounds: 3,
-      gate: {
+      check: {
         handler: 'checker',
         evaluate: () => ({ kind: 'loop' as const }),
         input: 'frames.work.output',
         config: { severity: 'blocker' },
-        escalation: {
-          title: 'Loop escalation',
-          prompt: 'The loop needs human input.',
-          autoAction: 'reject',
-          timeoutMs: null,
-        },
       },
     });
 
     const loopNode = workflow.definition.root.nodes[0] as WorkflowLoopNode | undefined;
-    expect(loopNode?.gate.input).toBe('frames.work.output');
-    expect(loopNode?.gate.config).toEqual({ severity: 'blocker' });
-    expect(loopNode?.gate.escalation).toEqual({
-      title: 'Loop escalation',
-      prompt: 'The loop needs human input.',
-      autoAction: 'reject',
-      timeoutMs: null,
-    });
+    expect(loopNode?.check.input).toBe('frames.work.output');
+    expect(loopNode?.check.config).toEqual({ severity: 'blocker' });
   });
 
   it('applies when/skip conditions to loop nodes', () => {
     const workflow = defineWorkflow('loop-conditions').loop('retry', [codeStep('attempt', () => null)], {
       maxRounds: 2,
-      gate: {
+      check: {
         handler: 'check',
         evaluate: () => ({ kind: 'pass' as const }),
       },
@@ -1558,7 +1436,7 @@ describe('fluent builder — loop nodes', () => {
   it('loop node definition is JSON-serializable', () => {
     const workflow = defineWorkflow('loop-serial').loop('converge', [codeStep('work', () => null)], {
       maxRounds: 3,
-      gate: {
+      check: {
         handler: 'checker',
         evaluate: () => ({ kind: 'pass' as const }),
       },
@@ -1572,7 +1450,7 @@ describe('fluent builder — loop nodes', () => {
     expect(() =>
       workflow.loop('converge', [codeStep('work', () => null)], {
         maxRounds: 3,
-        gate: {
+        check: {
           handler: 'check',
           evaluate: () => ({ kind: 'pass' as const }),
         },
@@ -1586,7 +1464,7 @@ describe('fluent builder — loop nodes', () => {
     expect(() =>
       workflow.loop('converge', [codeStep('work', () => null)], {
         maxRounds: 3,
-        gate: {
+        check: {
           handler: 'check',
           evaluate: () => ({ kind: 'pass' as const }),
         },
@@ -1600,7 +1478,7 @@ describe('fluent builder — loop nodes', () => {
     expect(() =>
       workflow.loop('retry', [codeStep('attempt', () => null)], {
         maxRounds: 2,
-        gate: {
+        check: {
           handler: 'check',
           evaluate: () => ({ kind: 'pass' as const }),
         },
@@ -1611,7 +1489,7 @@ describe('fluent builder — loop nodes', () => {
   it('does not register the loop node itself in runtimeHandlers', () => {
     const workflow = defineWorkflow('loop-no-handler').loop('converge', [codeStep('work', () => null)], {
       maxRounds: 3,
-      gate: {
+      check: {
         handler: 'checker',
         evaluate: () => ({ kind: 'pass' as const }),
       },
@@ -1620,9 +1498,9 @@ describe('fluent builder — loop nodes', () => {
     expect(workflow.runtimeHandlers.has('work')).toBe(true);
   });
 
-  it('runtimeLoopGates is empty when no loop nodes are present', () => {
+  it('runtimeLoopChecks is empty when no loop nodes are present', () => {
     const workflow = defineWorkflow('no-loop').codeStep('work', () => null);
-    expect(workflow.runtimeLoopGates.size).toBe(0);
+    expect(workflow.runtimeLoopChecks.size).toBe(0);
   });
 });
 
@@ -1634,17 +1512,17 @@ describe('standalone factory — loop()', () => {
   it('is exported from the root package barrel with loop schemas', () => {
     const loopNode = rootLoop('converge', [codeStep('aggregate', () => null)], {
       maxRounds: 2,
-      gate: { handler: 'check', evaluate: () => ({ kind: 'pass' as const }) },
+      check: { handler: 'check', evaluate: () => ({ kind: 'pass' as const }) },
     });
 
     expect(RootWorkflowLoopNodeSchema.parse(loopNode).type).toBe('loop');
-    expect(RootLoopGateOutcomeSchema.parse({ kind: 'loop' })).toEqual({ kind: 'loop' });
+    expect(RootLoopCheckOutcomeSchema.parse({ kind: 'loop' })).toEqual({ kind: 'loop' });
   });
 
   it('creates a serializable loop node', () => {
     const loopNode = loop('converge', [codeStep('aggregate', () => ({ blockers: [] }))], {
       maxRounds: 3,
-      gate: {
+      check: {
         handler: 'no-open-blockers',
         evaluate: () => ({ kind: 'pass' as const }),
       },
@@ -1654,7 +1532,7 @@ describe('standalone factory — loop()', () => {
       id: 'converge',
       type: 'loop',
       maxRounds: 3,
-      gate: { handler: 'no-open-blockers' },
+      check: { handler: 'no-open-blockers' },
       body: {
         id: 'converge__body',
         type: 'sequence',
@@ -1665,7 +1543,7 @@ describe('standalone factory — loop()', () => {
   it('applies when/skip to the standalone loop node', () => {
     const loopNode = loop('retry', [codeStep('attempt', () => null)], {
       maxRounds: 2,
-      gate: {
+      check: {
         handler: 'check',
         evaluate: () => ({ kind: 'pass' as const }),
       },
@@ -1679,7 +1557,7 @@ describe('standalone factory — loop()', () => {
   it('is JSON-serializable', () => {
     const loopNode = loop('retry', [codeStep('attempt', () => null)], {
       maxRounds: 2,
-      gate: {
+      check: {
         handler: 'check',
         evaluate: () => ({ kind: 'pass' as const }),
       },
@@ -1687,27 +1565,19 @@ describe('standalone factory — loop()', () => {
     expect(() => JSON.stringify(loopNode)).not.toThrow();
   });
 
-  it('serializes gate input, config, and escalation on standalone node', () => {
+  it('serializes check input and config on standalone node', () => {
     const loopNode = loop('converge', [codeStep('work', () => null)], {
       maxRounds: 3,
-      gate: {
+      check: {
         handler: 'checker',
         evaluate: () => ({ kind: 'loop' as const }),
         input: 'frames.work.output',
         config: { threshold: 0.9 },
-        escalation: {
-          prompt: 'Human needed',
-        },
       },
     });
 
-    expect(loopNode.gate.input).toBe('frames.work.output');
-    expect(loopNode.gate.config).toEqual({ threshold: 0.9 });
-    expect(loopNode.gate.escalation).toEqual({
-      prompt: 'Human needed',
-      autoAction: 'reject',
-      timeoutMs: null,
-    });
+    expect(loopNode.check.input).toBe('frames.work.output');
+    expect(loopNode.check.config).toEqual({ threshold: 0.9 });
   });
 
   it('rejects nested loops before returning a standalone node', () => {
@@ -1717,31 +1587,31 @@ describe('standalone factory — loop()', () => {
         [
           loop('inner', [codeStep('work', () => null)], {
             maxRounds: 2,
-            gate: { handler: 'inner-check', evaluate: () => ({ kind: 'pass' as const }) },
+            check: { handler: 'inner-check', evaluate: () => ({ kind: 'pass' as const }) },
           }),
         ],
         {
           maxRounds: 3,
-          gate: { handler: 'outer-check', evaluate: () => ({ kind: 'pass' as const }) },
+          check: { handler: 'outer-check', evaluate: () => ({ kind: 'pass' as const }) },
         },
       ),
     ).toThrow("Nested loop 'inner' found inside loop 'outer'");
   });
 
-  it('addNode collects standalone loop gate handler into runtimeLoopGates', () => {
-    const gateEvaluate = () => ({ kind: 'pass' as const });
+  it('addNode collects standalone loop check handler into runtimeLoopChecks', () => {
+    const checkEvaluate = () => ({ kind: 'pass' as const });
     const workflow = defineWorkflow('standalone-loop-addnode');
     workflow.addNode(
       loop('converge', [codeStep('aggregate', () => null)], {
         maxRounds: 3,
-        gate: {
+        check: {
           handler: 'blocker-check',
-          evaluate: gateEvaluate,
+          evaluate: checkEvaluate,
         },
       }),
     );
 
-    expect(workflow.runtimeLoopGates.get('blocker-check')).toBe(gateEvaluate);
+    expect(workflow.runtimeLoopChecks.get('blocker-check')).toBe(checkEvaluate);
     expect(workflow.runtimeHandlers.get('aggregate')).toBeTypeOf('function');
   });
 
@@ -1751,7 +1621,7 @@ describe('standalone factory — loop()', () => {
     workflow.addNode(
       loop('converge', [codeStep('work', bodyHandler), agentStep('review', 'analyst')], {
         maxRounds: 3,
-        gate: {
+        check: {
           handler: 'check',
           evaluate: () => ({ kind: 'pass' as const }),
         },

@@ -544,7 +544,6 @@ describe('workflow public rerun subjects', () => {
       cancelSubject: `workflow.${originalExecutionId}.cancel`,
       env: {},
       createdAt: Date.now(),
-      suspensionStrategy: 'wait-in-process',
     };
     await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.setExecutionStart, {
       execution: createWorkflowExecution({
@@ -598,7 +597,6 @@ describe('workflow public rerun subjects', () => {
       cancelSubject: `workflow.${executionId}.cancel`,
       env: {},
       createdAt: Date.now(),
-      suspensionStrategy: 'wait-in-process',
     };
     await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.setExecutionStart, {
       execution: createWorkflowExecution({
@@ -660,21 +658,43 @@ describe('workflow public rerun subjects', () => {
     afterEach(() => {
       vi.unstubAllEnvs();
     });
+    const legacyStation = { id: 'stored-step', type: 'station', role: 'reviewer', prompt: 'Review' }; // legacy-input
     it.each([
-      { title: 'rejects snapshot reruns before writing', mode: 'snapshot', sourceKind: 'source', rejects: true },
+      {
+        title: 'rejects snapshot reruns with a legacy station before writing',
+        mode: 'snapshot',
+        sourceKind: 'source',
+        rejects: true,
+        legacyNode: legacyStation,
+      },
+      {
+        title: 'rejects snapshot reruns with a legacy Gate before writing',
+        mode: 'snapshot',
+        sourceKind: 'source',
+        rejects: true,
+        legacyNode: {
+          id: 'stored-approval',
+          type: 'gate', // legacy-input
+          prompt: 'Approve the run',
+          autoAction: 'reject',
+          timeoutMs: null,
+        },
+      },
       {
         title: 'rejects current reruns of ephemeral source executions before writing',
         mode: 'current',
         sourceKind: 'source',
         rejects: true,
+        legacyNode: legacyStation,
       },
       {
         title: 'starts definition-backed current reruns from the current definition despite an unreadable snapshot',
         mode: 'current',
         sourceKind: 'definition',
         rejects: false,
+        legacyNode: legacyStation,
       },
-    ] as const)('$title', async ({ mode, sourceKind, rejects }) => {
+    ] as const)('$title', async ({ mode, sourceKind, rejects, legacyNode }) => {
       if (!setup) {
         throw new Error('Workflow executor test setup did not initialize.');
       }
@@ -703,7 +723,6 @@ describe('workflow public rerun subjects', () => {
         cancelSubject: `workflow.${executionId}.cancel`,
         env: {},
         createdAt: Date.now(),
-        suspensionStrategy: 'wait-in-process',
       };
       await MakaioBus.request(call, WorkflowStorageSubjects.setExecutionStart, {
         execution: createWorkflowExecution({
@@ -720,7 +739,7 @@ describe('workflow public rerun subjects', () => {
         root: {
           id: 'stored-root',
           type: 'sequence',
-          nodes: [{ id: 'stored-step', type: 'station', role: 'reviewer', prompt: 'Review' }], // legacy-input
+          nodes: [legacyNode],
         },
       };
       await setup.dbContext.exec(sql`
@@ -764,6 +783,7 @@ describe('workflow public rerun subjects', () => {
         code: WorkflowErrorCode.DEFINITION_INVALID,
         message: expect.stringContaining(executionId),
       });
+      expect(error.cause).toHaveProperty('message', expect.stringContaining('definitionSnapshot.root.nodes.0.type'));
       // A rejected rerun must not reserve a coordinator, dispatch a worker, or issue a storage write.
       expect(messages).toEqual(['request:workflow.rerun', 'request:storage:workflow.getRunContext']);
       expect(await MakaioBus.request(call, WorkflowSubjects.getRunContext, { executionId })).toEqual(stored);

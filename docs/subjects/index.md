@@ -11,11 +11,11 @@ next: false
 
 | Metric | Count |
 |--------|-------|
-| Namespaces | 109 |
-| Subjects | 992 (369 events, 623 RPCs) |
-| framework | 104 |
+| Namespaces | 108 |
+| Subjects | 974 (363 events, 611 RPCs) |
+| framework | 103 |
 | extension | 5 |
-| kind: bus | 79 |
+| kind: bus | 78 |
 | kind: adapter | 7 |
 | kind: client | 2 |
 | kind: extension | 3 |
@@ -88,7 +88,7 @@ next: false
 | [`storage:sessionOwnership`](./storage-sessionownership.md) | storage | 10 | 0E / 10R |
 | [`storage:skill`](./storage-skill.md) | storage | 5 | 0E / 5R |
 | [`storage:supervisor-runtime`](./storage-supervisor-runtime.md) | storage | 5 | 0E / 5R |
-| [`storage:workflow`](./storage-workflow.md) | storage | 38 | 0E / 38R |
+| [`storage:workflow`](./storage-workflow.md) | storage | 30 | 0E / 30R |
 | [`subagent`](./subagent.md) | bus | 16 | 6E / 10R |
 | [`subject-telemetry`](./subject-telemetry.md) | bus | 1 | 1E / 0R |
 | [`toast`](./toast.md) | bus | 4 | 4E / 0R |
@@ -98,10 +98,9 @@ next: false
 | [`vcs:pr`](./vcs-pr.md) | bus | 8 | 5E / 3R |
 | [`vision`](./vision.md) | bus | 1 | 0E / 1R |
 | [`voice`](./voice.md) | bus | 6 | 4E / 2R |
-| [`worker`](./worker.md) | bus | 13 | 9E / 4R |
-| [`workflow`](./workflow.md) | bus | 57 | 26E / 31R |
+| [`worker`](./worker.md) | bus | 12 | 8E / 4R |
+| [`workflow`](./workflow.md) | bus | 49 | 21E / 28R |
 | [`workflow-blocks`](./workflow-blocks.md) | bus | 2 | 1E / 1R |
-| [`workflow-gate-timeout`](./workflow-gate-timeout.md) | bus | 1 | 0E / 1R |
 
 ---
 

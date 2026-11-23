@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { eq } from 'drizzle-orm';
 import { ArtifactSubjects, type ArtifactRevision } from '@makaio/contracts';
 import { MakaioBus } from '@makaio/bus-core';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
-import { worklogArtifactWrites, worklogGateEvents } from '../storage/schema.js';
+import { worklogArtifactWrites } from '../storage/schema.js';
 import { createTestDb, createWorkflowExecution, type TestDbContext } from './shared.js';
 
 describe('WorkLog projection service', () => {
@@ -140,130 +139,6 @@ describe('WorkLog projection service', () => {
     });
 
     expect(result.frame?.nodeType).toBe('code-step');
-  });
-
-  it('preserves gate suspension metadata when projecting gate.resumed', async () => {
-    await MakaioBus.emit(WorkflowSubjects.gate.suspended, {
-      executionId: 'exec-worklog',
-      frameId: 'frame-gate',
-      nodeId: 'approve',
-      schema: {},
-      prompt: 'Approve deployment?',
-      autoAction: 'reject',
-      timeoutMs: 60000,
-      openedAt: Date.now(),
-    });
-
-    const [waiting] = await dbContext.db
-      .select()
-      .from(worklogGateEvents)
-      .where(eq(worklogGateEvents.frameId, 'frame-gate'));
-
-    await MakaioBus.emit(WorkflowSubjects.gate.resumed, {
-      executionId: 'exec-worklog',
-      frameId: 'frame-gate',
-      nodeId: 'approve',
-      resumeData: { approved: true },
-    });
-
-    const [resumed] = await dbContext.db
-      .select()
-      .from(worklogGateEvents)
-      .where(eq(worklogGateEvents.frameId, 'frame-gate'));
-
-    expect(resumed).toMatchObject({
-      status: 'resumed',
-      prompt: 'Approve deployment?',
-      openedAt: waiting?.openedAt,
-      resumeData: { approved: true },
-    });
-    expect(resumed?.resolvedAt).toBeGreaterThanOrEqual(waiting?.openedAt ?? 0);
-  });
-
-  it('preserves rejected gate resume data when projecting the resolution event', async () => {
-    await MakaioBus.emit(WorkflowSubjects.gate.suspended, {
-      executionId: 'exec-worklog',
-      frameId: 'frame-gate-reject',
-      nodeId: 'approve',
-      schema: {},
-      prompt: 'Approve deployment?',
-      autoAction: 'reject',
-      timeoutMs: 60000,
-      openedAt: Date.now(),
-    });
-
-    const [waiting] = await dbContext.db
-      .select()
-      .from(worklogGateEvents)
-      .where(eq(worklogGateEvents.frameId, 'frame-gate-reject'));
-
-    await MakaioBus.emit(WorkflowSubjects.gate.resumed, {
-      executionId: 'exec-worklog',
-      frameId: 'frame-gate-reject',
-      nodeId: 'approve',
-      resumeData: { approved: false, reason: 'needs changes' },
-    });
-
-    await MakaioBus.emit(WorkflowSubjects.gate.resolved, {
-      executionId: 'exec-worklog',
-      stepId: 'approve',
-      stepType: 'gate',
-      frameId: 'frame-gate-reject',
-      action: 'reject',
-      source: 'user',
-    });
-
-    const [rejected] = await dbContext.db
-      .select()
-      .from(worklogGateEvents)
-      .where(eq(worklogGateEvents.frameId, 'frame-gate-reject'));
-
-    expect(rejected).toMatchObject({
-      status: 'rejected',
-      prompt: 'Approve deployment?',
-      openedAt: waiting?.openedAt,
-      resumeData: { approved: false, reason: 'needs changes' },
-    });
-    expect(rejected?.resolvedAt).toBeGreaterThanOrEqual(waiting?.openedAt ?? 0);
-  });
-
-  it('records cancelled gate settlements without resume data', async () => {
-    await MakaioBus.emit(WorkflowSubjects.gate.suspended, {
-      executionId: 'exec-worklog',
-      frameId: 'frame-gate-cancel',
-      nodeId: 'approve',
-      schema: {},
-      prompt: 'Approve deployment?',
-      autoAction: 'reject',
-      timeoutMs: 60000,
-      openedAt: Date.now(),
-    });
-
-    const [waiting] = await dbContext.db
-      .select()
-      .from(worklogGateEvents)
-      .where(eq(worklogGateEvents.frameId, 'frame-gate-cancel'));
-
-    await MakaioBus.emit(WorkflowSubjects.gate.resolved, {
-      executionId: 'exec-worklog',
-      stepId: 'approve',
-      stepType: 'gate',
-      frameId: 'frame-gate-cancel',
-      source: 'cancelled',
-    });
-
-    const [cancelled] = await dbContext.db
-      .select()
-      .from(worklogGateEvents)
-      .where(eq(worklogGateEvents.frameId, 'frame-gate-cancel'));
-
-    expect(cancelled).toMatchObject({
-      status: 'cancelled',
-      prompt: 'Approve deployment?',
-      openedAt: waiting?.openedAt,
-      resumeData: null,
-    });
-    expect(cancelled?.resolvedAt).toBeGreaterThanOrEqual(waiting?.openedAt ?? 0);
   });
 
   it('aggregates worklog stats within a time window', async () => {

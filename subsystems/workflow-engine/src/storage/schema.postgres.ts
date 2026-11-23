@@ -2,14 +2,12 @@ import {
   workflowDefinitionsDual,
   workflowExecutionsDual,
   workflowExecutionFramesDual,
-  workflowGateInstancesDual,
   workflowStepSpansDual,
   workflowExecutionLinksDual,
   workflowRunContextsDual,
   worklogSummariesDual,
   worklogFrameEntriesDual,
   worklogArtifactWritesDual,
-  worklogGateEventsDual,
   workflowExecutionStateDual,
   workflowExecutionStateEventsDual,
 } from './schema.js';
@@ -29,8 +27,6 @@ export const workflowDefinitions = workflowDefinitionsDual.postgres;
 export const workflowExecutions = workflowExecutionsDual.postgres;
 /** Postgres face of the `workflow_execution_frames` table. */
 export const workflowExecutionFrames = workflowExecutionFramesDual.postgres;
-/** Postgres face of the `workflow_gate_instances` table. */
-export const workflowGateInstances = workflowGateInstancesDual.postgres;
 /** Postgres face of the `workflow_step_spans` table. */
 export const workflowStepSpans = workflowStepSpansDual.postgres;
 /** Postgres face of the `workflow_execution_links` table. */
@@ -43,8 +39,6 @@ export const worklogSummaries = worklogSummariesDual.postgres;
 export const worklogFrameEntries = worklogFrameEntriesDual.postgres;
 /** Postgres face of the `worklog_artifact_writes` table. */
 export const worklogArtifactWrites = worklogArtifactWritesDual.postgres;
-/** Postgres face of the `worklog_gate_events` table. */
-export const worklogGateEvents = worklogGateEventsDual.postgres;
 /** Postgres face of the `workflow_execution_state` table. */
 export const workflowExecutionState = workflowExecutionStateDual.postgres;
 /** Postgres face of the `workflow_execution_state_events` table. */

@@ -8,7 +8,6 @@ import {
   SubagentConfigSchema,
   SubagentSubjects,
   type IWorkflowRunner,
-  type WorkflowGateNode,
 } from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
@@ -425,5 +424,3 @@ export async function teardownWorkflowExecutorWithSubagentServiceTest(
 
   setup.dbContext.cleanup();
 }
-
-export type GateStepInput = WorkflowGateNode;

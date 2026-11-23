@@ -61,10 +61,12 @@
   "makaio": {
     "drizzleSchema": {
       "sqlite": [
-        "./src/storage/schema.ts"
+        "./src/storage/schema.ts",
+        "./src/storage/retained-tables.ts"
       ],
       "postgres": [
-        "./src/storage/schema.postgres.ts"
+        "./src/storage/schema.postgres.ts",
+        "./src/storage/retained-tables.postgres.ts"
       ]
     }
   },

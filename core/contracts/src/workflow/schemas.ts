@@ -220,17 +220,15 @@ export type WorkflowSourceLocation = z.infer<typeof WorkflowSourceLocationSchema
  * - `code-step`      — runs the handler registered for the node ID
  * - `agent-step`     — runs an agent for a named role with a templated prompt
  * - `parallel`       — runs child branches concurrently
- * - `gate`           — pauses execution awaiting human or automated approval
  * - `iterate`        — expands over a collection (fan-out then fan-in)
  * - `iterate-chain`  — sequential pipeline iteration over a collection
- * - `loop`           — gated retry loop with a body sequence and convergence gate
+ * - `loop`           — repeats a body sequence until its check passes or its round limit is reached
  * - `sequence`       — ordered list of child nodes (the structural container)
  */
 export const WorkflowNodeTypeSchema = z.enum([
   'code-step',
   'agent-step',
   'parallel',
-  'gate',
   'iterate',
   'iterate-chain',
   'loop',
@@ -259,7 +257,7 @@ export type WorkflowParallelMode = z.infer<typeof WorkflowParallelModeSchema>;
  * All node types extend this base. The `when` and `skip` fields carry
  * jexl expressions evaluated at runtime; schemas must not contain functions.
  */
-export const WorkflowNodeBaseSchema = z.object({
+export const WorkflowNodeBaseSchema = z.strictObject({
   /**
    * Unique node identifier within the workflow definition.
    * Must be a non-empty string; uniqueness is enforced at authoring time.
@@ -311,7 +309,6 @@ export const WorkflowNodeSchema: z.ZodType<WorkflowNode> = z.lazy(
       WorkflowCodeStepNodeSchema,
       WorkflowAgentStepNodeSchema,
       WorkflowParallelNodeSchema,
-      WorkflowGateNodeSchema,
       WorkflowIterateNodeSchema,
       WorkflowIterateChainNodeSchema,
       WorkflowLoopNodeSchema,
@@ -356,7 +353,7 @@ export const WorkflowCodeStepNodeSchema = WorkflowNodeBaseSchema.extend({
   outputSchema: JsonSchemaRecordSchema.optional(),
   /** Timeout in milliseconds. */
   timeoutMs: z.number().int().positive().optional(),
-}).strict();
+});
 
 export type WorkflowCodeStepNode = z.infer<typeof WorkflowCodeStepNodeSchema>;
 
@@ -388,7 +385,7 @@ export const WorkflowAgentStepNodeSchema = WorkflowNodeBaseSchema.extend({
   timeoutMs: z.number().int().positive().optional(),
   /** Completion mode: `'tool'` (default) waits for `completeTask`; `'turn'` completes after the first turn. */
   completion: CompletionModeSchema.optional(),
-}).strict();
+});
 
 export type WorkflowAgentStepNode = z.infer<typeof WorkflowAgentStepNodeSchema>;
 
@@ -425,49 +422,6 @@ export const WorkflowParallelNodeSchema = WorkflowNodeBaseSchema.extend({
 });
 
 export type WorkflowParallelNode = z.infer<typeof WorkflowParallelNodeSchema>;
-
-// ─────────────────────────────────────────────────────────────
-// Gate Node
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Gate node — pauses workflow execution awaiting human or automated approval.
- *
- * When the gate opens, the runtime emits a `gate.suspended` event and blocks
- * until the gate is resolved (approved or rejected) or the timeout fires.
- */
-export const WorkflowGateNodeSchema = WorkflowNodeBaseSchema.extend({
-  /** Node type discriminant. */
-  type: z.literal('gate'),
-  /**
-   * Message shown to the reviewer in the approval dialog.
-   * Supports `{{ }}` template interpolation for dynamic content.
-   */
-  prompt: z.string().min(1),
-  /**
-   * Optional title for the approval dialog.
-   * Defaults to 'Workflow Approval Required' when omitted.
-   */
-  title: z.string().optional(),
-  /**
-   * Action to take when the timeout expires.
-   * - `'approve'`: auto-approve and continue the workflow
-   * - `'reject'`: auto-reject and fail the workflow
-   */
-  autoAction: z.enum(['approve', 'reject']),
-  /**
-   * Timeout in milliseconds before `autoAction` fires.
-   * `null` blocks indefinitely (no timeout).
-   */
-  timeoutMs: z.number().int().positive().nullable(),
-  /**
-   * JSON Schema for the resume data payload submitted when the gate is approved.
-   * Validated against the schema before the workflow continues.
-   */
-  resumeSchema: JsonSchemaRecordSchema.optional(),
-});
-
-export type WorkflowGateNode = z.infer<typeof WorkflowGateNodeSchema>;
 
 // ─────────────────────────────────────────────────────────────
 // Iterate Node
@@ -534,38 +488,30 @@ export const WorkflowIterateChainNodeSchema = WorkflowNodeBaseSchema.extend({
 export type WorkflowIterateChainNode = z.infer<typeof WorkflowIterateChainNodeSchema>;
 
 // ─────────────────────────────────────────────────────────────
-// Loop Gate Outcome
+// Loop Check Outcome
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Discriminated union of outcomes a loop gate handler may return.
+ * Outcome a loop check handler returns after each round.
  *
- * - `pass`     — exit the loop and continue downstream
- * - `loop`     — re-enter the loop body for another round
- * - `escalate` — pause the loop and raise a gate for human decision
+ * - `pass` — the loop completes and execution continues downstream
+ * - `loop` — the body runs again unless the round limit has been reached, in which case the loop fails
  */
-export const LoopGateOutcomeSchema = z.discriminatedUnion('kind', [
+export const LoopCheckOutcomeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('pass') }).strict(),
   z.object({ kind: z.literal('loop') }).strict(),
-  z.object({ kind: z.literal('escalate'), reason: z.string().min(1) }).strict(),
 ]);
 
-export type LoopGateOutcome = z.infer<typeof LoopGateOutcomeSchema>;
+export type LoopCheckOutcome = z.infer<typeof LoopCheckOutcomeSchema>;
 
 // ─────────────────────────────────────────────────────────────
 // Loop Node
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Loop node — gated retry loop with a body sequence and convergence gate.
- *
- * Executes `body` up to `maxRounds` times. After each round, the `gate`
- * handler is evaluated. The handler returns a {@link LoopGateOutcome}:
- * `pass` exits the loop, `loop` re-enters the body, and `escalate`
- * suspends the loop and raises a human gate for decision.
- *
- * The `gate.escalation` block is optional; when present it configures the
- * suspended gate's prompt, resume schema, auto-action, and timeout.
+ * Loop node — runs its body sequence up to `maxRounds` times and evaluates
+ * the named check after each round. A loop whose check has not passed after
+ * `maxRounds` rounds fails by default or completes when configured to do so.
  *
  * V1 does not support nested loops. Use {@link validateNoNestedLoops}
  * at authoring time to enforce this constraint.
@@ -573,66 +519,21 @@ export type LoopGateOutcome = z.infer<typeof LoopGateOutcomeSchema>;
 export const WorkflowLoopNodeSchema = WorkflowNodeBaseSchema.extend({
   /** Node type discriminant. */
   type: z.literal('loop'),
-  /**
-   * Maximum number of loop iterations before the gate forces escalation.
-   * Must be a positive integer.
-   */
+  /** Maximum number of rounds to run if the check has yet to pass. */
   maxRounds: z.number().int().positive(),
-  /**
-   * The sequence node executed on each loop iteration.
-   * Must be a `sequence` node; individual code steps, agent steps, etc.
-   * are placed inside the body sequence.
-   */
+  /** How to finish after all rounds are exhausted. Defaults to failing the loop. */
+  onExhausted: z.enum(['fail', 'complete']).optional(),
+  /** The sequence node executed on each round. */
   body: z.lazy((): z.ZodType<WorkflowSequenceNode> => WorkflowSequenceNodeSchema),
-  /**
-   * Gate configuration evaluated after each body execution to determine
-   * whether to loop, pass, or escalate.
-   */
-  gate: z
+  /** Check evaluated after each round. */
+  check: z
     .object({
-      /**
-       * Registered gate handler name resolved at runtime.
-       * The handler receives gate input, config, and loop context.
-       */
+      /** Registered check handler name resolved at runtime. */
       handler: z.string().min(1),
-      /**
-       * Optional expression resolving to the gate handler's input value.
-       * Typically a frame output reference like `'frames.aggregate.output'`.
-       */
+      /** Optional expression resolving to the check handler's input, e.g. `'frames.aggregate.output'`. */
       input: z.string().min(1).optional(),
-      /**
-       * Optional static configuration forwarded to the gate handler.
-       * Arbitrary JSON; the handler interprets its shape.
-       */
+      /** Optional static configuration forwarded to the check handler. */
       config: JsonValueSchema.optional(),
-      /**
-       * Optional escalation configuration for when the gate suspends the loop.
-       * When present, the runtime creates a human gate with this configuration.
-       */
-      escalation: z
-        .object({
-          /** Title for the escalation gate dialog. */
-          title: z.string().optional(),
-          /** Prompt shown to the reviewer in the escalation gate. */
-          prompt: z.string().min(1),
-          /**
-           * JSON Schema for the resume data payload submitted when
-           * the escalation gate is resolved.
-           */
-          resumeSchema: JsonSchemaRecordSchema.optional(),
-          /**
-           * Action to take when the escalation timeout expires.
-           * Defaults to `'reject'`.
-           */
-          autoAction: z.enum(['approve', 'reject']).default('reject'),
-          /**
-           * Timeout in milliseconds before `autoAction` fires.
-           * `null` blocks indefinitely (no timeout). Defaults to `null`.
-           */
-          timeoutMs: z.number().int().positive().nullable().default(null),
-        })
-        .strict()
-        .optional(),
     })
     .strict(),
 });
@@ -844,11 +745,6 @@ export const WorkflowDefinitionSchema = z
      */
     scope: WorkflowExecutionScopeSchema.default({ type: 'global' }),
     /**
-     * Canvas layout hints for the visual editor.
-     * Stored as an opaque JSON record; ignored by the executor.
-     */
-    canvasLayout: z.record(z.string(), JsonValueSchema).optional(),
-    /**
      * Declarations addressed to extensions, keyed by extension name.
      *
      * Each entry is an opaque JSON value that only the named extension validates and
@@ -912,15 +808,7 @@ export type WorkflowDefinitionList = z.infer<typeof WorkflowDefinitionListSchema
 /**
  * Execution status of a workflow.
  */
-export const ExecutionStatusSchema = z.enum([
-  'pending',
-  'running',
-  'paused',
-  'finalizing',
-  'completed',
-  'failed',
-  'cancelled',
-]);
+export const ExecutionStatusSchema = z.enum(['pending', 'running', 'finalizing', 'completed', 'failed', 'cancelled']);
 
 export type ExecutionStatus = z.infer<typeof ExecutionStatusSchema>;
 
@@ -995,7 +883,7 @@ export const WorkflowFrameStateSchema = z.object({
   /** Parent frame ID. Absent for the root frame. */
   parentFrameId: z.string().optional(),
   /** Current frame execution status. */
-  status: z.enum(['pending', 'running', 'waiting', 'completed', 'failed', 'skipped', 'cancelled']),
+  status: z.enum(['pending', 'running', 'completed', 'failed', 'skipped', 'cancelled']),
   /**
    * Number of execution attempts for this frame (zero-based).
    * Incremented each time the frame is retried after failure.
@@ -1022,59 +910,6 @@ export const WorkflowFrameStateSchema = z.object({
 });
 
 export type WorkflowFrameState = z.infer<typeof WorkflowFrameStateSchema>;
-
-// ─────────────────────────────────────────────────────────────
-// Gate Instance State
-// ─────────────────────────────────────────────────────────────
-
-/** Gate instance status values. */
-export const WorkflowGateStatusSchema = z.enum(['waiting', 'resumed', 'rejected', 'timed-out', 'cancelled']);
-
-export type WorkflowGateStatus = z.infer<typeof WorkflowGateStatusSchema>;
-
-/**
- * Persisted state of a gate node instance.
- *
- * Created when a gate node is entered, updated when the gate is resolved,
- * timed out, or cancelled. Stored independently of frame state so the
- * gate service can query open gates without scanning the full frame tree.
- */
-export const WorkflowGateInstanceSchema = z.object({
-  /** Execution this gate belongs to. */
-  executionId: z.string(),
-  /** Attempt that opened this gate. Absent for legacy non-Attempt executions. */
-  executionAttemptId: z.string().optional(),
-  /** Node ID of the gate in the workflow definition. */
-  nodeId: z.string(),
-  /** Frame ID of the gate's execution frame. */
-  frameId: z.string(),
-  /**
-   * JSON Schema describing the expected resume data payload.
-   * Callers must satisfy this schema when responding to the gate.
-   */
-  schema: JsonSchemaRecordSchema,
-  /**
-   * Optional prompt shown to the reviewer in the approval UI.
-   * Populated from the gate node's `prompt` field after template interpolation.
-   */
-  prompt: z.string().optional(),
-  /** Current gate status. */
-  status: WorkflowGateStatusSchema,
-  /** Effective timeout action captured when the gate opened. */
-  autoAction: z.enum(['approve', 'reject']),
-  /** Effective timeout in milliseconds captured when the gate opened; `null` blocks indefinitely. */
-  timeoutMs: z.number().int().positive().nullable(),
-  /** JSON-serializable resume data submitted by the approver. */
-  resumeData: JsonValueSchema.optional(),
-  /** Human-readable rationale supplied by the responder when settling the gate. */
-  reason: z.string().optional(),
-  /** Epoch milliseconds when the gate was created (node entered). */
-  createdAt: z.number(),
-  /** Epoch milliseconds when the gate left the `waiting` status. */
-  resolvedAt: z.number().optional(),
-});
-
-export type WorkflowGateInstance = z.infer<typeof WorkflowGateInstanceSchema>;
 
 // ─────────────────────────────────────────────────────────────
 // Resolved Role (for agent-step nodes)
@@ -1229,29 +1064,3 @@ export const ExecutionsByArtifactRefsQuerySchema = z.object({
 });
 
 export type ExecutionsByArtifactRefsQuery = z.infer<typeof ExecutionsByArtifactRefsQuerySchema>;
-
-/**
- * Query parameters for listing gate instances.
- *
- * At least one of `executionId` or `status` is required to avoid unbounded
- * scans. Results are ordered by `createdAt desc, id desc` and always limited.
- */
-export const GateInstanceListQuerySchema = z
-  .object({
-    /** Filter by owning execution. */
-    executionId: z.string().min(1).optional(),
-    /** Filter by gate status (e.g. `'waiting'` for an approval inbox). */
-    status: WorkflowGateStatusSchema.optional(),
-    /** Maximum number of gates to return. Defaults to 50, max 500. */
-    limit: z
-      .number()
-      .int()
-      .min(EXECUTION_LIST_MIN_LIMIT)
-      .max(EXECUTION_LIST_MAX_LIMIT)
-      .default(EXECUTION_LIST_DEFAULT_LIMIT),
-  })
-  .refine((query) => query.executionId !== undefined || query.status !== undefined, {
-    message: 'Either executionId or status is required.',
-  });
-
-export type GateInstanceListQuery = z.infer<typeof GateInstanceListQuerySchema>;

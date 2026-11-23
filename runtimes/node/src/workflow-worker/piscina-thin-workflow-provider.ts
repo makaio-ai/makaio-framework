@@ -61,7 +61,7 @@ export interface PiscinaThinWorkflowProviderOptions {
   readonly bus: IMakaioBus;
   /**
    * Workflow adapter that reconstructs a launch configuration from the
-   * Attempt's canonical instruction and the selected Worker Runtime inputs.
+   * Attempt's canonical instruction and the provisioning connection details.
    */
   readonly launchResolver: WorkflowLaunchResolver;
   /**
@@ -104,7 +104,6 @@ const PISCINA_OUTCOME_RETRY_DEFAULTS: OutcomeSubmitRetryConfig = {
 const DEFAULT_BASE_CAPABILITIES: NormalizedWorkerCapabilities = {
   persistentStorage: true,
   customCapabilities: ['workflow.local-runtime', 'workflow.thin-runner'],
-  suspensionStrategy: 'wait-in-process',
   supportsRecovery: false,
   materializationModes: ['local-directory'],
 };
@@ -419,7 +418,6 @@ export class PiscinaThinWorkflowProvider implements IWorkerProvider {
     this.baseCapabilities = WorkerCapabilitiesSchema.parse({
       ...DEFAULT_BASE_CAPABILITIES,
       ...options.baseCapabilities,
-      suspensionStrategy: options.baseCapabilities?.suspensionStrategy ?? DEFAULT_BASE_CAPABILITIES.suspensionStrategy,
       // Pinned after the overrides: advertising recovery would offer dispatch
       // selectors a capability this provider does not implement and its
       // allocation lifetime cannot support. Typed callers are rejected at the

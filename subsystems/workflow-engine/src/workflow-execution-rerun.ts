@@ -67,7 +67,7 @@ function buildRerunLinkMetadata(mode: 'snapshot' | 'current', reason: string | u
  * Rerun a workflow execution with a persisted run context.
  *
  * Rerun intentionally keys off the durable run context rather than the
- * execution row status. Recovery, paused resume, failed retry, and completed
+ * execution row status. Recovery, workflow rerun, failed retry, and completed
  * replay all need the same immutable start metadata.
  *
  * Two modes are supported:

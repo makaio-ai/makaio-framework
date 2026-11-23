@@ -322,12 +322,7 @@ describe('workflow execution bus access', () => {
       const allowedSubscriptionSubjects = resolveHmacIdentityAllowedSubscriptionSubjects('attempt-1');
       expect(allowedMessageSubjects).not.toBeNull();
       expect(allowedSubscriptionSubjects).toEqual(
-        new Set([
-          'execution-attempt.operation.deliver',
-          'execution-attempt.control.deliver',
-          'workflow.gate.respond',
-          'workflow.exec-1.cancel',
-        ]),
+        new Set(['execution-attempt.operation.deliver', 'execution-attempt.control.deliver', 'workflow.exec-1.cancel']),
       );
       for (const subject of [
         'execution-attempt.runtime.register',
@@ -341,7 +336,6 @@ describe('workflow execution bus access', () => {
         'workflow.getRunContext',
         'storage:workflow.getExecution',
         'workflow.frame.started',
-        'workflow.gate.suspended',
         'workflow.state.get',
         'artifact.kind.list',
         'artifact.query',
@@ -366,7 +360,6 @@ describe('workflow execution bus access', () => {
       for (const subject of [
         'execution-attempt.operation.deliver',
         'execution-attempt.control.deliver',
-        'workflow.gate.respond',
         'workflow.exec-directional-denial.cancel',
       ]) {
         expect(allowedMessageSubjects!.has(subject)).toBe(false);
@@ -481,7 +474,6 @@ describe('workflow execution bus access', () => {
       expect(allowedSubscriptionSubjects).toStrictEqual([
         'execution-attempt.operation.deliver',
         'execution-attempt.control.deliver',
-        'workflow.gate.respond',
         'workflow.exec-protocol.cancel',
       ]);
       expect([...allowedMessageSubjects, ...allowedSubscriptionSubjects].some((subject) => subject.includes('*'))).toBe(
@@ -520,8 +512,6 @@ describe('workflow execution bus access', () => {
       expect(allowedMessageSubjects).toContain('storage:workflow.setFrame');
       expect(allowedMessageSubjects).toContain('storage:workflow.setSpan');
       expect(allowedMessageSubjects).toContain('storage:workflow.listFrames');
-      expect(allowedMessageSubjects).toContain('storage:workflow.getGateInstance');
-      expect(allowedMessageSubjects).toContain('storage:workflow.setGateInstance');
 
       // Lifecycle events
       expect(allowedMessageSubjects).toContain('workflow.frame.started');
@@ -529,12 +519,6 @@ describe('workflow execution bus access', () => {
       expect(allowedMessageSubjects).toContain('workflow.frame.failed');
       expect(allowedMessageSubjects).toContain('workflow.frame.sessionLinked');
       expect(allowedMessageSubjects).toContain('workflow.execution.progress');
-
-      // Gate events may be emitted by the attempt; response handling is an inbound endpoint.
-      expect(allowedMessageSubjects).toContain('workflow.gate.suspended');
-      expect(allowedMessageSubjects).toContain('workflow.gate.resumed');
-      expect(allowedMessageSubjects).toContain('workflow.gate.resolved');
-      expect(allowedMessageSubjects).not.toContain('workflow.gate.respond');
 
       // State RPC
       expect(allowedMessageSubjects).toContain('workflow.state.get');
@@ -564,7 +548,6 @@ describe('workflow execution bus access', () => {
       expect(allowedSubscriptionSubjects).toStrictEqual([
         'execution-attempt.operation.deliver',
         'execution-attempt.control.deliver',
-        'workflow.gate.respond',
         `workflow.${executionId}.cancel`,
       ]);
     });

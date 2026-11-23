@@ -34,9 +34,8 @@ export type {
   ArtifactBindingOptions,
   BuiltWorkflow,
   DefineWorkflowOptions,
-  GateOptions,
   IterateOptions,
-  LoopGateRegistration,
+  LoopCheckRegistration,
   LoopOptions,
   NodeOptions,
   ParallelMode,
@@ -45,5 +44,5 @@ export type {
   WorkflowStateAuthoringDefinition,
   WorkflowZodSchemas,
 } from './authoring-builder.js';
-export type { LoopGateHandler } from './loop.js';
-export { agentStep, codeStep, gate, iterate, iterateChain, loop } from './authoring-node-factories.js';
+export type { LoopCheckHandler } from './loop.js';
+export { agentStep, codeStep, iterate, iterateChain, loop } from './authoring-node-factories.js';

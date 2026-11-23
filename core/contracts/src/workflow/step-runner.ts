@@ -12,11 +12,9 @@ import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.
  * Node types that produce lifecycle events and span records.
  * Derived from {@link WorkflowNodeTypeSchema}.
  *
- * Structural nodes (`sequence`, `parallel`, `iterate`, `iterate-chain`) are
- * excluded — they emit lifecycle events only as parent frames, not as runner
- * targets. `gate` is included because gate resolution events are observable.
+ * Structural nodes emit lifecycle events as parent frames.
  */
-export const WorkflowStepTypeSchema = WorkflowNodeTypeSchema.extract(['code-step', 'agent-step', 'gate']);
+export const WorkflowStepTypeSchema = WorkflowNodeTypeSchema.extract(['code-step', 'agent-step']);
 
 export type WorkflowStepType = z.infer<typeof WorkflowStepTypeSchema>;
 
@@ -27,8 +25,7 @@ export type WorkflowStepType = z.infer<typeof WorkflowStepTypeSchema>;
 /**
  * Node types that are dispatchable to a {@link IStepRunner}.
  * Derived from {@link WorkflowStepTypeSchema}.
- * Gates and agent steps are coordination steps handled by the orchestrator,
- * not dispatched to runners.
+ * The orchestrator handles agent steps directly.
  */
 export const WorkflowRunnerStepTypeSchema = WorkflowStepTypeSchema.extract(['code-step']);
 
@@ -199,15 +196,13 @@ export function createWorkflowCancelSubject(fullSubject: string): WorkflowCancel
 
 /**
  * Configuration passed through the scheduler runStep callback to execute a
- * single runner-dispatachable node.
+ * single runner-dispatchable node.
  *
  * Internal API — only the Executor/Bridge creates these from a resolved,
- * runner-executable node. Structural nodes (`gate`, `sequence`, `parallel`,
- * `iterate`, `iterate-chain`) are orchestrator coordination nodes and are
- * never dispatched to runners.
+ * runner-executable node.
  *
- * Uses {@link WorkflowRunnerStepTypeSchema} (`code-step`) — all other node
- * types are handled by the orchestrator directly.
+ * Uses {@link WorkflowRunnerStepTypeSchema} (`code-step`). The orchestrator
+ * handles all other node types directly.
  */
 export const StepRunConfigSchema = z
   .object({
@@ -253,8 +248,8 @@ export type StepRunConfig = z.infer<typeof StepRunConfigSchema>;
  * Human-readable reason string placed in step error fields and abort-signal
  * reasons when a workflow is cancelled.
  *
- * Used by orchestrators, step executors, worker-pool dispatch, and gate
- * coordinators to ensure consistent messaging across the execution pipeline.
+ * Used by orchestrators, step executors, and worker-pool dispatch to ensure
+ * consistent messaging across the execution pipeline.
  */
 export const WORKFLOW_CANCELLED_REASON = 'Workflow cancelled';
 

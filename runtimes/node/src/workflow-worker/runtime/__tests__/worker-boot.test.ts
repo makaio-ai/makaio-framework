@@ -66,8 +66,9 @@ describe('bootWorkerBus', () => {
 
     try {
       await transport.connect(hostBus, 'worker-boot-readiness-host');
-      cleanup = hostBus.on(WorkflowSubjects.gate.awaitApproval, (ctx) => {
-        ctx.setResult({ action: 'approve', source: 'user' });
+      cleanup = hostBus.on(WorkflowSubjects.getExecution, (ctx) => {
+        expect(ctx.payload.executionId).toBe('exec-ready');
+        ctx.setResult({ execution: null });
       });
       worker = await bootWorkerBus({
         busUrl: `ws://127.0.0.1:${port}/bus`,
@@ -75,23 +76,12 @@ describe('bootWorkerBus', () => {
       });
 
       const result = await worker.bus.request(
-        WorkflowSubjects.gate.awaitApproval,
-        {
-          executionId: 'exec-ready',
-          stepId: 'gate-ready',
-          stepType: 'gate',
-          workflowId: 'wf-ready',
-          workflowName: 'Readiness',
-          title: 'Ready?',
-          message: 'Ready?',
-          autoAction: 'reject',
-          timeoutMs: null,
-          openedAt: Date.now(),
-        },
+        WorkflowSubjects.getExecution,
+        { executionId: 'exec-ready' },
         { timeout: 1_000 },
       );
 
-      expect(result).toEqual({ action: 'approve', source: 'user' });
+      expect(result).toEqual({ execution: null });
     } finally {
       if (worker) await worker.close();
       cleanup();

@@ -36,15 +36,34 @@ function makeRunContext(params: Parameters<StartExecutionDeps['buildRunContext']
     cancelSubject: `workflow.${params.executionId}.cancel`,
     env: {},
     createdAt: Date.now(),
-    suspensionStrategy: 'wait-in-process',
   };
 }
 
 describe('startExecution', () => {
   it.each([
-    'test',
-    'production',
-  ])('rejects an unreadable stored definition before creating a coordinator session, run context or execution in %s mode', async (mode) => {
+    {
+      mode: 'test',
+      name: 'removed node',
+      unknownKey: undefined,
+      node: { type: 'delegate-agent', id: 'removed-step', agentId: 'agent' },
+    },
+    {
+      mode: 'production',
+      name: 'removed node',
+      unknownKey: undefined,
+      node: { type: 'delegate-agent', id: 'removed-step', agentId: 'agent' },
+    },
+    {
+      mode: 'production',
+      name: 'unknown nested key',
+      unknownKey: 'label',
+      node: { type: 'sequence', id: 'inner', nodes: [], label: 'Main' },
+    },
+  ])('rejects a stored $name before creating a session or execution in $mode mode', async ({
+    mode,
+    unknownKey,
+    node,
+  }) => {
     const bus = createBusInstance();
     const call = bus.own('start');
     bus.registerNamespace(SessionNamespace);
@@ -73,7 +92,7 @@ describe('startExecution', () => {
     const root = {
       type: 'sequence',
       id: 'root',
-      nodes: [{ type: 'delegate-agent', id: 'removed-step', agentId: 'agent' }], // legacy-input
+      nodes: [node], // legacy-input
     };
 
     try {
@@ -83,7 +102,11 @@ describe('startExecution', () => {
           VALUES (${workflowId}, ${workflowId}, ${JSON.stringify(root)}, 'global', 1, 1)
         `);
 
-      await expect(startExecution(call, deps, workflowId)).rejects.toSatisfy(isDefinitionInvalidError);
+      await expect(startExecution(call, deps, workflowId)).rejects.toSatisfy(
+        (error: unknown) =>
+          isDefinitionInvalidError(error) &&
+          (unknownKey === undefined || (error instanceof Error && error.message.includes(unknownKey))),
+      );
       expect(createdSessions).toEqual([]);
       expect(deps.buildRunContext).not.toHaveBeenCalled();
       expect(deps.activeExecutions.size).toBe(0);
@@ -228,7 +251,6 @@ describe('persistLoadedExecutionStart', () => {
       scope: { type: 'global' },
       triggerPayload: {},
       coordinatorSessionId: 'session-worker-start-storage-required',
-      suspensionStrategy: 'wait-in-process',
     });
 
     try {

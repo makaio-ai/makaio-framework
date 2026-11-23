@@ -68,7 +68,6 @@ export interface StartExecutionDeps {
     triggerPayload: WorkflowRunContext['triggerPayload'];
     triggerMode?: WorkflowRunContext['triggerMode'];
     artifactRef?: WorkflowRunContext['artifactRef'];
-    suspensionStrategy?: WorkflowRunContext['suspensionStrategy'];
     terminalAuthority?: WorkflowRunContext['terminalAuthority'];
     materializationSpec?: WorkflowRunContext['materializationSpec'];
   }): WorkflowRunContext;
@@ -224,7 +223,7 @@ function seedDefinitionExecution(
     workflow,
     runContext,
     runtimeHandlers: new Map(),
-    runtimeLoopGates: new Map(),
+    runtimeLoopChecks: new Map(),
   });
   return execution;
 }
@@ -548,7 +547,7 @@ export async function startResolvedDefinitionExecution(
   // that exact immutable definition for every definition launch, including
   // path-backed runners, so remote finalization never trusts worker input.
   const definitionSnapshot = options.definitionSnapshot ?? workflow;
-  const dispatch = selectDefinitionExecutionDispatch(deps, { workflow });
+  const dispatch = selectDefinitionExecutionDispatch(deps, workflow);
   assertRunnerBackedSourceDispatchAvailable(dispatch.runner, executionSource, workflowId);
   const { source: durableSource, materializationSpec } = await resolveDurablePathSource(
     call,
@@ -612,7 +611,6 @@ export async function startResolvedDefinitionExecution(
         boundConfig,
         scope: resolvedScope,
         ...(artifactRef !== undefined ? { artifactRef } : {}),
-        suspensionStrategy: runContext.suspensionStrategy,
         ...(materializationSpec !== undefined ? { materializationSpec } : {}),
       },
       dispatch,
@@ -654,7 +652,7 @@ function seedFileExecution(
     },
     runContext,
     runtimeHandlers: new Map(),
-    runtimeLoopGates: new Map(),
+    runtimeLoopChecks: new Map(),
   });
 }
 

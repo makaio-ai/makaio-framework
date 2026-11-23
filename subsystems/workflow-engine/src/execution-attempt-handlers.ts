@@ -5,12 +5,17 @@ import {
   type ExecutionAttemptInstruction,
   type ExecutionAttemptOutcome,
   type ExecutionAttemptOutcomeSubmitRequest,
+  type OutcomeAckDecision,
 } from '@makaio/contracts';
 import type { BaseMessageContext } from '@makaio/core';
 import { resolveExecutionAttemptPeer, type ExecutionAttemptPeerIdentity } from './execution-bound-access.js';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import { RuntimeOutcomeFenceMismatchError, type AttemptControlState } from './execution-attempt-repository.js';
-import { submitAttemptOutcome, type AttemptOutcomeSubmissionDeps } from './outcome-convergence.js';
+import {
+  submitAttemptOutcome,
+  type AttemptOutcomeSubmission,
+  type AttemptOutcomeSubmissionDeps,
+} from './outcome-convergence.js';
 
 /** Owner-specific interpretation of a terminal report against its frozen assignment. */
 export interface AttemptOutcomeDecodingInput {
@@ -29,6 +34,33 @@ export interface ExecutionAttemptHandlersDeps<TOutcome> extends AttemptOutcomeSu
    * @returns The owner-specific outcome passed through canonical commit and convergence.
    */
   decodeOutcome(input: AttemptOutcomeDecodingInput): TOutcome | Promise<TOutcome>;
+  /**
+   * Identify an immutable incompatibility in the reported outcome or its assignment.
+   * @param error - Rejection from the owner decoder.
+   * @returns Whether the Runtime must stop resubmitting this report.
+   */
+  isDecodeConflict?(error: unknown): boolean;
+}
+
+/**
+ * Decode a Runtime report before committing it, acknowledging permanent decoder conflicts.
+ * @param deps - Owner decoder, error classifier, authority and convergence.
+ * @param input - Frozen instruction, reported outcome and originating slot.
+ * @returns A permanent conflict or the normal durable outcome decision.
+ */
+export async function decodeAndSubmitAttemptOutcome<TOutcome>(
+  deps: ExecutionAttemptHandlersDeps<TOutcome>,
+  input: AttemptOutcomeSubmission<ExecutionAttemptOutcome> & Pick<AttemptOutcomeDecodingInput, 'instruction'>,
+): Promise<OutcomeAckDecision> {
+  const { instruction, outcome: report, ...submission } = input;
+  let outcome: TOutcome;
+  try {
+    outcome = await deps.decodeOutcome({ instruction, outcome: report });
+  } catch (error) {
+    if (deps.isDecodeConflict?.(error)) return 'conflict';
+    throw error;
+  }
+  return submitAttemptOutcome(deps, { ...submission, outcome });
 }
 
 /**
@@ -162,13 +194,17 @@ export function registerExecutionAttemptHandlers<TOutcome>(
         ctx.setResult({ decision: 'fenced' });
         return;
       }
-      const runtimeFence = {
-        runtimeGeneration: request.runtimeGeneration,
-        operationId: request.operationId ?? null,
-      };
-      const outcome = await deps.decodeOutcome({ instruction, outcome: request.outcome });
       try {
-        const decision = await submitAttemptOutcome(deps, { ...peer, call: ctx.call, outcome, runtimeFence });
+        const decision = await decodeAndSubmitAttemptOutcome(deps, {
+          ...peer,
+          call: ctx.call,
+          instruction,
+          outcome: request.outcome,
+          runtimeFence: {
+            runtimeGeneration: request.runtimeGeneration,
+            operationId: request.operationId ?? null,
+          },
+        });
         ctx.setResult({ decision });
       } catch (error) {
         if (!(error instanceof RuntimeOutcomeFenceMismatchError)) throw error;

@@ -69,7 +69,6 @@ export function createWorkflowLaunchResolver(
       ...(request.connection.env !== undefined ? { env: request.connection.env } : {}),
       coordinatorSessionId: input.coordinatorSessionId,
       cancelSubject: input.cancelSubject,
-      suspensionStrategy: request.runtimeInputs.suspensionStrategy,
       terminalAuthority: input.terminalAuthority,
       ...(input.materializationSpec !== undefined ? { materializationSpec: input.materializationSpec } : {}),
     });

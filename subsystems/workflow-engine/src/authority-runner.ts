@@ -88,7 +88,6 @@ export async function acceptAuthorityRunnerResult(
   result: WorkflowRunResult,
 ): Promise<{ accepted: boolean; status: WorkflowExecution['status'] }> {
   const { bus, activeExecutions } = deps;
-  if (result.status === 'paused') throw new Error('authority runner result must be terminal');
   if (result.executionId !== executionId) throw new Error('authority runner result execution identity mismatch');
   const { execution } = await bus.request(call, WorkflowStorageSubjects.getExecution, { executionId });
   if (!execution) throw new Error(`Authority runner execution not found: ${executionId}`);
@@ -120,7 +119,7 @@ export async function acceptAuthorityRunnerResult(
       workflow,
       runContext,
       runtimeHandlers: new Map(),
-      runtimeLoopGates: new Map(),
+      runtimeLoopChecks: new Map(),
     });
     adopted = true;
   } else if (existing.execution.workflowId !== result.workflowId) {

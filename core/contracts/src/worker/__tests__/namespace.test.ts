@@ -15,7 +15,6 @@ describe('worker namespace', () => {
   describe('runtime.inputs.get', () => {
     const runtimeInputs = {
       workerManifest: { contributionRefs: [] },
-      suspensionStrategy: 'exit-and-redispatch',
     };
 
     it('registers the runtime input query under worker', () => {
@@ -36,10 +35,9 @@ describe('worker namespace', () => {
       expect(WorkerSchemas['runtime.inputs.get'].request.safeParse({ executionAttemptId: '' }).success).toBe(false);
     });
 
-    it('returns selected contribution and suspension inputs without defaulting', () => {
+    it('returns selected contribution inputs without defaulting', () => {
       expect(WorkerSchemas['runtime.inputs.get'].response.parse({ runtimeInputs })).toStrictEqual({ runtimeInputs });
-      expect(WorkerRuntimeInputsSchema.safeParse({ workerManifest: { contributionRefs: [] } }).success).toBe(false);
-      expect(WorkerRuntimeInputsSchema.safeParse({ suspensionStrategy: 'wait-in-process' }).success).toBe(false);
+      expect(WorkerRuntimeInputsSchema.safeParse({}).success).toBe(false);
     });
 
     it('represents a missing selected binding explicitly', () => {
@@ -149,46 +147,5 @@ describe('worker namespace', () => {
       environment: 'piscina',
     });
     expect('adapters' in parsed).toBe(false);
-  });
-
-  describe('lifecycle.paused', () => {
-    it('defines lifecycle.paused with required gate and frame identity', () => {
-      const parsed = WorkerSchemas['lifecycle.paused'].parse({
-        executionAttemptId: 'attempt-1',
-        executionId: 'wfx-1',
-        environment: 'piscina',
-        pausedAtGateId: 'approve',
-        pausedAtFrameId: 'frame-approve-1',
-      });
-
-      expect(parsed).toMatchObject({
-        executionAttemptId: 'attempt-1',
-        executionId: 'wfx-1',
-        pausedAtGateId: 'approve',
-        pausedAtFrameId: 'frame-approve-1',
-      });
-    });
-
-    it('rejects lifecycle.paused without pausedAtGateId', () => {
-      expect(() =>
-        WorkerSchemas['lifecycle.paused'].parse({
-          executionAttemptId: 'attempt-1',
-          executionId: 'wfx-1',
-          environment: 'piscina',
-          pausedAtFrameId: 'frame-approve-1',
-        }),
-      ).toThrow();
-    });
-
-    it('rejects lifecycle.paused without pausedAtFrameId', () => {
-      expect(() =>
-        WorkerSchemas['lifecycle.paused'].parse({
-          executionAttemptId: 'attempt-1',
-          executionId: 'wfx-1',
-          environment: 'piscina',
-          pausedAtGateId: 'approve',
-        }),
-      ).toThrow();
-    });
   });
 });

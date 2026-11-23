@@ -25,8 +25,8 @@ describe('WorkflowStepTypeSchema', () => {
     expect(WorkflowStepTypeSchema.parse('agent-step')).toBe('agent-step');
   });
 
-  it('accepts gate as a lifecycle node type', () => {
-    expect(WorkflowStepTypeSchema.parse('gate')).toBe('gate');
+  it('rejects the retired lifecycle node type', () => {
+    expect(WorkflowStepTypeSchema.safeParse('gate').success).toBe(false); // legacy-input
   });
 
   it('rejects structural node types that do not emit lifecycle events', () => {
@@ -52,7 +52,7 @@ describe('WorkflowRunnerStepTypeSchema', () => {
   });
 
   it('rejects gate (gates are not runner-executable)', () => {
-    expect(() => WorkflowRunnerStepTypeSchema.parse('gate')).toThrow();
+    expect(() => WorkflowRunnerStepTypeSchema.parse('gate')).toThrow(); // legacy-input
   });
 
   it('rejects agent-step (handled by the orchestrator)', () => {
@@ -192,14 +192,8 @@ describe('StepRunConfigSchema', () => {
     expect(() =>
       StepRunConfigSchema.parse({
         ...minimalConfig,
-        stepType: 'gate',
-        stepDefinition: {
-          id: 'approval',
-          type: 'gate',
-          prompt: 'Approve?',
-          autoAction: 'reject',
-          timeoutMs: null,
-        },
+        stepType: 'gate', // legacy-input
+        stepDefinition: { id: 'agent', type: 'agent-step', agentId: 'agent-1', prompt: 'Review' },
       }),
     ).toThrow();
   });
@@ -210,13 +204,7 @@ describe('StepRunConfigSchema', () => {
       StepRunConfigSchema.parse({
         ...minimalConfig,
         stepType: 'code-step',
-        stepDefinition: {
-          id: 'approval',
-          type: 'gate',
-          prompt: 'Approve?',
-          autoAction: 'reject',
-          timeoutMs: null,
-        },
+        stepDefinition: { id: 'agent', type: 'agent-step', agentId: 'agent-1', prompt: 'Review' },
       }),
     ).toThrow();
   });

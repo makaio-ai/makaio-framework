@@ -820,7 +820,7 @@ describe('subscribe/unsubscribe subject restriction', () => {
     await routeMessage(
       {
         type: 'subscribe',
-        subjects: { 'worker.control.bootstrap.claim': [100], 'workflow.gate.respond': [100] },
+        subjects: { 'worker.control.bootstrap.claim': [100], 'session.list': [100] },
         deliveryClasses: {},
       },
       restrictedSocket,

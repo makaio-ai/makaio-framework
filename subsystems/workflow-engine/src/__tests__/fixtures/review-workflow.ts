@@ -46,8 +46,8 @@ export const ReviewArtifactDataSchema = z.object({
    * Review lifecycle status.
    *
    * - `draft`    — review is being assembled
-   * - `triaged`  — triage gate has been passed (approve path)
-   * - `rejected` — triage gate rejected the review
+   * - `triaged`  — triage accepted the review (approve path)
+   * - `rejected` — triage rejected the review
    * - `fixed`    — post-fix iteration completed
    */
   status: z.enum(['draft', 'triaged', 'rejected', 'fixed']),
@@ -62,23 +62,6 @@ export const ReviewArtifactDataSchema = z.object({
 
 export type ReviewArtifactData = z.infer<typeof ReviewArtifactDataSchema>;
 
-/**
- * Triage gate resume data schema.
- *
- * The gate reviewer must supply an `action` and an optional rationale when
- * resuming from the triage checkpoint.
- */
-export const TriageGateResumeSchema = z.object({
-  /**
-   * Whether the review should proceed to publish (`approve`) or stop (`reject`).
-   */
-  action: z.enum(['approve', 'reject']),
-  /** Optional reviewer rationale for the decision. */
-  rationale: z.string().optional(),
-});
-
-export type TriageGateResume = z.infer<typeof TriageGateResumeSchema>;
-
 // ─────────────────────────────────────────────────────────────
 // Delegate output shapes
 // ─────────────────────────────────────────────────────────────
@@ -91,8 +74,8 @@ export interface DelegateOutput {
 
 /** Output produced after applying the triage decision to the artifact status. */
 interface TriageStatusOutput {
-  /** Gate action that drove the artifact status update. */
-  readonly action: TriageGateResume['action'];
+  /** Triage decision that drove the artifact status update. */
+  readonly action: 'approve' | 'reject';
   /** Artifact status written for the triage decision. */
   readonly status: 'triaged' | 'rejected';
 }
@@ -111,7 +94,6 @@ interface TriageStatusOutput {
  *   ├─ quality delegate
  *   └─ test-coverage delegate
  * codeStep(aggregate)        — merge findings into artifact
- * gate(triage)              — human triage checkpoint
  * codeStep(apply-triage-status) — persist approve/reject status
  * codeStep(apply-fix)?       — fix iteration (conditional on triage status)
  * ```
@@ -130,12 +112,14 @@ export function buildReviewWorkflow(opts?: {
   readonly onTestCoverage?: (ctx: StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>>) => Promise<DelegateOutput>;
   /** Override for the aggregate code step handler. */
   readonly onAggregate?: (ctx: StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>, ReviewArtifactData>) => Promise<ReviewFindings>;
+  /** Triage decision supplied directly by the test. */
+  readonly triageDecision?: TriageStatusOutput['action'];
   /** Override for the fix code step handler. */
   readonly onFix?: (ctx: StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>, ReviewArtifactData>) => Promise<string>;
 }) {
   return defineWorkflow('review-workflow', {
     name: 'Code Review',
-    description: 'Parallel spec, quality, and test-coverage review with triage gate and optional fix iteration.',
+    description: 'Parallel spec, quality, and test-coverage review with a supplied triage decision and optional fix iteration.',
   })
     .artifact({
       kind: 'code-review',
@@ -220,29 +204,17 @@ export function buildReviewWorkflow(opts?: {
         return findings;
       },
     )
-    .gate('triage', {
-      prompt: 'Review the findings and decide whether to approve or reject.',
-      title: 'Triage Gate',
-      autoAction: 'reject',
-      timeoutMs: null,
-      resume: TriageGateResumeSchema,
-    })
     .codeStep('apply-triage-status', async (ctx) => {
       const typedCtx = ctx as StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>, ReviewArtifactData>;
-      const triageOutput = typedCtx.previousSteps['triage']?.output;
-      const resumeData =
-        typeof triageOutput === 'object' && triageOutput !== null && !Array.isArray(triageOutput)
-          ? (triageOutput as Record<string, unknown>)['resumeData']
-          : undefined;
-      const decision = TriageGateResumeSchema.parse(resumeData);
-      const status: TriageStatusOutput['status'] = decision.action === 'approve' ? 'triaged' : 'rejected';
+      const action = opts?.triageDecision ?? 'reject';
+      const status: TriageStatusOutput['status'] = action === 'approve' ? 'triaged' : 'rejected';
 
       if (typedCtx.artifact !== undefined) {
         const artifactCtx = typedCtx.artifact as ArtifactContext<ReviewArtifactData>;
         await artifactCtx.updateStatus(status);
       }
 
-      return { action: decision.action, status } satisfies TriageStatusOutput;
+      return { action, status } satisfies TriageStatusOutput;
     })
     .codeStep(
       'apply-fix',

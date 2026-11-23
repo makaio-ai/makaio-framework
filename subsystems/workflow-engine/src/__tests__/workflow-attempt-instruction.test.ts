@@ -61,8 +61,6 @@ describe('workflow Attempt instruction', () => {
     });
     const runContext = context({
       env: { TEST_PRIVATE_VALUE: 'test-only-context-value' },
-      suspensionStrategy: 'exit-and-redispatch',
-      dispatchMetadata: { resume: true, providerId: 'provider-1' },
       inputs: { repository: 'repo-1' },
       config: { testCommand: 'yarn test' },
       triggerPayload: { decision: 'continue' },
@@ -79,15 +77,7 @@ describe('workflow Attempt instruction', () => {
       cancelSubject: 'workflow.execution-1.cancel',
       terminalAuthority: 'authority',
     });
-    for (const excluded of [
-      'busAuth',
-      'busUrl',
-      'env',
-      'workerManifest',
-      'suspensionStrategy',
-      'createdAt',
-      'dispatchMetadata',
-    ]) {
+    for (const excluded of ['busAuth', 'busUrl', 'env', 'workerManifest', 'createdAt']) {
       expect(input).not.toHaveProperty(excluded);
     }
     expect(JSON.stringify(instruction)).not.toContain('test-only-');
@@ -142,7 +132,7 @@ describe('workflow Attempt instruction', () => {
       configSchema: undefined,
       executableSource: undefined,
       successFinalizerId: undefined,
-      root: { type: 'sequence' as const, id: 'root', nodes: [], name: undefined },
+      root: { type: 'sequence' as const, id: 'root', nodes: [], when: undefined },
       scope: { type: 'global' as const },
     };
     const instruction = build(config({ source: { kind: 'definition', workflowId: 'workflow-1' }, definition }));
@@ -153,7 +143,7 @@ describe('workflow Attempt instruction', () => {
       scope: { type: 'global' },
     });
     expect(snapshot).not.toHaveProperty('inputSchema');
-    expect(snapshot?.root).not.toHaveProperty('name');
+    expect(snapshot?.root).not.toHaveProperty('when');
   });
 
   it.each([
@@ -275,7 +265,7 @@ describe('workflow Attempt instruction', () => {
       false,
     );
     expect(
-      WorkflowInvocationInputSchema.safeParse({ ...input, suspensionStrategy: 'exit-and-redispatch' }).success,
+      WorkflowInvocationInputSchema.safeParse({ ...input, suspensionStrategy: 'exit-and-redispatch' }).success, // legacy-input
     ).toBe(false);
     expect(WorkflowInvocationInputSchema.safeParse({ ...input, terminalAuthority: 'worker' }).success).toBe(false);
   });

@@ -1,7 +1,7 @@
 import type { CallContext } from '@makaio/core';
 import type {
   CodeStepHandler,
-  LoopGateHandler,
+  LoopCheckHandler,
   StepRunnerBusAuth,
   StepRunnerPlatformDefaults,
   WorkerMaterializationSpec,
@@ -120,6 +120,6 @@ export interface ActiveExecution {
    * (e.g. inline builds, runFile). Empty for definition-backed executions.
    */
   runtimeHandlers: Map<string, CodeStepHandler>;
-  /** Loop gate handler functions keyed by handler name. */
-  runtimeLoopGates: Map<string, LoopGateHandler>;
+  /** Loop check handler functions keyed by handler name. */
+  runtimeLoopChecks: Map<string, LoopCheckHandler>;
 }

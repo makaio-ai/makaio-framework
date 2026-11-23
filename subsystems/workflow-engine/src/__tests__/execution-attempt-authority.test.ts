@@ -45,15 +45,16 @@ function makeFailedResult(executionId: string): WorkflowRunResult {
   };
 }
 
-function makePausedResult(executionId: string): WorkflowRunResult {
-  return {
-    executionId,
+const terminalResults: readonly WorkflowRunResult[] = [
+  makeCompletedResult('exec-1'),
+  makeFailedResult('exec-1'),
+  {
+    executionId: 'exec-1',
     workflowId: 'test-workflow',
-    status: 'paused',
-    pausedAtGateId: 'gate-1',
-    pausedAtFrameId: 'frame-1',
-  };
-}
+    status: 'cancelled',
+    reason: 'cancelled by owner',
+  },
+];
 
 function makeAllocationRef(
   providerId: string = TEST_PROVIDER_ID,
@@ -996,12 +997,15 @@ describe('ExecutionAttemptAuthority', () => {
       expect(authority.waitForOutcome(attempt.executionAttemptId)).toBeDefined();
     });
 
-    it('resolves the waiter promise only after settleOutcome is called', async () => {
+    it.each(terminalResults)('resolves a $status result waiter only after explicit settlement', async (result) => {
       const attempt = await authority.createAttempt('exec-1', makeTestInstruction());
-      const result = makeCompletedResult('exec-1');
-
       const waiterPromise = authority.waitForOutcome(attempt.executionAttemptId);
-      expect(waiterPromise).toBeDefined();
+      if (waiterPromise === undefined) throw new Error('Expected an outcome waiter');
+      let settled = false;
+      const markSettled = () => {
+        settled = true;
+      };
+      void waiterPromise.then(markSettled, markSettled);
 
       const decision = await authority.commitOutcome(
         attempt.executionAttemptId,
@@ -1009,8 +1013,9 @@ describe('ExecutionAttemptAuthority', () => {
         authority.canonicalizeOutcome(result),
       );
 
-      // Waiter is NOT resolved yet — convergence has not happened.
-      // Settle it explicitly to simulate post-convergence settlement.
+      expect(authority.waitForOutcome(attempt.executionAttemptId)).toBe(waiterPromise);
+      expect(settled).toBe(false);
+
       authority.settleOutcome(attempt.executionAttemptId, {
         ...requireCommittedOutcome(decision),
         acceptance: 'projected',
@@ -1242,59 +1247,32 @@ describe('ExecutionAttemptAuthority', () => {
       // The waiter for the fenced attempt should be rejected
       await expect(waiterPromise1).rejects.toThrow('has been fenced');
     });
-  });
 
-  // ─────────────────────────────────────────────────────────
-  // Pause Settlement
-  // ─────────────────────────────────────────────────────────
-
-  describe('paused outcome', () => {
-    it('commits the paused result and leaves the waiter pending until explicit settlement', async () => {
-      const attempt = await authority.createAttempt('exec-1', makeTestInstruction());
-      const waiterPromise = authority.waitForOutcome(attempt.executionAttemptId);
-      const pausedResult = makePausedResult('exec-1');
-
-      const decision = await authority.commitOutcome(
-        attempt.executionAttemptId,
-        'exec-1',
-        authority.canonicalizeOutcome(pausedResult),
-      );
-
-      expect(decision).toEqual({
-        kind: 'accepted',
-        outcome: pausedResult,
-        text: authority.canonicalizeOutcome(pausedResult).text,
-        controlObservation: { controlRevision: 0, cancellation: null },
-      });
-
-      // The waiter is NOT resolved yet — convergence must happen first.
-      // Settle it explicitly to simulate post-convergence settlement.
-      authority.settleOutcome(attempt.executionAttemptId, {
+    it('fences replay from a settled attempt when a new attempt is admitted', async () => {
+      const attempt1 = await authority.createAttempt('exec-1', makeTestInstruction());
+      const result = makeFailedResult('exec-1');
+      const durable = authority.canonicalizeOutcome(result);
+      const decision = await authority.commitOutcome(attempt1.executionAttemptId, 'exec-1', durable);
+      authority.settleOutcome(attempt1.executionAttemptId, {
         ...requireCommittedOutcome(decision),
         acceptance: 'projected',
       });
-      await expect(waiterPromise).resolves.toEqual({
-        outcome: pausedResult,
-        controlObservation: { controlRevision: 0, cancellation: null },
-        acceptance: 'projected',
-      });
-    });
 
-    it('allows a new attempt to be created after pause settlement', async () => {
-      const attempt1 = await authority.createAttempt('exec-1', makeTestInstruction());
-      const pausedResult = makePausedResult('exec-1');
-
-      await authority.commitOutcome(attempt1.executionAttemptId, 'exec-1', authority.canonicalizeOutcome(pausedResult));
-
-      // Resume creates a new attempt
       const attempt2 = await authority.createAttempt('exec-1', makeTestInstruction());
 
       expect(attempt2.executionAttemptId).not.toBe(attempt1.executionAttemptId);
       expect(attempt2.status).toBe('pending');
-
-      // The new attempt should be the active one
-      const active = await authority.getActiveAttempt('exec-1', attempt2.executionAttemptId);
-      expect(active).not.toBeNull();
+      await expect(authority.getActiveAttempt('exec-1', attempt2.executionAttemptId)).resolves.toEqual(attempt2);
+      await expect(authority.commitOutcome(attempt1.executionAttemptId, 'exec-1', durable)).resolves.toEqual({
+        kind: 'fenced',
+      });
+      await expect(
+        authority.readAttemptSettlement({ executionId: 'exec-1', executionAttemptId: attempt1.executionAttemptId }),
+      ).resolves.toMatchObject({
+        kind: 'outcome',
+        isCurrentAttempt: false,
+        result: { outcome: result, text: durable.text },
+      });
     });
   });
 
@@ -1661,21 +1639,14 @@ describe('ExecutionAttemptAuthority', () => {
       expect(recoverable).toHaveLength(0);
     });
 
-    it('excludes settled attempts (outcome committed)', async () => {
+    it.each(terminalResults)('excludes attempts after a $status outcome is committed', async (result) => {
       const attempt = await authority.createAttempt('exec-1', makeTestInstruction());
       const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
       await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
 
-      const result = makeCompletedResult('exec-1');
-      const decision = await authority.commitOutcome(
-        attempt.executionAttemptId,
-        'exec-1',
-        authority.canonicalizeOutcome(result),
-      );
-      authority.settleOutcome(attempt.executionAttemptId, {
-        ...requireCommittedOutcome(decision),
-        acceptance: 'projected',
-      });
+      await expect(
+        authority.commitOutcome(attempt.executionAttemptId, 'exec-1', authority.canonicalizeOutcome(result)),
+      ).resolves.toMatchObject({ kind: 'accepted' });
 
       const recoverable = await authority.getRecoverableAttempts('exec-1');
       expect(recoverable).toHaveLength(0);
@@ -1693,26 +1664,6 @@ describe('ExecutionAttemptAuthority', () => {
       await authority.recordInfrastructureFailure({ claim, executionId: 'exec-1' });
 
       await expect(waiterPromise).rejects.toThrow('infrastructure failure');
-
-      const recoverable = await authority.getRecoverableAttempts('exec-1');
-      expect(recoverable).toHaveLength(0);
-    });
-
-    it('excludes paused (settled) attempts', async () => {
-      const attempt = await authority.createAttempt('exec-1', makeTestInstruction());
-      const claim = await beginTestProvisioning(authority, attempt.executionAttemptId, 'exec-1');
-      await authority.recordAllocation({ claim, allocationRef: makeAllocationRef() });
-
-      const pausedResult = makePausedResult('exec-1');
-      const decision = await authority.commitOutcome(
-        attempt.executionAttemptId,
-        'exec-1',
-        authority.canonicalizeOutcome(pausedResult),
-      );
-      authority.settleOutcome(attempt.executionAttemptId, {
-        ...requireCommittedOutcome(decision),
-        acceptance: 'projected',
-      });
 
       const recoverable = await authority.getRecoverableAttempts('exec-1');
       expect(recoverable).toHaveLength(0);

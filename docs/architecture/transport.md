@@ -171,7 +171,7 @@ instead:
 | Field | Authorizes | Default for an execution-attempt registration |
 | --- | --- | --- |
 | `allowedMessageSubjects` | Messages the attempt may send to the authority | The canonical attempt-to-authority subject matrix |
-| `allowedSubscriptionSubjects` | Subjects the attempt may advertise as request handlers | `execution-attempt.operation.deliver`, `execution-attempt.control.deliver`, `workflow.gate.respond`, and `workflow.<executionId>.cancel` |
+| `allowedSubscriptionSubjects` | Subjects the attempt may advertise as request handlers | `execution-attempt.operation.deliver`, `execution-attempt.control.deliver`, and `workflow.<executionId>.cancel` |
 
 The workflow-attempt helpers apply the corresponding default matrix when either
 field is omitted. Each matrix is deny-by-default: a subject absent from its
@@ -183,17 +183,12 @@ An allowed subscription authorizes only an advertisement. It does not advertise
 request-handler interest: a remote attempt receives a server-routed request
 only after it has advertised a matching request subscription.
 
-`execution-attempt.operation.deliver`, `execution-attempt.control.deliver`, and
-`workflow.gate.respond` are additionally server-bound to the authenticated
+`execution-attempt.operation.deliver` and `execution-attempt.control.deliver`
+are additionally server-bound to the authenticated
 Attempt identity. The WebSocket server evaluates the current required recipient
 filter for every outbound request, event, and broadcast delivery independently
 of subscription advertisements. An attempt cannot receive another Attempt's
 delivery by omitting or withdrawing subscriptions or forging a subscription filter.
-
-Attempt-owned gates persist their `executionAttemptId` and require responses
-with that exact target. Web and GitHub gate producers preserve the ID from the
-suspension or stored binding. Non-Attempt gates retain their legacy path with
-no Attempt ID; an Attempt-addressed response cannot resolve such a gate.
 
 ### MessagePort Transport
 

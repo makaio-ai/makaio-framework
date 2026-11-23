@@ -76,19 +76,8 @@ describe('SpanRecordSchema', () => {
     expect(result.toolCallCount).toBe(8);
   });
 
-  it('accepts a gate span', () => {
-    const result = SpanRecordSchema.parse({
-      executionId: 'wfx-abc123',
-      frameId: 'frm-gate',
-      stepId: 'approval-gate',
-      stepType: 'gate',
-      status: 'completed',
-      startedAt: 1716000000000,
-      completedAt: 1716000060000,
-      durationMs: 60000,
-    });
-    expect(result.stepType).toBe('gate');
-    expect(result.status).toBe('completed');
+  it('rejects the retired step type in stored spans', () => {
+    expect(SpanRecordSchema.safeParse({ ...minimalSpan, stepType: 'gate' }).success).toBe(false); // legacy-input
   });
 
   it('accepts a skipped span', () => {

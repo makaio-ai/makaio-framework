@@ -1,10 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
   WorkerSchemas,
+  WorkerRuntimeInputsSchema,
   WorkerBootstrapCredentialsSchema,
   WorkerBootstrapDeadlineAtSchema,
   WorkerBootstrapGrantedClaimResponseSchema,
 } from '../index.js';
+
+describe('Worker runtime inputs', () => {
+  it('rejects the retired suspension strategy even with a valid worker manifest', () => {
+    expect(
+      WorkerRuntimeInputsSchema.safeParse({
+        workerManifest: { contributionRefs: [] },
+        suspensionStrategy: 'wait-in-process', // legacy-input
+      }).success,
+    ).toBe(false);
+  });
+});
 
 describe('Worker bootstrap deadline schema', () => {
   it.each([
@@ -190,20 +202,20 @@ describe('control.outcome.submit schema', () => {
     expect(request.result.status).toBe('cancelled');
   });
 
-  it('validates paused outcome submission', () => {
-    const request = WorkerSchemas['control.outcome.submit'].request.parse({
-      executionAttemptId: 'attempt-1',
-      executionId: 'exec-1',
-      result: {
+  it('rejects an outcome for a parked execution', () => {
+    expect(
+      WorkerSchemas['control.outcome.submit'].request.safeParse({
+        executionAttemptId: 'attempt-1',
         executionId: 'exec-1',
-        workflowId: 'wf-1',
-        status: 'paused',
-        pausedAtGateId: 'approve',
-        pausedAtFrameId: 'frame-approve-1',
-      },
-    });
-
-    expect(request.result.status).toBe('paused');
+        result: {
+          executionId: 'exec-1',
+          workflowId: 'wf-1',
+          status: 'paused', // legacy-input
+          pausedAtGateId: 'approve', // legacy-input
+          pausedAtFrameId: 'frame-approve-1', // legacy-input
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it('rejects outcome when envelope and result executionId differ', () => {

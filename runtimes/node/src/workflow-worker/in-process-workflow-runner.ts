@@ -43,7 +43,7 @@ export interface InProcessWorkflowRunnerOptions {
  *
  * Use this runner when the host process already owns a fully-booted bus and
  * the workflow's step types do not require process isolation (e.g. pure shell,
- * agent, and gate steps sourced from a serialized definition).
+ * and agent steps sourced from a serialized definition).
  *
  * The bus lifecycle is owned by the caller. This runner holds no disposable
  * resources of its own, so `dispose()` is intentionally omitted.

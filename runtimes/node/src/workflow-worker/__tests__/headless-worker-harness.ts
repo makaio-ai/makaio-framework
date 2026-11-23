@@ -61,7 +61,6 @@ export function makeRunContext(executionId: string): WorkflowRunContext {
     cancelSubject: `workflow.${executionId}.cancel`,
     env: {},
     createdAt: Date.now(),
-    suspensionStrategy: 'wait-in-process',
   };
 }
 
@@ -273,7 +272,6 @@ export async function createAuthoritySide(
   // Selected realization inputs are frozen separately; this is not the instruction lookup.
   const runtimeInputs = structuredClone({
     workerManifest: runContext.workerManifest,
-    suspensionStrategy: runContext.suspensionStrategy,
   });
   const offGetRunContext = authority.on(
     WorkerSubjects.runtime.inputs.get,

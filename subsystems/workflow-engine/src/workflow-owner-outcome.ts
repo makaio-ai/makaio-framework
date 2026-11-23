@@ -12,7 +12,6 @@ import {
   withExecutionDurableTransition,
   type FinalizerDeps,
 } from './workflow-execution-finalizer.js';
-import { parkExecution } from './workflow-execution-pause.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 
 /**
@@ -126,7 +125,7 @@ export async function acceptWorkflowOwnerOutcome(
     !cancellation &&
     input.controlObservation !== null &&
     input.controlObservation.controlRevision > 0 &&
-    (owner.status === 'running' || owner.status === 'paused')
+    owner.status === 'running'
   ) {
     // Attempt Cancel and owner Cancel are two durable writes. After an
     // interrupted second write, recovery must finish that decision first.
@@ -145,7 +144,7 @@ export async function acceptWorkflowOwnerOutcome(
 
 /**
  * Delegate to the existing owner projection without fabricating workflow results.
- * @param call - Call context bound into the finalizer parked-result projection.
+ * @param call - Call context of the outcome submission.
  * @param deps - Owner's projection callbacks.
  * @param input - Committed technical outcome.
  * @returns Whether the corresponding projection accepted the fact.
@@ -166,9 +165,6 @@ async function projectOutcome(
         ? accepted.status === 'cancelled'
         : accepted.status === 'failed' || accepted.status === 'cancelled')
     );
-  }
-  if (input.outcome.status === 'paused') {
-    return parkExecution(call, deps.lifecycle, input.outcome);
   }
   const accepted = await deps.acceptTerminalResult(call, input.executionId, input.outcome);
   return accepted.accepted && isAcceptedRunnerResultStatus(accepted.status, input.outcome.status);

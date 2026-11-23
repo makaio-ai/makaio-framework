@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { WorkflowWorkerConfigSchema, type ExecutionAttemptOutcome, type WorkflowRunResult } from '@makaio/contracts';
+import {
+  WorkflowErrorCode,
+  WorkflowWorkerConfigSchema,
+  type ExecutionAttemptOutcome,
+  type WorkflowRunResult,
+} from '@makaio/contracts';
 import { buildWorkflowAttemptInstruction } from '../workflow-attempt-instruction.js';
 import {
   decodeWorkflowAttemptOutcome,
@@ -25,7 +30,6 @@ const instruction = buildWorkflowAttemptInstruction({
 describe('workflow Attempt outcome owner adapter', () => {
   it.each([
     { ...identity, status: 'completed' },
-    { ...identity, status: 'paused', pausedAtGateId: 'gate-1', pausedAtFrameId: 'frame-1' },
     { kind: 'technical-failure', stage: 'workload-invocation', message: 'Process did not stop' },
     { kind: 'cancelled', reason: 'Worker stopped' },
   ] satisfies WorkflowAttemptOutcome[])('retains a recorded-only fact without fabricating a runner result: %j', (outcome) => {
@@ -75,14 +79,14 @@ describe('workflow Attempt outcome owner adapter', () => {
     expect(decodeWorkflowAttemptOutcome({ instruction: malformed, outcome })).toEqual(outcome);
   });
 
-  it('still rejects workload results whose frozen workflow input cannot be decoded', () => {
+  it('reports an invalid definition for workload results whose frozen input cannot be decoded', () => {
     const malformed = { ...instruction, workload: { ...instruction.workload, input: {} } };
     expect(() =>
       decodeWorkflowAttemptOutcome({
         instruction: malformed,
         outcome: { kind: 'workload-result', result: { ...identity, status: 'completed' } },
       }),
-    ).toThrow();
+    ).toThrow(expect.objectContaining({ code: WorkflowErrorCode.DEFINITION_INVALID }));
   });
 
   it.each([
@@ -98,12 +102,11 @@ describe('workflow Attempt outcome owner adapter', () => {
     expect(decoded).not.toHaveProperty('workflowId');
   });
 
-  it('preserves completed, failed, cancelled, and paused workflow outcomes', () => {
+  it('preserves completed, failed, and cancelled workflow outcomes', () => {
     const results: WorkflowRunResult[] = [
       { ...identity, status: 'completed' },
       { ...identity, status: 'failed', error: 'Workflow error' },
       { ...identity, status: 'cancelled', reason: 'Requested by owner' },
-      { ...identity, status: 'paused', pausedAtGateId: 'review-gate', pausedAtFrameId: 'frame-1' },
     ];
     for (const result of results) {
       const decoded = decodeWorkflowAttemptOutcome({ instruction, outcome: { kind: 'workload-result', result } });
@@ -143,12 +146,18 @@ describe('workflow Attempt outcome owner adapter', () => {
     }
   });
 
-  it('rejects undecoded generic envelopes and incomplete workflow results in the owner codec', () => {
+  it('rejects undecoded generic envelopes and retired paused results in the owner codec', () => {
     expect(() =>
       workflowAttemptOutcomeCodec.parse({ kind: 'workload-result', result: { ...identity, status: 'completed' } }),
     ).toThrow();
-    expect(() =>
-      workflowAttemptOutcomeCodec.parse({ ...identity, status: 'paused', pausedAtGateId: 'review-gate' }),
+    expect(
+      () =>
+        workflowAttemptOutcomeCodec.parse({
+          ...identity,
+          status: 'paused',
+          pausedAtGateId: 'review-gate',
+          pausedAtFrameId: 'frame-1',
+        }), // legacy-input
     ).toThrow();
     expect(() =>
       workflowAttemptOutcomeCodec.parse({ kind: 'technical-failure', stage: 'unknown', message: 'Failed' }),
@@ -171,15 +180,14 @@ describe('workflow Attempt outcome owner adapter', () => {
     expect(workflowAttemptOutcomeCodec.parse(JSON.parse(persisted))).toEqual(outcome);
   });
 
-  it('retains pause identity and refuses mismatched committed workflow results', () => {
-    const paused: WorkflowRunResult = {
+  it('refuses mismatched committed workflow results', () => {
+    const failed: WorkflowRunResult = {
       ...identity,
-      status: 'paused',
-      pausedAtGateId: 'gate-1',
-      pausedAtFrameId: 'frame-1',
+      status: 'failed',
+      error: 'failed',
     };
-    expect(toCommittedWorkflowRunnerResult(paused, identity)).toEqual(paused);
-    expect(() => toCommittedWorkflowRunnerResult(paused, { ...identity, executionId: 'another-execution' })).toThrow(
+    expect(toCommittedWorkflowRunnerResult(failed, identity)).toEqual(failed);
+    expect(() => toCommittedWorkflowRunnerResult(failed, { ...identity, executionId: 'another-execution' })).toThrow(
       'owner identity',
     );
   });

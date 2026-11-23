@@ -17,7 +17,6 @@ import {
   type JsonPatchOperation,
   type JsonValue,
   type WorkflowExecution,
-  type WorkflowGateInstance,
   type WorkflowRunContext,
 } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './namespace.js';
@@ -25,7 +24,6 @@ import type { InsertWorkflowExecution } from './schema.js';
 import { workflowEngineSchema } from './schema.variants.js';
 import { registerDefinitionHandlers } from './definition-handler.js';
 import { registerFrameHandlers } from './frame-handler.js';
-import { mapGateInstance, registerGateInstanceHandlers, toGateDbValues } from './gate-handler.js';
 import { registerSpanHandlers } from './span-handler.js';
 import { registerRunContextHandlers, upsertWorkflowRunContext } from './run-context-handler.js';
 import { registerStateHandlers } from './state-handler.js';
@@ -171,22 +169,7 @@ async function upsertExecutionStart(
       target: workflowExecutions.id,
       set: dbValues,
     });
-    const existingRunContexts =
-      runContext.dispatchMetadata === undefined
-        ? await tx
-            .select({ dispatchMetadata: workflowRunContexts.dispatchMetadata })
-            .from(workflowRunContexts)
-            .where(eq(workflowRunContexts.executionId, runContext.executionId))
-            .limit(1)
-        : [];
-    const existingDispatchMetadata = existingRunContexts[0]?.dispatchMetadata;
-    const runContextSnapshot =
-      runContext.dispatchMetadata === undefined &&
-      existingDispatchMetadata !== null &&
-      existingDispatchMetadata !== undefined
-        ? { ...runContext, dispatchMetadata: existingDispatchMetadata as WorkflowRunContext['dispatchMetadata'] }
-        : runContext;
-    await upsertWorkflowRunContext(tx, runContextSnapshot, workflowRunContexts);
+    await upsertWorkflowRunContext(tx, runContext, workflowRunContexts);
     if (initialState !== undefined) {
       const now = Date.now();
       const initialColumnValue = toWorkflowStateJsonColumnValue(db, initialState);
@@ -220,88 +203,6 @@ async function upsertExecutionStart(
           set: link,
         });
     }
-  });
-}
-
-/**
- * Restore a paused execution and its waiting gate in one storage transaction.
- * @param db - Database handle.
- * @param execution - Paused execution row to restore.
- * @param gate - Waiting gate row to restore.
- */
-async function restorePausedGateResumeState(
-  db: MakaioDatabase,
-  execution: WorkflowExecution,
-  gate: WorkflowGateInstance,
-): Promise<void> {
-  if (gate.executionId !== execution.id) {
-    throw new Error('restorePausedGateResumeState requires execution.id to match gate.executionId');
-  }
-  if (execution.status !== 'paused' || gate.status !== 'waiting') {
-    throw new Error('restorePausedGateResumeState requires a paused execution and waiting gate');
-  }
-  const { workflowExecutions, workflowGateInstances } = resolveSchema(db, workflowEngineSchema);
-  const executionValues = toExecutionDbValues(execution);
-  const gateValues = toGateDbValues(gate);
-  await executeTransaction(db, async (tx) => {
-    await tx.insert(workflowExecutions).values(executionValues).onConflictDoUpdate({
-      target: workflowExecutions.id,
-      set: executionValues,
-    });
-    await tx.insert(workflowGateInstances).values(gateValues).onConflictDoUpdate({
-      target: workflowGateInstances.id,
-      set: gateValues,
-    });
-  });
-}
-
-/**
- * Cancel a paused execution and every still-waiting gate in one transaction.
- * @param db - Drizzle database instance.
- * @param executionId - Paused execution to terminalize.
- * @param completedAt - Cancellation timestamp to persist on execution and gates.
- * @param reason - Optional cancellation reason to persist on the execution.
- * @returns Cancel result with the gate rows transitioned to `cancelled`.
- */
-async function cancelPausedExecution(
-  db: MakaioDatabase,
-  executionId: string,
-  completedAt: number,
-  reason: string | undefined,
-): Promise<{
-  readonly cancelled: boolean;
-  readonly gates: Array<WorkflowGateInstance & { readonly status: 'cancelled' }>;
-}> {
-  const { workflowExecutions, workflowGateInstances } = resolveSchema(db, workflowEngineSchema);
-  return executeTransaction(db, async (tx) => {
-    const executionRows = await tx
-      .select()
-      .from(workflowExecutions)
-      .where(eq(workflowExecutions.id, executionId))
-      .limit(1);
-    const execution = executionRows[0];
-    if (execution?.status !== 'paused') return { cancelled: false, gates: [] };
-
-    const gateRows = await tx
-      .select()
-      .from(workflowGateInstances)
-      .where(and(eq(workflowGateInstances.executionId, executionId), eq(workflowGateInstances.status, 'waiting')));
-    const gates = gateRows.map((row) => ({
-      ...mapGateInstance(row),
-      status: 'cancelled' as const,
-      resolvedAt: completedAt,
-    }));
-
-    await tx
-      .update(workflowExecutions)
-      .set({ status: 'cancelled', completedAt, reason: reason ?? null })
-      .where(eq(workflowExecutions.id, executionId));
-    for (const gate of gates) {
-      const gateValues = toGateDbValues(gate);
-      await tx.update(workflowGateInstances).set(gateValues).where(eq(workflowGateInstances.id, gateValues.id));
-    }
-
-    return { cancelled: true, gates };
   });
 }
 
@@ -346,7 +247,7 @@ async function applyExecutionUpdate(
 }
 
 /**
- * Register execution CRUD handlers (get, set, update, cancel, restore).
+ * Register execution CRUD handlers (get, set, start, update).
  * @param bus - Message bus to subscribe on.
  * @param db - Drizzle database instance.
  * @returns Cleanup function that unsubscribes all registered handlers.
@@ -390,47 +291,17 @@ function registerExecutionCrudHandlers(bus: IMakaioBus, db: MakaioDatabase): () 
     ctx.setResult({ id: execution.id, executionId: execution.id });
   });
 
-  const unsubRestorePausedGateResumeState = bus.on(
-    WorkflowStorageSubjects.restorePausedGateResumeState,
-    async (ctx) => {
-      const execution = ctx.payload.execution as WorkflowExecution;
-      const gate = ctx.payload.gate as WorkflowGateInstance;
-      await restorePausedGateResumeState(db, execution, gate);
-      ctx.setResult({ executionId: execution.id, gateId: gate.nodeId });
-    },
-  );
-
   const unsubUpdateExecution = bus.on(WorkflowStorageSubjects.updateExecution, async (ctx) => {
     const { executionId, status, error, reason, completedAt } = ctx.payload;
     const success = await applyExecutionUpdate(db, executionId, status, error, reason, completedAt);
     ctx.setResult({ success });
   });
 
-  const unsubPauseRunningExecution = bus.on(WorkflowStorageSubjects.pauseRunningExecution, async (ctx) => {
-    const { workflowExecutions } = resolveSchema(db, workflowEngineSchema);
-    const updated = await serializeDatabaseOperation(db, () =>
-      db
-        .update(workflowExecutions)
-        .set({ status: 'paused' })
-        .where(and(eq(workflowExecutions.id, ctx.payload.executionId), eq(workflowExecutions.status, 'running')))
-        .returning({ id: workflowExecutions.id }),
-    );
-    ctx.setResult({ paused: updated.length === 1 });
-  });
-
-  const unsubCancelPausedExecution = bus.on(WorkflowStorageSubjects.cancelPausedExecution, async (ctx) => {
-    const { executionId, completedAt, reason } = ctx.payload;
-    ctx.setResult(await cancelPausedExecution(db, executionId, completedAt, reason));
-  });
-
   return () => {
     unsubGetExecution();
     unsubSetExecution();
     unsubSetExecutionStart();
-    unsubRestorePausedGateResumeState();
     unsubUpdateExecution();
-    unsubPauseRunningExecution();
-    unsubCancelPausedExecution();
   };
 }
 
@@ -517,7 +388,6 @@ function registerExecutionListHandlers(bus: IMakaioBus, db: MakaioDatabase): () 
  * - Definition CRUD: get, set, delete, list
  * - Execution CRUD: getExecution, setExecution, updateExecution, listExecutions, listExecutionsByArtifactRefs
  * - Frame CRUD: setFrame, getFrame, listFrames
- * - Gate instance CRUD: setGateInstance, getGateInstance, listGateInstances
  * - Span CRUD: setSpan, listSpans
  * - Execution link CRUD: setExecutionLink, listExecutionLinks
  * - Run context CRUD: setRunContext, getRunContext
@@ -531,7 +401,6 @@ export function registerDrizzleWorkflowStorage(bus: IMakaioBus, db: MakaioDataba
   const executionCrudCleanup = registerExecutionCrudHandlers(bus, db);
   const executionListCleanup = registerExecutionListHandlers(bus, db);
   const frameCleanup = registerFrameHandlers(bus, db);
-  const gateCleanup = registerGateInstanceHandlers(bus, db);
   const spanCleanup = registerSpanHandlers(bus, db);
   const runContextCleanup = registerRunContextHandlers(bus, db);
   const stateCleanup = registerStateHandlers(bus, db);
@@ -544,7 +413,6 @@ export function registerDrizzleWorkflowStorage(bus: IMakaioBus, db: MakaioDataba
     executionCrudCleanup();
     executionListCleanup();
     frameCleanup();
-    gateCleanup();
     spanCleanup();
     runContextCleanup();
     stateCleanup();

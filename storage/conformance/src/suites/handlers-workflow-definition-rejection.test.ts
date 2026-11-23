@@ -1,7 +1,7 @@
 /**
  * Dual-dialect conformance for stored-definition rejection and transactional rollback.
  *
- * The same four cases run against file-backed SQLite and, with
+ * The same cases run against file-backed SQLite and, with
  * `MAKAIO_STORAGE_TEST_DIALECT=postgres` and `MAKAIO_STORAGE_TEST_URL`, against
  * live PostgreSQL: a mixed list with one unreadable row, a single get of an
  * unreadable identifier, a rejected upsert that retains the invalid stored
@@ -72,18 +72,18 @@ function minimalDefinition(id: string) {
  * Insert stored rows directly, including invalid schema fragments supported by both dialects.
  * @param ctx - Conformance database context.
  * @param dialect - Active dialect.
- * @param rows - Identifiers and optional input schema values to persist.
+ * @param rows - Identifiers and optional root and input schema values to persist.
  */
 async function insertRows(
   ctx: StorageDatabaseContext,
   dialect: StorageDialect,
-  rows: readonly { id: string; inputSchema?: number }[],
+  rows: readonly { id: string; inputSchema?: number; root?: unknown }[],
 ): Promise<void> {
-  for (const { id, inputSchema } of rows) {
+  for (const { id, inputSchema, root = minimalRoot(`${id}-step`) } of rows) {
     await ctx.executor.run(sql`
       INSERT INTO workflow_definitions (id, name, root, input_schema, scope_type, created_at, updated_at)
       VALUES (
-        ${id}, ${id}, ${jsonValue(dialect, minimalRoot(`${id}-step`))},
+        ${id}, ${id}, ${jsonValue(dialect, root)},
         ${inputSchema === undefined ? sql`NULL` : jsonValue(dialect, inputSchema)},
         'global', ${createdAt}, ${createdAt}
       )
@@ -155,6 +155,25 @@ describeStorageConformance('workflow definition rejection', (config) => {
       await expect(
         storage.bus.request(storage.call, WorkflowStorageSubjects.get, { id: readableId }),
       ).resolves.toMatchObject({ workflow: { id: readableId } });
+    } finally {
+      storage.cleanup();
+    }
+  });
+
+  it('rejects a single get for an unknown key on a nested sequence', async () => {
+    const ctx = getCtx();
+    const id = 'wfr-nested-unknown-key';
+    const root = { type: 'sequence', id: 'root', nodes: [{ type: 'sequence', id: 'inner', nodes: [], label: 'Main' }] };
+    await insertRows(ctx, config.dialect, [{ id, root }]);
+    const storage = createWorkflowStorageBus(ctx.db);
+    try {
+      await expect(storage.bus.request(storage.call, WorkflowStorageSubjects.get, { id })).rejects.toSatisfy(
+        (error: unknown) =>
+          isDefinitionInvalidError(error) &&
+          error instanceof Error &&
+          error.message.includes(id) &&
+          error.message.includes('label'),
+      );
     } finally {
       storage.cleanup();
     }

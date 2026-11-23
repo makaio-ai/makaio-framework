@@ -72,7 +72,6 @@ function setup(options: { resolve?: string; create?: string; startRef?: boolean;
     cancelSubject: 'workflow.execution-1.cancel',
     env: {},
     createdAt: 1,
-    suspensionStrategy: 'wait-in-process',
     ...(options.startRef && { artifactRef: { kind: existing.kind, id: existing.id } }),
   };
   return {

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { asc, eq, getTableColumns, sql } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import { createBusInstance, MakaioBus, ValidationError, type IMakaioBus } from '@makaio/bus-core';
+import { getRawSqlExecutor } from '@makaio/storage-drizzle';
 import { WorkflowNamespace, WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import {
@@ -20,7 +21,6 @@ import {
   serializeArtifactRef,
   parseArtifactRef,
   type WorkflowDefinition,
-  type WorkflowGateInstance,
 } from '@makaio/contracts';
 import {
   createTestDb,
@@ -29,8 +29,7 @@ import {
   createWorkflowExecution,
   type TestDbContext,
 } from './shared.js';
-import { workflowDefinitions, workflowExecutionStateEvents } from '../storage/schema.js';
-import { storedDefinitionSelection } from '../storage/stored-definition.js';
+import { workflowExecutionStateEvents } from '../storage/schema.js';
 
 /**
  * Inserts a `workflow_definitions` row directly via SQL, bypassing `WorkflowStorageSubjects.set`
@@ -67,10 +66,7 @@ async function insertRawDefinitionRow(
  * @returns All definition rows, including their exact JSON text and timestamps.
  */
 async function readRawDefinitionRows(context: TestDbContext) {
-  return context.db
-    .select(storedDefinitionSelection(getTableColumns(workflowDefinitions)))
-    .from(workflowDefinitions)
-    .orderBy(asc(workflowDefinitions.id));
+  return getRawSqlExecutor(context.db).all(sql`SELECT * FROM workflow_definitions ORDER BY id`);
 }
 
 type StorageValidationMode = {
@@ -88,6 +84,15 @@ type InvalidDefinitionCase = {
   readonly makeWorkflow: (id: string) => unknown;
 };
 
+const retiredGateNodeType = 'gate'; // legacy-input
+const retiredGateRoot = {
+  type: 'sequence',
+  id: 'root',
+  nodes: [
+    { type: retiredGateNodeType, id: 'approval', prompt: 'Approve the run', autoAction: 'reject', timeoutMs: null },
+  ],
+};
+
 const INVALID_DEFINITION_CASES: readonly InvalidDefinitionCase[] = [
   {
     name: 'removed node type',
@@ -95,6 +100,10 @@ const INVALID_DEFINITION_CASES: readonly InvalidDefinitionCase[] = [
       ...createWorkflowDefinition({ id }),
       root: { type: 'sequence', id: 'root', nodes: [{ type: 'delegate-agent', id: 'removed' }] }, // legacy-input
     }),
+  },
+  {
+    name: 'retired Gate node',
+    makeWorkflow: (id) => ({ ...createWorkflowDefinition({ id }), root: retiredGateRoot }),
   },
   {
     name: 'unexpected top-level field',
@@ -878,34 +887,6 @@ describe('workflow storage handlers', () => {
     ).rejects.toThrow('state sequence conflict');
   });
 
-  it('round-trips suspensionStrategy through run context storage', async () => {
-    const workflow = createWorkflowDefinition({ id: 'workflow-suspension-strategy' });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-    const execution = createWorkflowExecution({ id: 'execution-suspension-strategy', workflowId: workflow.id });
-    const now = Date.now();
-    const runContext = WorkflowRunContextSchema.parse({
-      executionId: execution.id,
-      workflowId: workflow.id,
-      source: { kind: 'definition', workflowId: workflow.id },
-      definitionSnapshot: workflow,
-      inputs: {},
-      triggerPayload: {},
-      scope: { type: 'global' },
-      coordinatorSessionId: 'session-suspension-strategy',
-      cancelSubject: `workflow.${execution.id}.cancel`,
-      env: {},
-      createdAt: now,
-      suspensionStrategy: 'exit-and-redispatch',
-    });
-
-    await MakaioBus.request(WorkflowStorageSubjects.setExecutionStart, { execution, runContext });
-
-    const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, {
-      executionId: execution.id,
-    });
-    expect(fetched?.suspensionStrategy).toBe('exit-and-redispatch');
-  });
-
   it('round-trips terminal authority through run context storage', async () => {
     const workflow = createWorkflowDefinition({ id: 'workflow-terminal-authority' });
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
@@ -1428,372 +1409,71 @@ describe('workflow storage handlers', () => {
     expect(frames.find((frame) => frame.frameId === 'frame-null-output')?.output).toBeNull();
   });
 
-  it('round-trips explicit null gate resumeData separately from absent resumeData', async () => {
-    const workflow = createWorkflowDefinition({ id: 'workflow-gate-null-resume' });
+  it('omits retained Gate rows from narrow reads and includes their usage in totals', async () => {
+    const workflow = createWorkflowDefinition({ id: 'workflow-retained-rows' });
     await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-    const execution = createWorkflowExecution({ id: 'execution-gate-null-resume', workflowId: workflow.id });
+    const execution = createWorkflowExecution({ id: 'execution-retained-rows', workflowId: workflow.id });
     await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+    await MakaioBus.emit(WorkflowSubjects.execution.started, { executionId: execution.id, workflowId: workflow.id });
 
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
-      gate: {
-        executionId: execution.id,
-        nodeId: 'waiting-gate',
-        frameId: 'frame-waiting-gate',
-        schema: {},
-        status: 'waiting',
-        autoAction: 'reject',
-        timeoutMs: null,
-        createdAt: 1000,
-      },
-    });
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
-      gate: {
-        executionId: execution.id,
-        nodeId: 'null-gate',
-        frameId: 'frame-null-gate',
-        schema: {},
-        status: 'resumed',
-        autoAction: 'approve',
-        timeoutMs: 5000,
-        resumeData: null,
-        createdAt: 1000,
-        resolvedAt: 2000,
-      },
-    });
-
-    const { gate: absentResumeGate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+    await dbContext.exec(sql`
+      INSERT INTO workflow_execution_frames (frame_id, execution_id, node_id, node_type, path, status)
+      VALUES
+        ('retained-frame', ${execution.id}, 'approval', ${retiredGateNodeType}, '["retained-frame"]', 'completed'),
+        ('current-frame', ${execution.id}, 'compute', 'code-step', '["current-frame"]', 'completed')
+    `);
+    await dbContext.exec(sql`
+      INSERT INTO worklog_frame_entries (frame_id, execution_id, node_id, node_type, path, status, input_tokens, estimated_cost)
+      VALUES
+        ('retained-frame', ${execution.id}, 'approval', ${retiredGateNodeType}, '["retained-frame"]', 'completed', 13, 0.25)
+    `);
+    await dbContext.exec(sql`
+      INSERT INTO workflow_step_spans (execution_id, frame_id, step_id, step_type, status)
+      VALUES
+        (${execution.id}, 'retained-frame', 'approval', ${retiredGateNodeType}, 'completed'),
+        (${execution.id}, 'current-frame', 'compute', 'code-step', 'completed')
+    `);
+    await MakaioBus.emit(WorkflowSubjects.frame.completed, {
       executionId: execution.id,
-      nodeId: 'waiting-gate',
-      frameId: 'frame-waiting-gate',
-    });
-    const { gate: nullResumeGate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
-      executionId: execution.id,
-      nodeId: 'null-gate',
-      frameId: 'frame-null-gate',
-    });
-    const { gates } = await MakaioBus.request(WorkflowStorageSubjects.listGateInstances, { executionId: execution.id });
-
-    expect(absentResumeGate).not.toBeNull();
-    expect(Object.hasOwn(absentResumeGate!, 'resumeData')).toBe(false);
-    expect(absentResumeGate?.autoAction).toBe('reject');
-    expect(absentResumeGate?.timeoutMs).toBeNull();
-    expect(nullResumeGate?.resumeData).toBeNull();
-    expect(nullResumeGate?.autoAction).toBe('approve');
-    expect(nullResumeGate?.timeoutMs).toBe(5000);
-    expect(gates.find((gate) => gate.nodeId === 'waiting-gate')).not.toHaveProperty('resumeData');
-    expect(gates.find((gate) => gate.nodeId === 'null-gate')?.resumeData).toBeNull();
-  });
-
-  it('lists waiting gates across executions by status filter', async () => {
-    const workflow = createWorkflowDefinition({ id: 'workflow-gate-inbox' });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-    const waitingExecution = createWorkflowExecution({ id: 'execution-gate-inbox-waiting', workflowId: workflow.id });
-    const resumedExecution = createWorkflowExecution({ id: 'execution-gate-inbox-resumed', workflowId: workflow.id });
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: waitingExecution });
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: resumedExecution });
-
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
-      gate: {
-        executionId: waitingExecution.id,
-        nodeId: 'inbox-waiting-gate',
-        frameId: 'frame-inbox-waiting',
-        schema: {},
-        status: 'waiting',
-        autoAction: 'reject',
-        timeoutMs: null,
-        createdAt: 1000,
-      },
-    });
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
-      gate: {
-        executionId: resumedExecution.id,
-        nodeId: 'inbox-resumed-gate',
-        frameId: 'frame-inbox-resumed',
-        schema: {},
-        status: 'resumed',
-        autoAction: 'reject',
-        timeoutMs: null,
-        createdAt: 2000,
-      },
+      frameId: 'current-frame',
+      nodeId: 'compute',
+      nodeType: 'code-step',
     });
 
-    const { gates } = await MakaioBus.request(WorkflowStorageSubjects.listGateInstances, { status: 'waiting' });
-
-    expect(gates.map((gate) => gate.status)).toEqual(['waiting']);
-    expect(gates[0]?.executionId).toBe(waitingExecution.id);
-  });
-
-  it('rejects gate instance listing without any filter', async () => {
-    await expect(MakaioBus.request(WorkflowStorageSubjects.listGateInstances, {} as never)).rejects.toThrow(
-      'Either executionId or status is required',
-    );
-  });
-
-  it('resolves a waiting gate instance only once', async () => {
-    const workflow = createWorkflowDefinition({ id: 'workflow-gate-atomic-resolve' });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-    const execution = createWorkflowExecution({ id: 'execution-gate-atomic-resolve', workflowId: workflow.id });
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
-
-    const waitingGate: WorkflowGateInstance = {
-      executionId: execution.id,
-      nodeId: 'gate-atomic-resolve',
-      frameId: 'frame-gate-atomic-resolve',
-      schema: {},
-      status: 'waiting',
-      autoAction: 'reject',
-      timeoutMs: null,
-      createdAt: 1000,
-    };
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, { gate: waitingGate });
-
-    const firstResponse = await MakaioBus.request(WorkflowStorageSubjects.resolveWaitingGateInstance, {
-      gate: {
-        ...waitingGate,
-        status: 'resumed',
-        resumeData: { decision: 'first' },
-        reason: 'approved after review',
-        resolvedAt: 2000,
-      },
+    const { frame } = await MakaioBus.request(WorkflowStorageSubjects.getFrame, { frameId: 'retained-frame' });
+    const { frames } = await MakaioBus.request(WorkflowStorageSubjects.listFrames, { executionId: execution.id });
+    const { spans } = await MakaioBus.request(WorkflowStorageSubjects.listSpans, { executionId: execution.id });
+    const { frame: retainedWorklogFrame } = await MakaioBus.request(WorkflowSubjects.worklog.frame.get, {
+      frameId: 'retained-frame',
     });
-    const secondResponse = await MakaioBus.request(WorkflowStorageSubjects.resolveWaitingGateInstance, {
-      gate: {
-        ...waitingGate,
-        status: 'rejected',
-        resumeData: { decision: 'second' },
-        resolvedAt: 3000,
-      },
+    const { frame: currentWorklogFrame } = await MakaioBus.request(WorkflowSubjects.worklog.frame.get, {
+      frameId: 'current-frame',
     });
+    const { summary } = await MakaioBus.request(WorkflowSubjects.worklog.get, { executionId: execution.id });
 
-    const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
-      executionId: execution.id,
-      nodeId: waitingGate.nodeId,
-      frameId: waitingGate.frameId,
-    });
+    expect(frame).toBeNull();
+    expect(frames.map(({ frameId }) => frameId)).toEqual(['current-frame']);
+    expect(spans.map(({ frameId }) => frameId)).toEqual(['current-frame']);
+    expect(retainedWorklogFrame).toBeNull();
+    expect(currentWorklogFrame?.nodeId).toBe('compute');
+    expect(summary).toMatchObject({ totalInputTokens: 13, totalEstimatedCost: 0.25 });
 
-    expect(firstResponse).toEqual({ accepted: true });
-    expect(secondResponse).toEqual({ accepted: false });
-    expect(gate).toEqual({
-      ...waitingGate,
-      status: 'resumed',
-      resumeData: { decision: 'first' },
-      reason: 'approved after review',
-      resolvedAt: 2000,
-    });
-  });
-
-  it('does not let a stale Attempt response resolve a gate reopened by another Attempt', async () => {
-    const workflow = createWorkflowDefinition({ id: 'workflow-gate-attempt-cas' });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-    const execution = createWorkflowExecution({ id: 'execution-gate-attempt-cas', workflowId: workflow.id });
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
-
-    const waitingGate: WorkflowGateInstance = {
-      executionId: execution.id,
-      executionAttemptId: 'attempt-original',
-      nodeId: 'gate-attempt-cas',
-      frameId: 'frame-gate-attempt-cas',
-      schema: {},
-      status: 'waiting',
-      autoAction: 'reject',
-      timeoutMs: null,
-      createdAt: 1000,
-    };
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, { gate: waitingGate });
-    const reopenedGate = { ...waitingGate, executionAttemptId: 'attempt-reopened' };
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, { gate: reopenedGate });
-
-    const staleResponse = await MakaioBus.request(WorkflowStorageSubjects.resolveWaitingGateInstance, {
-      gate: {
-        ...waitingGate,
-        status: 'resumed',
-        resumeData: { decision: 'stale' },
-        resolvedAt: 2000,
-      },
-    });
-    const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
-      executionId: execution.id,
-      nodeId: waitingGate.nodeId,
-      frameId: waitingGate.frameId,
-    });
-
-    expect(staleResponse).toEqual({ accepted: false });
-    expect(gate).toEqual(reopenedGate);
-  });
-
-  it('restores paused execution and waiting gate state through one storage subject', async () => {
-    const workflow = createWorkflowDefinition({ id: 'workflow-gate-restore-state' });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-    const pausedExecution = {
-      ...createWorkflowExecution({
-        id: 'execution-gate-restore-state',
-        workflowId: workflow.id,
-      }),
-      status: 'paused',
-    } satisfies ReturnType<typeof createWorkflowExecution> & { readonly status: 'paused' };
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, {
-      execution: { ...pausedExecution, status: 'running' },
-    });
-
-    const waitingGate = {
-      executionId: pausedExecution.id,
-      nodeId: 'gate-restore-state',
-      frameId: 'frame-gate-restore-state',
-      schema: {},
-      status: 'waiting',
-      autoAction: 'reject',
-      timeoutMs: 5000,
-      createdAt: 1000,
-    } satisfies WorkflowGateInstance & { readonly status: 'waiting' };
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
-      gate: {
-        ...waitingGate,
-        status: 'resumed',
-        resumeData: { decision: 'accepted' },
-        resolvedAt: 2000,
-      },
-    });
-
-    await MakaioBus.request(WorkflowStorageSubjects.restorePausedGateResumeState, {
-      execution: pausedExecution,
-      gate: waitingGate,
-    });
-
-    const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
-      executionId: pausedExecution.id,
-    });
-    const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
-      executionId: waitingGate.executionId,
-      nodeId: waitingGate.nodeId,
-      frameId: waitingGate.frameId,
-    });
-
-    expect(execution).toEqual(expect.objectContaining({ id: pausedExecution.id, status: 'paused' }));
-    expect(gate).toEqual(waitingGate);
-  });
-
-  it('cancels a paused execution and its waiting gates through one storage subject', async () => {
-    const workflow = createWorkflowDefinition({ id: 'workflow-paused-cancel' });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-    const execution = createWorkflowExecution({
-      id: 'execution-paused-cancel',
-      workflowId: workflow.id,
-      status: 'paused',
-    });
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
-
-    const waitingGate = {
-      executionId: execution.id,
-      nodeId: 'gate-paused-cancel',
-      frameId: 'frame-gate-paused-cancel',
-      schema: {},
-      status: 'waiting',
-      autoAction: 'reject',
-      timeoutMs: null,
-      createdAt: 1000,
-    } satisfies WorkflowGateInstance & { readonly status: 'waiting' };
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, { gate: waitingGate });
-
-    const cancelled = await MakaioBus.request(WorkflowStorageSubjects.cancelPausedExecution, {
-      executionId: execution.id,
-      completedAt: 2000,
-      reason: 'review requested cancellation',
-    });
-    const { execution: persistedExecution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
-      executionId: execution.id,
-    });
-    const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
-      executionId: waitingGate.executionId,
-      nodeId: waitingGate.nodeId,
-      frameId: waitingGate.frameId,
-    });
-
-    expect(cancelled).toEqual({
-      cancelled: true,
-      gates: [{ ...waitingGate, status: 'cancelled', resolvedAt: 2000 }],
-    });
-    expect(persistedExecution).toEqual(
-      expect.objectContaining({
-        id: execution.id,
-        status: 'cancelled',
-        completedAt: 2000,
-        reason: 'review requested cancellation',
-      }),
-    );
-    expect(gate).toEqual({ ...waitingGate, status: 'cancelled', resolvedAt: 2000 });
-  });
-
-  it('lists only finite-timeout waiting gates on paused executions for scheduler rehydration', async () => {
-    const workflow = createWorkflowDefinition({ id: 'workflow-paused-gate-timeouts' });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-
-    const pausedExecution = createWorkflowExecution({
-      id: 'execution-paused-gate-timeout',
-      workflowId: workflow.id,
-      status: 'paused',
-    });
-    const runningExecution = createWorkflowExecution({
-      id: 'execution-running-gate-timeout',
-      workflowId: workflow.id,
-      status: 'running',
-    });
-    const completedExecution = createWorkflowExecution({
-      id: 'execution-completed-gate-timeout',
-      workflowId: workflow.id,
-      status: 'completed',
-      completedAt: Date.now(),
-    });
-
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: pausedExecution });
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: runningExecution });
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution: completedExecution });
-
-    const baseGate = {
-      nodeId: 'gate',
-      frameId: 'frame',
-      schema: {},
-      autoAction: 'reject' as const,
-      timeoutMs: 1000,
-      createdAt: 1000,
-    };
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
-      gate: { ...baseGate, executionId: pausedExecution.id, status: 'waiting' },
-    });
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
-      gate: {
-        ...baseGate,
-        executionId: pausedExecution.id,
-        nodeId: 'gate-null-timeout',
-        timeoutMs: null,
-        status: 'waiting',
-      },
-    });
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
-      gate: {
-        ...baseGate,
-        executionId: pausedExecution.id,
-        nodeId: 'gate-resumed',
-        status: 'resumed',
-        resumeData: null,
-      },
-    });
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
-      gate: { ...baseGate, executionId: runningExecution.id, nodeId: 'gate-running', status: 'waiting' },
-    });
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
-      gate: { ...baseGate, executionId: completedExecution.id, nodeId: 'gate-completed', status: 'waiting' },
-    });
-
-    const { gates } = await MakaioBus.request(WorkflowStorageSubjects.listPausedGateTimeouts, {});
-
-    expect(gates.map((gate) => gate.nodeId)).toEqual(['gate']);
-    expect(gates[0]).toEqual(
-      expect.objectContaining({
-        executionId: pausedExecution.id,
-        status: 'waiting',
-        timeoutMs: 1000,
-        autoAction: 'reject',
-      }),
+    const storedRows = await getRawSqlExecutor(dbContext.db).all(sql`
+      SELECT 'runtime-frame' AS source, node_type AS nodeType
+      FROM workflow_execution_frames WHERE frame_id = 'retained-frame'
+      UNION ALL
+      SELECT 'worklog-frame', node_type FROM worklog_frame_entries WHERE frame_id = 'retained-frame'
+      UNION ALL
+      SELECT 'span', step_type FROM workflow_step_spans
+      WHERE execution_id = ${execution.id} AND frame_id = 'retained-frame'
+    `);
+    expect(storedRows).toHaveLength(3);
+    expect(storedRows).toEqual(
+      expect.arrayContaining([
+        { source: 'runtime-frame', nodeType: retiredGateNodeType },
+        { source: 'worklog-frame', nodeType: retiredGateNodeType },
+        { source: 'span', nodeType: retiredGateNodeType },
+      ]),
     );
   });
 
@@ -2010,6 +1690,18 @@ describe.each(STORAGE_VALIDATION_MODES)('stored definition validation ($name)', 
     await expect(
       bus.request(bus.own('start'), WorkflowStorageSubjects.get, { id: 'undecodable-root' }),
     ).rejects.toSatisfy((error: unknown) => isDefinitionInvalidError(error));
+    expect(await readRawDefinitionRows(context)).toEqual(before);
+  });
+
+  it('rejects a stored Gate definition with its identifier and node path', async () => {
+    const id = 'retired-gate-definition';
+    await insertRawDefinitionRow(context, { id, root: JSON.stringify(retiredGateRoot) });
+    const before = await readRawDefinitionRows(context);
+
+    await expect(bus.request(bus.own('start'), WorkflowStorageSubjects.get, { id })).rejects.toSatisfy(
+      (error: unknown) =>
+        isDefinitionInvalidError(error) && error.message.includes(id) && error.message.includes('root.nodes.0.type'),
+    );
     expect(await readRawDefinitionRows(context)).toEqual(before);
   });
 

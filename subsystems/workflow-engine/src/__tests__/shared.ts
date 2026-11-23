@@ -2,6 +2,7 @@ import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { createTempDb, createDbCleanup, type TestDbContextWithCleanup } from '@makaio/test-utils/drizzle-harness';
 import { readMigrations } from '@makaio/storage-migrations';
 import { applyMigrations } from '@makaio/storage-migrations/apply-migrations';
+import { WorkflowFrameStateSchema } from '@makaio/contracts';
 import type {
   WorkflowDefinition,
   WorkflowFrameState,
@@ -9,10 +10,49 @@ import type {
   WorkflowAgentStepNode,
   WorkflowAutomationTriggerBinding,
 } from '@makaio/contracts';
-import type { WorkflowExecution as StorageWorkflowExecution } from '../storage/namespace.js';
+import {
+  WorkflowStorageNamespace,
+  WorkflowStorageSubjects,
+  type WorkflowExecution as StorageWorkflowExecution,
+} from '../storage/namespace.js';
 import { registerDrizzleWorkflowStorage } from '../storage/handler.js';
 
 const TEST_MIGRATIONS_TABLE = '__drizzle_migrations_test_workflow_engine_storage';
+
+/**
+ * Register frame storage for tests that run the runtime without a database.
+ * @param bus - The actual bus used by the workflow runtime.
+ * @param options - Optional one-time failure injection for the first frame write.
+ * @returns A function that removes the frame handlers.
+ */
+export function registerInMemoryFrameStore(
+  bus: IMakaioBus,
+  options: { readonly failFirstWrite?: boolean } = {},
+): () => void {
+  bus.registerNamespace(WorkflowStorageNamespace);
+  const frames = new Map<string, { executionId: string; frame: WorkflowFrameState }>();
+  let failWrite = options.failFirstWrite === true;
+  const unsubscribeSet = bus.on(WorkflowStorageSubjects.setFrame, (ctx) => {
+    if (failWrite) {
+      failWrite = false;
+      throw new Error('First frame write failed');
+    }
+    const { executionId, frame } = ctx.payload;
+    frames.set(frame.frameId, { executionId, frame: WorkflowFrameStateSchema.parse(frame) });
+    ctx.setResult({ frameId: frame.frameId });
+  });
+  const unsubscribeList = bus.on(WorkflowStorageSubjects.listFrames, (ctx) => {
+    ctx.setResult({
+      frames: [...frames.values()]
+        .filter(({ executionId }) => executionId === ctx.payload.executionId)
+        .map(({ frame }) => structuredClone(frame)),
+    });
+  });
+  return () => {
+    unsubscribeList();
+    unsubscribeSet();
+  };
+}
 
 /**
  * Options accepted by {@link createWorkflowDefinition}.
@@ -47,8 +87,6 @@ export interface WorkflowDefinitionOptions {
     needs?: string[];
     steps?: Array<{ id: string; type: string; prompt?: string; command?: string[]; adapter?: string }>;
     if?: string;
-    autoAction?: 'approve' | 'reject';
-    timeoutMs?: number | null;
     adapter?: string;
     harnessId?: string;
     contextMode?: string;
@@ -91,15 +129,6 @@ export function createWorkflowDefinition(options: WorkflowDefinitionOptions = {}
       type: 'sequence',
       id: `${id}__root`,
       nodes: options.steps.map((step) => {
-        if (step.type === 'gate') {
-          return {
-            type: 'gate' as const,
-            id: step.id,
-            prompt: step.prompt ?? 'Gate step',
-            autoAction: step.autoAction ?? 'reject',
-            timeoutMs: step.timeoutMs ?? 60_000,
-          };
-        }
         // agent, shell, function, bus-request and other DAG types all
         // map to 'agent-step' in the primitive runtime.  Tests that exercise
         // pure DAG-scheduler paths (workflow-scheduler.*) access the

@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { MakaioBus } from '@makaio/bus-core';
 import { createTestCall } from '@makaio/test-utils';
-import { createWorkflowCancelSubject, type IWorkflowRunner, type WorkflowRunnerCompletion } from '@makaio/contracts';
+import { createWorkflowCancelSubject, WorkflowDefinitionSchema, WorkflowRunContextSchema } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { WorkflowSubjects } from '../namespace.js';
-import { WorkflowStorageSubjects } from '../storage/namespace.js';
+import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import { createInMemoryAttemptRepository, makeTestInstruction } from '../testing/index.js';
 import { workflowAttemptOutcomeCodec } from '../workflow-attempt-outcome.js';
 import { cancelExecution } from '../workflow-execution-finalizer.js';
@@ -22,7 +23,8 @@ describe('workflow durable cancellation intent', () => {
     setup = undefined;
   });
 
-  it.each(['running', 'paused'] as const)('commits %s owner intent before notifying a controller', async (status) => {
+  it('commits running owner intent before notifying a controller', async () => {
+    const status = 'running';
     const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
     setup = await setupWorkflowExecutorTest({ executionAttemptAuthority: authority });
@@ -144,6 +146,63 @@ describe('workflow durable cancellation intent', () => {
     ).toMatchObject({ status: 'cancelled' });
   });
 
+  it('converges cancellation of a running owner with a historical definition snapshot', async ({ onTestFinished }) => {
+    vi.stubEnv('NODE_ENV', 'test');
+    onTestFinished(() => {
+      vi.unstubAllEnvs();
+    });
+    setup = await setupWorkflowExecutorTest();
+    MakaioBus.registerNamespace(WorkflowStorageNamespace);
+    const call = createTestCall();
+    const workflow = createWorkflowDefinition();
+    const execution = createWorkflowExecution({ workflowId: workflow.id, status: 'running' });
+    const executionId = execution.id;
+    const runContext = WorkflowRunContextSchema.parse({
+      executionId,
+      workflowId: workflow.id,
+      source: { kind: 'definition', workflowId: workflow.id },
+      definitionSnapshot: workflow,
+      coordinatorSessionId: 'owner-session',
+      cancelSubject: `workflow.${executionId}.cancel`,
+      createdAt: 1,
+      terminalAuthority: 'authority',
+    });
+    await MakaioBus.request(call, WorkflowStorageSubjects.setExecutionStart, { execution, runContext });
+
+    const snapshot = {
+      ...workflow,
+      canvasLayout: { approval: { x: 1, y: 2 } }, // legacy-input
+      root: {
+        ...workflow.root,
+        nodes: [
+          { id: 'approval', type: 'gate', prompt: 'Approve?', autoAction: 'reject', timeoutMs: null }, // legacy-input
+        ],
+      },
+    };
+    await setup.dbContext.exec(
+      sql`UPDATE workflow_run_contexts SET definition_snapshot = ${JSON.stringify(snapshot)} WHERE execution_id = ${executionId}`,
+    );
+    expect(WorkflowDefinitionSchema.safeParse(snapshot).success).toBe(false);
+    const stored = await MakaioBus.request(call, WorkflowStorageSubjects.getRunContext, { executionId });
+    expect(stored.runContext?.definitionSnapshot).toEqual(snapshot);
+
+    const events: unknown[] = [];
+    setup.cleanupFns.push(
+      MakaioBus.on(WorkflowSubjects.execution.cancelled, (ctx) => {
+        events.push(ctx.payload);
+      }),
+    );
+    const reason = 'Operator stopped work';
+    await expect(
+      setup.workflowExecutor.acceptAuthorityCancellation(call, executionId, { kind: 'cancelled', reason }),
+    ).resolves.toEqual({ accepted: true, status: 'cancelled' });
+    const settled = await MakaioBus.request(call, WorkflowStorageSubjects.getExecution, { executionId });
+    expect(settled.execution).toMatchObject({ status: 'cancelled', reason });
+    expect(events).toEqual([
+      expect.objectContaining({ executionId, workflowId: workflow.id, reason, completedAt: expect.any(Number) }),
+    ]);
+  });
+
   it('notifies worker control before a lifecycle subscriber waits on slow work', async () => {
     const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
@@ -173,74 +232,5 @@ describe('workflow durable cancellation intent', () => {
       release.resolve();
       await cancelling;
     }
-  });
-
-  it('accepts cancellation and wakes control while the preceding paused subscriber is blocked', async () => {
-    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
-    const runnerResult = Promise.withResolvers<WorkflowRunnerCompletion>();
-    let runnerSignal: AbortSignal | undefined;
-    const runner: IWorkflowRunner = {
-      run(_call, _config, signal) {
-        runnerSignal = signal;
-        return runnerResult.promise;
-      },
-    };
-    setup = await setupWorkflowExecutorTest({ executionAttemptAuthority: authority, workflowRunner: runner });
-    const definition = createWorkflowDefinition();
-    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.set, { workflow: definition });
-    const entered = Promise.withResolvers<void>();
-    const release = Promise.withResolvers<void>();
-    const cancelledEvent = Promise.withResolvers<void>();
-    const events: string[] = [];
-    setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.execution.paused, async () => {
-        events.push('paused');
-        entered.resolve();
-        await release.promise;
-      }),
-    );
-    setup.cleanupFns.push(
-      MakaioBus.on(WorkflowSubjects.execution.cancelled, () => {
-        events.push('cancelled');
-        cancelledEvent.resolve();
-      }),
-    );
-    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
-      workflowId: definition.id,
-    });
-    const attempt = await authority.createAttempt(executionId, makeTestInstruction());
-    let notified = false;
-    setup.cleanupFns.push(
-      MakaioBus.on(createWorkflowCancelSubject(`workflow.${executionId}.cancel`), () => {
-        notified = true;
-      }),
-    );
-    runnerResult.resolve({
-      state: 'uncommitted',
-      result: {
-        executionId,
-        workflowId: definition.id,
-        status: 'paused',
-        pausedAtGateId: 'gate-approve',
-        pausedAtFrameId: 'frame-gate-1',
-      },
-    });
-    try {
-      await entered.promise;
-      await expect(
-        MakaioBus.request(createTestCall(), WorkflowSubjects.cancel, { executionId, reason: 'operator' }),
-      ).resolves.toEqual({
-        cancelled: true,
-      });
-      expect(await authority.readCancellation(attempt.executionAttemptId)).toMatchObject({ reason: 'operator' });
-      expect(notified).toBe(true);
-      expect(runnerSignal?.aborted).toBe(true);
-      expect(events).toEqual(['paused']);
-    } finally {
-      release.resolve();
-    }
-    await cancelledEvent.promise;
-    expect(events).toEqual(['paused', 'cancelled']);
   });
 });

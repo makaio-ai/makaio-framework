@@ -3,7 +3,6 @@ import type {
   WorkflowDefinition,
   WorkflowSequenceNode,
   WorkflowCodeStepNode,
-  WorkflowGateNode,
   WorkflowParallelNode,
   WorkflowIterateNode,
   WorkflowIterateChainNode,
@@ -18,10 +17,6 @@ import { projectWorkflowGraph } from '../projection.js';
 
 function mkCodeStep(id: string): WorkflowCodeStepNode {
   return { type: 'code-step', id };
-}
-
-function mkGate(id: string): WorkflowGateNode {
-  return { type: 'gate', id, prompt: 'approve?', autoAction: 'reject', timeoutMs: 60_000 };
 }
 
 function mkAgentStep(id: string): WorkflowAgentStepNode {
@@ -45,7 +40,7 @@ function mkIterateChain(id: string, body: WorkflowSequenceNode): WorkflowIterate
 }
 
 function mkLoop(id: string, body: WorkflowSequenceNode, maxRounds = 3): WorkflowLoopNode {
-  return { type: 'loop', id, maxRounds, body, gate: { handler: 'my-gate' } };
+  return { type: 'loop', id, maxRounds, body, check: { handler: 'my-check' } };
 }
 
 function mkDefinition(root: WorkflowSequenceNode): WorkflowDefinition {
@@ -195,10 +190,9 @@ describe('walkWorkflowDefinition', () => {
     expect(ancestorPaths['deep']).toEqual(['root', 'par', 'a-seq']);
   });
 
-  it('visits all 8 node types', () => {
+  it('visits all 7 node types', () => {
     const root = mkSequence('root', [
       mkCodeStep('s'),
-      mkGate('g'),
       mkAgentStep('dr'),
       mkParallel('p', { b: mkSequence('p-seq', []) }),
       mkIterate('i', mkSequence('i-body', [])),
@@ -208,7 +202,7 @@ describe('walkWorkflowDefinition', () => {
     const types = new Set<string>();
     walkWorkflowDefinition(root, { enter: (node) => void types.add(node.type) });
     expect(types).toEqual(
-      new Set(['sequence', 'code-step', 'gate', 'agent-step', 'parallel', 'iterate', 'iterate-chain', 'loop']),
+      new Set(['sequence', 'code-step', 'agent-step', 'parallel', 'iterate', 'iterate-chain', 'loop']),
     );
   });
 });
@@ -239,7 +233,6 @@ describe('projectWorkflowGraph', () => {
     const def = mkDefinition(
       mkSequence('root', [
         mkCodeStep('s'),
-        mkGate('g'),
         mkAgentStep('dr'),
         mkParallel('p', { b: mkSequence('p-seq', []) }),
         mkIterate('i', mkSequence('i-body', [])),
@@ -252,7 +245,6 @@ describe('projectWorkflowGraph', () => {
 
     expect(roleMap['root']).toBe('structural');
     expect(roleMap['s']).toBe('leaf');
-    expect(roleMap['g']).toBe('leaf');
     expect(roleMap['dr']).toBe('leaf');
     expect(roleMap['p']).toBe('control');
     expect(roleMap['i']).toBe('control');

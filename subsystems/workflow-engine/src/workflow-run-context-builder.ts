@@ -1,4 +1,4 @@
-import { WorkflowRunContextSchema, type SuspensionStrategy, type WorkflowRunContext } from '@makaio/contracts';
+import { WorkflowRunContextSchema, type WorkflowRunContext } from '@makaio/contracts';
 import type { ExecutorConfig } from './types.js';
 
 /**
@@ -11,9 +11,9 @@ export interface BuildWorkflowRunContextParams {
   readonly workflowId: string;
   /** Session coordinating this execution. */
   readonly coordinatorSessionId: string;
-  /** Source descriptor used to redispatch or inspect this run. */
+  /** Source descriptor used to load or inspect the workflow for this run. */
   readonly source: WorkflowRunContext['source'];
-  /** Optional persisted definition snapshot for resume/replay. */
+  /** Optional persisted definition snapshot for execution or reruns. */
   readonly definitionSnapshot?: WorkflowRunContext['definitionSnapshot'];
   /** Normalized workflow input payload. */
   readonly inputs: WorkflowRunContext['inputs'];
@@ -27,8 +27,6 @@ export interface BuildWorkflowRunContextParams {
   readonly triggerMode?: WorkflowRunContext['triggerMode'];
   /** Optional artifact bound at start. */
   readonly artifactRef?: WorkflowRunContext['artifactRef'];
-  /** Suspension strategy selected by the caller for this execution. */
-  readonly suspensionStrategy?: SuspensionStrategy;
   /** Terminal owner selected by execution dispatch before the context is persisted. */
   readonly terminalAuthority?: WorkflowRunContext['terminalAuthority'];
   /**
@@ -73,7 +71,6 @@ export function buildWorkflowRunContext(
     cancelSubject: `workflow.${params.executionId}.cancel`,
     env: executorConfig.platformDefaults.env ?? {},
     createdAt: Date.now(),
-    suspensionStrategy: params.suspensionStrategy ?? 'wait-in-process',
     ...(params.terminalAuthority !== undefined ? { terminalAuthority: params.terminalAuthority } : {}),
     ...(params.materializationSpec !== undefined ? { materializationSpec: params.materializationSpec } : {}),
   });

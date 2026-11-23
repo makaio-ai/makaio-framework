@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { JsonSchemaRecordSchema, JsonValueSchema } from '../shared/json-value.js';
+import { JsonSchemaRecordSchema } from '../shared/json-value.js';
 import { WorkflowArtifactBindingSchema, WorkflowNodeTypeSchema } from './schemas.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -29,7 +29,7 @@ export const WorkLogExecutionSummarySchema = z.object({
    * Current execution status.
    * Mirrors `WorkflowExecution.status` — kept in sync via event projection.
    */
-  status: z.enum(['pending', 'running', 'paused', 'finalizing', 'completed', 'failed', 'cancelled']),
+  status: z.enum(['pending', 'running', 'finalizing', 'completed', 'failed', 'cancelled']),
   /** Epoch milliseconds when the execution started. */
   startedAt: z.number(),
   /** Epoch milliseconds when the execution reached a terminal status. */
@@ -78,7 +78,7 @@ export const WorkLogFrameEntrySchema = z.object({
    */
   path: z.array(z.string()),
   /** Current or terminal frame status. */
-  status: z.enum(['pending', 'running', 'waiting', 'completed', 'failed', 'skipped', 'cancelled']),
+  status: z.enum(['pending', 'running', 'completed', 'failed', 'skipped', 'cancelled']),
   /** Zero-based attempt index. 0 for first attempt, incremented on retry. */
   attempt: z.number().int().nonnegative(),
   /** Zero-based iteration index for frames inside an iterate node. */
@@ -133,40 +133,6 @@ export const WorkLogArtifactWriteSchema = z.object({
 });
 
 export type WorkLogArtifactWrite = z.infer<typeof WorkLogArtifactWriteSchema>;
-
-// ─────────────────────────────────────────────────────────────
-// Gate Event
-// ─────────────────────────────────────────────────────────────
-
-/**
- * A gate lifecycle event recorded in the WorkLog.
- *
- * One entry per gate state transition. Enables "show me all pending gates
- * across executions" queries without scanning the full frame state.
- */
-export const WorkLogGateEventSchema = z.object({
-  /** Execution this gate belongs to. */
-  executionId: z.string().min(1),
-  /** Node identifier of the gate in the workflow definition. */
-  nodeId: z.string().min(1),
-  /** Frame identifier for the gate's execution frame. */
-  frameId: z.string().min(1),
-  /** Gate status at the time of this event. */
-  status: z.enum(['waiting', 'resumed', 'rejected', 'timed-out', 'cancelled']),
-  /**
-   * Prompt shown to the reviewer, after template interpolation.
-   * Populated when the gate entered `waiting` status.
-   */
-  prompt: z.string().optional(),
-  /** Epoch milliseconds when the gate entered `waiting`. */
-  openedAt: z.number(),
-  /** Epoch milliseconds when the gate left `waiting`. */
-  resolvedAt: z.number().optional(),
-  /** JSON-serializable resume data submitted by the approver. */
-  resumeData: JsonValueSchema.optional(),
-});
-
-export type WorkLogGateEvent = z.infer<typeof WorkLogGateEventSchema>;
 
 // ─────────────────────────────────────────────────────────────
 // Usage Summary
@@ -225,7 +191,6 @@ export const WorkLogStatsSchema = z.object({
   byStatus: z.object({
     pending: z.number().int().nonnegative(),
     running: z.number().int().nonnegative(),
-    paused: z.number().int().nonnegative(),
     finalizing: z.number().int().nonnegative(),
     completed: z.number().int().nonnegative(),
     failed: z.number().int().nonnegative(),

@@ -19,9 +19,8 @@ import type { RuntimeLoadedWorkflow } from './types.js';
 /**
  * Validate that a value matches the {@link RuntimeLoadedWorkflow} shape.
  *
- * Guards against incorrectly structured default exports — anything that
- * looks like a `defineWorkflow()` result (has a `definition` object and a
- * `runtimeHandlers` Map) passes.
+ * Checks the serialized definition and the runtime fields exposed by
+ * `defineWorkflow()`.
  * @param value - Candidate value from the module's default export.
  * @returns The value narrowed to {@link RuntimeLoadedWorkflow}.
  * @throws When the value does not match the expected shape.
@@ -54,12 +53,24 @@ function normalizeWorkflowDefaultExport(value: unknown): RuntimeLoadedWorkflow {
     );
   }
 
-  const zodSchemas = isWorkflowZodSchemas(obj['zodSchemas']) ? obj['zodSchemas'] : undefined;
-  const runtimeLoopGatesExport = obj['runtimeLoopGates'];
-  if (runtimeLoopGatesExport !== undefined && !(runtimeLoopGatesExport instanceof Map)) {
+  let zodSchemas: WorkflowZodSchemas | undefined;
+  if ('zodSchemas' in obj) {
+    const exportedSchemas = obj['zodSchemas'];
+    if (!isWorkflowZodSchemas(exportedSchemas)) {
+      throw new WorkflowError(
+        WorkflowErrorCode.NOT_EXECUTABLE,
+        `Invalid workflow module default export: 'zodSchemas' must be an object with Zod schemas ` +
+          `under 'input', 'config', 'output', or 'artifact'.`,
+      );
+    }
+    zodSchemas = exportedSchemas;
+  }
+
+  const runtimeLoopChecksExport = obj['runtimeLoopChecks'];
+  if (runtimeLoopChecksExport !== undefined && !(runtimeLoopChecksExport instanceof Map)) {
     throw new WorkflowError(
       WorkflowErrorCode.NOT_EXECUTABLE,
-      `Invalid workflow module default export: 'runtimeLoopGates' must be a Map instance when provided.`,
+      `Invalid workflow module default export: 'runtimeLoopChecks' must be a Map instance when provided.`,
     );
   }
 
@@ -67,8 +78,8 @@ function normalizeWorkflowDefaultExport(value: unknown): RuntimeLoadedWorkflow {
     definition: definitionResult.data as RuntimeLoadedWorkflow['definition'],
     runtimeHandlers: obj['runtimeHandlers'] as RuntimeLoadedWorkflow['runtimeHandlers'],
     ...(zodSchemas !== undefined ? { zodSchemas } : {}),
-    ...(runtimeLoopGatesExport !== undefined
-      ? { runtimeLoopGates: runtimeLoopGatesExport as RuntimeLoadedWorkflow['runtimeLoopGates'] }
+    ...(runtimeLoopChecksExport !== undefined
+      ? { runtimeLoopChecks: runtimeLoopChecksExport as RuntimeLoadedWorkflow['runtimeLoopChecks'] }
       : {}),
   };
 }
@@ -79,7 +90,16 @@ function normalizeWorkflowDefaultExport(value: unknown): RuntimeLoadedWorkflow {
  * @returns Whether the value has the builder schema container shape.
  */
 function isWorkflowZodSchemas(value: unknown): value is WorkflowZodSchemas {
-  return typeof value === 'object' && value !== null && !Array.isArray(value) && 'gates' in value;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+
+  const schemas = value as Record<PropertyKey, unknown>;
+  return Reflect.ownKeys(schemas).every((key) => {
+    if (key !== 'input' && key !== 'config' && key !== 'output' && key !== 'artifact') return false;
+    const schema = schemas[key];
+    return (
+      typeof schema === 'object' && schema !== null && 'safeParse' in schema && typeof schema.safeParse === 'function'
+    );
+  });
 }
 
 /**

@@ -7,7 +7,6 @@ import {
   WorkflowNamespace,
   WorkflowSubjects,
   WorkflowWorkerConfigSchema,
-  WorkflowGateNodeSchema,
   WorkflowDefinitionSchema,
   JsonValueSchema,
   type CallContext,
@@ -72,9 +71,6 @@ async function connectOwner(store: ReturnType<typeof createRestartableTempDb>) {
     bus.on(WorkflowSubjects.execution.completed, () => {
       events.push('completed');
     }),
-    bus.on(WorkflowSubjects.execution.paused, () => {
-      events.push('paused');
-    }),
     bus.on(WorkflowSubjects.execution.cancelled, () => {
       events.push('cancelled');
     }),
@@ -98,29 +94,16 @@ async function connectOwner(store: ReturnType<typeof createRestartableTempDb>) {
  * Seed the same portable owner context used by authority-dispatched workflows.
  * @param call - Call context of the test's workflow operation.
  * @param owner - Current composition using real owner storage and Authority.
- * @param status - Worker result whose projection must wait for the owner decision.
  * @returns Immutable attempt identity and a genuine workflow result.
  */
-async function seedOwner(
-  call: CallContext,
-  owner: Awaited<ReturnType<typeof connectOwner>>,
-  status: 'completed' | 'paused',
-) {
+async function seedOwner(call: CallContext, owner: Awaited<ReturnType<typeof connectOwner>>) {
   const executionId = 'cancel-gap-owner';
   const workflow = createWorkflowDefinition({
     id: 'cancel-gap-workflow',
     root: {
       id: 'root',
       type: 'sequence',
-      nodes: [
-        WorkflowGateNodeSchema.parse({
-          id: 'human-review',
-          type: 'gate',
-          prompt: 'Approve the result',
-          autoAction: 'reject',
-          timeoutMs: null,
-        }),
-      ],
+      nodes: [],
     },
   });
   const runContext = {
@@ -136,7 +119,6 @@ async function seedOwner(
     cancelSubject: `workflow.${executionId}.cancel`,
     env: {},
     createdAt: Date.now(),
-    suspensionStrategy: 'wait-in-process' as const,
     terminalAuthority: 'authority' as const,
   };
   await owner.bus.request(call, WorkflowStorageSubjects.setExecutionStart, {
@@ -154,9 +136,7 @@ async function seedOwner(
   const result: WorkflowRunResult = {
     executionId,
     workflowId: workflow.id,
-    ...(status === 'paused'
-      ? { status: 'paused', pausedAtGateId: 'human-review', pausedAtFrameId: 'human-review-frame' }
-      : { status: 'completed' }),
+    status: 'completed',
   };
   return { executionId, executionAttemptId: attempt.executionAttemptId, result };
 }
@@ -172,7 +152,7 @@ describe('workflow owner cancellation recovery', () => {
       let owner: Awaited<ReturnType<typeof connectOwner>> | undefined;
       try {
         owner = await connectOwner(store);
-        const { executionId } = await seedOwner(call, owner, 'completed');
+        const { executionId } = await seedOwner(call, owner);
         await owner.raw.run(sql`UPDATE workflow_run_contexts
           SET definition_snapshot = ${snapshot.storedSnapshot} WHERE execution_id = ${executionId}`);
         const stored = await owner.bus.request(call, WorkflowStorageSubjects.getRunContext, { executionId });
@@ -200,16 +180,13 @@ describe('workflow owner cancellation recovery', () => {
     });
   });
 
-  it.each([
-    'completed',
-    'paused',
-  ] as const)('withholds $0 ACK across restart until the interrupted owner Cancel actually commits', async (status) => {
+  it('withholds the completed ACK across restart until the interrupted owner Cancel commits', async () => {
     const store = createRestartableTempDb('workflow-owner-cancel-gap');
     const call = createTestCall();
     let owner: Awaited<ReturnType<typeof connectOwner>> | undefined;
     try {
       owner = await connectOwner(store);
-      const submission = await seedOwner(call, owner, status);
+      const submission = await seedOwner(call, owner);
       const { executionId, executionAttemptId } = submission;
       // Fail the actual second durable write, not a mocked acceptance callback.
       await owner.raw.run(

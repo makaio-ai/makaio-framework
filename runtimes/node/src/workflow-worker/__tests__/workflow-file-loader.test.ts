@@ -3,6 +3,7 @@ import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import { WorkflowErrorCode } from '@makaio/contracts';
 import { loadWorkflowModule, loadWorkflowModules } from '../workflow-file-loader.js';
 import type { RuntimeLoadedWorkflow } from '../index.js';
@@ -34,9 +35,10 @@ afterEach(async () => {
  * registered handler, so each is a `code-step` node (no `prompt`).
  * @param id - Workflow identifier.
  * @param stepIds - Step IDs to register in the runtime map.
+ * @param exportFields - Additional fields for the workflow default export.
  * @returns ESM module source string.
  */
-function makeWorkflowModuleSource(id: string, stepIds: string[]): string {
+function makeWorkflowModuleSource(id: string, stepIds: string[], exportFields = ''): string {
   const stepEntries = stepIds.map((sid) => `['${sid}', (ctx) => ctx]`).join(', ');
   const codeStepNodes = stepIds.map((sid) => `{ id: '${sid}', type: 'code-step' }`).join(', ');
   return `
@@ -48,7 +50,7 @@ const definition = {
   scope: { type: 'global' },
 };
 const runtimeHandlers = new Map([${stepEntries}]);
-export default { definition, runtimeHandlers };
+export default { definition, runtimeHandlers, ${exportFields} };
 `;
 }
 
@@ -212,6 +214,31 @@ export default { definition, runtimeHandlers };
       await expect(promise).rejects.toThrow(/invalid workflow module/i);
       await expect(promise).rejects.toMatchObject({ code: WorkflowErrorCode.NOT_EXECUTABLE });
     });
+
+    it('rejects a workflow module containing a legacy Gate node', async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      await mkdir(dir, { recursive: true });
+
+      const source = `
+export default {
+  definition: {
+    id: 'legacy-review',
+    root: { id: 'root', type: 'sequence', nodes: [
+      { id: 'approval', type: 'gate', prompt: 'Approve?', autoAction: 'reject', timeoutMs: null }, // legacy-input
+    ] },
+    scope: { type: 'global' },
+  },
+  runtimeHandlers: new Map(),
+};
+`;
+      const filePath = join(dir, 'legacy-review.mjs');
+      await writeFile(filePath, source, 'utf8');
+
+      const promise = loadWorkflowModule({ kind: 'path', path: filePath });
+      await expect(promise).rejects.toMatchObject({ code: WorkflowErrorCode.NOT_EXECUTABLE });
+      await expect(promise).rejects.toThrow(/"path":\s*\[\s*"root",\s*"nodes",\s*0,\s*"type"/);
+    });
   });
 
   describe('kind: source', () => {
@@ -294,6 +321,59 @@ export default { definition, runtimeHandlers: new Map() };
       const promise = loadWorkflowModule({ kind: 'definition', workflowId: 'some-id' });
       await expect(promise).rejects.toThrow(/definition-sourced/i);
       await expect(promise).rejects.toMatchObject({ code: WorkflowErrorCode.NOT_EXECUTABLE });
+    });
+  });
+});
+
+describe('loadWorkflowModule — runtime schemas', () => {
+  it('preserves the exported artifact Zod schema and its validation', async () => {
+    const dir = makeTempDir();
+    tempDirs.push(dir);
+    await mkdir(dir, { recursive: true });
+
+    const source = `
+import { createRequire } from 'node:module';
+const { z } = createRequire(${JSON.stringify(import.meta.url)})('zod');
+export const artifact = z.object({ title: z.string().min(1) });
+${makeWorkflowModuleSource('artifact-schema', [], 'zodSchemas: { artifact }')}
+`;
+    const filePath = join(dir, 'artifact-schema.mjs');
+    await writeFile(filePath, source, 'utf8');
+
+    const loaded = await loadWorkflowModule({ kind: 'path', path: filePath });
+    const { artifact } = (await import(/* @vite-ignore */ pathToFileURL(filePath).href)) as { artifact: unknown };
+    const loadedArtifact = loaded.zodSchemas?.artifact;
+
+    expect(loaded.zodSchemas).toEqual({ artifact });
+    expect(loadedArtifact).toBe(artifact);
+    expect(loadedArtifact?.safeParse({ title: 'Report' }).success).toBe(true);
+    expect(loadedArtifact?.safeParse({ title: 42 }).success).toBe(false);
+  });
+
+  it('preserves an empty schema container', async () => {
+    const loaded = await loadWorkflowModule({
+      kind: 'source',
+      filename: 'empty-schemas.mjs',
+      source: makeWorkflowModuleSource('empty-schemas', [], 'zodSchemas: {}'),
+    });
+
+    expect(loaded.zodSchemas).toEqual({});
+  });
+
+  it.each([
+    { name: 'a retired schema key', schemas: '{ gates: new Map() }' }, // legacy-input
+    { name: 'a non-schema value', schemas: '{ artifact: { safeParse: true } }' }, // legacy-input
+    { name: 'an array container', schemas: '[]' },
+  ])('rejects a module with $name', async ({ schemas }) => {
+    const promise = loadWorkflowModule({
+      kind: 'source',
+      filename: 'invalid-schemas.mjs',
+      source: makeWorkflowModuleSource('invalid-schemas', [], `zodSchemas: ${schemas}`),
+    });
+
+    await expect(promise).rejects.toMatchObject({
+      code: WorkflowErrorCode.NOT_EXECUTABLE,
+      message: expect.stringContaining('zodSchemas'),
     });
   });
 });
@@ -570,18 +650,18 @@ export default {
 });
 
 // ─────────────────────────────────────────────────────────────
-// runtimeLoopGates round-trip
+// runtimeLoopChecks round-trip
 // ─────────────────────────────────────────────────────────────
 
 /**
  * Build ESM source for a workflow whose root contains a `loop` node with
- * a body sequence and a gate, plus a `runtimeLoopGates` Map carrying the
- * gate handler function.
+ * a body sequence and a check, plus a `runtimeLoopChecks` Map carrying the
+ * check handler function.
  * @param id - Workflow identifier.
- * @param gateHandlerName - The gate handler name registered in the map.
+ * @param checkHandlerName - The check handler name registered in the map.
  * @returns ESM module source string.
  */
-function makeLoopWorkflowModuleSource(id: string, gateHandlerName: string): string {
+function makeLoopWorkflowModuleSource(id: string, checkHandlerName: string): string {
   return `
 const definition = {
   id: '${id}',
@@ -601,8 +681,8 @@ const definition = {
             { id: 'step1', type: 'code-step' },
           ],
         },
-        gate: {
-          handler: '${gateHandlerName}',
+        check: {
+          handler: '${checkHandlerName}',
           input: 'frames.step1.output',
         },
       },
@@ -612,13 +692,13 @@ const definition = {
   scope: { type: 'global' },
 };
 const runtimeHandlers = new Map([['step1', (ctx) => ctx]]);
-const runtimeLoopGates = new Map([['${gateHandlerName}', (_input, _config, _ctx) => ({ kind: 'pass' })]]);
-export default { definition, runtimeHandlers, runtimeLoopGates };
+const runtimeLoopChecks = new Map([['${checkHandlerName}', (_input, _config, _ctx) => ({ kind: 'pass' })]]);
+export default { definition, runtimeHandlers, runtimeLoopChecks };
 `;
 }
 
-describe('loadWorkflowModule — runtimeLoopGates round-trip', () => {
-  it('preserves runtimeLoopGates through the file-loader round-trip (path source)', async () => {
+describe('loadWorkflowModule — runtimeLoopChecks round-trip', () => {
+  it('preserves runtimeLoopChecks through the file-loader round-trip (path source)', async () => {
     const dir = makeTempDir();
     tempDirs.push(dir);
     await mkdir(dir, { recursive: true });
@@ -639,18 +719,19 @@ describe('loadWorkflowModule — runtimeLoopGates round-trip', () => {
     expect(rootNodes[0]).toMatchObject({
       type: 'loop',
       body: { nodes: [{ id: 'step1', type: 'code-step' }] },
+      check: { handler: 'convergence-check', input: 'frames.step1.output' },
     });
 
-    // runtimeLoopGates map is carried through
-    expect(loaded.runtimeLoopGates).toBeDefined();
-    expect(loaded.runtimeLoopGates).toBeInstanceOf(Map);
-    expect(loaded.runtimeLoopGates!.size).toBe(1);
-    expect(loaded.runtimeLoopGates!.has('convergence-check')).toBe(true);
-    expect(loaded.runtimeLoopGates!.get('convergence-check')).toBeTypeOf('function');
+    // runtimeLoopChecks map is carried through
+    expect(loaded.runtimeLoopChecks).toBeDefined();
+    expect(loaded.runtimeLoopChecks).toBeInstanceOf(Map);
+    expect(loaded.runtimeLoopChecks!.size).toBe(1);
+    expect(loaded.runtimeLoopChecks!.has('convergence-check')).toBe(true);
+    expect(loaded.runtimeLoopChecks!.get('convergence-check')).toBeTypeOf('function');
   });
 
-  it('preserves runtimeLoopGates through the inline source round-trip', async () => {
-    const source = makeLoopWorkflowModuleSource('inline-loop-wf', 'quality-gate');
+  it('preserves runtimeLoopChecks through the inline source round-trip', async () => {
+    const source = makeLoopWorkflowModuleSource('inline-loop-wf', 'quality-check');
 
     const loaded = await loadWorkflowModule({
       kind: 'source',
@@ -658,12 +739,12 @@ describe('loadWorkflowModule — runtimeLoopGates round-trip', () => {
       source,
     });
 
-    expect(loaded.runtimeLoopGates).toBeDefined();
-    expect(loaded.runtimeLoopGates!.has('quality-gate')).toBe(true);
-    expect(loaded.runtimeLoopGates!.get('quality-gate')).toBeTypeOf('function');
+    expect(loaded.runtimeLoopChecks).toBeDefined();
+    expect(loaded.runtimeLoopChecks!.has('quality-check')).toBe(true);
+    expect(loaded.runtimeLoopChecks!.get('quality-check')).toBeTypeOf('function');
   });
 
-  it('omits runtimeLoopGates when the export does not include one', async () => {
+  it('omits runtimeLoopChecks when the export does not include one', async () => {
     const dir = makeTempDir();
     tempDirs.push(dir);
     await mkdir(dir, { recursive: true });
@@ -674,32 +755,32 @@ describe('loadWorkflowModule — runtimeLoopGates round-trip', () => {
 
     const loaded = await loadWorkflowModule({ kind: 'path', path: filePath });
 
-    expect(loaded.runtimeLoopGates).toBeUndefined();
+    expect(loaded.runtimeLoopChecks).toBeUndefined();
   });
 
-  it('throws when runtimeLoopGates is defined but not a Map instance', async () => {
+  it('throws when runtimeLoopChecks is defined but not a Map instance', async () => {
     const dir = makeTempDir();
     tempDirs.push(dir);
     await mkdir(dir, { recursive: true });
 
-    // runtimeLoopGates is a plain object, not a Map.
+    // runtimeLoopChecks is a plain object, not a Map.
     const content = `
 const definition = {
-  id: 'bad-gates',
-  name: 'bad-gates',
+  id: 'bad-loop-checks',
+  name: 'bad-loop-checks',
   root: { id: 'root', type: 'sequence', nodes: [] },
   triggers: [],
   scope: { type: 'global' },
 };
 const runtimeHandlers = new Map();
-const runtimeLoopGates = { 'my-gate': () => ({ kind: 'pass' }) };
-export default { definition, runtimeHandlers, runtimeLoopGates };
+const runtimeLoopChecks = { 'my-check': () => ({ kind: 'pass' }) };
+export default { definition, runtimeHandlers, runtimeLoopChecks };
 `;
-    const filePath = join(dir, 'bad-gates.mjs');
+    const filePath = join(dir, 'bad-loop-checks.mjs');
     await writeFile(filePath, content, 'utf8');
 
     const promise = loadWorkflowModule({ kind: 'path', path: filePath });
-    await expect(promise).rejects.toThrow(/runtimeLoopGates/i);
+    await expect(promise).rejects.toThrow(/runtimeLoopChecks/i);
     await expect(promise).rejects.toMatchObject({ code: WorkflowErrorCode.NOT_EXECUTABLE });
   });
 });

@@ -1,5 +1,5 @@
-import type { WorkflowExecution, WorkflowWorkerConfig } from '@makaio/contracts';
-import { WorkflowNamespace } from '@makaio/contracts';
+import type { WorkflowExecution, WorkflowFrameState, WorkflowWorkerConfig } from '@makaio/contracts';
+import { WorkflowFrameStateSchema, WorkflowNamespace } from '@makaio/contracts';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '@makaio/subsystem-workflow-engine';
 import { createBusInstance } from '@makaio/bus-core';
 
@@ -23,7 +23,6 @@ export function makeWorkerConfig(overrides?: Partial<WorkflowWorkerConfig>): Wor
     env: {},
     coordinatorSessionId: 'session-1',
     cancelSubject: 'workflow.wfx-1.cancel',
-    suspensionStrategy: 'wait-in-process',
     ...overrides,
   };
 }
@@ -31,8 +30,8 @@ export function makeWorkerConfig(overrides?: Partial<WorkflowWorkerConfig>): Wor
 /**
  * Register in-memory workflow storage handlers on a bus instance.
  *
- * Provides the minimum storage surface the orchestrator needs for a zero-step
- * workflow run, including the atomic start checkpoint subject.
+ * Provides execution lifecycle storage, including the atomic start checkpoint
+ * and frame writes during a run.
  * @param bus - Bus instance to register handlers on.
  * @returns Tuple of cleanup function and execution store.
  */
@@ -40,6 +39,7 @@ export function registerInMemoryStorage(
   bus: ReturnType<typeof createBusInstance>,
 ): [() => void, Map<string, WorkflowExecution>] {
   const executions = new Map<string, WorkflowExecution>();
+  const frames = new Map<string, { executionId: string; frame: WorkflowFrameState }>();
 
   const offSet = bus.on(WorkflowStorageSubjects.setExecution, (ctx) => {
     const execution = ctx.payload.execution as WorkflowExecution;
@@ -70,12 +70,19 @@ export function registerInMemoryStorage(
     ctx.setResult({ id: ctx.payload.span.stepId });
   });
 
+  const offFrame = bus.on(WorkflowStorageSubjects.setFrame, (ctx) => {
+    const { executionId, frame } = ctx.payload;
+    frames.set(frame.frameId, { executionId, frame: WorkflowFrameStateSchema.parse(frame) });
+    ctx.setResult({ frameId: frame.frameId });
+  });
+
   return [
     () => {
       offSet();
       offSetExecutionStart();
       offUpdate();
       offSpan();
+      offFrame();
     },
     executions,
   ];
