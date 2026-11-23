@@ -236,6 +236,7 @@ export {
   ALLOCATION_LISTING_MAX_LIMIT,
   ALLOCATION_SCOPE_BLOCK_REASONS,
   AllocationListingCompletenessSchema,
+  UnknownAllocationListingCompletenessSchema,
   AllocationListingRequestSchema,
   AllocationObservationPageSchema,
   AllocationObservationSchema,

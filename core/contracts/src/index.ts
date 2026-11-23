@@ -2272,3 +2272,22 @@ export type {
   DefinedAutomationTrigger,
   ExtensionAutomationTriggersContribution,
 } from './automation-trigger/index.js';
+
+export {
+  CoreOutcomeRefusalCodeSchema,
+  JobRunEndingSchema,
+  JobRunErrorCodeSchema,
+  JobRunOutcomeNamespace,
+  JobRunOutcomeSchemas,
+  OutcomeSubmitRequestSchema,
+  OutcomeSubmitResponseSchema,
+} from './workflow/job-run-outcome.js';
+export type {
+  CloseJobRunInput,
+  CoreOutcomeRefusalCode,
+  JobRunCapability,
+  JobRunEnding,
+  JobRunErrorCode,
+  OutcomeSubmitRequest,
+  OutcomeSubmitResponse,
+} from './workflow/job-run-outcome.js';
