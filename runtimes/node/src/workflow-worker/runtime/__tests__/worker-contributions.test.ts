@@ -1,8 +1,11 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import { ToolSubjects, WorkflowSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
+import { bootWorkerBus, bootWorkerRuntime } from '../worker-boot.js';
 import { loadWorkerRuntimeContributions } from '../worker-contributions.js';
 
 describe('loadWorkerRuntimeContributions', () => {
@@ -37,7 +40,7 @@ describe('loadWorkerRuntimeContributions', () => {
     const result = await loadWorkerRuntimeContributions([toolsEntrypoint, adaptersEntrypoint]);
 
     expect(result.toolsets).toHaveLength(1);
-    expect(result.toolsets[0]?.metadata.name).toBe('tools');
+    expect(result.toolsets[0]?.toolset.metadata.name).toBe('tools');
   });
 
   it('accepts an empty verified identity realization', async () => {
@@ -55,7 +58,7 @@ describe('loadWorkerRuntimeContributions', () => {
       signal: new AbortController().signal,
     });
 
-    expect(result.toolsets[0]?.metadata.name).toBe('present');
+    expect(result.toolsets[0]?.toolset.metadata.name).toBe('present');
   });
 
   it('binds the worker bus to the loaded extension as its carrier', async () => {
@@ -69,11 +72,65 @@ describe('loadWorkerRuntimeContributions', () => {
       signal: new AbortController().signal,
     });
 
-    const reported: unknown = JSON.parse(result.toolsets[0]?.metadata.name ?? 'null');
+    const reported: unknown = JSON.parse(result.toolsets[0]?.toolset.metadata.name ?? 'null');
     expect(reported).toEqual({
       caller: { kind: 'makaio.extension', id: 'carrier-ext' },
       extensionName: 'carrier-ext',
     });
+  });
+
+  it('uses the loaded extension as the caller of a tool request in the worker runtime', async () => {
+    const entrypoint = path.join(root, 'lookup.mjs');
+    await fs.writeFile(
+      entrypoint,
+      `import { z } from ${JSON.stringify(import.meta.resolve('zod'))};
+      const getExecution = ${JSON.stringify(WorkflowSubjects.getExecution)};
+      const tool = {
+        metadata: { name: 'lookup-execution', description: 'Look up a workflow execution' },
+        inputSchema: z.object({ executionId: z.string() }),
+        outputSchema: z.object({ found: z.boolean() }),
+        async execute(input, { bus, call }) {
+          const { execution } = await bus.request(call, getExecution, input);
+          return { success: true, data: { found: execution !== null } };
+        },
+      };
+      export default {
+        name: 'lookup-extension',
+        displayName: 'Lookup',
+        tools: { createToolsets: () => [{
+          metadata: { name: 'lookup', description: 'Lookup tools', version: '1.0.0' },
+          tools: { 'lookup-execution': tool },
+        }] },
+      };`,
+    );
+    const handle = await bootWorkerBus({ busAuth: { kind: 'none' } });
+    const captureCall = vi.fn();
+    const unsubscribe = handle.bus.on(WorkflowSubjects.getExecution, (ctx) => {
+      captureCall(ctx.call);
+      ctx.setResult({ execution: null });
+    });
+    const principal = { kind: 'makaio.host', id: 'tool-requester' } as const;
+
+    try {
+      const contributions = await loadWorkerRuntimeContributions([entrypoint], { bus: handle.bus });
+      const runtime = await bootWorkerRuntime(handle, contributions);
+      try {
+        const result = await handle.bus.request(createTestCall({ principal }), ToolSubjects.execute, {
+          toolName: 'lookup-execution',
+          input: { executionId: 'run' },
+        });
+
+        expect(result).toEqual({ success: true, data: { found: false } });
+        expect(captureCall).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ caller: { kind: 'makaio.extension', id: 'lookup-extension' }, principal }),
+        );
+      } finally {
+        await runtime.close();
+      }
+    } finally {
+      unsubscribe();
+      await handle.close();
+    }
   });
 
   it('leaves the bus unset when no worker-local bus is supplied', async () => {
@@ -84,7 +141,7 @@ describe('loadWorkerRuntimeContributions', () => {
     );
     const result = await loadWorkerRuntimeContributions([noBusEntrypoint]);
 
-    expect(result.toolsets[0]?.metadata.name).toBe('unset');
+    expect(result.toolsets[0]?.toolset.metadata.name).toBe('unset');
   });
 
   it('throws a clear error when a toolset factory reads open contributions', async () => {

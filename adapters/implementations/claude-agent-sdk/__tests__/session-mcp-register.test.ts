@@ -114,18 +114,21 @@ describe('ClaudeConnectorSession — MCP bus registration', () => {
       }),
     );
 
-    const registration = new McpSessionRegistration({
-      bus: {} as never,
-      adapterId: 'test-adapter',
-      adapterName: 'claude-agent-sdk',
-      agentId: 'test-agent',
-      cwd: '/tmp',
-      model: 'claude-sonnet',
-      env: {},
-      contextEnv: {},
-      sessionId: 'makaio-session-race',
-      mcpServerPort: SEEDED_PORT,
-    });
+    const registration = new McpSessionRegistration(
+      {
+        bus: {} as never,
+        adapterId: 'test-adapter',
+        adapterName: 'claude-agent-sdk',
+        agentId: 'test-agent',
+        cwd: '/tmp',
+        model: 'claude-sonnet',
+        env: {},
+        contextEnv: {},
+        sessionId: 'makaio-session-race',
+        mcpServerPort: SEEDED_PORT,
+      },
+      MakaioBus,
+    );
 
     const pending = registration.register(createTestCall(), 'adapter-session-race');
     registration.unregister(createTestCall());
@@ -148,17 +151,20 @@ describe('ClaudeConnectorSession — MCP bus registration', () => {
         ctx.setResult({});
       }),
     );
-    const registration = new McpSessionRegistration({
-      bus: {} as never,
-      adapterId: 'test-adapter',
-      adapterName: 'claude-agent-sdk',
-      agentId: 'test-agent',
-      cwd: '/tmp',
-      model: 'claude-sonnet',
-      env: {},
-      contextEnv: {},
-      sessionId: 'makaio-session-rotate',
-    });
+    const registration = new McpSessionRegistration(
+      {
+        bus: {} as never,
+        adapterId: 'test-adapter',
+        adapterName: 'claude-agent-sdk',
+        agentId: 'test-agent',
+        cwd: '/tmp',
+        model: 'claude-sonnet',
+        env: {},
+        contextEnv: {},
+        sessionId: 'makaio-session-rotate',
+      },
+      MakaioBus,
+    );
     const operation = createTestCall({ principal: PERSON });
     await registration.register(operation, 'adapter-session-rotate');
 

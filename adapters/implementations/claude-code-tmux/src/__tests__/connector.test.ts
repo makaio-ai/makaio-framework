@@ -9,7 +9,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import type { IPtyProcess } from '@makaio/subsystem-native-session-supervisor';
 import { MakaioBus } from '@makaio/bus-core';
-import { createTestCall } from '@makaio/test-utils';
+import { createTestBusInstance, createTestCall, makeStubExtensionBus } from '@makaio/test-utils';
 import { McpSubjects } from '@makaio/contracts';
 import { CONNECTOR_EXIT_OBSERVATION_MS } from '@makaio/ai-adapters-core';
 import { ClaudeCodeClientSubjects, CLAUDE_CODE_HOOK_SESSION_START } from '@makaio/client-claude-code/runtime';
@@ -174,9 +174,27 @@ import type { ClaudeCodeTmuxAgentConfig } from '../types.js';
 // ---------------------------------------------------------------------------
 
 const TEST_CWD = '/tmp';
+const CARRIER = { kind: 'makaio.extension', id: 'claude-code-tmux' };
 
+/**
+ * Create an isolated carrier with a working hook-wiring service.
+ * @returns Adapter carrier bus for MCP lifecycle tests.
+ */
+function makeMcpTestBus(): ReturnType<typeof makeStubExtensionBus> {
+  const bus = makeStubExtensionBus(createTestBusInstance(), CARRIER.id);
+  bus.on(ClaudeCodeClientSubjects.wiring.apply, (ctx) => {
+    ctx.setResult({ applied: 1, skipped: 0 });
+  });
+  return bus;
+}
+
+/**
+ * Create a connector using the supplied carrier or the default test bus.
+ * @param overrides - Connector config overrides.
+ * @returns Connector with its scoped bus initialized.
+ */
 async function makeConnector(overrides: Partial<ClaudeCodeTmuxAgentConfig> = {}): Promise<ClaudeCodeTmuxConnector> {
-  const bus = await ClaudeCodeTmuxConnectorNamespace.scopedBus(MakaioBus);
+  const bus = await ClaudeCodeTmuxConnectorNamespace.scopedBus(overrides.globalBus ?? MakaioBus);
   return new ClaudeCodeTmuxConnector({
     bus,
     globalBus: MakaioBus,
@@ -363,7 +381,10 @@ describe('ClaudeCodeTmuxConnector', () => {
     });
 
     it('registers a pinned MCP session and writes the makaio MCP server before spawning', async () => {
+      const carrierBus = makeMcpTestBus();
+      const call = createTestCall({ principal: { kind: 'makaio.extension', id: 'requesting-extension' } });
       const connector = await makeConnector({
+        globalBus: carrierBus,
         sessionId: 'makaio-session-1',
         agentId: 'agent-1',
         env: {
@@ -377,17 +398,19 @@ describe('ClaudeCodeTmuxConnector', () => {
       const registrations: unknown[] = [];
       const mcpWrites: unknown[] = [];
 
-      MakaioBus.on(McpSubjects.session.register, (ctx) => {
+      carrierBus.on(McpSubjects.session.register, (ctx) => {
+        expect(ctx.call).toMatchObject({ caller: CARRIER, principal: call.principal });
         registrations.push(ctx.payload);
         ctx.setResult({ port: 4123 });
       });
-      MakaioBus.on(ClaudeCodeClientSubjects.config.mcpServers.add, (ctx) => {
+      carrierBus.on(ClaudeCodeClientSubjects.config.mcpServers.add, (ctx) => {
+        expect(ctx.call).toMatchObject({ caller: CARRIER, principal: call.principal });
         mcpWrites.push(ctx.payload);
         ctx.setResult({ added: true, replaced: false });
       });
       fireSessionStart();
 
-      await connector.initialize({ call: createTestCall() });
+      await connector.initialize({ call });
 
       expect(registrations).toHaveLength(1);
       expect(registrations[0]).toMatchObject({
@@ -463,8 +486,10 @@ describe('ClaudeCodeTmuxConnector', () => {
     });
 
     it('wires hooks into the session config directory using user scope', async () => {
-      MakaioBus.__resetHandlers?.();
+      const carrierBus = makeStubExtensionBus(createTestBusInstance(), CARRIER.id);
+      const call = createTestCall({ principal: { kind: 'makaio.extension', id: 'requesting-extension' } });
       const connector = await makeConnector({
+        globalBus: carrierBus,
         sessionId: 'makaio-session-1',
         env: { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/tmp/isolated-claude-config' },
         clientExecution: {
@@ -477,13 +502,14 @@ describe('ClaudeCodeTmuxConnector', () => {
       });
       const wiringRequests: unknown[] = [];
 
-      MakaioBus.on(ClaudeCodeClientSubjects.wiring.apply, (ctx) => {
+      carrierBus.on(ClaudeCodeClientSubjects.wiring.apply, (ctx) => {
+        expect(ctx.call).toMatchObject({ caller: CARRIER, principal: call.principal });
         wiringRequests.push(ctx.payload);
         ctx.setResult({ applied: 1, skipped: 0 });
       });
       fireSessionStart();
 
-      await connector.initialize({ call: createTestCall() });
+      await connector.initialize({ call });
 
       expect(wiringRequests).toHaveLength(1);
       expect(wiringRequests.at(-1)).toMatchObject({
@@ -895,28 +921,31 @@ describe('ClaudeCodeTmuxConnector', () => {
     });
 
     it('removes the MCP server and unregisters the MCP session', async () => {
-      const connector = await makeConnector();
+      const carrierBus = makeMcpTestBus();
+      const connector = await makeConnector({ globalBus: carrierBus });
       const removals: unknown[] = [];
       const unregisters: unknown[] = [];
 
-      MakaioBus.on(McpSubjects.session.register, (ctx) => {
+      carrierBus.on(McpSubjects.session.register, (ctx) => {
         ctx.setResult({ port: 4123 });
       });
-      MakaioBus.on(ClaudeCodeClientSubjects.config.mcpServers.add, (ctx) => {
+      carrierBus.on(ClaudeCodeClientSubjects.config.mcpServers.add, (ctx) => {
         ctx.setResult({ added: true, replaced: false });
       });
-      MakaioBus.on(ClaudeCodeClientSubjects.config.mcpServers.remove, (ctx) => {
+      carrierBus.on(ClaudeCodeClientSubjects.config.mcpServers.remove, (ctx) => {
+        expect(ctx.call).toMatchObject({ caller: CARRIER, principal: CARRIER });
         removals.push(ctx.payload);
         ctx.setResult({ removed: true });
       });
-      MakaioBus.on(McpSubjects.session.unregister, (ctx) => {
+      carrierBus.on(McpSubjects.session.unregister, (ctx) => {
+        expect(ctx.call).toMatchObject({ caller: CARRIER, principal: CARRIER });
         unregisters.push(ctx.payload);
         ctx.setResult({});
       });
       fireSessionStart();
       await connector.initialize({ call: createTestCall() });
 
-      await connector.close(createTestCall());
+      await connector.close(carrierBus.own('stop'));
 
       expect(removals).toHaveLength(1);
       expect(removals[0]).toMatchObject({ projectDir: TEST_CWD });

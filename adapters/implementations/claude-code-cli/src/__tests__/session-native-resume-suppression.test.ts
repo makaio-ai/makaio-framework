@@ -105,6 +105,7 @@ function makeHandle(useNativeResume?: boolean): MessageHandle {
 async function makeSession(): Promise<ClaudeCliSession> {
   const config: ClaudeCliSessionConfig = {
     bus: await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus),
+    globalBus: MakaioBus,
     adapterId: 'adapter-test',
     adapterName: 'claude-code-cli',
     agentId: 'agent-test',

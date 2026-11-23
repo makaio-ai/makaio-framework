@@ -92,6 +92,7 @@ describe('ClaudeCliSession shutdown vs queue processing', () => {
     const onTurnStart = vi.fn();
     const session = new ClaudeCliSession({
       bus,
+      globalBus: MakaioBus,
       adapterId: 'adapter-test',
       adapterName: 'claude-code-cli',
       agentId: 'agent-test',
@@ -165,6 +166,7 @@ describe('ClaudeCliSession shutdown vs queue processing', () => {
     const bus = await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus);
     const session = new ClaudeCliSession({
       bus,
+      globalBus: MakaioBus,
       adapterId: 'adapter-test',
       adapterName: 'claude-code-cli',
       agentId: 'agent-test',
@@ -210,6 +212,7 @@ describe('ClaudeCliSession shutdown vs queue processing', () => {
     const bus = await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus);
     const session = new ClaudeCliSession({
       bus,
+      globalBus: MakaioBus,
       adapterId: 'adapter-test',
       adapterName: 'claude-code-cli',
       agentId: 'agent-test',

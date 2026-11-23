@@ -1,7 +1,7 @@
 import type { ProceduralConnectorSession, ProcessingState } from '@makaio/ai-adapters-core';
 import { MakaioBus } from '@makaio/bus-core';
-import { McpSubjects } from '@makaio/contracts';
-import { createTestBusInstance, createTestCall } from '@makaio/test-utils';
+import { McpSubjects, type CallContext } from '@makaio/contracts';
+import { createTestBusInstance, createTestCall, makeStubExtensionBus } from '@makaio/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CursorSdkProviderConfig } from '../schemas.js';
 
@@ -137,6 +137,44 @@ describe('CursorSdkConnector', () => {
     });
     expect(JSON.stringify(registrations[0])).not.toContain('selected-secret');
     expect(JSON.stringify(registrations[0])).not.toContain('opposing-secret');
+  });
+
+  it('registers MCP as the adapter carrier and preserves the initializing principal', async () => {
+    const carrierBus = makeStubExtensionBus(createTestBusInstance(), 'cursor-sdk');
+    const principal = { kind: 'acme.person', id: 'cursor-initializer' };
+    const calls: CallContext[] = [];
+    carrierBus.on(McpSubjects.session.register, (ctx) => {
+      calls.push(ctx.call);
+      ctx.setResult({ port: 4123 });
+    });
+    const connector = await createConnector(undefined, carrierBus);
+
+    await connector.initialize({ call: createTestCall({ principal }) });
+
+    expect(calls).toEqual([
+      expect.objectContaining({ caller: { kind: 'makaio.extension', id: 'cursor-sdk' }, principal }),
+    ]);
+    await connector.close();
+  });
+
+  it('unregisters the MCP session with the adapter carrier on close', async () => {
+    const carrierBus = makeStubExtensionBus(createTestBusInstance(), 'cursor-sdk');
+    const stop = carrierBus.own('stop');
+    const unregistrations: Array<{ adapterSessionId: string; call: CallContext }> = [];
+    carrierBus.on(McpSubjects.session.unregister, (ctx) => {
+      unregistrations.push({ adapterSessionId: ctx.payload.adapterSessionId, call: ctx.call });
+      ctx.setResult({});
+    });
+    const connector = await createConnector(undefined, carrierBus);
+    const call = createTestCall();
+    await connector.initialize({ call });
+    const adapterSessionId = await connector.getAdapterSessionId(call);
+
+    await connector.close();
+
+    expect(unregistrations).toEqual([
+      { adapterSessionId, call: expect.objectContaining({ caller: stop.caller, principal: stop.principal }) },
+    ]);
   });
 
   it('removes all turn handlers on close so only a same-agent successor receives turn events', async () => {

@@ -1,3 +1,4 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 import type { CallContext } from '@makaio/core';
 import type {
   AIReasoningLevel,
@@ -80,6 +81,8 @@ export type OnTurnCompleteCallback = (handle: MessageHandle, result: MessageResu
  * Session configuration for the Claude Code CLI session.
  */
 export interface ClaudeCliSessionConfig extends ConnectorSessionConfig<ClaudeCodeCliConnectorBus> {
+  /** Adapter carrier bus used for MCP registration and cleanup. */
+  globalBus: Pick<IMakaioBus, 'requestOptional' | 'own'>;
   /** Agent ID for event correlation */
   agentId: string;
   /** Callback to emit SDK events through connector (for metadata injection) */

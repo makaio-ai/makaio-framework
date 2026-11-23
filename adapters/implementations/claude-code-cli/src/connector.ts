@@ -99,6 +99,7 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
 
     const sessionConfig: ClaudeCliSessionConfig = {
       bus: this.config.bus as ClaudeCodeCliConnectorBus,
+      globalBus: this.globalBus,
       adapterId: this.adapterId,
       adapterName: this.adapterName,
       agentId: this.agentId,

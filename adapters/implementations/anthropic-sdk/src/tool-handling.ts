@@ -20,7 +20,7 @@
  *         │
  *         └─► executeTool()
  *               ├─► emitSdkEvent(tool_started)
- *               ├─► MakaioBus.request(ToolSubjects.execute)
+ *               ├─► globalBus.request(call, ToolSubjects.execute)
  *               └─► emitSdkEvent(tool_completed)
  * ```
  *
@@ -77,7 +77,7 @@ const ADAPTER_LABEL = 'AnthropicSdkAgent';
  *
  * The handler receives `AgentToolApproveRequest` from the connector (already
  * transformed via toGlobalToolApproval), enriches with context if needed,
- * and forwards to global MakaioBus.
+ * and forwards it to `AgentSubjects.toolApprove` on the adapter's carrier bus.
  * @param connector - Anthropic SDK connector (needs only `on` method)
  * @param context - Adapter context for request enrichment (static or lazy callback)
  * @returns Unsubscribe function

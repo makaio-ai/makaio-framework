@@ -422,7 +422,7 @@ async function initializeOneEnabledAdapter(
     platformDefaults,
     definitionProviders: adapter.providers,
     clientId,
-    globalBus: bus,
+    globalBus: adapter.carrierBus,
   });
 
   if (!isCurrentAdapter(adapter)) {

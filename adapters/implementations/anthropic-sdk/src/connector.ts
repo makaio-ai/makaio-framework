@@ -18,9 +18,9 @@ import { resolveAnthropicConstructorAuth } from './constructor-auth.js';
  * 3. If tool_use blocks present, execute tools via Bus RPC and recurse
  * 4. When no tool_use blocks, mark turn complete
  *
- * Tools are fetched from ToolRegistry via MakaioBus.request(ToolSubjects.list)
- * on the first turn. Tool execution routes through MakaioBus.request(ToolSubjects.execute)
- * to the ToolRegistry, which validates input and executes the tool handler.
+ * Tools are fetched from ToolRegistry with a ToolSubjects.list request on the adapter's
+ * carrier bus (`globalBus`) on the first turn. Tool execution sends ToolSubjects.execute on
+ * the same bus to the ToolRegistry, which validates input and executes the tool handler.
  *
  * Authentication is resolved once by the central adapter runtime and delivered
  * through the Anthropic constructor target.

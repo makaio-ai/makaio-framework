@@ -110,6 +110,7 @@ function makeHandle(): MessageHandle {
 async function makeSession(onTurnComplete?: OnTurnCompleteCallback): Promise<ClaudeCliSession> {
   return new ClaudeCliSession({
     bus: await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus),
+    globalBus: MakaioBus,
     adapterId: 'adapter-1',
     adapterName: 'claude-code-cli',
     agentId: 'agent-1',

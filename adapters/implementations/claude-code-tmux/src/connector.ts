@@ -13,7 +13,6 @@ import {
   type ConnectorStartOptions,
 } from '@makaio/ai-adapters-core';
 import { readClaudeProviderBaseUrl, resolveClaudeProcessEnv } from '@makaio/ai-adapters-claude-process-shared';
-import { MakaioBus } from '@makaio/bus-core';
 import { isTmuxAvailable, TmuxBackend } from '@makaio/subsystem-native-session-supervisor';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
 import { McpSubjects, type CallContext, type ConnectorTeardownResult } from '@makaio/contracts';
@@ -128,7 +127,7 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
   private async ensureHookWiring(call: CallContext, projectDir: string, configDir: string): Promise<void> {
     const makaioCommand = process.argv[1] ?? 'makaio';
     try {
-      await MakaioBus.request(call, ClaudeCodeClientSubjects.wiring.apply, {
+      await this.globalBus.request(call, ClaudeCodeClientSubjects.wiring.apply, {
         scope: 'user',
         projectDir,
         makaioCommand,
@@ -156,7 +155,7 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
    * @param projectDir - Project directory whose `.mcp.json` Claude Code reads.
    */
   private async registerMcpSession(call: CallContext, projectDir: string): Promise<void> {
-    const result = await MakaioBus.requestOptional(call, McpSubjects.session.register, {
+    const result = await this.globalBus.requestOptional(call, McpSubjects.session.register, {
       adapterSessionId: this.claudeSessionId,
       agentId: this.agentId,
       adapterId: this.adapterId,
@@ -183,7 +182,7 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
     const mcpServerName = `makaio-${this.claudeSessionId.slice(0, 8)}`;
 
     try {
-      const installed = await addMcpServerToProject(call, projectDir, mcpServerName, {
+      const installed = await addMcpServerToProject(this.globalBus, call, projectDir, mcpServerName, {
         type: 'http',
         url: `http://127.0.0.1:${result.data.port}/mcp?adapterSessionId=${encodeURIComponent(this.claudeSessionId)}`,
       });
@@ -208,7 +207,10 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
     const installedNames = [...this.installedMcpServerNames];
     this.installedMcpServerNames.clear();
     const removals = await Promise.allSettled(
-      installedNames.map((name) => removeMcpServerFromProject(projectDir, name)),
+      installedNames.map((name) =>
+        // ORIGIN: lifecycle cleanup removes the installed MCP servers on the adapter carrier.
+        removeMcpServerFromProject(this.globalBus, this.globalBus.own('stop'), projectDir, name),
+      ),
     );
     await this.unregisterMcpSession();
 
@@ -216,7 +218,7 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
   }
 
   /**
-   * Unregister the adapter session from the singleton MCP bridge service.
+   * Unregister the adapter session from the MCP bridge service.
    */
   private async unregisterMcpSession(): Promise<void> {
     if (!this.registeredMcpSessionId) {
@@ -224,8 +226,8 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
     }
     const adapterSessionId = this.registeredMcpSessionId;
     this.registeredMcpSessionId = undefined;
-    // ORIGIN: direct lifecycle cleanup sends on the host singleton, which owns this stop context.
-    await MakaioBus.requestOptional(MakaioBus.own('stop'), McpSubjects.session.unregister, {
+    // ORIGIN: lifecycle cleanup retires the MCP registration on the adapter carrier.
+    await this.globalBus.requestOptional(this.globalBus.own('stop'), McpSubjects.session.unregister, {
       adapterSessionId,
     });
   }

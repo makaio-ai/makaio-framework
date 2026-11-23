@@ -5,6 +5,13 @@ import { createCarrierBus } from '@makaio/bus-core/kernel-api';
 import type { NodeExtensionContext } from '@makaio/contracts';
 import type { Toolset } from '@makaio/tools-core';
 
+/** A toolset and the carrier from the context of its contributing extension. */
+interface WorkerToolsetContribution {
+  readonly toolset: Toolset;
+  /** Carrier bus when the loader is given a worker-local bus. */
+  readonly bus: IMakaioBus | undefined;
+}
+
 /**
  * Collected contributions from worker-local extension packages.
  *
@@ -13,8 +20,8 @@ import type { Toolset } from '@makaio/tools-core';
  * host, so adapter contributions are not harvested for workers.
  */
 export interface WorkerRuntimeContributions {
-  /** Toolsets extracted from loaded packages. */
-  readonly toolsets: Toolset[];
+  /** Toolsets extracted from loaded packages and their contributor buses. */
+  readonly toolsets: WorkerToolsetContribution[];
 }
 
 /**
@@ -170,13 +177,7 @@ export async function loadWorkerRuntimeContributions(
 ): Promise<WorkerRuntimeContributions> {
   const results = await Promise.all(entrypoints.map((entrypoint) => loadSinglePackage(entrypoint, options)));
 
-  const toolsets: Toolset[] = [];
-
-  for (const result of results) {
-    toolsets.push(...result.toolsets);
-  }
-
-  return { toolsets };
+  return { toolsets: results.flat() };
 }
 
 /**
@@ -187,13 +188,13 @@ export async function loadWorkerRuntimeContributions(
  * with partial contributions.
  * @param entrypoint - Verified absolute path to the contribution entrypoint.
  * @param options - Worker-local runtime surfaces exposed during extraction.
- * @returns Extracted contributions from the package.
+ * @returns Extracted toolsets with their contributor's carrier bus.
  * @throws When the package cannot be imported, has no recognizable export, or toolset creation fails.
  */
 async function loadSinglePackage(
   entrypoint: string,
   options?: WorkerRuntimeContributionLoadOptions,
-): Promise<{ toolsets: Toolset[] }> {
+): Promise<WorkerToolsetContribution[]> {
   if (!path.isAbsolute(entrypoint)) {
     throw new Error(`Worker contribution entrypoint must be an absolute materialized path: ${entrypoint}`);
   }
@@ -208,12 +209,8 @@ async function loadSinglePackage(
     );
   }
 
-  const packageToolsets: Toolset[] = [];
+  if (!ext.tools?.createToolsets) return [];
 
-  if (ext.tools?.createToolsets) {
-    const created = ext.tools.createToolsets(createWorkerToolsetContext(ext.name, options));
-    packageToolsets.push(...created);
-  }
-
-  return { toolsets: packageToolsets };
+  const ctx = createWorkerToolsetContext(ext.name, options);
+  return ext.tools.createToolsets(ctx).map((toolset) => ({ toolset, bus: ctx.bus }));
 }

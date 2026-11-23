@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { VersionRangeSchema, defineAdapterProviderAuth } from '@makaio/contracts';
 import { ClientStorageSubjects } from '@makaio/services-core/settings/storage';
-import { createTestCall } from '@makaio/test-utils';
+import { createTestCall, makeStubExtensionBus } from '@makaio/test-utils';
 import { buildCompatibleAuthOptions } from '../compatible-auth-options.js';
 import type { LoadedAdapter } from '../adapter-runtime-types.js';
 
@@ -57,6 +57,7 @@ function createLoadedAdapter(
     name,
     displayName: name,
     packageName: `@makaio/adapter-${name}`,
+    carrierBus: makeStubExtensionBus(MakaioBus, `@makaio/adapter-${name}`),
     factory: async () => ({}),
     options: {},
     providerDefinitionIds: ['anthropic'],

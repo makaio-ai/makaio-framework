@@ -17,7 +17,7 @@
  * const adapter = await createAnthropicSdkAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
  *
  * // Adapter is ready to handle adapter.startAgent RPC via bus
- * // Start agents via MakaioBus.request(AdapterSubjects.startAgent, { adapterId, ... })
+ * // Start agents with an AdapterSubjects.startAgent request on the bus: { adapterId, ... }
  * ```
  * @packageDocumentation
  */

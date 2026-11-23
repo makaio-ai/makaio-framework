@@ -107,6 +107,7 @@ describe('ClaudeCliSession native fork validation', () => {
 
     const session = new ClaudeCliSession({
       bus: await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus),
+      globalBus: MakaioBus,
       adapterId: 'adapter-test',
       adapterName: 'claude-code-cli',
       agentId: 'agent-test',
@@ -136,6 +137,7 @@ describe('ClaudeCliSession native fork validation', () => {
 
     const session = new ClaudeCliSession({
       bus: await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus),
+      globalBus: MakaioBus,
       adapterId: 'adapter-test',
       adapterName: 'claude-code-cli',
       agentId: 'agent-test',

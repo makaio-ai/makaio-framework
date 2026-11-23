@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { McpSubjects } from '@makaio/contracts';
 import type { CallContext } from '@makaio/contracts';
-import { createTestCall } from '@makaio/test-utils';
+import { createTestBusInstance, createTestCall, makeStubExtensionBus } from '@makaio/test-utils';
 import { ClaudeCliSession } from '../session.js';
 
 /**
@@ -15,6 +15,7 @@ import { ClaudeCliSession } from '../session.js';
 function makeSession(overrides: Partial<ConstructorParameters<typeof ClaudeCliSession>[0]> = {}) {
   return new ClaudeCliSession({
     bus: {} as never,
+    globalBus: MakaioBus,
     adapterId: 'test-adapter',
     adapterName: 'claude-code-cli',
     agentId: 'test-agent',
@@ -32,14 +33,19 @@ type McpConfigResult = { config: string; hasBridge: boolean } | undefined;
  * Invoke the private MCP config builder without weakening test types.
  * @param session - Session under test
  * @param sessionIdForMcp - Adapter session ID for MCP routing
+ * @param call - Minted call driving registration
  * @returns MCP config result
  */
-function registerMcpContextForTest(session: ClaudeCliSession, sessionIdForMcp: string): Promise<McpConfigResult> {
+function registerMcpContextForTest(
+  session: ClaudeCliSession,
+  sessionIdForMcp: string,
+  call = createTestCall(),
+): Promise<McpConfigResult> {
   const register = Reflect.get(session, 'registerMcpContextAndBuildConfig') as (
     call: CallContext,
     sessionIdForMcp: string,
   ) => Promise<McpConfigResult>;
-  return register.call(session, createTestCall(), sessionIdForMcp);
+  return register.call(session, call, sessionIdForMcp);
 }
 
 /**
@@ -64,6 +70,53 @@ describe('ClaudeCliSession — MCP bus registration', () => {
   afterEach(() => {
     for (const fn of cleanup) fn();
     cleanup = [];
+  });
+
+  it('registers through the adapter carrier and preserves the principal', async () => {
+    const carrierBus = makeStubExtensionBus(createTestBusInstance(), 'claude-code-cli');
+    const call = createTestCall({ principal: { kind: 'makaio.host', id: 'requesting-host' } });
+    const observed = vi.fn();
+    cleanup.push(
+      carrierBus.on(McpSubjects.session.register, (ctx) => {
+        observed(ctx.call.caller, ctx.call.principal);
+        ctx.setResult({ port: 12345 });
+      }),
+    );
+
+    await registerMcpContextForTest(makeSession({ globalBus: carrierBus }), 'adapter-session', call);
+
+    expect(observed).toHaveBeenCalledExactlyOnceWith(
+      { kind: 'makaio.extension', id: 'claude-code-cli' },
+      call.principal,
+    );
+  });
+
+  it.each(['explicit stop context', 'session close'])('unregisters through the adapter carrier on %s', async (path) => {
+    const carrierBus = makeStubExtensionBus(createTestBusInstance(), 'claude-code-cli');
+    const stopCall = carrierBus.own('stop');
+    const observed = vi.fn();
+    const session = makeSession({ globalBus: carrierBus });
+    cleanup.push(
+      carrierBus.on(McpSubjects.session.register, (ctx) => {
+        ctx.setResult({ port: 12345 });
+      }),
+      carrierBus.on(McpSubjects.session.unregister, (ctx) => {
+        observed(ctx.payload.adapterSessionId, ctx.call.caller, ctx.call.principal);
+        ctx.setResult({});
+      }),
+    );
+    expectMcpConfig(await registerMcpContextForTest(session, 'adapter-session'));
+
+    if (path === 'session close') {
+      await session.close();
+    } else {
+      const unregister = Reflect.get(session, 'unregisterMcpSession') as (call: CallContext) => void;
+      unregister.call(session, stopCall);
+    }
+
+    await vi.waitFor(() =>
+      expect(observed).toHaveBeenCalledExactlyOnceWith('adapter-session', stopCall.caller, stopCall.principal),
+    );
   });
 
   it('returns a config with the makaio entry when the bridge handler is registered', async () => {
