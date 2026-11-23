@@ -49,6 +49,7 @@ describe('createAdapterConfigFactory', () => {
 
     const config = await factory.getConfig({
       bus: MakaioBus as Parameters<typeof factory.getConfig>[0]['bus'],
+      globalBus: MakaioBus,
       agentId: 'agent-1',
       adapterName: 'test-adapter',
       adapterId: 'adapter-1',
@@ -84,6 +85,7 @@ describe('createAdapterConfigFactory', () => {
 
     const config = await factory.getConfig({
       bus: MakaioBus as Parameters<typeof factory.getConfig>[0]['bus'],
+      globalBus: MakaioBus,
       agentId: 'agent-1',
       adapterName: 'test-adapter',
       adapterId: 'adapter-1',
@@ -105,6 +107,7 @@ describe('createAdapterConfigFactory', () => {
 
     const config = await factory.getConfig({
       bus: MakaioBus as Parameters<typeof factory.getConfig>[0]['bus'],
+      globalBus: MakaioBus,
       agentId: 'agent-1',
       adapterName: 'test-adapter',
       adapterId: 'adapter-1',
@@ -125,6 +128,7 @@ describe('createAdapterConfigFactory', () => {
     const levels = { low: 1024, medium: 4096, high: 8192 };
     const config = await factory.getConfig({
       bus: MakaioBus as Parameters<typeof factory.getConfig>[0]['bus'],
+      globalBus: MakaioBus,
       agentId: 'agent-1',
       adapterName: 'test-adapter',
       adapterId: 'adapter-1',
@@ -148,6 +152,7 @@ describe('createAdapterConfigFactory', () => {
     await expect(
       factory.getConfig({
         bus: MakaioBus as Parameters<typeof factory.getConfig>[0]['bus'],
+        globalBus: MakaioBus,
         agentId: 'agent-1',
         adapterName: 'test-adapter',
         adapterId: 'adapter-1',
@@ -167,6 +172,7 @@ describe('createAdapterConfigFactory', () => {
 
     const config = await factory.getConfig({
       bus: MakaioBus as Parameters<typeof factory.getConfig>[0]['bus'],
+      globalBus: MakaioBus,
       agentId: 'agent-1',
       adapterName: 'test-adapter',
       adapterId: 'adapter-1',
@@ -188,6 +194,7 @@ describe('createAdapterConfigFactory', () => {
     await expect(
       factory.getConfig({
         bus: MakaioBus as Parameters<typeof factory.getConfig>[0]['bus'],
+        globalBus: MakaioBus,
         agentId: 'agent-1',
         adapterName: 'test-adapter',
         adapterId: 'adapter-1',
@@ -211,6 +218,7 @@ describe('createAdapterConfigFactory', () => {
     await expect(
       factory.getConfig({
         bus: MakaioBus as Parameters<typeof factory.getConfig>[0]['bus'],
+        globalBus: MakaioBus,
         agentId: 'agent-1',
         adapterName: 'test-adapter',
         adapterId: 'adapter-1',
@@ -244,6 +252,7 @@ describe('createAdapterConfigFactory', () => {
     await expect(
       factory.getConfig({
         bus: MakaioBus as Parameters<typeof factory.getConfig>[0]['bus'],
+        globalBus: MakaioBus,
         agentId: 'agent-1',
         adapterName: 'test-adapter',
         adapterId: 'adapter-1',

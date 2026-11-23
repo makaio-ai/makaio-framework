@@ -1,4 +1,4 @@
-import { createBusContext, createBusInstance } from '@makaio/bus-core';
+import { createBusInstance } from '@makaio/bus-core';
 import {
   ExecutionAttemptNamespace,
   ExecutionAttemptOutcomeSchema,
@@ -29,7 +29,7 @@ function createHarness(beforeDecode?: () => Promise<void>) {
     serialize: (outcome) => JSON.stringify(outcome),
   });
   const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
-  const bus = createBusInstance({ context: createBusContext() });
+  const bus = createBusInstance();
   bus.registerNamespace(ExecutionAttemptNamespace);
   const transport = new AttemptGateTransport();
   bus.registerTransport(transport);

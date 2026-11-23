@@ -23,7 +23,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
-import { createMockBus } from '@makaio/test-utils';
+import { createMockBus, createTestCall } from '@makaio/test-utils';
 import { deleteSession, getSessionInfo, listSessions, renameSession } from '../../src/shared/sessions.js';
 
 // ---------------------------------------------------------------------------
@@ -46,7 +46,7 @@ describe('session management — bus simulation (always runs)', () => {
       const { bus, request } = createMockBus();
       request.mockResolvedValue({ sessions: [], total: 0 });
 
-      const sessions = await listSessions(bus);
+      const sessions = await listSessions(createTestCall(), bus);
 
       expect(sessions).toEqual([]);
     });
@@ -70,7 +70,7 @@ describe('session management — bus simulation (always runs)', () => {
         total: 1,
       });
 
-      const sessions = await listSessions(bus);
+      const sessions = await listSessions(createTestCall(), bus);
 
       expect(sessions).toHaveLength(1);
       expect(sessions[0]).toEqual({
@@ -87,9 +87,10 @@ describe('session management — bus simulation (always runs)', () => {
       const { bus, request } = createMockBus();
       request.mockResolvedValue({ sessions: [], total: 0 });
 
-      await listSessions(bus, { status: 'closed' });
+      const call = createTestCall();
+      await listSessions(call, bus, { status: 'closed' });
 
-      expect(request).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ status: 'closed' }));
+      expect(request).toHaveBeenCalledWith(call, expect.anything(), expect.objectContaining({ status: 'closed' }));
     });
   });
 
@@ -111,7 +112,7 @@ describe('session management — bus simulation (always runs)', () => {
         },
       });
 
-      const info = await getSessionInfo(bus, 'sess-sim-2');
+      const info = await getSessionInfo(createTestCall(), bus, 'sess-sim-2');
 
       expect(info).toBeDefined();
       expect(info!.sessionId).toBe('sess-sim-2');
@@ -123,7 +124,7 @@ describe('session management — bus simulation (always runs)', () => {
       const { bus, request } = createMockBus();
       request.mockResolvedValue({ session: null });
 
-      const info = await getSessionInfo(bus, 'nonexistent');
+      const info = await getSessionInfo(createTestCall(), bus, 'nonexistent');
 
       expect(info).toBeUndefined();
     });
@@ -132,9 +133,10 @@ describe('session management — bus simulation (always runs)', () => {
       const { bus, request } = createMockBus();
       request.mockResolvedValue({ session: null });
 
-      await getSessionInfo(bus, 'target-sess');
+      const call = createTestCall();
+      await getSessionInfo(call, bus, 'target-sess');
 
-      expect(request).toHaveBeenCalledWith(expect.anything(), { sessionId: 'target-sess' });
+      expect(request).toHaveBeenCalledWith(call, expect.anything(), { sessionId: 'target-sess' });
     });
   });
 
@@ -147,8 +149,10 @@ describe('session management — bus simulation (always runs)', () => {
       const { bus, request } = createMockBus();
       request.mockResolvedValue({ success: true });
 
-      await expect(renameSession(bus, 'sess-sim-3', 'New Name')).resolves.toBeUndefined();
+      const call = createTestCall();
+      await expect(renameSession(call, bus, 'sess-sim-3', 'New Name')).resolves.toBeUndefined();
       expect(request).toHaveBeenCalledWith(
+        call,
         expect.anything(),
         expect.objectContaining({ sessionId: 'sess-sim-3', title: 'New Name' }),
       );
@@ -158,7 +162,9 @@ describe('session management — bus simulation (always runs)', () => {
       const { bus, request } = createMockBus();
       request.mockResolvedValue({ success: false });
 
-      await expect(renameSession(bus, 'sess-sim-3', 'Bad Name')).rejects.toThrow('Failed to rename session');
+      await expect(renameSession(createTestCall(), bus, 'sess-sim-3', 'Bad Name')).rejects.toThrow(
+        'Failed to rename session',
+      );
     });
   });
 
@@ -174,7 +180,7 @@ describe('session management — bus simulation (always runs)', () => {
         .mockResolvedValueOnce({ success: true }) // archive
         .mockResolvedValueOnce({ success: true, eventsDeleted: 3 }); // purge
 
-      await deleteSession(bus, 'sess-sim-4');
+      await deleteSession(createTestCall(), bus, 'sess-sim-4');
 
       expect(request).toHaveBeenCalledTimes(3);
     });
@@ -186,7 +192,7 @@ describe('session management — bus simulation (always runs)', () => {
         .mockResolvedValueOnce({ success: true }) // archive
         .mockResolvedValueOnce({ success: true, eventsDeleted: 0 }); // purge
 
-      await expect(deleteSession(bus, 'sess-sim-4')).rejects.toThrow('already closed');
+      await expect(deleteSession(createTestCall(), bus, 'sess-sim-4')).rejects.toThrow('already closed');
       expect(request).toHaveBeenCalledTimes(1);
     });
   });

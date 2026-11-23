@@ -8,6 +8,7 @@
  * @packageDocumentation
  */
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   CanonicalModelSubjects,
   isCanonicalModelParseError,
@@ -38,12 +39,14 @@ import {
  * When the caller provides `adapterId`, the framework validates any explicit
  * name against the adapter-subsystem reverse lookup and otherwise backfills the
  * canonical adapter name from that subsystem-owned mapping.
+ * @param call - Call context of the operation resolving the adapter name
  * @param bus - Bus the adapter-subsystem lookup is issued on
  * @param selection - Direct adapter selection
  * @param sessionId - Session ID used in error messages
  * @returns Resolved adapter name
  */
 export async function resolveSelectionAdapterName(
+  call: CallContext,
   bus: IMakaioBus,
   selection: AdapterSelection,
   sessionId: string,
@@ -59,6 +62,7 @@ export async function resolveSelectionAdapterName(
 
   if (adapterId) {
     return resolveAdapterNameById(
+      call,
       bus,
       adapterId,
       explicitAdapterName,
@@ -79,6 +83,7 @@ export async function resolveSelectionAdapterName(
 /**
  * Resolve the public agent selection into the direct adapter shape required
  * by the framework orchestrator's startup path.
+ * @param call - Call context of the `session.sendMessage` request being served.
  * @param bus - Bus any resolver round trip is issued on.
  * @param selection - Public session agent selection from the request.
  * @param sessionId - Session ID used for context and diagnostics.
@@ -87,6 +92,7 @@ export async function resolveSelectionAdapterName(
  * @returns Direct adapter selection for `adapter.startAgent`.
  */
 export async function resolveInitialAdapterSelection(
+  call: CallContext,
   bus: IMakaioBus,
   selection: AgentSelectionBase | undefined,
   sessionId: string,
@@ -105,6 +111,7 @@ export async function resolveInitialAdapterSelection(
 
   if (selection.kind === 'canonical-model') {
     return await resolveCanonicalModelSelection(
+      call,
       bus,
       selection as CanonicalModelSelection,
       sessionId,
@@ -120,6 +127,7 @@ export async function resolveInitialAdapterSelection(
 
 /**
  * Resolve a canonical-model selection to a direct adapter selection.
+ * @param call - Call context of the `session.sendMessage` request being served.
  * @param bus - Bus the canonical-model resolution is issued on.
  * @param selection - Canonical model selection from the session request.
  * @param sessionId - Session ID used for context and diagnostics.
@@ -128,6 +136,7 @@ export async function resolveInitialAdapterSelection(
  * @returns Direct adapter selection with resolved adapter, provider config, and model.
  */
 async function resolveCanonicalModelSelection(
+  call: CallContext,
   bus: IMakaioBus,
   selection: CanonicalModelSelection,
   sessionId: string,
@@ -147,7 +156,7 @@ async function resolveCanonicalModelSelection(
     );
   }
 
-  const resolved = await bus.request(CanonicalModelSubjects.resolve, {
+  const resolved = await bus.request(call, CanonicalModelSubjects.resolve, {
     parsed,
     context: {
       sessionId,
@@ -202,6 +211,7 @@ export interface SelectionInstanceContext {
  * every path that reads the pair. Refusing first is what makes the two branches
  * above total: each one holds a pair it can honour, so neither has to decide what
  * to do with half of one.
+ * @param call - Call context of the operation resolving the owned instance.
  * @param bus - Bus the resolution is issued on.
  * @param selection - Direct adapter selection this start runs from.
  * @param context - Adapter name, session identity, this runtime's machine and its instance registry.
@@ -210,6 +220,7 @@ export interface SelectionInstanceContext {
  *   complete explicit triple has no matching live announcement.
  */
 export async function resolveSelectionOwnedInstance(
+  call: CallContext,
   bus: IMakaioBus,
   selection: AdapterSelection,
   context: SelectionInstanceContext,
@@ -225,7 +236,7 @@ export async function resolveSelectionOwnedInstance(
   });
   if (refusal !== undefined) throw new SessionStartError('start-failed', refusal);
   if (named.adapterId === undefined) {
-    const owned = await resolveOwnedAdapterInstance(bus, {
+    const owned = await resolveOwnedAdapterInstance(call, bus, {
       adapterName,
       machineId,
     });
@@ -237,7 +248,7 @@ export async function resolveSelectionOwnedInstance(
     }
     return { adapterId: owned.adapterId, machineId: owned.machineId, ownerInstanceId: owned.ownerInstanceId };
   }
-  const owned = await resolveOwnedAdapterInstance(bus, {
+  const owned = await resolveOwnedAdapterInstance(call, bus, {
     adapterName,
     adapterId: named.adapterId,
     ...(named.machineId !== undefined && { machineId: named.machineId }),
@@ -281,17 +292,19 @@ export interface FreshStartTarget {
  * name the machine, and the connector authenticates with the credentials. Reading
  * them at four call sites is how three of them can end up describing a target the
  * fourth does not.
+ * @param call - Call context of the operation resolving the fresh-start target.
  * @param bus - Bus every resolution round trip is issued on.
  * @param selection - Direct adapter selection this start runs from.
  * @param context - Session identity, this runtime's machine and its instance registry.
  * @returns The resolved target of the start.
  */
 export async function resolveFreshStartTarget(
+  call: CallContext,
   bus: IMakaioBus,
   selection: AdapterSelection,
   context: Omit<SelectionInstanceContext, 'adapterName'>,
 ): Promise<FreshStartTarget> {
-  const adapterName = await resolveSelectionAdapterName(bus, selection, context.sessionId);
+  const adapterName = await resolveSelectionAdapterName(call, bus, selection, context.sessionId);
   // Both round trips need only the name, so they are issued together rather than
   // one behind the other: two sequential bus requests cost a start two latencies
   // to answer one question. They are still *awaited* in order, so a selection that
@@ -300,11 +313,11 @@ export async function resolveFreshStartTarget(
   const providerContextResolution =
     selection.providerConfigId === undefined
       ? undefined
-      : resolveRuntimeProviderContext(bus, { adapterName, providerConfigId: selection.providerConfigId });
+      : resolveRuntimeProviderContext(call, bus, { adapterName, providerConfigId: selection.providerConfigId });
   // The provider resolution has no consumer left once the instance fails, and an
   // unobserved rejection must not escape the start. Awaiting it below is unaffected.
   providerContextResolution?.catch(() => undefined);
-  const instance = await resolveSelectionOwnedInstance(bus, selection, { ...context, adapterName });
+  const instance = await resolveSelectionOwnedInstance(call, bus, selection, { ...context, adapterName });
   const providerContext = await providerContextResolution;
   return {
     adapterName,

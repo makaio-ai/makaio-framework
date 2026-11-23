@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, MakaioBus } from '@makaio/bus-core';
 import { ToolSubjects, type ToolListItem } from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import type { ExtensionContext, ToolDefinition } from '@mariozechner/pi-coding-agent';
 import { PiSdkProviderConfigSchema } from '../schemas.js';
 import { createPiToolHandler, fetchToolsForPi } from '../tool-conversion.js';
@@ -69,6 +70,7 @@ describe('createPiToolHandler', () => {
       env: { NODE_ENV: 'test' },
       allowedDirectories: ['/repo'],
       getTurnExecutionContext: () => ({
+        call: createTestCall(),
         turnId: 'message-1',
         turnContext: {
           terminalSessionKey: 'project::default::terminal',
@@ -123,6 +125,7 @@ describe('createPiToolHandler', () => {
       sessionId: 'session-1',
       cwd: '/repo',
       env: {},
+      getTurnExecutionContext: () => ({ call: createTestCall() }),
       consumeApprovedToolInput: () => ({ path: 'approved.md' }),
     });
 
@@ -148,6 +151,7 @@ describe('createPiToolHandler', () => {
       sessionId: 'session-1',
       cwd: '/repo',
       env: {},
+      getTurnExecutionContext: () => ({ call: createTestCall() }),
     });
 
     await expect(executePiTool(handler, 'tool-call-1', { path: 'missing.md' })).rejects.toThrow('Cannot read file');
@@ -172,43 +176,25 @@ describe('fetchToolsForPi', () => {
       });
     });
 
-    const tools = await fetchToolsForPi(
-      hostBus,
-      'adapter-pi-1',
-      'pi-sdk',
-      {
-        bus: hostBus,
-        adapterId: 'adapter-pi-1',
-        adapterName: 'pi-sdk',
-        agentId: 'agent-1',
-        sessionId: 'session-1',
-        cwd: '/repo',
-        env: {},
-      },
-      {
-        allowedTools: ['read_file', 'write_file'],
-        disallowedTools: ['write_file'],
-      },
-    );
+    const toolContext = {
+      bus: hostBus,
+      adapterId: 'adapter-pi-1',
+      adapterName: 'pi-sdk',
+      agentId: 'agent-1',
+      sessionId: 'session-1',
+      cwd: '/repo',
+      env: {},
+      getTurnExecutionContext: () => ({ call: createTestCall() }),
+    };
+    const tools = await fetchToolsForPi(createTestCall(), hostBus, 'adapter-pi-1', 'pi-sdk', toolContext, {
+      allowedTools: ['read_file', 'write_file'],
+      disallowedTools: ['write_file'],
+    });
 
     expect(tools.map((tool) => tool.name)).toEqual(['read_file']);
 
     await expect(
-      fetchToolsForPi(
-        hostBus,
-        'adapter-pi-1',
-        'pi-sdk',
-        {
-          bus: hostBus,
-          adapterId: 'adapter-pi-1',
-          adapterName: 'pi-sdk',
-          agentId: 'agent-1',
-          sessionId: 'session-1',
-          cwd: '/repo',
-          env: {},
-        },
-        { allowedTools: [] },
-      ),
+      fetchToolsForPi(createTestCall(), hostBus, 'adapter-pi-1', 'pi-sdk', toolContext, { allowedTools: [] }),
     ).resolves.toEqual([]);
   });
 });

@@ -14,6 +14,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
 import type { IMakaioSession } from '@makaio/contracts';
 import { HookAbortError } from '@makaio/hooks';
+import { createTestCall } from '@makaio/test-utils';
 import { Turn } from '../../entities/turn.js';
 import {
   createRouteTestContext,
@@ -206,7 +207,7 @@ describe('routeToAgents - native attempt degrade', () => {
     expect(sendCount).toBe(1);
     expect(completedOutcomes).toEqual(['cancelled']);
     expect(turn.getResult().success).toBe(true);
-    expect(onTurnComplete).toHaveBeenCalledWith(turn, expect.objectContaining({ success: true }));
+    expect(onTurnComplete).toHaveBeenCalledWith(createTestCall(), turn, expect.objectContaining({ success: true }));
   });
 
   it('marks agent as errored when both native attempt and retry fail', async () => {
@@ -233,7 +234,7 @@ describe('routeToAgents - native attempt degrade', () => {
     });
 
     expect(turn.getResult().success).toBe(false);
-    expect(onTurnComplete).toHaveBeenCalledWith(turn, expect.objectContaining({ success: false }));
+    expect(onTurnComplete).toHaveBeenCalledWith(createTestCall(), turn, expect.objectContaining({ success: false }));
   });
 
   it('does not retry when non-native context fails', async () => {

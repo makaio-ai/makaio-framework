@@ -10,7 +10,8 @@
 import { randomUUID } from 'node:crypto';
 import { BaseService } from '@makaio/service-base';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { BaseMessageContext, ContextForSubjectDefinition } from '@makaio/core';
+import { isInProcessCaller, MAKAIO_CLI_LOCAL_PARTY_KIND, MAKAIO_LOOPBACK_PARTY_KIND } from '@makaio/core';
+import type { BaseMessageContext, CallContext, ContextForSubjectDefinition as SubjectContext } from '@makaio/core';
 import { NativeSessionSupervisorSubjects } from '@makaio/contracts/native-session-supervisor';
 import type { NativeSupervisorAttachRequest } from '@makaio/contracts/native-session-supervisor';
 import { ClientSubjects } from '@makaio/contracts';
@@ -20,6 +21,7 @@ import { toSnapshot } from './runtime-snapshot.js';
 import { PtyRuntime } from './pty/pty-runtime.js';
 import { LazyNodePtyBackend } from './lazy-node-pty-backend.js';
 import { TerminalAttachmentRegistry } from './terminal-attachment-registry.js';
+import type { ConnectionCloseObserver } from './terminal-attachment-registry.js';
 import type { PtyExitEvent, PtyOutputEvent } from './pty/types.js';
 
 export { LazyNodePtyBackend } from './lazy-node-pty-backend.js';
@@ -57,26 +59,23 @@ export type PtyRuntimeFactory = (handlers: PtyRuntimeHandlers) => PtyRuntime;
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/** Named authenticated peer permitted to control locally supervised PTYs. */
-const LOCAL_CLI_PEER_KIND = 'makaio-cli-local';
-/** Trusted peer claim assigned only by an unauthenticated loopback listener. */
-const LOOPBACK_PEER_KIND = 'makaio-loopback';
-
 /**
  * Determine whether a request may control a supervised process.
  *
- * Direct in-process calls retain their existing local-origin authority. CLI
- * requests crossing the local WebSocket bus must authenticate as the named
- * local CLI peer registered by the host composition root.
+ * In-process callers (extensions and host code) retain their existing local
+ * authority. CLI requests crossing the local WebSocket bus must come from the
+ * local CLI caller on an authenticated connection; the unauthenticated
+ * loopback listener is accepted only for an identified connection.
  * @param ctx - Trusted request metadata supplied by the bus dispatch path.
  * @returns Whether the caller may launch, stop, or control a terminal attachment.
  */
-function isAuthorizedSupervisorControl(ctx: Pick<BaseMessageContext, 'origin' | 'transport'>): boolean {
-  const peer = ctx.transport?.peer;
+function isAuthorizedSupervisorControl(ctx: Pick<BaseMessageContext, 'call' | 'transport'>): boolean {
   return (
-    ctx.origin.local ||
-    (peer?.authenticated === true && peer.kind === LOCAL_CLI_PEER_KIND) ||
-    (peer?.authenticated === false && peer.kind === LOOPBACK_PEER_KIND && ctx.transport?.connectionId !== undefined)
+    isInProcessCaller(ctx.call) ||
+    (ctx.transport?.authenticated === true && ctx.call.caller.kind === MAKAIO_CLI_LOCAL_PARTY_KIND) ||
+    (ctx.transport?.authenticated === false &&
+      ctx.call.caller.kind === MAKAIO_LOOPBACK_PARTY_KIND &&
+      ctx.transport?.connectionId !== undefined)
   );
 }
 
@@ -90,11 +89,8 @@ function createSupervisorLaunchEnv(
   sessionConfigEnv: Record<string, string> | undefined,
   supervisorSessionId: string,
 ): Record<string, string> {
-  return {
-    ...sessionConfigEnv,
-    // Correlation identifier for the supervised runtime; not an authentication token.
-    MAKAIO_SUPERVISOR_SESSION_ID: supervisorSessionId,
-  };
+  // Correlation identifier for the supervised runtime; not an authentication token.
+  return { ...sessionConfigEnv, MAKAIO_SUPERVISOR_SESSION_ID: supervisorSessionId };
 }
 
 /**
@@ -133,12 +129,18 @@ export class SupervisorService extends BaseService {
 
   /**
    * @param bus - Bus instance used for registering handlers and emitting events.
+   * @param observeConnectionClosed - Observes the close of a transport connection so terminal
+   *   attachments owned by that connection are released.
    * @param createPtyRuntime - Optional factory for constructing the PTY runtime.
    *   The factory receives the service's own output and exit handlers, ensuring
    *   that natural PTY exits always update the registry. Defaults to a
    *   lazily loaded `NodePtyBackend` suitable for production Node.js hosts.
    */
-  public constructor(bus: IMakaioBus, createPtyRuntime?: PtyRuntimeFactory) {
+  public constructor(
+    bus: IMakaioBus,
+    observeConnectionClosed: ConnectionCloseObserver,
+    createPtyRuntime?: PtyRuntimeFactory,
+  ) {
     super(bus);
     this.registry = new RuntimeRegistry(bus);
     const factory = createPtyRuntime ?? defaultPtyRuntimeFactory;
@@ -156,7 +158,7 @@ export class SupervisorService extends BaseService {
         });
       },
     });
-    this.terminalAttachments = new TerminalAttachmentRegistry(bus, this.ptyRuntime);
+    this.terminalAttachments = new TerminalAttachmentRegistry(bus, this.ptyRuntime, observeConnectionClosed);
   }
 
   /**
@@ -245,7 +247,8 @@ export class SupervisorService extends BaseService {
     this.terminalAttachments.clear();
 
     const bindings = [...this.sessionConfigBindings.keys()];
-    const cleanupResults = await Promise.allSettled(bindings.map((id) => this.destroySessionConfig(id)));
+    const call = this.bus.own('stop');
+    const cleanupResults = await Promise.allSettled(bindings.map((id) => this.destroySessionConfig(call, id)));
     for (let index = 0; index < cleanupResults.length; index += 1) {
       if (cleanupResults[index]?.status === 'rejected') {
         errors.push(new Error(`Config lease cleanup failed for supervised runtime '${bindings[index]}'`));
@@ -274,14 +277,12 @@ export class SupervisorService extends BaseService {
    * Handle a `launch` request: spawn a PTY process and register the runtime.
    * @param ctx - Bus handler context carrying the launch request payload.
    */
-  private async _handleLaunch(
-    ctx: ContextForSubjectDefinition<typeof NativeSessionSupervisorSubjects.launch>,
-  ): Promise<void> {
+  private async _handleLaunch(ctx: SubjectContext<typeof NativeSessionSupervisorSubjects.launch>): Promise<void> {
     const { clientId, cwd, command, args, env, sessionId, clientProfileName, adapterSessionId, metadata } = ctx.payload;
 
     const supervisorSessionId = randomUUID();
     const startedAt = Date.now();
-    const sessionConfig = await this.prepareSessionConfig({
+    const sessionConfig = await this.prepareSessionConfig(ctx.call, {
       supervisorSessionId,
       clientId,
       sessionId,
@@ -303,7 +304,7 @@ export class SupervisorService extends BaseService {
       }));
     } catch (error) {
       try {
-        await this.destroySessionConfig(supervisorSessionId);
+        await this.destroySessionConfig(ctx.call, supervisorSessionId);
       } catch (cleanupError) {
         throw new AggregateError([error, cleanupError], 'Native runtime spawn and config cleanup both failed');
       }
@@ -311,7 +312,7 @@ export class SupervisorService extends BaseService {
     }
 
     try {
-      await this.registry.register({
+      await this.registry.register(ctx.call, {
         supervisorSessionId,
         clientId,
         pid,
@@ -327,7 +328,7 @@ export class SupervisorService extends BaseService {
     } catch (error) {
       this.ptyRuntime.kill(supervisorSessionId, 'SIGTERM');
       try {
-        await this.destroySessionConfig(supervisorSessionId);
+        await this.destroySessionConfig(ctx.call, supervisorSessionId);
       } catch (cleanupError) {
         throw new AggregateError([error, cleanupError], 'Runtime registration and config cleanup both failed');
       } finally {
@@ -348,14 +349,14 @@ export class SupervisorService extends BaseService {
     const pendingExit = this.pendingExits.get(supervisorSessionId);
     if (pendingExit !== undefined) {
       this.pendingExits.delete(supervisorSessionId);
-      await this._recordPtyExit(pendingExit);
+      await this._recordPtyExit(ctx.call, pendingExit);
     }
 
     // Best-effort runtime observation: notify the runtime registry that this
     // supervisor has spawned a client process. Fire-and-forget — failure must
     // never block the launch response.
     void this.bus
-      .requestOptional(ClientSubjects.runtime.observe, {
+      .requestOptional(ctx.call, ClientSubjects.runtime.observe, {
         clientId,
         source: { layer: 'supervisor', producer: 'native-session-supervisor' },
         observedAt: Date.now(),
@@ -375,7 +376,7 @@ export class SupervisorService extends BaseService {
    * Handle an `attach` request: resolve the locator and report attachment state.
    * @param ctx - Bus handler context carrying the attach request payload.
    */
-  private _handleAttach(ctx: ContextForSubjectDefinition<typeof NativeSessionSupervisorSubjects.attach>): void {
+  private _handleAttach(ctx: SubjectContext<typeof NativeSessionSupervisorSubjects.attach>): void {
     const request = ctx.payload;
 
     let supervisorSessionId: string;
@@ -440,9 +441,7 @@ export class SupervisorService extends BaseService {
    * would give callers misleading feedback.
    * @param ctx - Bus handler context carrying the stop request payload.
    */
-  private async _handleStop(
-    ctx: ContextForSubjectDefinition<typeof NativeSessionSupervisorSubjects.stop>,
-  ): Promise<void> {
+  private async _handleStop(ctx: SubjectContext<typeof NativeSessionSupervisorSubjects.stop>): Promise<void> {
     const { supervisorSessionId, signal } = ctx.payload;
 
     const runtime = this.registry.getBySupervisorId(supervisorSessionId);
@@ -459,13 +458,13 @@ export class SupervisorService extends BaseService {
       return;
     }
 
-    await this.registry.update({
+    await this.registry.update(ctx.call, {
       supervisorSessionId,
       status: 'stopped',
       pid: null,
       stoppedAt: Date.now(),
     });
-    await this.destroySessionConfig(supervisorSessionId);
+    await this.destroySessionConfig(ctx.call, supervisorSessionId);
 
     ctx.setResult({ success: true });
   }
@@ -476,7 +475,7 @@ export class SupervisorService extends BaseService {
    * The schema guarantees exactly zero or one locator field is present.
    * @param ctx - Bus handler context carrying the status request payload.
    */
-  private _handleStatus(ctx: ContextForSubjectDefinition<typeof NativeSessionSupervisorSubjects.status>): void {
+  private _handleStatus(ctx: SubjectContext<typeof NativeSessionSupervisorSubjects.status>): void {
     const request = ctx.payload;
 
     if ('supervisorSessionId' in request) {
@@ -509,7 +508,7 @@ export class SupervisorService extends BaseService {
    */
   private async _handlePtyExit(evt: PtyExitEvent): Promise<void> {
     if (this.#destroyed) return;
-    await this._recordPtyExit(evt);
+    await this._recordPtyExit(this.bus.own('observer'), evt);
   }
 
   /**
@@ -520,10 +519,11 @@ export class SupervisorService extends BaseService {
    * succeeds. Explicit `stop` remains the terminal user-requested state; the
    * subsequent OS exit event only confirms the process is gone and must not
    * reclassify the runtime as a natural exit.
+   * @param call - Call context of the launch that replays the exit, or the observer context of a natural exit.
    * @param evt - Exit event carrying the supervisor session ID and exit code.
    */
-  private async _recordPtyExit(evt: PtyExitEvent): Promise<void> {
-    this.terminalAttachments.releaseRuntime(evt.supervisorSessionId);
+  private async _recordPtyExit(call: CallContext, evt: PtyExitEvent): Promise<void> {
+    this.terminalAttachments.releaseRuntime(call, evt.supervisorSessionId);
     const runtime = this.registry.getBySupervisorId(evt.supervisorSessionId);
     if (runtime === undefined) {
       this.pendingExits.set(evt.supervisorSessionId, evt);
@@ -534,28 +534,32 @@ export class SupervisorService extends BaseService {
       return;
     }
 
-    await this.registry.update({
+    await this.registry.update(call, {
       supervisorSessionId: evt.supervisorSessionId,
       status: 'exited',
       pid: null,
       stoppedAt: Date.now(),
     });
-    await this.destroySessionConfig(evt.supervisorSessionId);
+    await this.destroySessionConfig(call, evt.supervisorSessionId);
   }
 
   /**
    * Materialize session-scoped client config when the client config service is available.
+   * @param call - Call context of the launch request.
    * @param options - Launch identity and environment fields.
    * @returns Environment to pass to the spawned process.
    */
-  private async prepareSessionConfig(options: {
-    supervisorSessionId: string;
-    clientId: string;
-    sessionId: string | undefined;
-    profileName: string | undefined;
-    env: Record<string, string> | undefined;
-  }): Promise<{ env: Record<string, string> | undefined }> {
-    const result = await this.bus.requestOptional(ClientSubjects.sessionConfig.create, {
+  private async prepareSessionConfig(
+    call: CallContext,
+    options: {
+      supervisorSessionId: string;
+      clientId: string;
+      sessionId: string | undefined;
+      profileName: string | undefined;
+      env: Record<string, string> | undefined;
+    },
+  ): Promise<{ env: Record<string, string> | undefined }> {
+    const result = await this.bus.requestOptional(call, ClientSubjects.sessionConfig.create, {
       clientId: options.clientId,
       leaseId: options.supervisorSessionId,
       ...(options.sessionId !== undefined ? { ownerSessionId: options.sessionId } : {}),
@@ -578,15 +582,14 @@ export class SupervisorService extends BaseService {
 
   /**
    * Destroy materialized session config for a supervised runtime, if present.
+   * @param call - Call context of the operation that releases the config.
    * @param supervisorSessionId - Supervisor runtime identity.
    */
-  private async destroySessionConfig(supervisorSessionId: string): Promise<void> {
+  private async destroySessionConfig(call: CallContext, supervisorSessionId: string): Promise<void> {
     const binding = this.sessionConfigBindings.get(supervisorSessionId);
-    if (binding === undefined) {
-      return;
-    }
+    if (binding === undefined) return;
     try {
-      const result = await this.bus.requestOptional(ClientSubjects.sessionConfig.destroy, {
+      const result = await this.bus.requestOptional(call, ClientSubjects.sessionConfig.destroy, {
         clientId: binding.clientId,
         leaseId: binding.leaseId,
       });
@@ -596,9 +599,8 @@ export class SupervisorService extends BaseService {
     } catch {
       throw new Error(`Failed to release config lease for supervised runtime '${supervisorSessionId}'`);
     }
-    if (this.sessionConfigBindings.get(supervisorSessionId) === binding) {
+    if (this.sessionConfigBindings.get(supervisorSessionId) === binding)
       this.sessionConfigBindings.delete(supervisorSessionId);
-    }
   }
 
   /**
@@ -611,8 +613,9 @@ export class SupervisorService extends BaseService {
    */
   private async _markHydratedRunningRuntimesUnknown(): Promise<void> {
     const runningRuntimes = this.registry.getByStatus('running');
+    const call = this.bus.own('start');
     for (const runtime of runningRuntimes) {
-      await this.registry.update({
+      await this.registry.update(call, {
         supervisorSessionId: runtime.supervisorSessionId,
         status: 'unknown',
         pid: null,

@@ -1,4 +1,5 @@
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { BaseService } from '@makaio/service-base';
 import { type ProviderDefinition, CanonicalModelSubjects } from '@makaio/contracts';
 import { slugifyProviderConfigName } from '@makaio/contracts/config';
@@ -32,7 +33,7 @@ export class CanonicalModelService extends BaseService {
    * Creates a new CanonicalModelService instance.
    * @param bus - Bus instance for request/event handling
    */
-  public constructor(bus: IMakaioBus = MakaioBus) {
+  public constructor(bus: IMakaioBus) {
     super(bus);
   }
 
@@ -40,13 +41,13 @@ export class CanonicalModelService extends BaseService {
    * Registers the canonical model resolution handler on the bus.
    */
   protected override async onInit(): Promise<void> {
-    await this.bus.request(AdapterSubsystemSubjects.ensureReady, {});
+    await this.bus.request(this.bus.own('start'), AdapterSubsystemSubjects.ensureReady, {});
 
     const deps = this.createDeps();
     const resolver = new CanonicalModelResolver(deps);
 
     this.registerHandler(CanonicalModelSubjects.resolve, async (ctx) => {
-      const result = await resolver.resolve(ctx.payload.parsed, ctx.payload.context);
+      const result = await resolver.resolve(ctx.payload.parsed, ctx.payload.context, ctx.call);
       ctx.setResult(result);
     });
   }
@@ -58,22 +59,22 @@ export class CanonicalModelService extends BaseService {
   private createDeps(): CanonicalModelResolverDeps {
     const bus = this.bus;
 
-    const listEnabledAdapterNames = async (): Promise<string[]> => {
-      const { adapters } = await bus.request(AdapterSubsystemSubjects.listAdapters, {});
+    const listEnabledAdapterNames = async (call: CallContext): Promise<string[]> => {
+      const { adapters } = await bus.request(call, AdapterSubsystemSubjects.listAdapters, {});
       return adapters.filter((adapter) => adapter.enabled).map((adapter) => adapter.name);
     };
 
-    const getDefaultBinding = async (adapterName: string): Promise<BindingRecord | undefined> => {
+    const getDefaultBinding = async (call: CallContext, adapterName: string): Promise<BindingRecord | undefined> => {
       const [defaultBindingResult, enabledConfigIds] = await Promise.all([
-        bus.request(AdapterSubsystemSubjects.getDefaultBinding, { adapterName }),
-        this.listEnabledProviderConfigIds(),
+        bus.request(call, AdapterSubsystemSubjects.getDefaultBinding, { adapterName }),
+        this.listEnabledProviderConfigIds(call),
       ]);
 
       if (defaultBindingResult.binding && enabledConfigIds.has(defaultBindingResult.binding.providerConfigId)) {
         return defaultBindingResult.binding;
       }
 
-      const { bindings } = await bus.request(AdapterSubsystemSubjects.listBindings, { adapterName });
+      const { bindings } = await bus.request(call, AdapterSubsystemSubjects.listBindings, { adapterName });
       const enabledBindings = bindings.filter((binding) => enabledConfigIds.has(binding.providerConfigId));
       const binding = enabledBindings.find((candidate) => candidate.isDefault) ?? enabledBindings[0];
       return binding;
@@ -81,44 +82,52 @@ export class CanonicalModelService extends BaseService {
 
     /**
      * Get provider definitions for an adapter from the adapter subsystem.
+     * @param call - Call context of the message being handled
      * @param adapterName - The adapter whose provider definitions to fetch.
      * @returns Array of provider definitions contributed by the adapter.
      */
-    const getProviderDefinitions = async (adapterName: string): Promise<ProviderDefinition[]> => {
-      const { definitions } = await bus.request(AdapterSubsystemSubjects.getProviderDefinitionsByAdapter, {
+    const getProviderDefinitions = async (call: CallContext, adapterName: string): Promise<ProviderDefinition[]> => {
+      const { definitions } = await bus.request(call, AdapterSubsystemSubjects.getProviderDefinitionsByAdapter, {
         adapterName,
       });
       return definitions;
     };
 
-    const listBindingsForConfig = async (providerConfigId: string): Promise<BindingRecord[]> => {
-      const { bindings } = await bus.request(AdapterSubsystemSubjects.listBindingsByConfig, {
+    const listBindingsForConfig = async (call: CallContext, providerConfigId: string): Promise<BindingRecord[]> => {
+      const { bindings } = await bus.request(call, AdapterSubsystemSubjects.listBindingsByConfig, {
         providerConfigId,
       });
       return bindings;
     };
 
-    const findProviderConfigByName = async (name: string): Promise<{ readonly id: string } | undefined> => {
-      const { configs } = await bus.request(AdapterSubsystemSubjects.listProviderConfigs, { enabled: true });
+    const findProviderConfigByName = async (
+      call: CallContext,
+      name: string,
+    ): Promise<{ readonly id: string } | undefined> => {
+      const { configs } = await bus.request(call, AdapterSubsystemSubjects.listProviderConfigs, {
+        enabled: true,
+      });
       const targetName = slugifyProviderConfigName(name);
       return configs.find((config) => slugifyProviderConfigName(config.name) === targetName);
     };
 
     const findProviderDefinition = this.buildFindProviderDefinition(listEnabledAdapterNames, getProviderDefinitions);
     const findDefaultConfigForDefinition = async (
+      call: CallContext,
       definitionId: string,
     ): Promise<{ readonly id: string } | undefined> => {
-      const { configs } = await bus.request(AdapterSubsystemSubjects.listProviderConfigsByDefinition, {
+      const { configs } = await bus.request(call, AdapterSubsystemSubjects.listProviderConfigsByDefinition, {
         definitionId,
       });
       const enabledConfigs = configs.filter((config) => config.enabled);
       return enabledConfigs.find((config) => config.isDefault) ?? enabledConfigs[0];
     };
     const findConfigForDefinitionAndAdapter = async (
+      call: CallContext,
       definitionId: string,
       adapterName: string,
     ): Promise<{ readonly id: string } | undefined> => {
-      const { config } = await bus.request(AdapterSubsystemSubjects.findConfigForDefinitionAndAdapter, {
+      const { config } = await bus.request(call, AdapterSubsystemSubjects.findConfigForDefinitionAndAdapter, {
         definitionId,
         adapterName,
       });
@@ -149,13 +158,21 @@ export class CanonicalModelService extends BaseService {
    * @returns Async function that finds a provider definition by ID
    */
   private buildFindProviderDefinition(
-    listEnabledAdapterNames: () => Promise<string[]>,
-    getProviderDefinitions: (adapterName: string) => Promise<ProviderDefinition[]>,
-  ): (id: string, enabledAdapterNames?: readonly string[]) => Promise<ProviderDefinition | undefined> {
-    return async (id: string, enabledAdapterNames?: readonly string[]): Promise<ProviderDefinition | undefined> => {
-      const adapterNames = enabledAdapterNames ?? (await listEnabledAdapterNames());
+    listEnabledAdapterNames: (call: CallContext) => Promise<string[]>,
+    getProviderDefinitions: (call: CallContext, adapterName: string) => Promise<ProviderDefinition[]>,
+  ): (
+    call: CallContext,
+    id: string,
+    enabledAdapterNames?: readonly string[],
+  ) => Promise<ProviderDefinition | undefined> {
+    return async (
+      call: CallContext,
+      id: string,
+      enabledAdapterNames?: readonly string[],
+    ): Promise<ProviderDefinition | undefined> => {
+      const adapterNames = enabledAdapterNames ?? (await listEnabledAdapterNames(call));
       for (const adapterName of adapterNames) {
-        const definitions = await getProviderDefinitions(adapterName);
+        const definitions = await getProviderDefinitions(call, adapterName);
         const definition = definitions.find((provider) => provider.id === id);
         if (definition) {
           return definition;
@@ -178,21 +195,22 @@ export class CanonicalModelService extends BaseService {
    * @returns Async function that resolves a bare model name to a target
    */
   private buildResolveDefaultModelTarget(
-    listEnabledAdapterNames: () => Promise<string[]>,
-    getProviderDefinitions: (adapterName: string) => Promise<ProviderDefinition[]>,
+    listEnabledAdapterNames: (call: CallContext) => Promise<string[]>,
+    getProviderDefinitions: (call: CallContext, adapterName: string) => Promise<ProviderDefinition[]>,
     findConfigForDefinitionAndAdapter: (
+      call: CallContext,
       definitionId: string,
       adapterName: string,
     ) => Promise<{ readonly id: string } | undefined>,
-  ): (model: string) => Promise<DefaultModelResolution> {
+  ): (call: CallContext, model: string) => Promise<DefaultModelResolution> {
     const bus = this.bus;
 
-    return async (model: string): Promise<DefaultModelResolution> => {
-      const adapterNames = await listEnabledAdapterNames();
+    return async (call: CallContext, model: string): Promise<DefaultModelResolution> => {
+      const adapterNames = await listEnabledAdapterNames(call);
       const definitionsByAdapter = await Promise.all(
         adapterNames.map(async (adapterName) => ({
           adapterName,
-          definitions: await getProviderDefinitions(adapterName),
+          definitions: await getProviderDefinitions(call, adapterName),
         })),
       );
 
@@ -203,7 +221,7 @@ export class CanonicalModelService extends BaseService {
         return { kind: 'not-found' };
       }
 
-      const { matches: registryMatches } = await bus.request(ModelRegistrySubjects.checkModelInProviders, {
+      const { matches: registryMatches } = await bus.request(call, ModelRegistrySubjects.checkModelInProviders, {
         providerIds: allProviderIds,
         model,
       });
@@ -212,6 +230,7 @@ export class CanonicalModelService extends BaseService {
         await Promise.all(
           definitionsByAdapter.map(({ adapterName, definitions }) =>
             this.collectAdapterCandidates(
+              call,
               adapterName,
               definitions,
               model,
@@ -229,6 +248,7 @@ export class CanonicalModelService extends BaseService {
   /**
    * Collect candidates for a single adapter by filtering providers that have the
    * model in the registry and have a bound config for the adapter.
+   * @param call - Call context of the message being handled
    * @param adapterName - The adapter being scanned
    * @param definitions - Provider definitions for the adapter
    * @param model - Bare model name being resolved
@@ -237,18 +257,20 @@ export class CanonicalModelService extends BaseService {
    * @returns Array of candidates for this adapter
    */
   private async collectAdapterCandidates(
+    call: CallContext,
     adapterName: string,
     definitions: ProviderDefinition[],
     model: string,
     registryMatches: Record<string, unknown>,
     findConfigForDefinitionAndAdapter: (
+      call: CallContext,
       definitionId: string,
       adapterName: string,
     ) => Promise<{ readonly id: string } | undefined>,
   ): Promise<DefaultModelCandidate[]> {
     const matchedProviders = definitions.filter((provider) => provider.id in registryMatches);
     const configs = await Promise.all(
-      matchedProviders.map((provider) => findConfigForDefinitionAndAdapter(provider.id, adapterName)),
+      matchedProviders.map((provider) => findConfigForDefinitionAndAdapter(call, provider.id, adapterName)),
     );
 
     return matchedProviders.flatMap((provider, index) => {
@@ -312,10 +334,13 @@ export class CanonicalModelService extends BaseService {
 
   /**
    * Load enabled provider config IDs from the adapter subsystem.
+   * @param call - Call context of the message being handled
    * @returns Enabled provider config IDs
    */
-  private async listEnabledProviderConfigIds(): Promise<Set<string>> {
-    const { configs } = await this.bus.request(AdapterSubsystemSubjects.listProviderConfigs, { enabled: true });
+  private async listEnabledProviderConfigIds(call: CallContext): Promise<Set<string>> {
+    const { configs } = await this.bus.request(call, AdapterSubsystemSubjects.listProviderConfigs, {
+      enabled: true,
+    });
     return new Set(configs.map((config) => config.id));
   }
 }

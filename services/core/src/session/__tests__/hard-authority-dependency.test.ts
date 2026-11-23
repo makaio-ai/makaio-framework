@@ -21,8 +21,10 @@ import {
   SessionOwnershipStorageSubjects,
   SessionSubjects,
   type AdapterSessionClaimRecord,
+  type CallContext,
   type MakaioSessionAgent,
 } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { registerRestartAgentsHandler } from '../handlers/restart-agents.js';
 import { startLeadAgent } from '../handlers/lead-start.js';
@@ -112,7 +114,7 @@ describe('the ownership authority is a hard dependency of every reserving start 
    * @param overrides - Fields the case needs on the row.
    */
   async function seedSession(sessionId: string, overrides?: { adapterSessionId?: string }): Promise<void> {
-    await bus.request(SessionStorageSubjects.set, {
+    await bus.request(createTestCall(), SessionStorageSubjects.set, {
       sessionId,
       session: createTestSession(sessionId, { machineId: MACHINE_ID, ...overrides }),
     });
@@ -124,7 +126,7 @@ describe('the ownership authority is a hard dependency of every reserving start 
    * @param sessionId - Session the agent belongs to.
    */
   async function seedResumableAgent(agentId: string, sessionId: string): Promise<void> {
-    await bus.request(AgentStorageSubjects.set, {
+    await bus.request(createTestCall(), AgentStorageSubjects.set, {
       agentId,
       agent: createTestAgent(agentId, {
         sessionId,
@@ -171,7 +173,7 @@ describe('the ownership authority is a hard dependency of every reserving start 
    * @returns The claims, in storage order.
    */
   async function loadClaims(machineId: string): Promise<AdapterSessionClaimRecord[]> {
-    const { claims } = await bus.request(SessionOwnershipStorageSubjects.listClaims, { machineId });
+    const { claims } = await bus.request(createTestCall(), SessionOwnershipStorageSubjects.listClaims, { machineId });
     return claims;
   }
 
@@ -181,18 +183,19 @@ describe('the ownership authority is a hard dependency of every reserving start 
    * @returns The stored agent rows, in storage order.
    */
   async function loadAgents(sessionId: string): Promise<readonly MakaioSessionAgent[]> {
-    const { agents } = await bus.request(AgentStorageSubjects.listBySession, { sessionId });
+    const { agents } = await bus.request(createTestCall(), AgentStorageSubjects.listBySession, { sessionId });
     return agents;
   }
 
   /**
    * Run one fresh lead start against whatever this host composed.
+   * @param call - Call context of the simulated start request.
    * @param sessionId - Session to start the lead into.
    * @param machineId - Machine to target; an empty value probes the runtime boundary.
    * @returns Whatever the start decided.
    */
-  function startLead(sessionId: string, machineId = MACHINE_ID): ReturnType<typeof startLeadAgent> {
-    return startLeadAgent(bus, {
+  function startLead(call: CallContext, sessionId: string, machineId = MACHINE_ID): ReturnType<typeof startLeadAgent> {
+    return startLeadAgent(call, bus, {
       sessionId,
       instance: {
         adapterId: ADAPTER_ID,
@@ -210,7 +213,7 @@ describe('the ownership authority is a hard dependency of every reserving start 
     const sessionId = 'no-authority-fresh-start';
     await seedSession(sessionId);
 
-    await expect(startLead(sessionId)).rejects.toThrow(RESERVE_START_SUBJECT);
+    await expect(startLead(createTestCall(), sessionId)).rejects.toThrow(RESERVE_START_SUBJECT);
 
     // Wave 2 §7.4's throwing-reservation rollback: the pre-dispatch row is the
     // only thing the attempt took, and it is taken back before the error
@@ -219,7 +222,7 @@ describe('the ownership authority is a hard dependency of every reserving start 
     expect(await loadAgents(sessionId)).toEqual([]);
     expect(await loadClaims(MACHINE_ID)).toEqual([]);
     expect(await loadClaims(KEYLESS_DESIGNATION_KEY.machineId)).toEqual([]);
-    const { session } = await bus.request(SessionStorageSubjects.get, { sessionId });
+    const { session } = await bus.request(createTestCall(), SessionStorageSubjects.get, { sessionId });
     expect(session?.leadAgentId).toBeUndefined();
   });
 
@@ -230,7 +233,7 @@ describe('the ownership authority is a hard dependency of every reserving start 
     registerResumableRuntime();
     cleanups.push(registerRestartAgentsHandler(bus));
 
-    const result = await bus.request(SessionSubjects.restartAgents, { sessionId });
+    const result = await bus.request(createTestCall(), SessionSubjects.restartAgents, { sessionId });
 
     expect(result.results).toHaveLength(1);
     expect(result.results[0]).toMatchObject({ agentId: 'restart-agent', success: false });
@@ -241,7 +244,7 @@ describe('the ownership authority is a hard dependency of every reserving start 
     // as a phantom recovery. No generation was taken and nothing was dispatched.
     expect(dispatchedRehydrates).toEqual([]);
     expect(await loadClaims(MACHINE_ID)).toEqual([]);
-    const { agent } = await bus.request(AgentStorageSubjects.get, { agentId: 'restart-agent' });
+    const { agent } = await bus.request(createTestCall(), AgentStorageSubjects.get, { agentId: 'restart-agent' });
     // Back to `idle`, which is where the claim found it. This agent is a *live*
     // one being restarted — the restart handler claims those by design — and
     // nothing here reached the provider, so its connector is exactly as it was.
@@ -259,9 +262,9 @@ describe('the ownership authority is a hard dependency of every reserving start 
     // start that *does* report a provider session goes on to settle currency,
     // and a settlement is keyed and therefore genuinely needs an identity.
     startedProviderSessionId = null;
-    await bus.request(SessionSubjects.create, { sessionId });
+    await bus.request(createTestCall(), SessionSubjects.create, { sessionId });
 
-    const result = await startLead(sessionId);
+    const result = await startLead(createTestCall(), sessionId);
 
     // Path A's reservation is keyless, so it never reads the machine-scoped key
     // triple and cannot answer `machine-identity-unavailable`. It designates and
@@ -269,7 +272,7 @@ describe('the ownership authority is a hard dependency of every reserving start 
     // the designation writes through.
     expect(result.outcome).toBe('started');
     expect(dispatchedStarts).toHaveLength(1);
-    const { session } = await bus.request(SessionSubjects.get, { sessionId });
+    const { session } = await bus.request(createTestCall(), SessionSubjects.get, { sessionId });
     expect(session?.leadAgentId).toBe(dispatchedStarts[0]);
     expect(await loadClaims(KEYLESS_DESIGNATION_KEY.machineId)).toEqual([]);
     const agents = await loadAgents(sessionId);
@@ -284,9 +287,9 @@ describe('the ownership authority is a hard dependency of every reserving start 
   it('refuses an unscoped fresh lead start before it reserves, persists, or dispatches', async () => {
     const sessionId = 'no-machine-identity-keyed-settlement';
     await composeAuthority();
-    await bus.request(SessionSubjects.create, { sessionId });
+    await bus.request(createTestCall(), SessionSubjects.create, { sessionId });
 
-    await expect(startLead(sessionId, '')).rejects.toMatchObject({ code: 'start-failed' });
+    await expect(startLead(createTestCall(), sessionId, '')).rejects.toMatchObject({ code: 'start-failed' });
 
     expect(dispatchedStarts).toEqual([]);
     expect(await loadClaims(KEYLESS_DESIGNATION_KEY.machineId)).toEqual([]);
@@ -297,17 +300,17 @@ describe('the ownership authority is a hard dependency of every reserving start 
   it('reserves and dispatches a restart normally once the authority is composed (case 85, control)', async () => {
     const sessionId = 'authority-restart';
     await composeAuthority(MACHINE_ID);
-    await bus.request(SessionSubjects.create, { sessionId, machineId: MACHINE_ID });
-    const { session } = await bus.request(SessionSubjects.get, { sessionId });
+    await bus.request(createTestCall(), SessionSubjects.create, { sessionId, machineId: MACHINE_ID });
+    const { session } = await bus.request(createTestCall(), SessionSubjects.get, { sessionId });
     if (!session) throw new Error('Session not found after create');
-    await bus.request(SessionStorageSubjects.set, {
+    await bus.request(createTestCall(), SessionStorageSubjects.set, {
       sessionId,
       session: { ...session, adapterSessionId: 'provider-session-xyz' },
     });
     await seedResumableAgent('restart-agent', sessionId);
     registerResumableRuntime();
 
-    const result = await bus.request(SessionSubjects.restartAgents, { sessionId });
+    const result = await bus.request(createTestCall(), SessionSubjects.restartAgents, { sessionId });
 
     // The control for the case above: the same fixture with the authority
     // composed reserves, dispatches and settles. Without it, "reports failed"

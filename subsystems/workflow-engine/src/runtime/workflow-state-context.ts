@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { JsonValue, WorkflowStateContext } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { createWorkflowStatePatch } from '../workflow-state-json-patch.js';
@@ -12,14 +13,19 @@ import { createWorkflowStatePatch } from '../workflow-state-json-patch.js';
  * The `update()` method applies the mutator to a structured clone of the current
  * state, then sends both JSON Patch operations and the full next value to the
  * engine for sequence-checked persistence.
+ * @param call - Call context of the handled message the state context serves; forwarded to every state request
  * @param executionId - Execution to bind the state context to
  * @param bus - Bus for state RPC calls
  * @returns A state context with `get()` and `update()` methods
  */
-export function createWorkflowStateContext(executionId: string, bus: IMakaioBus): WorkflowStateContext<JsonValue> {
+export function createWorkflowStateContext(
+  call: CallContext,
+  executionId: string,
+  bus: IMakaioBus,
+): WorkflowStateContext<JsonValue> {
   return {
     async get(): Promise<JsonValue> {
-      const result = await bus.request(WorkflowSubjects.state.get, {
+      const result = await bus.request(call, WorkflowSubjects.state.get, {
         executionId,
       });
       return result.value;
@@ -27,7 +33,7 @@ export function createWorkflowStateContext(executionId: string, bus: IMakaioBus)
 
     async update(mutator: (draft: JsonValue) => JsonValue | void | Promise<JsonValue | void>): Promise<JsonValue> {
       // Get current state
-      const current = await bus.request(WorkflowSubjects.state.get, {
+      const current = await bus.request(call, WorkflowSubjects.state.get, {
         executionId,
       });
 
@@ -38,7 +44,7 @@ export function createWorkflowStateContext(executionId: string, bus: IMakaioBus)
       const patch = createWorkflowStatePatch(current.value, nextValue);
 
       // Send the patch — use the full next value
-      const result = await bus.request(WorkflowSubjects.state.patch, {
+      const result = await bus.request(call, WorkflowSubjects.state.patch, {
         executionId,
         expectedSequence: current.sequence,
         patch,

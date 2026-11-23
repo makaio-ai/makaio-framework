@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { defineAdapterProviderAuth } from '@makaio/contracts';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
+import { createTestCall } from '@makaio/test-utils';
 import { AdapterRuntimeSnapshotError, resolveAdapterRuntimeSnapshot } from '../resolve-adapter-runtime-snapshot.js';
 
 const METHOD = { owner: 'provider' as const, providerDefinitionId: 'public-provider', methodId: 'none' };
@@ -71,7 +72,7 @@ describe('resolveAdapterRuntimeSnapshot selector correlation', () => {
     });
 
     await expect(
-      resolveAdapterRuntimeSnapshot(MakaioBus, {
+      resolveAdapterRuntimeSnapshot(createTestCall(), MakaioBus, {
         adapterName: 'public-adapter',
         providerConfigId: 'public-config',
       }),
@@ -86,7 +87,7 @@ describe('resolveAdapterRuntimeSnapshot selector correlation', () => {
       setResult(runtimeResponse(adapterName, providerConfigId));
     });
 
-    const error = await resolveAdapterRuntimeSnapshot(MakaioBus, {
+    const error = await resolveAdapterRuntimeSnapshot(createTestCall(), MakaioBus, {
       adapterName: 'public-adapter',
       providerConfigId: 'public-config',
     }).catch((value: unknown) => value);

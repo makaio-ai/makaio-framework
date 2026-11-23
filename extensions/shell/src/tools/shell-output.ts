@@ -25,7 +25,7 @@ export const shellOutputTool = defineTool({
     }
 
     try {
-      const result = await context.bus.requestOptional(ShellSubjects.output, input);
+      const result = await context.bus.requestOptional(context.call, ShellSubjects.output, input);
 
       if (!result.handled) {
         return toolError(ToolErrorCodes.TOOL_NOT_FOUND, 'Shell service is not available');

@@ -6,6 +6,7 @@
  */
 import * as path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { BaseService } from '@makaio/service-base';
 import { PackageSubjects } from './namespace.js';
 import type { PackageUpdateInfo } from './namespace.js';
@@ -301,12 +302,13 @@ export class PackageManagerService extends BaseService {
 
   /**
    * Emit `packages.installed` before resolving the install RPC.
+   * @param call - Call context of the install request.
    * @param packageName - Installed package name.
    * @param version - Installed version.
    */
-  private async emitInstalled(packageName: string, version: string): Promise<void> {
+  private async emitInstalled(call: CallContext, packageName: string, version: string): Promise<void> {
     try {
-      await this.bus.emit(PackageSubjects.installed, { packageName, version });
+      await this.bus.emit(call, PackageSubjects.installed, { packageName, version });
     } catch (err) {
       console.error('[PackageManagerService] installed emit failed:', err);
     }
@@ -314,11 +316,12 @@ export class PackageManagerService extends BaseService {
 
   /**
    * Emit `packages.uninstalled` before resolving the uninstall RPC.
+   * @param call - Call context of the uninstall request.
    * @param packageName - Uninstalled package name.
    */
-  private async emitUninstalled(packageName: string): Promise<void> {
+  private async emitUninstalled(call: CallContext, packageName: string): Promise<void> {
     try {
-      await this.bus.emit(PackageSubjects.uninstalled, { packageName });
+      await this.bus.emit(call, PackageSubjects.uninstalled, { packageName });
     } catch (err) {
       console.error('[PackageManagerService] uninstalled emit failed:', err);
     }
@@ -384,11 +387,16 @@ export class PackageManagerService extends BaseService {
   /**
    * Install a batch of npm packages through the dependency resolver and emit
    * `packages.installed` for each newly-installed package.
+   * @param call - Call context of the install request.
    * @param names - Normalized npm package names.
    * @param force - When `true`, bypass inverse-dependency version checks.
    * @returns Resolved install result payload.
    */
-  private async installNpmPackages(names: readonly string[], force?: boolean): Promise<PackageInstallResult> {
+  private async installNpmPackages(
+    call: CallContext,
+    names: readonly string[],
+    force?: boolean,
+  ): Promise<PackageInstallResult> {
     const snapshot = await this.yarnManager.readManifestSnapshot();
     let resolution: ResolutionResult;
     try {
@@ -405,7 +413,7 @@ export class PackageManagerService extends BaseService {
     }
     for (const resolved of resolution.installed) {
       if (resolved.source !== 'already-present') {
-        await this.emitInstalled(resolved.npmName, resolved.version);
+        await this.emitInstalled(call, resolved.npmName, resolved.version);
       }
     }
     const first = resolution.installed[0];
@@ -479,14 +487,14 @@ export class PackageManagerService extends BaseService {
         }
         const result = await this.localInstaller.install(normalizedNames[0]!);
         if (result.success) {
-          await this.emitInstalled(result.packageName, result.version ?? 'unknown');
+          await this.emitInstalled(ctx.call, result.packageName, result.version ?? 'unknown');
         }
         ctx.setResult(result);
         return;
       }
 
       try {
-        ctx.setResult(await this.installNpmPackages(normalizedNames, ctx.payload.force));
+        ctx.setResult(await this.installNpmPackages(ctx.call, normalizedNames, ctx.payload.force));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error('[PackageManagerService] Install failed:', message);
@@ -516,7 +524,7 @@ export class PackageManagerService extends BaseService {
       if (localExtension) {
         const result = await this.localInstaller.uninstall(packageName);
         if (result.success) {
-          await this.emitUninstalled(packageName);
+          await this.emitUninstalled(ctx.call, packageName);
         }
         ctx.setResult(result);
         return;
@@ -524,12 +532,8 @@ export class PackageManagerService extends BaseService {
 
       try {
         await this.yarnManager.uninstallPackage(packageName);
-        await this.emitUninstalled(packageName);
-        ctx.setResult({
-          success: true,
-          packageName,
-          restartRequired: true,
-        });
+        await this.emitUninstalled(ctx.call, packageName);
+        ctx.setResult({ success: true, packageName, restartRequired: true });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error('[PackageManagerService] Uninstall failed:', message);
@@ -556,11 +560,7 @@ export class PackageManagerService extends BaseService {
       }
       try {
         const latestVersion = await this.yarnManager.getLatestVersion(packageName);
-        ctx.setResult({
-          success: true,
-          packageName,
-          latestVersion,
-        });
+        ctx.setResult({ success: true, packageName, latestVersion });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error('[PackageManagerService] Version check failed:', message);

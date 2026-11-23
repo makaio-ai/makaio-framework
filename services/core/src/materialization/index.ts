@@ -10,7 +10,6 @@ export { buildGenericArtifactView, GENERIC_ARTIFACT_VIEW_BUILDER_VERSION } from 
 export {
   MaterializationOperationCoordinator,
   type MaterializationOperationLease,
-  type MaterializationOperationRequestOrigin,
   type MaterializationOperationScope,
   type MaterializationProviderObject,
 } from './materialization-operation-coordinator.js';

@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { SessionMessage } from '@makaio/contracts';
 import { MessageStorageSubjects } from '../messages/namespace.js';
 import { SessionEventStorageSubjects } from '../session-events/namespace.js';
@@ -15,11 +16,13 @@ const MAX_EVENTS_PER_SESSION = 10000;
  * Respects squash boundaries: if a squash event is encountered,
  * messages before it are replaced with the summary.
  * Paginates through all events until no more cursors or message limit is reached.
+ * @param call - Call context of the handled message the context is built for; forwarded to every request
  * @param bus - Bus instance for RPC calls
  * @param options - Build context options
  * @returns Assembled context result
  */
 export async function buildSessionContext(
+  call: CallContext,
   bus: IMakaioBus,
   options: BuildContextOptions,
 ): Promise<ContextAssemblyResult> {
@@ -31,7 +34,7 @@ export async function buildSessionContext(
   // Paginate through all events for this session
   let cursor: string | undefined;
   do {
-    const { events, nextCursor } = await bus.request(SessionEventStorageSubjects.getEvents, {
+    const { events, nextCursor } = await bus.request(call, SessionEventStorageSubjects.getEvents, {
       sessionId,
       options: { limit: MAX_EVENTS_PER_SESSION, ...(cursor && { after: cursor }) },
     });
@@ -57,7 +60,7 @@ export async function buildSessionContext(
       } else if (event.type === 'message') {
         // Fetch the actual message content
         const payload = event.payload as { messageId: string };
-        const { message } = await bus.request(MessageStorageSubjects.get, {
+        const { message } = await bus.request(call, MessageStorageSubjects.get, {
           messageId: payload.messageId,
         });
 

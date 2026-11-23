@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { WorkerNamespace, WorkerSubjects, WorkflowWorkerConfigSchema } from '@makaio/contracts';
 import type {
+  CallContext,
   WorkflowWorkerConfig,
   IWorkflowRunner,
   WorkflowFrameState,
@@ -46,21 +48,23 @@ function makePausedRunResult(
 
 /**
  * Start a workflow through the executor bus subject and return the execution ID.
+ * @param call - Call context for the test operation.
  * @param workflowId - Workflow definition to start.
  * @returns The started execution ID.
  */
-async function startWorkflowThroughExecutor(workflowId: string): Promise<string> {
-  const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId });
+async function startWorkflowThroughExecutor(call: CallContext, workflowId: string): Promise<string> {
+  const { executionId } = await MakaioBus.request(call, WorkflowSubjects.start, { workflowId });
   return executionId;
 }
 
 /**
  * Check durable execution state for any terminal or parked status.
+ * @param call - Call context for the test operation.
  * @param executionId - Execution to inspect.
  * @returns True when the execution has reached a settled state.
  */
-async function isExecutionSettled(executionId: string): Promise<boolean> {
-  const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+async function isExecutionSettled(call: CallContext, executionId: string): Promise<boolean> {
+  const { execution } = await MakaioBus.request(call, WorkflowStorageSubjects.getExecution, { executionId });
   return (
     execution?.status === 'completed' ||
     execution?.status === 'failed' ||
@@ -72,11 +76,12 @@ async function isExecutionSettled(executionId: string): Promise<boolean> {
 /**
  * Wait for the execution task to settle by observing any terminal or paused
  * lifecycle event for the given execution ID.
+ * @param call - Call context for the test operation.
  * @param executionId - Execution to wait for.
  * @returns A promise that resolves when the execution has reached a settled state.
  */
-async function waitForExecutionTaskToSettle(executionId: string): Promise<void> {
-  if (await isExecutionSettled(executionId)) {
+async function waitForExecutionTaskToSettle(call: CallContext, executionId: string): Promise<void> {
+  if (await isExecutionSettled(call, executionId)) {
     return;
   }
 
@@ -110,7 +115,7 @@ async function waitForExecutionTaskToSettle(executionId: string): Promise<void> 
         onSettle(ctx.payload.executionId);
       }),
     );
-    void isExecutionSettled(executionId).then((settled) => {
+    void isExecutionSettled(call, executionId).then((settled) => {
       if (settled) {
         onSettle(executionId);
       }
@@ -124,6 +129,7 @@ async function waitForExecutionTaskToSettle(executionId: string): Promise<void> 
  * This mirrors the state that would exist after an exit-and-redispatch provider
  * parks an execution: the execution row has `status: 'paused'` and a gate
  * instance with `status: 'waiting'` exists for the given node/frame.
+ * @param call - Call context for the test operation.
  * @param workflowId - Workflow definition identifier.
  * @param executionId - Execution identifier.
  * @param gateId - Gate node ID.
@@ -133,6 +139,7 @@ async function waitForExecutionTaskToSettle(executionId: string): Promise<void> 
  * @returns The seeded gate instance.
  */
 async function seedPausedExecutionAndGate(
+  call: CallContext,
   workflowId: string,
   executionId: string,
   gateId: string,
@@ -150,7 +157,7 @@ async function seedPausedExecutionAndGate(
     status: 'paused',
     completedAt: undefined,
   });
-  await MakaioBus.request(WorkflowStorageSubjects.setExecution, { execution });
+  await MakaioBus.request(call, WorkflowStorageSubjects.setExecution, { execution });
 
   // Persist a run context so resumePausedExecution can look it up.
   const workflow = createWorkflowDefinition({ id: workflowId });
@@ -176,7 +183,7 @@ async function seedPausedExecutionAndGate(
     ...(options.terminalAuthority !== undefined ? { terminalAuthority: options.terminalAuthority } : {}),
     ...(options.materializationSpec !== undefined ? { materializationSpec: options.materializationSpec } : {}),
   };
-  await MakaioBus.request(WorkflowStorageSubjects.setRunContext, { runContext });
+  await MakaioBus.request(call, WorkflowStorageSubjects.setRunContext, { runContext });
 
   if (options.seedResumeFrame !== false) {
     const resumeFrame: WorkflowFrameState = {
@@ -188,7 +195,7 @@ async function seedPausedExecutionAndGate(
       attempt: 0,
       startedAt: Date.now(),
     };
-    await MakaioBus.request(WorkflowStorageSubjects.setFrame, { executionId, frame: resumeFrame });
+    await MakaioBus.request(call, WorkflowStorageSubjects.setFrame, { executionId, frame: resumeFrame });
   }
 
   const gate: WorkflowGateInstance = {
@@ -201,7 +208,7 @@ async function seedPausedExecutionAndGate(
     timeoutMs: null,
     createdAt: Date.now(),
   };
-  await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, { gate });
+  await MakaioBus.request(call, WorkflowStorageSubjects.setGateInstance, { gate });
 
   return gate;
 }
@@ -238,7 +245,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
     await destroyEntered.promise;
 
     await expect(
-      MakaioBus.requestOptional(WorkflowSubjects.gate.respond, {
+      MakaioBus.requestOptional(createTestCall(), WorkflowSubjects.gate.respond, {
         executionId: 'execution-shutting-down',
         gateId: 'gate-shutting-down',
         action: 'approve',
@@ -258,7 +265,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
     // construct the paused result dynamically from the config.
     const stubRunner: IWorkflowRunner = {
       run: vi.fn(
-        (config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> =>
+        (_call: CallContext, config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> =>
           Promise.resolve({
             state: 'uncommitted',
             result: makePausedRunResult(config.executionId, config.workflowId, 'gate-approve', 'frame-gate-1'),
@@ -268,7 +275,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     // Persist the workflow definition so startExecution can look it up.
     setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: definition });
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.set, { workflow: definition });
 
     const pausedEvents: Array<{ executionId: string }> = [];
     const completedEvents: Array<{ executionId: string }> = [];
@@ -281,11 +288,13 @@ describe('WorkflowExecutor — paused gate integration', () => {
     });
 
     try {
-      const executionId = await startWorkflowThroughExecutor(workflowId);
-      await waitForExecutionTaskToSettle(executionId);
+      const executionId = await startWorkflowThroughExecutor(createTestCall(), workflowId);
+      await waitForExecutionTaskToSettle(createTestCall(), executionId);
 
       // 1. The execution status must be 'paused' — not completed/failed.
-      const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      const { execution } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, {
+        executionId,
+      });
       expect(execution?.status).toBe('paused');
       expect(execution?.completedAt).toBeUndefined();
 
@@ -312,7 +321,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
     };
 
     setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: definition });
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.set, { workflow: definition });
 
     const pausedEvents: string[] = [];
     const lifecycleEvents: string[] = [];
@@ -335,26 +344,28 @@ describe('WorkflowExecutor — paused gate integration', () => {
     );
 
     try {
-      const executionId = await startWorkflowThroughExecutor(workflowId);
+      const executionId = await startWorkflowThroughExecutor(createTestCall(), workflowId);
       releaseRunner.resolve({
         state: 'uncommitted',
         result: makePausedRunResult(executionId, workflowId, 'gate-approve', 'frame-gate-1'),
       });
       await pauseRequestReached.promise;
 
-      const cancellation = MakaioBus.request(WorkflowSubjects.cancel, {
+      const cancellation = MakaioBus.request(createTestCall(), WorkflowSubjects.cancel, {
         executionId,
         reason: 'cancel follows pause projection',
       });
-      await expect(MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).resolves.toEqual(
-        expect.objectContaining({ execution: expect.objectContaining({ status: 'paused' }) }),
-      );
+      await expect(
+        MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, { executionId }),
+      ).resolves.toEqual(expect.objectContaining({ execution: expect.objectContaining({ status: 'paused' }) }));
 
       releasePauseRequest.resolve();
       await pauseRequestFinished.promise;
       await expect(cancellation).resolves.toEqual({ cancelled: true });
 
-      const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      const { execution } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, {
+        executionId,
+      });
       expect(execution?.status).toBe('cancelled');
       expect(pausedEvents).toEqual([executionId]);
       expect(lifecycleEvents).toEqual(['paused', 'cancelled']);
@@ -372,12 +383,12 @@ describe('WorkflowExecutor — paused gate integration', () => {
     const stubRunner: IWorkflowRunner = { run: vi.fn(() => releaseRunner.promise) };
 
     setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: definition });
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.set, { workflow: definition });
 
     const cancellationFinished = Promise.withResolvers<void>();
     const offPaused = MakaioBus.on(WorkflowSubjects.execution.paused, async (ctx) => {
       await expect(
-        MakaioBus.request(WorkflowSubjects.cancel, {
+        MakaioBus.request(ctx.call, WorkflowSubjects.cancel, {
           executionId: ctx.payload.executionId,
           reason: 'cancelled by paused handler',
         }),
@@ -386,14 +397,16 @@ describe('WorkflowExecutor — paused gate integration', () => {
     });
 
     try {
-      const executionId = await startWorkflowThroughExecutor(workflowId);
+      const executionId = await startWorkflowThroughExecutor(createTestCall(), workflowId);
       releaseRunner.resolve({
         state: 'uncommitted',
         result: makePausedRunResult(executionId, workflowId, 'gate-approve', 'frame-gate-1'),
       });
       await cancellationFinished.promise;
       await vi.waitFor(async () => {
-        const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+        const { execution } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, {
+          executionId,
+        });
         expect(execution?.status).toBe('cancelled');
       });
     } finally {
@@ -413,15 +426,18 @@ describe('WorkflowExecutor — paused gate integration', () => {
     const stubRunner: IWorkflowRunner = { run: vi.fn(() => releaseRunner.promise) };
 
     setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: definition });
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.set, { workflow: definition });
     const holdCancelledEvent = MakaioBus.on(WorkflowSubjects.execution.cancelled, async () => {
       cancellationPersisted.resolve();
       await releaseCancellationPublication.promise;
     });
 
     try {
-      const executionId = await startWorkflowThroughExecutor(workflowId);
-      const cancellation = MakaioBus.request(WorkflowSubjects.cancel, { executionId, reason: 'race winner' });
+      const executionId = await startWorkflowThroughExecutor(createTestCall(), workflowId);
+      const cancellation = MakaioBus.request(createTestCall(), WorkflowSubjects.cancel, {
+        executionId,
+        reason: 'race winner',
+      });
       await cancellationPersisted.promise;
       releaseRunner.resolve({
         state: 'uncommitted',
@@ -432,9 +448,11 @@ describe('WorkflowExecutor — paused gate integration', () => {
       });
       releaseCancellationPublication.resolve();
       await expect(cancellation).resolves.toEqual({ cancelled: true });
-      await waitForExecutionTaskToSettle(executionId);
+      await waitForExecutionTaskToSettle(createTestCall(), executionId);
 
-      const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      const { execution } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, {
+        executionId,
+      });
       expect(execution?.status).toBe('cancelled');
     } finally {
       releaseCancellationPublication.resolve();
@@ -449,7 +467,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
     const frameId = 'frame-gate-paused-cancel-1';
 
     setup = await setupWorkflowExecutorTest();
-    await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId);
+    await seedPausedExecutionAndGate(createTestCall(), workflowId, executionId, gateId, frameId);
 
     const cancelledEvents: Array<{ executionId: string; workflowId: string; reason?: string }> = [];
     const gateResolvedEvents: Array<{ executionId: string; frameId: string; source: 'cancelled' }> = [];
@@ -473,18 +491,20 @@ describe('WorkflowExecutor — paused gate integration', () => {
     );
 
     try {
-      const cancelResult = await MakaioBus.request(WorkflowSubjects.cancel, {
+      const cancelResult = await MakaioBus.request(createTestCall(), WorkflowSubjects.cancel, {
         executionId,
         reason: 'stop parked gate',
       });
 
-      const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
-      const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+      const { execution } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, {
+        executionId,
+      });
+      const { gate } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getGateInstance, {
         executionId,
         nodeId: gateId,
         frameId,
       });
-      const response = await MakaioBus.request(WorkflowSubjects.gate.respond, {
+      const response = await MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
         executionId,
         gateId,
         frameId,
@@ -509,7 +529,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
   it('returns false when cancelling an unknown execution', async () => {
     setup = await setupWorkflowExecutorTest();
 
-    const cancelResult = await MakaioBus.request(WorkflowSubjects.cancel, {
+    const cancelResult = await MakaioBus.request(createTestCall(), WorkflowSubjects.cancel, {
       executionId: 'missing-paused-cancel',
       reason: 'not running',
     });
@@ -536,7 +556,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
     const runnerCalls: WorkflowWorkerConfig[] = [];
     const stubRunner: IWorkflowRunner = {
       ...(terminalAuthority !== undefined ? { terminalAuthority } : {}),
-      run: vi.fn(async (config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
+      run: vi.fn(async (call: CallContext, config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
         runnerCalls.push(config);
         const result: WorkflowRunResult = {
           executionId: config.executionId,
@@ -545,7 +565,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
         };
         if (terminalAuthority === 'authority') {
           if (!setup) throw new Error('Missing executor setup');
-          await setup.workflowExecutor.acceptAuthorityRunnerResult(config.executionId, result);
+          await setup.workflowExecutor.acceptAuthorityRunnerResult(call, config.executionId, result);
           return {
             state: 'authority-committed',
             result,
@@ -564,6 +584,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     // Seed storage with a paused execution and a waiting gate.
     await seedPausedExecutionAndGate(
+      createTestCall(),
       workflowId,
       executionId,
       gateId,
@@ -574,7 +595,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     // Send a gate.respond through the bus — the executor's low-priority fallback
     // handler should accept it.
-    const { accepted } = await MakaioBus.request(WorkflowSubjects.gate.respond, {
+    const { accepted } = await MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
       executionId,
       gateId,
       frameId,
@@ -585,7 +606,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
     expect(accepted).toBe(true);
 
     // The gate instance must be updated to 'resumed'.
-    const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+    const { gate } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getGateInstance, {
       executionId,
       nodeId: gateId,
       frameId,
@@ -602,7 +623,9 @@ describe('WorkflowExecutor — paused gate integration', () => {
     });
     await expect
       .poll(
-        async () => (await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status,
+        async () =>
+          (await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, { executionId })).execution
+            ?.status,
       )
       .toBe('completed');
   });
@@ -628,12 +651,20 @@ describe('WorkflowExecutor — paused gate integration', () => {
       { priority: 100 },
     );
     try {
-      await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId, {}, { terminalAuthority: owner });
+      await seedPausedExecutionAndGate(
+        createTestCall(),
+        workflowId,
+        executionId,
+        gateId,
+        frameId,
+        {},
+        { terminalAuthority: owner },
+      );
       // Prove the observer runs before the storage responder short-circuits dispatch.
       expect(observedStatuses).toEqual(['paused']);
       observedStatuses.length = 0;
       await expect(
-        MakaioBus.request(WorkflowSubjects.gate.respond, {
+        MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
           executionId,
           gateId,
           frameId,
@@ -643,13 +674,17 @@ describe('WorkflowExecutor — paused gate integration', () => {
       ).rejects.toThrow('incompatible with the persisted terminal authority');
       expect(run).not.toHaveBeenCalled();
       expect(observedStatuses).not.toContain('running');
-      const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
-      const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+      const { execution } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, {
+        executionId,
+      });
+      const { gate } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getGateInstance, {
         executionId,
         nodeId: gateId,
         frameId,
       });
-      const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+      const { runContext } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getRunContext, {
+        executionId,
+      });
       expect(execution?.status).toBe('paused');
       expect(gate?.status).toBe('waiting');
       expect(runContext?.terminalAuthority).toBe(owner);
@@ -667,24 +702,24 @@ describe('WorkflowExecutor — paused gate integration', () => {
     const runnerCalls: Array<{ executionId: string }> = [];
     const releaseRunner = Promise.withResolvers<WorkflowRunnerCompletion>();
     const stubRunner: IWorkflowRunner = {
-      run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
+      run: vi.fn((_call: CallContext, config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
         runnerCalls.push({ executionId: config.executionId });
         return releaseRunner.promise;
       }),
     };
 
     setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
-    await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId);
+    await seedPausedExecutionAndGate(createTestCall(), workflowId, executionId, gateId, frameId);
 
     const responses = await Promise.all([
-      MakaioBus.request(WorkflowSubjects.gate.respond, {
+      MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
         executionId,
         gateId,
         frameId,
         action: 'approve',
         resumeData: { decision: 'approved-a' },
       }),
-      MakaioBus.request(WorkflowSubjects.gate.respond, {
+      MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
         executionId,
         gateId,
         frameId,
@@ -696,7 +731,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
     expect(responses.map((response) => response.accepted).sort()).toEqual([false, true]);
     expect(runnerCalls).toEqual([{ executionId }]);
 
-    const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+    const { gate } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getGateInstance, {
       executionId,
       nodeId: gateId,
       frameId,
@@ -717,10 +752,10 @@ describe('WorkflowExecutor — paused gate integration', () => {
     const releaseSecondRunner = Promise.withResolvers<WorkflowRunnerCompletion>();
     let dispatches = 0;
     const runner: IWorkflowRunner = {
-      run: vi.fn(async (): Promise<WorkflowRunnerCompletion> => {
+      run: vi.fn(async (call: CallContext): Promise<WorkflowRunnerCompletion> => {
         dispatches++;
         if (dispatches !== 1) return releaseSecondRunner.promise;
-        await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
+        await MakaioBus.request(call, WorkflowStorageSubjects.setGateInstance, {
           gate: {
             executionId,
             nodeId: 'gate-two',
@@ -739,9 +774,9 @@ describe('WorkflowExecutor — paused gate integration', () => {
       }),
     };
     setup = await setupWorkflowExecutorTest({ workflowRunner: runner });
-    await seedPausedExecutionAndGate(workflowId, executionId, 'gate-one', 'frame-one');
-    const offPaused = MakaioBus.on(WorkflowSubjects.execution.paused, async () => {
-      const response = await MakaioBus.request(WorkflowSubjects.gate.respond, {
+    await seedPausedExecutionAndGate(createTestCall(), workflowId, executionId, 'gate-one', 'frame-one');
+    const offPaused = MakaioBus.on(WorkflowSubjects.execution.paused, async (ctx) => {
+      const response = await MakaioBus.request(ctx.call, WorkflowSubjects.gate.respond, {
         executionId,
         gateId: 'gate-two',
         frameId: 'frame-two',
@@ -752,7 +787,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
     });
     try {
       await expect(
-        MakaioBus.request(WorkflowSubjects.gate.respond, {
+        MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
           executionId,
           gateId: 'gate-one',
           frameId: 'frame-one',
@@ -762,9 +797,10 @@ describe('WorkflowExecutor — paused gate integration', () => {
       ).resolves.toMatchObject({ accepted: true });
       await expect(secondResponse.promise).resolves.toBe(true);
       expect(dispatches).toBe(2);
-      expect((await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status).toBe(
-        'running',
-      );
+      expect(
+        (await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, { executionId })).execution
+          ?.status,
+      ).toBe('running');
     } finally {
       offPaused();
       releaseSecondRunner.resolve({
@@ -788,9 +824,22 @@ describe('WorkflowExecutor — paused gate integration', () => {
     };
     setup = await setupWorkflowExecutorTest({ workflowRunner: runner, executionAttemptAuthority: authority });
     MakaioBus.registerNamespace(WorkerNamespace);
-    await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId, {}, { terminalAuthority: 'authority' });
-    await MakaioBus.request(WorkflowStorageSubjects.updateExecution, { executionId, status: 'running' });
-    const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    await seedPausedExecutionAndGate(
+      createTestCall(),
+      workflowId,
+      executionId,
+      gateId,
+      frameId,
+      {},
+      { terminalAuthority: 'authority' },
+    );
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.updateExecution, {
+      executionId,
+      status: 'running',
+    });
+    const { runContext } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getRunContext, {
+      executionId,
+    });
     if (!runContext) throw new Error('Expected portable owner context');
     const instruction = buildWorkflowAttemptInstruction({
       id: 'pause-publication-instruction',
@@ -807,7 +856,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
       await releasePublication.promise;
     });
     const result = makePausedRunResult(executionId, workflowId, gateId, frameId);
-    const submission = MakaioBus.request(WorkerSubjects.control.outcome.submit, {
+    const submission = MakaioBus.request(createTestCall(), WorkerSubjects.control.outcome.submit, {
       executionId,
       executionAttemptId: attempt.executionAttemptId,
       result,
@@ -816,7 +865,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
     try {
       await publicationReached.promise;
       expect(
-        await MakaioBus.request(WorkflowSubjects.gate.respond, {
+        await MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
           executionId,
           gateId,
           frameId,
@@ -824,9 +873,10 @@ describe('WorkflowExecutor — paused gate integration', () => {
           resumeData: {},
         }),
       ).toMatchObject({ accepted: true });
-      expect((await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status).toBe(
-        'running',
-      );
+      expect(
+        (await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, { executionId })).execution
+          ?.status,
+      ).toBe('running');
       releasePublication.resolve();
       await expect(submission).resolves.toEqual({ decision: 'accepted' });
       await expect(waiter).resolves.toEqual({
@@ -839,7 +889,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
       releasePublication.resolve();
       await submission.catch(() => undefined);
       const completed: WorkflowRunResult = { executionId, workflowId, status: 'completed' };
-      await setup.workflowExecutor.acceptAuthorityRunnerResult(executionId, completed);
+      await setup.workflowExecutor.acceptAuthorityRunnerResult(createTestCall(), executionId, completed);
       releaseRunner.resolve({
         state: 'authority-committed',
         result: completed,
@@ -860,7 +910,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     const stubRunner: IWorkflowRunner = {
       run: vi.fn(
-        (config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> =>
+        (_call: CallContext, config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> =>
           Promise.resolve({
             state: 'uncommitted',
             result: { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' },
@@ -869,7 +919,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
     };
 
     setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
-    const seededGate = await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId);
+    const seededGate = await seedPausedExecutionAndGate(createTestCall(), workflowId, executionId, gateId, frameId);
     const failRunningTransition = MakaioBus.on(
       WorkflowStorageSubjects.setExecution,
       (ctx) => {
@@ -882,7 +932,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     try {
       await expect(
-        MakaioBus.request(WorkflowSubjects.gate.respond, {
+        MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
           executionId,
           gateId,
           frameId,
@@ -894,8 +944,10 @@ describe('WorkflowExecutor — paused gate integration', () => {
       failRunningTransition();
     }
 
-    const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
-    const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+    const { execution } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, {
+      executionId,
+    });
+    const { gate } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getGateInstance, {
       executionId,
       nodeId: gateId,
       frameId,
@@ -918,16 +970,16 @@ describe('WorkflowExecutor — paused gate integration', () => {
       const runnerCalls: Array<{ executionId: string }> = [];
       const releaseRunner = Promise.withResolvers<WorkflowRunnerCompletion>();
       const stubRunner: IWorkflowRunner = {
-        run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
+        run: vi.fn((_call: CallContext, config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
           runnerCalls.push({ executionId: config.executionId });
           return releaseRunner.promise;
         }),
       };
 
       setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
-      await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId);
+      await seedPausedExecutionAndGate(createTestCall(), workflowId, executionId, gateId, frameId);
 
-      await MakaioBus.emit(WorkflowSubjects.gate.suspended, {
+      await MakaioBus.emit(createTestCall(), WorkflowSubjects.gate.suspended, {
         executionId,
         nodeId: gateId,
         frameId,
@@ -939,7 +991,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
       });
 
       await Promise.all([
-        MakaioBus.request(WorkflowSubjects.gate.respond, {
+        MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
           executionId,
           gateId,
           frameId,
@@ -973,7 +1025,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
       }),
     };
     setup = await setupWorkflowExecutorTest({ workflowRunner: runner });
-    await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId);
+    await seedPausedExecutionAndGate(createTestCall(), workflowId, executionId, gateId, frameId);
     const loading = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     let frameReads = 0;
@@ -989,7 +1041,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
       },
       { priority: 100 },
     );
-    const resuming = MakaioBus.request(WorkflowSubjects.gate.respond, {
+    const resuming = MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
       executionId,
       gateId,
       frameId,
@@ -998,14 +1050,18 @@ describe('WorkflowExecutor — paused gate integration', () => {
     });
     try {
       await loading.promise;
-      await expect(MakaioBus.request(WorkflowSubjects.cancel, { executionId })).resolves.toEqual({ cancelled: true });
+      await expect(MakaioBus.request(createTestCall(), WorkflowSubjects.cancel, { executionId })).resolves.toEqual({
+        cancelled: true,
+      });
       release.resolve();
       if (fails) await expect(resuming).rejects.toThrow('Resume frame preparation failed after cancellation');
       else await resuming;
-      expect((await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution).toMatchObject({
+      expect(
+        (await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, { executionId })).execution,
+      ).toMatchObject({
         status: 'cancelled',
       });
-      const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+      const { gate } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getGateInstance, {
         executionId,
         nodeId: gateId,
         frameId,
@@ -1027,7 +1083,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     const stubRunner: IWorkflowRunner = {
       run: vi.fn(
-        (config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> =>
+        (_call: CallContext, config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> =>
           Promise.resolve({
             state: 'uncommitted',
             result: { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' },
@@ -1036,10 +1092,18 @@ describe('WorkflowExecutor — paused gate integration', () => {
     };
 
     setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
-    await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId, {}, { seedResumeFrame: false });
+    await seedPausedExecutionAndGate(
+      createTestCall(),
+      workflowId,
+      executionId,
+      gateId,
+      frameId,
+      {},
+      { seedResumeFrame: false },
+    );
 
     await expect(
-      MakaioBus.request(WorkflowSubjects.gate.respond, {
+      MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
         executionId,
         gateId,
         frameId,
@@ -1048,9 +1112,11 @@ describe('WorkflowExecutor — paused gate integration', () => {
       }),
     ).rejects.toThrow(`[WorkflowExecutor] Missing resume frames for paused execution: ${executionId}`);
 
-    const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
+    const { execution } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, {
+      executionId,
+    });
     expect(execution?.status).toBe('paused');
-    const { gate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+    const { gate } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getGateInstance, {
       executionId,
       nodeId: gateId,
       frameId,
@@ -1074,11 +1140,11 @@ describe('WorkflowExecutor — paused gate integration', () => {
     };
     setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
     const gate = {
-      ...(await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId)),
+      ...(await seedPausedExecutionAndGate(createTestCall(), workflowId, executionId, gateId, frameId)),
       executionAttemptId: 'attempt-a',
     };
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, { gate });
-    const { accepted } = await MakaioBus.request(WorkflowSubjects.gate.respond, {
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.setGateInstance, { gate });
+    const { accepted } = await MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
       executionId,
       executionAttemptId,
       gateId,
@@ -1087,7 +1153,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
       resumeData: {},
     });
     expect(accepted).toBe(false);
-    const { gate: persistedGate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+    const { gate: persistedGate } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getGateInstance, {
       executionId,
       nodeId: gateId,
       frameId,
@@ -1104,7 +1170,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     const stubRunner: IWorkflowRunner = {
       run: vi.fn(
-        (config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> =>
+        (_call: CallContext, config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> =>
           Promise.resolve({
             state: 'uncommitted',
             result: { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' },
@@ -1114,14 +1180,14 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
 
-    const gate = await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId, {
+    const gate = await seedPausedExecutionAndGate(createTestCall(), workflowId, executionId, gateId, frameId, {
       type: 'object',
       required: ['decision'],
       properties: { decision: { const: 'approved' } },
       additionalProperties: false,
     });
 
-    const { accepted } = await MakaioBus.request(WorkflowSubjects.gate.respond, {
+    const { accepted } = await MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
       executionId,
       gateId,
       frameId,
@@ -1131,7 +1197,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     expect(accepted).toBe(false);
 
-    const { gate: persistedGate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+    const { gate: persistedGate } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getGateInstance, {
       executionId,
       nodeId: gateId,
       frameId,
@@ -1148,7 +1214,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     const runnerCalls: Array<{ executionId: string }> = [];
     const stubRunner: IWorkflowRunner = {
-      run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
+      run: vi.fn((_call: CallContext, config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
         runnerCalls.push({ executionId: config.executionId });
         return Promise.resolve({
           state: 'uncommitted',
@@ -1159,9 +1225,9 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
 
-    await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId);
+    await seedPausedExecutionAndGate(createTestCall(), workflowId, executionId, gateId, frameId);
 
-    const { accepted } = await MakaioBus.request(WorkflowSubjects.gate.respond, {
+    const { accepted } = await MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
       executionId,
       gateId,
       action: 'approve',
@@ -1170,7 +1236,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     expect(accepted).toBe(true);
 
-    const { gate: persistedGate } = await MakaioBus.request(WorkflowStorageSubjects.getGateInstance, {
+    const { gate: persistedGate } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getGateInstance, {
       executionId,
       nodeId: gateId,
       frameId,
@@ -1188,7 +1254,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     const stubRunner: IWorkflowRunner = {
       run: vi.fn(
-        (config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> =>
+        (_call: CallContext, config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> =>
           Promise.resolve({
             state: 'uncommitted',
             result: { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' },
@@ -1198,11 +1264,11 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
     setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
 
-    const firstGate = await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId);
+    const firstGate = await seedPausedExecutionAndGate(createTestCall(), workflowId, executionId, gateId, frameId);
     const secondGate: WorkflowGateInstance = { ...firstGate, frameId: secondFrameId, createdAt: Date.now() };
-    await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, { gate: secondGate });
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.setGateInstance, { gate: secondGate });
 
-    const { accepted } = await MakaioBus.request(WorkflowSubjects.gate.respond, {
+    const { accepted } = await MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
       executionId,
       gateId,
       action: 'approve',
@@ -1210,7 +1276,9 @@ describe('WorkflowExecutor — paused gate integration', () => {
     });
 
     expect(accepted).toBe(false);
-    const { gates } = await MakaioBus.request(WorkflowStorageSubjects.listGateInstances, { executionId });
+    const { gates } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.listGateInstances, {
+      executionId,
+    });
     expect(gates.filter((gate) => gate.nodeId === gateId).map((gate) => gate.status)).toEqual(['waiting', 'waiting']);
     expect(stubRunner.run).not.toHaveBeenCalled();
   });
@@ -1226,7 +1294,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
       const runnerCalls: Array<{ executionId: string }> = [];
       const stubRunner: IWorkflowRunner = {
-        run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
+        run: vi.fn((_call: CallContext, config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
           runnerCalls.push({ executionId: config.executionId });
           return Promise.resolve({
             state: 'uncommitted',
@@ -1240,9 +1308,9 @@ describe('WorkflowExecutor — paused gate integration', () => {
       };
 
       setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner });
-      await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId);
+      await seedPausedExecutionAndGate(createTestCall(), workflowId, executionId, gateId, frameId);
 
-      await MakaioBus.emit(WorkflowSubjects.gate.suspended, {
+      await MakaioBus.emit(createTestCall(), WorkflowSubjects.gate.suspended, {
         executionId,
         nodeId: gateId,
         frameId,
@@ -1274,7 +1342,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
       const runnerCalls: Array<{ executionId: string }> = [];
       const stubRunner: IWorkflowRunner = {
-        run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
+        run: vi.fn((_call: CallContext, config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
           runnerCalls.push({ executionId: config.executionId });
           return Promise.resolve({
             state: 'uncommitted',
@@ -1288,8 +1356,8 @@ describe('WorkflowExecutor — paused gate integration', () => {
       };
 
       setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner, initExecutor: false });
-      const gate = await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId);
-      await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
+      const gate = await seedPausedExecutionAndGate(createTestCall(), workflowId, executionId, gateId, frameId);
+      await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.setGateInstance, {
         gate: { ...gate, autoAction: 'approve', timeoutMs: 1000 },
       });
 
@@ -1315,7 +1383,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
 
       const runnerCalls: Array<{ executionId: string }> = [];
       const stubRunner: IWorkflowRunner = {
-        run: vi.fn((config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
+        run: vi.fn((_call: CallContext, config: WorkflowWorkerConfig): Promise<WorkflowRunnerCompletion> => {
           runnerCalls.push({ executionId: config.executionId });
           return Promise.resolve({
             state: 'uncommitted',
@@ -1329,13 +1397,13 @@ describe('WorkflowExecutor — paused gate integration', () => {
       };
 
       setup = await setupWorkflowExecutorTest({ workflowRunner: stubRunner, initExecutor: false });
-      const gate = await seedPausedExecutionAndGate(workflowId, executionId, gateId, frameId);
-      await MakaioBus.request(WorkflowStorageSubjects.setGateInstance, {
+      const gate = await seedPausedExecutionAndGate(createTestCall(), workflowId, executionId, gateId, frameId);
+      await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.setGateInstance, {
         gate: { ...gate, autoAction: 'reject', timeoutMs: 1000 },
       });
 
       await setup.workflowExecutor.init();
-      const response = await MakaioBus.request(WorkflowSubjects.gate.respond, {
+      const response = await MakaioBus.request(createTestCall(), WorkflowSubjects.gate.respond, {
         executionId,
         gateId,
         frameId,

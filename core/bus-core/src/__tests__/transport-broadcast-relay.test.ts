@@ -10,6 +10,7 @@ import {
   type BusTransport,
   type BusTransportError,
 } from '../index.js';
+import { busContextOf } from '../kernel-api.js';
 
 type BroadcastResult = { nodeId: string; payload: unknown };
 
@@ -141,7 +142,7 @@ declare module '../index.js' {
   }
 }
 
-const { registerTransport } = MakaioBus.getContext().transportRegistry;
+const { registerTransport } = busContextOf(MakaioBus).transportRegistry;
 
 describe('Incoming broadcast relay', () => {
   let transport: BroadcastResultsTransport;

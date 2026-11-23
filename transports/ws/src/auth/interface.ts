@@ -58,6 +58,13 @@ export interface TransportAuth {
   getReceiveContext?(socket?: WebSocketLike): TransportReceiveContext | undefined;
 
   /**
+   * Return the authenticated identity used to look up socket policy.
+   * @param socket - Server-side socket whose identity should be retrieved.
+   * @returns The verified identity ID, or undefined when the socket has no bound identity.
+   */
+  getAuthenticatedIdentityId?(socket: WebSocketLike): string | undefined;
+
+  /**
    * Return whether a previously authenticated socket may still send bus frames.
    *
    * Auth strategies with expiring or revocable credentials should re-check the

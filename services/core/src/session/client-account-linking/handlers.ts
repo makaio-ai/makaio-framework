@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   ClientAccountIdentifierSchema,
   ClientSubjects,
@@ -19,11 +20,11 @@ import type {
 /**
  * Build the session-scoped account-observation handler.
  * @param bus - Bus instance used for storage lookups and account resolution
- * @returns Request handler for `client.session.account.observe`
+ * @returns Request handler for `client.session.account.observe`; it takes the received `call` per message
  */
 export function createSessionClientAccountObserveHandler(bus: IMakaioBus): SessionClientAccountObserveHandler {
-  return async (payload): Promise<ClientSessionAccountObserveResponse> => {
-    const resolvedSession = await resolveObservedSession(bus, payload);
+  return async (call, payload): Promise<ClientSessionAccountObserveResponse> => {
+    const resolvedSession = await resolveObservedSession(call, bus, payload);
     if (!resolvedSession) {
       return {
         handled: false,
@@ -35,7 +36,7 @@ export function createSessionClientAccountObserveHandler(bus: IMakaioBus): Sessi
 
     const { sessionId } = resolvedSession;
     const { observation, accountObserveRequest } = deriveClientAccountObservation(payload);
-    const accountObserveResult = await bus.requestOptional(ClientSubjects.account.observe, accountObserveRequest);
+    const accountObserveResult = await bus.requestOptional(call, ClientSubjects.account.observe, accountObserveRequest);
     if (!accountObserveResult.handled) {
       return {
         handled: false,
@@ -46,7 +47,7 @@ export function createSessionClientAccountObserveHandler(bus: IMakaioBus): Sessi
     }
 
     const { clientAccountId } = accountObserveResult.data;
-    const changed = await persistClientAccountObservation(bus, sessionId, observation, clientAccountId);
+    const changed = await persistClientAccountObservation(call, bus, sessionId, observation, clientAccountId);
 
     return {
       handled: true,
@@ -59,33 +60,35 @@ export function createSessionClientAccountObserveHandler(bus: IMakaioBus): Sessi
 
 /**
  * Resolve the target session from the observation locator.
+ * @param call - Call context of the observation message
  * @param bus - Bus instance used for storage lookups
  * @param payload - Session-scoped client account observation request
  * @returns Resolved session, or `null` when neither locator finds one
  */
 export async function resolveObservedSession(
+  call: CallContext,
   bus: IMakaioBus,
   payload: ClientSessionAccountObserveRequest,
 ): Promise<ResolvedClientObservationSession | null> {
   switch (payload.locator.kind) {
     case 'session': {
-      const { session } = await bus.request(SessionStorageSubjects.get, {
+      const { session } = await bus.request(call, SessionStorageSubjects.get, {
         sessionId: payload.locator.sessionId,
       });
       return session ? { sessionId: session.sessionId, session } : null;
     }
     case 'adapter-session': {
-      const { session } = await bus.request(SessionStorageSubjects.getByAdapterSessionId, {
+      const { session } = await bus.request(call, SessionStorageSubjects.getByAdapterSessionId, {
         adapterSessionId: payload.locator.adapterSessionId,
       });
       return session ? { sessionId: session.sessionId, session } : null;
     }
     case 'both': {
       const [{ session: bySessionId }, { session: byAdapterSessionId }] = await Promise.all([
-        bus.request(SessionStorageSubjects.get, {
+        bus.request(call, SessionStorageSubjects.get, {
           sessionId: payload.locator.sessionId,
         }),
-        bus.request(SessionStorageSubjects.getByAdapterSessionId, {
+        bus.request(call, SessionStorageSubjects.getByAdapterSessionId, {
           adapterSessionId: payload.locator.adapterSessionId,
         }),
       ]);
@@ -238,6 +241,7 @@ function normalizeString(value: unknown): string | undefined {
 
 /**
  * Persist the latest client account linkage onto the resolved session.
+ * @param call - Call context of the observation message
  * @param bus - Bus instance used for storage updates
  * @param sessionId - Session being updated
  * @param observation - Raw observation persisted on the session
@@ -245,6 +249,7 @@ function normalizeString(value: unknown): string | undefined {
  * @returns Whether the canonical client-account linkage changed during the authoritative storage write
  */
 async function persistClientAccountObservation(
+  call: CallContext,
   bus: IMakaioBus,
   sessionId: string,
   observation: ClientIdentityObservation,
@@ -254,7 +259,7 @@ async function persistClientAccountObservation(
   // separate subject. `client.session.account.observe` only records positive v1
   // observations, so overloading this write path with "clear linkage" semantics
   // would blur "no canonical account resolved" and "explicit unlink requested".
-  const updateResult = await bus.request(SessionStorageSubjects.update, {
+  const updateResult = await bus.request(call, SessionStorageSubjects.update, {
     sessionId,
     clientId: observation.clientId,
     clientAccountId,

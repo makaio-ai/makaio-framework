@@ -14,7 +14,8 @@
 import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { ClientSubjects, type ClientRuntimeObserveRequest } from '@makaio/contracts';
+import { ClientSubjects, type CallContext, type ClientRuntimeObserveRequest } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { CodexAppServerAgent } from '../agent.js';
 import { CodexAppServerConfig } from '../config.js';
 import {
@@ -32,11 +33,16 @@ import {
  * Create a CodexAppServerAgent wired to the connector from an existing test
  * context. The agent is initialized immediately so event subscriptions are
  * active before the first connector notification arrives.
+ * @param call - Call context for agent initialization
  * @param ctx - Connector test context
  * @param clientId - Client ID for observation payloads (default: 'codex')
  * @returns The initialized agent instance
  */
-async function createAgentForContext(ctx: ConnectorTestContext, clientId = 'codex'): Promise<CodexAppServerAgent> {
+async function createAgentForContext(
+  call: CallContext,
+  ctx: ConnectorTestContext,
+  clientId = 'codex',
+): Promise<CodexAppServerAgent> {
   const agent = new CodexAppServerAgent({
     agentId: 'test-agent',
     adapterId: 'test-adapter',
@@ -54,7 +60,7 @@ async function createAgentForContext(ctx: ConnectorTestContext, clientId = 'code
     // Return the already-created connector so the agent wires against it directly.
     connectorFactory: () => ctx.connector,
   });
-  await agent.init();
+  await agent.init(call);
   return agent;
 }
 
@@ -91,7 +97,7 @@ describe('CodexAppServerAgent — client.runtime.observe producer', () => {
 
   it('emits client.runtime.observe when thread/started arrives with an adapter session ID', async () => {
     ctx = await createConnectorTestContext();
-    await createAgentForContext(ctx);
+    await createAgentForContext(createTestCall(), ctx);
 
     const [captured, cleanup] = captureRuntimeObserveRequests();
     try {
@@ -111,7 +117,7 @@ describe('CodexAppServerAgent — client.runtime.observe producer', () => {
 
   it('forwards clientId from agent config into the observe request', async () => {
     ctx = await createConnectorTestContext();
-    await createAgentForContext(ctx, 'codex-custom');
+    await createAgentForContext(createTestCall(), ctx, 'codex-custom');
 
     const [captured, cleanup] = captureRuntimeObserveRequests();
     try {
@@ -127,7 +133,7 @@ describe('CodexAppServerAgent — client.runtime.observe producer', () => {
   it('includes an observedAt timestamp that is a recent epoch millisecond value', async () => {
     const before = Date.now();
     ctx = await createConnectorTestContext();
-    await createAgentForContext(ctx);
+    await createAgentForContext(createTestCall(), ctx);
 
     const [captured, cleanup] = captureRuntimeObserveRequests();
     try {
@@ -145,7 +151,7 @@ describe('CodexAppServerAgent — client.runtime.observe producer', () => {
 
   it('does not emit client.runtime.observe when no handler is registered (best-effort: no throw)', async () => {
     ctx = await createConnectorTestContext();
-    await createAgentForContext(ctx);
+    await createAgentForContext(createTestCall(), ctx);
 
     // No handler registered — requestOptional should silently return { handled: false }
     await expect(startConnectorWithThread(ctx)).resolves.toBeDefined();
@@ -154,7 +160,7 @@ describe('CodexAppServerAgent — client.runtime.observe producer', () => {
 
   it('does not crash when the runtime.observe handler rejects with an actual error (best-effort swallowing)', async () => {
     ctx = await createConnectorTestContext();
-    await createAgentForContext(ctx);
+    await createAgentForContext(createTestCall(), ctx);
 
     // Register a handler that rejects with a real error, not a NoHandlerError.
     // requestOptional re-throws non-NoHandlerError rejections, so the .catch()

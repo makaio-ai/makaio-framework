@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { IMakaioSession } from '@makaio/contracts';
 import type {
   ClientAccountObserveRequest,
@@ -28,7 +29,10 @@ export interface DerivedClientAccountObservation {
 
 /**
  * Request handler signature for session-scoped client account observation.
+ *
+ * The `call` is the received call context of the observation message; it is passed per message and never held.
  */
 export type SessionClientAccountObserveHandler = (
+  call: CallContext,
   payload: ClientSessionAccountObserveRequest,
 ) => Promise<ClientSessionAccountObserveResponse>;

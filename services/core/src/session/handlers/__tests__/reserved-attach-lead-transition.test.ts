@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   AdapterSubjects,
   AgentSubjects,
@@ -50,7 +51,7 @@ describe('reserved attach lead transitions', () => {
       lastActivityAt: now,
     };
     const session = fixture.seedSession({ agents: [previous], leadAgentId: PREVIOUS_LEAD_ID });
-    await MakaioBus.request(AgentStorageSubjects.set, { agentId: previous.agentId, agent: previous });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.set, { agentId: previous.agentId, agent: previous });
     return session;
   }
 
@@ -76,7 +77,7 @@ describe('reserved attach lead transitions', () => {
     const deadLead = fixture.ctx.getStoredAgent(agentId);
     if (deadLead === undefined) throw new Error('expected failed lead to remain materialized');
 
-    const recovered = await verifyAndRecoverAgents(MakaioBus, [deadLead], {
+    const recovered = await verifyAndRecoverAgents(createTestCall(), MakaioBus, [deadLead], {
       plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
       machineId: 'local-machine',
     });
@@ -118,7 +119,7 @@ describe('reserved attach lead transitions', () => {
       lastActivityAt: now,
     };
     const session = fixture.seedSession({ agents: [member] });
-    await MakaioBus.request(AgentStorageSubjects.set, { agentId: member.agentId, agent: member });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.set, { agentId: member.agentId, agent: member });
     fixture.registerAdapter(() => {
       throw new Error('first lead start exploded');
     });
@@ -201,7 +202,7 @@ describe('reserved attach lead transitions', () => {
           reservations += 1;
           await context.next();
           if (reservations === 2) {
-            await MakaioBus.request(AgentStorageSubjects.set, {
+            await MakaioBus.request(context.call, AgentStorageSubjects.set, {
               agentId: 'newer-lead',
               agent: {
                 agentId: 'newer-lead',
@@ -214,7 +215,7 @@ describe('reserved attach lead transitions', () => {
                 lastActivityAt: 1,
               },
             });
-            await designateSessionLead(MakaioBus, {
+            await designateSessionLead(context.call, MakaioBus, {
               sessionId: ATTACH_TEST_IDS.sessionId,
               agentId: 'newer-lead',
               expectedLeadAgentId: context.payload.agentId,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { McpSubjects } from '@makaio/contracts';
 import { ModelRegistryPublicSubjects } from '@makaio/contracts/model-registry';
 import { createMockBus, createTestBusInstance } from '@makaio/test-utils';
 import { accountInfo, mcpServerStatus, supportedCommands, supportedModels } from '../../src/shared/introspection.js';
@@ -29,7 +30,7 @@ describe('supportedModels', () => {
       });
     });
 
-    await expect(supportedModels(bus)).resolves.toEqual([
+    await expect(supportedModels(bus.own('root'), bus)).resolves.toEqual([
       {
         name: 'claude-sonnet-4-6',
         friendlyName: 'Claude Sonnet 4.6',
@@ -47,10 +48,11 @@ describe('supportedModels', () => {
 
   it('returns an empty list when the public model-registry subject has no handler', async () => {
     const { bus, requestOptional } = createMockBus();
+    const call = bus.own('root');
     requestOptional.mockResolvedValue({ handled: false });
 
-    await expect(supportedModels(bus)).resolves.toEqual([]);
-    expect(requestOptional).toHaveBeenCalledWith(ModelRegistryPublicSubjects.supportedModels, {});
+    await expect(supportedModels(call, bus)).resolves.toEqual([]);
+    expect(requestOptional).toHaveBeenCalledWith(call, ModelRegistryPublicSubjects.supportedModels, {});
   });
 });
 
@@ -62,7 +64,7 @@ describe('mcpServerStatus', () => {
   it('returns an empty array when no sessionId is provided', async () => {
     const { bus, request } = createMockBus();
 
-    const result = await mcpServerStatus(bus);
+    const result = await mcpServerStatus(bus.own('root'), bus);
 
     expect(result).toEqual([]);
     expect(request).not.toHaveBeenCalled();
@@ -71,13 +73,14 @@ describe('mcpServerStatus', () => {
   it('returns an empty array when sessionId is undefined', async () => {
     const { bus } = createMockBus();
 
-    const result = await mcpServerStatus(bus, undefined);
+    const result = await mcpServerStatus(bus.own('root'), bus, undefined);
 
     expect(result).toEqual([]);
   });
 
   it('calls mcp.session.resolve with the provided sessionId', async () => {
     const { bus, request } = createMockBus();
+    const call = bus.own('root');
     request.mockResolvedValue({
       sessionId: 'session-1',
       projectId: null,
@@ -87,10 +90,11 @@ describe('mcpServerStatus', () => {
       discoverableTools: [],
     });
 
-    await mcpServerStatus(bus, 'session-1');
+    await mcpServerStatus(call, bus, 'session-1');
 
     expect(request).toHaveBeenCalledWith(
-      expect.anything(),
+      call,
+      McpSubjects.session.resolve,
       expect.objectContaining({ sessionId: 'session-1', profileId: null, projectId: null }),
     );
   });
@@ -117,7 +121,7 @@ describe('mcpServerStatus', () => {
       discoverableTools: [],
     });
 
-    const result = await mcpServerStatus(bus, 'session-1');
+    const result = await mcpServerStatus(bus.own('root'), bus, 'session-1');
 
     expect(result).toEqual([
       { name: 'github', status: 'configured' },
@@ -136,7 +140,7 @@ describe('mcpServerStatus', () => {
       discoverableTools: [],
     });
 
-    const result = await mcpServerStatus(bus, 'session-1');
+    const result = await mcpServerStatus(bus.own('root'), bus, 'session-1');
 
     expect(result).toEqual([]);
   });

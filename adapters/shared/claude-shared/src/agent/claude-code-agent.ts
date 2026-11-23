@@ -2,7 +2,7 @@
 /* eslint max-lines: ["error", { "max": 450 }] */
 import { AIAgent, processDiscriminatedItems, AIAgentConnector } from '@makaio/ai-adapters-core';
 import type { OnOptions } from '@makaio/bus-core';
-import type { HandlerForSubjectDefinition, ScopedSubjectDefinition } from '@makaio/core';
+import type { CallContext, HandlerForSubjectDefinition, ScopedSubjectDefinition } from '@makaio/core';
 import type { ClaudeConnectorBus, ClaudeConnectorNamespace } from '../namespace/index.js';
 import { registerToolApprovalHandler } from '../tool-handling/index.js';
 import { AgentSubjects, type StepType, type SessionMessageBlock } from '@makaio/contracts';
@@ -181,7 +181,7 @@ export abstract class ClaudeCodeAgent<
       switch (msg.type) {
         case 'system':
           if (msg.subtype === 'init') {
-            await this.emitStart();
+            await this.emitStart(ctx.call);
           }
           break;
         case 'assistant': {
@@ -191,12 +191,12 @@ export abstract class ClaudeCodeAgent<
             if (subject.subject === 'tool.use') {
               if (messageId === undefined) return;
               const tp = payload as { toolName: string; args?: Record<string, unknown>; toolCallId: string };
-              await this.emitToolUse(messageId, tp.toolName, tp.args, tp.toolCallId);
+              await this.emitToolUse(ctx.call, messageId, tp.toolName, tp.args, tp.toolCallId);
             } else if (subject.subject === 'tool.started' || subject.subject === 'tool.completed') {
               if (messageId === undefined) return;
-              await this.emitGlobal(subject, { ...payload, messageId });
+              await this.emitGlobal(ctx.call, subject, { ...payload, messageId });
             } else {
-              await this.emitGlobal(subject, payload);
+              await this.emitGlobal(ctx.call, subject, payload);
             }
           });
           break;
@@ -204,19 +204,19 @@ export abstract class ClaudeCodeAgent<
         case 'stream_event': {
           const event = msg.event;
           if (event.type === 'content_block_start') {
-            await this.handleContentBlockStart(event, messageId);
+            await this.handleContentBlockStart(ctx.call, event, messageId);
           } else if (event.type === 'content_block_stop') {
-            await this.handleContentBlockStop(event);
+            await this.handleContentBlockStop(ctx.call, event);
           } else if (event.type === 'content_block_delta') {
-            await this.handleContentBlockDelta(event);
+            await this.handleContentBlockDelta(ctx.call, event);
           }
           break;
         }
         case 'result':
-          await this.handleResultEvent(msg);
+          await this.handleResultEvent(ctx.call, msg);
           break;
         case 'user':
-          await this.handleUserEvent(msg, messageId);
+          await this.handleUserEvent(ctx.call, msg, messageId);
           break;
       }
     });
@@ -224,10 +224,15 @@ export abstract class ClaudeCodeAgent<
 
   /**
    * Handle content_block_start event - reset accumulators and emit step.started.
+   * @param call - Call context of the sdk.event message being translated
    * @param event - The content_block_start event
    * @param messageId - Originating connector message identity
    */
-  private async handleContentBlockStart(event: ContentBlockStartEvent, messageId?: string): Promise<void> {
+  private async handleContentBlockStart(
+    call: CallContext,
+    event: ContentBlockStartEvent,
+    messageId?: string,
+  ): Promise<void> {
     const block = event.content_block;
     const toolUseMetadata = getToolUseMetadata(block);
     const stepType: StepType =
@@ -262,7 +267,7 @@ export abstract class ClaudeCodeAgent<
       return;
     }
 
-    await this.emitGlobal(AgentSubjects.step.started, {
+    await this.emitGlobal(call, AgentSubjects.step.started, {
       ...(messageId !== undefined && { messageId }),
       stepType,
       blockIndex: event.index,
@@ -271,7 +276,7 @@ export abstract class ClaudeCodeAgent<
     });
 
     if (toolUseMetadata) {
-      await this.emitGlobal(AgentSubjects.tool.started, {
+      await this.emitGlobal(call, AgentSubjects.tool.started, {
         ...(messageId !== undefined && { messageId }),
         toolName: toolUseMetadata.toolName,
         toolCallId: toolUseMetadata.toolCallId,
@@ -281,15 +286,16 @@ export abstract class ClaudeCodeAgent<
 
   /**
    * Handle content_block_stop - emit step.finished or parse tool args.
+   * @param call - Call context of the sdk.event message being translated
    * @param event - The content_block_stop event
    */
-  private async handleContentBlockStop(event: ContentBlockStopEvent): Promise<void> {
+  private async handleContentBlockStop(call: CallContext, event: ContentBlockStopEvent): Promise<void> {
     if (this.currentStepType !== 'tool_use') {
       const content: SessionMessageBlock =
         this.currentStepType === 'text'
           ? { type: 'text', content: this.currentTextContent }
           : { type: 'reasoning', content: this.currentReasoningContent };
-      await this.emitGlobal(AgentSubjects.step.finished, {
+      await this.emitGlobal(call, AgentSubjects.step.finished, {
         stepType: this.currentStepType,
         blockIndex: event.index,
         content,
@@ -305,18 +311,19 @@ export abstract class ClaudeCodeAgent<
 
   /**
    * Handle content_block_delta - accumulate streaming content and emit deltas.
+   * @param call - Call context of the sdk.event message being translated
    * @param event - The content_block_delta event
    */
-  private async handleContentBlockDelta(event: ContentBlockDeltaEvent): Promise<void> {
+  private async handleContentBlockDelta(call: CallContext, event: ContentBlockDeltaEvent): Promise<void> {
     const delta = event.delta;
     switch (delta.type) {
       case 'text_delta':
         this.currentTextContent += delta.text!;
-        await this.emitGlobal(AgentSubjects.message_delta, { text: delta.text! });
+        await this.emitGlobal(call, AgentSubjects.message_delta, { text: delta.text! });
         break;
       case 'thinking_delta':
         this.currentReasoningContent += delta.thinking!;
-        await this.emitGlobal(AgentSubjects.reasoning_delta, { content: delta.thinking! });
+        await this.emitGlobal(call, AgentSubjects.reasoning_delta, { content: delta.thinking! });
         break;
       case 'input_json_delta':
         if ('partial_json' in delta) {
@@ -328,18 +335,22 @@ export abstract class ClaudeCodeAgent<
 
   /**
    * Handle result event usage metadata.
+   * @param call - Call context of the sdk.event message being translated
    * @param payload - Result event payload
    */
-  private async handleResultEvent(payload: {
-    subtype: string;
-    is_error?: boolean;
-    usage?: unknown;
-    total_cost_usd?: number;
-  }): Promise<void> {
+  private async handleResultEvent(
+    call: CallContext,
+    payload: {
+      subtype: string;
+      is_error?: boolean;
+      usage?: unknown;
+      total_cost_usd?: number;
+    },
+  ): Promise<void> {
     if (payload.usage) {
       const usage = payload.usage as TerminalResultUsage;
-      await this.trackUsage(normalizeTerminalResultUsage(usage, payload.total_cost_usd));
-      await this.emitContextWindowUpdate({
+      await this.trackUsage(call, normalizeTerminalResultUsage(usage, payload.total_cost_usd));
+      await this.emitContextWindowUpdate(call, {
         currentTokens: computeContextWindowTokens(usage),
         maxTokens: this.getContextWindowSize() ?? 200_000,
         cachedTokens: usage.cache_read_input_tokens,
@@ -349,10 +360,12 @@ export abstract class ClaudeCodeAgent<
 
   /**
    * Handle user event - emit tool.output, tool.completed, and step.finished.
+   * @param call - Call context of the sdk.event message being translated
    * @param payload - User event payload
    * @param messageId - Originating connector message identity
    */
   private async handleUserEvent(
+    call: CallContext,
     payload: {
       message?: { content?: unknown };
       tool_use_result?: { stdout?: string; stderr?: string } | string;
@@ -362,10 +375,11 @@ export abstract class ClaudeCodeAgent<
     await routeClaudeToolResults({
       messageId,
       payload,
-      resolveToolOutput: async (ownerId, output, nativeId) => await this.emitToolOutput(ownerId, output, { nativeId }),
-      emitToolCompleted: async (result) => await this.emitGlobal(AgentSubjects.tool.completed, result),
+      resolveToolOutput: async (ownerId, output, nativeId) =>
+        await this.emitToolOutput(call, ownerId, output, { nativeId }),
+      emitToolCompleted: async (result) => await this.emitGlobal(call, AgentSubjects.tool.completed, result),
       emitToolStepFinished: async (result) =>
-        await this.emitGlobal(AgentSubjects.step.finished, {
+        await this.emitGlobal(call, AgentSubjects.step.finished, {
           stepType: 'tool_use' as StepType,
           blockIndex: result.blockIndex,
           content: {
@@ -407,11 +421,11 @@ export abstract class ClaudeCodeAgent<
       registerToolApprovalHandler(
         connector,
         this.getSubjects(),
-        async () => ({
+        async (call: CallContext) => ({
           adapterId: this.adapterId,
           adapterName: this.adapterName,
           agentId: this.agentId,
-          adapterSessionId: await this.getAdapterSessionId(),
+          adapterSessionId: await this.getAdapterSessionId(call),
           // Intentionally asserted: sessionId is validated by registerToolApprovalHandler's
           // resolved-context guard before the payload reaches AgentSubjects.toolApprove.
           sessionId: this.sessionId!,

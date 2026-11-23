@@ -1,4 +1,4 @@
-import type { ContributionProcessor } from '@makaio/kernel';
+import type { ContributionProcessor, KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel';
 import type { ArtifactKindRegistration } from '@makaio/contracts';
 import { ArtifactSchemaRegistryToken } from './packages.js';
 import type { ArtifactKindRegistrationOwner, ArtifactSchemaRegistry } from './artifact-schema-registry.js';
@@ -67,7 +67,7 @@ export function createArtifactKindContributionProcessor(): ContributionProcessor
   return {
     filter: (pkg) => (pkg.artifactKinds?.kinds?.length ?? 0) > 0,
 
-    async processActivated(name, pkg, ctx) {
+    async processActivated(name: string, pkg: KernelMakaioExtension, ctx: KernelExtensionContext) {
       const registry = ctx.getService(ArtifactSchemaRegistryToken);
       if (!registry) {
         throw new Error(
@@ -84,7 +84,7 @@ export function createArtifactKindContributionProcessor(): ContributionProcessor
       activeContributions.set(name, { registry, owner, registrations });
     },
 
-    async processStopped(name) {
+    async processStopped(name: string) {
       try {
         stopContribution(name);
       } catch (error) {

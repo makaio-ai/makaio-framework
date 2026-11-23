@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type { AdapterRetirementAttempt } from './adapter-runtime-lifecycle.js';
 
 /** Exact runtime identity whose routing availability is being withdrawn. */
@@ -28,15 +29,17 @@ export interface DeinitializedAdapterObservation {
  *
  * This is the registry-owned attempt used only when the adapter did not publish
  * for itself. Subscriber failure is reported but cannot block registry cleanup.
+ * @param call - Call context of the retirement attempt the publication belongs to.
  * @param bus - Global adapter lifecycle bus.
  * @param identity - Exact instance identity being withdrawn.
  */
 export async function publishAdapterDeinitializationBestEffort(
+  call: CallContext,
   bus: IMakaioBus,
   identity: DeinitializedAdapterIdentity,
 ): Promise<void> {
   try {
-    await bus.emit(AdapterSubjects.deinitialized, identity);
+    await bus.emit(call, AdapterSubjects.deinitialized, identity);
   } catch (error) {
     console.warn(`[AdapterRuntimeRegistry] Failed to publish deinitialization for "${identity.adapterName}":`, error);
   }
@@ -49,12 +52,14 @@ export async function publishAdapterDeinitializationBestEffort(
  * attempt, not that every local or remote subscriber received it. Retrying a
  * self-owned attempt cannot guarantee delivery and would violate the exact-once
  * lifecycle contract, so the registry falls back only when no attempt occurred.
+ * @param call - Call context forwarded to the fallback publication, should it fire.
  * @param bus - Global adapter lifecycle bus.
  * @param identity - Exact instance identity being closed.
  * @param onAttemptObserved - Withdraw the exact instance from live routing.
  * @returns Observation used to conditionally publish the registry fallback.
  */
 export function observeAdapterDeinitialization(
+  call: CallContext,
   bus: IMakaioBus,
   identity: DeinitializedAdapterIdentity,
   onAttemptObserved: () => void = () => undefined,
@@ -75,7 +80,7 @@ export function observeAdapterDeinitialization(
 
   return {
     async publishFallback(): Promise<void> {
-      if (!attemptObserved) await publishAdapterDeinitializationBestEffort(bus, identity);
+      if (!attemptObserved) await publishAdapterDeinitializationBestEffort(call, bus, identity);
     },
     dispose: cleanup,
   };
@@ -83,6 +88,7 @@ export function observeAdapterDeinitialization(
 
 /**
  * Close an adapter and publish the registry fallback when the adapter did not.
+ * @param call - Call context forwarded to the observed fallback publication.
  * @param bus - Global adapter lifecycle bus.
  * @param identity - Exact instance identity being closed.
  * @param close - Close operation whose classified attempt permits fallback publication.
@@ -90,12 +96,13 @@ export function observeAdapterDeinitialization(
  * @returns The close attempt including any close/publication flight still in progress.
  */
 export async function closeAdapterWithDeinitializationFallback(
+  call: CallContext,
   bus: IMakaioBus,
   identity: DeinitializedAdapterIdentity,
   close: () => Promise<AdapterRetirementAttempt>,
   onWithdrawalObserved: () => void,
 ): Promise<AdapterRetirementAttempt> {
-  const observation = observeAdapterDeinitialization(bus, identity, onWithdrawalObserved);
+  const observation = observeAdapterDeinitialization(call, bus, identity, onWithdrawalObserved);
   let completionOwnsObservation = false;
   try {
     const attempt = await close();
@@ -124,6 +131,7 @@ export async function closeAdapterWithDeinitializationFallback(
 
 /**
  * Start a retirement attempt, adding deinitialization ownership only for a previously live slot.
+ * @param call - Call context of the retirement flight, forwarded to any fallback publication.
  * @param bus - Global lifecycle bus.
  * @param identity - Exact instance identity for a possible fallback withdrawal.
  * @param close - Classified close attempt owned by the retirement flight.
@@ -131,12 +139,13 @@ export async function closeAdapterWithDeinitializationFallback(
  * @returns Classified attempt, including any pending close/publication completion.
  */
 export function startAdapterRetirementAttempt(
+  call: CallContext,
   bus: IMakaioBus,
   identity: DeinitializedAdapterIdentity,
   close: () => Promise<AdapterRetirementAttempt>,
   publishDeinitialization: boolean,
 ): Promise<AdapterRetirementAttempt> {
   return publishDeinitialization
-    ? closeAdapterWithDeinitializationFallback(bus, identity, close, () => undefined)
+    ? closeAdapterWithDeinitializationFallback(call, bus, identity, close, () => undefined)
     : close();
 }

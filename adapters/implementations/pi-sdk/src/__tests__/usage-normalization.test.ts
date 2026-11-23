@@ -11,8 +11,9 @@ import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AgentSubjects, type ConnectorTeardownResult } from '@makaio/contracts';
+import { AgentSubjects, type CallContext, type ConnectorTeardownResult } from '@makaio/contracts';
 import { createNoAuthTestProviderContext } from '@makaio/ai-adapters-core';
+import { createTestCall } from '@makaio/test-utils';
 import { PiAgent } from '../agent.js';
 import { PiConnector } from '../connector.js';
 import { PiSdkNamespace, PiSdkSubjects } from '../namespaces/index.js';
@@ -41,19 +42,21 @@ class TestPiConnector extends PiConnector {
   /**
    * Emit a raw usage payload on the scoped `usage` subject, exactly like the
    * production session layer does after a completed assistant message.
+   * @param call - Call context of the message that produced the usage
    * @param usage - Raw Pi SDK usage object
    */
-  public emitUsage(usage: unknown): Promise<void> {
-    return this.emit(PiSdkSubjects.usage, { eventType: 'usage', usage });
+  public emitUsage(call: CallContext, usage: unknown): Promise<void> {
+    return this.emit(call, PiSdkSubjects.usage, { eventType: 'usage', usage });
   }
 }
 
 /**
  * Create a fully wired PiAgent backed by the stub connector.
+ * @param call - Call context that initializes the agent
  * @returns Agent under test and its connector
  */
-async function makeAgent(): Promise<{ agent: PiAgent; connector: TestPiConnector }> {
-  const adapterBus = await PiSdkNamespace.scopedBus();
+async function makeAgent(call: CallContext): Promise<{ agent: PiAgent; connector: TestPiConnector }> {
+  const adapterBus = await PiSdkNamespace.scopedBus(MakaioBus);
   let connector: TestPiConnector | undefined;
   const agent = new PiAgent({
     agentId: TEST_AGENT_ID,
@@ -88,7 +91,7 @@ async function makeAgent(): Promise<{ agent: PiAgent; connector: TestPiConnector
     },
   });
 
-  await agent.init();
+  await agent.init(call);
   if (!connector) throw new Error('connectorFactory was not invoked during init()');
   return { agent, connector };
 }
@@ -112,10 +115,10 @@ describe('PiAgent usage normalization', () => {
       usageEvents.push(ctx.payload as Record<string, unknown>);
     });
 
-    const { agent, connector } = await makeAgent();
+    const { agent, connector } = await makeAgent(createTestCall());
     agents.push(agent);
 
-    await connector.emitUsage({
+    await connector.emitUsage(createTestCall(), {
       input: 100,
       output: 20,
       cacheRead: 30,
@@ -147,10 +150,10 @@ describe('PiAgent usage normalization', () => {
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     try {
-      const { agent, connector } = await makeAgent();
+      const { agent, connector } = await makeAgent(createTestCall());
       agents.push(agent);
 
-      await connector.emitUsage({ input: 'not-a-number' });
+      await connector.emitUsage(createTestCall(), { input: 'not-a-number' });
 
       await vi.waitFor(() =>
         expect(consoleWarn).toHaveBeenCalledWith('[PiAgent] Received usage event with unexpected shape; skipping.'),

@@ -12,7 +12,7 @@
  * @packageDocumentation
  */
 
-import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { DeferredPromise } from '@makaio/utils';
 import type { RawClientHookPayload } from '@makaio/subsystem-client';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
@@ -22,6 +22,8 @@ import { createHookEventRouter, type HookEventCallbacks } from './utils/hook-eve
 
 /** Configuration for a TmuxSession instance. */
 export interface TmuxSessionConfig {
+  /** Bus the hook subscription is registered on (the carrier's bus, not the process-wide one). */
+  bus: IMakaioBus;
   /** The tmux PTY process handle from the supervisor. */
   ptyProcess: ITmuxPtyProcess;
   /** Claude Code session ID expected from hook events. */
@@ -39,6 +41,7 @@ export interface TmuxSessionConfig {
  * - Hook event subscription with session ID filtering
  */
 export class TmuxSession {
+  private readonly bus: IMakaioBus;
   private readonly ptyProcess: ITmuxPtyProcess;
   private readonly expectedClaudeSessionId: string;
   private claudeSessionId: string | undefined;
@@ -49,6 +52,7 @@ export class TmuxSession {
    * @param config - Session configuration
    */
   public constructor(config: TmuxSessionConfig) {
+    this.bus = config.bus;
     this.ptyProcess = config.ptyProcess;
     this.expectedClaudeSessionId = config.expectedClaudeSessionId;
   }
@@ -177,10 +181,11 @@ export class TmuxSession {
   /**
    * Subscribe to Claude Code hook events filtered to this session.
    *
-   * Subscribes on the **global** bus because `client:claude-code.hook.received`
-   * lives in the `client:claude-code` namespace, not the adapter's scoped
+   * Subscribes on the bus passed in {@link TmuxSessionConfig.bus}, which must
+   * be the host-level bus rather than the adapter's scoped namespace view,
+   * because `client:claude-code.hook.received` lives in the `client:claude-code`
    * namespace. Hook events originate from external processes and are emitted
-   * on the global bus by the hook bridge (tests) or the CLI kernel (production).
+   * on that bus by the hook bridge (tests) or the CLI kernel (production).
    *
    * The returned unsubscribe function removes the bus listener. Call it
    * during cleanup to prevent memory leaks.
@@ -201,7 +206,7 @@ export class TmuxSession {
 
     const router = createHookEventRouter(() => this.expectedClaudeSessionId, wrappedCallbacks);
 
-    this.hookUnsubscribe = MakaioBus.on(
+    this.hookUnsubscribe = this.bus.on(
       ClaudeCodeClientSubjects.hook.received,
       async (ctx: { payload: RawClientHookPayload }) => {
         await router(ctx.payload);

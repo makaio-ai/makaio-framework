@@ -22,6 +22,7 @@ import {
   registerMemoryAgentStorage,
   type SessionStorageMemoryState,
 } from '@makaio/services-core/session';
+import { createTestCall } from '@makaio/test-utils';
 import { updateAgentActivityStatusBestEffort } from '../agent-storage-status.js';
 
 const AGENT_ID = 'activity-stamp-agent';
@@ -98,7 +99,7 @@ describe('the per-turn activity stamp', () => {
       waiting.push(resolve);
       answered.set(status, waiting);
     });
-    updateAgentActivityStatusBestEffort(bus, AGENT_ID, status);
+    updateAgentActivityStatusBestEffort(createTestCall(), bus, AGENT_ID, status);
     return settled;
   }
 

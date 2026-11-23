@@ -1,7 +1,13 @@
 import type { MakaioBusContext } from '../types/index.js';
 import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 import { getOnPropagationPromise, on } from './on.js';
-import type { HandlerForSubjectDefinition, PayloadFilter, SubjectDefinition, TypedPayloadFilter } from '@makaio/core';
+import type {
+  HandlerForSubjectDefinition,
+  PartyRef,
+  PayloadFilter,
+  SubjectDefinition,
+  TypedPayloadFilter,
+} from '@makaio/core';
 
 /**
  * Options for the Promise-based once() method.
@@ -65,6 +71,7 @@ type ContextForSubjectDefinition<T extends SubjectDefinition> = Parameters<Handl
  * The handler is removed BEFORE being invoked to prevent re-entrance issues if the
  * handler triggers the same event.
  * @param context - Makaio bus context
+ * @param owner - Carrier of the bus instance registering the handler; becomes the owner of the underlying `on()` entry
  * @param subjectDefinition - Subject definition with subject pattern and metadata
  * @param handler - Handler function (EventHandler for events, RequestHandler for requests)
  * @returns Unsubscribe function for manual cleanup if needed
@@ -110,6 +117,7 @@ type ContextForSubjectDefinition<T extends SubjectDefinition> = Parameters<Handl
  */
 export function once<T extends SubjectDefinition>(
   context: MakaioBusContext,
+  owner: PartyRef,
   subjectDefinition: T,
   handler: HandlerForSubjectDefinition<T>,
 ): () => void;
@@ -117,18 +125,19 @@ export function once<T extends SubjectDefinition>(
 /**
  * Wait for an event or request to occur, returning a Promise.
  * @param context - Makaio bus context
+ * @param owner - Carrier of the bus instance registering the handler; becomes the owner of the underlying `on()` entry
  * @param subjectDefinition - Subject definition with subject pattern and metadata
  * @param options - Options for timeout, filter, and abort signal
  * @returns Promise that resolves with the event/request context
  * @example Simple await
  * ```typescript
- * const ctx = await once(context, Subjects.init);
+ * const ctx = await once(context, owner, Subjects.init);
  * console.debug('Event received:', ctx.payload);
  * ```
  * @example With timeout
  * ```typescript
  * try {
- *   const ctx = await once(context, Subjects.init, { timeoutMs: 5000 });
+ *   const ctx = await once(context, owner, Subjects.init, { timeoutMs: 5000 });
  * } catch (err) {
  *   if (err instanceof OnceTimeoutError) {
  *     console.debug('Timed out waiting for event');
@@ -137,7 +146,7 @@ export function once<T extends SubjectDefinition>(
  * ```
  * @example With declarative filter (waits for matching event)
  * ```typescript
- * const ctx = await once(context, Subjects.message, {
+ * const ctx = await once(context, owner, Subjects.message, {
  *   filter: { sessionId: expectedId }
  * });
  * // Resolves only when a message with matching sessionId is received
@@ -145,18 +154,20 @@ export function once<T extends SubjectDefinition>(
  * @example With AbortSignal
  * ```typescript
  * const controller = new AbortController();
- * const promise = once(context, Subjects.init, { signal: controller.signal });
+ * const promise = once(context, owner, Subjects.init, { signal: controller.signal });
  * controller.abort(); // Cancels the wait
  * ```
  */
 export function once<T extends SubjectDefinition>(
   context: MakaioBusContext,
+  owner: PartyRef,
   subjectDefinition: T,
   options?: OnceOptions<T>,
 ): Promise<ContextForSubjectDefinition<T>>;
 
 export function once<T extends SubjectDefinition>(
   context: MakaioBusContext,
+  owner: PartyRef,
   subjectDefinition: T,
   handlerOrOptions?: HandlerForSubjectDefinition<T> | OnceOptions<T>,
 ): (() => void) | Promise<ContextForSubjectDefinition<T>> {
@@ -174,8 +185,7 @@ export function once<T extends SubjectDefinition>(
       return (handler as (ctx: unknown) => void | Promise<void>)(ctx);
     }) as HandlerForSubjectDefinition<T>;
 
-    unsubscribe = on(context, subjectDefinition, wrappedHandler);
-
+    unsubscribe = on(context, owner, subjectDefinition, wrappedHandler);
     // Return unsubscribe function for manual cleanup if needed
     return () => {
       if (unsubscribe) {
@@ -228,6 +238,7 @@ export function once<T extends SubjectDefinition>(
     // The handler is registered synchronously — local delivery works immediately.
     unsubscribe = on(
       context,
+      owner,
       subjectDefinition,
       ((ctx: ContextForSubjectDefinition<T>) => {
         // Match found - cleanup and resolve
@@ -252,10 +263,7 @@ export function once<T extends SubjectDefinition>(
       }
     };
 
-    if (propagated) {
-      void propagated.then(startTimer, startTimer);
-    } else {
-      startTimer();
-    }
+    if (propagated) void propagated.then(startTimer, startTimer);
+    else startTimer();
   });
 }

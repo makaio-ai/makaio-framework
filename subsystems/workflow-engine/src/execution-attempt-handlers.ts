@@ -168,7 +168,7 @@ export function registerExecutionAttemptHandlers<TOutcome>(
       };
       const outcome = await deps.decodeOutcome({ instruction, outcome: request.outcome });
       try {
-        const decision = await submitAttemptOutcome(deps, { ...peer, outcome, runtimeFence });
+        const decision = await submitAttemptOutcome(deps, { ...peer, call: ctx.call, outcome, runtimeFence });
         ctx.setResult({ decision });
       } catch (error) {
         if (!(error instanceof RuntimeOutcomeFenceMismatchError)) throw error;

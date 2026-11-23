@@ -12,13 +12,14 @@ import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { Command } from 'commander';
+import { createBusInstance } from '@makaio/bus-core';
 import { registerExtensionCommands } from '../extension-commands.js';
 import {
   buildConfiguredRuntimeOptions,
   FilesystemDescriptorDiscovery,
   type FrameworkModuleResolver,
 } from '@makaio/runtime-node';
-import type { ExtensionDescriptor } from '@makaio/contracts';
+import type { CallContext, ExtensionDescriptor } from '@makaio/contracts';
 import {
   ExtensionSubjects,
   type InstalledExtensionCatalogEntry,
@@ -136,10 +137,12 @@ vi.mock('../bus-client.js', async (importOriginal) => {
     connectBusClient: async () => {
       if (enablementMockState.connectError) throw enablementMockState.connectError;
       return {
+        own: createBusInstance().own,
         // Dispatches on the subject, not the payload shape: `list` and
         // `catalog` are both `{}` requests, and only the subject tells the two
         // apart — the same way the bus itself routes them.
         request: async (
+          _call: CallContext,
           subject: unknown,
           payload: Record<string, unknown>,
         ): Promise<

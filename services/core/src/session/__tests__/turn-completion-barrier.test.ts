@@ -12,7 +12,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
-import type { SessionMessage, TurnIngestionMarker } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
+import type { CallContext, SessionMessage, TurnIngestionMarker } from '@makaio/contracts';
 import { TurnStorageSubjects } from '../turns/index.js';
 import { MessageStorageSubjects } from '../messages/namespace.js';
 import { SessionTurnManager, TURN_COMPLETION_PERSISTENCE_TIMEOUT_MS } from '../session-turn-manager.js';
@@ -100,7 +101,7 @@ function registerDelayedMessageStorage(unsubs: UnsubFn[], appendDelayMs: number,
       sequence.push(`message-persisted:${message.role}`);
       ctx.setResult({ message });
       // Mirror messages/shared.ts: stored fires after persistence completed.
-      MakaioBus.emit(MessageStorageSubjects.stored, { message: structuredClone(message) });
+      MakaioBus.emit(ctx.call, MessageStorageSubjects.stored, { message: structuredClone(message) });
     }),
   );
   unsubs.push(
@@ -146,10 +147,14 @@ function collectTurnCompleted(
 
 /**
  * Emit an agent.complete event for the given agent/turn.
+ * @param call - Call context of the completion event
  * @param input - Exact agent, turn, and message correlation.
  */
-async function emitAgentComplete(input: { agentId: string; turnId: string; messageId?: string }): Promise<void> {
-  await MakaioBus.emit(AgentSubjects.complete, {
+async function emitAgentComplete(
+  call: CallContext,
+  input: { agentId: string; turnId: string; messageId?: string },
+): Promise<void> {
+  await MakaioBus.emit(call, AgentSubjects.complete, {
     agentId: input.agentId,
     adapterId: `adapter-${input.agentId}`,
     adapterName: 'test-adapter',
@@ -161,18 +166,20 @@ async function emitAgentComplete(input: { agentId: string; turnId: string; messa
 
 /**
  * Emit an agent.message event so SessionBridge accumulates a text block.
+ * @param call - Call context of the agent message
  * @param agentId - Producing agent
  * @param turnId - Managed turn identity
  * @param content - Assistant text content
  * @param messageId - Exact admitted message identity
  */
 async function emitAgentMessage(
+  call: CallContext,
   agentId: string,
   turnId: string,
   content: string,
   messageId = 'msg-user-1',
 ): Promise<void> {
-  await MakaioBus.emit(AgentSubjects.message, {
+  await MakaioBus.emit(call, AgentSubjects.message, {
     agentId,
     adapterId: `adapter-${agentId}`,
     adapterName: 'test-adapter',
@@ -203,20 +210,25 @@ describe('turn completion persist-before-emit barrier', () => {
   /**
    * Wire manager + bridge like SessionOrchestrator does, create a turn, and
    * prime the bridge's turn context via session.turn.started.
+   * @param call - Call context of the admitted message
    * @param sessionId - Session under test
    * @param agentIds - Agents participating in the turn
    * @returns The created turn's identity
    */
-  async function startManagedTurn(sessionId: string, agentIds: string[]): Promise<{ turnId: string }> {
+  async function startManagedTurn(
+    call: CallContext,
+    sessionId: string,
+    agentIds: string[],
+  ): Promise<{ turnId: string }> {
     manager = new SessionTurnManager(MakaioBus);
     manager.registerCompletionHandlers(manager.completeTurn.bind(manager));
     bridge = new SessionBridge(MakaioBus);
 
-    const admission = await manager.acquireMessageAdmission(sessionId, agentIds, 'msg-user-1');
+    const admission = await manager.acquireMessageAdmission(call, sessionId, agentIds, 'msg-user-1');
     const turn = admission.turn;
     admission.commit();
     // Prime SessionBridge turn tracking (normally emitted by the orchestrator).
-    await MakaioBus.emit(SessionSubjects.turn.started, {
+    await MakaioBus.emit(call, SessionSubjects.turn.started, {
       sessionId,
       turnId: turn.turnId,
       turnNumber: turn.turnNumber,
@@ -233,9 +245,9 @@ describe('turn completion persist-before-emit barrier', () => {
     registerDelayedMessageStorage(unsubs, 50, sequence);
     const completed = collectTurnCompleted(unsubs, sequence);
 
-    const { turnId } = await startManagedTurn('sess-barrier-1', ['agent-1']);
-    await emitAgentMessage('agent-1', turnId, 'hello from the agent');
-    await emitAgentComplete({ agentId: 'agent-1', turnId });
+    const { turnId } = await startManagedTurn(createTestCall(), 'sess-barrier-1', ['agent-1']);
+    await emitAgentMessage(createTestCall(), 'agent-1', turnId, 'hello from the agent');
+    await emitAgentComplete(createTestCall(), { agentId: 'agent-1', turnId });
     await waitForAsync();
 
     expect(completed).toHaveLength(1);
@@ -248,11 +260,11 @@ describe('turn completion persist-before-emit barrier', () => {
     registerDelayedMessageStorage(unsubs, 50, sequence);
     const completed = collectTurnCompleted(unsubs, sequence);
 
-    const { turnId } = await startManagedTurn('sess-barrier-multi', ['agent-1', 'agent-2']);
-    await emitAgentMessage('agent-1', turnId, 'first agent output');
-    await emitAgentMessage('agent-2', turnId, 'second agent output');
-    await emitAgentComplete({ agentId: 'agent-1', turnId });
-    await emitAgentComplete({ agentId: 'agent-2', turnId });
+    const { turnId } = await startManagedTurn(createTestCall(), 'sess-barrier-multi', ['agent-1', 'agent-2']);
+    await emitAgentMessage(createTestCall(), 'agent-1', turnId, 'first agent output');
+    await emitAgentMessage(createTestCall(), 'agent-2', turnId, 'second agent output');
+    await emitAgentComplete(createTestCall(), { agentId: 'agent-1', turnId });
+    await emitAgentComplete(createTestCall(), { agentId: 'agent-2', turnId });
     await waitForAsync();
 
     expect(completed).toHaveLength(1);
@@ -266,10 +278,10 @@ describe('turn completion persist-before-emit barrier', () => {
     registerDelayedMessageStorage(unsubs, 50, sequence);
     const completed = collectTurnCompleted(unsubs, sequence);
 
-    const { turnId } = await startManagedTurn('sess-barrier-mixed', ['agent-1', 'agent-2']);
-    await emitAgentMessage('agent-1', turnId, 'persisted output');
-    await emitAgentComplete({ agentId: 'agent-1', turnId });
-    await emitAgentComplete({ agentId: 'agent-2', turnId });
+    const { turnId } = await startManagedTurn(createTestCall(), 'sess-barrier-mixed', ['agent-1', 'agent-2']);
+    await emitAgentMessage(createTestCall(), 'agent-1', turnId, 'persisted output');
+    await emitAgentComplete(createTestCall(), { agentId: 'agent-1', turnId });
+    await emitAgentComplete(createTestCall(), { agentId: 'agent-2', turnId });
 
     expect(completed).toHaveLength(1);
     expect(sequence.filter((entry) => entry === 'message-persisted:assistant')).toHaveLength(1);
@@ -282,10 +294,10 @@ describe('turn completion persist-before-emit barrier', () => {
     registerDelayedMessageStorage(unsubs, 1, sequence);
     const completed = collectTurnCompleted(unsubs);
 
-    const { turnId } = await startManagedTurn('sess-barrier-zero', ['agent-1']);
+    const { turnId } = await startManagedTurn(createTestCall(), 'sess-barrier-zero', ['agent-1']);
     // No agent.message: SessionBridge persists nothing (zero blocks, no error).
     const startedAt = Date.now();
-    await emitAgentComplete({ agentId: 'agent-1', turnId });
+    await emitAgentComplete(createTestCall(), { agentId: 'agent-1', turnId });
     const elapsed = Date.now() - startedAt;
 
     expect(completed).toHaveLength(1);
@@ -306,10 +318,10 @@ describe('turn completion persist-before-emit barrier', () => {
       );
       const completed = collectTurnCompleted(unsubs);
 
-      const { turnId } = await startManagedTurn('sess-barrier-write-failure', ['agent-1']);
-      await emitAgentMessage('agent-1', turnId, 'output that cannot be persisted');
+      const { turnId } = await startManagedTurn(createTestCall(), 'sess-barrier-write-failure', ['agent-1']);
+      await emitAgentMessage(createTestCall(), 'agent-1', turnId, 'output that cannot be persisted');
       const startedAt = Date.now();
-      await emitAgentComplete({ agentId: 'agent-1', turnId });
+      await emitAgentComplete(createTestCall(), { agentId: 'agent-1', turnId });
 
       expect(completed).toHaveLength(1);
       expect(Date.now() - startedAt).toBeLessThan(TURN_COMPLETION_PERSISTENCE_TIMEOUT_MS / 2);
@@ -339,8 +351,8 @@ describe('turn completion persist-before-emit barrier', () => {
     registerDelayedMessageStorage(unsubs, 1, []);
     const completed = collectTurnCompleted(unsubs);
 
-    const { turnId } = await startManagedTurn('sess-barrier-early', ['agent-1']);
-    const completion = emitAgentComplete({ agentId: 'agent-1', turnId });
+    const { turnId } = await startManagedTurn(createTestCall(), 'sess-barrier-early', ['agent-1']);
+    const completion = emitAgentComplete(createTestCall(), { agentId: 'agent-1', turnId });
     await turnCompletionStarted;
     await waitForAsync();
     expect(completed).toHaveLength(0);
@@ -360,13 +372,14 @@ describe('turn completion persist-before-emit barrier', () => {
     const completed = collectTurnCompleted(unsubs);
     manager = new SessionTurnManager(MakaioBus);
     const admission = await manager.acquireMessageAdmission(
+      createTestCall(),
       'sess-barrier-identities',
       ['agent-1', 'agent-2'],
       'msg-user-1',
     );
     admission.commit();
     const turn = admission.turn;
-    const completion = manager.completeTurn(turn, { success: true, errors: [] });
+    const completion = manager.completeTurn(createTestCall(), turn, { success: true, errors: [] });
 
     const agentOneSettlement = {
       sessionId: turn.sessionId,
@@ -374,11 +387,11 @@ describe('turn completion persist-before-emit barrier', () => {
       messageId: 'msg-user-1',
       agentId: 'agent-1',
     };
-    await MakaioBus.emit(SessionSubjects.turn.assistantPersistenceSettled, agentOneSettlement);
-    await MakaioBus.emit(SessionSubjects.turn.assistantPersistenceSettled, agentOneSettlement);
+    await MakaioBus.emit(createTestCall(), SessionSubjects.turn.assistantPersistenceSettled, agentOneSettlement);
+    await MakaioBus.emit(createTestCall(), SessionSubjects.turn.assistantPersistenceSettled, agentOneSettlement);
     expect(completed).toHaveLength(0);
 
-    await MakaioBus.emit(SessionSubjects.turn.assistantPersistenceSettled, {
+    await MakaioBus.emit(createTestCall(), SessionSubjects.turn.assistantPersistenceSettled, {
       sessionId: turn.sessionId,
       turnId: turn.turnId,
       messageId: 'msg-user-1',
@@ -404,10 +417,15 @@ describe('turn completion persist-before-emit barrier', () => {
       );
       const completed = collectTurnCompleted(unsubs);
       manager = new SessionTurnManager(MakaioBus);
-      const admission = await manager.acquireMessageAdmission('sess-barrier-fallback', ['agent-1'], 'msg-user-1');
+      const admission = await manager.acquireMessageAdmission(
+        createTestCall(),
+        'sess-barrier-fallback',
+        ['agent-1'],
+        'msg-user-1',
+      );
       admission.commit();
       const turn = admission.turn;
-      const completion = manager.completeTurn(turn, { success: true, errors: [] });
+      const completion = manager.completeTurn(createTestCall(), turn, { success: true, errors: [] });
 
       await messageProbeHandled;
       await Promise.resolve();
@@ -425,10 +443,10 @@ describe('turn completion persist-before-emit barrier', () => {
     registerTurnStorage(unsubs);
     unsubs.push(MakaioBus.on(MessageStorageSubjects.getByTurn, (ctx) => ctx.setResult({ messages: [] })));
     manager = new SessionTurnManager(MakaioBus);
-    const turn = await manager.createTurn('sess-setup-failure-no-pairs', ['agent-1']);
+    const turn = await manager.createTurn(createTestCall(), 'sess-setup-failure-no-pairs', ['agent-1']);
     const startedAt = Date.now();
 
-    await manager.failActiveTurnBeforeDispatch(turn, 'setup-failed');
+    await manager.failActiveTurnBeforeDispatch(createTestCall(), turn, 'setup-failed');
 
     expect(Date.now() - startedAt).toBeLessThan(TURN_COMPLETION_PERSISTENCE_TIMEOUT_MS / 2);
   });
@@ -454,13 +472,14 @@ describe('turn completion persist-before-emit barrier', () => {
       );
       manager = new SessionTurnManager(MakaioBus);
       const admission = await manager.acquireMessageAdmission(
+        createTestCall(),
         'sess-barrier-destroyed-probe',
         ['agent-1'],
         'msg-user-1',
       );
       admission.commit();
       const turn = admission.turn;
-      const completion = manager.completeTurn(turn, { success: true, errors: [] });
+      const completion = manager.completeTurn(createTestCall(), turn, { success: true, errors: [] });
 
       await startedProbe;
       manager.destroy();
@@ -477,9 +496,9 @@ describe('turn completion persist-before-emit barrier', () => {
     const completed = collectTurnCompleted(unsubs);
     manager = new SessionTurnManager(MakaioBus);
 
-    const turn = await manager.createTurn('sess-ephemeral', ['agent-1']);
+    const turn = await manager.createTurn(createTestCall(), 'sess-ephemeral', ['agent-1']);
     const startedAt = Date.now();
-    await manager.completeTurn(turn, { success: true, errors: [] });
+    await manager.completeTurn(createTestCall(), turn, { success: true, errors: [] });
     const elapsed = Date.now() - startedAt;
 
     expect(completed).toHaveLength(1);
@@ -499,12 +518,16 @@ describe('turn completion persist-before-emit barrier', () => {
     manager = new SessionTurnManager(MakaioBus);
     // Managed-path turn.started emit site: the MakaioSession aggregate.
     const session = new MakaioSession({ sessionId: 'sess-marker', bus: MakaioBus });
-    const entityTurn = await session.startTurn({ agentIds: ['agent-1'], messageId: 'msg-1', turnNumber: 1 });
+    const entityTurn = await session.startTurn(createTestCall(), {
+      agentIds: ['agent-1'],
+      messageId: 'msg-1',
+      turnNumber: 1,
+    });
     entityTurn.recordPairTerminal('msg-1', 'agent-1', 'completed');
 
     // Managed-path turn.completed emit site: the SessionTurnManager.
-    const turn = await manager.createTurn('sess-marker', ['agent-1']);
-    await manager.completeTurn(turn, { success: true, errors: [] });
+    const turn = await manager.createTurn(createTestCall(), 'sess-marker', ['agent-1']);
+    await manager.completeTurn(createTestCall(), turn, { success: true, errors: [] });
 
     expect(startedEvents).toHaveLength(1);
     expect(startedEvents[0]).toEqual({ turnNumber: 1, ingestionMarker: 'live' });
@@ -521,11 +544,11 @@ describe('turn completion persist-before-emit barrier', () => {
     manager.registerCompletionHandlers(manager.completeTurn.bind(manager));
 
     const sessionId = 'sess-lifecycle-rows';
-    const turn = await manager.createTurn(sessionId, ['agent-1']);
+    const turn = await manager.createTurn(createTestCall(), sessionId, ['agent-1']);
     turn.admitMessage('msg-user-1', ['agent-1']);
     turn.commitMessageAdmission('msg-user-1');
     // The orchestrator's turn.started emit path (persists the lifecycle row).
-    await emitSessionTurnStarted(MakaioBus, {
+    await emitSessionTurnStarted(createTestCall(), MakaioBus, {
       sessionId,
       turnId: turn.turnId,
       turnNumber: turn.turnNumber,
@@ -534,7 +557,7 @@ describe('turn completion persist-before-emit barrier', () => {
       initiator: turn.initiator,
       ingestionMarker: 'live',
     });
-    await emitAgentComplete({ agentId: 'agent-1', turnId: turn.turnId });
+    await emitAgentComplete(createTestCall(), { agentId: 'agent-1', turnId: turn.turnId });
     await waitForAsync();
 
     const events = await getStoredEvents(sessionId);
@@ -556,12 +579,12 @@ describe('turn completion persist-before-emit barrier', () => {
     const completed = collectTurnCompleted(unsubs);
     manager = new SessionTurnManager(MakaioBus);
 
-    const turn = await manager.createTurn('sess-late-stored', ['agent-1']);
-    await manager.completeTurn(turn, { success: true, errors: [] });
+    const turn = await manager.createTurn(createTestCall(), 'sess-late-stored', ['agent-1']);
+    await manager.completeTurn(createTestCall(), turn, { success: true, errors: [] });
     expect(completed).toHaveLength(1);
 
     // Late settlement after the completion emitted — must be a no-op.
-    await MakaioBus.emit(SessionSubjects.turn.assistantPersistenceSettled, {
+    await MakaioBus.emit(createTestCall(), SessionSubjects.turn.assistantPersistenceSettled, {
       sessionId: turn.sessionId,
       turnId: turn.turnId,
       messageId: 'msg-user-1',

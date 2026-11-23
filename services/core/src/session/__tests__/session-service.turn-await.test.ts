@@ -1,12 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
+import { countSubjectHandlers, createTestCall } from '@makaio/test-utils';
 import { registerMemoryTurnStorage, TurnStorageSubjects } from '../turns/index.js';
 import { MakaioSessionService } from '../session-service.js';
-
-function getFullSubjectKey(subject: { subject: string; $meta: { namespace: string } }): string {
-  return `${subject.$meta.namespace}.${subject.subject}`;
-}
 
 describe('MakaioSessionService - turn await', () => {
   let bus: IMakaioBus;
@@ -34,24 +31,24 @@ describe('MakaioSessionService - turn await', () => {
       initiator: { source: 'user' as const },
     };
 
-    const awaited = bus.request(SessionSubjects.turn.await, {
+    const awaited = bus.request(createTestCall(), SessionSubjects.turn.await, {
       sessionId: completion.sessionId,
       turnId: completion.turnId,
       timeoutMs: 100,
     });
 
-    await bus.emit(SessionSubjects.turn.completed, {
+    await bus.emit(createTestCall(), SessionSubjects.turn.completed, {
       ...completion,
       turnId: 'other-turn',
     });
-    await bus.emit(SessionSubjects.turn.completed, completion);
+    await bus.emit(createTestCall(), SessionSubjects.turn.completed, completion);
 
     await expect(awaited).resolves.toEqual({ completion });
   });
 
   it('rejects with the local RPC timeout style when completion does not arrive', async () => {
     await expect(
-      bus.request(SessionSubjects.turn.await, {
+      bus.request(createTestCall(), SessionSubjects.turn.await, {
         sessionId: 'session-await-timeout',
         turnId: 'turn-await-timeout',
         timeoutMs: 5,
@@ -62,17 +59,17 @@ describe('MakaioSessionService - turn await', () => {
   it('resolves from storage with the persisted turn initiator', async () => {
     turnStorageCleanup = registerMemoryTurnStorage(bus);
     const initiator = { source: 'extension' as const, sourceId: 'routine:validation' };
-    const { turn } = await bus.request(TurnStorageSubjects.create, {
+    const { turn } = await bus.request(createTestCall(), TurnStorageSubjects.create, {
       sessionId: 'session-await-completed',
       initiator,
     });
-    const { turn: completed } = await bus.request(TurnStorageSubjects.complete, {
+    const { turn: completed } = await bus.request(createTestCall(), TurnStorageSubjects.complete, {
       turnId: turn.turnId,
       status: 'completed',
     });
 
     await expect(
-      bus.request(SessionSubjects.turn.await, {
+      bus.request(createTestCall(), SessionSubjects.turn.await, {
         sessionId: completed.sessionId,
         turnId: completed.turnId,
         timeoutMs: 5,
@@ -86,7 +83,7 @@ describe('MakaioSessionService - turn await', () => {
         initiator,
       },
     });
-    expect(bus.getContext().eventHandlers.has(getFullSubjectKey(SessionSubjects.turn.completed))).toBe(false);
+    expect(countSubjectHandlers(bus, SessionSubjects.turn.completed)).toBe(0);
   });
 
   it('resolves from storage with persisted turn usage', async () => {
@@ -95,17 +92,17 @@ describe('MakaioSessionService - turn await', () => {
       total: { inputTokens: 120, outputTokens: 45 },
       byAgent: { 'agent-a': { inputTokens: 120, outputTokens: 45 } },
     };
-    const { turn } = await bus.request(TurnStorageSubjects.create, {
+    const { turn } = await bus.request(createTestCall(), TurnStorageSubjects.create, {
       sessionId: 'session-await-completed-usage',
     });
-    const { turn: completed } = await bus.request(TurnStorageSubjects.complete, {
+    const { turn: completed } = await bus.request(createTestCall(), TurnStorageSubjects.complete, {
       turnId: turn.turnId,
       status: 'completed',
       usage,
     });
 
     await expect(
-      bus.request(SessionSubjects.turn.await, {
+      bus.request(createTestCall(), SessionSubjects.turn.await, {
         sessionId: completed.sessionId,
         turnId: completed.turnId,
         timeoutMs: 5,
@@ -123,14 +120,16 @@ describe('MakaioSessionService - turn await', () => {
 
   it('does not invent an initiator for historical completed turns without one', async () => {
     turnStorageCleanup = registerMemoryTurnStorage(bus);
-    const { turn } = await bus.request(TurnStorageSubjects.create, { sessionId: 'session-await-unknown-origin' });
-    const { turn: completed } = await bus.request(TurnStorageSubjects.complete, {
+    const { turn } = await bus.request(createTestCall(), TurnStorageSubjects.create, {
+      sessionId: 'session-await-unknown-origin',
+    });
+    const { turn: completed } = await bus.request(createTestCall(), TurnStorageSubjects.complete, {
       turnId: turn.turnId,
       status: 'completed',
     });
 
     await expect(
-      bus.request(SessionSubjects.turn.await, {
+      bus.request(createTestCall(), SessionSubjects.turn.await, {
         sessionId: completed.sessionId,
         turnId: completed.turnId,
         timeoutMs: 5,

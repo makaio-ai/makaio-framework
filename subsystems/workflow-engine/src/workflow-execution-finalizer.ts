@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import {
@@ -39,12 +40,15 @@ export interface FinalizerDeps {
   requestAttemptCancellation?(executionId: string, reason?: string): Promise<void>;
   /**
    * Best-effort fast-path delivery after an initiating cancellation commits.
+   * @param call - Call context of the cancellation being delivered.
    * @param executionId - Owner whose cancellation request committed.
    * @param reason - Optional cancellation explanation.
    */
-  notifyAttemptCancellation?(executionId: string, reason?: string): Promise<void>;
+  notifyAttemptCancellation?(call: CallContext, executionId: string, reason?: string): Promise<void>;
   /** Registered success-finalizer subjects keyed by their stable identity. */
   successFinalizers?: ReadonlyMap<string, WorkflowSuccessFinalizer>;
+  /** Execution whose finalization is being replayed by the current result submission. */
+  replayingExecutionId?: string;
   /** Resolve the immutable workflow-selected success finalizer for one execution. */
   resolveSuccessFinalizerId?(executionId: string): string | undefined;
   /** Per-execution tails serializing durable lifecycle transitions. */
@@ -173,20 +177,22 @@ export interface WorkflowSuccessFinalizer {
  *
  * A transport or handler failure intentionally leaves the durable claim
  * unsettled. The owning finalizer is replayed during executor initialization.
+ * @param call - Call context of the handled message the delivery serves.
  * @param deps - Finalizer dependencies.
  * @param finalizer - Registered finalizer receiving the claim.
  * @param claim - Durable transition claim to deliver.
  */
 async function deliverSuccessFinalization(
+  call: CallContext,
   deps: FinalizerDeps,
   finalizer: WorkflowSuccessFinalizer,
   claim: WorkflowFinalizationClaim,
 ): Promise<void> {
-  const delivery = await deps.bus.request(finalizer.finalizeSubject, claim);
+  const delivery = await deps.bus.request(call, finalizer.finalizeSubject, claim);
   if (!delivery.accepted) {
     const error = `Workflow success finalizer "${finalizer.finalizerId}" rejected transition ${claim.transitionKey}`;
     const completedAt = Date.now();
-    const { failed } = await deps.bus.request(WorkflowStorageSubjects.failFinalization, {
+    const { failed } = await deps.bus.request(call, WorkflowStorageSubjects.failFinalization, {
       executionId: claim.executionId,
       claimToken: claim.claimToken,
       error,
@@ -199,33 +205,42 @@ async function deliverSuccessFinalization(
 
 /**
  * Recover unsettled claims for all currently registered success finalizers.
- * @param deps - Finalizer dependencies.
+ * @param call - Context for the result being replayed, or the carrier's own context for a standalone sweep.
+ * @param deps - Finalizer dependencies, including the execution ID for a result replay.
  */
-export async function recoverSuccessFinalizations(deps: FinalizerDeps): Promise<void> {
+export async function recoverSuccessFinalizations(call: CallContext, deps: FinalizerDeps): Promise<void> {
+  const { bus, replayingExecutionId } = deps;
+  // ORIGIN: A result replay can discover claims from unrelated executions.
+  const recoveryCall = replayingExecutionId === undefined ? call : bus.own('shared-work');
+  const callForClaim = (claim: WorkflowFinalizationClaim) =>
+    claim.executionId === replayingExecutionId ? call : recoveryCall;
   for (const finalizer of deps.successFinalizers?.values() ?? []) {
-    const { claims } = await deps.bus.request(WorkflowStorageSubjects.listClaimedFinalizations, {
-      finalizerId: finalizer.finalizerId,
-    });
+    const query = { finalizerId: finalizer.finalizerId };
+    const { claims } = await bus.request(recoveryCall, WorkflowStorageSubjects.listClaimedFinalizations, query);
     for (const claim of claims) {
-      await deliverSuccessFinalization(deps, finalizer, claim);
+      await deliverSuccessFinalization(callForClaim(claim), deps, finalizer, claim);
     }
-    const { claims: unpublished } = await deps.bus.request(WorkflowStorageSubjects.listUnpublishedFinalizations, {
-      finalizerId: finalizer.finalizerId,
-    });
+    const { claims: unpublished } = await bus.request(
+      recoveryCall,
+      WorkflowStorageSubjects.listUnpublishedFinalizations,
+      query,
+    );
     for (const claim of unpublished) {
-      await deps.bus.request(WorkflowStorageSubjects.publishFinalization, { claim });
+      await bus.request(callForClaim(claim), WorkflowStorageSubjects.publishFinalization, { claim });
     }
   }
 }
 
 /**
  * Finalize an execution as completed.
+ * @param call - Call context of the handled message the finalization serves.
  * @param deps - Finalizer dependencies.
  * @param execution - Mutable execution state.
  * @param executionId - Execution identifier.
  * @param startTime - Epoch ms when execution started.
  */
 export async function completeExecutionWithSuccess(
+  call: CallContext,
   deps: FinalizerDeps,
   execution: WorkflowExecution,
   executionId: string,
@@ -235,6 +250,7 @@ export async function completeExecutionWithSuccess(
   const finalizer = finalizerId === undefined ? undefined : deps.successFinalizers?.get(finalizerId);
   if (finalizerId !== undefined && finalizer === undefined) {
     await completeExecutionWithFailure(
+      call,
       deps,
       execution,
       executionId,
@@ -257,16 +273,16 @@ export async function completeExecutionWithSuccess(
       deps,
       executionId,
       async () => {
-        const stored = await deps.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+        const stored = await deps.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId });
         if (stored.execution?.status !== 'running') return false;
-        const result = await deps.bus.request(WorkflowStorageSubjects.claimFinalization, { claim });
+        const result = await deps.bus.request(call, WorkflowStorageSubjects.claimFinalization, { claim });
         if (!result.claimed) return false;
         execution.status = 'finalizing';
         deps.activeExecutions.delete(executionId);
         return true;
       },
       async (committed) => {
-        if (committed) await deliverSuccessFinalization(deps, finalizer, claim);
+        if (committed) await deliverSuccessFinalization(call, deps, finalizer, claim);
       },
     );
     if (!claimed) return;
@@ -278,17 +294,17 @@ export async function completeExecutionWithSuccess(
     deps,
     executionId,
     async () => {
-      const stored = await deps.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      const stored = await deps.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId });
       if (stored.execution?.status !== 'running') return false;
       execution.status = 'completed';
       execution.completedAt = completedAt;
-      await persistExecutionUpdate(deps.bus, execution, { status: execution.status, completedAt });
+      await persistExecutionUpdate(call, deps.bus, execution, { status: execution.status, completedAt });
       deps.activeExecutions.delete(executionId);
       return true;
     },
     async (committed) => {
       if (!committed) return;
-      await deps.bus.emit(WorkflowSubjects.execution.completed, {
+      await deps.bus.emit(call, WorkflowSubjects.execution.completed, {
         executionId,
         workflowId: execution.workflowId,
         totalDuration: completedAt - startTime,
@@ -301,6 +317,7 @@ export async function completeExecutionWithSuccess(
 
 /**
  * Finalize an execution as failed.
+ * @param call - Call context of the handled message the finalization serves.
  * @param deps - Finalizer dependencies.
  * @param execution - Mutable execution state.
  * @param executionId - Execution identifier.
@@ -309,6 +326,7 @@ export async function completeExecutionWithSuccess(
  * durable failure state is persisted but before the execution-level failure event is emitted.
  */
 export async function completeExecutionWithFailure(
+  call: CallContext,
   deps: FinalizerDeps,
   execution: WorkflowExecution,
   executionId: string,
@@ -320,12 +338,12 @@ export async function completeExecutionWithFailure(
     deps,
     executionId,
     async () => {
-      const stored = await deps.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      const stored = await deps.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId });
       if (stored.execution?.status !== 'running') return false;
       execution.status = 'failed';
       execution.error = error;
       execution.completedAt = completedAt;
-      await persistExecutionUpdate(deps.bus, execution, { status: execution.status, error, completedAt });
+      await persistExecutionUpdate(call, deps.bus, execution, { status: execution.status, error, completedAt });
       deps.activeExecutions.delete(executionId);
       return true;
     },
@@ -336,7 +354,7 @@ export async function completeExecutionWithFailure(
       } catch (hookError) {
         console.error('[WorkflowFinalizer] Failed to run failure pre-emit hook:', hookError);
       }
-      await deps.bus.emit(WorkflowSubjects.execution.failed, {
+      await deps.bus.emit(call, WorkflowSubjects.execution.failed, {
         executionId,
         workflowId: execution.workflowId,
         error,
@@ -353,11 +371,17 @@ export async function completeExecutionWithFailure(
  * Aborts each tracked step's AbortController, which triggers the cooperative
  * cancellation signal. It also emits the per-step cancellation bus subject so
  * remote workers can observe cancellation through their own bus connection.
+ * @param call - Call context of the handled message the cancellation serves.
  * @param deps - Finalizer dependencies (requires activeRunnerSteps).
  * @param executionId - Execution identifier whose runner steps should be cancelled.
  * @param reason - Optional cancellation reason to forward to remote workers.
  */
-export function cancelActiveRunnerSteps(deps: FinalizerDeps, executionId: string, reason?: string): void {
+export function cancelActiveRunnerSteps(
+  call: CallContext,
+  deps: FinalizerDeps,
+  executionId: string,
+  reason?: string,
+): void {
   const { activeRunnerSteps, bus } = deps;
 
   const prefix = `${executionId}:`;
@@ -366,7 +390,7 @@ export function cancelActiveRunnerSteps(deps: FinalizerDeps, executionId: string
     const stepId = key.slice(prefix.length);
     entry.controller.abort();
     void bus
-      .emit(createStepCancelSubject(entry.cancelSubject), { executionId, stepId, reason })
+      .emit(call, createStepCancelSubject(entry.cancelSubject), { executionId, stepId, reason })
       .catch((error: unknown) => {
         console.error(`[WorkflowFinalizer] Failed to emit cancellation for ${key}:`, error);
       });
@@ -380,17 +404,19 @@ export function cancelActiveRunnerSteps(deps: FinalizerDeps, executionId: string
  * after the gate is durably parked. A later public cancel must still
  * terminalize the paused execution and its waiting gates so timeout/manual
  * resume paths cannot continue the run.
+ * @param call - Call context of the handled message the cancellation serves.
  * @param deps - Finalizer dependencies.
  * @param executionId - Paused execution identifier to cancel.
  * @param reason - Optional human-readable cancellation reason.
  * @returns True when a paused execution was cancelled.
  */
 async function cancelPausedExecution(
+  call: CallContext,
   deps: FinalizerDeps,
   executionId: string,
   reason?: string,
 ): Promise<undefined | { workflowId: string; completedAt: number; gates: Array<{ nodeId: string; frameId: string }> }> {
-  const existing = await deps.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+  const existing = await deps.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId });
   if (existing.execution == null) return undefined;
 
   const workflowId = existing.execution.workflowId;
@@ -399,7 +425,7 @@ async function cancelPausedExecution(
   }
 
   const completedAt = Date.now();
-  const { cancelled, gates } = await deps.bus.request(WorkflowStorageSubjects.cancelPausedExecution, {
+  const { cancelled, gates } = await deps.bus.request(call, WorkflowStorageSubjects.cancelPausedExecution, {
     executionId,
     completedAt,
     reason,
@@ -420,6 +446,7 @@ async function cancelPausedExecution(
  * - Cancels waiting gate rows for parked paused executions
  * - Persists the cancelled status
  * - Emits `execution.cancelled`
+ * @param call - Call context of the handled message the cancellation serves.
  * @param deps - Finalizer dependencies.
  * @param executionId - Execution identifier to cancel.
  * @param reason - Optional human-readable cancellation reason.
@@ -427,18 +454,19 @@ async function cancelPausedExecution(
  * @returns True when a running or parked execution was cancelled.
  */
 async function cancelExecutionDurably(
+  call: CallContext,
   deps: FinalizerDeps,
   executionId: string,
   reason?: string,
   mode: 'request' | 'converge' = 'converge',
 ): Promise<undefined | { workflowId: string; completedAt: number; gates: Array<{ nodeId: string; frameId: string }> }> {
-  const { execution } = await deps.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+  const { execution } = await deps.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId });
   if (execution?.status !== 'running' && execution?.status !== 'paused') return undefined;
   // This runs inside the existing lifecycle ordering point, so a completed or
   // finalizing owner cannot acquire a new cancel intent after refusing cancel.
   if (mode === 'request') await deps.requestAttemptCancellation?.(executionId, reason);
   if (execution?.status !== 'running') {
-    return cancelPausedExecution(deps, executionId, reason);
+    return cancelPausedExecution(call, deps, executionId, reason);
   }
 
   // Durable ownership survives executor restart and may precede loading the
@@ -458,9 +486,9 @@ async function cancelExecutionDurably(
     }
 
     // Cancel active runner steps (cooperative abort).
-    cancelActiveRunnerSteps(deps, executionId, reason);
+    cancelActiveRunnerSteps(call, deps, executionId, reason);
 
-    await persistExecutionUpdate(deps.bus, execution, {
+    await persistExecutionUpdate(call, deps.bus, execution, {
       status: execution.status,
       reason,
       completedAt: execution.completedAt,
@@ -474,33 +502,42 @@ async function cancelExecutionDurably(
 
 /**
  * Cancel one execution while excluding concurrent pause projection.
+ * @param call - Call context of the handled message the cancellation serves.
  * @param deps - Finalizer dependencies.
  * @param executionId - Execution to cancel.
  * @param reason - Optional cancellation reason.
  * @returns Whether cancellation changed the execution state.
  */
-export async function cancelExecution(deps: FinalizerDeps, executionId: string, reason?: string): Promise<boolean> {
-  return transitionCancellation(deps, executionId, reason, 'converge');
+export async function cancelExecution(
+  call: CallContext,
+  deps: FinalizerDeps,
+  executionId: string,
+  reason?: string,
+): Promise<boolean> {
+  return transitionCancellation(call, deps, executionId, reason, 'converge');
 }
 
 /**
  * Initiate owner cancellation, persisting provider control intent before notification.
  * Do not use this to converge an already observed worker cancellation outcome.
+ * @param call - Call context of the handled message the cancellation serves.
  * @param deps - Finalizer dependencies.
  * @param executionId - Owner being cancelled by control-plane policy.
  * @param reason - Optional cancellation explanation.
  * @returns Whether the owner accepted cancellation.
  */
 export async function requestExecutionCancellation(
+  call: CallContext,
   deps: FinalizerDeps,
   executionId: string,
   reason?: string,
 ): Promise<boolean> {
-  return transitionCancellation(deps, executionId, reason, 'request');
+  return transitionCancellation(call, deps, executionId, reason, 'request');
 }
 
 /**
  * Share lifecycle ordering without confusing a control request with its outcome.
+ * @param call - Call context of the handled message the cancellation serves.
  * @param deps - Finalizer dependencies.
  * @param executionId - Owner whose cancellation is being recorded.
  * @param reason - Optional cancellation explanation.
@@ -508,6 +545,7 @@ export async function requestExecutionCancellation(
  * @returns Whether the durable owner state changed.
  */
 async function transitionCancellation(
+  call: CallContext,
   deps: FinalizerDeps,
   executionId: string,
   reason: string | undefined,
@@ -516,12 +554,12 @@ async function transitionCancellation(
   const transition = await commitExecutionLifecycleTransition(
     deps,
     executionId,
-    () => cancelExecutionDurably(deps, executionId, reason, mode),
+    () => cancelExecutionDurably(call, deps, executionId, reason, mode),
     async (committed) => {
       if (committed === undefined) return;
       for (const gate of committed.gates) {
         await deps.bus
-          .emit(WorkflowSubjects.gate.resolved, {
+          .emit(call, WorkflowSubjects.gate.resolved, {
             executionId,
             stepId: gate.nodeId,
             stepType: 'gate',
@@ -532,7 +570,7 @@ async function transitionCancellation(
             console.error(`[WorkflowFinalizer] Failed to emit cancelled gate resolution for ${gate.frameId}:`, error);
           });
       }
-      await deps.bus.emit(WorkflowSubjects.execution.cancelled, {
+      await deps.bus.emit(call, WorkflowSubjects.execution.cancelled, {
         executionId,
         workflowId: committed.workflowId,
         reason,
@@ -542,7 +580,8 @@ async function transitionCancellation(
     (committed) => {
       // Control must not queue behind a paused-event subscriber. Its durable
       // request already committed; ordered lifecycle publication is independent.
-      if (committed !== undefined && mode === 'request') return deps.notifyAttemptCancellation?.(executionId, reason);
+      if (committed !== undefined && mode === 'request')
+        return deps.notifyAttemptCancellation?.(call, executionId, reason);
     },
   );
   if (transition === undefined) return false;

@@ -361,7 +361,7 @@ describe('operation admission handler', () => {
       ADMIT.$meta.namespace,
       ADMIT.subject as string,
       { executionAttemptId: attemptId, operationKind: 'workflow-run', admissionKey: 'run-1', runtimeGeneration },
-      { kind: 'test-identity', id: attemptId, authenticated: true },
+      { kind: 'test.identity', id: attemptId },
     );
 
     expect(response.error?.message).toContain('authenticated workflow-execution-attempt peer');

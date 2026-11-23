@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
+import { createTestCall } from '@makaio/test-utils';
 import { RuntimeRegistry } from '../runtime-registry.js';
 import { registerDrizzleSupervisorRuntimeStorage } from '../storage/drizzle-handler.js';
 import { SupervisorRuntimeStorageSubjects } from '../storage/namespace.js';
@@ -44,7 +45,7 @@ describe('RuntimeRegistry', () => {
 
   describe('register', () => {
     it('creates a new runtime with status = running', async () => {
-      await registry.register(BASE_INIT);
+      await registry.register(createTestCall(), BASE_INIT);
 
       const runtime = registry.getBySupervisorId(BASE_INIT.supervisorSessionId);
       expect(runtime).toBeDefined();
@@ -56,7 +57,7 @@ describe('RuntimeRegistry', () => {
     });
 
     it('persists the runtime to storage', async () => {
-      await registry.register(BASE_INIT);
+      await registry.register(createTestCall(), BASE_INIT);
 
       // Verify storage via a fresh registry (cold load)
       const freshRegistry = new RuntimeRegistry(MakaioBus);
@@ -68,7 +69,7 @@ describe('RuntimeRegistry', () => {
     });
 
     it('indexes sessionId and adapterSessionId when provided', async () => {
-      await registry.register({
+      await registry.register(createTestCall(), {
         ...BASE_INIT,
         sessionId: 'sess_001',
         adapterSessionId: 'adp_001',
@@ -81,7 +82,7 @@ describe('RuntimeRegistry', () => {
 
   describe('lookup by correlation field', () => {
     beforeEach(async () => {
-      await registry.register({
+      await registry.register(createTestCall(), {
         ...BASE_INIT,
         sessionId: 'sess_abc',
         adapterSessionId: 'adp_xyz',
@@ -118,14 +119,14 @@ describe('RuntimeRegistry', () => {
 
   describe('update', () => {
     beforeEach(async () => {
-      await registry.register({
+      await registry.register(createTestCall(), {
         ...BASE_INIT,
         sessionId: 'sess_old',
       });
     });
 
     it('applies status and stoppedAt update', async () => {
-      const ok = await registry.update({
+      const ok = await registry.update(createTestCall(), {
         supervisorSessionId: BASE_INIT.supervisorSessionId,
         status: 'stopped',
         stoppedAt: 1_700_000_005_000,
@@ -141,7 +142,7 @@ describe('RuntimeRegistry', () => {
     });
 
     it('persists status update to storage', async () => {
-      await registry.update({
+      await registry.update(createTestCall(), {
         supervisorSessionId: BASE_INIT.supervisorSessionId,
         status: 'exited',
         pid: null,
@@ -155,7 +156,7 @@ describe('RuntimeRegistry', () => {
     });
 
     it('updates secondary indices when sessionId changes', async () => {
-      await registry.update({
+      await registry.update(createTestCall(), {
         supervisorSessionId: BASE_INIT.supervisorSessionId,
         sessionId: 'sess_new',
       });
@@ -168,13 +169,13 @@ describe('RuntimeRegistry', () => {
 
     it('updates secondary indices when adapterSessionId changes', async () => {
       // Register with an initial adapterSessionId
-      await registry.register({
+      await registry.register(createTestCall(), {
         ...BASE_INIT,
         supervisorSessionId: 'sup_adp_reindex',
         adapterSessionId: 'adp_old',
       });
 
-      await registry.update({
+      await registry.update(createTestCall(), {
         supervisorSessionId: 'sup_adp_reindex',
         adapterSessionId: 'adp_new',
       });
@@ -186,7 +187,7 @@ describe('RuntimeRegistry', () => {
     });
 
     it('returns false for unknown supervisorSessionId', async () => {
-      const ok = await registry.update({
+      const ok = await registry.update(createTestCall(), {
         supervisorSessionId: 'nonexistent',
         status: 'stopped',
       });
@@ -199,7 +200,7 @@ describe('RuntimeRegistry', () => {
       // and is therefore treated as a no-op. Clearing a correlation field is not
       // supported. This test asserts the negative: the existing index must remain
       // intact after an update that includes sessionId: undefined.
-      const ok = await registry.update({
+      const ok = await registry.update(createTestCall(), {
         supervisorSessionId: BASE_INIT.supervisorSessionId,
         sessionId: undefined,
         status: 'stopped',
@@ -219,13 +220,13 @@ describe('RuntimeRegistry', () => {
     it('setting adapterSessionId to undefined in update() is a no-op — the index entry is preserved', async () => {
       // Symmetrical to the sessionId case: adapterSessionId: undefined must not
       // clear the secondary index entry set at registration time.
-      await registry.register({
+      await registry.register(createTestCall(), {
         ...BASE_INIT,
         supervisorSessionId: 'sup_adp_noop',
         adapterSessionId: 'adp_noop_value',
       });
 
-      const ok = await registry.update({
+      const ok = await registry.update(createTestCall(), {
         supervisorSessionId: 'sup_adp_noop',
         adapterSessionId: undefined,
         status: 'stopped',
@@ -246,7 +247,7 @@ describe('RuntimeRegistry', () => {
       );
 
       try {
-        const ok = await registry.update({
+        const ok = await registry.update(createTestCall(), {
           supervisorSessionId: BASE_INIT.supervisorSessionId,
           status: 'stopped',
         });
@@ -263,7 +264,7 @@ describe('RuntimeRegistry', () => {
 
   describe('remove', () => {
     beforeEach(async () => {
-      await registry.register({
+      await registry.register(createTestCall(), {
         ...BASE_INIT,
         sessionId: 'sess_rm',
         adapterSessionId: 'adp_rm',
@@ -271,7 +272,7 @@ describe('RuntimeRegistry', () => {
     });
 
     it('removes from primary and secondary indices', async () => {
-      await registry.remove(BASE_INIT.supervisorSessionId);
+      await registry.remove(createTestCall(), BASE_INIT.supervisorSessionId);
 
       expect(registry.getBySupervisorId(BASE_INIT.supervisorSessionId)).toBeUndefined();
       expect(registry.getBySessionId('sess_rm')).toBeUndefined();
@@ -279,7 +280,7 @@ describe('RuntimeRegistry', () => {
     });
 
     it('persists deletion to storage', async () => {
-      await registry.remove(BASE_INIT.supervisorSessionId);
+      await registry.remove(createTestCall(), BASE_INIT.supervisorSessionId);
 
       const freshRegistry = new RuntimeRegistry(MakaioBus);
       await freshRegistry.loadFromStorage();
@@ -288,7 +289,7 @@ describe('RuntimeRegistry', () => {
     });
 
     it('returns false for unknown supervisorSessionId', async () => {
-      const ok = await registry.remove('nonexistent');
+      const ok = await registry.remove(createTestCall(), 'nonexistent');
       expect(ok).toBe(false);
     });
 
@@ -301,7 +302,7 @@ describe('RuntimeRegistry', () => {
       );
 
       try {
-        const ok = await registry.remove(BASE_INIT.supervisorSessionId);
+        const ok = await registry.remove(createTestCall(), BASE_INIT.supervisorSessionId);
 
         expect(ok).toBe(false);
         // In-memory indices must be unchanged — storage failure must not mutate them.
@@ -316,9 +317,9 @@ describe('RuntimeRegistry', () => {
 
   describe('getAll and getByStatus', () => {
     beforeEach(async () => {
-      await registry.register({ ...BASE_INIT, supervisorSessionId: 'sup_a' });
-      await registry.register({ ...BASE_INIT, supervisorSessionId: 'sup_b' });
-      await registry.update({ supervisorSessionId: 'sup_b', status: 'stopped' });
+      await registry.register(createTestCall(), { ...BASE_INIT, supervisorSessionId: 'sup_a' });
+      await registry.register(createTestCall(), { ...BASE_INIT, supervisorSessionId: 'sup_b' });
+      await registry.update(createTestCall(), { supervisorSessionId: 'sup_b', status: 'stopped' });
     });
 
     it('getAll returns all registered runtimes', () => {
@@ -339,7 +340,7 @@ describe('RuntimeRegistry', () => {
   describe('loadFromStorage', () => {
     it('hydrates the in-memory cache from persisted records', async () => {
       // Populate via original registry
-      await registry.register({
+      await registry.register(createTestCall(), {
         ...BASE_INIT,
         sessionId: 'sess_persist',
         adapterSessionId: 'adp_persist',

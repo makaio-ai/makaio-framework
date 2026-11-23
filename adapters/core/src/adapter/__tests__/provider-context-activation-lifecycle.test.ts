@@ -1,9 +1,10 @@
+import { createTestCall } from '@makaio/test-utils';
 import { describe, expect, it } from 'vitest';
 import { rollbackAdapterProviderContextActivationAfterFailure } from '../provider-context-activation-lifecycle.js';
 
 describe('provider-context activation failure diagnostics', () => {
   it('sanitizes primary and cleanup errors when auth needs no account activation transaction', async () => {
-    const error = await rollbackAdapterProviderContextActivationAfterFailure({
+    const error = await rollbackAdapterProviderContextActivationAfterFailure(createTestCall(), {
       activation: { terminal: true },
       primaryError: new Error('connector echoed explicit-api-key-value'),
       cleanup: async () => {
@@ -25,7 +26,7 @@ describe('provider-context activation failure diagnostics', () => {
 
   it('replaces a pre-aggregated lease rollback failure when no account activation transaction exists', async () => {
     const credentialError = new Error('connector creation echoed oauth-token-value');
-    const error = await rollbackAdapterProviderContextActivationAfterFailure({
+    const error = await rollbackAdapterProviderContextActivationAfterFailure(createTestCall(), {
       activation: { terminal: true },
       primaryError: new AggregateError(
         [credentialError, new Error('lease release echoed oauth-token-value')],

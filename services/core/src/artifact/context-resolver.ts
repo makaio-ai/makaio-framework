@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   ArtifactSubjects,
   type ArtifactContextRelationSelector,
@@ -45,10 +46,12 @@ interface ResolverState extends ContextRefLedger {
  * Selectors follow stored relations outbound by default. A selector with
  * `direction: 'inbound'` instead selects the current revisions of artifacts
  * whose relations of that type point at the walked artifact's identity.
+ * @param call - Handled message call context.
  * @param options - Bus, root ref, and explicit relation selectors.
  * @returns Normalized wire context with all encountered refs visible.
  */
 export async function resolveArtifactContext(
+  call: CallContext,
   options: ResolveArtifactContextOptions,
 ): Promise<ResolvedArtifactContextWire> {
   const maxDepth = options.maxDepth ?? 5;
@@ -64,7 +67,7 @@ export async function resolveArtifactContext(
     refs: [],
   };
 
-  const root = await resolveRef(state, options.ref);
+  const root = await resolveRef(call, state, options.ref);
   if (!root) {
     throw new Error(
       `artifact.resolveContext: root artifact '${options.ref.kind}:${options.ref.id}:${options.ref.revision}' not found`,
@@ -72,7 +75,7 @@ export async function resolveArtifactContext(
   }
 
   state.resolved.push(root);
-  await walkArtifact(state, root, options.selectors, 0, new Set([artifactRevisionKey(options.ref)]));
+  await walkArtifact(call, state, root, options.selectors, 0, new Set([artifactRevisionKey(options.ref)]));
 
   return {
     rootRef: options.ref,
@@ -88,7 +91,7 @@ interface EdgeCandidate extends ContextEdgeFields {
   /** Artifact revision the edge points at. */
   readonly target: ArtifactRef;
   /** Loads the target revision through the per-call cache. */
-  readonly load: () => Promise<ArtifactRevision | null>;
+  readonly load: (call: CallContext) => Promise<ArtifactRevision | null>;
 }
 
 /**
@@ -96,6 +99,7 @@ interface EdgeCandidate extends ContextEdgeFields {
  *
  * Stored (outbound) relations are visited first; inbound selectors then
  * query the store for artifacts pointing back at this artifact.
+ * @param call - Handled message call context.
  * @param state - Resolver state accumulator.
  * @param artifact - Current artifact to walk.
  * @param selectors - Merged selectors for this artifact's relations.
@@ -103,6 +107,7 @@ interface EdgeCandidate extends ContextEdgeFields {
  * @param path - Ancestor ref keys for cycle detection.
  */
 async function walkArtifact(
+  call: CallContext,
   state: ResolverState,
   artifact: ArtifactRevision,
   selectors: ArtifactContextSelector | undefined,
@@ -115,17 +120,18 @@ async function walkArtifact(
 
   const sourceRef = artifactToRef(artifact);
   for (const relation of artifact.relations) {
-    await resolveRelation(state, sourceRef, relation, selectors, depth, path);
+    await resolveRelation(call, state, sourceRef, relation, selectors, depth, path);
   }
   for (const [relationType, selector] of Object.entries(selectors ?? {})) {
     if (selector.direction === 'inbound') {
-      await resolveInboundRelations(state, sourceRef, relationType, selector, depth, path);
+      await resolveInboundRelations(call, state, sourceRef, relationType, selector, depth, path);
     }
   }
 }
 
 /**
  * Resolve a single outbound relation from a source artifact.
+ * @param call - Handled message call context.
  * @param state - Resolver state accumulator.
  * @param sourceRef - Source artifact reference.
  * @param relation - Outbound relation to resolve.
@@ -134,6 +140,7 @@ async function walkArtifact(
  * @param path - Ancestor ref keys for cycle detection.
  */
 async function resolveRelation(
+  call: CallContext,
   state: ResolverState,
   sourceRef: ArtifactRef,
   relation: ArtifactRelation,
@@ -156,7 +163,13 @@ async function resolveRelation(
     recordRef(state, refEntry({ ...edge, target }, { status: 'unresolved', reason }));
     return;
   }
-  await resolveEdge(state, { ...edge, target, load: () => resolveRef(state, target) }, depth, path);
+  await resolveEdge(
+    call,
+    state,
+    { ...edge, target, load: (loadCall) => resolveRef(loadCall, state, target) },
+    depth,
+    path,
+  );
 }
 
 /**
@@ -169,6 +182,7 @@ async function resolveRelation(
  * the walked artifact to the matching artifact's current revision, marked
  * `direction: 'inbound'`. Query results are cached per relation type and
  * identity for the whole call.
+ * @param call - Handled message call context.
  * @param state - Resolver state accumulator.
  * @param sourceRef - Walked artifact the inbound relations point at.
  * @param relationType - Relation type declared by the inbound selector.
@@ -177,6 +191,7 @@ async function resolveRelation(
  * @param path - Ancestor ref keys for cycle detection.
  */
 async function resolveInboundRelations(
+  call: CallContext,
   state: ResolverState,
   sourceRef: ArtifactRef,
   relationType: string,
@@ -188,7 +203,7 @@ async function resolveInboundRelations(
   const queryKey = JSON.stringify([relationType, sourceRef.kind, sourceRef.id]);
   let sources = state.inboundByKey.get(queryKey);
   if (!sources) {
-    const { artifacts } = await state.bus.request(ArtifactSubjects.query, {
+    const { artifacts } = await state.bus.request(call, ArtifactSubjects.query, {
       relation: { type: relationType, target: { refClass: 'artifact', kind: sourceRef.kind, id: sourceRef.id } },
       currentOnly: true,
     });
@@ -209,9 +224,9 @@ async function resolveInboundRelations(
         sourceLocalId: relation.sourceLocalId,
         direction: 'inbound',
         selector,
-        load: () => resolveRef(state, target, async () => source),
+        load: (loadCall) => resolveRef(loadCall, state, target, async () => source),
       };
-      await resolveEdge(state, candidate, depth, path);
+      await resolveEdge(call, state, candidate, depth, path);
     }
   }
 }
@@ -222,12 +237,14 @@ async function resolveInboundRelations(
  * Checks run in a fixed order: selector match (`not-selected`), depth limit
  * (`depth-exceeded`, skipped for back-edges), then loading (`not-found`). A
  * back-edge is recorded as resolved but not walked again.
+ * @param call - Handled message call context.
  * @param state - Resolver state accumulator.
  * @param candidate - Edge to resolve.
  * @param depth - Current traversal depth.
  * @param path - Ancestor ref keys for cycle detection.
  */
 async function resolveEdge(
+  call: CallContext,
   state: ResolverState,
   candidate: EdgeCandidate,
   depth: number,
@@ -247,7 +264,7 @@ async function resolveEdge(
   }
 
   const alreadyResolved = state.resolvedByKey.has(targetKey);
-  const next = await candidate.load();
+  const next = await candidate.load(call);
   if (!next) {
     recordRef(state, refEntry(candidate, { status: 'unresolved', reason: 'not-found' }));
     return;
@@ -257,11 +274,12 @@ async function resolveEdge(
   if (!alreadyResolved) state.resolved.push(next);
   if (isBackEdge) return;
 
-  await continueWalk(state, next, targetKey, candidate.relationType, selector, depth, path);
+  await continueWalk(call, state, next, targetKey, candidate.relationType, selector, depth, path);
 }
 
 /**
  * Continue the walk into a resolved artifact with the selector's remaining depth and nested overrides.
+ * @param call - Handled message call context.
  * @param state - Resolver state accumulator.
  * @param next - Resolved artifact to walk next.
  * @param nextKey - Revision key of `next`, added to the ancestor path.
@@ -271,6 +289,7 @@ async function resolveEdge(
  * @param path - Ancestor ref keys up to and excluding `next`.
  */
 async function continueWalk(
+  call: CallContext,
   state: ResolverState,
   next: ArtifactRevision,
   nextKey: string,
@@ -282,7 +301,14 @@ async function continueWalk(
   const remainingDepth = (selector.depth ?? 1) - 1;
   const continued: ArtifactContextSelector | undefined =
     remainingDepth > 0 ? { [relationType]: { ...selector, depth: remainingDepth } } : undefined;
-  await walkArtifact(state, next, mergeSelectors(continued, selector.nested), depth + 1, new Set([...path, nextKey]));
+  await walkArtifact(
+    call,
+    state,
+    next,
+    mergeSelectors(continued, selector.nested),
+    depth + 1,
+    new Set([...path, nextKey]),
+  );
 }
 
 /**
@@ -290,20 +316,22 @@ async function continueWalk(
  *
  * The cache is the single admission path: a cached entry (including a cached
  * `null`) wins over `fetch`, and whatever `fetch` returns is cached.
+ * @param call - Handled message call context.
  * @param state - Resolver state with cache.
  * @param ref - Artifact reference to resolve.
  * @param fetch - Loader for a cache miss; defaults to the `artifact.resolve` RPC.
  * @returns Resolved artifact revision, or `null` if not found.
  */
 async function resolveRef(
+  call: CallContext,
   state: ResolverState,
   ref: ArtifactRef,
-  fetch: () => Promise<ArtifactRevision | null> = async () =>
-    (await state.bus.request(ArtifactSubjects.resolve, { ref })).artifact,
+  fetch: (call: CallContext) => Promise<ArtifactRevision | null> = async (fetchCall) =>
+    (await state.bus.request(fetchCall, ArtifactSubjects.resolve, { ref })).artifact,
 ): Promise<ArtifactRevision | null> {
   const key = artifactRevisionKey(ref);
   if (state.resolvedByKey.has(key)) return state.resolvedByKey.get(key) ?? null;
-  const artifact = await fetch();
+  const artifact = await fetch(call);
   state.resolvedByKey.set(key, artifact);
   return artifact;
 }

@@ -8,7 +8,8 @@ import {
   type WireSessionConfig,
   type WireSessionSubjects,
 } from '@makaio/ai-adapters-core';
-import { createTestBusInstance } from '@makaio/test-utils';
+import type { CallContext } from '@makaio/contracts';
+import { createTestCall, createTestBusInstance } from '@makaio/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 import { TurnStateChangedSchema } from '../../namespaces/schemas/turn-state.js';
 import {
@@ -61,8 +62,8 @@ class TestStreamConnector extends BaseStreamConnector<TestBus, TestSession, Base
     await this.fetchToolsImpl();
   }
 
-  protected override async ensureSession(): Promise<ProceduralConnectorSession> {
-    const session = await super.ensureSession();
+  protected override async ensureSession(call: CallContext): Promise<ProceduralConnectorSession> {
+    const session = await super.ensureSession(call);
     await this.afterEnsureSessionImpl();
     return session;
   }
@@ -89,27 +90,35 @@ class TestStreamConnector extends BaseStreamConnector<TestBus, TestSession, Base
   }
 }
 
+async function createConnector(
+  hostBus: ReturnType<typeof createTestBusInstance>,
+  onMessageSent?: (handle: MessageHandle) => void,
+): Promise<TestStreamConnector> {
+  return new TestStreamConnector({
+    bus: await TestNamespace.scopedBus(hostBus),
+    globalBus: hostBus,
+    adapterId: 'adapter-1',
+    adapterName: 'stream-lifecycle-test',
+    agentId: 'agent-1',
+    model: 'test-model',
+    cwd: process.cwd(),
+    onMessageSent,
+  });
+}
+
 describe('BaseStreamConnector terminal initialization', () => {
   it('does not publish a session or wire turn handlers when close wins during tool fetch', async () => {
     const hostBus = createTestBusInstance();
-    const connector = new TestStreamConnector({
-      bus: await TestNamespace.scopedBus(hostBus.getContext()),
-      globalBus: hostBus,
-      adapterId: 'adapter-1',
-      adapterName: 'stream-lifecycle-test',
-      agentId: 'agent-1',
-      model: 'test-model',
-      cwd: process.cwd(),
-    });
+    const connector = await createConnector(hostBus);
     let releaseFetch: (() => void) | undefined;
     connector.fetchToolsImpl = () =>
       new Promise<void>((resolve) => {
         releaseFetch = resolve;
       });
 
-    const initialization = connector.initialize();
+    const initialization = connector.initialize({ call: createTestCall() });
     await vi.waitFor(() => expect(releaseFetch).toBeTypeOf('function'));
-    await connector.close();
+    await connector.close(createTestCall());
     releaseFetch?.();
 
     await expect(initialization).rejects.toThrow('closed connector');
@@ -120,17 +129,8 @@ describe('BaseStreamConnector terminal initialization', () => {
   it('settles a send handle when close wins during tool fetch', async () => {
     const hostBus = createTestBusInstance();
     let sentHandle: MessageHandle | undefined;
-    const connector = new TestStreamConnector({
-      bus: await TestNamespace.scopedBus(hostBus.getContext()),
-      globalBus: hostBus,
-      adapterId: 'adapter-1',
-      adapterName: 'stream-lifecycle-test',
-      agentId: 'agent-1',
-      model: 'test-model',
-      cwd: process.cwd(),
-      onMessageSent: (handle) => {
-        sentHandle = handle;
-      },
+    const connector = await createConnector(hostBus, (handle) => {
+      sentHandle = handle;
     });
     let releaseFetch: (() => void) | undefined;
     connector.fetchToolsImpl = () =>
@@ -138,13 +138,16 @@ describe('BaseStreamConnector terminal initialization', () => {
         releaseFetch = resolve;
       });
 
-    const sending = connector.sendMessage({
-      role: 'user',
-      message: 'racing tool fetch',
-      blocks: [{ type: 'text', content: 'racing tool fetch' }],
-    });
+    const sending = connector.sendMessage(
+      {
+        role: 'user',
+        message: 'racing tool fetch',
+        blocks: [{ type: 'text', content: 'racing tool fetch' }],
+      },
+      { call: createTestCall() },
+    );
     await vi.waitFor(() => expect(releaseFetch).toBeTypeOf('function'));
-    const closing = connector.close();
+    const closing = connector.close(createTestCall());
     if (!releaseFetch) {
       throw new Error('tool fetch gate was not installed');
     }
@@ -168,7 +171,7 @@ describe('BaseStreamConnector terminal initialization', () => {
 
   it('keeps a turn handler that completed before close takes the terminal latch', async () => {
     const hostBus = createTestBusInstance();
-    await TestNamespace.scopedBus(hostBus.getContext());
+    await TestNamespace.scopedBus(hostBus);
     let releaseFirstHandler: (() => void) | undefined;
     const firstHandlerStarted = new Promise<void>((resolve) => {
       hostBus.on(TestNamespace.subjects.turn.turn_started, async () => {
@@ -178,19 +181,12 @@ describe('BaseStreamConnector terminal initialization', () => {
         });
       });
     });
-    const connector = new TestStreamConnector({
-      bus: await TestNamespace.scopedBus(hostBus.getContext()),
-      globalBus: hostBus,
-      adapterId: 'adapter-1',
-      adapterName: 'stream-lifecycle-test',
-      agentId: 'agent-1',
-      model: 'test-model',
-      cwd: process.cwd(),
-    });
-    await connector.initialize();
+    const connector = await createConnector(hostBus);
+    await connector.initialize({ call: createTestCall() });
     const turnStarted = connector.onceProcessingStateChanged();
 
-    const emitting = (await TestNamespace.scopedBus(hostBus.getContext())).emit(
+    const emitting = (await TestNamespace.scopedBus(hostBus)).emit(
+      createTestCall(),
       TestNamespace.subjects.turn.turn_started,
       {
         adapterId: 'adapter-1',
@@ -204,7 +200,7 @@ describe('BaseStreamConnector terminal initialization', () => {
     await turnStarted;
     expect(connector.getProcessingState()).toBe('turn_started');
 
-    const closing = connector.close();
+    const closing = connector.close(createTestCall());
     releaseFirstHandler?.();
 
     await Promise.all([emitting, closing]);
@@ -213,15 +209,7 @@ describe('BaseStreamConnector terminal initialization', () => {
 
   it('waits for an active turn handler without letting it mutate after close', async () => {
     const hostBus = createTestBusInstance();
-    const connector = new TestStreamConnector({
-      bus: await TestNamespace.scopedBus(hostBus.getContext()),
-      globalBus: hostBus,
-      adapterId: 'adapter-1',
-      adapterName: 'stream-lifecycle-test',
-      agentId: 'agent-1',
-      model: 'test-model',
-      cwd: process.cwd(),
-    });
+    const connector = await createConnector(hostBus);
     let releaseTurnStart: (() => void) | undefined;
     const turnStartEntered = new Promise<void>((resolve) => {
       connector.onTurnStarted = async () => {
@@ -231,9 +219,10 @@ describe('BaseStreamConnector terminal initialization', () => {
         });
       };
     });
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
-    const emitting = (await TestNamespace.scopedBus(hostBus.getContext())).emit(
+    const emitting = (await TestNamespace.scopedBus(hostBus)).emit(
+      createTestCall(),
       TestNamespace.subjects.turn.turn_started,
       {
         adapterId: 'adapter-1',
@@ -244,7 +233,7 @@ describe('BaseStreamConnector terminal initialization', () => {
       },
     );
     await turnStartEntered;
-    const closing = connector.close();
+    const closing = connector.close(createTestCall());
     let closeSettled = false;
     void closing.then(() => {
       closeSettled = true;
@@ -259,26 +248,21 @@ describe('BaseStreamConnector terminal initialization', () => {
 
   it('rejects a close-racing send before it can process the released session queue', async () => {
     const hostBus = createTestBusInstance();
-    const connector = new TestStreamConnector({
-      bus: await TestNamespace.scopedBus(hostBus.getContext()),
-      globalBus: hostBus,
-      adapterId: 'adapter-1',
-      adapterName: 'stream-lifecycle-test',
-      agentId: 'agent-1',
-      model: 'test-model',
-      cwd: process.cwd(),
-    });
-    await connector.initialize();
+    const connector = await createConnector(hostBus);
+    await connector.initialize({ call: createTestCall() });
     const session = connector.createdSession;
 
-    const closing = connector.close();
+    const closing = connector.close(createTestCall());
 
     await expect(
-      connector.sendMessage({
-        role: 'user',
-        message: 'after close',
-        blocks: [{ type: 'text', content: 'after close' }],
-      }),
+      connector.sendMessage(
+        {
+          role: 'user',
+          message: 'after close',
+          blocks: [{ type: 'text', content: 'after close' }],
+        },
+        { call: createTestCall() },
+      ),
     ).rejects.toThrow('closed connector');
     await closing;
 
@@ -290,19 +274,10 @@ describe('BaseStreamConnector terminal initialization', () => {
   it('settles a send-first, close-second handle without starting provider work', async () => {
     const hostBus = createTestBusInstance();
     let sentHandle: MessageHandle | undefined;
-    const connector = new TestStreamConnector({
-      bus: await TestNamespace.scopedBus(hostBus.getContext()),
-      globalBus: hostBus,
-      adapterId: 'adapter-1',
-      adapterName: 'stream-lifecycle-test',
-      agentId: 'agent-1',
-      model: 'test-model',
-      cwd: process.cwd(),
-      onMessageSent: (handle) => {
-        sentHandle = handle;
-      },
+    const connector = await createConnector(hostBus, (handle) => {
+      sentHandle = handle;
     });
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
     const session = connector.createdSession;
     let releaseEnsureSession: (() => void) | undefined;
     const ensureSessionPaused = new Promise<void>((resolve) => {
@@ -313,13 +288,16 @@ describe('BaseStreamConnector terminal initialization', () => {
         });
     });
 
-    const sending = connector.sendMessage({
-      role: 'user',
-      message: 'racing close',
-      blocks: [{ type: 'text', content: 'racing close' }],
-    });
+    const sending = connector.sendMessage(
+      {
+        role: 'user',
+        message: 'racing close',
+        blocks: [{ type: 'text', content: 'racing close' }],
+      },
+      { call: createTestCall() },
+    );
     await ensureSessionPaused;
-    const closing = connector.close();
+    const closing = connector.close(createTestCall());
     if (!releaseEnsureSession) {
       throw new Error('ensureSession gate was not installed');
     }
@@ -339,19 +317,10 @@ describe('BaseStreamConnector terminal initialization', () => {
   it('drains an accepted queued handle before awaiting session close', async () => {
     const hostBus = createTestBusInstance();
     const sentHandles: MessageHandle[] = [];
-    const connector = new TestStreamConnector({
-      bus: await TestNamespace.scopedBus(hostBus.getContext()),
-      globalBus: hostBus,
-      adapterId: 'adapter-1',
-      adapterName: 'stream-lifecycle-test',
-      agentId: 'agent-1',
-      model: 'test-model',
-      cwd: process.cwd(),
-      onMessageSent: (handle) => {
-        sentHandles.push(handle);
-      },
+    const connector = await createConnector(hostBus, (handle) => {
+      sentHandles.push(handle);
     });
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
     const session = connector.createdSession;
     if (!session) {
       throw new Error('stream session was not created');
@@ -360,16 +329,22 @@ describe('BaseStreamConnector terminal initialization', () => {
     session.processQueue.mockImplementationOnce(async (queue) => {
       queue.dequeue();
     });
-    await connector.sendMessage({
-      role: 'user',
-      message: 'active turn',
-      blocks: [{ type: 'text', content: 'active turn' }],
-    });
-    await connector.sendMessage({
-      role: 'user',
-      message: 'queued turn',
-      blocks: [{ type: 'text', content: 'queued turn' }],
-    });
+    await connector.sendMessage(
+      {
+        role: 'user',
+        message: 'active turn',
+        blocks: [{ type: 'text', content: 'active turn' }],
+      },
+      { call: createTestCall() },
+    );
+    await connector.sendMessage(
+      {
+        role: 'user',
+        message: 'queued turn',
+        blocks: [{ type: 'text', content: 'queued turn' }],
+      },
+      { call: createTestCall() },
+    );
 
     const queuedHandle = sentHandles[1];
     if (!queuedHandle) {
@@ -383,7 +358,7 @@ describe('BaseStreamConnector terminal initialization', () => {
         }),
     );
 
-    const closing = connector.close();
+    const closing = connector.close(createTestCall());
     const completion = await queuedHandle.waitForCompletion();
 
     expect(completion).toMatchObject({ outcome: 'error' });
@@ -398,24 +373,19 @@ describe('BaseStreamConnector terminal initialization', () => {
 
   it('keeps the session usable after an interrupt', async () => {
     const hostBus = createTestBusInstance();
-    const connector = new TestStreamConnector({
-      bus: await TestNamespace.scopedBus(hostBus.getContext()),
-      globalBus: hostBus,
-      adapterId: 'adapter-1',
-      adapterName: 'stream-lifecycle-test',
-      agentId: 'agent-1',
-      model: 'test-model',
-      cwd: process.cwd(),
-    });
-    await connector.initialize();
+    const connector = await createConnector(hostBus);
+    await connector.initialize({ call: createTestCall() });
     const session = connector.createdSession;
 
-    await connector.interrupt();
-    await connector.sendMessage({
-      role: 'user',
-      message: 'after interrupt',
-      blocks: [{ type: 'text', content: 'after interrupt' }],
-    });
+    await connector.interrupt(createTestCall());
+    await connector.sendMessage(
+      {
+        role: 'user',
+        message: 'after interrupt',
+        blocks: [{ type: 'text', content: 'after interrupt' }],
+      },
+      { call: createTestCall() },
+    );
 
     expect(session?.abort).toHaveBeenCalledTimes(1);
     expect(session?.processQueue).toHaveBeenCalledTimes(1);
@@ -425,19 +395,10 @@ describe('BaseStreamConnector terminal initialization', () => {
   it('settles and drains the queue when close wins during active-state transition', async () => {
     const hostBus = createTestBusInstance();
     let sentHandle: MessageHandle | undefined;
-    const connector = new TestStreamConnector({
-      bus: await TestNamespace.scopedBus(hostBus.getContext()),
-      globalBus: hostBus,
-      adapterId: 'adapter-1',
-      adapterName: 'stream-lifecycle-test',
-      agentId: 'agent-1',
-      model: 'test-model',
-      cwd: process.cwd(),
-      onMessageSent: (handle) => {
-        sentHandle = handle;
-      },
+    const connector = await createConnector(hostBus, (handle) => {
+      sentHandle = handle;
     });
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
     const session = connector.createdSession;
     let releaseActiveStateUpdate: (() => void) | undefined;
     const activeStateUpdatePaused = new Promise<void>((resolve) => {
@@ -448,13 +409,16 @@ describe('BaseStreamConnector terminal initialization', () => {
         });
     });
 
-    const sending = connector.sendMessage({
-      role: 'user',
-      message: 'racing active state',
-      blocks: [{ type: 'text', content: 'racing active state' }],
-    });
+    const sending = connector.sendMessage(
+      {
+        role: 'user',
+        message: 'racing active state',
+        blocks: [{ type: 'text', content: 'racing active state' }],
+      },
+      { call: createTestCall() },
+    );
     await activeStateUpdatePaused;
-    const closing = connector.close();
+    const closing = connector.close(createTestCall());
     if (!releaseActiveStateUpdate) {
       throw new Error('active-state transition gate was not installed');
     }

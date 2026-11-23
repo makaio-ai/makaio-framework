@@ -36,6 +36,7 @@ import { CredentialRefSchema } from '@makaio/contracts/config';
 import { type EventContext } from '@makaio/core';
 import { resolveCredentialRef } from '@makaio/ai-adapters-core/config';
 import { startHttpMcpServer } from '@makaio/subsystem-mcp-http-server';
+import { createTestCall } from '@makaio/test-utils';
 import { createMcpTestServerLifecycle } from './mcp-test-server-lifecycle.js';
 
 // Module augmentation for vitest TaskMeta lives in scripts/lib/vitest-meta.d.ts.
@@ -245,7 +246,7 @@ function getAdapterTestQueue(adapterName: string, concurrency?: number): PQueue 
 }
 
 // Initialize ToolRegistry for tests - registers handlers for ToolSubjects.list and ToolSubjects.execute
-const testToolRegistry = new ToolRegistry();
+const testToolRegistry = new ToolRegistry({ bus: MakaioBus });
 await testToolRegistry.register(filesystemToolset);
 
 // Register memory storage handlers before session service (required by MakaioSessionService contract).
@@ -265,7 +266,7 @@ MakaioBus.on(CredentialSubjects.getChannelToken, (ctx) => {
   ctx.setResult({ token: testCredentialToken });
 });
 const testCredentialEndpoint = createChannelEndpoint(
-  MakaioBus.getContext(),
+  MakaioBus,
   'credentials',
   (channel) => {
     channel.on(CredentialSubjects.resolve, async (ctx) => {
@@ -303,7 +304,7 @@ MakaioBus.on(McpSubjects.session.unregister, (ctx) => {
   ctx.setResult({});
 });
 
-const _sessionService = new MakaioSessionService();
+const _sessionService = new MakaioSessionService(MakaioBus);
 await _sessionService.init();
 
 export const adaptersPath = path.join(import.meta.dirname, '../');
@@ -394,11 +395,11 @@ export const getAgentTestContext = async (
 
   testConfig.registerToolApprovalHandler(
     agent,
-    async () => ({
+    async (call) => ({
       adapterId: agent.adapterId,
       adapterName: agent.getAdapterName(),
       agentId: agent.getAgentId(),
-      adapterSessionId: await agent.getAdapterSessionId(),
+      adapterSessionId: await agent.getAdapterSessionId(call),
       sessionId: 'conformance-test-session',
     }),
     MakaioBus,
@@ -413,6 +414,7 @@ export const getAgentTestContext = async (
         awaitedStartResults.set(
           adapterName,
           agent.start(normalizeMessageInput(initialMessage), {
+            call: createTestCall(),
             messageId: '11111111-1111-1111-1111-111111111111',
             systemPrompt: conformanceSystemPrompt,
           }),
@@ -422,6 +424,7 @@ export const getAgentTestContext = async (
     } else {
       // No cache - fresh start every time
       return agent.start(normalizeMessageInput(initialMessage), {
+        call: createTestCall(),
         systemPrompt: conformanceSystemPrompt,
       });
     }
@@ -439,11 +442,11 @@ export const getAgentTestContext = async (
     });
     testConfig.registerToolApprovalHandler(
       connector,
-      async () => ({
+      async (call) => ({
         adapterId: connector.adapterId,
         adapterName: connector.getAdapterName(),
         agentId: connector.getAgentId(),
-        adapterSessionId: await connector.getAdapterSessionId(),
+        adapterSessionId: await connector.getAdapterSessionId(call),
         sessionId: 'conformance-test-session',
       }),
       MakaioBus,
@@ -504,6 +507,7 @@ export const getOrchestrationTestContext = async (
 
   const createAdapterFn = () =>
     testConfig.createAdapter!({
+      globalBus: MakaioBus,
       adapterId: finalAdapterId,
       machineId: 'test-machine',
       ownerInstanceId: 'test-owner-instance',

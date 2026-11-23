@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { JsonValue, WorkflowFrameState, WorkflowIterateChainNode, WorkflowSequenceNode } from '@makaio/contracts';
 import type { ExecuteSequenceFn, NodeOutcome } from './node-execution.js';
 import { cancelFrame, completeFrame, failFrame, startFrame } from './node-execution.js';
@@ -63,6 +64,7 @@ const ITEM_RESUME_STATUSES = new Set<WorkflowFrameState['status']>(['completed',
  * **Output:**
  * The `IterateChainOutput.items` array contains the settled state of each
  * item that was executed (items after a failure are not included).
+ * @param call - Call context of the message that drives this execution run.
  * @param node - The iterate-chain node to execute.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context.
@@ -72,6 +74,7 @@ const ITEM_RESUME_STATUSES = new Set<WorkflowFrameState['status']>(['completed',
  * @returns Terminal execution outcome for the iterate-chain node as a whole.
  */
 export async function executeIterateChainNode(
+  call: CallContext,
   node: WorkflowIterateChainNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
@@ -106,6 +109,7 @@ export async function executeIterateChainNode(
 
     const item = collection[index];
     const result = await runChainItem(
+      call,
       item,
       index,
       previous,
@@ -155,6 +159,7 @@ export async function executeIterateChainNode(
  * per-item state independently. Injects `item`, `index`, and `previous`
  * into the expression context so body nodes can reference the current
  * collection element and the preceding item's output.
+ * @param call - Call context of the message that drives this execution run.
  * @param item - The collection item for this iteration.
  * @param index - Zero-based index of this item in the collection.
  * @param previous - Output from the previous item's body, if any.
@@ -167,6 +172,7 @@ export async function executeIterateChainNode(
  * @returns Settled outcome for this item.
  */
 async function runChainItem(
+  call: CallContext,
   item: unknown,
   index: number,
   previous: JsonValue | undefined,
@@ -202,7 +208,7 @@ async function runChainItem(
   // item frame left behind by a parked descendant gate.
   const frame =
     resumeFrame ??
-    ctx.createFrame({
+    ctx.createFrame(call, {
       nodeId: node.id,
       nodeType: 'iterate-chain',
       path: parentPath,
@@ -211,20 +217,20 @@ async function runChainItem(
     });
 
   if (ctx.signal.aborted) {
-    await cancelFrame(frame, ctx);
+    await cancelFrame(call, frame, ctx);
     return { status: 'cancelled' };
   }
 
   if (resumeFrame === undefined) {
-    await startFrame(frame, ctx);
+    await startFrame(call, frame, ctx);
   }
 
   let outcome: NodeOutcome;
   try {
-    outcome = await executeSequenceFn(node.body as WorkflowSequenceNode, ctx, itemCtx, frame.frameId, frame.path);
+    outcome = await executeSequenceFn(call, node.body as WorkflowSequenceNode, ctx, itemCtx, frame.frameId, frame.path);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await failFrame(frame, ctx, message);
+    await failFrame(call, frame, ctx, message);
     return { status: 'rejected', reason: message };
   }
 
@@ -235,16 +241,16 @@ async function runChainItem(
       // output value. Extract the last body node's output from the frame registry
       // so it can be passed as `previous` to the next item.
       const bodyOutput = extractLastBodyOutput(node, frame.frameId, ctx);
-      await completeFrame(frame, ctx, bodyOutput);
+      await completeFrame(call, frame, ctx, bodyOutput);
       return fulfilledItem(bodyOutput);
     }
     case 'skipped': {
       // A fully-skipped body sequence is treated as fulfilled with no output.
-      await completeFrame(frame, ctx);
+      await completeFrame(call, frame, ctx);
       return fulfilledItem();
     }
     case 'cancelled': {
-      await cancelFrame(frame, ctx);
+      await cancelFrame(call, frame, ctx);
       return { status: 'cancelled' };
     }
     case 'paused': {
@@ -253,7 +259,7 @@ async function runChainItem(
       return outcome;
     }
     case 'failed': {
-      await failFrame(frame, ctx, outcome.error);
+      await failFrame(call, frame, ctx, outcome.error);
       return { status: 'rejected', reason: outcome.error };
     }
   }

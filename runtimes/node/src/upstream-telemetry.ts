@@ -7,6 +7,7 @@ import {
   type ObservedBusMessage,
   projectSubjectTelemetryFacts,
 } from '@makaio/bus-core';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
 import { SubjectTelemetrySubjects } from '@makaio/contracts';
 import type { ShutdownStep } from './boot-phase.js';
 import type { UpstreamTelemetryBootOptions } from './boot-types.js';
@@ -40,7 +41,7 @@ function shouldExportObservedMessage(bus: IMakaioBus, message: ObservedBusMessag
   }
 
   const fullSubject = `${message.namespace}.${message.subject}`;
-  const registry = bus.getContext().namespaceRegistry;
+  const registry = busContextOf(bus).namespaceRegistry;
   return !registry.isLocalSubject(fullSubject) && !registry.isCollectorOnlySubject(fullSubject);
 }
 
@@ -92,7 +93,7 @@ async function exportTelemetryFacts(
     direction: 'outbound',
     observedAt: Date.now(),
     machineId,
-    namespaceRegistry: bus.getContext().namespaceRegistry,
+    namespaceRegistry: busContextOf(bus).namespaceRegistry,
     projectorRegistry: options.projectorRegistry,
   });
 

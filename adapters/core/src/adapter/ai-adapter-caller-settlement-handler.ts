@@ -1,4 +1,4 @@
-import type { ExtractSubjectPayload, ExtractSubjectResponse, RequestContext } from '@makaio/core';
+import type { CallContext, ExtractSubjectPayload, ExtractSubjectResponse, RequestContext } from '@makaio/core';
 import { AdapterSubjects } from '@makaio/contracts';
 
 type AcknowledgeCallerSettlementPayload = ExtractSubjectPayload<typeof AdapterSubjects.acknowledgeCallerSettlement>;
@@ -8,6 +8,7 @@ type AcknowledgeCallerSettlementResponse = ExtractSubjectResponse<typeof Adapter
 interface CallerSettlementRegistry {
   /** Acknowledge the exact recovery settlement accepted by this runtime. */
   acknowledgeCallerSettlement(
+    call: CallContext,
     agentId: string,
     settlementAckToken: string,
     recovery: boolean,
@@ -25,6 +26,7 @@ export function createAcknowledgeCallerSettlementHandler(
   return async (ctx) => {
     ctx.setResult(
       await registry.acknowledgeCallerSettlement(
+        ctx.call,
         ctx.payload.agentId,
         ctx.payload.settlementAckToken,
         ctx.payload.recovery === true,

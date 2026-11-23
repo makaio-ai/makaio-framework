@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { CredentialSubjects, type ResolvedProviderContext } from '@makaio/contracts';
 import { buildStoredCredentialRef } from '@makaio/contracts/config';
+import { createTestCall } from '@makaio/test-utils';
 
 import { activateProviderContext, ProviderContextActivationError } from './activate-provider-context.js';
 
@@ -33,10 +34,10 @@ describe('activateProviderContext', () => {
 
   it('is a no-op unless inferred auth selects a managed account', async () => {
     const bus = createBusInstance();
-    await expect(activateProviderContext(bus, { state: 'unresolved' })).resolves.toBeUndefined();
-    await expect(activateProviderContext(bus, makeInferredContext())).resolves.toBeUndefined();
+    await expect(activateProviderContext(createTestCall(), bus, { state: 'unresolved' })).resolves.toBeUndefined();
+    await expect(activateProviderContext(createTestCall(), bus, makeInferredContext())).resolves.toBeUndefined();
     await expect(
-      activateProviderContext(bus, {
+      activateProviderContext(createTestCall(), bus, {
         state: 'resolved',
         providerConfigId: 'cfg-explicit',
         definitionId: 'anthropic',
@@ -74,12 +75,13 @@ describe('activateProviderContext', () => {
       }),
     );
 
-    await activateProviderContext(bus, providerContext);
+    await activateProviderContext(createTestCall(), bus, providerContext);
     expect(observed).toEqual({ providerContext });
   });
 
   it('fails with a typed error when the selected manager is unavailable', async () => {
-    const error = await activateProviderContext(createBusInstance(), makeInferredContext('account-1')).catch(
+    const bus = createBusInstance();
+    const error = await activateProviderContext(createTestCall(), bus, makeInferredContext('account-1')).catch(
       (value: unknown) => value,
     );
 
@@ -95,9 +97,11 @@ describe('activateProviderContext', () => {
       }),
     );
 
-    const error = await activateProviderContext(bus, makeInferredContext('account-secret-coordinate')).catch(
-      (value: unknown) => value,
-    );
+    const error = await activateProviderContext(
+      createTestCall(),
+      bus,
+      makeInferredContext('account-secret-coordinate'),
+    ).catch((value: unknown) => value);
     expect(error).toBeInstanceOf(ProviderContextActivationError);
     expect((error as ProviderContextActivationError).code).toBe('account-not-found');
     expect(String(error)).not.toContain('account-secret-coordinate');
@@ -111,7 +115,9 @@ describe('activateProviderContext', () => {
       }),
     );
 
-    const error = await activateProviderContext(bus, makeInferredContext('account-1')).catch((value: unknown) => value);
+    const error = await activateProviderContext(createTestCall(), bus, makeInferredContext('account-1')).catch(
+      (value: unknown) => value,
+    );
     expect(error).toBeInstanceOf(ProviderContextActivationError);
     expect((error as ProviderContextActivationError).code).toBe('activation-failed');
     expect(String(error)).not.toContain('secret-token-value');

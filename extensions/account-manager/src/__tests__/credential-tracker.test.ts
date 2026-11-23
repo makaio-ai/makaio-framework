@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import type { StoredAccount } from '../interfaces/account-store.js';
 import { CredentialTracker } from '../handlers/credential-tracker.js';
 import { InMemoryCredentialSource } from './testing/in-memory-source.js';
@@ -104,7 +105,7 @@ describe('CredentialTracker', () => {
       await store.upsert(CLIENT_ID, accountA);
       await store.upsert(CLIENT_ID, accountB);
 
-      await tracker.start();
+      await tracker.start(createTestCall());
 
       const accounts = await store.list(CLIENT_ID);
       expect(accounts).toHaveLength(1);
@@ -128,7 +129,7 @@ describe('CredentialTracker', () => {
       await store.upsert(CLIENT_ID, accountA);
       await store.upsert(CLIENT_ID, accountB);
 
-      await tracker.start();
+      await tracker.start(createTestCall());
 
       const accounts = await store.list(CLIENT_ID);
       expect(accounts).toHaveLength(1);
@@ -163,7 +164,7 @@ describe('CredentialTracker', () => {
       await store.upsert(CLIENT_ID, accountExpired);
       await store.upsert(CLIENT_ID, accountValid);
 
-      await tracker.start();
+      await tracker.start(createTestCall());
 
       const accounts = await store.list(CLIENT_ID);
       expect(accounts).toHaveLength(1);
@@ -201,7 +202,7 @@ describe('CredentialTracker', () => {
       // start() keeps it active rather than deactivating it on null-read.
       source.setCredential({ token: sharedToken, fingerprint: sharedFingerprint, metadata: {} });
 
-      await tracker.start();
+      await tracker.start(createTestCall());
 
       const accounts = await store.list(CLIENT_ID);
       // Dedup collapses the two duplicates into one; the survivor is active.
@@ -225,7 +226,7 @@ describe('CredentialTracker', () => {
       await store.upsert(CLIENT_ID, accountA);
       await store.upsert(CLIENT_ID, accountB);
 
-      await tracker.start();
+      await tracker.start(createTestCall());
 
       const accounts = await store.list(CLIENT_ID);
       expect(accounts).toHaveLength(2);
@@ -253,7 +254,7 @@ describe('CredentialTracker', () => {
       await store.upsert(CLIENT_ID, accountA);
       await store.upsert(CLIENT_ID, accountB);
 
-      await tracker.start();
+      await tracker.start(createTestCall());
 
       const accounts = await store.list(CLIENT_ID);
       expect(accounts).toHaveLength(1);
@@ -284,7 +285,7 @@ describe('CredentialTracker', () => {
       await store.upsert(CLIENT_ID, accountB);
       await store.upsert(CLIENT_ID, accountC);
 
-      await tracker.start();
+      await tracker.start(createTestCall());
 
       const accounts = await store.list(CLIENT_ID);
       expect(accounts).toHaveLength(1);
@@ -322,7 +323,7 @@ describe('CredentialTracker', () => {
       await store.upsert(CLIENT_ID, accountA);
       await store.upsert(CLIENT_ID, accountB);
 
-      await tracker.start();
+      await tracker.start(createTestCall());
 
       const accounts = await store.list(CLIENT_ID);
       expect(accounts).toHaveLength(1);

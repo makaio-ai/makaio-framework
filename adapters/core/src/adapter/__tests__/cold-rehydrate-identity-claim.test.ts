@@ -58,6 +58,7 @@ beforeEach(async () => {
     // occupying nothing and make the session-claim arm below vacuous.
     configFactory: async (input) => ({
       bus: coldScopedBus,
+      globalBus: input.globalBus,
       agentId: input.agentId ?? AGENT_ID,
       adapterId: input.adapterId ?? adapter.adapterId,
       adapterName: 'cold-adapter',

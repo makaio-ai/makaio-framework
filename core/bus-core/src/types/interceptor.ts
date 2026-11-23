@@ -1,4 +1,4 @@
-import type { PayloadFilter } from '@makaio/core';
+import type { CallContext, PartyRef, PayloadFilter } from '@makaio/core';
 
 /**
  * Context provided to interceptor handlers.
@@ -16,6 +16,12 @@ export interface InterceptorContext<P, S = string> {
   readonly payload: P;
   readonly messageId: string;
   readonly correlationId: string | undefined;
+
+  /**
+   * Call context of the message being intercepted: caller = sender, principal,
+   * attestedBy. Pass it on when the interceptor sends follow-up messages.
+   */
+  readonly call: CallContext;
 
   /**
    * Stop propagation of this message.
@@ -66,6 +72,11 @@ export interface InterceptOptions {
 export interface InterceptorEntry<H> {
   handler: H;
   priority: number;
+  /**
+   * The party that registered the interceptor (the carrier of the bus instance
+   * it was registered on). Only kind and id; never claims.
+   */
+  owner: PartyRef;
 }
 
 /**

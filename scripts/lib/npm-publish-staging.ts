@@ -7,7 +7,7 @@
  * @packageDocumentation
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { createPortablePackageJson, type PackageJsonLike } from '@makaio/build-tooling/portable-package';
 import { isForbiddenPublishBuildArtifact } from './npm-packlist-policy.js';
@@ -191,6 +191,51 @@ function normalizeStagedDeclarationTargets(publishDir: string, value: unknown): 
   );
 }
 
+/** Built-output file extensions whose import specifiers must be resolvable by consumers. */
+const BUILT_OUTPUT_FILE_PATTERN = /\.(?:[cm]?js|d\.[cm]?ts)$/u;
+
+/** Matches a quoted `@makaio/framework` or `@makaio/framework/<subpath>` import specifier. */
+const FRAMEWORK_SPECIFIER_PATTERN = /(['"])@makaio\/framework(?:\/[^'"]*)?\1/u;
+
+/**
+ * Find the first staged built-output file that imports `@makaio/framework`.
+ * @param directory - Absolute directory to scan recursively.
+ * @returns Absolute path of the first importing file, or `undefined`.
+ */
+function findFrameworkImportingFile(directory: string): string | undefined {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const entryPath = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules') continue;
+      const nested = findFrameworkImportingFile(entryPath);
+      if (nested) return nested;
+    } else if (BUILT_OUTPUT_FILE_PATTERN.test(entry.name)) {
+      if (FRAMEWORK_SPECIFIER_PATTERN.test(readFileSync(entryPath, 'utf8'))) return entryPath;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Enforce that a staged package whose built output imports `@makaio/framework/*`
+ * declares `@makaio/framework` as a peer dependency, so a consumer installing only
+ * that package is told to install the framework that provides the imported types.
+ * @param publishDir - Absolute publish staging directory with built output copied in.
+ * @param manifest - Staged manifest that will be written to `publishDir`.
+ * @throws When built output imports the framework but the manifest has no such peer.
+ */
+function assertFrameworkPeerForBuiltImports(publishDir: string, manifest: PublishablePackageJson): void {
+  if (manifest.name === '@makaio/framework') return;
+  if (manifest.peerDependencies?.['@makaio/framework'] !== undefined) return;
+  const importer = findFrameworkImportingFile(publishDir);
+  if (importer) {
+    throw new Error(
+      `${manifest.name}: built output imports @makaio/framework (${relative(publishDir, importer)}) ` +
+        'but the manifest does not declare it in peerDependencies',
+    );
+  }
+}
+
 /**
  * Stage one package for npm publishing.
  * @param packageDir - Absolute package root.
@@ -236,10 +281,9 @@ export function stagePackageForNpmPublish(
     }
   }
 
-  const stagedPackageJson = normalizeStagedDeclarationTargets(
-    publishDir,
-    createStagedPackageJson(packageJson, frameworkVersion, publishVersions),
-  );
+  const stagedManifest = createStagedPackageJson(packageJson, frameworkVersion, publishVersions);
+  assertFrameworkPeerForBuiltImports(publishDir, stagedManifest);
+  const stagedPackageJson = normalizeStagedDeclarationTargets(publishDir, stagedManifest);
 
   writeFileSync(join(publishDir, 'package.json'), `${JSON.stringify(stagedPackageJson, null, 2)}\n`, 'utf8');
 

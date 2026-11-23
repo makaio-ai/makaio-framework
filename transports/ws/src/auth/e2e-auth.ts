@@ -5,7 +5,7 @@
  * After successful handshake, provides a session encryption key for encrypting/decrypting bus messages.
  */
 
-import type { TransportReceiveContext } from '@makaio/core';
+import { MAKAIO_E2E_PEER_PARTY_KIND, type TransportReceiveContext } from '@makaio/core';
 import type { TransportAuth } from './interface.js';
 import type { WebSocketLike } from '../types.js';
 import { WebSocketConnectionError } from '../connection-error.js';
@@ -469,7 +469,9 @@ export class E2EAuth implements TransportAuth {
     }
     return {
       transportName: '',
-      peer: { kind: 'e2e', id: peerId, authenticated: true, encrypted: true },
+      authenticated: true,
+      encrypted: true,
+      caller: { kind: MAKAIO_E2E_PEER_PARTY_KIND, id: peerId },
     };
   }
 

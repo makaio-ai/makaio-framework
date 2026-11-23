@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ResolvedAdapterAuth } from '@makaio/ai-adapters-core/config';
+import { createTestBusInstance } from '@makaio/test-utils';
 import { OpenAIAdapter, OpenAIModelFetchAuthError } from '../adapter.js';
 import { MODEL_FETCH_TIMEOUT_MS } from '../constants.js';
 
@@ -37,6 +38,7 @@ describe('OpenAIAdapter.fetchModels', () => {
     vi.stubGlobal('fetch', fetchStub);
 
     const models = await new OpenAIAdapter({
+      globalBus: createTestBusInstance(),
       machineId: 'test-machine',
       ownerInstanceId: 'test-owner-instance',
     }).fetchModels('https://example.test/v1', SELECTED_AUTH);
@@ -56,10 +58,11 @@ describe('OpenAIAdapter.fetchModels', () => {
     });
     vi.stubGlobal('fetch', fetchStub);
 
-    const result = new OpenAIAdapter({ machineId: 'test-machine', ownerInstanceId: 'test-owner-instance' }).fetchModels(
-      'https://example.test/v1',
-      SELECTED_AUTH,
-    );
+    const result = new OpenAIAdapter({
+      globalBus: createTestBusInstance(),
+      machineId: 'test-machine',
+      ownerInstanceId: 'test-owner-instance',
+    }).fetchModels('https://example.test/v1', SELECTED_AUTH);
     const expectation = expect(result).rejects.toThrow(`timed out after ${MODEL_FETCH_TIMEOUT_MS}ms`);
     await vi.advanceTimersByTimeAsync(MODEL_FETCH_TIMEOUT_MS);
 
@@ -74,10 +77,11 @@ describe('OpenAIAdapter.fetchModels', () => {
     );
 
     await expect(
-      new OpenAIAdapter({ machineId: 'test-machine', ownerInstanceId: 'test-owner-instance' }).fetchModels(
-        'https://example.test/v1',
-        SELECTED_AUTH,
-      ),
+      new OpenAIAdapter({
+        globalBus: createTestBusInstance(),
+        machineId: 'test-machine',
+        ownerInstanceId: 'test-owner-instance',
+      }).fetchModels('https://example.test/v1', SELECTED_AUTH),
     ).rejects.toThrow(/500 Server Error/);
 
     expect(vi.getTimerCount()).toBe(0);
@@ -88,7 +92,11 @@ describe('OpenAIAdapter.fetchModels', () => {
     vi.stubGlobal('fetch', createFetchStub(fetchStub));
 
     await expect(
-      new OpenAIAdapter({ machineId: 'test-machine', ownerInstanceId: 'test-owner-instance' }).fetchModels(undefined, {
+      new OpenAIAdapter({
+        globalBus: createTestBusInstance(),
+        machineId: 'test-machine',
+        ownerInstanceId: 'test-owner-instance',
+      }).fetchModels(undefined, {
         processEnv: {},
         connectorDeliveries: [],
         configInheritance: 'empty',

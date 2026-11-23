@@ -17,6 +17,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createBusInstance } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   ToolSubjects,
   WorkerNamespace,
@@ -1551,7 +1552,7 @@ describe('workflow-level runner boot composition', () => {
         throw new Error('Expected worker runner');
       }
       const config = makeWorkerConfig();
-      const completion = await runner.run(config, new AbortController().signal);
+      const completion = await runner.run(createTestCall(), config, new AbortController().signal);
 
       expect(runner).toBeInstanceOf(WorkerRunner);
       expect(completion).toMatchObject({ state: 'authority-committed', result: { status: 'completed' } });
@@ -1562,8 +1563,8 @@ describe('workflow-level runner boot composition', () => {
   });
 
   it('preserves omitted manifests for worker mode', async () => {
-    let capturedRequest: Parameters<WorkerDispatch>[0] | undefined;
-    const dispatch: WorkerDispatch = async (request) => {
+    let capturedRequest: Parameters<WorkerDispatch>[1] | undefined;
+    const dispatch: WorkerDispatch = async (_call, request) => {
       capturedRequest = request;
       const result = {
         executionId: 'wfx-1',
@@ -1598,7 +1599,7 @@ describe('workflow-level runner boot composition', () => {
       throw new Error('Expected worker runner');
     }
     expect(runner).toBeInstanceOf(WorkerRunner);
-    await runner.run(makeWorkerConfig(), signal);
+    await runner.run(createTestCall(), makeWorkerConfig(), signal);
 
     if (capturedRequest === undefined) {
       throw new Error('Expected dispatch request');

@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { ExtensionWarningAction } from '@makaio/contracts/extension';
 import { getExtensionWarningActionLabel } from '@makaio/contracts/extension';
 import { ToastSubjects } from '@makaio/contracts/toast';
@@ -24,12 +25,13 @@ export interface EmitterHost {
  * Called once at the end of `startAll` after all health checks have completed.
  * Only `degraded` severity triggers proactive notification; `info` and
  * `recommended` warnings are queryable via `warnings.list` only.
+ * @param call - Call that triggered the warning notification.
  * @param host - Coordinator surface providing the entries map and bus.
  */
-export async function emitWarnings(host: EmitterHost): Promise<void> {
+export async function emitWarnings(call: CallContext, host: EmitterHost): Promise<void> {
   for (const [name, entry] of host.entries) {
     if (entry.state !== 'active') continue;
-    await emitWarningsForEntry(host, name, entry);
+    await emitWarningsForEntry(call, host, name, entry);
   }
 }
 
@@ -89,11 +91,17 @@ function pruneWarningActionsForEntry(actionMap: Map<string, ExtensionWarningActi
  * Only `degraded` severity warnings are emitted. Toast emission failures are
  * swallowed so headless mode (where toast infrastructure is absent) does not
  * crash.
+ * @param call - Call that triggered the warning notification.
  * @param host - Coordinator surface providing the bus and warning action map.
  * @param name - Package name used for log prefixes and toast IDs.
  * @param entry - Package entry whose warnings should be emitted.
  */
-export async function emitWarningsForEntry(host: EmitterHost, name: string, entry: ExtensionEntry): Promise<void> {
+export async function emitWarningsForEntry(
+  call: CallContext,
+  host: EmitterHost,
+  name: string,
+  entry: ExtensionEntry,
+): Promise<void> {
   pruneWarningActionsForEntry(host.warningActionMap, name);
 
   const degraded = entry.warnings.filter((w) => w.severity === 'degraded');
@@ -107,7 +115,7 @@ export async function emitWarningsForEntry(host: EmitterHost, name: string, entr
     const actions = buildToastActions(warning.action);
 
     try {
-      await host.bus.emit(ToastSubjects.show, {
+      await host.bus.emit(call, ToastSubjects.show, {
         level: 'warning',
         title: warning.title,
         message: `${entry.pkg.displayName}: ${warning.message}`,

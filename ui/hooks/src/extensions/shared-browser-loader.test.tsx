@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadExtensionBrowserContributions } from './shared-browser-loader.js';
 
@@ -15,11 +15,9 @@ interface TestContribution {
 }
 
 function createBus(extensions: Array<{ browser?: { entrypoint: string }; name: string; state: string }>): IMakaioBus {
-  const bus: Pick<IMakaioBus, 'request'> = {
-    request: vi.fn().mockResolvedValue({ extensions }),
-  };
-
-  return bus as IMakaioBus;
+  const bus = createBusInstance();
+  vi.spyOn(bus, 'request').mockResolvedValue({ extensions });
+  return bus;
 }
 
 describe('loadExtensionBrowserContributions', () => {

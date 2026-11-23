@@ -33,7 +33,8 @@ export async function attachInteractiveTerminal(
  */
 async function reportAttachmentStatus(bus: IMakaioBus, request: NativeSupervisorAttachRequest): Promise<void> {
   try {
-    const response = await bus.request(NativeSessionSupervisorSubjects.attach, request);
+    // ORIGIN: The non-interactive CLI attach command requests runtime status.
+    const response = await bus.request(bus.own('root'), NativeSessionSupervisorSubjects.attach, request);
     if (!response.success) {
       process.stderr.write('attach: runtime not found or attach failed\n');
       process.exitCode = 1;
@@ -81,7 +82,8 @@ class TerminalAttachmentRelay {
     const unsubscribeDisconnected = this.bus.on(BusLifecycle.disconnected, () => this.detachTerminal?.());
     try {
       await waitForSubscriptionPropagation(unsubscribe);
-      const response = await this.bus.request(NativeSessionSupervisorSubjects.terminal.open, {
+      // ORIGIN: The interactive CLI attach command opens the relay.
+      const response = await this.bus.request(this.bus.own('start'), NativeSessionSupervisorSubjects.terminal.open, {
         attachmentId: this.attachmentId,
         locator: this.locator,
       });
@@ -176,7 +178,10 @@ class TerminalAttachmentRelay {
   private async close(): Promise<void> {
     if (!this.attached) return;
     try {
-      await this.bus.request(NativeSessionSupervisorSubjects.terminal.close, { attachmentId: this.attachmentId });
+      // ORIGIN: The CLI relay releases its attachment when it shuts down.
+      await this.bus.request(this.bus.own('stop'), NativeSessionSupervisorSubjects.terminal.close, {
+        attachmentId: this.attachmentId,
+      });
     } catch (err) {
       process.stderr.write(`attach cleanup failed: ${err instanceof Error ? err.message : String(err)}\n`);
       process.exitCode = 1;

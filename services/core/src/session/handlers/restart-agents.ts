@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AdapterSubjects, SessionSubjects, type IMakaioSession, type MakaioSessionAgent } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { evaluateNativeLocality } from '../native-locality.js';
@@ -25,13 +26,14 @@ type RestartAgentsHandlerResult =
  *
  * Best-effort: returns `false` when the adapter is unreachable or has no
  * handler, matching the attach-handler's `adapterSupportsResume` pattern.
+ * @param call - Call context of the restart the probe belongs to
  * @param bus - Bus for the capability query
  * @param adapterId - Live adapter instance ID
  * @returns `true` when the adapter declares `session:resume`
  */
-async function adapterSupportsResume(bus: IMakaioBus, adapterId: string): Promise<boolean> {
+async function adapterSupportsResume(call: CallContext, bus: IMakaioBus, adapterId: string): Promise<boolean> {
   try {
-    const result = await bus.requestOptional(AdapterSubjects.getCapabilities, { adapterId });
+    const result = await bus.requestOptional(call, AdapterSubjects.getCapabilities, { adapterId });
     return result.handled ? new Set(result.data.capabilities).has('session:resume') : false;
   } catch {
     return false;
@@ -47,16 +49,18 @@ async function adapterSupportsResume(bus: IMakaioBus, adapterId: string): Promis
  * Returns `undefined` only when both the payload and the runtime identity are
  * absent — downstream locality evaluation treats this as `missing-machine-id`
  * and degrades to deferred lazy recovery with history.
+ * @param call - Call context of the restart the resolution belongs to
  * @param bus - Bus for identity resolution
  * @param payloadMachineId - Explicit machine ID from the request payload
  * @returns Effective machine identity, or `undefined` when unavailable
  */
 async function resolveEffectiveMachineId(
+  call: CallContext,
   bus: IMakaioBus,
   payloadMachineId: string | undefined,
 ): Promise<string | undefined> {
   if (payloadMachineId !== undefined) return payloadMachineId;
-  const identity = await bus.requestOptional(AdapterRuntimeSubjects.getMachineId, {});
+  const identity = await bus.requestOptional(call, AdapterRuntimeSubjects.getMachineId, {});
   return identity.handled ? identity.data.machineId : undefined;
 }
 
@@ -67,6 +71,7 @@ async function resolveEffectiveMachineId(
  * is evaluated against it and the plan resumes it. Reading the target from the
  * raw `adapterSessionId` origin column instead is what let a settled movement be
  * evaluated and then discarded.
+ * @param call - Call context of the restart being planned
  * @param bus - Bus for the capability probe
  * @param session - Session row supplying the structural locality signals
  * @param agent - Agent being restarted
@@ -75,6 +80,7 @@ async function resolveEffectiveMachineId(
  * @returns The agent's recovery plan
  */
 async function planRestart(
+  call: CallContext,
   bus: IMakaioBus,
   session: IMakaioSession,
   agent: MakaioSessionAgent,
@@ -86,7 +92,7 @@ async function planRestart(
     intent: 'resume',
     session,
     localMachineId: machineId,
-    adapterSupportsNative: await adapterSupportsResume(bus, adapterId),
+    adapterSupportsNative: await adapterSupportsResume(call, bus, adapterId),
     targetAdapterName: agent.adapterName,
     currentCwd: agent.cwd,
     targetCwd: agent.cwd,
@@ -172,6 +178,7 @@ function reportRestartOutcome(
  * second lifecycle beside it — including the one bounded re-entry a joiner is
  * owed when the attempt it joined built no connector, because that attempt
  * answered for *its* inputs and this restart has not asked for its own yet.
+ * @param call - Call context of the restart request; every step of the restart forwards it
  * @param bus - Bus every step is issued on
  * @param session - Session row supplying the structural locality signals
  * @param agent - Agent being restarted
@@ -179,6 +186,7 @@ function reportRestartOutcome(
  * @returns This agent's entry in the handler's result list
  */
 async function restartAgent(
+  call: CallContext,
   bus: IMakaioBus,
   session: IMakaioSession,
   agent: MakaioSessionAgent,
@@ -189,8 +197,8 @@ async function restartAgent(
   // would advertise a binding that does not exist.
   const { agentId, adapterId: storedAdapterId } = agent;
   for (let replan = 0; replan <= MAX_RECOVERY_REPLANS; replan += 1) {
-    const outcome = await runOrJoinReservedRehydrate(bus, agent, async () => {
-      const snapshot = await readRecoveryPlanningSnapshot(bus, agentId);
+    const outcome = await runOrJoinReservedRehydrate(call, bus, agent, async () => {
+      const snapshot = await readRecoveryPlanningSnapshot(call, bus, agentId);
       if (snapshot === null) return { kind: 'lost' };
       if (!recoverySnapshotIsClaimable(snapshot)) {
         return snapshot.agent.status === 'disposed' ? { kind: 'refused', outcome: 'agent-disposed' } : { kind: 'lost' };
@@ -202,7 +210,7 @@ async function restartAgent(
       // holder generation; reading any of those facts before the seam would
       // create a request for a lifecycle this caller never gets to run.
       const instance = toMachineScopedAdapterInstance(
-        await resolveOwnedAdapterInstance(bus, {
+        await resolveOwnedAdapterInstance(call, bus, {
           adapterName: agent.adapterName,
           storedAdapterId: agent.adapterId,
           ...(machineId !== undefined && { machineId }),
@@ -210,9 +218,15 @@ async function restartAgent(
       );
       if (instance === undefined) return { kind: 'deferred', reason: 'machine-identity-unavailable' };
 
-      const plan = await planRestart(bus, session, agent, instance.adapterId, instance.machineId);
+      const plan = await planRestart(call, bus, session, agent, instance.adapterId, instance.machineId);
       if (recoveryPlanRequiresHistory(plan)) return { kind: 'deferred', reason: 'machine-identity-unavailable' };
-      const recoveryGuard = await buildRecoveryReservationGuard(bus, snapshot, instance, plan.resumeAdapterSessionId);
+      const recoveryGuard = await buildRecoveryReservationGuard(
+        call,
+        bus,
+        snapshot,
+        instance,
+        plan.resumeAdapterSessionId,
+      );
       return {
         agent,
         sessionId: agent.sessionId,
@@ -284,12 +298,12 @@ function describeRestartFailure(error: unknown): string {
 export function registerRestartAgentsHandler(bus: IMakaioBus): () => void {
   return bus.on(SessionSubjects.restartAgents, async (ctx) => {
     const { sessionId, machineId: payloadMachineId } = ctx.payload;
-    const listResult = await bus.requestOptional(AgentStorageSubjects.listBySession, { sessionId });
+    const listResult = await bus.requestOptional(ctx.call, AgentStorageSubjects.listBySession, { sessionId });
     const agents = listResult.handled ? listResult.data.agents : [];
     const results: RestartAgentsHandlerResult[] = [];
 
-    const machineId = await resolveEffectiveMachineId(bus, payloadMachineId);
-    const sessionResult = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
+    const machineId = await resolveEffectiveMachineId(ctx.call, bus, payloadMachineId);
+    const sessionResult = await bus.requestOptional(ctx.call, SessionStorageSubjects.get, { sessionId });
     const session = sessionResult.handled ? sessionResult.data.session : null;
 
     for (const agent of agents) {
@@ -309,7 +323,7 @@ export function registerRestartAgentsHandler(bus: IMakaioBus): () => void {
         continue;
       }
       try {
-        results.push(await restartAgent(bus, session, agent, machineId));
+        results.push(await restartAgent(ctx.call, bus, session, agent, machineId));
       } catch (error) {
         results.push({
           agentId: agent.agentId,

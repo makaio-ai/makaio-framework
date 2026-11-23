@@ -20,6 +20,7 @@ import {
   TEST_PROVISIONER_INCARNATION_ID,
 } from '@makaio/subsystem-workflow-engine/testing';
 import { createSqliteAttemptRepository } from '@makaio/subsystem-workflow-engine/testing/sqlite';
+import { createTestCall } from '@makaio/test-utils';
 import { createRestartableTempDb } from '@makaio/test-utils/drizzle-harness';
 import { PiscinaThinWorkflowProvider } from '../piscina-thin-workflow-provider.js';
 import { ThinWorkflowPiscinaRunner } from '../thin-workflow-piscina-runner.js';
@@ -308,7 +309,12 @@ describe('ThinWorkflowPiscinaRunner integration', () => {
     const perCallManifest: WorkerContributionManifest = { contributionRefs: [] };
 
     try {
-      const completion = await runner.run(makeWorkerConfig(), new AbortController().signal, perCallManifest);
+      const completion = await runner.run(
+        createTestCall(),
+        makeWorkerConfig(),
+        new AbortController().signal,
+        perCallManifest,
+      );
       expect(completion).toMatchObject({
         state: 'uncommitted',
         result: {
@@ -343,7 +349,7 @@ describe('ThinWorkflowPiscinaRunner integration', () => {
     });
 
     try {
-      const completion = await runner.run(config, new AbortController().signal, workspace.manifest);
+      const completion = await runner.run(createTestCall(), config, new AbortController().signal, workspace.manifest);
       if (completion.state !== 'uncommitted') throw new Error('Piscina leaves owner finalization to its caller');
       expect(completion.result).toMatchObject({
         status: 'completed',
@@ -382,6 +388,7 @@ describe('ThinWorkflowPiscinaRunner integration', () => {
 
     try {
       const outcome = await provider.provision(
+        createTestCall(),
         createWorkflowProvisionRequest(
           makeProvisionableWorkflowConfig({ busUrl: PROVISION_BUS_URL }),
           'attempt-integration',
@@ -616,6 +623,7 @@ describe('process-bound allocation lifetime', () => {
       });
 
       const outcome = await first.provider.provision(
+        createTestCall(),
         createWorkflowProvisionRequest(
           makeProvisionableWorkflowConfig({
             executionId,

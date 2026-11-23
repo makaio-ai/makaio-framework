@@ -1,5 +1,6 @@
 /* eslint max-lines: ["error", { "max": 430, "skipBlankLines": true, "skipComments": true }] */
 import { evaluateSync, resolveTemplate } from '@makaio/expression';
+import type { CallContext } from '@makaio/core';
 import {
   type ResponseSchemaDescriptor,
   type WorkflowDelegateAgentNode,
@@ -21,6 +22,7 @@ import { resolveDelegateAgentConfig, resolveDelegateRoleConfig } from './delegat
 
 /**
  * Execute a `delegate-agent` node through the workflow agent resolver seam.
+ * @param call - Call context of the handled message this node execution serves.
  * @param node - The delegate-agent node to execute.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context.
@@ -28,6 +30,7 @@ import { resolveDelegateAgentConfig, resolveDelegateRoleConfig } from './delegat
  * @returns Terminal execution outcome for this delegation.
  */
 export async function executeDelegateAgentNode(
+  call: CallContext,
   node: WorkflowDelegateAgentNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
@@ -37,7 +40,7 @@ export async function executeDelegateAgentNode(
     return { status: 'cancelled' };
   }
 
-  const agentResult = await ctx.bus.requestOptional(WorkflowSubjects.resolveAgent, {
+  const agentResult = await ctx.bus.requestOptional(call, WorkflowSubjects.resolveAgent, {
     agentId: node.agentId,
   });
   if (!agentResult.handled) {
@@ -60,6 +63,7 @@ export async function executeDelegateAgentNode(
     node.outputSchema !== undefined ? { schema: node.outputSchema } : undefined;
   const resolvedConfig = resolveDelegateAgentConfig(node, agentResult.data);
   return executeResolvedSubagentNode(
+    call,
     {
       nodeId: node.id,
       nodeLabel: 'Delegate-agent node',
@@ -84,6 +88,7 @@ export async function executeDelegateAgentNode(
 /**
  * Execute a `delegate-role` node by resolving the named role and running a
  * workflow-owned session turn.
+ * @param call - Call context of the handled message this node execution serves.
  * @param node - The delegate-role node to execute.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context.
@@ -91,6 +96,7 @@ export async function executeDelegateAgentNode(
  * @returns Terminal execution outcome for this delegation.
  */
 export async function executeDelegateRoleNode(
+  call: CallContext,
   node: WorkflowDelegateRoleNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
@@ -100,7 +106,7 @@ export async function executeDelegateRoleNode(
     return { status: 'cancelled' };
   }
 
-  const roleResult = await ctx.bus.requestOptional(WorkflowSubjects.resolveRole, {
+  const roleResult = await ctx.bus.requestOptional(call, WorkflowSubjects.resolveRole, {
     roleId: node.role,
   });
   if (!roleResult.handled) {
@@ -115,6 +121,7 @@ export async function executeDelegateRoleNode(
   const task = resolveTemplate(node.prompt, buildRuntimeExpressionScope(expressionCtx));
   const resolvedRole = resolveDelegateRoleConfig(node, roleResult.data);
   return executeResolvedSubagentNode(
+    call,
     {
       nodeId: node.id,
       nodeLabel: 'Delegate-role node',

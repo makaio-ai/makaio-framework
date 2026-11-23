@@ -1,4 +1,4 @@
-import type { ExtractSubjectPayload } from '@makaio/core';
+import type { CallContext, ExtractSubjectPayload } from '@makaio/core';
 import {
   AgentSubjects,
   AdapterSubjects,
@@ -16,30 +16,69 @@ type MessageOwnedPayload<T> = Omit<T, keyof AgentContext> & { messageId: string 
  * Dependencies for AgentEventBridge.
  */
 export interface AgentEventBridgeConfig {
-  /** Emit usage payload (agent context gets added by AIAgent). */
-  emitUsage: (payload: Omit<ExtractSubjectPayload<typeof AgentSubjects.usage>, keyof AgentContext>) => Promise<void>;
-  /** Emit context window status payload. */
+  /**
+   * Emit usage payload (agent context gets added by AIAgent).
+   * @param call - Call context the emission is made under
+   * @param payload - Usage payload without agent context
+   */
+  emitUsage: (
+    call: CallContext,
+    payload: Omit<ExtractSubjectPayload<typeof AgentSubjects.usage>, keyof AgentContext>,
+  ) => Promise<void>;
+  /**
+   * Emit context window status payload.
+   * @param call - Call context the emission is made under
+   * @param payload - Context window status payload without agent context
+   */
   emitContextWindowUpdated: (
+    call: CallContext,
     payload: Omit<ExtractSubjectPayload<typeof AgentSubjects.contextWindow.updated>, keyof AgentContext>,
   ) => Promise<void>;
-  /** Emit tool.use payload. */
-  emitToolUse: (payload: MessageOwnedPayload<ExtractSubjectPayload<typeof AgentSubjects.tool.use>>) => Promise<void>;
-  /** Emit tool.output payload. */
+  /**
+   * Emit tool.use payload.
+   * @param call - Call context the emission is made under
+   * @param payload - Tool use payload
+   */
+  emitToolUse: (
+    call: CallContext,
+    payload: MessageOwnedPayload<ExtractSubjectPayload<typeof AgentSubjects.tool.use>>,
+  ) => Promise<void>;
+  /**
+   * Emit tool.output payload.
+   * @param call - Call context the emission is made under
+   * @param payload - Tool output payload
+   */
   emitToolOutput: (
+    call: CallContext,
     payload: MessageOwnedPayload<ExtractSubjectPayload<typeof AgentSubjects.tool.output>>,
   ) => Promise<void>;
-  /** Emit adapter log payload. */
+  /**
+   * Emit adapter log payload.
+   * @param call - Call context the emission is made under
+   * @param payload - Adapter log payload without adapter identity
+   */
   emitAdapterLog: (
+    call: CallContext,
     payload: Omit<ExtractSubjectPayload<typeof AdapterSubjects.log>, 'adapterId' | 'adapterName'>,
   ) => Promise<void>;
-  /** Emit step.started payload. */
+  /**
+   * Emit step.started payload.
+   * @param call - Call context the emission is made under
+   * @param payload - Step started payload
+   */
   emitStepStarted: (
+    call: CallContext,
     payload:
       | Omit<ExtractSubjectPayload<typeof AgentSubjects.step.started>, keyof AgentContext>
       | MessageOwnedPayload<ExtractSubjectPayload<typeof AgentSubjects.step.started>>,
   ) => Promise<void>;
-  /** Emit step.finished payload. */
+  /**
+   * Emit step.finished payload.
+   * @param call - Call context the emission is made under
+   * @param payload - Step finished payload
+   */
   emitStepFinished: (
+    call: CallContext,
     payload:
       | Omit<ExtractSubjectPayload<typeof AgentSubjects.step.finished>, keyof AgentContext>
       | MessageOwnedPayload<ExtractSubjectPayload<typeof AgentSubjects.step.finished>>,
@@ -106,9 +145,10 @@ export class AgentEventBridge {
 
   /**
    * Emit usage event to global bus.
+   * @param call - Call context of the message whose provider activity reports the usage
    * @param normalized - Provider-normalized usage metrics
    */
-  public async trackUsage(normalized: NormalizedCallUsage): Promise<void> {
+  public async trackUsage(call: CallContext, normalized: NormalizedCallUsage): Promise<void> {
     const requestCorrelation = this.getActiveMessageHandle()?.requestCorrelation;
 
     const payload: typeof normalized & { model: string } = {
@@ -126,20 +166,21 @@ export class AgentEventBridge {
       payload.frameId = requestCorrelation.frameId;
     }
 
-    await this.emitUsagePayload(payload);
+    await this.emitUsagePayload(call, payload);
   }
 
   /**
    * Emit context window health signal.
+   * @param call - Call context of the message whose provider activity reports the metrics
    * @param input - Raw usage and capacity metrics
    */
-  public async emitContextWindowUpdate(input: ContextWindowInput): Promise<void> {
+  public async emitContextWindowUpdate(call: CallContext, input: ContextWindowInput): Promise<void> {
     const { currentTokens, maxTokens, cachedTokens } = input;
     const hasValidCapacity = maxTokens > 0 && Number.isFinite(maxTokens) && Number.isFinite(currentTokens);
     const percentage = hasValidCapacity ? Math.min(100, (currentTokens / maxTokens) * 100) : 0;
     const level = hasValidCapacity ? (percentage >= 80 ? 'critical' : percentage >= 60 ? 'warn' : 'ok') : 'critical';
 
-    await this.emitContextWindowUpdatedPayload({
+    await this.emitContextWindowUpdatedPayload(call, {
       currentTokens,
       maxTokens,
       cachedTokens,
@@ -150,6 +191,7 @@ export class AgentEventBridge {
 
   /**
    * Emit tool.use event with correlation tracking.
+   * @param call - Call context of the message whose provider activity reports the tool call
    * @param messageId - Message that owns the tool call
    * @param toolName - Tool identifier
    * @param args - Tool arguments
@@ -157,13 +199,14 @@ export class AgentEventBridge {
    * @returns Correlation ID for the call
    */
   public async emitToolUse(
+    call: CallContext,
     messageId: string,
     toolName: string,
     args?: Record<string, unknown>,
     nativeId?: string,
   ): Promise<string> {
     const toolCallId = this.toolCallTracker.register(messageId, toolName, args, nativeId);
-    await this.emitToolUsePayload({
+    await this.emitToolUsePayload(call, {
       messageId,
       toolName,
       args,
@@ -174,21 +217,27 @@ export class AgentEventBridge {
 
   /**
    * Emit tool.output event with best-effort correlation resolution.
+   * @param call - Call context of the message whose provider activity reports the tool output
    * @param messageId - Message that owns the tool output
    * @param output - Tool output text
    * @param hints - Correlation hints from adapter events
    * @returns Resolved toolCallId, toolName (falls back to 'unknown'), and args from the matched tool.use call
    */
-  public async emitToolOutput(messageId: string, output: string, hints: ResolveHints): Promise<ToolOutputResult> {
+  public async emitToolOutput(
+    call: CallContext,
+    messageId: string,
+    output: string,
+    hints: ResolveHints,
+  ): Promise<ToolOutputResult> {
     const { correlationId, strategy, toolName, args } = this.toolCallTracker.resolve(messageId, hints);
     if (!correlationId) {
-      await this.emitAdapterLogPayload({
+      await this.emitAdapterLogPayload(call, {
         level: 'warn',
         message: `Tool output arrived with no pending tool calls. Hints: ${JSON.stringify(hints)}`,
         timestamp: Date.now(),
       });
       const fallbackId = crypto.randomUUID();
-      await this.emitToolOutputPayload({
+      await this.emitToolOutputPayload(call, {
         messageId,
         output,
         toolCallId: fallbackId,
@@ -198,61 +247,67 @@ export class AgentEventBridge {
     }
 
     if (strategy === 'oldest') {
-      await this.emitAdapterLogPayload({
+      await this.emitAdapterLogPayload(call, {
         level: 'warn',
         message: `Tool output correlation used fallback. Hints: ${JSON.stringify(hints)}`,
         timestamp: Date.now(),
       });
     }
 
-    await this.emitToolOutputPayload({ messageId, output, toolCallId: correlationId, toolName, args });
+    await this.emitToolOutputPayload(call, { messageId, output, toolCallId: correlationId, toolName, args });
     return { toolCallId: correlationId, toolName: toolName ?? 'unknown', args };
   }
 
   /**
    * Emit step.started for the current block index.
+   * @param call - Call context of the message whose provider activity starts the step
    * @param stepType - Block step type
    * @param blockData - Optional step metadata
    * @param content - Optional immediate block content
    */
   public async emitStepStarted(
+    call: CallContext,
     stepType: StepType,
     blockData?: BlockData,
     content?: SessionMessageBlock,
   ): Promise<void> {
-    await this.emitOwnedStepStarted(undefined, stepType, blockData, content);
+    await this.emitOwnedStepStarted(call, undefined, stepType, blockData, content);
   }
 
   /**
    * Emit step.started with an explicit originating message identity.
+   * @param call - Call context of the message whose provider activity starts the step
    * @param messageId - Message that owns the step
    * @param stepType - Block step type
    * @param blockData - Optional step metadata
    * @param content - Optional immediate block content
    */
   public async emitStepStartedForMessage(
+    call: CallContext,
     messageId: string,
     stepType: StepType,
     blockData?: BlockData,
     content?: SessionMessageBlock,
   ): Promise<void> {
-    await this.emitOwnedStepStarted(messageId, stepType, blockData, content);
+    await this.emitOwnedStepStarted(call, messageId, stepType, blockData, content);
   }
 
   /**
    * Emit step.started with optional explicit message ownership.
+   * @param call - Call context the emission is made under.
    * @param messageId - Optional message that owns the step.
    * @param stepType - Semantic step kind.
    * @param blockData - Optional block metadata.
    * @param content - Optional initial block content.
    */
   private async emitOwnedStepStarted(
+    call: CallContext,
     messageId: string | undefined,
     stepType: StepType,
     blockData?: BlockData,
     content?: SessionMessageBlock,
   ): Promise<void> {
-    await this.emitStepStartedPayload({
+    await this.emitStepStartedPayload(call, {
       ...(messageId !== undefined && { messageId }),
       stepType,
       blockIndex: this.getBlockIndex(),
@@ -263,39 +318,44 @@ export class AgentEventBridge {
 
   /**
    * Emit step.finished and advance block index.
+   * @param call - Call context of the message whose provider activity finishes the step
    * @param stepType - Completed step type
    * @param content - Final block content
    */
-  public async emitStepFinished(stepType: StepType, content: SessionMessageBlock): Promise<void> {
-    await this.emitOwnedStepFinished(undefined, stepType, content);
+  public async emitStepFinished(call: CallContext, stepType: StepType, content: SessionMessageBlock): Promise<void> {
+    await this.emitOwnedStepFinished(call, undefined, stepType, content);
   }
 
   /**
    * Emit step.finished with an explicit originating message identity and advance the block index.
+   * @param call - Call context of the message whose provider activity finishes the step
    * @param messageId - Message that owns the step
    * @param stepType - Completed step type
    * @param content - Final block content
    */
   public async emitStepFinishedForMessage(
+    call: CallContext,
     messageId: string,
     stepType: StepType,
     content: SessionMessageBlock,
   ): Promise<void> {
-    await this.emitOwnedStepFinished(messageId, stepType, content);
+    await this.emitOwnedStepFinished(call, messageId, stepType, content);
   }
 
   /**
    * Emit step.finished with optional explicit message ownership and advance the block index.
+   * @param call - Call context the emission is made under.
    * @param messageId - Optional message that owns the step.
    * @param stepType - Semantic step kind.
    * @param content - Completed block content.
    */
   private async emitOwnedStepFinished(
+    call: CallContext,
     messageId: string | undefined,
     stepType: StepType,
     content: SessionMessageBlock,
   ): Promise<void> {
-    await this.emitStepFinishedPayload({
+    await this.emitStepFinishedPayload(call, {
       ...(messageId !== undefined && { messageId }),
       stepType,
       blockIndex: this.getBlockIndex(),

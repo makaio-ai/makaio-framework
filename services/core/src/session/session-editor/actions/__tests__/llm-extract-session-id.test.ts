@@ -3,6 +3,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, AgentResolutionSubjects } from '@makaio/contracts';
 import { AdapterRuntimeSubjects } from '@makaio/services-core/adapter-runtime';
 import type { SessionMessage } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { createLlmExtractAction } from '../llm-extract.js';
 
 describe('createLlmExtractAction sessionId handling', () => {
@@ -54,7 +55,10 @@ describe('createLlmExtractAction sessionId handling', () => {
         },
       ];
 
-      const result = await action.execute(messages, { virtualModelId: 'cheap-extraction', sessionId: '' });
+      const result = await action.execute(createTestCall(), messages, {
+        virtualModelId: 'cheap-extraction',
+        sessionId: '',
+      });
       expect(result.kind).toBe('context');
     } finally {
       unsubs.forEach((unsub) => unsub());

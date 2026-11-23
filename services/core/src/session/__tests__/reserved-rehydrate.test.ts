@@ -2,6 +2,7 @@
 /* eslint max-lines: ["error", { "max": 520 }] */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SessionOwnershipStorageSubjects, SessionSubjects, type MakaioSessionAgent } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
 import { SessionStartError } from '../handlers/session-start-error.js';
 import {
@@ -52,7 +53,7 @@ describe('reserved rehydrate', () => {
       bus.on(
         SessionSubjects.ownership.reserveStart,
         async (context) => {
-          await bus.request(SessionSubjects.close, { sessionId: agent.sessionId });
+          await bus.request(context.call, SessionSubjects.close, { sessionId: agent.sessionId });
           await context.next();
         },
         FIRST,
@@ -165,7 +166,10 @@ describe('reserved rehydrate', () => {
     const agent = await ctx.seedAgent('session-lost', 'agent-lost');
     // What a peer's claim looks like from here: the row is already `starting`,
     // which the compare-and-swap deliberately excludes from its expectation.
-    await bus.request(AgentStorageSubjects.updateStatus, { agentId: agent.agentId, status: 'starting' });
+    await bus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+      agentId: agent.agentId,
+      status: 'starting',
+    });
     ctx.registerAdapter();
 
     await expect(recoverNatively(agent)).rejects.toThrow(SessionStartError);
@@ -179,7 +183,7 @@ describe('reserved rehydrate', () => {
     const agent = await ctx.seedAgent('session-refused', 'agent-refused');
     // A second, unrelated generation of the same agent: a fan-out release would
     // destroy it, a token-scoped one leaves it exactly as it is.
-    const unrelated = await bus.request(SessionOwnershipStorageSubjects.claim, {
+    const unrelated = await bus.request(createTestCall(), SessionOwnershipStorageSubjects.claim, {
       machineId: MACHINE_ID,
       adapterId: ADAPTER_ID,
       adapterName: 'test-adapter',
@@ -219,7 +223,9 @@ describe('reserved rehydrate', () => {
     expect(claims).toHaveLength(1);
     expect(claims[0]?.providerSessionId).toBe('provider-moved-to');
     expect(claims.some((claim) => claim.providerSessionId === requested)).toBe(false);
-    const { ownership } = await bus.request(SessionOwnershipStorageSubjects.read, { agentId: agent.agentId });
+    const { ownership } = await bus.request(createTestCall(), SessionOwnershipStorageSubjects.read, {
+      agentId: agent.agentId,
+    });
     expect(ownership?.currency.currentAdapterSessionId).toBe('provider-moved-to');
   });
 
@@ -228,17 +234,18 @@ describe('reserved rehydrate', () => {
     ctx.registerAdapter();
 
     await recoverNatively(agent);
-    const finalized = await bus.request(AgentStorageSubjects.get, { agentId: agent.agentId });
+    const finalized = await bus.request(createTestCall(), AgentStorageSubjects.get, { agentId: agent.agentId });
     expect(finalized.agent?.recoveryAttemptId).toBeUndefined();
     if (finalized.agent === null) throw new Error('expected finalized agent');
 
-    await bus.request(AgentStorageSubjects.set, {
+    await bus.request(createTestCall(), AgentStorageSubjects.set, {
       agentId: agent.agentId,
       agent: { ...finalized.agent, recoveryAttemptId: 'stale-recovery-attempt' },
     });
 
     expect(
-      (await bus.request(AgentStorageSubjects.get, { agentId: agent.agentId })).agent?.recoveryAttemptId,
+      (await bus.request(createTestCall(), AgentStorageSubjects.get, { agentId: agent.agentId })).agent
+        ?.recoveryAttemptId,
     ).toBeUndefined();
   });
 
@@ -310,10 +317,14 @@ describe('reserved rehydrate', () => {
 
   it('does not let a status-only peer overwrite a guarded recovery attempt (case 98a)', async () => {
     const agent = await ctx.seedAgent('session-peer-dead', 'agent-peer-dead');
-    ctx.registerAdapter(async (agentId) => {
+    ctx.registerAdapter(async (call, agentId) => {
       // A peer applying the in-flight consumer rule claims this recovery while
       // the connector is coming back. It says nothing about ownership.
-      await bus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'dead', expectedStatus: ['starting'] });
+      await bus.request(call, AgentStorageSubjects.updateStatus, {
+        agentId,
+        status: 'dead',
+        expectedStatus: ['starting'],
+      });
       return { success: true };
     });
 
@@ -325,9 +336,9 @@ describe('reserved rehydrate', () => {
 
   it('refuses Ack when a peer wrote idle before this generation could commit (case 98b)', async () => {
     const agent = await ctx.seedAgent('session-peer-idle', 'agent-peer-idle');
-    ctx.registerAdapter(async (agentId) => {
+    ctx.registerAdapter(async (call, agentId) => {
       // What an *unreserved* attempt joining the same agent writes.
-      await bus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+      await bus.request(call, AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
       return { success: true };
     });
 
@@ -351,7 +362,10 @@ describe('reserved rehydrate', () => {
         SessionOwnershipStorageSubjects.settleMovement,
         async (ctx) => {
           await ctx.next();
-          await bus.emit(SessionSubjects.agent.removed, { sessionId: agent.sessionId, agentId: agent.agentId });
+          await bus.emit(ctx.call, SessionSubjects.agent.removed, {
+            sessionId: agent.sessionId,
+            agentId: agent.agentId,
+          });
         },
         FIRST,
       ),
@@ -376,7 +390,7 @@ describe('reserved rehydrate', () => {
         SessionOwnershipStorageSubjects.settleMovement,
         async (ctx) => {
           await ctx.next();
-          await bus.request(AgentStorageSubjects.delete, { agentId: agent.agentId });
+          await bus.request(ctx.call, AgentStorageSubjects.delete, { agentId: agent.agentId });
         },
         FIRST,
       ),
@@ -448,7 +462,7 @@ describe('reserved rehydrate', () => {
     // may still be live must not be handed to a second connector (I15). What
     // the release buys is that the generation is *named* — reconcile sees an
     // abandoned row instead of a `held` one no process can account for.
-    const reserved = await bus.request(SessionSubjects.ownership.reserveStart, {
+    const reserved = await bus.request(createTestCall(), SessionSubjects.ownership.reserveStart, {
       sessionId: agent.sessionId,
       agentId: agent.agentId,
       adapterId: ADAPTER_ID,
@@ -469,7 +483,7 @@ describe('reserved rehydrate', () => {
         SessionOwnershipStorageSubjects.settleMovement,
         async (context) => {
           await context.next();
-          await bus.request(SessionSubjects.close, { sessionId: agent.sessionId });
+          await bus.request(context.call, SessionSubjects.close, { sessionId: agent.sessionId });
         },
         FIRST,
       ),

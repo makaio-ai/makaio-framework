@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CanUseTool, PermissionResult } from '@anthropic-ai/claude-agent-sdk';
+import { MessageHandle, normalizeMessageInput } from '@makaio/ai-adapters-core';
+import { MakaioBus } from '@makaio/bus-core';
 import { resolveToolPolicy, ToolNameError } from '@makaio/contracts';
 import type { ResolvedToolPolicy } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { createGateConnector } from '../src/test/gate-test-helpers.js';
 import type { ClaudeAgentConfig } from '../src/types/index.js';
 
@@ -9,24 +12,45 @@ import type { ClaudeAgentConfig } from '../src/types/index.js';
 type GateLists = Pick<ClaudeAgentConfig, 'allowedTools' | 'disallowedTools'>;
 
 /**
+ * Build a real message handle for a pending turn triggered by a received call.
+ * @returns The handle; its `call` is what attributed sends must forward.
+ */
+function makePendingHandle(): MessageHandle {
+  return new MessageHandle(createTestCall(), 'msg-gate', normalizeMessageInput('hi'), 'enqueue');
+}
+
+/**
+ * Put a turn into the connector's pending slot, as `onTurnStart` does in production.
+ * @param connector - Connector under test.
+ * @param handle - Handle of the started turn, or undefined to clear the slot.
+ */
+function setPendingHandle(connector: object, handle: MessageHandle | undefined): void {
+  Reflect.set(connector, 'pendingMessageHandle', handle);
+}
+
+/**
  * Build a connector whose central tool approval request (the bus round trip to
  * `ToolApprovalService`) is replaced by a spy that always allows. The unit under test,
  * the connector's real `canUseTool` handler, is left untouched.
  * @param lists - Caller allow/deny lists, written with Makaio tool names.
  * @param policy - Tool policy handed to the handler; defaults to `lists` resolved for Claude.
- * @returns The connector's `canUseTool` handler and the central approval spy.
+ * @param pending - Handle of the started turn the handler attributes approvals to; null leaves the slot empty.
+ * @returns The connector's `canUseTool` handler, the central approval spy and the pending handle.
  * @throws {@link ToolNameError} when a list entry is invalid, mirroring query option building.
  */
 async function makeGate(
   lists: GateLists,
   policy: ResolvedToolPolicy = resolveToolPolicy('claude', lists),
+  pending: MessageHandle | null = makePendingHandle(),
 ): Promise<{
   canUseTool: CanUseTool;
   centralApproval: ReturnType<typeof vi.fn>;
+  pending: MessageHandle | null;
 }> {
   const centralApproval = vi.fn().mockResolvedValue({ action: 'allow' });
-  const { createToolApprovalHandler } = await createGateConnector(lists, centralApproval);
-  return { canUseTool: createToolApprovalHandler(policy), centralApproval };
+  const { connector, createToolApprovalHandler } = await createGateConnector(lists, centralApproval);
+  setPendingHandle(connector, pending ?? undefined);
+  return { canUseTool: createToolApprovalHandler(policy), centralApproval, pending };
 }
 
 /**
@@ -88,7 +112,7 @@ describe('ClaudeSdkConnector canUseTool — caller allowlist gate', () => {
     expect(await callTool(canUseTool, 'Read')).toMatchObject({ behavior: 'allow' });
     expect(await callTool(canUseTool, 'mcp__github__get_issue')).toMatchObject({ behavior: 'allow' });
     expect(centralApproval).toHaveBeenCalledTimes(2);
-    expect(centralApproval.mock.calls.map(([, payload]) => (payload as { toolName: string }).toolName)).toEqual([
+    expect(centralApproval.mock.calls.map(([, , payload]) => (payload as { toolName: string }).toolName)).toEqual([
       'Read',
       'mcp__github__get_issue',
     ]);
@@ -238,7 +262,69 @@ describe('ClaudeSdkConnector canUseTool — caller allowlist gate', () => {
     expect(centralApproval).toHaveBeenCalledOnce();
   });
 
+  it('R1: forwards the pending handle call to central approval', async () => {
+    const { canUseTool, centralApproval, pending } = await makeGate({});
+
+    await callTool(canUseTool, 'Bash');
+
+    expect(centralApproval).toHaveBeenCalledOnce();
+    expect(centralApproval.mock.calls[0]?.[0]).toBe(pending?.call);
+  });
+
+  it('R3: declines an allowed tool without an approval RPC when no turn is pending', async () => {
+    const { canUseTool, centralApproval } = await makeGate(
+      { allowedTools: ['read_file'] },
+      resolveToolPolicy('claude', { allowedTools: ['read_file'] }),
+      null,
+    );
+
+    const result = await callTool(canUseTool, 'Read');
+
+    expect(result).toEqual({
+      behavior: 'deny',
+      message: 'Tool use denied: no operation attributable to this approval request',
+      interrupt: false,
+    });
+    expect(centralApproval).not.toHaveBeenCalled();
+  });
+
   it('throws ToolNameError when the allowlist carries a native Claude name instead of a Makaio name', async () => {
     await expect(makeGate({ allowedTools: ['Read'] })).rejects.toThrow(ToolNameError);
+  });
+});
+
+describe('ClaudeSdkConnector SDK events — call attribution', () => {
+  const sdkMessage = { type: 'system', subtype: 'hook_started' };
+
+  /**
+   * Build a connector whose `emit` is recorded and drive its real SDK event callback.
+   * @param pending - Handle of the started turn, or undefined for pre-init traffic.
+   * @returns The `emit` spy of the connector.
+   */
+  async function driveSdkEvent(pending: MessageHandle | undefined): Promise<ReturnType<typeof vi.fn>> {
+    const { connector, buildSessionConfig } = await createGateConnector({}, vi.fn());
+    const emit = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(connector, 'emit', { value: emit });
+    setPendingHandle(connector, pending);
+    await buildSessionConfig().emitSdkEvent?.(pending?.call ?? MakaioBus.own('observer'), sdkMessage);
+    return emit;
+  }
+
+  it('R1: emits the event under the pending handle call with its message id', async () => {
+    const pending = makePendingHandle();
+
+    const emit = await driveSdkEvent(pending);
+
+    expect(emit).toHaveBeenCalledOnce();
+    expect(emit.mock.calls[0]?.[0]).toBe(pending.call);
+    expect(emit.mock.calls[0]?.[2]).toMatchObject({ originatingMessageId: 'msg-gate' });
+  });
+
+  it('R2: emits the event with the observer context when no turn is pending', async () => {
+    const emit = await driveSdkEvent(undefined);
+
+    expect(emit).toHaveBeenCalledOnce();
+    expect(emit.mock.calls[0]?.[0]).toBe(MakaioBus.own('observer'));
+    expect(emit.mock.calls[0]?.[2]).not.toHaveProperty('originatingMessageId');
   });
 });

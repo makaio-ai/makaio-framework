@@ -9,7 +9,7 @@ import {
   type AuthMethodRef,
   type ResolvedProviderAuth,
 } from '@makaio/contracts';
-import { AuthenticationError } from '@makaio/core';
+import { AuthenticationError, type CallContext } from '@makaio/core';
 
 /** Stable normalized adapter-auth failure categories. */
 export type AdapterAuthErrorReason =
@@ -41,8 +41,13 @@ export class AdapterAuthError extends AuthenticationError {
 /** Plaintext values produced by the trusted credential resolver. */
 export type ResolvedAuthCredentialValues = Readonly<Record<string, string>>;
 
-/** Resolve normalized credential refs without exposing them outside the trusted consumer. */
+/**
+ * Resolve normalized credential refs without exposing them outside the trusted consumer.
+ * @param call - Call context of the message requiring authentication.
+ * @param credentialRefs - Selected credential refs keyed by declared field ID.
+ */
 export type ResolveAuthCredentialRefs = (
+  call: CallContext,
   credentialRefs: Readonly<Record<string, AuthCredentialRef>>,
 ) => Promise<ResolvedAuthCredentialValues>;
 
@@ -260,15 +265,17 @@ export function bindProviderAuth(options: BindProviderAuthOptions): BoundProvide
  * Explicit refs are resolved exactly once. Only required fields must materialize;
  * unavailable optional fields are omitted from every delivery. Inferred and no-auth
  * methods never invoke the credential resolver.
+ * @param call - Call context of the message requiring authentication.
  * @param bound - Immutable refs-only adapter binding.
  * @param resolveCredentialRefs - Trusted local credential resolver.
  * @returns Immutable plaintext delivery snapshot.
  */
 export async function resolveBoundProviderAuth(
+  call: CallContext,
   bound: BoundProviderAuthContext,
   resolveCredentialRefs: ResolveAuthCredentialRefs,
 ): Promise<ResolvedAdapterAuth> {
-  const values = await resolveSelectedCredentialValues(bound.auth, resolveCredentialRefs);
+  const values = await resolveSelectedCredentialValues(call, bound.auth, resolveCredentialRefs);
   const processEnvEntries: Array<readonly [string, string]> = [];
   const connectorDeliveries: ResolvedConnectorAuthDelivery[] = [];
 
@@ -300,11 +307,13 @@ export async function resolveBoundProviderAuth(
 
 /**
  * Resolve and validate selected explicit credential values.
+ * @param call - Call context of the message requiring authentication.
  * @param auth - Bound normalized authentication selection.
  * @param resolveCredentialRefs - Trusted local credential resolver.
  * @returns Plaintext values keyed by declared field ID.
  */
 async function resolveSelectedCredentialValues(
+  call: CallContext,
   auth: ResolvedProviderAuth,
   resolveCredentialRefs: ResolveAuthCredentialRefs,
 ): Promise<ResolvedAuthCredentialValues> {
@@ -314,7 +323,7 @@ async function resolveSelectedCredentialValues(
 
   let resolved: unknown;
   try {
-    resolved = await resolveCredentialRefs(auth.credentialRefs);
+    resolved = await resolveCredentialRefs(call, auth.credentialRefs);
   } catch (error) {
     if (error instanceof AdapterAuthError) {
       throw error;

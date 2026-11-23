@@ -27,13 +27,15 @@ import { ClientSubjects, SessionSubjects } from '@makaio/contracts';
 export function createDefaultCheckMakaioManaged(clientId?: string): (sessionId: string) => Promise<boolean> {
   return async (adapterSessionId: string): Promise<boolean> => {
     try {
+      const call = MakaioBus.own('shared-work');
       // Runtime truth: fast in-memory check against the client runtime registry.
       // This catches the hook-first race: even when the DB only has a tracking
       // stub (isImported=true), the runtime registry knows the session is
       // adapter-managed because it was registered via client.runtime.observe.
       if (clientId !== undefined) {
         try {
-          const runtimeResult = await MakaioBus.requestOptional(ClientSubjects.runtime.isAdapterManaged, {
+          // ORIGIN: The runtime lookup is part of a shared managed-session check.
+          const runtimeResult = await MakaioBus.requestOptional(call, ClientSubjects.runtime.isAdapterManaged, {
             adapterSessionId,
             clientId,
           });
@@ -47,7 +49,8 @@ export function createDefaultCheckMakaioManaged(clientId?: string): (sessionId: 
       }
 
       // Storage truth: original predicate — a non-imported session row exists.
-      const result = await MakaioBus.request(SessionSubjects.getByAdapterSessionId, { adapterSessionId });
+      // ORIGIN: The storage lookup completes the same shared managed-session check.
+      const result = await MakaioBus.request(call, SessionSubjects.getByAdapterSessionId, { adapterSessionId });
       return result.session !== null && !result.session.isImported;
     } catch {
       return false;

@@ -16,7 +16,7 @@ import { readClaudeProviderBaseUrl, resolveClaudeProcessEnv } from '@makaio/ai-a
 import { MakaioBus } from '@makaio/bus-core';
 import { isTmuxAvailable, TmuxBackend } from '@makaio/subsystem-native-session-supervisor';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
-import { McpSubjects, type ConnectorTeardownResult } from '@makaio/contracts';
+import { McpSubjects, type CallContext, type ConnectorTeardownResult } from '@makaio/contracts';
 import { TmuxSession } from './session.js';
 import { ClaudeCodeTmuxConnectorSubjects, type ClaudeCodeTmuxConnectorBus } from './namespace/index.js';
 import { ADAPTER_NAME, DEFAULT_INTERRUPT_SETTLE_MS, TMUX_SERVER_NAME } from './constants.js';
@@ -29,6 +29,17 @@ import { prepareLaunchPrerequisites } from './utils/launch-prerequisites.js';
 import { subscribeToEarlySessionStart } from './utils/early-session-start.js';
 import { subscribeConnectorHooks } from './utils/session-hook-subscription.js';
 import { observePaneExit, subscribePaneExit, type PaneExitSubscription } from './utils/pane-exit.js';
+
+/**
+ * Throw the first failed cleanup phase after all independent phases settled.
+ * @param results - Settled cleanup task results.
+ */
+function throwFirstCleanupError(results: PromiseSettledResult<unknown>[]): void {
+  const failed = results.find((result) => result.status === 'rejected');
+  if (failed?.status === 'rejected') {
+    throw failed.reason;
+  }
+}
 
 /**
  * Connector for the Claude Code tmux adapter.
@@ -109,14 +120,15 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
    * Sends a `wiring.apply` bus request to the Claude Code client service, which
    * writes hook entries into the session-scoped user settings file. This must
    * complete before Claude Code is spawned — it reads the config at startup.
+   * @param call - Call context of the operation that owns this session work.
    * @param projectDir - Absolute path to the project root.
    * @param configDir - Session-scoped config directory where user-scope
    *   settings are written.
    */
-  private async ensureHookWiring(projectDir: string, configDir: string): Promise<void> {
+  private async ensureHookWiring(call: CallContext, projectDir: string, configDir: string): Promise<void> {
     const makaioCommand = process.argv[1] ?? 'makaio';
     try {
-      await MakaioBus.request(ClaudeCodeClientSubjects.wiring.apply, {
+      await MakaioBus.request(call, ClaudeCodeClientSubjects.wiring.apply, {
         scope: 'user',
         projectDir,
         makaioCommand,
@@ -140,10 +152,11 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
    *
    * The server entry uses a session-scoped name (`makaio-<short-id>`) so that
    * concurrent sessions and existing user entries are never overwritten.
+   * @param call - Call context of the operation that owns this session work.
    * @param projectDir - Project directory whose `.mcp.json` Claude Code reads.
    */
-  private async registerMcpSession(projectDir: string): Promise<void> {
-    const result = await MakaioBus.requestOptional(McpSubjects.session.register, {
+  private async registerMcpSession(call: CallContext, projectDir: string): Promise<void> {
+    const result = await MakaioBus.requestOptional(call, McpSubjects.session.register, {
       adapterSessionId: this.claudeSessionId,
       agentId: this.agentId,
       adapterId: this.adapterId,
@@ -170,7 +183,7 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
     const mcpServerName = `makaio-${this.claudeSessionId.slice(0, 8)}`;
 
     try {
-      const installed = await addMcpServerToProject(projectDir, mcpServerName, {
+      const installed = await addMcpServerToProject(call, projectDir, mcpServerName, {
         type: 'http',
         url: `http://127.0.0.1:${result.data.port}/mcp?adapterSessionId=${encodeURIComponent(this.claudeSessionId)}`,
       });
@@ -187,8 +200,8 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
    * Remove MCP config entries installed by this connector and unregister the
    * pinned adapter session from the bridge.
    *
-   * `unregisterMcpSession()` runs in a `finally` block so the pinned session
-   * is always released even when `.mcp.json` removal fails.
+   * `unregisterMcpSession()` runs after all removal attempts settle so the
+   * pinned session is released even when `.mcp.json` removal fails.
    * @param projectDir - Project directory whose `.mcp.json` was updated.
    */
   private async cleanupMcpSession(projectDir: string): Promise<void> {
@@ -199,10 +212,7 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
     );
     await this.unregisterMcpSession();
 
-    const failedRemoval = removals.find((result) => result.status === 'rejected');
-    if (failedRemoval?.status === 'rejected') {
-      throw failedRemoval.reason;
-    }
+    throwFirstCleanupError(removals);
   }
 
   /**
@@ -214,7 +224,8 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
     }
     const adapterSessionId = this.registeredMcpSessionId;
     this.registeredMcpSessionId = undefined;
-    await MakaioBus.requestOptional(McpSubjects.session.unregister, {
+    // ORIGIN: direct lifecycle cleanup sends on the host singleton, which owns this stop context.
+    await MakaioBus.requestOptional(MakaioBus.own('stop'), McpSubjects.session.unregister, {
       adapterSessionId,
     });
   }
@@ -225,9 +236,10 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
    *
    * Idempotent: a no-op when a session is already live. Concurrent callers all
    * await the same in-flight promise so only one launch sequence runs.
+   * @param call - Call context of the operation initializing the session.
    * @returns Promise that resolves when the session is ready.
    */
-  private initializeSession(): Promise<void> {
+  private initializeSession(call: CallContext): Promise<void> {
     if (this.connectorSession) return Promise.resolve();
 
     if (!this.initializationPromise) {
@@ -236,7 +248,7 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
       // starts the hook-wiring and MCP registration, whose prefixes are their own
       // file and bus work. None of them calls `initializeSession()`.
       const token = ++this.lifecycleToken;
-      this.initializationPromise = this._doInitializeSession(token).catch((error) => {
+      this.initializationPromise = this._doInitializeSession(call, token).catch((error) => {
         // Clear the promise on failure so a future call can retry.
         this.initializationPromise = undefined;
         throw error;
@@ -249,9 +261,10 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
   /**
    * Perform the actual session initialization. Called exactly once per
    * session lifecycle; callers must go through {@link initializeSession}.
+   * @param call - Call context of the operation initializing the session.
    * @param token - Lifecycle token captured when initialization started.
    */
-  private async _doInitializeSession(token: number): Promise<void> {
+  private async _doInitializeSession(call: CallContext, token: number): Promise<void> {
     const env = this.resolveSpawnEnv();
     const binaryPath = this.config.clientExecution?.binaryPath ?? 'claude';
     const projectDir = this.cwd;
@@ -266,8 +279,8 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
       const mergedEnv = await prepareLaunchPrerequisites({
         projectDir,
         baseEnv: env,
-        ensureHookWiring: (dir, configDir) => this.ensureHookWiring(dir, configDir),
-        registerMcpSession: (dir) => this.registerMcpSession(dir),
+        ensureHookWiring: (dir, configDir) => this.ensureHookWiring(call, dir, configDir),
+        registerMcpSession: (dir) => this.registerMcpSession(call, dir),
         assertLifecycleCurrent: () => this.assertLifecycleCurrent(token),
       });
 
@@ -281,7 +294,7 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
         serverName: this.config.providerConfig?.tmuxServerName ?? TMUX_SERVER_NAME,
         commandTimeoutMs: CONNECTOR_EXIT_OBSERVATION_MS,
       });
-      earlySessionStartUnsubscribe = subscribeToEarlySessionStart(this.claudeSessionId, (sessionId) => {
+      earlySessionStartUnsubscribe = subscribeToEarlySessionStart(this.globalBus, this.claudeSessionId, (sessionId) => {
         earlySessionStartId = sessionId;
         this.tmuxSession?.observeSessionStart(sessionId);
       });
@@ -310,6 +323,7 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
       );
 
       this.tmuxSession = new TmuxSession({
+        bus: this.globalBus,
         ptyProcess: ptyProcess as ITmuxPtyProcess,
         expectedClaudeSessionId: this.claudeSessionId,
       });
@@ -365,9 +379,11 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
         this.lastResult = result;
         this.pendingMessageHandle = undefined;
       },
-      emitTurnCompleted: (payload) => this.emit(ClaudeCodeTmuxConnectorSubjects.turn.turn_completed, payload),
-      emitToolUseStarted: (payload) => this.emit(ClaudeCodeTmuxConnectorSubjects.tool_use.started, payload),
-      emitToolUseFinished: (payload) => this.emit(ClaudeCodeTmuxConnectorSubjects.tool_use.finished, payload),
+      emitTurnCompleted: (call, payload) =>
+        this.emit(call, ClaudeCodeTmuxConnectorSubjects.turn.turn_completed, payload),
+      emitToolUseStarted: (call, payload) => this.emit(call, ClaudeCodeTmuxConnectorSubjects.tool_use.started, payload),
+      emitToolUseFinished: (call, payload) =>
+        this.emit(call, ClaudeCodeTmuxConnectorSubjects.tool_use.finished, payload),
       interruptSettleMs: DEFAULT_INTERRUPT_SETTLE_MS,
     });
   }
@@ -449,25 +465,25 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
    * Initialize the session without sending a message.
    *
    * Idempotent — no-op when the session is already live.
-   * @param options - Optional start options; captures `systemPrompt` for future use.
+   * @param options - Start options carrying the call; captures `systemPrompt` for future use.
    */
-  public override async initialize(options?: ConnectorStartOptions): Promise<void> {
-    this.captureSystemPrompt(options?.systemPrompt);
+  public override async initialize(options: ConnectorStartOptions): Promise<void> {
+    this.captureSystemPrompt(options.systemPrompt);
     if (this.connectorSession) return;
-    await this.initializeSession();
+    await this.initializeSession(options.call);
   }
 
   /**
    * Start the connector with an initial user message.
    * @param message - Normalized first user message.
-   * @param options - Optional start options (e.g., delivery mode, message ID).
+   * @param options - Start options carrying the call of the handled message (and delivery mode, message ID).
    * @returns Agent start result with session ID and message handle.
    */
   public override async start(
     message: NormalizedMessageInput,
-    options?: ConnectorStartOptions,
+    options: ConnectorStartOptions,
   ): Promise<AgentStartResult> {
-    this.captureSystemPrompt(options?.systemPrompt);
+    this.captureSystemPrompt(options.systemPrompt);
     const handle = await this.sendMessage(message, options);
     return {
       adapterSessionId: await this.getAdapterSessionId(),
@@ -483,15 +499,15 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
    * processing. Returns the message handle immediately; the turn completes
    * asynchronously via hook events.
    * @param message - Normalized user message.
-   * @param options - Optional send options (delivery mode, message ID).
+   * @param options - Send options carrying the call of the handled message (and delivery mode, message ID).
    * @returns The message handle for tracking.
    */
   public override async sendMessage(
     message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
+    options: ConnectorSendMessageOptions,
   ): Promise<MessageHandle> {
     if (!this.connectorSession) {
-      await this.initializeSession();
+      await this.initializeSession(options.call);
     }
 
     const handle = this.createMessageHandle(message, options);
@@ -531,8 +547,9 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
    * Abort the session by killing the tmux pane immediately.
    *
    * Unlike `close()`, this does not wait for graceful shutdown.
+   * @param _call - Call context of the operation aborting the connector.
    */
-  public override abort(): void {
+  public override abort(_call: CallContext): void {
     this.tmuxSession?.kill();
     void this.teardown({
       finalizeActiveTurn: true,
@@ -554,9 +571,10 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
    * **Class: `exited`,** from the pane process's own published exit;
    * {@link observePaneExit} states the evidence and each weaker answer, including
    * which of them a close racing initialization is entitled to.
+   * @param _call - Call context of the operation closing the connector.
    * @returns What this runtime observed about the end of its pane process.
    */
-  public override async close(): Promise<ConnectorTeardownResult> {
+  public override async close(_call: CallContext): Promise<ConnectorTeardownResult> {
     return this.teardown({
       finalizeActiveTurn: true,
       error: new Error('Claude Code tmux session closed'),
@@ -660,16 +678,5 @@ export class ClaudeCodeTmuxConnector extends AIAgentConnector<ClaudeCodeTmuxConn
     if (!this.isLifecycleCurrent(token)) {
       throw new Error('Claude Code tmux session initialization was superseded by teardown');
     }
-  }
-}
-
-/**
- * Throw the first failed cleanup phase after all independent phases settled.
- * @param results - Settled cleanup task results.
- */
-function throwFirstCleanupError(results: PromiseSettledResult<unknown>[]): void {
-  const failed = results.find((result) => result.status === 'rejected');
-  if (failed?.status === 'rejected') {
-    throw failed.reason;
   }
 }

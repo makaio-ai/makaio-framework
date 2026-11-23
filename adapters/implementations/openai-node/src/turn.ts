@@ -1,5 +1,6 @@
 import { ProceduralConnectorTurn } from '@makaio/ai-adapters-core';
 import type { MessageHandle } from '@makaio/ai-adapters-core';
+import type { CallContext } from '@makaio/contracts';
 import { OpenAINodeConnectorSubjects, type OpenAINodeConnectorBus } from './namespaces/index.js';
 import type { StreamSessionTurnState as OpenAITurnState } from '@makaio/ai-adapters-stream-session';
 
@@ -51,10 +52,11 @@ export class OpenAIConnectorTurn extends ProceduralConnectorTurn<OpenAITurnState
    * Pause (abort) at next opportunity.
    * OpenAI doesn't support true pause - we abort and caller restarts with
    * merged content.
+   * @param call - Call of the message requesting the pause
    * @returns Pause result indicating turn state
    */
-  public override async pause(): ReturnType<ProceduralConnectorTurn['pause']> {
-    const result = await super.pause();
+  public override async pause(call: CallContext): ReturnType<ProceduralConnectorTurn['pause']> {
+    const result = await super.pause(call);
     if (!result.turnEnded) {
       this.abortController.abort();
     }

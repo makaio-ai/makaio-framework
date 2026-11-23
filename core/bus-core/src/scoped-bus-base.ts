@@ -13,6 +13,7 @@ import type { EmitOptions, InterceptOptions, OnOptions, RequestOptions } from '.
 import type { InterceptorHandler } from './types/interceptor.js';
 import type { OnceOptions } from './methods/once.js';
 import type {
+  CallContext,
   ContextForSubjectDefinition,
   HandlerForSubjectDefinition,
   OptionalResult,
@@ -83,7 +84,27 @@ export interface IScopedBusBase<Namespace extends string> {
   ): Promise<ContextForSubjectDefinition<Subject>>;
 
   /**
-   * Emit an event.
+   * Emit an event on behalf of a handled message (call form).
+   *
+   * The principal and `attestedBy` of `call` are forwarded; the caller is this
+   * bus's carrier.
+   * @param call - Call context of the handled message (typically `ctx.call`)
+   * @param subject - Subject definition to emit on
+   * @param payload - Event payload matching the subject schema
+   * @param options - Optional emit options (message ids, transports)
+   * @returns Promise resolving when all handlers have been notified
+   */
+  emit<Subject extends ScopedSubjectDefinition<Namespace>>(
+    call: CallContext,
+    subject: Subject,
+    payload: Subject['$meta']['payload'],
+    options?: EmitOptions,
+  ): Promise<void>;
+
+  /**
+   * Emit an event on behalf of the carrier itself (own form).
+   *
+   * Caller and principal are both this bus's carrier.
    * @param subject - Subject definition to emit on
    * @param payload - Event payload matching the subject schema
    * @param options - Optional emit options (message ids, transports)
@@ -96,7 +117,29 @@ export interface IScopedBusBase<Namespace extends string> {
   ): Promise<void>;
 
   /**
-   * Make a request (throws if no handler is registered).
+   * Make a request on behalf of a handled message (call form; throws if no
+   * handler is registered).
+   *
+   * The principal and `attestedBy` of `call` are forwarded; the caller is this
+   * bus's carrier.
+   * @param call - Call context of the handled message (typically `ctx.call`)
+   * @param subject - Subject definition for the request
+   * @param payload - Request payload matching the subject schema
+   * @param options - Optional request options (timeout, signal, transports)
+   * @returns Promise resolving to the response payload
+   */
+  request<Subject extends ScopedSubjectDefinition<Namespace>>(
+    call: CallContext,
+    subject: Subject,
+    payload: Subject['$meta']['payload']['request'],
+    options?: RequestOptions,
+  ): Promise<Subject['$meta']['payload']['response']>;
+
+  /**
+   * Make a request on behalf of the carrier itself (own form; throws if no
+   * handler is registered).
+   *
+   * Caller and principal are both this bus's carrier.
    * @param subject - Subject definition for the request
    * @param payload - Request payload matching the subject schema
    * @param options - Optional request options (timeout, signal, transports)
@@ -109,8 +152,29 @@ export interface IScopedBusBase<Namespace extends string> {
   ): Promise<Subject['$meta']['payload']['response']>;
 
   /**
-   * Make an optional request (returns `OptionalResult` instead of throwing
-   * when no handler is registered).
+   * Make an optional request on behalf of a handled message (call form;
+   * returns `OptionalResult` instead of throwing when no handler is registered).
+   *
+   * The principal and `attestedBy` of `call` are forwarded; the caller is this
+   * bus's carrier.
+   * @param call - Call context of the handled message (typically `ctx.call`)
+   * @param subject - Subject definition for the request
+   * @param payload - Request payload matching the subject schema
+   * @param options - Optional request options (timeout, signal, transports)
+   * @returns Promise resolving to an `OptionalResult` wrapper
+   */
+  requestOptional<Subject extends ScopedSubjectDefinition<Namespace>>(
+    call: CallContext,
+    subject: Subject,
+    payload: Subject['$meta']['payload']['request'],
+    options?: RequestOptions,
+  ): Promise<OptionalResult<Subject['$meta']['payload']['response']>>;
+
+  /**
+   * Make an optional request on behalf of the carrier itself (own form;
+   * returns `OptionalResult` instead of throwing when no handler is registered).
+   *
+   * Caller and principal are both this bus's carrier.
    * @param subject - Subject definition for the request
    * @param payload - Request payload matching the subject schema
    * @param options - Optional request options (timeout, signal, transports)

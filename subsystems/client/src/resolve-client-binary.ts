@@ -6,6 +6,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/contracts/client';
 import type { ClientExecutionContext } from '@makaio/contracts/client';
+import type { CallContext } from '@makaio/core';
 
 /**
  * Resolve the execution context for a client binary via the bus.
@@ -13,6 +14,7 @@ import type { ClientExecutionContext } from '@makaio/contracts/client';
  * Uses `requestOptional` so the adapter continues to function in
  * framework-only boot where no `client.resolveBinary` handler is registered.
  * In that case `undefined` is returned and callers fall back to PATH lookup.
+ * @param call - Call context of the handled message.
  * @param bus - Runtime bus that owns the client-resolution handlers.
  * @param clientId - Stable client identifier to resolve (e.g. `'claude-code'`)
  * @returns Resolved execution context (source `'managed'` or `'global'`), or
@@ -20,9 +22,10 @@ import type { ClientExecutionContext } from '@makaio/contracts/client';
  *   (framework-only boot)
  */
 export async function resolveClientBinary(
+  call: CallContext,
   bus: IMakaioBus,
   clientId: string,
 ): Promise<ClientExecutionContext | undefined> {
-  const result = await bus.requestOptional(ClientSubjects.resolveBinary, { clientId });
+  const result = await bus.requestOptional(call, ClientSubjects.resolveBinary, { clientId });
   return result.handled ? result.data : undefined;
 }

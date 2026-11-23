@@ -55,7 +55,7 @@ function registerAdapterStartHandler(): () => void {
     const sessionId = ctx.payload.sessionId ?? 'session-missing';
     const providerConfigId =
       ctx.payload.providerContext?.state === 'resolved' ? ctx.payload.providerContext.providerConfigId : undefined;
-    await MakaioBus.request(AgentStorageSubjects.set, {
+    await MakaioBus.request(ctx.call, AgentStorageSubjects.set, {
       agentId,
       agent: {
         agentId,
@@ -71,7 +71,7 @@ function registerAdapterStartHandler(): () => void {
         ...(providerConfigId !== undefined && { providerConfigId }),
       },
     });
-    await MakaioBus.emit(SessionSubjects.agent.added, {
+    await MakaioBus.emit(ctx.call, SessionSubjects.agent.added, {
       sessionId,
       adapterSessionId,
       agentId,
@@ -108,14 +108,14 @@ function registerAgentSendMessageHandler(): () => void {
     setTimeout(() => {
       void (async () => {
         if (ctx.payload.sessionId !== undefined && ctx.payload.turnId !== undefined) {
-          const completion = await MakaioBus.request(SubagentSubjects.completeTask, {
+          const completion = await MakaioBus.request(ctx.call, SubagentSubjects.completeTask, {
             sessionId: ctx.payload.sessionId,
             turnId: ctx.payload.turnId,
             result: `completed:${String(ctx.payload.message)}`,
           });
           if (!completion.completed) return;
         }
-        await MakaioBus.emit(AgentSubjects.complete, {
+        await MakaioBus.emit(ctx.call, AgentSubjects.complete, {
           agentId: ctx.payload.agentId,
           adapterId: ctx.payload.adapterId,
           adapterName: 'workflow-test-adapter',
@@ -145,7 +145,7 @@ function registerSubagentStubHandlers(bus: typeof MakaioBus): Array<() => void> 
   const offSpawn = bus.on(SubagentSubjects.spawn, async (ctx) => {
     const subagentId = createTestId('subagent');
     subagentBySession.set(`session-${subagentId}`, subagentId);
-    await bus.emit(SubagentSubjects.spawned, {
+    await bus.emit(ctx.call, SubagentSubjects.spawned, {
       subagentId,
       parentSessionId: ctx.payload.parentSessionId,
       task: ctx.payload.config.task,
@@ -286,7 +286,7 @@ export async function setupWorkflowExecutorTest(
       // Defer completeTask to the next event-loop tick so SubagentSubjects.await
       // can register its pending resolver before the completion fires.
       setTimeout(() => {
-        void MakaioBus.request(SubagentSubjects.completeTask, {
+        void MakaioBus.request(ctx.call, SubagentSubjects.completeTask, {
           sessionId: `session-${ctx.payload.subagentId}`,
           turnId: `turn-${ctx.payload.subagentId}`,
           result: `completed:${ctx.payload.task}`,

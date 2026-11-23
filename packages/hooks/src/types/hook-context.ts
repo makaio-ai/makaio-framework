@@ -9,7 +9,7 @@ import type {
   Turn,
 } from '@makaio/contracts';
 import type { SessionSendMessageRequest } from '@makaio/contracts/session';
-import type { ExtractSubjectPayload } from '@makaio/core';
+import type { CallContext, ExtractSubjectPayload } from '@makaio/core';
 
 /** Session-level turn.completed payload (distinct from agent-level TurnCompleted) */
 type SessionTurnCompleted = ExtractSubjectPayload<typeof SessionSubjects.turn.completed>;
@@ -72,8 +72,13 @@ export interface SessionHookContext {
   readonly session?: IMakaioSession;
   /** Recent turn history, oldest first (up to 10 turns) */
   readonly recentHistory: Turn[];
-  /** Bus instance for making requests */
+  /** Bus of the extension that registered the hook; sends as that extension */
   readonly bus: IMakaioBus;
+  /**
+   * Call context of the message this hook handles (caller = sender, principal,
+   * attestedBy). Pass it as the first argument of every send made from the hook.
+   */
+  readonly call: CallContext;
   /**
    * Arbitrary context extensions contributed by the host-registered
    * `SessionSubjects.enrichContext` handler. Framework spreads these onto
@@ -157,8 +162,10 @@ export interface PostUserMessageContext {
   readonly agentId: string;
   /** Adapter ID */
   readonly adapterId: string;
-  /** Bus instance for making requests */
+  /** Bus of the extension that registered the hook; sends as that extension */
   readonly bus: IMakaioBus;
+  /** Call context of the message that triggered the turn; pass it as the first argument of every send */
+  readonly call: CallContext;
 }
 
 export interface PreTurnContext extends BaseHookContext<unknown> {

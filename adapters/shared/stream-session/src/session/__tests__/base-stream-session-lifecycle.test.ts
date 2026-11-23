@@ -5,7 +5,7 @@ import {
   SESSION_CLOSED_QUEUE_ERROR,
   UserMessageQueue,
 } from '@makaio/ai-adapters-core';
-import { createTestBusInstance } from '@makaio/test-utils';
+import { createTestBusInstance, createTestCall } from '@makaio/test-utils';
 import { describe, expect, it } from 'vitest';
 import { TurnStateChangedSchema } from '../../namespaces/schemas/turn-state.js';
 import { BaseStreamSession, type StreamSessionTurn } from '../base-stream-session.js';
@@ -86,7 +86,7 @@ class TestStreamSession extends BaseStreamSession<StreamSessionConfig<TestBus>, 
 describe('BaseStreamSession terminal setup gate', () => {
   it('continues scheduling turns after a reusable abort', async () => {
     const hostBus = createTestBusInstance();
-    const bus = await TestNamespace.scopedBus(hostBus.getContext());
+    const bus = await TestNamespace.scopedBus(hostBus);
     const session = new TestStreamSession({
       bus,
       adapterId: 'adapter-1',
@@ -99,6 +99,7 @@ describe('BaseStreamSession terminal setup gate', () => {
       handleError: () => {},
     });
     const handle = new MessageHandle(
+      createTestCall(),
       'message-after-abort',
       { role: 'user', message: 'after abort', blocks: [{ type: 'text', content: 'after abort' }] },
       'enqueue',
@@ -106,7 +107,7 @@ describe('BaseStreamSession terminal setup gate', () => {
     const queue = new UserMessageQueue();
     queue.enqueue(handle);
 
-    await session.abort();
+    await session.abort(createTestCall());
     await session.processQueue(queue);
     await Promise.resolve();
 
@@ -117,7 +118,7 @@ describe('BaseStreamSession terminal setup gate', () => {
 
   it('does not schedule a provider turn when close wins during agent_started emission', async () => {
     const hostBus = createTestBusInstance();
-    const bus = await TestNamespace.scopedBus(hostBus.getContext());
+    const bus = await TestNamespace.scopedBus(hostBus);
     let signalAgentStarted: (() => void) | undefined;
     const agentStarted = new Promise<void>((resolve) => {
       signalAgentStarted = resolve;
@@ -140,6 +141,7 @@ describe('BaseStreamSession terminal setup gate', () => {
       handleError: () => {},
     });
     const handle = new MessageHandle(
+      createTestCall(),
       'message-1',
       { role: 'user', message: 'close race', blocks: [{ type: 'text', content: 'close race' }] },
       'enqueue',
@@ -149,7 +151,7 @@ describe('BaseStreamSession terminal setup gate', () => {
 
     const processing = session.processQueue(queue);
     await agentStarted;
-    const closing = session.close();
+    const closing = session.close(createTestCall());
     if (!releaseAgentStarted) {
       throw new Error('agent_started emission gate was not installed');
     }

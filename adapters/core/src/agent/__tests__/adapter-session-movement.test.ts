@@ -8,7 +8,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AgentSubjects, type AdapterSessionMoved } from '@makaio/contracts';
+import { AgentSubjects, type AdapterSessionMoved, type CallContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import {
   ConfirmedAdapterSessionTracker,
   providerCommittedAdapterSessionId,
@@ -19,10 +20,12 @@ import { MessageHandle } from '../../message-handle/index.js';
 import type { SendMessageRequestPayload } from '../types.js';
 
 vi.mock('@makaio/hooks', () => ({
-  runPreUserMessageHooks: vi.fn(async (payload: { message: unknown; sessionContext?: unknown }) => ({
-    message: payload.message,
-    sessionContext: payload.sessionContext,
-  })),
+  runPreUserMessageHooks: vi.fn(
+    async (_call: CallContext, payload: { message: unknown; sessionContext?: unknown }) => ({
+      message: payload.message,
+      sessionContext: payload.sessionContext,
+    }),
+  ),
   runPostUserMessageHooks: vi.fn(async () => {}),
 }));
 
@@ -64,7 +67,7 @@ describe('ConfirmedAdapterSessionTracker', () => {
     const host = { ...HOST_BASE };
     const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, host);
 
-    await tracker.record('provider-1');
+    await tracker.record(createTestCall(), 'provider-1');
     await settle();
 
     expect(capture.movements).toHaveLength(1);
@@ -82,9 +85,9 @@ describe('ConfirmedAdapterSessionTracker', () => {
   it('does not re-announce an unchanged identity', async () => {
     const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, { ...HOST_BASE });
 
-    await tracker.record('provider-1');
-    await tracker.record('provider-1');
-    await tracker.record('provider-1');
+    await tracker.record(createTestCall(), 'provider-1');
+    await tracker.record(createTestCall(), 'provider-1');
+    await tracker.record(createTestCall(), 'provider-1');
     await settle();
 
     expect(capture.movements).toHaveLength(1);
@@ -93,8 +96,8 @@ describe('ConfirmedAdapterSessionTracker', () => {
   it('announces each genuine identity change', async () => {
     const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, { ...HOST_BASE });
 
-    await tracker.record('provider-1');
-    await tracker.record('provider-2');
+    await tracker.record(createTestCall(), 'provider-1');
+    await tracker.record(createTestCall(), 'provider-2');
     await settle();
 
     expect(capture.movements.map((movement) => movement.adapterSessionId)).toEqual(['provider-1', 'provider-2']);
@@ -104,7 +107,7 @@ describe('ConfirmedAdapterSessionTracker', () => {
     const host = { ...HOST_BASE, resumeAdapterSessionId: 'start-time-target' };
     const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, host);
 
-    await tracker.record('provider-1');
+    await tracker.record(createTestCall(), 'provider-1');
 
     expect(host.resumeAdapterSessionId).toBe('provider-1');
   });
@@ -113,7 +116,7 @@ describe('ConfirmedAdapterSessionTracker', () => {
     const host: { resumeAdapterSessionId?: string } & typeof HOST_BASE = { ...HOST_BASE };
     const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, host);
 
-    await tracker.record('provider-1');
+    await tracker.record(createTestCall(), 'provider-1');
 
     expect(host.resumeAdapterSessionId).toBeUndefined();
   });
@@ -122,7 +125,7 @@ describe('ConfirmedAdapterSessionTracker', () => {
     const host = { ...HOST_BASE, resumeAdapterSessionId: 'start-time-target' };
     const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, host);
 
-    await tracker.recordUnconfirmedMove();
+    await tracker.recordUnconfirmedMove(createTestCall());
 
     expect(host.resumeAdapterSessionId).toBeUndefined();
   });
@@ -134,8 +137,8 @@ describe('ConfirmedAdapterSessionTracker', () => {
     const host = { ...HOST_BASE, resumeAdapterSessionId: 'start-time-target' };
     const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, host);
 
-    await tracker.recordUnconfirmedMove();
-    await tracker.record('provider-successor');
+    await tracker.recordUnconfirmedMove(createTestCall());
+    await tracker.record(createTestCall(), 'provider-successor');
 
     expect(host.resumeAdapterSessionId).toBe('provider-successor');
   });
@@ -146,8 +149,8 @@ describe('ConfirmedAdapterSessionTracker', () => {
     const host: { resumeAdapterSessionId?: string } & typeof HOST_BASE = { ...HOST_BASE };
     const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, host);
 
-    await tracker.recordUnconfirmedMove();
-    await tracker.record('provider-1');
+    await tracker.recordUnconfirmedMove(createTestCall());
+    await tracker.record(createTestCall(), 'provider-1');
 
     expect(host.resumeAdapterSessionId).toBeUndefined();
   });
@@ -162,7 +165,7 @@ describe('ConfirmedAdapterSessionTracker', () => {
     tracker.adoptResumeTarget('explicitly-resumed');
     expect(host.resumeAdapterSessionId).toBe('explicitly-resumed');
 
-    await tracker.record('provider-rotated-on-resume');
+    await tracker.record(createTestCall(), 'provider-rotated-on-resume');
 
     expect(host.resumeAdapterSessionId).toBe('provider-rotated-on-resume');
   });
@@ -172,7 +175,7 @@ describe('ConfirmedAdapterSessionTracker', () => {
     const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, host);
 
     tracker.adoptResumeTarget(undefined);
-    await tracker.record('provider-1');
+    await tracker.record(createTestCall(), 'provider-1');
 
     expect(host.resumeAdapterSessionId).toBeUndefined();
   });
@@ -180,7 +183,7 @@ describe('ConfirmedAdapterSessionTracker', () => {
   it('ignores an unresolved identity', async () => {
     const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, { ...HOST_BASE });
 
-    await tracker.record(undefined);
+    await tracker.record(createTestCall(), undefined);
     await settle();
 
     expect(capture.movements).toHaveLength(0);
@@ -194,8 +197,8 @@ describe('ConfirmedAdapterSessionTracker', () => {
     // first-ever identity instead of a movement.
     const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, { ...HOST_BASE });
 
-    await tracker.record('provider-1');
-    await tracker.record(undefined);
+    await tracker.record(createTestCall(), 'provider-1');
+    await tracker.record(createTestCall(), undefined);
     await settle();
 
     expect(tracker.lastKnownAdapterSessionId).toBe('provider-1');
@@ -214,15 +217,15 @@ describe('ConfirmedAdapterSessionTracker', () => {
     try {
       const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, { ...HOST_BASE });
 
-      await tracker.record('provider-1');
+      await tracker.record(createTestCall(), 'provider-1');
       // The failed announcement still reaches other consumers; the cache
       // serves enrichment regardless of delivery.
       expect(tracker.lastKnownAdapterSessionId).toBe('provider-1');
       expect(capture.movements).toHaveLength(1);
 
       failNext = false;
-      await tracker.record('provider-1');
-      await tracker.record('provider-1');
+      await tracker.record(createTestCall(), 'provider-1');
+      await tracker.record(createTestCall(), 'provider-1');
       await settle();
 
       // Exactly one retry: the acknowledged announcement re-arms the change
@@ -236,7 +239,7 @@ describe('ConfirmedAdapterSessionTracker', () => {
   it('announces an unconfirmed movement without an identity', async () => {
     const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, { ...HOST_BASE });
 
-    await tracker.recordUnconfirmedMove();
+    await tracker.recordUnconfirmedMove(createTestCall());
     await settle();
 
     expect(capture.movements).toHaveLength(1);
@@ -257,13 +260,13 @@ describe('ConfirmedAdapterSessionTracker', () => {
     try {
       const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, { ...HOST_BASE });
       // Delivered, so the row now advertises provider-1 as the resume currency.
-      await tracker.record('provider-1');
+      await tracker.record(createTestCall(), 'provider-1');
       failNext = true;
-      await tracker.recordUnconfirmedMove();
+      await tracker.recordUnconfirmedMove(createTestCall());
 
       failNext = false;
       // Enrichment on the next emitted event, still resolving the abandoned ID.
-      await tracker.record('provider-1');
+      await tracker.record(createTestCall(), 'provider-1');
       await settle();
 
       // Two unconfirmed announcements: the rejected original and the retry.
@@ -289,11 +292,11 @@ describe('ConfirmedAdapterSessionTracker', () => {
     });
     try {
       const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, { ...HOST_BASE });
-      await tracker.recordUnconfirmedMove();
+      await tracker.recordUnconfirmedMove(createTestCall());
       expect(capture.movements).toHaveLength(1);
 
       failNext = false;
-      await tracker.record(undefined);
+      await tracker.record(createTestCall(), undefined);
       await settle();
 
       expect(capture.movements).toHaveLength(2);
@@ -313,15 +316,15 @@ describe('ConfirmedAdapterSessionTracker', () => {
     });
     try {
       const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, { ...HOST_BASE });
-      await tracker.record('provider-1');
+      await tracker.record(createTestCall(), 'provider-1');
       failNext = true;
-      await tracker.recordUnconfirmedMove();
+      await tracker.recordUnconfirmedMove(createTestCall());
 
       failNext = false;
-      await tracker.record('provider-2');
+      await tracker.record(createTestCall(), 'provider-2');
       // Two further enrichment calls must not re-announce anything.
-      await tracker.record('provider-2');
-      await tracker.record('provider-2');
+      await tracker.record(createTestCall(), 'provider-2');
+      await tracker.record(createTestCall(), 'provider-2');
       await settle();
 
       const last = capture.movements[capture.movements.length - 1];
@@ -346,23 +349,23 @@ describe('ConfirmedAdapterSessionTracker', () => {
     });
     try {
       const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, { ...HOST_BASE });
-      await tracker.record('provider-1');
+      await tracker.record(createTestCall(), 'provider-1');
       failNext = true;
-      await tracker.recordUnconfirmedMove();
+      await tracker.recordUnconfirmedMove(createTestCall());
       failNext = false;
       capture.movements.length = 0;
 
       // The caller owns the successor, so it stays unpublished until the exact
       // generation acknowledgement records the durable settlement.
-      await tracker.record('provider-2', true);
+      await tracker.record(createTestCall(), 'provider-2', true);
       expect(capture.movements).toEqual([]);
       tracker.recordCallerSettled('provider-2');
 
       // And the parked movement is gone rather than waiting for the next event:
       // enrichment re-records the identity, then reports none, and neither
       // re-drives it.
-      await tracker.record('provider-2');
-      await tracker.record(undefined);
+      await tracker.record(createTestCall(), 'provider-2');
+      await tracker.record(createTestCall(), undefined);
       await settle();
 
       expect(capture.movements).toEqual([]);
@@ -384,7 +387,7 @@ describe('ConfirmedAdapterSessionTracker', () => {
     });
     try {
       const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, { ...HOST_BASE });
-      await tracker.record('provider-1');
+      await tracker.record(createTestCall(), 'provider-1');
       expect(applied).toBe(true);
     } finally {
       consumer();
@@ -410,19 +413,19 @@ describe('ConfirmedAdapterSessionTracker', () => {
     try {
       const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, { ...HOST_BASE });
 
-      await tracker.record('provider-1');
+      await tracker.record(createTestCall(), 'provider-1');
       // The honest residual: the announcement reported failure before the
       // applying consumer settled, so this movement is not ordered.
       expect(applied).toBe(0);
 
       failNext = false;
       await new Promise((resolve) => setTimeout(resolve, 30));
-      await tracker.record('provider-1');
+      await tracker.record(createTestCall(), 'provider-1');
       // The retry is ordered again: every local consumer acknowledged it.
       expect(applied).toBe(2);
 
       // And the acknowledged retry re-arms the change guard.
-      await tracker.record('provider-1');
+      await tracker.record(createTestCall(), 'provider-1');
       await settle();
       expect(capture.movements).toHaveLength(2);
     } finally {
@@ -434,7 +437,7 @@ describe('ConfirmedAdapterSessionTracker', () => {
   it('omits sessionId for an agent that runs outside a session', async () => {
     const tracker = new ConfirmedAdapterSessionTracker(MakaioBus, { ...HOST_BASE, sessionId: undefined });
 
-    await tracker.record('provider-1');
+    await tracker.record(createTestCall(), 'provider-1');
     await settle();
 
     expect(capture.movements[0].sessionId).toBeUndefined();
@@ -487,8 +490,8 @@ describe('providerCommittedAdapterSessionId', () => {
         movesProviderSessionOnSuppressedResume: () => true,
       };
 
-      await tracker.recordUnconfirmedMove();
-      await tracker.record(providerCommittedAdapterSessionId(connector));
+      await tracker.recordUnconfirmedMove(createTestCall());
+      await tracker.record(createTestCall(), providerCommittedAdapterSessionId(connector));
       await settle();
 
       expect(capture.movements).toHaveLength(1);
@@ -511,10 +514,10 @@ describe('providerCommittedAdapterSessionId', () => {
         movesProviderSessionOnSuppressedResume: () => rotationPending,
       };
 
-      await tracker.recordUnconfirmedMove();
-      await tracker.record(providerCommittedAdapterSessionId(connector));
+      await tracker.recordUnconfirmedMove(createTestCall());
+      await tracker.record(createTestCall(), providerCommittedAdapterSessionId(connector));
       rotationPending = false;
-      await tracker.record(providerCommittedAdapterSessionId(connector));
+      await tracker.record(createTestCall(), providerCommittedAdapterSessionId(connector));
       await settle();
 
       expect(capture.movements).toHaveLength(2);
@@ -542,6 +545,7 @@ describe('AgentTurnExecutor pre-confirmation rotation signal', () => {
     confirmedAdapterSessionId: string | undefined;
     movesProviderSessionOnSuppressedResume?: boolean;
   }): Promise<{ signals: number; steps: string[] }> {
+    const call = createTestCall();
     const steps: string[] = [];
     const connector: Partial<AIAgentConnector> = {
       cwd: '/tmp',
@@ -549,7 +553,12 @@ describe('AgentTurnExecutor pre-confirmation rotation signal', () => {
       movesProviderSessionOnSuppressedResume: () => options.movesProviderSessionOnSuppressedResume ?? false,
       sendMessage: (async () => {
         steps.push('dispatch');
-        return new MessageHandle('m-1', { role: 'user', blocks: [{ type: 'text', content: 'hello' }] }, 'enqueue');
+        return new MessageHandle(
+          call,
+          'm-1',
+          { role: 'user', blocks: [{ type: 'text', content: 'hello' }] },
+          'enqueue',
+        );
       }) as AIAgentConnector['sendMessage'],
     };
     let signals = 0;
@@ -574,7 +583,7 @@ describe('AgentTurnExecutor pre-confirmation rotation signal', () => {
       adapterId: HOST_BASE.adapterId,
       message: 'hello',
     };
-    await executor.executeSendMessage(payload);
+    await executor.executeSendMessage(call, payload);
     return { signals, steps };
   }
 

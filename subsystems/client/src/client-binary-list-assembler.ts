@@ -12,6 +12,7 @@ import type { ClientBinaryListEntry, InstalledVersionEntry, ManagedInstallDescri
 import type { ClientDefinitionLookup } from './client-binary-manager-types.js';
 import { ClientBinaryStorageSubjects } from './storage/client-binary-storage-namespace.js';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -25,15 +26,17 @@ import type { IMakaioBus } from '@makaio/bus-core';
  * pointer, the descriptor pin, and the `updateAvailable` flag. A client is
  * considered to have an update available when its active version does not
  * match the pinned version in the managed install descriptor.
+ * @param call - Call context of the handled `client.list` message, forwarded to the storage request
  * @param bus - Bus instance for storage snapshot requests
  * @param definitionLookup - Client definition registry
  * @returns Assembled list of client binary entries
  */
 export async function assembleBinaryList(
+  call: CallContext,
   bus: IMakaioBus,
   definitionLookup: ClientDefinitionLookup,
 ): Promise<ClientBinaryListEntry[]> {
-  const { versions: allVersions, states } = await bus.request(ClientBinaryStorageSubjects.loadSnapshot, {});
+  const { versions: allVersions, states } = await bus.request(call, ClientBinaryStorageSubjects.loadSnapshot, {});
 
   const versionsByClient = Map.groupBy(allVersions, (v) => v.clientId);
 

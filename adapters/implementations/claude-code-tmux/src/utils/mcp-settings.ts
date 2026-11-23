@@ -8,6 +8,7 @@
  */
 
 import { MakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
 import type { ClaudeCodeMcpServerEntry } from '@makaio/client-claude-code';
 
@@ -18,17 +19,19 @@ import type { ClaudeCodeMcpServerEntry } from '@makaio/client-claude-code';
  * client service is present. The operation is idempotent: when a server with
  * the same `name` and structurally equal definition already exists, no write
  * is performed.
+ * @param call - Call context of the handled message.
  * @param projectDir - Absolute path to the project directory containing `.mcp.json`.
  * @param name - Logical server name (key in the `mcpServers` map).
  * @param server - MCP server definition to persist.
  * @returns `true` when a config-service handler processed the request.
  */
 export async function addMcpServerToProject(
+  call: CallContext,
   projectDir: string,
   name: string,
   server: ClaudeCodeMcpServerEntry,
 ): Promise<boolean> {
-  const result = await MakaioBus.requestOptional(ClaudeCodeClientSubjects.config.mcpServers.add, {
+  const result = await MakaioBus.requestOptional(call, ClaudeCodeClientSubjects.config.mcpServers.add, {
     projectDir,
     name,
     server,
@@ -47,9 +50,11 @@ export async function addMcpServerToProject(
  * @returns `true` when a config-service handler processed the request.
  */
 export async function removeMcpServerFromProject(projectDir: string, name: string): Promise<boolean> {
-  const result = await MakaioBus.requestOptional(ClaudeCodeClientSubjects.config.mcpServers.remove, {
-    projectDir,
-    name,
-  });
+  // ORIGIN: direct lifecycle cleanup sends on the host singleton, which owns this stop context.
+  const result = await MakaioBus.requestOptional(
+    MakaioBus.own('stop'),
+    ClaudeCodeClientSubjects.config.mcpServers.remove,
+    { projectDir, name },
+  );
   return result.handled;
 }

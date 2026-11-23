@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { BaseService } from '@makaio/service-base';
+import type { CallContext } from '@makaio/core';
 import {
   AgentSubjects,
   ApprovalSubjects,
@@ -98,13 +99,13 @@ export class ToolApprovalService extends BaseService {
       // Fetch agent metadata and the enriched-policy RPC result once here so both
       // the file-access check and the policy cascade share the same data without
       // a redundant bus hop.
-      const lookup = await this.getAgentMetadata(ctx.payload.agentId, ctx.payload.sessionId);
+      const lookup = await this.getAgentMetadata(ctx.call, ctx.payload.agentId, ctx.payload.sessionId);
       const agent = lookup.kind === 'found' ? lookup.agent : null;
       const agentLookupFailed = lookup.kind === 'error';
       const hasPersonaOrProfile = Boolean(agent?.personaId || agent?.profileId);
       const rawEnrichedPolicy =
         hasPersonaOrProfile && ctx.payload.toolName
-          ? await this.fetchRawEnrichedPolicy(agent?.personaId, agent?.profileId, ctx.payload.toolName)
+          ? await this.fetchRawEnrichedPolicy(ctx.call, agent?.personaId, agent?.profileId, ctx.payload.toolName)
           : undefined;
 
       const fileAccessContext = resolveFileAccessContext(agent, rawEnrichedPolicy, this.options.fileAccessRuleProvider);
@@ -120,7 +121,7 @@ export class ToolApprovalService extends BaseService {
       }
 
       // Check session-level override (highest-precedence policy layer).
-      const sessionOverride = await this.resolveSessionOverride(ctx.payload.sessionId);
+      const sessionOverride = await this.resolveSessionOverride(ctx.call, ctx.payload.sessionId);
       if (sessionOverride === 'reject') {
         ctx.setResult({
           action: 'deny',
@@ -158,6 +159,7 @@ export class ToolApprovalService extends BaseService {
       }
 
       const resolved = await this.resolvePolicyWithContext(
+        ctx.call,
         { adapterName: ctx.payload.adapterName, toolName: ctx.payload.toolName },
         agent,
         rawEnrichedPolicy,
@@ -177,7 +179,7 @@ export class ToolApprovalService extends BaseService {
           return;
 
         case 'always-ask':
-          await this.dispatchAlwaysAskApproval(ctx.payload, ctx.setResult.bind(ctx), resolved);
+          await this.dispatchAlwaysAskApproval(ctx.call, ctx.payload, ctx.setResult.bind(ctx), resolved);
           return;
       }
     });
@@ -188,11 +190,13 @@ export class ToolApprovalService extends BaseService {
    * Subscribes to the agent session-closed event so that a pending approval
    * is automatically cancelled when the agent disconnects. The subscription is
    * cleaned up in the `finally` block regardless of outcome.
+   * @param call - Call context of the approval request being handled
    * @param payload - Tool approval request payload
    * @param setResult - Callback to set the handler result on the request context
    * @param resolved - Pre-resolved policy context used to enrich the request
    */
   private async dispatchAlwaysAskApproval(
+    call: CallContext,
     payload: AgentToolApproveRequest,
     setResult: (result: AgentToolApproveResponse) => void,
     resolved: PolicyResolutionResult,
@@ -215,7 +219,7 @@ export class ToolApprovalService extends BaseService {
     );
 
     try {
-      const response = await this.bus.requestOptional(ApprovalSubjects.request, enriched, {
+      const response = await this.bus.requestOptional(call, ApprovalSubjects.request, enriched, {
         timeout: 0,
         signal: controller.signal,
       });
@@ -326,18 +330,20 @@ export class ToolApprovalService extends BaseService {
    * Execute the `approval.resolveEnrichedPolicy` RPC exactly once and return the
    * raw discriminated result. Callers apply their own fail-closed semantics.
    * Errors are logged here since this is the single call site for the RPC.
+   * @param call - Call context of the approval request being handled
    * @param personaId - Optional persona ID from agent metadata
    * @param profileId - Optional profile ID from agent metadata
    * @param toolName - Tool name forwarded to the RPC
    * @returns Handled result with response data, or unhandled sentinel on failure
    */
   private async fetchRawEnrichedPolicy(
+    call: CallContext,
     personaId: string | undefined,
     profileId: string | undefined,
     toolName: string,
   ): Promise<RawEnrichedPolicyResult> {
     try {
-      return await this.bus.requestOptional(ApprovalSubjects.resolveEnrichedPolicy, {
+      return await this.bus.requestOptional(call, ApprovalSubjects.resolveEnrichedPolicy, {
         toolName,
         personaId,
         profileId,
@@ -360,19 +366,21 @@ export class ToolApprovalService extends BaseService {
    * Policy cascade: persona/profile (via host-tier RPC) → harness → system default.
    * After resolving the base policy, applies capability-based overrides from
    * the harness using most-restrictive-wins semantics.
+   * @param call - Call context of the approval request being handled
    * @param request - Adapter name and tool name from the approval payload
    * @param agent - Pre-fetched agent metadata, or null if unavailable
    * @param rawEnrichedPolicy - Pre-fetched enriched-policy RPC result shared with the file-access check
    * @returns Resolved policy and associated context
    */
   private async resolvePolicyWithContext(
+    call: CallContext,
     request: { adapterName: string; toolName?: string },
     agent: MakaioSessionAgent | null,
     rawEnrichedPolicy: RawEnrichedPolicyResult | undefined,
   ): Promise<PolicyResolutionResult> {
     const adapterName = agent?.adapterName ?? request.adapterName;
     const enrichedBase = resolveEnrichedBasePolicy(agent?.personaId, agent?.profileId, rawEnrichedPolicy);
-    const harnessResolution = await this.resolveHarnessPolicy(adapterName, agent?.harnessId, agent?.clientId);
+    const harnessResolution = await this.resolveHarnessPolicy(call, adapterName, agent?.harnessId, agent?.clientId);
 
     // Persona/profile policy takes precedence over all harness-level settings.
     // If no persona/profile policy, check per-tool override first, then fall back to harness base.
@@ -406,19 +414,20 @@ export class ToolApprovalService extends BaseService {
    * and tests) counts as `absent`: without a storage handler no agent rows exist. Only a
    * thrown request (storage or transport failure) is an `error`. `absent` does not mean
    * "no tool lists": see TODO(FACT-247) in the approval handler.
+   * @param call - Call context of the approval request being handled
    * @param agentId - The agent identifier
    * @param sessionId - Optional session ID for scoped lookup
    * @returns `found` with the agent row, `absent` when no row exists, or `error` when the lookup failed
    */
-  private async getAgentMetadata(agentId: string, sessionId?: string): Promise<AgentLookupResult> {
+  private async getAgentMetadata(call: CallContext, agentId: string, sessionId?: string): Promise<AgentLookupResult> {
     try {
       let agent: MakaioSessionAgent | null | undefined;
       if (sessionId) {
-        const result = await this.bus.requestOptional(AgentStorageSubjects.listBySession, { sessionId });
+        const result = await this.bus.requestOptional(call, AgentStorageSubjects.listBySession, { sessionId });
         agent = result.handled ? result.data.agents.find((a) => a.agentId === agentId) : undefined;
       } else {
         // Fallback: direct lookup
-        const result = await this.bus.requestOptional(AgentStorageSubjects.get, { agentId });
+        const result = await this.bus.requestOptional(call, AgentStorageSubjects.get, { agentId });
         agent = result.handled ? result.data.agent : undefined;
       }
       return agent ? { kind: 'found', agent } : { kind: 'absent' };
@@ -433,13 +442,14 @@ export class ToolApprovalService extends BaseService {
    * Uses `requestOptional` so that when no session storage handler is registered
    * (e.g., in tests or lightweight runtimes) the method gracefully returns
    * `undefined` and the existing policy cascade runs unchanged.
+   * @param call - Call context of the approval request being handled
    * @param sessionId - Session to check
    * @returns Override policy or undefined when not set or unavailable
    */
-  private async resolveSessionOverride(sessionId?: string): Promise<ApprovalPolicy | undefined> {
+  private async resolveSessionOverride(call: CallContext, sessionId?: string): Promise<ApprovalPolicy | undefined> {
     if (!sessionId) return undefined;
     try {
-      const result = await this.bus.requestOptional(SessionStorageSubjects.get, { sessionId });
+      const result = await this.bus.requestOptional(call, SessionStorageSubjects.get, { sessionId });
       return result.handled ? (result.data.session?.approvalPolicyOverride ?? undefined) : undefined;
     } catch {
       return undefined;
@@ -448,18 +458,20 @@ export class ToolApprovalService extends BaseService {
 
   /**
    * Resolve harness policy for the given adapter; returns undefined on failure.
+   * @param call - Call context of the approval request being handled
    * @param adapterName - Adapter type name
    * @param harnessId - Explicit harness ID; overrides the default harness lookup
    * @param clientId - Client ID for client-scoped harness resolution
    * @returns Harness resolution carrying base policy and capability override data, or undefined when resolution fails
    */
   private async resolveHarnessPolicy(
+    call: CallContext,
     adapterName: string,
     harnessId?: string,
     clientId?: string,
   ): Promise<HarnessResolution | undefined> {
     try {
-      const harness = await this.bus.request(HarnessSubjects.resolve, {
+      const harness = await this.bus.request(call, HarnessSubjects.resolve, {
         adapterName,
         ...(harnessId && { profileHarnessId: harnessId }),
         ...(clientId && { clientId }),

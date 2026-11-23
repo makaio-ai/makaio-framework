@@ -39,6 +39,9 @@ import type {
  * Processors are registered before package startup and are invoked when a
  * package activates or stops. A processor can filter the packages it handles
  * by inspecting the executable {@link MakaioExtension} manifest.
+ * Processors run inside a host lifecycle step whose context belongs to the host carrier and cannot cross
+ * to another carrier, so processors that send mint `ctx.bus.own('start'|'stop')` on the activated extension's bus.
+ * A future toggle carrying a principal would require an attestation to the processor's carrier; none exists today.
  * @typeParam THostContext - Host context supplied to active extensions.
  */
 export interface ExtensionContributionProcessor<THostContext extends ExtensionContext = NodeExtensionContext> {

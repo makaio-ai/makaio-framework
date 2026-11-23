@@ -1,3 +1,4 @@
+import { createTestCall } from '@makaio/test-utils';
 import { describe, expect, it, vi } from 'vitest';
 import { AgentConnectorLifecycleManager } from '../agent-connector-lifecycle-manager.js';
 
@@ -75,7 +76,7 @@ describe('AgentConnectorLifecycleManager', () => {
       reportCleanupFailure: () => {},
     });
 
-    await expect(manager.swapConnector()).rejects.toThrow('replacement initialization failed');
+    await expect(manager.swapConnector(createTestCall())).rejects.toThrow('replacement initialization failed');
 
     expect(replacementUnsubscribe).toHaveBeenCalledOnce();
     expect(replacementClose).toHaveBeenCalledOnce();

@@ -176,14 +176,16 @@ export class WorkflowGateTimeoutScheduler {
   }): Promise<TimedOutGateResumeDecision> {
     this.clear(gate.executionId, gate.nodeId, gate.frameId);
 
-    const { gate: persistedGate } = await this.bus.request(WorkflowStorageSubjects.getGateInstance, {
+    // ORIGIN: Timer wakeups inspect persisted state without a triggering message.
+    const call = this.bus.own('schedule');
+    const { gate: persistedGate } = await this.bus.request(call, WorkflowStorageSubjects.getGateInstance, {
       executionId: gate.executionId,
       nodeId: gate.nodeId,
       frameId: gate.frameId,
     });
     if (persistedGate === null || persistedGate.status !== 'waiting') return 'settled';
 
-    const { execution } = await this.bus.request(WorkflowStorageSubjects.getExecution, {
+    const { execution } = await this.bus.request(call, WorkflowStorageSubjects.getExecution, {
       executionId: gate.executionId,
     });
     if (execution?.status === 'running') return 'retry';

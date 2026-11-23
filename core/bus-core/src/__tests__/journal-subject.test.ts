@@ -21,6 +21,7 @@ import type {
 import { createBusNamespace, defaultTransports, inspectSubjectSchema, journalSubject } from '@makaio/core';
 import { createBusInstance, channelSubject, localSubject } from '../index.js';
 import { ValidationError } from '../errors/validation-error.js';
+import { createBusContext } from '../kernel-api.js';
 import {
   journalDeclarationsEqual,
   routingMetadataFromMarks,
@@ -250,11 +251,12 @@ describe('registerNamespace(): journal declaration collision through the live re
   });
 
   it('reports a journal-over-local subject as local through the registry public local check', () => {
-    const bus = createBusInstance();
+    const context = createBusContext();
+    const bus = createBusInstance({ context });
     const domain = 'journalRegistryOverLocalTest';
     bus.registerNamespace(createBusNamespace(domain, { event: journalOverLocal({}) }));
 
-    expect(bus.getContext().namespaceRegistry.isLocalSubject(`${domain}.event`)).toBe(true);
+    expect(context.namespaceRegistry.isLocalSubject(`${domain}.event`)).toBe(true);
   });
 });
 
@@ -277,32 +279,33 @@ describe('registerNamespace(): journal declaration collision through the live re
 
 describe('registerNamespace(): real registry integration for the journal record field', () => {
   it('records an absent journal declaration, retrievable through getRegisteredSubject() and listRegisteredSubjects(), for a local event subject', () => {
-    const bus = createBusInstance();
+    const context = createBusContext();
+    const bus = createBusInstance({ context });
     const namespace = createBusNamespace('journalRegistryTest', {
       event: localSubject(z.object({ id: z.string() })),
     });
     bus.registerNamespace(namespace);
 
-    const registered = bus.getContext().namespaceRegistry.getRegisteredSubject('journalRegistryTest.event');
+    const registered = context.namespaceRegistry.getRegisteredSubject('journalRegistryTest.event');
     expect(registered?.journal).toBeUndefined();
     expect(registered?.local).toBe(true);
 
-    const listed = bus
-      .getContext()
-      .namespaceRegistry.listRegisteredSubjects()
+    const listed = context.namespaceRegistry
+      .listRegisteredSubjects()
       .find((subject) => subject.fullSubject === 'journalRegistryTest.event');
     expect(listed?.journal).toBeUndefined();
   });
 
   it('returns a copy from getRegisteredSubject(), so replacing a field of it does not change the registry', () => {
-    const bus = createBusInstance();
+    const context = createBusContext();
+    const bus = createBusInstance({ context });
     const declaration = { retention: 'recorded', schemaVersion: '1', readOlder: { kind: 'as-recorded' } } as const;
     bus.registerNamespace(
       createBusNamespace('journalRegistryCopyTest', {
         event: journalSubject(z.object({ id: z.string() }), declaration),
       }),
     );
-    const registry = bus.getContext().namespaceRegistry;
+    const registry = context.namespaceRegistry;
 
     const first = registry.getRegisteredSubject('journalRegistryCopyTest.event');
     expect(first?.journal).toEqual(declaration);
@@ -312,7 +315,8 @@ describe('registerNamespace(): real registry integration for the journal record 
   });
 
   it('keeps the declaration of a hand-built journal wrapper as registered when the caller mutates it afterwards', () => {
-    const bus = createBusInstance();
+    const context = createBusContext();
+    const bus = createBusInstance({ context });
     const send: 'makaio.host'[] = ['makaio.host'];
     const options = {
       retention: 'recorded' as const,
@@ -327,7 +331,7 @@ describe('registerNamespace(): real registry integration for the journal record 
     send.push('makaio.host');
     options.schemaVersion = '2';
 
-    const registered = bus.getContext().namespaceRegistry.getRegisteredSubject('journalRegistryLiteralTest.event');
+    const registered = context.namespaceRegistry.getRegisteredSubject('journalRegistryLiteralTest.event');
     expect(registered?.journal).toEqual({
       retention: 'recorded',
       schemaVersion: '1',
@@ -337,15 +341,16 @@ describe('registerNamespace(): real registry integration for the journal record 
   });
 
   it('classifies a registered request subject as a request and stores its inner request/response schemas', () => {
-    const bus = createBusInstance();
+    const context = createBusContext();
+    const bus = createBusInstance({ context });
     const namespace = createBusNamespace('journalRegistryRequestTest', {
       call: { request: z.object({ q: z.string() }), response: z.object({ output: z.string() }) },
     });
     bus.registerNamespace(namespace);
 
     const fullKey = 'journalRegistryRequestTest.call';
-    expect(bus.getContext().namespaceRegistry.isRequestSubject(fullKey)).toBe(true);
-    const registered = bus.getContext().namespaceRegistry.getRegisteredSubject(fullKey);
+    expect(context.namespaceRegistry.isRequestSubject(fullKey)).toBe(true);
+    const registered = context.namespaceRegistry.getRegisteredSubject(fullKey);
     expect(registered?.journal).toBeUndefined();
     expect(registered !== undefined && 'request' in registered.schema && 'response' in registered.schema).toBe(true);
   });
@@ -370,7 +375,8 @@ describe('registerNamespace(): real registry integration for the journal record 
   });
 
   it('registers a namespace containing a journal-wrapped event and a journal-wrapped request without a cast, reading local/channel/defaultTransports through the journal layer and still validating the request', async () => {
-    const bus = createBusInstance();
+    const context = createBusContext();
+    const bus = createBusInstance({ context });
     const domain = 'journalRegistryJournalWrappedTest';
     const eventJournalOptions: JournalOptions<EventSchema> = {
       retention: 'recorded',
@@ -392,22 +398,25 @@ describe('registerNamespace(): real registry integration for the journal record 
     });
     const { subjects } = bus.registerNamespace(namespace);
 
-    const registeredLocalEvent = bus.getContext().namespaceRegistry.getRegisteredSubject(`${domain}.localEvent`);
+    const registeredLocalEvent = context.namespaceRegistry.getRegisteredSubject(`${domain}.localEvent`);
     expect(registeredLocalEvent?.local).toBe(true);
     expect(registeredLocalEvent?.journal).toEqual(eventJournalOptions);
 
-    const registeredChannelEvent = bus.getContext().namespaceRegistry.getRegisteredSubject(`${domain}.channelEvent`);
+    const registeredChannelEvent = context.namespaceRegistry.getRegisteredSubject(`${domain}.channelEvent`);
     expect(registeredChannelEvent?.channel).toBe(true);
     expect(registeredChannelEvent?.journal).toEqual(eventJournalOptions);
 
     expect(subjects.routedEvent.$meta.defaultTransports).toBe('local-only');
 
-    const registeredCall = bus.getContext().namespaceRegistry.getRegisteredSubject(`${domain}.call`);
+    const registeredCall = context.namespaceRegistry.getRegisteredSubject(`${domain}.call`);
     expect(registeredCall?.journal).toEqual(requestJournalOptions);
     expect(
       registeredCall !== undefined && 'request' in registeredCall.schema && 'response' in registeredCall.schema,
     ).toBe(true);
 
-    await expect(bus.request(subjects.call, { input: 123 } as never)).rejects.toThrow(ValidationError);
+    const invalidPayload: unknown = { input: 123 };
+    await expect(bus.request(bus.own('root'), subjects.call, invalidPayload as { input: string })).rejects.toThrow(
+      ValidationError,
+    );
   });
 });

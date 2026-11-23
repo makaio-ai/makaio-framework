@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SessionOwnershipStorageSubjects, SessionSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { runExclusiveStart } from '../ownership/index.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
@@ -69,7 +70,7 @@ describe('reserved rehydrate owner routing', () => {
         async (context) => {
           if (injectMovement && context.payload.recoveryGuard !== undefined) {
             injectMovement = false;
-            const settled = await ctx.bus.request(SessionOwnershipStorageSubjects.settleMovement, {
+            const settled = await ctx.bus.request(context.call, SessionOwnershipStorageSubjects.settleMovement, {
               machineId: MACHINE_ID,
               adapterId: ADAPTER_ID,
               adapterName: agent.adapterName,
@@ -86,7 +87,7 @@ describe('reserved rehydrate owner routing', () => {
             if (settled.outcome !== 'settled' || settled.claim === null) {
               throw new Error(`failed to move recovery currency: ${settled.outcome}`);
             }
-            await ctx.bus.request(SessionOwnershipStorageSubjects.release, {
+            await ctx.bus.request(context.call, SessionOwnershipStorageSubjects.release, {
               agentId: agent.agentId,
               claimToken: settled.claim.claimToken,
               disposition: 'released',
@@ -112,12 +113,13 @@ describe('reserved rehydrate owner routing', () => {
   });
 
   it("replans its self-reentry from the joined attempt's row, binding, holder, and live owner", async () => {
+    const call = createTestCall();
     const agent = await ctx.seedAgent('session-joined-replan', 'agent-joined-replan');
     const replacementAdapterId = 'adapter-after-join';
     const replacementOwnerInstanceId = ctx.ownerInstanceId;
     const foreignOwnerInstanceId = 'foreign-holder-after-join';
     const foreign = await ctx.seedAgent('session-joined-foreign', 'agent-joined-foreign');
-    const holder = await ctx.bus.request(SessionOwnershipStorageSubjects.claim, {
+    const holder = await ctx.bus.request(call, SessionOwnershipStorageSubjects.claim, {
       machineId: MACHINE_ID,
       adapterId: replacementAdapterId,
       adapterName: agent.adapterName,
@@ -138,13 +140,13 @@ describe('reserved rehydrate owner routing', () => {
       joinedAttemptChangedRow = resolve;
     });
     runExclusiveStart(agent.agentId, async () => {
-      await ctx.bus.request(AgentStorageSubjects.updateRuntime, {
+      await ctx.bus.request(call, AgentStorageSubjects.updateRuntime, {
         agentId: agent.agentId,
         adapterId: replacementAdapterId,
         runtimeOwner: { machineId: MACHINE_ID, instanceId: 'persisted-owner-after-join' },
       });
-      await ctx.bus.request(AgentStorageSubjects.updateStatus, { agentId: agent.agentId, status: 'starting' });
-      await ctx.bus.request(AgentStorageSubjects.updateStatus, { agentId: agent.agentId, status: 'dead' });
+      await ctx.bus.request(call, AgentStorageSubjects.updateStatus, { agentId: agent.agentId, status: 'starting' });
+      await ctx.bus.request(call, AgentStorageSubjects.updateStatus, { agentId: agent.agentId, status: 'dead' });
       joinedAttemptChangedRow?.();
       await joinedAttemptReleased;
       return 'no-connector';

@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { IAccountCredentialStore, IAccountMetadataStore } from './interfaces/account-store.js';
 import type { RawCredential } from './interfaces/credential-source.js';
 import type { CredentialSourceWithOptionalLabel } from './handlers/credential-tracker-types.js';
@@ -13,6 +14,7 @@ import { isUsageAuthInvalidForFingerprint } from './utils/usage-auth-state.js';
  * Refreshes the access token when the usage-auth state indicates the stored
  * credential has been rejected by the upstream API. Writes refreshed tokens
  * back to the client's native store when the account is active.
+ * @param call - Call context of the usage fetch that needs the credential
  * @param clientId - The client identifier
  * @param accountId - The account the credential must still belong to
  * @param source - Credential source for the target client
@@ -21,13 +23,14 @@ import { isUsageAuthInvalidForFingerprint } from './utils/usage-auth-state.js';
  * @returns Prepared credential outcome, or null when the account is not found
  */
 export async function prepareUsageCredential(
+  call: CallContext,
   clientId: string,
   accountId: string,
   source: CredentialSourceWithOptionalLabel,
   metadataStore: IAccountMetadataStore,
   credentialStore: IAccountCredentialStore,
 ): Promise<UsagePreparedCredential | null> {
-  const account = await getStoredAccount(metadataStore, credentialStore, clientId, accountId);
+  const account = await getStoredAccount(call, metadataStore, credentialStore, clientId, accountId);
   if (!account) {
     console.warn(
       `[AccountManager] ${new Date().toISOString()} prepareUsageCredential ${clientId}:${accountId} — account not found`,
@@ -80,7 +83,7 @@ export async function prepareUsageCredential(
   account.credential = credential;
   account.metadata = mergeSourceAccountMetadata(account.metadata, credential.metadata);
   account.fingerprint = credential.fingerprint;
-  await upsertStoredAccount(metadataStore, credentialStore, clientId, account);
+  await upsertStoredAccount(call, metadataStore, credentialStore, clientId, account);
 
   return { status: 'ready', credential, changed: true };
 }

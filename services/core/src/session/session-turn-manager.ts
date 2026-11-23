@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { SessionSubjects, type MessageOutcome, type TurnInitiator } from '@makaio/contracts';
 import { TurnStorageSubjects } from './turns/index.js';
 import { Turn } from './entities/turn.js';
@@ -118,7 +119,7 @@ export class SessionTurnManager {
   public constructor(private readonly bus: IMakaioBus) {
     this.assistantPersistenceBarrier = new AssistantPersistenceBarrier(
       bus,
-      (turnId) => this.findTurnForCompletion(turnId),
+      (_call, turnId) => this.findTurnForCompletion(turnId),
       TURN_COMPLETION_PERSISTENCE_TIMEOUT_MS,
     );
   }
@@ -133,6 +134,7 @@ export class SessionTurnManager {
    * Concurrent sends either join the existing turn or await the same reserved
    * creation. They can never each create and overwrite a turn after storage
    * assignment has awaited.
+   * @param call - Call context of the handled message whose send is acquiring this turn.
    * @param sessionId - Session receiving the message.
    * @param agentIds - Agents participating when a new turn is needed.
    * @param initiator - Turn origin metadata for a new turn.
@@ -140,14 +142,15 @@ export class SessionTurnManager {
    * @returns Existing or newly created routable turn plus its acquisition mode.
    */
   public async acquireTurn(
+    call: CallContext,
     sessionId: string,
     agentIds: string[],
     initiator?: TurnInitiator,
     turnId?: string,
   ): Promise<TurnAcquisition> {
-    await this.retryRetainedCompletionsForSession(sessionId);
+    await this.retryRetainedCompletionsForSession(call, sessionId);
     const acquisition = await this.turnSlots.acquire(sessionId, (reservation) =>
-      this.createReservedTurn(reservation, agentIds, initiator, turnId),
+      this.createReservedTurn(call, reservation, agentIds, initiator, turnId),
     );
     if (agentIds.some((agentId) => !acquisition.turn.hasAgent(agentId))) {
       throw new Error(
@@ -163,11 +166,12 @@ export class SessionTurnManager {
    * Attach uses this before starting its idle agent, so an initial-message
    * attach is rejected before it can create a second provider lifecycle for a
    * session already routing work.
+   * @param call - Call context of the handled message reserving this slot.
    * @param sessionId - Session whose next turn slot is reserved.
    * @returns Opaque reservation consumed by {@link createReservedTurn}.
    */
-  public async reserveTurn(sessionId: string): Promise<TurnReservation> {
-    await this.retryRetainedCompletionsForSession(sessionId);
+  public async reserveTurn(call: CallContext, sessionId: string): Promise<TurnReservation> {
+    await this.retryRetainedCompletionsForSession(call, sessionId);
     return this.turnSlots.reserve(sessionId);
   }
 
@@ -183,6 +187,7 @@ export class SessionTurnManager {
    * Atomically acquire a routable turn and admit the complete message fanout.
    * When a concurrent terminal transition wins, acquisition retries rather than
    * returning a turn whose completion can no longer see this message.
+   * @param call - Call context of the handled message being admitted.
    * @param sessionId - Session receiving the message.
    * @param agentIds - Immutable participant subset targeted by the message.
    * @param messageId - Stable message identity.
@@ -191,6 +196,7 @@ export class SessionTurnManager {
    * @returns Prepared admission lease after first-message ordering is satisfied.
    */
   public async acquireMessageAdmission(
+    call: CallContext,
     sessionId: string,
     agentIds: string[],
     messageId: string,
@@ -198,7 +204,7 @@ export class SessionTurnManager {
     turnId?: string,
   ): Promise<PreparedTurnMessageAdmissionLease> {
     for (;;) {
-      const acquisition = await this.acquireTurn(sessionId, agentIds, initiator, turnId);
+      const acquisition = await this.acquireTurn(call, sessionId, agentIds, initiator, turnId);
       const admission = this.turnSlots.tryAdmitMessage(acquisition.turn, messageId, agentIds);
       if (!admission) continue;
       const preparation = this.turnSlots.beginPreparation(acquisition.turn);
@@ -233,6 +239,7 @@ export class SessionTurnManager {
    * Calls `TurnStorageSubjects.create` via `requestOptional`. If no storage
    * handler is registered (ephemeral mode), generates a synthetic UUID turn ID
    * and a per-session incrementing turn number.
+   * @param call - Call context of the handled message creating this turn.
    * @param reservation - Exclusive slot claim returned by {@link reserveTurn}.
    * @param agentIds - Agents participating in the new turn.
    * @param initiator - Turn origin metadata (user, plugin, system).
@@ -240,6 +247,7 @@ export class SessionTurnManager {
    * @returns Newly created and activated turn.
    */
   public async createReservedTurn(
+    call: CallContext,
     reservation: TurnReservation,
     agentIds: string[],
     initiator?: TurnInitiator,
@@ -248,7 +256,7 @@ export class SessionTurnManager {
     const { sessionId } = reservation;
 
     try {
-      const createResult = await this.bus.requestOptional(TurnStorageSubjects.create, {
+      const createResult = await this.bus.requestOptional(call, TurnStorageSubjects.create, {
         sessionId,
         ...(turnId !== undefined && { turnId }),
         ...(initiator !== undefined && { initiator }),
@@ -290,6 +298,7 @@ export class SessionTurnManager {
    * Calls `TurnStorageSubjects.create` via `requestOptional`. If no storage
    * handler is registered (ephemeral mode), generates a synthetic UUID turn ID
    * and a per-session incrementing turn number.
+   * @param call - Call context of the handled message creating this turn.
    * @param sessionId - Session the turn belongs to
    * @param agentIds - Agents participating in this turn
    * @param initiator - Turn origin metadata (user, plugin, system)
@@ -297,12 +306,13 @@ export class SessionTurnManager {
    * @returns The newly created and activated Turn entity
    */
   public async createTurn(
+    call: CallContext,
     sessionId: string,
     agentIds: string[],
     initiator?: TurnInitiator,
     turnId?: string,
   ): Promise<Turn> {
-    return this.createReservedTurn(await this.reserveTurn(sessionId), agentIds, initiator, turnId);
+    return this.createReservedTurn(call, await this.reserveTurn(call, sessionId), agentIds, initiator, turnId);
   }
 
   /**
@@ -312,7 +322,7 @@ export class SessionTurnManager {
    * @param turn - Newly created active turn to discard
    */
   public discardActiveTurn(turn: Turn): void {
-    if (!this.clearActiveRoutingTurn(turn)) {
+    if (!this.turnSlots.clearActive(turn)) {
       return;
     }
     this.usageAccumulators.delete(turn.turnId);
@@ -326,17 +336,18 @@ export class SessionTurnManager {
    * step fails. No provider turn has been accepted in either case, so the
    * manager can terminalize the turn directly without waiting for assistant
    * persistence.
+   * @param call - Call context of the handled message whose setup failed.
    * @param turn - Active turn whose setup failed before provider dispatch
    * @param error - Durable error code to store on the terminal turn
    */
-  public async failActiveTurnBeforeDispatch(turn: Turn, error: string): Promise<void> {
+  public async failActiveTurnBeforeDispatch(call: CallContext, turn: Turn, error: string): Promise<void> {
     const active = this.turnSlots.getActive(turn.sessionId);
     if (active?.turnId !== turn.turnId) {
       return;
     }
     const result = { success: false, errors: [error] };
     this.beginFinalization(turn, result, 'setup');
-    await this.completeTurn(turn, result);
+    await this.completeTurn(call, turn, result);
   }
 
   /**
@@ -345,23 +356,15 @@ export class SessionTurnManager {
    * Concurrent sends may have claimed the turn by the time their sibling's
    * append fails. Those turns remain routable; callers that own the entire
    * pre-dispatch sequence should use {@link failActiveTurnBeforeDispatch}.
+   * @param call - Call context of the handled message whose setup failed.
    * @param turn - Newly created active turn whose setup failed before any message claimed it
    * @param error - Durable error code to store on the terminal turn
    */
-  public async failActiveTurnSetup(turn: Turn, error: string): Promise<void> {
+  public async failActiveTurnSetup(call: CallContext, turn: Turn, error: string): Promise<void> {
     if (turn.messageIds.length > 0 || turn.hasPendingMessageAppends) {
       return;
     }
-    await this.failActiveTurnBeforeDispatch(turn, error);
-  }
-
-  /**
-   * Remove a turn from the active routing index when it is no longer routable.
-   * @param turn - Turn to remove when it still owns the session slot
-   * @returns Whether the turn owned and cleared the active routing slot
-   */
-  private clearActiveRoutingTurn(turn: Turn): boolean {
-    return this.turnSlots.clearActive(turn);
+    await this.failActiveTurnBeforeDispatch(call, turn, error);
   }
 
   private composeAdmissionWithPreparation(
@@ -372,10 +375,10 @@ export class SessionTurnManager {
       completePreparation: (lease) => this.turnSlots.completePreparation(lease),
       failPreparation: (lease, error) => this.turnSlots.failPreparation(lease, error),
       beginSetupFailure: (current, result) => this.beginFinalization(current.turn, result, 'setup'),
-      finalizeSetupFailure: async (current, result) => this.completeTurn(current.turn, result),
-      finalizeCompletedLedger: async (current, result) => {
+      finalizeSetupFailure: async (call, current, result) => this.completeTurn(call, current.turn, result),
+      finalizeCompletedLedger: async (call, current, result) => {
         this.beginFinalization(current.turn, result, 'normal');
-        await this.completeTurn(current.turn, result);
+        await this.completeTurn(call, current.turn, result);
       },
     });
   }
@@ -417,14 +420,15 @@ export class SessionTurnManager {
    * `turn.completed` lifecycle row is appended to `session_events`. Successful
    * message writes and the lifecycle row are therefore durable before consumers
    * observe `session.turn.completed`.
+   * @param call - Call context of the handled message whose completion closes this turn's ledger.
    * @param turn - The turn to complete
    * @param result - Turn result (success status and error messages)
    * @returns Promise resolved after durable finalization and emission.
    */
-  public async completeTurn(turn: Turn, result: TurnCompletionResult): Promise<void> {
+  public async completeTurn(call: CallContext, turn: Turn, result: TurnCompletionResult): Promise<void> {
     const existing = this.completionPromises.get(turn.turnId);
     if (existing) return await existing;
-    const completion = this.completeTurnInternal(turn, result);
+    const completion = this.completeTurnInternal(call, turn, result);
     this.completionPromises.set(turn.turnId, completion);
     try {
       await completion;
@@ -433,7 +437,7 @@ export class SessionTurnManager {
     }
   }
 
-  private async completeTurnInternal(turn: Turn, result: TurnCompletionResult): Promise<void> {
+  private async completeTurnInternal(call: CallContext, turn: Turn, result: TurnCompletionResult): Promise<void> {
     if (this.completingTurnIds.has(turn.turnId)) {
       return;
     }
@@ -448,15 +452,15 @@ export class SessionTurnManager {
     let turnStorageHandled = this.pendingTerminalCompletions.get(turn.turnId) ?? false;
     try {
       if (!this.pendingTerminalCompletions.has(turn.turnId)) {
-        const completion = await persistTurnCompletion(this.bus, turn, terminalResult, completedUsage, 'active');
+        const completion = await persistTurnCompletion(call, this.bus, turn, terminalResult, completedUsage, 'active');
         turnStorageHandled = completion.handled;
         if (!completion.transitioned) {
-          this.clearActiveRoutingTurn(turn);
+          this.turnSlots.clearActive(turn);
           this.clearCompletionState(turn, usageAccumulator);
           return;
         }
         this.pendingTerminalCompletions.set(turn.turnId, turnStorageHandled);
-        completedUsage = await flushBufferedTurnUsage({
+        completedUsage = await flushBufferedTurnUsage(call, {
           bus: this.bus,
           turn,
           result: terminalResult,
@@ -482,13 +486,13 @@ export class SessionTurnManager {
       // unhandled turn storage implies unhandled message storage and there is
       // nothing to wait for (zero added latency).
       if (turnStorageHandled && !this.setupFinalizingTurnIds.has(turn.turnId)) {
-        await this.assistantPersistenceBarrier.waitFor(turn);
+        await this.assistantPersistenceBarrier.waitFor(call, turn);
       }
       // Close usage admission before the final drain. Completion correlation
       // remains in completingTurns for an explicit lifecycle retry, but that
       // retry must not reopen the terminal usage snapshot.
       this.closedUsageAdmissions.add(turn.turnId);
-      completedUsage = await flushBufferedTurnUsage({
+      completedUsage = await flushBufferedTurnUsage(call, {
         bus: this.bus,
         turn,
         result: terminalResult,
@@ -508,7 +512,7 @@ export class SessionTurnManager {
       };
 
       // Lifecycle row persists before consumers see the event (persist-before-emit).
-      await appendSessionLifecycleEvent(this.bus, {
+      await appendSessionLifecycleEvent(call, this.bus, {
         type: 'turn.completed',
         sessionId: turn.sessionId,
         eventId: `turn.completed:${turn.turnId}`,
@@ -516,7 +520,7 @@ export class SessionTurnManager {
       });
       lifecycleAppended = true;
 
-      await this.bus.emit(SessionSubjects.turn.completed, completedPayload);
+      await this.bus.emit(call, SessionSubjects.turn.completed, completedPayload);
     } catch (error) {
       if (lifecycleAppended) {
         this.clearCompletionState(turn, usageAccumulator);
@@ -538,15 +542,16 @@ export class SessionTurnManager {
 
   /**
    * Retry a retained non-routable completion after durable storage failed.
+   * @param call - Call context of the handled message whose send is retrying this completion.
    * @param turnId - Identifier of the finalizing turn to retry.
    */
-  public async retryTurnCompletion(turnId: string): Promise<void> {
+  public async retryTurnCompletion(call: CallContext, turnId: string): Promise<void> {
     const retainedTurn = this.completingTurns.get(turnId);
     const retainedResult = this.pendingTerminalResults.get(turnId);
     if (retainedTurn === undefined || retainedResult === undefined) {
       throw new Error(`Turn ${turnId} has no retryable completion`);
     }
-    await this.completeTurn(retainedTurn, retainedResult);
+    await this.completeTurn(call, retainedTurn, retainedResult);
   }
 
   /**
@@ -554,16 +559,17 @@ export class SessionTurnManager {
    *
    * A provider normally emits one terminal event, so an ordinary later send is
    * the reachable owner trigger for a completion whose storage response failed.
+   * @param call - Call context of the handled message about to acquire a new routable turn.
    * @param sessionId - Session about to acquire a new routable turn.
    */
-  public async retryRetainedCompletionsForSession(sessionId: string): Promise<void> {
+  public async retryRetainedCompletionsForSession(call: CallContext, sessionId: string): Promise<void> {
     await this.turnSlots.awaitFinalization(sessionId, async () => {
       for (const turn of [...this.completingTurns.values()].filter(
         (candidate) => candidate.sessionId === sessionId && this.setupFinalizingTurnIds.has(candidate.turnId),
       )) {
         const inFlight = this.completionPromises.get(turn.turnId);
         if (inFlight) await inFlight;
-        else if (!this.completingTurnIds.has(turn.turnId)) await this.retryTurnCompletion(turn.turnId);
+        else if (!this.completingTurnIds.has(turn.turnId)) await this.retryTurnCompletion(call, turn.turnId);
       }
       for (const turn of [...this.completingTurns.values()].filter(
         // A normal assistant-persistence barrier remains intentionally
@@ -578,7 +584,7 @@ export class SessionTurnManager {
         if (inFlight) {
           await inFlight;
         } else {
-          await this.retryTurnCompletion(turn.turnId);
+          await this.retryTurnCompletion(call, turn.turnId);
         }
       }
     });
@@ -665,6 +671,7 @@ export class SessionTurnManager {
    *
    * Marks the agent on the turn, emits `user_message.completed` for each
    * message in the turn, then calls `onTurnComplete` when all agents are done.
+   * @param call - Call context of the handled message reporting this completion.
    * @param agentId - The agent that completed
    * @param messageId - Exact admitted message identity.
    * @param outcome - Canonical provider or routing outcome.
@@ -674,6 +681,7 @@ export class SessionTurnManager {
    * @returns Promise resolved after pair observation and any terminal finalization.
    */
   public async recordAgentCompletion(
+    call: CallContext,
     agentId: string,
     messageId: string,
     outcome: MessageOutcome,
@@ -681,7 +689,7 @@ export class SessionTurnManager {
     onTurnComplete: TurnCompleteCallback,
     completionTurnId: string,
   ): Promise<void> {
-    await recordTurnPairCompletion(this.bus, this.completionEventHooks(), {
+    await recordTurnPairCompletion(call, this.bus, this.completionEventHooks(), {
       agentId,
       messageId,
       outcome,
@@ -699,7 +707,7 @@ export class SessionTurnManager {
       addUsage: (turn: Turn, event: AgentUsageEvent) => this.usageAccumulators.get(turn.turnId)?.add(event),
       bufferUsage: (turnId: string, event: AgentUsageEvent) => this.bufferUsageDuringCompletion(turnId, event),
       canRetry: (turnId: string) => this.pendingTerminalResults.has(turnId) && !this.completingTurnIds.has(turnId),
-      retry: async (turnId: string) => this.retryTurnCompletion(turnId),
+      retry: async (call: CallContext, turnId: string) => this.retryTurnCompletion(call, turnId),
       beginFinalization: (turn: Turn, result: TurnCompletionResult) => this.beginFinalization(turn, result, 'normal'),
     };
   }

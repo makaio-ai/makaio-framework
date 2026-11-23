@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { ClientHookProviderContractRegistry, ClientHookResponseRegistry } from '@makaio/subsystem-client';
 import type { ContributorDefinition } from '@makaio/contracts/client';
 import { createAppendEffect, createSessionTokenEffect } from '@makaio/contracts/client';
+import { createTestCall } from '@makaio/test-utils';
 import { composeHookResponse } from '../hook-response-composer.js';
 import { claudeCodeToolResponseContract, createApproveEffect, createDenyEffect } from '../hook-response-contracts.js';
 import { CLAUDE_CODE_HOOK_PRE_TOOL_USE } from '../schemas.js';
@@ -102,7 +103,7 @@ describe('composeHookResponse', () => {
       const { responseRegistry } = createRegistries();
       const payload = makePreToolUsePayload();
 
-      const result = await composeHookResponse(responseRegistry, payload);
+      const result = await composeHookResponse(createTestCall(), responseRegistry, payload);
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe('');
@@ -127,7 +128,7 @@ describe('composeHookResponse', () => {
       });
       const payload = makePreToolUsePayload();
 
-      const result = await composeHookResponse(responseRegistry, payload);
+      const result = await composeHookResponse(createTestCall(), responseRegistry, payload);
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
@@ -155,7 +156,7 @@ describe('composeHookResponse', () => {
       });
       const payload = makePreToolUsePayload();
 
-      const result = await composeHookResponse(responseRegistry, payload);
+      const result = await composeHookResponse(createTestCall(), responseRegistry, payload);
 
       expect(result.exitCode).toBe(0);
       const output = parsePreToolUseOutput(result.stdout);
@@ -195,7 +196,7 @@ describe('composeHookResponse', () => {
       });
 
       const payload = makePreToolUsePayload();
-      const result = await composeHookResponse(responseRegistry, payload);
+      const result = await composeHookResponse(createTestCall(), responseRegistry, payload);
 
       const output = parsePreToolUseOutput(result.stdout);
       expect(output.permissionDecision).toBe('deny');
@@ -222,7 +223,7 @@ describe('composeHookResponse', () => {
       });
 
       const payload = makePreToolUsePayload();
-      const result = await composeHookResponse(responseRegistry, payload);
+      const result = await composeHookResponse(createTestCall(), responseRegistry, payload);
 
       const output = parsePreToolUseOutput(result.stdout);
       // Context alone renders no permission decision; Claude Code's normal
@@ -259,7 +260,7 @@ describe('composeHookResponse', () => {
       });
 
       const payload = makePreToolUsePayload();
-      const result = await composeHookResponse(responseRegistry, payload);
+      const result = await composeHookResponse(createTestCall(), responseRegistry, payload);
 
       const output = parsePreToolUseOutput(result.stdout);
       expect(output).not.toHaveProperty('permissionDecision');
@@ -297,7 +298,7 @@ describe('composeHookResponse', () => {
       });
 
       const payload = makePreToolUsePayload();
-      const result = await composeHookResponse(responseRegistry, payload);
+      const result = await composeHookResponse(createTestCall(), responseRegistry, payload);
 
       const output = parsePreToolUseOutput(result.stdout);
       expect(output.permissionDecision).toBe('deny');
@@ -323,7 +324,7 @@ describe('composeHookResponse', () => {
       });
 
       const payload = makePreToolUsePayload();
-      const result = await composeHookResponse(responseRegistry, payload);
+      const result = await composeHookResponse(createTestCall(), responseRegistry, payload);
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe('');
@@ -350,7 +351,7 @@ describe('composeHookResponse', () => {
       });
 
       const payload = makePreToolUsePayload();
-      const result = await composeHookResponse(responseRegistry, payload);
+      const result = await composeHookResponse(createTestCall(), responseRegistry, payload);
 
       expect(result.exitCode).toBe(0);
       const output = parsePreToolUseOutput(result.stdout);
@@ -391,7 +392,7 @@ describe('composeHookResponse', () => {
       });
 
       const payload = makePreToolUsePayload();
-      const result = await composeHookResponse(responseRegistry, payload);
+      const result = await composeHookResponse(createTestCall(), responseRegistry, payload);
 
       const output = parsePreToolUseOutput(result.stdout);
       // Closed failure converts to deny — the approve effect is discarded
@@ -409,7 +410,7 @@ describe('composeHookResponse', () => {
         payload: { session_id: 'sess-test-001' },
       };
 
-      const result = await composeHookResponse(responseRegistry, payload);
+      const result = await composeHookResponse(createTestCall(), responseRegistry, payload);
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe('');
@@ -442,7 +443,7 @@ describe('composeHookResponse', () => {
         respond: () => ({ canonicalEffects: [createAppendEffect('repo conventions')] }),
       });
 
-      const result = await composeHookResponse(responseRegistry, sessionStartPayload());
+      const result = await composeHookResponse(createTestCall(), responseRegistry, sessionStartPayload());
 
       expect(JSON.parse(result.stdout)).toEqual({
         hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'repo conventions' },
@@ -463,7 +464,7 @@ describe('composeHookResponse', () => {
       });
 
       const diagnostics: Array<{ contributorId: string; message: string }> = [];
-      const result = await composeHookResponse(responseRegistry, sessionStartPayload(), {
+      const result = await composeHookResponse(createTestCall(), responseRegistry, sessionStartPayload(), {
         onDiagnostics: (entries) => diagnostics.push(...entries),
       });
 
@@ -495,7 +496,7 @@ describe('composeHookResponse', () => {
       });
 
       const payload = makePreToolUsePayload();
-      const result = await composeHookResponse(responseRegistry, payload);
+      const result = await composeHookResponse(createTestCall(), responseRegistry, payload);
 
       const output = parsePreToolUseOutput(result.stdout);
       expect(output.permissionDecision).toBe('deny');
@@ -534,7 +535,7 @@ describe('composeHookResponse', () => {
       });
 
       const payload = makePreToolUsePayload();
-      const result = await composeHookResponse(responseRegistry, payload);
+      const result = await composeHookResponse(createTestCall(), responseRegistry, payload);
 
       const output = parsePreToolUseOutput(result.stdout);
       expect(output.permissionDecision).toBe('allow');
@@ -561,7 +562,7 @@ describe('composeHookResponse', () => {
       });
 
       const payload = makePreToolUsePayload();
-      const result = await composeHookResponse(responseRegistry, payload);
+      const result = await composeHookResponse(createTestCall(), responseRegistry, payload);
 
       const output = parsePreToolUseOutput(result.stdout);
       expect(output.permissionDecision).toBe('allow');
@@ -662,7 +663,8 @@ describe('composeHookResponse', () => {
         respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-abc-123')] }),
       });
 
-      const result = await composeHookResponse(responseRegistry, makeSessionStartPayload('sess-abc'), {
+      const payload = makeSessionStartPayload('sess-abc');
+      const result = await composeHookResponse(createTestCall(), responseRegistry, payload, {
         onSessionToken: (token, scope) => {
           received.push({ token, scope });
         },
@@ -692,7 +694,7 @@ describe('composeHookResponse', () => {
         }),
       });
 
-      const result = await composeHookResponse(responseRegistry, makeSessionStartPayload(), {
+      const result = await composeHookResponse(createTestCall(), responseRegistry, makeSessionStartPayload(), {
         onSessionToken: () => undefined,
       });
 
@@ -721,7 +723,8 @@ describe('composeHookResponse', () => {
         respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-subagent-xyz')] }),
       });
 
-      await composeHookResponse(responseRegistry, makeSubagentStartPayload('sess-parent', 'agent-child'), {
+      const payload = makeSubagentStartPayload('sess-parent', 'agent-child');
+      await composeHookResponse(createTestCall(), responseRegistry, payload, {
         onSessionToken: (token) => {
           received.push(token);
         },
@@ -747,7 +750,7 @@ describe('composeHookResponse', () => {
         respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-should-drop')] }),
       });
 
-      await composeHookResponse(responseRegistry, makePreToolUsePayload(), {
+      await composeHookResponse(createTestCall(), responseRegistry, makePreToolUsePayload(), {
         onSessionToken: (token) => {
           received.push(token);
         },
@@ -782,7 +785,7 @@ describe('composeHookResponse', () => {
         respond: () => ({ canonicalEffects: [createSessionTokenEffect('tok-low')] }),
       });
 
-      await composeHookResponse(responseRegistry, makeSessionStartPayload(), {
+      await composeHookResponse(createTestCall(), responseRegistry, makeSessionStartPayload(), {
         onSessionToken: (token) => {
           capturedToken = token;
         },

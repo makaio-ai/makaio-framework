@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { TelemetryOtelSubjects, type SpanDraft } from '../contracts/index.js';
 import { SpanEnricherPipeline } from '../enrichers/pipeline.js';
 import { SpanEnricherRuleRegistry } from '../enrichers/registry.js';
@@ -34,7 +35,7 @@ describe('SpanEnricherPipeline', () => {
 
     const pipeline = new SpanEnricherPipeline({ bus: MakaioBus, registry });
 
-    await expect(pipeline.enrich(baseDraft)).resolves.toMatchObject({
+    await expect(pipeline.enrich(baseDraft, createTestCall())).resolves.toMatchObject({
       attributes: {
         'makaio.execution.id': 'wfx-1',
         'factory.pipeline': 'ai-first-engineering',
@@ -48,7 +49,7 @@ describe('SpanEnricherPipeline', () => {
       registry: new SpanEnricherRuleRegistry(),
     });
 
-    await expect(pipeline.enrich(baseDraft)).resolves.toEqual(baseDraft);
+    await expect(pipeline.enrich(baseDraft, createTestCall())).resolves.toEqual(baseDraft);
   });
 
   it('higher-priority rules win on conflicting attribute keys', async () => {
@@ -71,7 +72,7 @@ describe('SpanEnricherPipeline', () => {
     });
 
     const pipeline = new SpanEnricherPipeline({ bus: MakaioBus, registry });
-    const enriched = await pipeline.enrich(baseDraft);
+    const enriched = await pipeline.enrich(baseDraft, createTestCall());
     expect(enriched.attributes['shared.key']).toBe('high-wins');
   });
 
@@ -85,7 +86,7 @@ describe('SpanEnricherPipeline', () => {
         registry: new SpanEnricherRuleRegistry(),
       });
 
-      await expect(pipeline.enrich(baseDraft)).resolves.toMatchObject({
+      await expect(pipeline.enrich(baseDraft, createTestCall())).resolves.toMatchObject({
         attributes: {
           'github.repo': 'makaio-ai/makaio',
         },
@@ -114,19 +115,22 @@ describe('SpanEnricherPipeline', () => {
     });
 
     const pipeline = new SpanEnricherPipeline({ bus: MakaioBus, registry });
-    const enriched = await pipeline.enrich({
-      ...baseDraft,
-      spanId: 'llm:wfx-1:sess-1:0',
-      sessionId: 'sess-1',
-      namespace: 'agent',
-      subject: 'usage',
-      attributes: {
-        'llm.provider': 'openai',
-        'llm.model': 'gpt-5.4',
-        'llm.tokens.input': 12,
-        'llm.tokens.output': 8,
+    const enriched = await pipeline.enrich(
+      {
+        ...baseDraft,
+        spanId: 'llm:wfx-1:sess-1:0',
+        sessionId: 'sess-1',
+        namespace: 'agent',
+        subject: 'usage',
+        attributes: {
+          'llm.provider': 'openai',
+          'llm.model': 'gpt-5.4',
+          'llm.tokens.input': 12,
+          'llm.tokens.output': 8,
+        },
       },
-    });
+      createTestCall(),
+    );
 
     expect(enriched.attributes['gen_ai.provider.name']).toBe('openai');
     expect(enriched.attributes['gen_ai.request.model']).toBe('gpt-5.4');
@@ -150,11 +154,14 @@ describe('SpanEnricherPipeline', () => {
     });
 
     const pipeline = new SpanEnricherPipeline({ bus: MakaioBus, registry });
-    const enriched = await pipeline.enrich({
-      ...baseDraft,
-      spanId: 'llm:wfx-1:sess-1:0',
-      attributes: {},
-    });
+    const enriched = await pipeline.enrich(
+      {
+        ...baseDraft,
+        spanId: 'llm:wfx-1:sess-1:0',
+        attributes: {},
+      },
+      createTestCall(),
+    );
 
     expect(enriched.attributes).not.toHaveProperty('gen_ai.usage.cost');
   });
@@ -175,7 +182,7 @@ describe('SpanEnricherPipeline', () => {
     });
 
     const pipeline = new SpanEnricherPipeline({ bus: MakaioBus, registry });
-    const enriched = await pipeline.enrich(baseDraft);
+    const enriched = await pipeline.enrich(baseDraft, createTestCall());
 
     expect(enriched.attributes).not.toHaveProperty('invalid.object');
   });
@@ -197,15 +204,18 @@ describe('SpanEnricherPipeline', () => {
     });
 
     const pipeline = new SpanEnricherPipeline({ bus: MakaioBus, registry });
-    const enriched = await pipeline.enrich({
-      ...baseDraft,
-      spanId: 'llm:wfx-1:sess-1:0',
-      attributes: {
-        'llm.labels': ['openai', 'chat'],
-        'llm.model': 'gpt-5.4',
-        'llm.tokens.input': 12,
+    const enriched = await pipeline.enrich(
+      {
+        ...baseDraft,
+        spanId: 'llm:wfx-1:sess-1:0',
+        attributes: {
+          'llm.labels': ['openai', 'chat'],
+          'llm.model': 'gpt-5.4',
+          'llm.tokens.input': 12,
+        },
       },
-    });
+      createTestCall(),
+    );
 
     expect(enriched.attributes['valid.labels']).toEqual(['openai', 'chat']);
     expect(enriched.attributes).not.toHaveProperty('invalid.mixed');
@@ -227,7 +237,7 @@ describe('SpanEnricherPipeline', () => {
     });
     try {
       const pipeline = new SpanEnricherPipeline({ bus: MakaioBus, registry });
-      const enriched = await pipeline.enrich(baseDraft);
+      const enriched = await pipeline.enrich(baseDraft, createTestCall());
 
       expect(enriched.attributes['shared.key']).toBe('bus');
     } finally {

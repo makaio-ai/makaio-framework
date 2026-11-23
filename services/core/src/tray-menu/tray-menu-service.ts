@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { BaseService } from '@makaio/service-base';
 import {
   TrayMenuEntrySchema,
@@ -70,13 +71,13 @@ export class TrayMenuService extends BaseService {
       // Always emit changed, even for identical re-registrations. The tray
       // rebuild is a single native menu update — the cost of a no-op rebuild
       // is negligible compared to the fragility of deep-equality checks.
-      await this.emitChanged();
+      await this.emitChanged(ctx.call);
       ctx.setResult({ entryId: entry.entryId });
     });
 
     this.registerHandler(TrayMenuSubjects.unregister, async (ctx) => {
       const removed = this.entries.delete(this.entryKey(ctx.payload.packageName, ctx.payload.entryId));
-      if (removed) await this.emitChanged();
+      if (removed) await this.emitChanged(ctx.call);
       ctx.setResult({ removed });
     });
 
@@ -87,7 +88,7 @@ export class TrayMenuService extends BaseService {
       const key = this.groupKey(group.packageName, group.groupId);
       this.groups.set(key, group);
       this.groupEntryIds.set(key, entryIds);
-      await this.emitChanged();
+      await this.emitChanged(ctx.call);
       ctx.setResult({ groupId: group.groupId });
     });
 
@@ -95,7 +96,7 @@ export class TrayMenuService extends BaseService {
       const key = this.groupKey(ctx.payload.packageName, ctx.payload.groupId);
       const removed = this.groups.delete(key);
       this.groupEntryIds.delete(key);
-      if (removed) await this.emitChanged();
+      if (removed) await this.emitChanged(ctx.call);
       ctx.setResult({ removed });
     });
 
@@ -189,8 +190,8 @@ export class TrayMenuService extends BaseService {
     return entryIds;
   }
 
-  private async emitChanged(): Promise<void> {
-    await this.bus.emit(TrayMenuSubjects.changed, {});
+  private async emitChanged(call: CallContext): Promise<void> {
+    await this.bus.emit(call, TrayMenuSubjects.changed, {});
   }
 
   private entryKey(packageName: string, entryId: string): string {

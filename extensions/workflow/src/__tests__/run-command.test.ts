@@ -10,6 +10,7 @@ import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { WorkflowSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import type { WorkflowRunArgs } from '../run-command.js';
 import { handleWorkflowRun, resolvePayload, WorkflowRunArgsSchema } from '../run-command.js';
 import type { CommandContext } from '@makaio/kernel/cli';
@@ -91,6 +92,7 @@ function createContext(
   const setExitCodeSpy = vi.fn<(code: number) => void>();
   return {
     args,
+    call: createTestCall(),
     bus,
     output: createOutput(),
     signal,
@@ -228,7 +230,7 @@ describe('handleWorkflowRun with --payload', () => {
     const runPromise = handleWorkflowRun(ctx);
 
     // Emit execution.completed to unblock bus.once().
-    await bus.emit(WorkflowSubjects.execution.completed, {
+    await bus.emit(createTestCall(), WorkflowSubjects.execution.completed, {
       executionId: 'exec-1',
       workflowId: 'wf-test',
       totalDuration: 123,
@@ -261,7 +263,7 @@ describe('handleWorkflowRun with --payload', () => {
     try {
       const runPromise = handleWorkflowRun(ctx);
 
-      await bus.emit(WorkflowSubjects.execution.completed, {
+      await bus.emit(createTestCall(), WorkflowSubjects.execution.completed, {
         executionId: 'exec-abs-1',
         workflowId: 'wf-test',
         totalDuration: 100,
@@ -291,7 +293,7 @@ describe('handleWorkflowRun with --payload', () => {
     const ctx = createContext(bus, makeArgs({ file: '/tmp/workflow.mjs', payload: '{}' }));
     const runPromise = handleWorkflowRun(ctx);
 
-    await bus.emit(WorkflowSubjects.execution.completed, {
+    await bus.emit(createTestCall(), WorkflowSubjects.execution.completed, {
       executionId: 'exec-abs-2',
       workflowId: 'wf-test',
       totalDuration: 101,
@@ -387,7 +389,7 @@ describe('handleWorkflowRun with piped stdin', () => {
     const ctx = createContext(bus, makeArgs({ file: './wf.ts' }));
     const runPromise = handleWorkflowRun(ctx);
 
-    await bus.emit(WorkflowSubjects.execution.completed, {
+    await bus.emit(createTestCall(), WorkflowSubjects.execution.completed, {
       executionId: 'exec-stdin-1',
       workflowId: 'wf-test',
       totalDuration: 200,
@@ -452,7 +454,7 @@ describe('handleWorkflowRun in await-trigger mode', () => {
     const runPromise = handleWorkflowRun(ctx);
 
     await new Promise<void>((resolve) => setImmediate(resolve));
-    await bus.emit(WorkflowSubjects.execution.completed, {
+    await bus.emit(createTestCall(), WorkflowSubjects.execution.completed, {
       executionId: 'exec-await-1',
       workflowId: 'wf-test',
       totalDuration: 25,
@@ -510,13 +512,13 @@ describe('handleWorkflowRun with --verbose', () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     // Emit a step.started lifecycle event — subscription is now registered.
-    await bus.emit(WorkflowSubjects.step.started, {
+    await bus.emit(createTestCall(), WorkflowSubjects.step.started, {
       executionId: 'exec-verbose-1',
       stepId: 'step-1',
       stepType: 'station',
     });
 
-    await bus.emit(WorkflowSubjects.execution.completed, {
+    await bus.emit(createTestCall(), WorkflowSubjects.execution.completed, {
       executionId: 'exec-verbose-1',
       workflowId: 'wf-test',
       totalDuration: 50,
@@ -556,7 +558,7 @@ describe('handleWorkflowRun — execution.failed', () => {
     const ctx = createContext(bus, makeArgs({ file: './wf.ts', payload: '{}' }));
     const runPromise = handleWorkflowRun(ctx);
 
-    await bus.emit(WorkflowSubjects.execution.failed, {
+    await bus.emit(createTestCall(), WorkflowSubjects.execution.failed, {
       executionId: 'exec-fail-1',
       workflowId: 'wf-test',
       error: 'step "fetch" timed out',
@@ -574,7 +576,7 @@ describe('handleWorkflowRun — execution.failed', () => {
     const cleanupRunFile = bus.on(WorkflowSubjects.runFile, async (ctx) => {
       runFileRequests += 1;
       ctx.setResult({ executionId: 'exec-handler-fail' });
-      await bus.emit(WorkflowSubjects.execution.failed, {
+      await bus.emit(ctx.call, WorkflowSubjects.execution.failed, {
         executionId: 'exec-handler-fail',
         workflowId: 'wf-test',
         error: 'runtime handler emitted failure',
@@ -599,14 +601,14 @@ describe('handleWorkflowRun — execution.failed', () => {
     const runPromise = handleWorkflowRun(ctx);
 
     // Emit failure for a different execution — should be ignored.
-    await bus.emit(WorkflowSubjects.execution.failed, {
+    await bus.emit(createTestCall(), WorkflowSubjects.execution.failed, {
       executionId: 'exec-other',
       workflowId: 'wf-test',
       error: 'unrelated failure',
     });
 
     // Now complete the target execution normally.
-    await bus.emit(WorkflowSubjects.execution.completed, {
+    await bus.emit(createTestCall(), WorkflowSubjects.execution.completed, {
       executionId: 'exec-target',
       workflowId: 'wf-test',
       totalDuration: 42,
@@ -630,7 +632,7 @@ describe('handleWorkflowRun — execution.failed', () => {
     const cleanupRunFile = bus.on(WorkflowSubjects.runFile, async (ctx) => {
       // Emit the failure event before setResult() so it lands in the buffer
       // before the executionId is known to the waiter.
-      await bus.emit(WorkflowSubjects.execution.failed, {
+      await bus.emit(ctx.call, WorkflowSubjects.execution.failed, {
         executionId: 'exec-early-fail',
         workflowId: 'wf-test',
         error: 'crashed before start',

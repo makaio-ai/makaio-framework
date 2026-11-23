@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { TurnStorageSubjects } from '@makaio/services-core/turn';
 import type { AgentUsageTotals } from './types.js';
 
@@ -18,19 +19,21 @@ import type { AgentUsageTotals } from './types.js';
  *
  * Uses `requestOptional` so callers that run without a session service
  * (e.g. isolated adapter tests) receive zero-valued totals rather than errors.
+ * @param call - Call context of the rehydrate request this query serves
  * @param bus - Global bus used to query turn storage
  * @param sessionId - Makaio session ID whose completed turns are queried
  * @param agentId - Agent whose per-turn usage contributions are summed
  * @returns Restored usage totals; all zeros when no turn history is found
  */
 export async function restoreAgentUsageFromTurns(
+  call: CallContext,
   bus: IMakaioBus,
   sessionId: string,
   agentId: string,
 ): Promise<AgentUsageTotals> {
   const totals: AgentUsageTotals = { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0 };
 
-  const result = await bus.requestOptional(TurnStorageSubjects.getBySession, {
+  const result = await bus.requestOptional(call, TurnStorageSubjects.getBySession, {
     sessionId,
     status: 'completed',
   });

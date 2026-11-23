@@ -7,6 +7,7 @@ import type {
   TransitionRuleDefinition,
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { ZodError } from 'zod';
 import { TransitionActionRegistry, WORKFLOW_START_ACTION_TYPE } from '../transition-action-registry.js';
 import { TransitionRuleRegistry } from '../transition-rule-registry.js';
@@ -65,6 +66,7 @@ describe('TransitionActionRegistry', () => {
     } satisfies TransitionEvaluationContext;
 
     await registry.dispatch(
+      createTestCall(),
       {
         type: WORKFLOW_START_ACTION_TYPE,
         input: {
@@ -115,6 +117,7 @@ describe('TransitionActionRegistry', () => {
     } satisfies TransitionEvaluationContext;
 
     await registry.dispatch(
+      createTestCall(),
       {
         type: WORKFLOW_START_ACTION_TYPE,
         input: {

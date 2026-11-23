@@ -7,7 +7,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { HostSubjects } from '@makaio/contracts';
+import { type CallContext, HostSubjects } from '@makaio/contracts';
 import type { WindowManagerState } from '@makaio/host-shared';
 
 export interface ElectrobunWindowsBusHandlerDeps {
@@ -15,10 +15,11 @@ export interface ElectrobunWindowsBusHandlerDeps {
   dashboardRegistrationId: string;
   /**
    * Create a host window for the supplied registration.
+   * @param call - Call context of the handled window request.
    * @param registrationId - Qualified window registration ID to open.
    * @returns The created Electrobun window ID.
    */
-  createWindow: (registrationId: string) => number;
+  createWindow: (call: CallContext, registrationId: string) => number;
   /**
    * Find an existing host window by registration ID.
    * @param registrationId - Qualified window registration ID to look up.
@@ -33,8 +34,11 @@ export interface ElectrobunWindowsBusHandlerDeps {
   focusWindow: (windowId: number) => boolean;
   /** Focus the most recent window and return its ID, or `null` when no window can be focused. */
   focusAnyWindow: () => number | null;
-  /** Open the default shell window. */
-  openDefaultWindow: () => number;
+  /**
+   * Open the default shell window.
+   * @param call - Call context of the handled focus request.
+   */
+  openDefaultWindow: (call: CallContext) => number;
   /**
    * Called once before the first window is created when upgrading from
    * background-only mode to regular (visible) mode.
@@ -66,7 +70,7 @@ export function registerElectrobunWindowsBusHandlers(
         ctx.setResult({ windowId: existing.windowId });
         return;
       }
-      const windowId = deps.createWindow(deps.dashboardRegistrationId);
+      const windowId = deps.createWindow(ctx.call, deps.dashboardRegistrationId);
       ctx.setResult({ windowId });
     } catch (error) {
       console.error('[electrobun] Failed to open dashboard:', error instanceof Error ? error.message : error);
@@ -84,7 +88,7 @@ export function registerElectrobunWindowsBusHandlers(
         ctx.setResult({ focused: true, windowId: focusedId });
         return;
       }
-      const windowId = deps.openDefaultWindow();
+      const windowId = deps.openDefaultWindow(ctx.call);
       ctx.setResult({ focused: true, windowId });
     } catch (error) {
       console.error('[electrobun] Failed to focus app window:', error instanceof Error ? error.message : error);

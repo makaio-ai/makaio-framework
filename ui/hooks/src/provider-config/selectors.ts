@@ -10,6 +10,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { ProtocolId } from '@makaio/contracts/provider';
 import {
   AdapterSubsystemSubjects,
@@ -50,17 +51,19 @@ function toSummaryView(
 
 /**
  * List provider-config summaries enriched for UI consumption.
+ * @param call - Call context forwarded to subsystem and storage requests.
  * @param bus - Bus used to load subsystem configs and provider definitions.
  * @param options - Optional list filter.
  * @returns Enriched provider-config summaries.
  */
 export async function listProviderConfigSummaryViews(
+  call: CallContext,
   bus: IMakaioBus,
   options: { enabled?: boolean } = {},
 ): Promise<ProviderConfigSummaryView[]> {
   const [{ configs }, { providers }] = await Promise.all([
-    bus.request(AdapterSubsystemSubjects.listProviderConfigs, options),
-    bus.request(ProviderStorageSubjects.list, {}),
+    bus.request(call, AdapterSubsystemSubjects.listProviderConfigs, options),
+    bus.request(call, ProviderStorageSubjects.list, {}),
   ]);
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
 
@@ -69,33 +72,37 @@ export async function listProviderConfigSummaryViews(
 
 /**
  * Load one provider-config detail view enriched for UI consumption.
+ * @param call - Call context forwarded to subsystem and storage requests.
  * @param bus - Bus used to load the safe config summary and provider metadata.
  * @param id - Provider-config identifier.
  * @returns Enriched detail view or `null` when missing.
  */
 export async function getProviderConfigDetailView(
+  call: CallContext,
   bus: IMakaioBus,
   id: string,
 ): Promise<ProviderConfigDetailView | null> {
-  const { config } = await bus.request(AdapterSubsystemSubjects.getProviderConfig, { id });
+  const { config } = await bus.request(call, AdapterSubsystemSubjects.getProviderConfig, { id });
   if (config === null) {
     return null;
   }
 
-  const { provider } = await bus.request(ProviderStorageSubjects.get, { id: config.definitionId });
+  const { provider } = await bus.request(call, ProviderStorageSubjects.get, { id: config.definitionId });
   return toSummaryView(config, provider);
 }
 
 /**
  * List adapter-deliverable authentication methods for one provider definition.
+ * @param call - Call context forwarded to the adapter subsystem request.
  * @param bus - Bus used to query the adapter subsystem.
  * @param definitionId - Provider definition whose auth methods are requested.
  * @returns Safe method declarations with fields/source hints but no credential refs.
  */
 export async function listCompatibleAuthOptions(
+  call: CallContext,
   bus: IMakaioBus,
   definitionId: string,
 ): Promise<CompatibleAuthOption[]> {
-  const { options } = await bus.request(AdapterSubsystemSubjects.listCompatibleAuthOptions, { definitionId });
+  const { options } = await bus.request(call, AdapterSubsystemSubjects.listCompatibleAuthOptions, { definitionId });
   return options;
 }

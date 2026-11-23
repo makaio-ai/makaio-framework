@@ -1,5 +1,11 @@
 import type { OnOptions } from '../types/index.js';
-import type { SubjectDefinition, HandlerForSubjectDefinition, OptionalResult } from '@makaio/core';
+import type {
+  CallContext,
+  SubjectDefinition,
+  HandlerForSubjectDefinition,
+  OptionalResult,
+  WildcardSubject,
+} from '@makaio/core';
 
 /**
  * Encrypted point-to-point communication channel over the bus.
@@ -9,6 +15,11 @@ import type { SubjectDefinition, HandlerForSubjectDefinition, OptionalResult } f
  * Observers, middleware, and transport loggers only see opaque `{ iv, data }` payloads.
  * Channel messages ride the normal bus transport layer unless the caller
  * explicitly constrains routing via the underlying bus configuration.
+ *
+ * A channel belongs to the carrier of the bus instance that opened it. Every send
+ * (`emit`, `request`, `requestOptional`) has the two forms of the bus sends: with the
+ * call context of a handled message first (principal and attestation of `call`), or
+ * without one (the carrier sends for itself). The caller is always that carrier.
  */
 export interface IDirectChannel {
   /** Unique channel identifier (used in channel-scoped subject namespaces). */
@@ -45,13 +56,45 @@ export interface IDirectChannel {
    * transports the channel was opened over. Routing therefore belongs to the
    * channel, and an option bag that could override it would let a caller send a
    * peer-encrypted payload somewhere the peer is not.
+   *
+   * Accepts event subjects only (no request and no wildcard subjects). Channel subjects stay usable.
+   *
+   * Two forms: call form `(call, subject, payload)` for a handled message (principal and
+   * attestation come from `call`, the caller is the channel's carrier), own form
+   * `(subject, payload)` when the carrier sends for itself.
+   * @param call - Call context of the send: the `ctx.call` of the message being handled
    * @param subject - Subject definition
    * @param payload - Event payload (will be encrypted before dispatch)
    */
-  emit<Subject extends SubjectDefinition>(subject: Subject, payload: Subject['$meta']['payload']): Promise<void>;
+  emit<
+    Subject extends SubjectDefinition,
+    IsRequest = Subject['$meta']['isRequest'],
+    IsWildcard = Subject['subject'] extends WildcardSubject ? true : false,
+  >(
+    call: CallContext,
+    subject: IsRequest extends false ? (IsWildcard extends false ? Subject : never) : never,
+    payload: Subject['$meta']['payload'],
+  ): Promise<void>;
+  /**
+   * Own form of {@link IDirectChannel.emit}: the carrier of the channel sends for itself.
+   * @param subject - Subject definition
+   * @param payload - Event payload (will be encrypted before dispatch)
+   */
+  emit<
+    Subject extends SubjectDefinition,
+    IsRequest = Subject['$meta']['isRequest'],
+    IsWildcard = Subject['subject'] extends WildcardSubject ? true : false,
+  >(
+    subject: IsRequest extends false ? (IsWildcard extends false ? Subject : never) : never,
+    payload: Subject['$meta']['payload'],
+  ): Promise<void>;
 
   /**
    * Encrypted request-response to the peer.
+   *
+   * Two forms: call form `(call, subject, payload, options?)` for a handled message,
+   * own form `(subject, payload, options?)` when the carrier sends for itself.
+   * @param call - Call context of the send: the `ctx.call` of the message being handled
    * @param subject - Subject definition (must be a request subject)
    * @param payload - Request payload (will be encrypted before dispatch)
    * @param options - Request options (timeout, etc.)
@@ -59,24 +102,55 @@ export interface IDirectChannel {
    * @throws \{ChannelClosedError\} If the channel is closed
    * @throws \{NoHandlerError\} If the peer has no handler for this subject
    */
-  request<Subject extends SubjectDefinition>(
-    subject: Subject,
+  request<Subject extends SubjectDefinition, IsRequest = Subject['$meta']['isRequest']>(
+    call: CallContext,
+    subject: IsRequest extends true ? Subject : never,
     payload: Subject['$meta']['payload']['request'],
     options?: { timeout?: number },
-  ): Promise<Subject['$meta']['payload']['response']>;
+  ): Promise<IsRequest extends true ? Subject['$meta']['payload']['response'] : never>;
+  /**
+   * Own form of {@link IDirectChannel.request}: the carrier of the channel sends for itself.
+   * @param subject - Subject definition (must be a request subject)
+   * @param payload - Request payload (will be encrypted before dispatch)
+   * @param options - Request options (timeout, etc.)
+   * @returns Decrypted response
+   * @throws \{ChannelClosedError\} If the channel is closed
+   * @throws \{NoHandlerError\} If the peer has no handler for this subject
+   */
+  request<Subject extends SubjectDefinition, IsRequest = Subject['$meta']['isRequest']>(
+    subject: IsRequest extends true ? Subject : never,
+    payload: Subject['$meta']['payload']['request'],
+    options?: { timeout?: number },
+  ): Promise<IsRequest extends true ? Subject['$meta']['payload']['response'] : never>;
 
   /**
    * Encrypted request-response, returns `handled: false` instead of throwing NoHandlerError.
+   *
+   * Two forms, as {@link IDirectChannel.request}.
+   * @param call - Call context of the send: the `ctx.call` of the message being handled
    * @param subject - Subject definition (must be a request subject)
    * @param payload - Request payload
    * @param options - Request options
    * @returns OptionalResult wrapping the response
    */
-  requestOptional<Subject extends SubjectDefinition>(
-    subject: Subject,
+  requestOptional<Subject extends SubjectDefinition, IsRequest = Subject['$meta']['isRequest']>(
+    call: CallContext,
+    subject: IsRequest extends true ? Subject : never,
     payload: Subject['$meta']['payload']['request'],
     options?: { timeout?: number },
-  ): Promise<OptionalResult<Subject['$meta']['payload']['response']>>;
+  ): Promise<OptionalResult<IsRequest extends true ? Subject['$meta']['payload']['response'] : never>>;
+  /**
+   * Own form of {@link IDirectChannel.requestOptional}: the carrier of the channel sends for itself.
+   * @param subject - Subject definition (must be a request subject)
+   * @param payload - Request payload
+   * @param options - Request options
+   * @returns OptionalResult wrapping the response
+   */
+  requestOptional<Subject extends SubjectDefinition, IsRequest = Subject['$meta']['isRequest']>(
+    subject: IsRequest extends true ? Subject : never,
+    payload: Subject['$meta']['payload']['request'],
+    options?: { timeout?: number },
+  ): Promise<OptionalResult<IsRequest extends true ? Subject['$meta']['payload']['response'] : never>>;
 
   /**
    * Close the channel. Notifies peer, rejects pending requests,

@@ -1,12 +1,15 @@
 import os from 'node:os';
 import { describeChangeReasoningInPlaceContract } from '@makaio/ai-adapters-stream-session/testing';
+import { createTestBusInstance } from '@makaio/test-utils';
 import { AnthropicSdkConnector } from '../connector.js';
 import { AnthropicSdkConnectorNamespace } from '../namespaces/index.js';
 
 describeChangeReasoningInPlaceContract('AnthropicSdkConnector', async () => {
-  const bus = await AnthropicSdkConnectorNamespace.scopedBus();
+  const globalBus = createTestBusInstance();
+  const bus = await AnthropicSdkConnectorNamespace.scopedBus(globalBus);
   return new AnthropicSdkConnector({
     bus,
+    globalBus,
     adapterId: 'adapter-test',
     adapterName: 'anthropic-sdk',
     agentId: 'agent-test',

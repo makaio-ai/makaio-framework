@@ -16,7 +16,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
 import type { MakaioSessionEvent, NativeLocalityVerdict, SessionEventType } from '@makaio/contracts';
-import type { ExtractSubjectPayload } from '@makaio/core';
+import type { CallContext, ExtractSubjectPayload } from '@makaio/core';
 import { SessionEventStorageSubjects } from './session-events/index.js';
 
 /**
@@ -65,11 +65,13 @@ export interface SessionLifecycleEventArgs {
  * It MUST NOT be used for `branch.merged` / `squash` — those handlers
  * (merge-handler, compress-handler) own their own idempotent persistence
  * with stable eventIds; double-writing here would duplicate rows.
+ * @param call - Call context of the operation this row belongs to
  * @param bus - Bus used to reach session-event storage
  * @param args - Event envelope fields (type, sessionId, payload, optional eventId/timestamp)
  * @param transform - Optional transform applied before persistence (return null to skip)
  */
 export async function appendSessionLifecycleEvent(
+  call: CallContext,
   bus: IMakaioBus,
   args: SessionLifecycleEventArgs,
   transform?: EventTransform,
@@ -89,7 +91,7 @@ export async function appendSessionLifecycleEvent(
     return;
   }
 
-  await bus.requestOptional(SessionEventStorageSubjects.append, { event });
+  await bus.requestOptional(call, SessionEventStorageSubjects.append, { event });
 }
 
 /**
@@ -111,18 +113,23 @@ export type SessionUserMessageSentPayload = ExtractSubjectPayload<typeof Session
  * (`ingestCompletedTurn`) is the one other sanctioned emitter — it batches
  * both lifecycle rows before emitting and must not be rerouted through this
  * helper (doing so would reorder its persist-before-emit batch).
+ * @param call - Call context of the operation that starts the turn
  * @param bus - Bus used for lifecycle persistence and event emission
  * @param payload - The exact `session.turn.started` payload to persist and emit
  */
-export async function emitSessionTurnStarted(bus: IMakaioBus, payload: SessionTurnStartedPayload): Promise<void> {
-  await appendSessionLifecycleEvent(bus, {
+export async function emitSessionTurnStarted(
+  call: CallContext,
+  bus: IMakaioBus,
+  payload: SessionTurnStartedPayload,
+): Promise<void> {
+  await appendSessionLifecycleEvent(call, bus, {
     type: 'turn.started',
     sessionId: payload.sessionId,
     eventId: `turn.started:${payload.turnId}`,
     payload,
   });
   try {
-    await bus.emit(SessionSubjects.turn.started, payload);
+    await bus.emit(call, SessionSubjects.turn.started, payload);
   } catch (error) {
     console.error(`[SessionLifecycle] Failed to emit turn.started for turn ${payload.turnId}:`, error);
   }
@@ -133,15 +140,17 @@ export async function emitSessionTurnStarted(bus: IMakaioBus, payload: SessionTu
  *
  * User-message consumers are observers of the already durable turn start. A
  * rejection cannot make the turn pre-start again or prevent provider routing.
+ * @param call - Call context of the operation that sends the message.
  * @param bus - Bus used for event emission.
  * @param payload - Exact user-message payload to observe.
  */
 export async function emitSessionUserMessageSent(
+  call: CallContext,
   bus: IMakaioBus,
   payload: SessionUserMessageSentPayload,
 ): Promise<void> {
   try {
-    await bus.emit(SessionSubjects.user_message.sent, payload);
+    await bus.emit(call, SessionSubjects.user_message.sent, payload);
   } catch (error) {
     console.error(`[SessionLifecycle] Failed to emit user_message.sent for turn ${payload.turnId}:`, error);
   }
@@ -173,6 +182,7 @@ export function registerSessionLifecycleEventWriters(bus: IMakaioBus, transform?
   const cleanups: Array<() => void> = [
     bus.on(SessionSubjects.agent.added, async (ctx) => {
       await appendSubscriptionLifecycleEvent(
+        ctx.call,
         bus,
         { type: 'agent.added', sessionId: ctx.payload.sessionId, payload: ctx.payload },
         transform,
@@ -180,6 +190,7 @@ export function registerSessionLifecycleEventWriters(bus: IMakaioBus, transform?
     }),
     bus.on(SessionSubjects.branch.created, async (ctx) => {
       await appendSubscriptionLifecycleEvent(
+        ctx.call,
         bus,
         { type: 'branch.created', sessionId: ctx.payload.sessionId, payload: ctx.payload },
         transform,
@@ -199,17 +210,19 @@ export function registerSessionLifecycleEventWriters(bus: IMakaioBus, transform?
  * Unlike turn lifecycle emit sites, subscription-owned audit rows are
  * best-effort side effects. A storage outage must not reject the operation
  * that already emitted `session.agent.added` or `session.branch.created`.
+ * @param call - Call context of the source event's handler
  * @param bus - Bus used for lifecycle persistence
  * @param args - Event envelope fields
  * @param transform - Optional transform applied before persistence
  */
 async function appendSubscriptionLifecycleEvent(
+  call: CallContext,
   bus: IMakaioBus,
   args: SessionLifecycleEventArgs,
   transform?: EventTransform,
 ): Promise<void> {
   try {
-    await appendSessionLifecycleEvent(bus, args, transform);
+    await appendSessionLifecycleEvent(call, bus, args, transform);
   } catch (error) {
     console.warn('[session-lifecycle-events] Failed to persist subscription lifecycle event', {
       type: args.type,
@@ -248,10 +261,15 @@ export interface LocalityDegradeEventArgs {
  * history injection. The helper is best-effort: a storage outage must not
  * prevent the degrade flow from proceeding. Native verdicts are silently
  * ignored (they are not degradations).
+ * @param call - Call context of the operation whose degradation is announced
  * @param bus - Bus for persistence and live emission
  * @param args - Degrade event fields
  */
-export async function emitLocalityDegradeEvent(bus: IMakaioBus, args: LocalityDegradeEventArgs): Promise<void> {
+export async function emitLocalityDegradeEvent(
+  call: CallContext,
+  bus: IMakaioBus,
+  args: LocalityDegradeEventArgs,
+): Promise<void> {
   const { verdict } = args;
   // Native verdicts are not degradations — nothing to emit.
   if (verdict.kind === 'native') {
@@ -284,7 +302,7 @@ export async function emitLocalityDegradeEvent(bus: IMakaioBus, args: LocalityDe
   // Persist-then-emit: row is durable before consumers observe the event.
   // Best-effort: storage failures do not block the degrade flow.
   try {
-    await appendSessionLifecycleEvent(bus, {
+    await appendSessionLifecycleEvent(call, bus, {
       type: 'locality.degraded',
       sessionId: args.sessionId,
       eventId,
@@ -303,7 +321,7 @@ export async function emitLocalityDegradeEvent(bus: IMakaioBus, args: LocalityDe
   // into an unhandled rejection at the degrade site (all callers use
   // fire-and-forget `void emitLocalityDegradeEvent(...)`).
   try {
-    await bus.emit(SessionSubjects.locality.degraded, payload);
+    await bus.emit(call, SessionSubjects.locality.degraded, payload);
   } catch (error) {
     console.warn('[session-lifecycle-events] Failed to emit live locality.degraded event', {
       sessionId: args.sessionId,

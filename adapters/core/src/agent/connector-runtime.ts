@@ -1,4 +1,5 @@
 import type { ScopedBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { ConnectorTeardownResult } from '@makaio/contracts';
 import type { MessageHandle } from '../message-handle/index.js';
 import type { AIAgentConnector } from '../connector/index.js';
@@ -40,14 +41,19 @@ export interface CreateConnectorRuntimeOptions<
   TConnector extends AIAgentConnector<TBus>,
   TConfig extends BaseAgentConnectorConfig<TBus> = BaseAgentConnectorConfig<TBus>,
 > {
+  /** Call context of the request that initializes or replaces this connector. */
+  readonly call: CallContext;
   /** Refs-only config emitted by the common adapter factory. */
   readonly config: BoundAdapterRuntimeConfig<TBus, TConfig>;
   /** Adapter connector constructor. */
   readonly connectorFactory: (config: ResolvedAdapterRuntimeConfig<TBus, TConfig>) => TConnector | Promise<TConnector>;
   /** Optional user-message callback attached only after auth preparation. */
   readonly onMessageSent?: (handle: MessageHandle) => void;
-  /** Sink for connector-owned provider-session rotations; see `BaseAgentConnectorConfig`. */
-  readonly onAdapterSessionMoved?: () => Promise<void>;
+  /**
+   * Sink for connector-owned provider-session rotations; see `BaseAgentConnectorConfig`.
+   * @param call - Call context of the message whose turn caused the move
+   */
+  readonly onAdapterSessionMoved?: (call: CallContext) => Promise<void>;
   /** Trusted host-local auth preparer; defaults to DirectChannel + client lease. */
   readonly prepareAuthRuntime?: AdapterAuthRuntimePreparer<TBus, TConfig>;
 }
@@ -62,7 +68,7 @@ export async function createConnectorRuntime<
   TConnector extends AIAgentConnector<TBus>,
   TConfig extends BaseAgentConnectorConfig<TBus>,
 >(options: CreateConnectorRuntimeOptions<TBus, TConnector, TConfig>): Promise<ConnectorRuntimeHandle<TConnector>> {
-  const prepared = await (options.prepareAuthRuntime ?? prepareAdapterAuthRuntime)(options.config);
+  const prepared = await (options.prepareAuthRuntime ?? prepareAdapterAuthRuntime)(options.call, options.config);
   try {
     const connector = await options.connectorFactory({
       ...prepared.config,
@@ -72,6 +78,7 @@ export async function createConnectorRuntime<
     return { connector, ...(prepared.lease !== undefined && { lease: prepared.lease }) };
   } catch (error) {
     await releaseAfterFailure(
+      options.call,
       prepared.lease,
       error,
       'Connector creation and client config lease rollback both failed.',
@@ -98,10 +105,12 @@ export async function createConnectorRuntime<
  * Both failures stay observable in the aggregated `closeError`; neither hides the
  * other. This function no longer rejects — a teardown reports, and a caller that
  * has to interpret an exception to learn a class is a caller that will guess.
+ * @param call - Call context of the teardown releasing this runtime
  * @param runtime - Connector and explicit lease pair
  * @returns The class this teardown may claim, with the failure that capped it
  */
 export async function closeConnectorRuntime<TConnector extends Pick<AIAgentConnector, 'close'>>(
+  call: CallContext,
   runtime: ConnectorRuntimeHandle<TConnector>,
 ): Promise<TeardownReport> {
   // One discriminated outcome rather than a result and an error that a reader —
@@ -109,14 +118,14 @@ export async function closeConnectorRuntime<TConnector extends Pick<AIAgentConne
   // failed, and nothing else is representable.
   let close: { readonly reported: ConnectorTeardownResult } | { readonly failed: unknown };
   try {
-    close = { reported: await runtime.connector.close() };
+    close = { reported: await runtime.connector.close(call) };
   } catch (error) {
     close = { failed: error };
   }
 
   let releaseError: unknown;
   try {
-    await runtime.lease?.release();
+    await runtime.lease?.release(call);
   } catch (error) {
     releaseError = error;
   }
@@ -145,10 +154,12 @@ export async function closeConnectorRuntime<TConnector extends Pick<AIAgentConne
 
 /**
  * Roll back partial handler setup and connector runtime ownership.
+ * @param call - Call context of the initialization being rolled back
  * @param options - Connector runtime, registered handlers, and triggering failure
  * @returns Never; the triggering failure or aggregate rollback failure is rethrown
  */
 export async function rollbackAgentInitialization<TConnector extends Pick<AIAgentConnector, 'close'>>(
+  call: CallContext,
   options: AgentInitializationRollbackOptions<TConnector>,
 ): Promise<never> {
   const cleanupErrors: unknown[] = [];
@@ -163,7 +174,7 @@ export async function rollbackAgentInitialization<TConnector extends Pick<AIAgen
   // failure out of the report rather than catching it. A weak-but-not-failed
   // class is deliberately not aggregated: `detached` means the handle is gone
   // and there is nothing for the caller to compensate.
-  const closeReport = await closeConnectorRuntime(options.runtime);
+  const closeReport = await closeConnectorRuntime(call, options.runtime);
   if (closeReport.closeError !== undefined) {
     cleanupErrors.push(closeReport.closeError);
   }
@@ -179,11 +190,13 @@ export async function rollbackAgentInitialization<TConnector extends Pick<AIAgen
 
 /**
  * Roll back a created lease while preserving the triggering failure.
+ * @param call - Call context of the connector creation being rolled back
  * @param lease - Lease to release, when auth preparation created one
  * @param primaryError - Failure that triggered rollback
  * @param message - Aggregate diagnostic when rollback also fails
  */
 async function releaseAfterFailure(
+  call: CallContext,
   lease: AdapterAuthLeaseHandle | undefined,
   primaryError: unknown,
   message: string,
@@ -192,7 +205,7 @@ async function releaseAfterFailure(
     return;
   }
   try {
-    await lease.release();
+    await lease.release(call);
   } catch (releaseError) {
     throw new AggregateError([primaryError, releaseError], message, { cause: primaryError });
   }

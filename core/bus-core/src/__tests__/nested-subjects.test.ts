@@ -106,7 +106,7 @@ describe('Nested Subjects', () => {
         received.push(payload);
       });
 
-      await MakaioBus.emit(_Nested1Subjects.tool.use, { toolName: 'bash' });
+      await MakaioBus.emit(MakaioBus.own('root'), _Nested1Subjects.tool.use, { toolName: 'bash' });
 
       expect(received).toEqual([{ toolName: 'bash' }]);
       expect(_Nested1Subjects.tool.use.$meta.namespace).toBe('nested1');
@@ -120,7 +120,7 @@ describe('Nested Subjects', () => {
         received.push(payload);
       });
 
-      await MakaioBus.emit(_Nested2Subjects.stream.chunk.partial, {
+      await MakaioBus.emit(MakaioBus.own('root'), _Nested2Subjects.stream.chunk.partial, {
         content: 'hello',
       });
 
@@ -136,7 +136,7 @@ describe('Nested Subjects', () => {
         received.push(payload);
       });
 
-      await MakaioBus.emit(_Nested3Subjects.agent.tool.execution.started, {
+      await MakaioBus.emit(MakaioBus.own('root'), _Nested3Subjects.agent.tool.execution.started, {
         toolName: 'bash',
       });
 
@@ -153,7 +153,7 @@ describe('Nested Subjects', () => {
         expect(upperName).toBe('BASH');
       });
 
-      await MakaioBus.emit(_Nested1Subjects.tool.use, { toolName: 'bash' });
+      await MakaioBus.emit(MakaioBus.own('root'), _Nested1Subjects.tool.use, { toolName: 'bash' });
     });
   });
 
@@ -166,7 +166,7 @@ describe('Nested Subjects', () => {
         received.push(payload);
       });
 
-      await scopedBus.emit(_ScopedSubjects.tool.use, { toolName: 'bash' });
+      await scopedBus.emit(MakaioBus.own('root'), _ScopedSubjects.tool.use, { toolName: 'bash' });
 
       expect(received).toEqual([{ toolName: 'bash' }]);
     });
@@ -179,7 +179,7 @@ describe('Nested Subjects', () => {
         received.push(payload);
       });
 
-      await scopedBus.emit(_ScopedSubjects.stream.chunk.partial, { content: 'hello' });
+      await scopedBus.emit(MakaioBus.own('root'), _ScopedSubjects.stream.chunk.partial, { content: 'hello' });
 
       expect(received).toEqual([{ content: 'hello' }]);
     });
@@ -200,7 +200,7 @@ describe('Nested Subjects', () => {
       });
 
       // Emit via scoped bus
-      await scopedBus.emit(_ScopedSubjects.tool.use, { toolName: 'bash' });
+      await scopedBus.emit(MakaioBus.own('root'), _ScopedSubjects.tool.use, { toolName: 'bash' });
 
       // Both should receive
       expect(scopedReceived).toEqual([{ toolName: 'bash' }]);
@@ -216,7 +216,7 @@ describe('Nested Subjects', () => {
         expect(length).toBe(4);
       });
 
-      await scopedBus.emit(_ScopedSubjects.tool.use, { toolName: 'bash' });
+      await scopedBus.emit(MakaioBus.own('root'), _ScopedSubjects.tool.use, { toolName: 'bash' });
     });
   });
 
@@ -228,7 +228,7 @@ describe('Nested Subjects', () => {
         }
       });
 
-      const result = await MakaioBus.request(_RequestNestedSubjects.tool.execute, {
+      const result = await MakaioBus.request(MakaioBus.own('root'), _RequestNestedSubjects.tool.execute, {
         toolName: 'bash',
       });
 
@@ -264,7 +264,7 @@ describe('Nested Subjects', () => {
        * Type assertions are required until the type system limitation is resolved.
        * At runtime, the payload is validated against the Zod schema, so type safety is maintained.
        */
-      const result = await scopedBus.request(_ScopedRequestSubjects.tool.execute, {
+      const result = await scopedBus.request(MakaioBus.own('root'), _ScopedRequestSubjects.tool.execute, {
         toolName: 'bash',
       } as never);
 
@@ -278,7 +278,7 @@ describe('Nested Subjects', () => {
         }
       });
 
-      const result = await MakaioBus.request(_RequestNested2Subjects.test.create.requested, {
+      const result = await MakaioBus.request(MakaioBus.own('root'), _RequestNested2Subjects.test.create.requested, {
         taskName: 'test',
       });
 
@@ -297,7 +297,7 @@ describe('Nested Subjects', () => {
         received.push(payload);
       });
 
-      await MakaioBus.emit(_AdapterClaudeCodeSubjects.tool.use, { toolName: 'bash' });
+      await MakaioBus.emit(MakaioBus.own('root'), _AdapterClaudeCodeSubjects.tool.use, { toolName: 'bash' });
 
       expect(received).toEqual([{ toolName: 'bash' }]);
       expect(_AdapterClaudeCodeSubjects.tool.use.$meta.namespace).toBe('adapter:claudeCode');
@@ -312,7 +312,7 @@ describe('Nested Subjects', () => {
         received.push(payload);
       });
 
-      await scopedBus.emit(_AdapterOpenAISubjects.tool.call, { functionName: 'get_weather' });
+      await scopedBus.emit(MakaioBus.own('root'), _AdapterOpenAISubjects.tool.call, { functionName: 'get_weather' });
 
       expect(received).toEqual([{ functionName: 'get_weather' }]);
     });
@@ -327,7 +327,7 @@ describe('Nested Subjects', () => {
         received.push(payload);
       });
 
-      await MakaioBus.emit(_AdapterClaudeCodeSdkSubjects.stream.thinking.content, {
+      await MakaioBus.emit(MakaioBus.own('root'), _AdapterClaudeCodeSdkSubjects.stream.thinking.content, {
         text: 'analyzing...',
       });
 
@@ -345,7 +345,7 @@ describe('Nested Subjects', () => {
         expect(hasPrefix).toBe(true);
       });
 
-      await scopedBus.emit(_AdapterOpenAISubjects.tool.call, { functionName: 'get_weather' });
+      await scopedBus.emit(MakaioBus.own('root'), _AdapterOpenAISubjects.tool.call, { functionName: 'get_weather' });
     });
   });
 
@@ -378,11 +378,11 @@ describe('Nested Subjects', () => {
 
     it('verifies runtime validation catches wrong payload shape on global bus', async () => {
       await expectValidationError(
-        () => MakaioBus.emit(_Nested1Subjects.tool.use, { wrongField: 'value' } as never),
+        () => MakaioBus.emit(MakaioBus.own('root'), _Nested1Subjects.tool.use, { wrongField: 'value' } as never),
         'missing field',
       );
       await expectValidationError(
-        () => MakaioBus.emit(_Nested1Subjects.tool.use, { toolName: 123 } as never),
+        () => MakaioBus.emit(MakaioBus.own('root'), _Nested1Subjects.tool.use, { toolName: 123 } as never),
         'wrong type',
       );
     });
@@ -395,11 +395,14 @@ describe('Nested Subjects', () => {
       });
 
       await expectValidationError(
-        () => MakaioBus.request(_RequestNestedSubjects.tool.execute, { wrongField: 'value' } as never),
+        () =>
+          MakaioBus.request(MakaioBus.own('root'), _RequestNestedSubjects.tool.execute, {
+            wrongField: 'value',
+          } as never),
         'missing field',
       );
       await expectValidationError(
-        () => MakaioBus.request(_RequestNestedSubjects.tool.execute, { toolName: 456 } as never),
+        () => MakaioBus.request(MakaioBus.own('root'), _RequestNestedSubjects.tool.execute, { toolName: 456 } as never),
         'wrong type',
       );
     });

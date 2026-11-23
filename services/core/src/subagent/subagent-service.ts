@@ -1,9 +1,9 @@
 // NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines: ["error", { "max": 630, "skipBlankLines": true, "skipComments": true }] */
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { BaseService } from '@makaio/service-base';
-import type { BaseMessageContext, ExtractSubjectPayload } from '@makaio/core';
-import { isPeerAuthorizedToDelegate, type SpawnDelegationAllowSet } from './spawn-delegation.js';
+import type { BaseMessageContext, CallContext, ExtractSubjectPayload } from '@makaio/core';
+import { isCallerAuthorizedToDelegate, type SpawnDelegationAllowSet } from './spawn-delegation.js';
 import {
   AgentSubjects,
   SubagentSubjects,
@@ -68,6 +68,12 @@ type AgentCompletePayload = ExtractSubjectPayload<typeof AgentSubjects.complete>
 type SessionTurnStartedPayload = ExtractSubjectPayload<typeof SessionSubjects.turn.started>;
 type SessionTurnCompletedPayload = ExtractSubjectPayload<typeof SessionSubjects.turn.completed>;
 
+/** Execution-target resolution fields derived from an explicit config value or the parent session. */
+interface ExecutionTargetResolutionParams {
+  executionTargetId?: string;
+  targetWorkingDirectory?: string;
+}
+
 /** Inputs for the atomic adapter-attach and initial-task startup phase. */
 interface SpawnAttachParams {
   subagentId: string;
@@ -113,15 +119,15 @@ export class SubagentService extends BaseService {
    * Creates a new SubagentService instance.
    * @param bus - The event bus for inter-service communication
    * @param constraints - Subagent execution constraints
-   * @param delegationAllowSet - Set of peer identities permitted to request
-   *   spawn or execute on this node from a remote origin. Authenticated
-   *   `workflow-execution` peers are allowed by identity; this set is for
-   *   additional delegated peer kinds.
+   * @param delegationAllowSet - Set of caller identities (`kind:id`) permitted to request
+   *   spawn or execute on this node from a remote origin. Callers of the
+   *   `makaio.job-run` kind are allowed by kind; this set is for additional
+   *   delegated caller kinds.
    * @param requestHandlerPriority - Priority for runtime-owned subagent lifecycle RPCs.
    * @param executionOwnerId - Stable identity used to bind spawned execution to this service instance.
    */
   public constructor(
-    bus: IMakaioBus = MakaioBus,
+    bus: IMakaioBus,
     constraints: SubagentConstraints = DEFAULT_CONSTRAINTS,
     private readonly delegationAllowSet: SpawnDelegationAllowSet = new Set(),
     private readonly requestHandlerPriority = 0,
@@ -132,24 +138,24 @@ export class SubagentService extends BaseService {
   }
 
   /**
-   * Grant an authenticated peer permission to delegate spawn/execute requests.
+   * Grant a caller permission to delegate spawn/execute requests.
    *
    * Adds the canonical `kind:id` key to the allow-set so subsequent remote
-   * calls from this peer pass the delegation guard.
-   * @param kind - Peer kind (e.g. `'workflow-execution'`)
-   * @param id - Peer identifier
+   * calls from this caller pass the delegation guard.
+   * @param kind - Caller party kind (e.g. `'makaio.machine'`)
+   * @param id - Caller identifier
    */
   public grantDelegation(kind: string, id: string): void {
     this.delegationAllowSet.add(`${kind}:${id}`);
   }
 
   /**
-   * Revoke delegation permission for an authenticated peer.
+   * Revoke delegation permission for a caller.
    *
    * Removes the canonical `kind:id` key from the allow-set. Subsequent
-   * remote calls from this peer will be denied by the delegation guard.
-   * @param kind - Peer kind (e.g. `'workflow-execution'`)
-   * @param id - Peer identifier
+   * remote calls from this caller will be denied by the delegation guard.
+   * @param kind - Caller party kind (e.g. `'makaio.machine'`)
+   * @param id - Caller identifier
    */
   public revokeDelegation(kind: string, id: string): void {
     this.delegationAllowSet.delete(`${kind}:${id}`);
@@ -165,7 +171,7 @@ export class SubagentService extends BaseService {
         return;
       }
       // Fire-and-forget: don't block the spawner
-      this.handleSpawned(ctx.payload).catch((err) => {
+      this.handleSpawned(ctx.call, ctx.payload).catch((err) => {
         console.error('[SubagentService] handleSpawned error:', err);
       });
     });
@@ -175,23 +181,23 @@ export class SubagentService extends BaseService {
       if (!this.isRemoteDelegationAllowed(ctx)) {
         return;
       }
-      const result = await this.handleExecute(ctx.payload);
+      const result = await this.handleExecute(ctx.call, ctx.payload);
       ctx.setResult(result);
     });
 
     // Route toChild messages to child sessions
     this.registerHandler(SubagentSubjects.toChild, async (ctx) => {
-      await this.handleToChild(ctx.payload);
+      await this.handleToChild(ctx.call, ctx.payload);
     });
 
     // Clean up on completion
     this.registerHandler(SubagentSubjects.completed, async (ctx) => {
-      await this.handleCompleted(ctx.payload.subagentId);
+      await this.handleCompleted(ctx.call, ctx.payload.subagentId);
     });
 
     // Clean up on cancellation
     this.registerHandler(SubagentSubjects.cancelled, async (ctx) => {
-      await this.handleCancelled(ctx.payload.subagentId);
+      await this.handleCancelled(ctx.call, ctx.payload.subagentId);
     });
 
     // Detect dead child adapter processes
@@ -201,11 +207,11 @@ export class SubagentService extends BaseService {
 
     // Terminalize turn-mode subagents when their first agent turn completes
     this.registerHandler(AgentSubjects.complete, async (ctx) => {
-      await this.handleAgentComplete(ctx.payload);
+      await this.handleAgentComplete(ctx.call, ctx.payload);
     });
 
     this.registerHandler(SessionSubjects.turn.completed, async (ctx) => {
-      await this.handleSessionTurnCompleted(ctx.payload);
+      await this.handleSessionTurnCompleted(ctx.call, ctx.payload);
     });
 
     this.registerHandler(SessionSubjects.turn.started, (ctx) => {
@@ -267,7 +273,7 @@ export class SubagentService extends BaseService {
       manager: this.manager,
       bus: this.bus,
       executionOwnerId: this.executionOwnerId,
-      onCompletionCandidate: (subagentId) => this.finalizeSubagentIfReady(subagentId),
+      onCompletionCandidate: (call: CallContext, subagentId: string) => this.finalizeSubagentIfReady(call, subagentId),
     };
 
     // getStatus RPC - query subagent state
@@ -288,7 +294,7 @@ export class SubagentService extends BaseService {
           return;
         }
         const payload = SpawnSubagentRpcRequestSchema.parse(busCtx.payload);
-        const result = await handleSpawnRpc(ctx, payload);
+        const result = await handleSpawnRpc(busCtx.call, ctx, payload);
         busCtx.setResult(result);
       },
       { priority: this.requestHandlerPriority },
@@ -306,7 +312,7 @@ export class SubagentService extends BaseService {
 
     // send RPC - send message to subagent, optionally resolve pending
     this.registerHandler(SubagentSubjects.send, async (busCtx) => {
-      const result = await handleSendRpc(ctx, busCtx.payload);
+      const result = await handleSendRpc(busCtx.call, ctx, busCtx.payload);
       busCtx.setResult(result);
     });
 
@@ -314,7 +320,7 @@ export class SubagentService extends BaseService {
     this.registerHandler(
       SubagentSubjects.kill,
       async (busCtx) => {
-        const result = await handleKillRpc(ctx, busCtx.payload);
+        const result = await handleKillRpc(busCtx.call, ctx, busCtx.payload);
         busCtx.setResult(result);
       },
       { priority: this.requestHandlerPriority },
@@ -322,19 +328,19 @@ export class SubagentService extends BaseService {
 
     // reportProgress RPC - child reports progress
     this.registerHandler(SubagentSubjects.reportProgress, async (busCtx) => {
-      const result = await handleReportProgressRpc(ctx, busCtx.payload);
+      const result = await handleReportProgressRpc(busCtx.call, ctx, busCtx.payload);
       busCtx.setResult(result);
     });
 
     // requestInput RPC - child requests input from parent
     this.registerHandler(SubagentSubjects.requestInput, async (busCtx) => {
-      const result = await handleRequestInputRpc(ctx, busCtx.payload);
+      const result = await handleRequestInputRpc(busCtx.call, ctx, busCtx.payload);
       busCtx.setResult(result);
     });
 
     // completeTask RPC - child signals completion
     this.registerHandler(SubagentSubjects.completeTask, async (busCtx) => {
-      const result = await handleCompleteTaskRpc(ctx, busCtx.payload);
+      const result = await handleCompleteTaskRpc(busCtx.call, ctx, busCtx.payload);
       busCtx.setResult(result);
     });
 
@@ -353,10 +359,11 @@ export class SubagentService extends BaseService {
 
   /**
    * Handle spawned event - create session and start agent.
+   * @param call - Call context of the handled message the spawn belongs to
    * @param payload - Spawned event payload
    * @returns Error message on failure, undefined on success
    */
-  private async handleSpawned(payload: SpawnedPayload): Promise<string | undefined> {
+  private async handleSpawned(call: CallContext, payload: SpawnedPayload): Promise<string | undefined> {
     const { subagentId, parentSessionId, task, spawningToolCallId } = payload;
     const existing = this.manager.get(subagentId);
     if (existing && existing.status !== 'spawning') {
@@ -368,7 +375,7 @@ export class SubagentService extends BaseService {
     this.spawningExecutions.add(subagentId);
 
     try {
-      return await this.executeSpawned(payload, parentSessionId, task, spawningToolCallId);
+      return await this.executeSpawned(call, payload, parentSessionId, task, spawningToolCallId);
     } finally {
       this.spawningExecutions.delete(subagentId);
     }
@@ -376,6 +383,7 @@ export class SubagentService extends BaseService {
 
   /**
    * Execute the single claimed spawn event for one subagent.
+   * @param call - Call context of the handled message the spawn belongs to
    * @param payload - Spawned event payload.
    * @param parentSessionId - Parent session that requested the subagent.
    * @param task - Task sent to the child agent.
@@ -383,6 +391,7 @@ export class SubagentService extends BaseService {
    * @returns Error message on failure, otherwise undefined.
    */
   private async executeSpawned(
+    call: CallContext,
     payload: SpawnedPayload,
     parentSessionId: string,
     task: string,
@@ -395,6 +404,7 @@ export class SubagentService extends BaseService {
 
     if (!adapterName) {
       return this.failSpawn(
+        call,
         subagentId,
         parentSessionId,
         'adapter_start',
@@ -412,26 +422,18 @@ export class SubagentService extends BaseService {
     }
 
     let resolvedExecutionTargetId: string | undefined;
-    let resolutionParams: Awaited<ReturnType<typeof this.buildExecutionTargetResolutionParams>>;
+    let resolutionParams: ExecutionTargetResolutionParams;
     try {
-      resolutionParams = await this.buildExecutionTargetResolutionParams(parentSessionId, config.executionTargetId);
-      const resolveResult = await this.bus.requestOptional(ExecutionTargetSubjects.resolve, resolutionParams);
       let executionTarget: ExecutionTarget;
-      if (resolveResult.handled) {
-        executionTarget = resolveResult.data.executionTarget;
-      } else if (resolutionParams.executionTargetId != null) {
-        // Explicit target requested but no resolver is registered — throwing
-        // here surfaces the misconfiguration rather than silently ignoring
-        // the caller's intent and running locally.
-        throw new Error(
-          `Execution target resolver unavailable for explicit target '${resolutionParams.executionTargetId}'`,
-        );
-      } else {
-        executionTarget = SUBAGENT_DEFAULT_LOCAL_TARGET;
-      }
+      ({ resolutionParams, executionTarget } = await this.resolveSpawnExecutionTarget(
+        call,
+        parentSessionId,
+        config.executionTargetId,
+      ));
 
       if (executionTarget.type !== 'local') {
         return this.failSpawn(
+          call,
           subagentId,
           parentSessionId,
           'adapter_start',
@@ -444,12 +446,13 @@ export class SubagentService extends BaseService {
       // stamped onto child sessions.
       resolvedExecutionTargetId = resolutionParams.executionTargetId ?? undefined;
     } catch (err) {
-      return this.failSpawn(subagentId, parentSessionId, 'adapter_start', err);
+      return this.failSpawn(call, subagentId, parentSessionId, 'adapter_start', err);
     }
 
     let sessionId: string;
     try {
       sessionId = await this.createChildSessionForSpawn(
+        call,
         subagentId,
         parentSessionId,
         config,
@@ -458,11 +461,11 @@ export class SubagentService extends BaseService {
         spawningToolCallId,
       );
     } catch (err) {
-      return this.failSpawn(subagentId, parentSessionId, 'session_create', err);
+      return this.failSpawn(call, subagentId, parentSessionId, 'session_create', err);
     }
 
     if (shouldAbort()) return undefined;
-    return this.attachSpawnedSubagent({
+    return this.attachSpawnedSubagent(call, {
       subagentId,
       parentSessionId,
       adapterName,
@@ -476,14 +479,15 @@ export class SubagentService extends BaseService {
 
   /**
    * Attach the child agent and atomically admit its initial task.
+   * @param call - Call context of the handled message the spawn belongs to
    * @param params - Resolved startup inputs and cancellation authority.
    * @returns Error message on failure, otherwise undefined.
    */
-  private async attachSpawnedSubagent(params: SpawnAttachParams): Promise<string | undefined> {
+  private async attachSpawnedSubagent(call: CallContext, params: SpawnAttachParams): Promise<string | undefined> {
     const { subagentId, parentSessionId, adapterName, config, sessionId, task, targetWorkingDirectory, shouldAbort } =
       params;
     try {
-      await attachSubagent(this.bus, {
+      await attachSubagent(call, this.bus, {
         subagentId,
         adapterName,
         config,
@@ -498,6 +502,7 @@ export class SubagentService extends BaseService {
       if (shouldAbort()) return undefined;
       const attachError = getSessionAgentAttachError(err);
       return this.failSpawn(
+        call,
         subagentId,
         parentSessionId,
         attachError?.stage === 'initial_message' ? 'agent_start' : 'adapter_start',
@@ -509,7 +514,37 @@ export class SubagentService extends BaseService {
   }
 
   /**
+   * Resolve the execution target for a subagent spawn.
+   * @param call - Call context of the handled message the spawn belongs to
+   * @param parentSessionId - Parent session used as fallback context
+   * @param executionTargetId - Optional explicit target override from subagent config
+   * @returns Resolution parameters together with the resolved execution target
+   * @throws Error when an explicit target is requested but no resolver is registered.
+   */
+  private async resolveSpawnExecutionTarget(
+    call: CallContext,
+    parentSessionId: string,
+    executionTargetId: string | undefined,
+  ): Promise<{ resolutionParams: ExecutionTargetResolutionParams; executionTarget: ExecutionTarget }> {
+    const resolutionParams = await this.buildExecutionTargetResolutionParams(call, parentSessionId, executionTargetId);
+    const resolveResult = await this.bus.requestOptional(call, ExecutionTargetSubjects.resolve, resolutionParams);
+    if (resolveResult.handled) {
+      return { resolutionParams, executionTarget: resolveResult.data.executionTarget };
+    }
+    if (resolutionParams.executionTargetId != null) {
+      // Explicit target requested but no resolver is registered — throwing
+      // here surfaces the misconfiguration rather than silently ignoring
+      // the caller's intent and running locally.
+      throw new Error(
+        `Execution target resolver unavailable for explicit target '${resolutionParams.executionTargetId}'`,
+      );
+    }
+    return { resolutionParams, executionTarget: SUBAGENT_DEFAULT_LOCAL_TARGET };
+  }
+
+  /**
    * Creates the child session and updates tracked subagent state.
+   * @param call - Call context of the handled message the spawn belongs to
    * @param subagentId - Subagent identifier
    * @param parentSessionId - Parent session identifier
    * @param config - Parsed subagent config
@@ -519,14 +554,16 @@ export class SubagentService extends BaseService {
    * @returns Created child session ID
    */
   private async createChildSessionForSpawn(
+    call: CallContext,
     subagentId: string,
     parentSessionId: string,
     config: SubagentConfig,
     executionTargetId: string | undefined,
-    resolutionParams: Awaited<ReturnType<typeof this.buildExecutionTargetResolutionParams>>,
+    resolutionParams: ExecutionTargetResolutionParams,
     spawningToolCallId: string | undefined,
   ): Promise<string> {
     const { sessionId } = await this.bus.request(
+      call,
       SessionSubjects.create,
       this.buildChildSessionCreatePayload(
         parentSessionId,
@@ -538,13 +575,14 @@ export class SubagentService extends BaseService {
     );
     this.manager.setChildSessionId(subagentId, sessionId);
     if (this.pendingChildSessionClose.has(subagentId)) {
-      await this.closeChildSession(subagentId);
+      await this.closeChildSession(call, subagentId);
     }
     return sessionId;
   }
 
   /**
    * Marks subagent spawn as failed and emits the lifecycle failure event.
+   * @param call - Call context of the handled message the spawn belongs to
    * @param subagentId - Subagent identifier
    * @param parentSessionId - Parent session identifier
    * @param phase - Spawn phase where failure occurred
@@ -553,6 +591,7 @@ export class SubagentService extends BaseService {
    * @throws AggregateError when child cleanup or failure publication also fails.
    */
   private async failSpawn(
+    call: CallContext,
     subagentId: string,
     parentSessionId: string,
     phase: SubagentExecutionFailed['phase'],
@@ -563,9 +602,9 @@ export class SubagentService extends BaseService {
 
     const [closeResult, publicationResult] = await Promise.allSettled([
       this.manager.get(subagentId)?.childSessionId !== undefined
-        ? this.requestChildSessionClose(subagentId)
+        ? this.requestChildSessionClose(call, subagentId)
         : Promise.resolve(),
-      this.emitExecutionFailed(subagentId, parentSessionId, phase, primaryFailure),
+      this.emitExecutionFailed(call, subagentId, parentSessionId, phase, primaryFailure),
     ]);
     const finalizationFailures: SubagentFailureFinalizationError[] = [];
     if (closeResult.status === 'rejected') {
@@ -589,19 +628,18 @@ export class SubagentService extends BaseService {
    * Priority:
    * 1. Explicit subagent `executionTargetId`
    * 2. Parent session stamped target + working directory
+   * @param call - Call context of the handled message the spawn belongs to
    * @param parentSessionId - Parent session used as fallback context.
    * @param executionTargetId - Optional explicit target override from subagent config.
    * @returns Resolution parameters for `ExecutionTargetSubjects.resolve`.
    */
   private async buildExecutionTargetResolutionParams(
+    call: CallContext,
     parentSessionId: string,
     executionTargetId?: string,
-  ): Promise<{
-    executionTargetId?: string;
-    targetWorkingDirectory?: string;
-  }> {
+  ): Promise<ExecutionTargetResolutionParams> {
     if (executionTargetId !== undefined) return { executionTargetId };
-    const { session: parentSession } = await this.bus.request(SessionStorageSubjects.get, {
+    const { session: parentSession } = await this.bus.request(call, SessionStorageSubjects.get, {
       sessionId: parentSessionId,
     });
     if (!parentSession) {
@@ -646,7 +684,13 @@ export class SubagentService extends BaseService {
     };
   }
 
-  private async handleExecute(payload: ExecuteSubagentPayload): Promise<ExecuteSubagentResponse> {
+  /**
+   * Handle an explicit execute request by tracking and spawning the subagent.
+   * @param call - Call context of the handled execute request
+   * @param payload - Execute request payload
+   * @returns Success flag, with the error message on failure
+   */
+  private async handleExecute(call: CallContext, payload: ExecuteSubagentPayload): Promise<ExecuteSubagentResponse> {
     const config = SubagentConfigSchema.parse({ ...payload.config, task: payload.task });
     // First track the subagent in manager (normally done by spawn tool, but execute RPC bypasses that)
     this.manager.track({
@@ -656,7 +700,7 @@ export class SubagentService extends BaseService {
       depth: payload.depth,
     });
 
-    const error = await this.handleSpawned({
+    const error = await this.handleSpawned(call, {
       subagentId: payload.subagentId,
       parentSessionId: payload.parentSessionId,
       task: payload.task,
@@ -672,9 +716,10 @@ export class SubagentService extends BaseService {
 
   /**
    * Route a message from parent to child subagent session.
+   * @param call - Call context of the handled toChild message
    * @param payload - Message routing payload
    */
-  private async handleToChild(payload: ToChildPayload): Promise<void> {
+  private async handleToChild(call: CallContext, payload: ToChildPayload): Promise<void> {
     const { subagentId, content } = payload;
 
     const tracked = this.manager.get(subagentId);
@@ -689,7 +734,7 @@ export class SubagentService extends BaseService {
     }
 
     try {
-      await this.bus.request(SessionSubjects.sendMessage, {
+      await this.bus.request(call, SessionSubjects.sendMessage, {
         sessionId: tracked.childSessionId,
         message: content,
         source: 'system',
@@ -701,18 +746,20 @@ export class SubagentService extends BaseService {
 
   /**
    * Handle terminal successful subagent completion.
+   * @param call - Call context of the handled completion event
    * @param subagentId - Completed subagent identifier.
    */
-  private async handleCompleted(subagentId: string): Promise<void> {
-    await this.closeChildSession(subagentId);
+  private async handleCompleted(call: CallContext, subagentId: string): Promise<void> {
+    await this.closeChildSession(call, subagentId);
   }
 
   /**
    * Handle terminal subagent cancellation.
+   * @param call - Call context of the handled cancellation event
    * @param subagentId - Cancelled subagent identifier.
    */
-  private async handleCancelled(subagentId: string): Promise<void> {
-    await this.closeChildSession(subagentId);
+  private async handleCancelled(call: CallContext, subagentId: string): Promise<void> {
+    await this.closeChildSession(call, subagentId);
   }
 
   /**
@@ -721,11 +768,12 @@ export class SubagentService extends BaseService {
    * The close operation is best-effort because subagent state has already
    * transitioned terminal; a session-close failure should not undo completion
    * or cancellation.
+   * @param call - Call context of the message the close belongs to
    * @param subagentId - Subagent whose child session should be closed.
    */
-  private async closeChildSession(subagentId: string): Promise<void> {
+  private async closeChildSession(call: CallContext, subagentId: string): Promise<void> {
     try {
-      await this.requestChildSessionClose(subagentId);
+      await this.requestChildSessionClose(call, subagentId);
     } catch {
       console.error(
         `[SubagentService] Failed to close child session for subagent ${subagentId}:`,
@@ -736,10 +784,11 @@ export class SubagentService extends BaseService {
 
   /**
    * Close a tracked child session while preserving failures for transactional callers.
+   * @param call - Call context of the message the close belongs to
    * @param subagentId - Subagent whose child session should be closed.
    * @throws Error when the session close request fails.
    */
-  private async requestChildSessionClose(subagentId: string): Promise<void> {
+  private async requestChildSessionClose(call: CallContext, subagentId: string): Promise<void> {
     const tracked = this.manager.get(subagentId);
     if (!tracked) return;
     if (!tracked.childSessionId) {
@@ -747,7 +796,7 @@ export class SubagentService extends BaseService {
       return;
     }
     this.pendingChildSessionClose.delete(subagentId);
-    await this.bus.request(SessionSubjects.close, { sessionId: tracked.childSessionId });
+    await this.bus.request(call, SessionSubjects.close, { sessionId: tracked.childSessionId });
   }
 
   /**
@@ -778,9 +827,10 @@ export class SubagentService extends BaseService {
 
   /**
    * Record turn-mode completion intent; canonical session completion owns terminalization.
+   * @param call - Call context of the handled completion event.
    * @param payload - Correlated agent completion event.
    */
-  private async handleAgentComplete(payload: AgentCompletePayload): Promise<void> {
+  private async handleAgentComplete(call: CallContext, payload: AgentCompletePayload): Promise<void> {
     const { sessionId, turnId, outcome, message, error } = payload;
 
     if (!sessionId || !turnId) return;
@@ -794,7 +844,7 @@ export class SubagentService extends BaseService {
       if (effectiveOutcome === 'completed') {
         try {
           this.manager.recordCompletionCandidate(subagent.subagentId, turnId, message ?? '', undefined, 'turn');
-          await this.finalizeSubagentIfReady(subagent.subagentId);
+          await this.finalizeSubagentIfReady(call, subagent.subagentId);
         } catch {
           return;
         }
@@ -807,7 +857,7 @@ export class SubagentService extends BaseService {
             undefined,
             'turn',
           );
-          await this.finalizeSubagentIfReady(subagent.subagentId);
+          await this.finalizeSubagentIfReady(call, subagent.subagentId);
         } catch {
           return;
         }
@@ -818,9 +868,10 @@ export class SubagentService extends BaseService {
 
   /**
    * Reconcile canonical child turn completion with a matching completion intent.
+   * @param call - Call context of the handled turn-completed event.
    * @param payload - Persisted session turn completion.
    */
-  private async handleSessionTurnCompleted(payload: SessionTurnCompletedPayload): Promise<void> {
+  private async handleSessionTurnCompleted(call: CallContext, payload: SessionTurnCompletedPayload): Promise<void> {
     if (payload.ingestionMarker === 'backfill') return;
     for (const subagent of this.manager.getAllNonTerminal()) {
       if (subagent.childSessionId !== payload.sessionId) continue;
@@ -834,7 +885,7 @@ export class SubagentService extends BaseService {
       );
       const candidate = subagent.completionCandidate;
       if (candidate?.turnId !== payload.turnId) return;
-      await this.finalizeSubagentIfReady(subagent.subagentId);
+      await this.finalizeSubagentIfReady(call, subagent.subagentId);
       return;
     }
   }
@@ -850,12 +901,13 @@ export class SubagentService extends BaseService {
 
   /**
    * Publish only the terminal snapshot frozen after both completion proofs exist.
+   * @param call - Call context of the message that completed the second proof
    * @param subagentId - Subagent whose proofs may now reconcile.
    */
-  private async finalizeSubagentIfReady(subagentId: string): Promise<void> {
+  private async finalizeSubagentIfReady(call: CallContext, subagentId: string): Promise<void> {
     if (!this.manager.finalizeCompletionIfReady(subagentId)) return;
     const completed = this.manager.get(subagentId);
-    await this.bus.emit(SubagentSubjects.completed, {
+    await this.bus.emit(call, SubagentSubjects.completed, {
       subagentId,
       success: completed?.status === 'completed',
       ...(completed?.status === 'completed'
@@ -870,24 +922,32 @@ export class SubagentService extends BaseService {
   /**
    * Return true when a handler may proceed.
    *
-   * Local callers always proceed. Remote callers proceed only when they are an
-   * authenticated workflow execution peer or their authenticated peer appears
-   * in the delegation allow-set.
+   * In-process callers always proceed. Remote callers proceed only when they
+   * are a job run or their caller identity appears in the delegation allow-set.
    * @param ctx - Incoming message context
    * @returns True when the handler should process the request
    */
   private isRemoteDelegationAllowed(ctx: BaseMessageContext): boolean {
-    return ctx.origin.local || isPeerAuthorizedToDelegate(ctx.transport?.peer, this.delegationAllowSet);
+    return isCallerAuthorizedToDelegate(ctx.call, this.delegationAllowSet);
   }
 
+  /**
+   * Publish the spawn-failure lifecycle event.
+   * @param call - Call context of the handled message the spawn belongs to
+   * @param subagentId - Subagent identifier
+   * @param parentSessionId - Parent session identifier
+   * @param phase - Spawn phase where failure occurred
+   * @param err - Error object or message
+   */
   private async emitExecutionFailed(
+    call: CallContext,
     subagentId: string,
     parentSessionId: string,
     phase: SubagentExecutionFailed['phase'],
     err: unknown,
   ): Promise<void> {
     const error = err instanceof Error ? err.message : String(err);
-    await this.bus.emit(SubagentSubjects.executionFailed, {
+    await this.bus.emit(call, SubagentSubjects.executionFailed, {
       subagentId,
       parentSessionId,
       phase,

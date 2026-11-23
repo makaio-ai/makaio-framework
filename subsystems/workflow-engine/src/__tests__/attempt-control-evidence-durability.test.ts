@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createBusContext, createBusInstance } from '@makaio/bus-core';
+import { createBusInstance } from '@makaio/bus-core';
 import { ExecutionAttemptNamespace, ExecutionAttemptSubjects } from '@makaio/contracts';
 import { createRestartableTempDb } from '@makaio/test-utils/drizzle-harness';
 import { reconcileAttemptCancellation } from '../attempt-control-delivery.js';
@@ -51,7 +51,7 @@ describe('SQLite Attempt control evidence durability', () => {
       const { conclusion: _conclusion, operationId: _operation, ...correlation } = report;
       const receipt = { ...correlation, receivedAt: '2026-09-10T11:59:59.000Z' };
       const { executionId: _owner, ...wireReceipt } = receipt;
-      const bus = createBusInstance({ context: createBusContext() });
+      const bus = createBusInstance();
       bus.registerNamespace(ExecutionAttemptNamespace);
       let deliveries = 0;
       // This real protocol responder confirms delivery, not an actual runtime stop.
@@ -61,16 +61,14 @@ describe('SQLite Attempt control evidence durability', () => {
           deliveries += 1;
           ctx.setResult({ decision: 'received', receipt: wireReceipt });
         });
+      const deps = { bus, authority: recovered };
+      const input = { ...ids, timeoutMs: 1_000 };
       try {
-        expect(await reconcileAttemptCancellation({ bus, authority: recovered }, { ...ids, timeoutMs: 1_000 })).toEqual(
-          {
-            kind: 'received',
-            persistence: { kind: 'accepted' },
-          },
-        );
-        expect(await reconcileAttemptCancellation({ bus, authority: recovered }, { ...ids, timeoutMs: 1_000 })).toEqual(
-          { kind: 'evidence-complete' },
-        );
+        expect(await reconcileAttemptCancellation(bus.own('root'), deps, input)).toEqual({
+          kind: 'received',
+          persistence: { kind: 'accepted' },
+        });
+        expect(await reconcileAttemptCancellation(bus.own('root'), deps, input)).toEqual({ kind: 'evidence-complete' });
         expect(deliveries).toBe(1);
       } finally {
         unregister();

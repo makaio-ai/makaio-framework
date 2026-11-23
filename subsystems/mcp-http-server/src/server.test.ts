@@ -6,6 +6,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { createBusInstance } from '@makaio/bus-core';
 import { ToolSubjects, type ToolExecutionContextOverrides } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { McpContextRegistry } from './context-registry.js';
 import { createMcpServer } from './create-mcp-server.js';
 import {
@@ -376,7 +377,7 @@ describe('startHttpMcpServer', () => {
     const sendToolListChanged = vi.spyOn(Server.prototype, 'sendToolListChanged').mockResolvedValue();
 
     await expect(startHttpMcpServer(bus, { port: -1 })).rejects.toThrow(/port/i);
-    await bus.emit(ToolSubjects.registryChanged, {
+    await bus.emit(createTestCall(), ToolSubjects.registryChanged, {
       revision: 5,
       reason: 'toolset-registered',
       toolsetName: 'after-invalid-port',
@@ -387,7 +388,7 @@ describe('startHttpMcpServer', () => {
 });
 
 describe('createMcpServer', () => {
-  async function callEchoTool(options?: Parameters<typeof createMcpServer>[2]): Promise<ReturnType<typeof vi.spyOn>> {
+  async function callEchoTool(options?: Parameters<typeof createMcpServer>[2]) {
     const bus = createBusInstance();
     const cleanupList = bus.on(ToolSubjects.list, (ctx) => {
       ctx.setResult({
@@ -406,7 +407,7 @@ describe('createMcpServer', () => {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
       await client.callTool({ name: 'echo', arguments: { value: 'ok' } });
-      return requestOptional;
+      return { requestOptional, call: bus.own('root') };
     } finally {
       await client.close();
       await server.close();
@@ -416,17 +417,24 @@ describe('createMcpServer', () => {
   }
 
   it('forwards a configured timeout beyond the bus default to tool execution', async () => {
-    const requestOptional = await callEchoTool({ toolExecutionTimeoutMs: 180_000 });
+    const { requestOptional, call } = await callEchoTool({ toolExecutionTimeoutMs: 180_000 });
 
-    expect(requestOptional).toHaveBeenCalledWith(ToolSubjects.execute, expect.objectContaining({ toolName: 'echo' }), {
-      timeout: 180_000,
-    });
+    expect(requestOptional).toHaveBeenCalledWith(
+      call,
+      ToolSubjects.execute,
+      expect.objectContaining({ toolName: 'echo' }),
+      { timeout: 180_000 },
+    );
   });
 
   it('retains the bus default when no tool execution timeout is configured', async () => {
-    const requestOptional = await callEchoTool();
+    const { requestOptional, call } = await callEchoTool();
 
-    expect(requestOptional.mock.lastCall).toHaveLength(2);
+    expect(requestOptional.mock.lastCall).toEqual([
+      call,
+      ToolSubjects.execute,
+      expect.objectContaining({ toolName: 'echo' }),
+    ]);
   });
 
   it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER])('rejects unsafe tool execution timeout %s', async (timeout) => {
@@ -559,7 +567,7 @@ describe('createMcpServer', () => {
       await server.connect(serverTransport);
       await client.connect(clientTransport);
 
-      await bus.emit(ToolSubjects.registryChanged, {
+      await bus.emit(createTestCall(), ToolSubjects.registryChanged, {
         revision: 1,
         reason: 'toolset-registered',
         toolsetName: 'test-toolset',
@@ -584,7 +592,7 @@ describe('createMcpServer', () => {
       await server.connect(serverTransport);
       await server.close();
 
-      await bus.emit(ToolSubjects.registryChanged, {
+      await bus.emit(createTestCall(), ToolSubjects.registryChanged, {
         revision: 2,
         reason: 'toolset-unregistered',
         toolsetName: 'test-toolset',
@@ -600,7 +608,7 @@ describe('createMcpServer', () => {
 
       await server.close();
 
-      await bus.emit(ToolSubjects.registryChanged, {
+      await bus.emit(createTestCall(), ToolSubjects.registryChanged, {
         revision: 3,
         reason: 'toolset-registered',
         toolsetName: 'test-toolset',

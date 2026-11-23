@@ -133,6 +133,10 @@ type PiscinaWorkerRunParams = UnboundWorkerParams | (AttemptBoundWorkerParams & 
  * Contributions are loaded once per workflow, not once per step — the
  * orchestrator owns step dispatch and reuses the same bus and runtime
  * throughout the execution.
+ *
+ * Design limit: the run executes under the worker bus's `own('root')`. The
+ * requester's principal ends at the thread boundary; it reaches the run again only
+ * once the job run is a caller with its own credential.
  * @param params - Worker run parameters including config, verified contributions, and signal.
  * @returns The terminal workflow run result.
  * @throws {@link RuntimeRegistrationRefusedError} When the Authority refuses this runtime.
@@ -212,7 +216,9 @@ export async function runWorkflowInWorker(params: WorkflowWorkerRunParams): Prom
     const effectiveConfig = await resolveAwaitTriggerConfig(config, loaded, handle.bus, abortController.signal);
 
     // Step 7: Run orchestrator
+    // ORIGIN: The thread starts the run itself; the requester's call does not cross the thread boundary.
     return await runWorkflowOrchestrator({
+      call: handle.bus.own('root'),
       config: effectiveConfig,
       loaded,
       bus: handle.bus,

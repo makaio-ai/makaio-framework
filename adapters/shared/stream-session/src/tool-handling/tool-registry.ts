@@ -8,6 +8,7 @@
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import { type ToolListItem, ToolSubjects } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 
 export interface ToolRegistryLoadOptions {
   /** Allowed tool names. Empty array intentionally disables all registry tools. */
@@ -46,6 +47,7 @@ function applyToolNameFilter(tools: ToolListItem[], options?: ToolRegistryLoadOp
  *
  * Does not throw on failure — an agent can still operate without tools,
  * so errors are logged and an empty array is returned.
+ * @param call - Call context of the message requesting registry tools.
  * @param bus - Bus that owns the ToolRegistry handlers.
  * @param adapterId - Adapter instance ID for logging/routing.
  * @param adapterName - Adapter type name.
@@ -53,13 +55,14 @@ function applyToolNameFilter(tools: ToolListItem[], options?: ToolRegistryLoadOp
  * @returns List of available tools, or empty array if fetch fails.
  */
 export async function loadToolsFromRegistry(
+  call: CallContext,
   bus: IMakaioBus,
   adapterId: string,
   adapterName: string,
   options?: ToolRegistryLoadOptions,
 ): Promise<ToolListItem[]> {
   try {
-    const response = await bus.request(ToolSubjects.list, {
+    const response = await bus.request(call, ToolSubjects.list, {
       adapterId,
       adapterName,
     });

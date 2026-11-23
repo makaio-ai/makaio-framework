@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages.js';
+import { createTestBusInstance } from '@makaio/test-utils';
 import { AnthropicSdkSession } from '../session.js';
-import type { AnthropicSdkSessionConfig } from '../types/index.js';
+import { AnthropicSdkConnectorNamespace } from '../namespaces/index.js';
 
 function createAnthropicTool(name: string): Tool {
   return {
@@ -13,19 +14,17 @@ function createAnthropicTool(name: string): Tool {
 
 /** Thin subclass that exposes the protected `getEffectiveToolNames` for assertions. */
 class TestAnthropicSdkSession extends AnthropicSdkSession {
-  public constructor(config: AnthropicSdkSessionConfig) {
-    super(config);
-  }
-
   public override getEffectiveToolNames(): string[] {
     return super.getEffectiveToolNames();
   }
 }
 
 describe('AnthropicSdkSession tool refresh', () => {
-  it('rebuilds the live tool set from the latest native tools after refresh', () => {
+  it('rebuilds the live tool set from the latest native tools after refresh', async () => {
+    const globalBus = createTestBusInstance();
     const session = new TestAnthropicSdkSession({
-      bus: {} as never,
+      bus: await AnthropicSdkConnectorNamespace.scopedBus(globalBus),
+      globalBus,
       adapterId: 'adapter-id',
       adapterName: 'anthropic-sdk',
       agentId: 'agent-id',

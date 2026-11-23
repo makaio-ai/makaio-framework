@@ -422,9 +422,10 @@ async function tryPrintLiveListing(
   let bus: Awaited<ReturnType<typeof connectBusClient>> | undefined;
   try {
     bus = await connectBusClient(busUrl, { auth, autoReconnect: false });
+    const call = bus.own('root');
     const [{ extensions }, { entries }] = await Promise.all([
-      bus.request(ExtensionSubjects.list, {}),
-      bus.request(ExtensionSubjects.catalog, {}),
+      bus.request(call, ExtensionSubjects.list, {}),
+      bus.request(call, ExtensionSubjects.catalog, {}),
     ]);
     printLiveListing(extensions, entries);
     return true;

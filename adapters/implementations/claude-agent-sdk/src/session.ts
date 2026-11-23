@@ -1,7 +1,7 @@
 /* eslint max-lines: ["error", { "max": 740 }] */
 import type { Query, SDKUserMessage as SdkSDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { query } from '@anthropic-ai/claude-agent-sdk';
-import type { SDKMessage, SDKUserMessage } from '@makaio/client-claude-code';
+import type { SDKMessage } from '@makaio/client-claude-code';
 import { isKnownSdkMessageForRouting } from '@makaio/client-claude-code';
 import {
   BaseConnectorSession,
@@ -10,6 +10,8 @@ import {
   type AIReasoningLevel,
   type MessageHandle,
 } from '@makaio/ai-adapters-core';
+import type { CallContext } from '@makaio/core';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { DeferredPromise } from '@makaio/utils';
 import { AsyncQuerySource } from '@makaio/ai-adapters-claude-shared';
 import { ClaudeConnectorTurn } from './turn.js';
@@ -20,7 +22,7 @@ import { ClaudeSessionConfig, CreateToolApprovalHandler } from './types/index.js
 import { buildMcpServersRecord, buildQueryOptions } from './utils/buildQueryOptions.js';
 import type { McpResolvedServer, ResponseSchemaDescriptor } from '@makaio/contracts';
 import { McpSessionRegistration } from './mcp-session-bridge.js';
-import { handleClaudeResultMessage } from './result-handling.js';
+import { callForSdkMessage, handleTurnSdkEvent } from './turn-sdk-events.js';
 import { TerminalResultDrain } from './terminal-result-drain.js';
 
 type StreamEvent = { type: string; delta?: { type: string; thinking?: string } };
@@ -67,7 +69,15 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   private activeResponseSchemaKey: string | undefined;
   private readonly terminalResultDrain = new TerminalResultDrain();
 
-  public constructor(config: ClaudeSessionConfig) {
+  /**
+   * Create a session whose observer origins belong to the adapter's carrier.
+   * @param config - SDK session configuration and scoped adapter bus
+   * @param originBus - Parent of the scoped adapter bus, used to mint observer origins
+   */
+  public constructor(
+    config: ClaudeSessionConfig,
+    private readonly originBus: Pick<IMakaioBus, 'own'>,
+  ) {
     super(config);
     this.lifecycle = new SessionLifecycle();
     this.mcpRegistration = new McpSessionRegistration(config);
@@ -75,10 +85,12 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
 
   /**
    * Initialize the session - creates query instance and starts consumption.
+   * @param call - Operation call forwarded to MCP registration
    * @param createToolApprovalHandler - Factory for tool approval handler
    * @param responseSchema - Optional response schema descriptor for the initial query.
    */
   public async initialize(
+    call: CallContext,
     createToolApprovalHandler: CreateToolApprovalHandler,
     responseSchema?: ResponseSchemaDescriptor,
   ): Promise<void> {
@@ -87,7 +99,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
 
     // Register MCP context after query creation so the session ID is known. If
     // registration returns a port, patch the live query's MCP servers accordingly.
-    await this.refreshMcpContext();
+    await this.refreshMcpContext(call);
 
     // Resolve with local session ID for idle initialization (system.init arrives only when SDK processes
     // a real message; for idle agents getAdapterSessionId() would block without this).
@@ -97,12 +109,11 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   }
 
   /**
-   * Register with the MCP bridge and, if the port changed, patch the live
-   * query's MCP server list. Centralises the register-then-repatch sequence
-   * so `initialize()` and immediate-mode rotation stay in sync.
+   * Register with the MCP bridge and patch the live query's servers if the port changed.
+   * @param call - Operation call forwarded to MCP registration
    */
-  private async refreshMcpContext(): Promise<void> {
-    if (await this.mcpRegistration.register(this.sessionId)) {
+  private async refreshMcpContext(call: CallContext): Promise<void> {
+    if (await this.mcpRegistration.register(call, this.sessionId)) {
       await this.updateMcpServers(this.config.mcpUpstreamServers ?? []);
     }
   }
@@ -129,14 +140,19 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
 
   /**
    * @internal Test-only seam for driving MCP registration without full SDK lifecycle.
+   * @param call - Operation call forwarded to MCP registration
    * @param sessionId - Optional adapter session identifier for registration.
    * @param mode - Whether to run the register or refresh path.
    * @returns Promise that resolves after the requested MCP sync path completes.
    */
-  public async syncMcpContextForTest(sessionId?: string, mode: 'register' | 'refresh' = 'register'): Promise<void> {
+  public async syncMcpContextForTest(
+    call: CallContext,
+    sessionId?: string,
+    mode: 'register' | 'refresh' = 'register',
+  ): Promise<void> {
     if (sessionId !== undefined) this.sessionId = sessionId;
-    if (mode === 'refresh') return this.refreshMcpContext();
-    await this.mcpRegistration.register(this.sessionId);
+    if (mode === 'refresh') return this.refreshMcpContext(call);
+    await this.mcpRegistration.register(call, this.sessionId);
   }
 
   /**
@@ -253,10 +269,14 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
    * Ensure the active SDK query matches the required response schema.
    * Schema changes are query boundaries (SDK accepts `outputFormat` only at
    * `query()` time). Resumes only after `system.init` confirms a session ID.
+   * @param call - Turn call forwarded to MCP registration
    * @param responseSchema - Optional per-turn response schema descriptor.
    * @returns True when a new SDK query was created.
    */
-  private async ensureQueryForResponseSchema(responseSchema: ResponseSchemaDescriptor | undefined): Promise<boolean> {
+  private async ensureQueryForResponseSchema(
+    call: CallContext,
+    responseSchema: ResponseSchemaDescriptor | undefined,
+  ): Promise<boolean> {
     const nextKey = this.getResponseSchemaKey(responseSchema);
     if (this.queryInstance && this.activeResponseSchemaKey === nextKey) {
       return false;
@@ -266,10 +286,10 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
     const oldQuery = this.disownActiveQuery();
     oldQuery?.close();
     if (resumeSessionId === undefined && this.mcpRegistration.isRegistered) {
-      this.mcpRegistration.unregister();
+      this.mcpRegistration.unregister(call);
     }
     await this.createQuery(resumeSessionId, responseSchema);
-    await this.refreshMcpContext();
+    await this.refreshMcpContext(call);
     return true;
   }
 
@@ -316,14 +336,15 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   /**
    * Replace the active query with a fresh one (no provider resume), following
    * the drain/ownership contract shared with {@link ensureQueryForResponseSchema}.
+   * @param call - Turn call forwarded to MCP registration
    * @param responseSchema - Optional per-turn response schema descriptor for the new query.
    */
-  private async rotateToFreshQuery(responseSchema?: ResponseSchemaDescriptor): Promise<void> {
+  private async rotateToFreshQuery(call: CallContext, responseSchema?: ResponseSchemaDescriptor): Promise<void> {
     const oldQuery = this.disownActiveQuery();
     oldQuery?.close();
-    this.mcpRegistration.unregister();
+    this.mcpRegistration.unregister(call);
     await this.createQuery(undefined, responseSchema);
-    await this.refreshMcpContext();
+    await this.refreshMcpContext(call);
   }
 
   /**
@@ -381,9 +402,9 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
         // creates the query eagerly). Rotate to a fresh query so the provider
         // does not natively resume a thread the caller replaced with injected
         // history.
-        await this.rotateToFreshQuery(handle.responseSchema);
+        await this.rotateToFreshQuery(handle.call, handle.responseSchema);
       } else {
-        await this.ensureQueryForResponseSchema(handle.responseSchema);
+        await this.ensureQueryForResponseSchema(handle.call, handle.responseSchema);
       }
       // Recheck: close() may have started during schema rotation / query
       // creation / MCP registration. The handle is dequeued and unreachable
@@ -421,7 +442,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
 
     if (this.currentTurn?.isPaused()) {
       this.currentTurn.setActiveMessageHandle(handle);
-      await this.currentTurn.resume();
+      await this.currentTurn.resume(handle.call);
       this.source.push(sdkMessage as SdkSDKUserMessage);
       return;
     }
@@ -439,7 +460,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
       handle,
     );
 
-    await this.currentTurn.start();
+    await this.currentTurn.start(handle.call);
   }
 
   private startConsumption(queryGeneration: number): void {
@@ -508,13 +529,8 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
 
     const result = { outcome: 'error' as const, error: normalizedError };
     const handle = turn.getMessageHandle();
-    if (handle) {
-      await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
-    } else {
-      turn.markCompleted(result);
-    }
-
-    await turn.finishOnError();
+    await markCompletedWithFinalResult(handle, result, this.config.onTurnComplete);
+    await turn.finishOnError(handle.call);
   }
 
   private async completeInterruptedTurnAfterDrainTimeout(queryGeneration: number): Promise<void> {
@@ -533,8 +549,9 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   private async handleSdkMessage(msg: unknown, queryGeneration: number): Promise<void> {
     if (queryGeneration !== this.queryGeneration) return;
 
+    const call = callForSdkMessage(this.originBus, this.currentTurn);
     if (!isKnownSdkMessageForRouting(msg)) {
-      await this.emitSdkEvent(msg);
+      await this.emitSdkEvent(call, msg);
       return;
     }
     const sdkMessage = msg;
@@ -568,7 +585,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
 
     // Emit SDK event before turn completion so MakaioBus subscribers receive
     // events before waitForCompletion() resolves.
-    await this.emitSdkEvent(sdkMessage);
+    await this.emitSdkEvent(call, sdkMessage);
 
     // Only accumulate thinking after stale-session filtering, so old query deltas
     // cannot contaminate tool-approval reasoning for the active session.
@@ -597,24 +614,7 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
       this.terminalResultDrain.markHandled(queryGeneration);
     }
 
-    await this.handleTurnSdkEvent(sdkMessage);
-  }
-
-  /**
-   * Apply an SDK message to the active turn after connector-level emission.
-   * @param sdkMessage - Routed SDK message.
-   */
-  private async handleTurnSdkEvent(sdkMessage: SDKMessage): Promise<void> {
-    const turn = this.currentTurn;
-    if (!turn) return;
-
-    if (sdkMessage.type === 'user' && (sdkMessage as SDKUserMessage & { isReplay?: boolean }).isReplay) {
-      turn.markAcknowledged();
-    }
-    if (sdkMessage.type === 'result') {
-      await handleClaudeResultMessage(sdkMessage, turn, this.config.onTurnComplete);
-    }
-    await turn.handleSdkEvent(sdkMessage);
+    await handleTurnSdkEvent(call, sdkMessage, this.currentTurn, this.config.onTurnComplete);
   }
 
   /**
@@ -625,13 +625,14 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
    * forwarding paths — `this.config.emitSdkEvent` receives the raw SDK message,
    * while `this.bus.emit(ClaudeCodeConnectorSubjects.sdk.event)` attaches
    * metadata for lenient validation and drift reporting.
+   * @param call - Active message call or the SDK observer origin
    * @param msg - SDK message to emit
    */
-  private async emitSdkEvent(msg: unknown): Promise<void> {
+  private async emitSdkEvent(call: CallContext, msg: unknown): Promise<void> {
     if (this.config.emitSdkEvent) {
-      await this.config.emitSdkEvent(msg);
+      await this.config.emitSdkEvent(call, msg);
     } else {
-      await this.bus.emit(ClaudeCodeConnectorSubjects.sdk.event, {
+      await this.bus.emit(call, ClaudeCodeConnectorSubjects.sdk.event, {
         ...(msg as Record<string, unknown>),
         agentId: this.config.agentId,
       } as Parameters<typeof this.bus.emit<typeof ClaudeCodeConnectorSubjects.sdk.event>>[1]);
@@ -645,10 +646,11 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
    * only additional semantic is the terminal `lifecycle.abort()` transition.
    * This mirrors the CLI adapter's approach and eliminates duplicated teardown
    * logic (including the try/catch around `interrupt()` that `close()` owns).
+   * @param call - Call context of the operation aborting the session
    */
-  public async abort(): Promise<void> {
+  public async abort(call: CallContext): Promise<void> {
     try {
-      await this.close();
+      await this.close(call);
     } finally {
       this.lifecycle.abort();
     }
@@ -707,10 +709,12 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
    * Gracefully close the session (interrupt, not abort).
    * Sets the closing flag to prevent new turns from starting, then
    * unregisters MCP context and absorbs interrupt errors.
+   * @param _call - Operation call; MCP teardown creates its own host-carrier origin
    */
-  public async close(): Promise<void> {
+  public async close(_call: CallContext): Promise<void> {
     this.closing = true;
-    this.mcpRegistration.unregister();
+    // ORIGIN: session teardown retires the MCP registration on the host carrier.
+    this.mcpRegistration.unregister(MakaioBus.own('stop'));
     const activeQuery = this.queryInstance;
     const queryGeneration = this.queryGeneration;
     const terminalResultDrain =

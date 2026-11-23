@@ -18,7 +18,9 @@ import type { MakaioNodeExtension } from '@makaio/contracts';
 import { ClientsCoreToken } from '@makaio/subsystem-client';
 import { CodexClientSessionService } from './codex-client-session-service.js';
 
-export { CodexClientSubjects, CODEX_CLIENT_NAMESPACE } from './namespace.js';
+import { CodexClientNamespace } from './namespace.js';
+
+export { CodexClientSubjects, CodexClientNamespace, CODEX_CLIENT_NAMESPACE } from './namespace.js';
 export { CodexClientSessionService } from './codex-client-session-service.js';
 export { normalizeCodexHook } from './hook-normalizer.js';
 export type { CodexNormalizedEvent, CodexNormalizedSubject } from './hook-normalizer.js';
@@ -68,6 +70,7 @@ export const codexClientRuntimePackage: MakaioNodeExtension<IMakaioBus> = {
   displayName: 'Codex Client Runtime',
   version: '0.1.0',
   dependencies: [dep('makaio.clients-core')],
+  namespaces: [CodexClientNamespace],
   /**
    * Create the Codex client session service bound to the runtime bus.
    *

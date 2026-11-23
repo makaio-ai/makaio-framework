@@ -13,6 +13,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { SessionSubjects } from '@makaio/contracts';
 import { SessionStorageSubjects } from '../storage/namespace.js';
 import {
@@ -42,12 +43,14 @@ function compileChildSessionPatterns(childSessionIds: ReadonlySet<string>): Chil
 
 /**
  * Resolve unmatched subagent children to their adapter session IDs.
+ * @param call - Call context of the import-completed message being handled
  * @param bus - Bus instance for storage requests
  * @param source - Import source that owns the parent completion event
  * @param children - Direct child sessions from `getChildren`
  * @returns Map from adapter session ID to Makaio session ID
  */
 async function buildSubagentAdapterToSessionIdMap(
+  call: CallContext,
   bus: IMakaioBus,
   source: string,
   children: Array<{ sessionId: string; branchKind?: string | null; spawningToolCallId?: string }>,
@@ -56,7 +59,7 @@ async function buildSubagentAdapterToSessionIdMap(
     children
       .filter((child) => child.branchKind === 'subagent' && child.spawningToolCallId === undefined)
       .map(async (child) => {
-        const { session } = await bus.request(SessionStorageSubjects.get, { sessionId: child.sessionId });
+        const { session } = await bus.request(call, SessionStorageSubjects.get, { sessionId: child.sessionId });
         const sessionSource = session?.source ?? session?.adapterName;
         return session?.adapterSessionId && sessionSource === source
           ? { sessionId: child.sessionId, adapterSessionId: session.adapterSessionId }
@@ -95,15 +98,17 @@ export function registerSpawningToolCallResolver(bus: IMakaioBus): () => void {
       const { sessionId: parentSessionId, source } = ctx.payload;
 
       // Get direct children and filter to unmatched subagents.
-      const { children } = await bus.request(SessionStorageSubjects.getChildren, { sessionId: parentSessionId });
+      const { children } = await bus.request(ctx.call, SessionStorageSubjects.getChildren, {
+        sessionId: parentSessionId,
+      });
 
-      const childAdapterToSessionId = await buildSubagentAdapterToSessionIdMap(bus, source, children);
+      const childAdapterToSessionId = await buildSubagentAdapterToSessionIdMap(ctx.call, bus, source, children);
       const unmatchedChildIds = new Set(childAdapterToSessionId.keys());
 
       if (unmatchedChildIds.size === 0) return;
 
       // Fetch all parent messages to scan for tool calls.
-      const messages = await fetchAllMessages(bus, parentSessionId);
+      const messages = await fetchAllMessages(ctx.call, bus, parentSessionId);
       const agentToolCalls = collectAgentToolCalls(messages);
 
       if (agentToolCalls.length === 0) return;
@@ -135,7 +140,7 @@ export function registerSpawningToolCallResolver(bus: IMakaioBus): () => void {
 
       const updates = [...assignments].map(async ([childSessionId, toolCallId]) => {
         try {
-          const { session } = await bus.request(SessionStorageSubjects.get, { sessionId: childSessionId });
+          const { session } = await bus.request(ctx.call, SessionStorageSubjects.get, { sessionId: childSessionId });
           if (session?.spawningToolCallId !== undefined) {
             return;
           }
@@ -143,7 +148,7 @@ export function registerSpawningToolCallResolver(bus: IMakaioBus): () => void {
           // storage:session.update treats non-null spawningToolCallId as
           // write-once provenance, so a concurrent assignment that lands after
           // this snapshot still wins atomically at the storage boundary.
-          await bus.request(SessionStorageSubjects.update, {
+          await bus.request(ctx.call, SessionStorageSubjects.update, {
             sessionId: childSessionId,
             spawningToolCallId: toolCallId,
           });

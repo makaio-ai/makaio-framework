@@ -1,8 +1,7 @@
 /* eslint max-lines: ["error", { "max": 660 }] */ // Bumped for the debugLog diagnostic sink option
-import * as methods from './methods/index.js';
-import { resetSeenCorrelationIds } from './utils/invoke-any-handlers.js';
-import { createScopedBus, type ScopedBus } from './scoped-bus.js';
-import { createFilteredBus } from './filtered-bus.js';
+import type { ScopedBus } from './scoped-bus.js';
+import { buildBusInstance, type BusTransportMethods } from './bus-instance.js';
+import { hostPartyOf } from './call-context/carrier.js';
 import type {
   BusMessageObserver,
   ConnectOptions,
@@ -15,10 +14,8 @@ import type { HandlerEntry } from './types/handler-entry.js';
 import type { InterceptorEntry, InterceptorHandler } from './types/interceptor.js';
 import { createNamespaceRegistry, createTransportRegistry } from './registries/index.js';
 import { resolveBusDebugLog } from './utils/debug-log.js';
-import { validateMessage } from './utils/message-safeguards.js';
-import { extendSubjectImpl } from './extend-subject.js';
 import { createBusNamespace } from '@makaio/core';
-import type { EventHandler, PayloadFilter, RequestHandler, SubjectDefinition } from '@makaio/core';
+import type { EventHandler, RequestHandler } from '@makaio/core';
 import { LifecycleSchemas } from './lifecycle-schemas.js';
 import { wireLifecycleEmitter } from './utils/wire-lifecycle-emitter.js';
 
@@ -99,9 +96,7 @@ interface ReadyHandshake {
  * @returns Object with `registerTransport`, `unregisterTransport`, `disconnect`, `connect`, and `ready` methods
  */
 // eslint-disable-next-line max-lines-per-function -- rollbackEntries helper inflates the count
-const createTransportMethods = (
-  context: MakaioBusContext,
-): Pick<IMakaioBus, 'registerTransport' | 'unregisterTransport' | 'disconnect' | 'reconnect' | 'connect' | 'ready'> => {
+const createTransportMethods = (context: MakaioBusContext): BusTransportMethods => {
   const localTransports = new Map<string, TransportEntry>();
   let connected = false;
   let connectPromise: Promise<void> | null = null;
@@ -458,21 +453,6 @@ export interface CreateBusOptions<Namespace extends string | undefined = undefin
 }
 
 /**
- * Clear all handler registries for test isolation.
- * @param context - Bus context to reset.
- */
-function resetAllHandlers(context: MakaioBusContext): void {
-  context.eventHandlers.clear();
-  context.requestHandlers.clear();
-  context.interceptorHandlers.clear();
-  context.anyHandlers.clear();
-  context.messageObservers.clear();
-  context.remoteRequestHandlers.clear();
-  context.remoteEventHandlers.clear();
-  resetSeenCorrelationIds();
-}
-
-/**
  * Use the supplied context or build a fresh one; an explicit `debugLog` always wins.
  * @param options - Bus creation options
  * @returns The context the bus instance will run on
@@ -499,91 +479,16 @@ export function createBusInstance<Namespace extends string | undefined = undefin
 ): IMakaioBus<Namespace> {
   // Each call creates a fresh context by default, so wireLifecycleEmitter
   // (called below) installs on an isolated transport registry. The only way
-  // to share a context is to pass one explicitly; createScopedBus reuses the
-  // parent context but does not call wireLifecycleEmitter itself.
+  // to share a context is to pass one explicitly; carrier-bound instances reuse
+  // the host context but do not call wireLifecycleEmitter themselves.
   const { namespace, transports } = options ?? {};
   const context = resolveBusContext(options);
   const transportMethods = createTransportMethods(context);
 
-  const bus: IMakaioBus<Namespace> = {
-    namespace,
-    on: (subject, handler, opts) => {
-      validateMessage('on', subject, namespace);
-      return methods.on(context, subject, handler, opts);
-    },
-    intercept: (subject, handler, opts) => {
-      validateMessage('intercept', subject, namespace);
-      return methods.intercept(context, subject, handler, opts);
-    },
-    once: (subject: SubjectDefinition, handler: unknown) => {
-      validateMessage('once', subject, namespace);
-      return methods.once(context, subject, handler as never);
-    },
-    emit: async (subject, payload, opts) => {
-      validateMessage('emit', subject, namespace);
-      return methods.emit(context, subject, payload, opts);
-    },
-    request: async (subject, payload, opts) => {
-      validateMessage('request', subject, namespace);
-      return methods.request(context, subject, payload, opts);
-    },
-    requestOptional: async (subject, payload, opts) => {
-      validateMessage('request', subject, namespace);
-      return methods.requestOptional(context, subject, payload, opts);
-    },
-    broadcast: async (subject, payload, opts) => {
-      // 'request' mode is intentional — broadcast subjects have isRequest=true, so
-      // 'emit' mode would incorrectly reject them. There is no dedicated 'broadcast'
-      // mode in validateMessage; 'request' is the correct validator for these subjects.
-      validateMessage('request', subject, namespace);
-      return methods.broadcast(context, subject, payload, opts);
-    },
-    scoped: (input, isolatedContext) => createScopedBus(isolatedContext ?? context, input.name),
-    withFilter: (filter: PayloadFilter) => createFilteredBus(context, namespace ?? '', filter),
-    ...transportMethods,
-    getContext: () => context,
-    getSchema: (subject) => context.namespaceRegistry.getSchema(subject),
-    registerNamespace: (definition) => context.namespaceRegistry.registerNamespace(definition),
-    registerNamespaces: (definitions) => context.namespaceRegistry.registerNamespaces(definitions),
-    extendSubject: (subject, extensions) => {
-      if (namespace && subject.$meta.namespace !== namespace)
-        throw new Error(
-          `Subject namespace ${subject.$meta.namespace} does not match scoped bus namespace ${namespace}`,
-        );
-      return extendSubjectImpl(context, subject, extensions);
-    },
-    observeMessages: (observer) => {
-      context.messageObservers.add(observer);
-      return () => {
-        context.messageObservers.delete(observer);
-      };
-    },
-    // Debugging/testing utilities
-    __onAny: (handler) => {
-      if (process.env.NODE_ENV === 'production') {
-        return () => {}; // Noop in production
-      }
-      context.anyHandlers.add(handler);
-      return () => {
-        context.anyHandlers.delete(handler);
-      };
-    },
-    __resetHandlers: process.env.NODE_ENV === 'test' ? () => resetAllHandlers(context) : undefined,
-  } as IMakaioBus<Namespace>;
-
-  // Object spread evaluates getters once at spread time and copies the resulting
-  // value as a plain data property. `transportMethods.ready` would be frozen as
-  // `Promise.resolve()` (its value when readyPromise is null) and would never
-  // reflect the promise set during connect(). Re-define it as a live getter so
-  // every read delegates to `transportMethods.ready`, which re-evaluates the
-  // closure variable each time.
-  Object.defineProperty(bus, 'ready', {
-    get(): Promise<void> {
-      return transportMethods.ready;
-    },
-    enumerable: true,
-    configurable: true,
-  });
+  // A bus built without a shared context is a carrier of its own: the host party of its
+  // fresh context, never the party of the running host (the kernel binds that one when it
+  // composes the host).
+  const bus = buildBusInstance<Namespace>(context, hostPartyOf(context), transportMethods, namespace);
 
   // Wire lifecycle emission: transport connect/disconnect fire BusLifecycle events (local-only).
   wireLifecycleEmitter(context, bus.registerNamespace(createBusNamespace('bus:lifecycle', LifecycleSchemas)).subjects);
@@ -635,8 +540,9 @@ export function createBusInstance<Namespace extends string | undefined = undefin
  *   console.debug('Agent started:', context.payload.agentId);
  * });
  *
- * // Emit events
- * await MakaioBus.emit(subjects.started, { agentId: 'agent-123' });
+ * // Emit events (the call context comes from `own`, or from a received `context.call`)
+ * const call = MakaioBus.own('start');
+ * await MakaioBus.emit(call, subjects.started, { agentId: 'agent-123' });
  *
  * // Handle requests
  * MakaioBus.on(subjects.toolApprove, (context) => {
@@ -644,7 +550,7 @@ export function createBusInstance<Namespace extends string | undefined = undefin
  * });
  *
  * // Make requests
- * const result = await MakaioBus.request(subjects.toolApprove, {
+ * const result = await MakaioBus.request(call, subjects.toolApprove, {
  *   toolName: 'deleteFile',
  * });
  * ```

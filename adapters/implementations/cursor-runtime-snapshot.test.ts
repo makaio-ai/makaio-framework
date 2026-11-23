@@ -3,6 +3,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { ExtensionSubjects } from '@makaio/kernel';
 import type { ProviderRuntimeSnapshot } from '@makaio/services-core/adapter-subsystem';
 import type { LoadedAdapter } from '@makaio/subsystem-adapter';
+import { createTestCall } from '@makaio/test-utils';
 import { resolveAdapterRuntimeSnapshot } from '../../subsystems/adapter/src/adapter-runtime-snapshot.js';
 import { providerDefinition } from '../../providers/cursor/src/definition.js';
 import { adapterDefinition } from './cursor-sdk/src/definition.js';
@@ -80,7 +81,7 @@ describe('Cursor SDK runtime snapshot', () => {
       setResult({ providers: [], clients: [] });
     });
 
-    const result = await resolveAdapterRuntimeSnapshot({
+    const result = await resolveAdapterRuntimeSnapshot(createTestCall(), {
       bus: MakaioBus,
       adapter: loadedCursorAdapter(),
       snapshot: cursorSnapshot(),

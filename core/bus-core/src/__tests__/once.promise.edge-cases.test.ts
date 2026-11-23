@@ -14,7 +14,7 @@ describe('once - Promise overload', () => {
     it('should work without any options', async () => {
       const promise = MakaioBus.once(EventSubjects.message, undefined);
 
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'test',
         sessionId: 'session-1',
       });
@@ -26,7 +26,7 @@ describe('once - Promise overload', () => {
     it('should work with empty options object', async () => {
       const promise = MakaioBus.once(EventSubjects.message, {});
 
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'test',
         sessionId: 'session-1',
       });
@@ -39,15 +39,15 @@ describe('once - Promise overload', () => {
       const promise = MakaioBus.once(EventSubjects.message);
 
       // Emit multiple events rapidly
-      void MakaioBus.emit(EventSubjects.message, {
+      void MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'first',
         sessionId: 'session-1',
       });
-      void MakaioBus.emit(EventSubjects.message, {
+      void MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'second',
         sessionId: 'session-2',
       });
-      void MakaioBus.emit(EventSubjects.message, {
+      void MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'third',
         sessionId: 'session-3',
       });

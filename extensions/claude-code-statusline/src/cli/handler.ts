@@ -4,6 +4,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { ClaudeCodeStatuslineRawPayload } from '@makaio/client-claude-code';
 import { ClaudeCodeStatuslineRawPayloadSchema } from '@makaio/client-claude-code';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
+import type { CallContext } from '@makaio/core';
 import type { CommandContext } from '@makaio/kernel/cli';
 
 export interface ClaudeStatuslineArgs {
@@ -13,6 +14,7 @@ export interface ClaudeStatuslineArgs {
 
 export interface ClaudeStatuslineCommandContext {
   readonly args: ClaudeStatuslineArgs;
+  readonly call: CallContext;
   readonly bus: Pick<IMakaioBus, 'emit'> | null;
   readonly output: Pick<CommandContext<ClaudeStatuslineArgs>['output'], 'write' | 'error'>;
   readonly signal?: AbortSignal;
@@ -63,7 +65,7 @@ export async function runClaudeStatuslineCommand(
 ): Promise<void> {
   const stdinText = await safeReadStdinText(deps);
   const payload = parseRawStatuslinePayload(stdinText);
-  const pendingEmit = payload ? safeEmitRawPayload(ctx.bus, payload) : Promise.resolve();
+  const pendingEmit = payload ? safeEmitRawPayload(ctx.call, ctx.bus, payload) : Promise.resolve();
 
   if (ctx.args.upstreamCommand) {
     await safeRunUpstream(deps, {
@@ -118,11 +120,13 @@ function parseRawStatuslinePayload(stdinText: string): ClaudeCodeStatuslineRawPa
 
 /**
  * Emit the raw statusline payload on the Claude Code client subject.
+ * @param call - Call context of the command invocation.
  * @param bus - Bus facade used by the command context, or `null` when the bus is unavailable.
  * @param payload - Parsed raw Claude statusline payload.
  * @returns Promise that resolves after the best-effort emit settles.
  */
 async function safeEmitRawPayload(
+  call: CallContext,
   bus: Pick<IMakaioBus, 'emit'> | null,
   payload: ClaudeCodeStatuslineRawPayload,
 ): Promise<void> {
@@ -130,7 +134,7 @@ async function safeEmitRawPayload(
     return;
   }
   try {
-    await bus.emit(ClaudeCodeClientSubjects.statusline.received, payload);
+    await bus.emit(call, ClaudeCodeClientSubjects.statusline.received, payload);
   } catch {
     // Fail open: statusline rendering should continue even when the bus is unavailable.
   }

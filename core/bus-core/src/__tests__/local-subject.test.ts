@@ -2,11 +2,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
 import { MakaioBus, localSubject, type BusTransport } from '../index.js';
+import { busContextOf } from '../kernel-api.js';
 import type { BusMessage, MakaioBusContext } from '../types/index.js';
 
 describe('localSubject', () => {
   beforeEach(() => {
-    MakaioBus.getContext()?.namespaceRegistry.__resetNamespaces?.();
+    busContextOf(MakaioBus)?.namespaceRegistry.__resetNamespaces?.();
   });
 
   describe('schema wrapping', () => {
@@ -87,7 +88,7 @@ describe('localSubject', () => {
         }),
       );
 
-      const registry = MakaioBus.getContext().namespaceRegistry;
+      const registry = busContextOf(MakaioBus).namespaceRegistry;
       const subject = registry
         .listRegisteredSubjects()
         .find((registeredSubject) => registeredSubject.fullSubject === 'test-local-snapshot.event');
@@ -126,7 +127,7 @@ describe('localSubject', () => {
         unsubscribe: vi.fn().mockResolvedValue(undefined),
       };
 
-      context = MakaioBus.getContext();
+      context = busContextOf(MakaioBus);
       context.transportRegistry.registerTransport('test' as never, mockTransport as never);
     });
 
@@ -137,7 +138,7 @@ describe('localSubject', () => {
         }),
       );
 
-      await MakaioBus.emit(TestNamespace.subjects.localEvent, { data: 'test' });
+      await MakaioBus.emit(MakaioBus.own('root'), TestNamespace.subjects.localEvent, { data: 'test' });
 
       expect(sentMessages).toHaveLength(0);
     });
@@ -149,7 +150,7 @@ describe('localSubject', () => {
         }),
       );
 
-      await MakaioBus.emit(TestNamespace.subjects.normalEvent, { data: 'test' });
+      await MakaioBus.emit(MakaioBus.own('root'), TestNamespace.subjects.normalEvent, { data: 'test' });
 
       expect(sentMessages).toHaveLength(1);
       expect(sentMessages[0].type).toBe('event');
@@ -170,7 +171,9 @@ describe('localSubject', () => {
         ctx.setResult({ found: true });
       });
 
-      const result = await MakaioBus.request(TestNamespace.subjects.localRequest, { id: 'test' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), TestNamespace.subjects.localRequest, {
+        id: 'test',
+      });
 
       expect(result).toEqual({ found: true });
       expect(sentMessages).toHaveLength(0);

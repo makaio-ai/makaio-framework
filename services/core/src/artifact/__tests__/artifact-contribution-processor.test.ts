@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionToken } from '@makaio/contracts';
 import { ArtifactSubjects, defineArtifactKind } from '@makaio/contracts';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { createTestCall, makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { ArtifactSchemaRegistryToken } from '../packages.js';
 import { createArtifactKindContributionProcessor } from '../artifact-contribution-processor.js';
@@ -12,10 +12,7 @@ import { ArtifactSchemaRegistry } from '../artifact-schema-registry.js';
 /**
  * Build a minimal extension context that shares the given bus and exposes an
  * optional registry via `getService`.
- *
- * The context must share the same bus as the registry so that RPCs emitted by
- * the contribution processor reach the handler registered by the registry.
- * @param bus - The shared bus instance used by both registry and context.
+ * @param bus - Bus instance exposed by the extension context.
  * @param registry - Registry instance to expose, or `undefined` to simulate a
  *   missing service.
  * @returns Minimal kernel extension context stub.
@@ -60,7 +57,7 @@ describe('createArtifactKindContributionProcessor', () => {
 
     await processor.processActivated('planner', pkg, makeContext(bus, registry));
 
-    const listed = await bus.request(ArtifactSubjects.kind.list, {});
+    const listed = await bus.request(createTestCall(), ArtifactSubjects.kind.list, {});
     expect(listed.kinds.map((entry) => entry.kind)).toEqual(['implementation-plan']);
 
     await registry.destroy();
@@ -100,7 +97,7 @@ describe('createArtifactKindContributionProcessor', () => {
 
     await processor.processActivated('planner', pkg, makeContext(bus, registry));
 
-    const listed = await bus.request(ArtifactSubjects.kind.list, {});
+    const listed = await bus.request(createTestCall(), ArtifactSubjects.kind.list, {});
     expect(listed.kinds.map((entry) => entry.kind).sort()).toEqual(['design-note', 'implementation-plan']);
 
     await registry.destroy();
@@ -192,10 +189,10 @@ describe('createArtifactKindContributionProcessor', () => {
 
     await processor.processActivated('planner', pkg, makeContext(bus, registry));
     await processor.processStopped?.('planner');
-    await expect(bus.request(ArtifactSubjects.kind.list, {})).resolves.toEqual({ kinds: [] });
+    await expect(bus.request(createTestCall(), ArtifactSubjects.kind.list, {})).resolves.toEqual({ kinds: [] });
 
     await processor.processActivated('planner', pkg, makeContext(bus, registry));
-    const listed = await bus.request(ArtifactSubjects.kind.list, {});
+    const listed = await bus.request(createTestCall(), ArtifactSubjects.kind.list, {});
     expect(listed.kinds.map((entry) => entry.kind)).toEqual(['implementation-plan']);
 
     await registry.destroy();

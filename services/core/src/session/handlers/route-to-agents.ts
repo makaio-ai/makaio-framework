@@ -5,6 +5,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AdapterSubjects, AgentSubjects } from '@makaio/contracts';
 import {
   applyCwdChangeTemplate,
@@ -28,6 +29,8 @@ import { convertSessionMessage } from '../context/convert-session-message.js';
 import { getFullConversation } from '../context/get-full-conversation.js';
 import { emitLocalityDegradeEvent } from '../session-lifecycle-events.js';
 import type { TurnCompletionRecorder } from './routing-lifecycle.js';
+import { buildAgentContext } from './agent-context.js';
+import type { CwdSwapMeta } from './agent-context.js';
 
 /**
  * Interface for turn context enrichment.
@@ -35,30 +38,11 @@ import type { TurnCompletionRecorder } from './routing-lifecycle.js';
  */
 interface ITurnContextEnricher {
   enrichForDeliveryMode(
+    call: CallContext,
     originalHistory: Message[] | undefined,
     turnId: string,
     deliveryMode: 'enqueue' | 'immediate' | 'replace' | undefined,
   ): Promise<Message[] | undefined>;
-}
-
-interface CwdSwapMeta {
-  previousCwd: string;
-  newCwd: string;
-}
-
-interface PerAgentContextInput {
-  baseContext?: SessionContext;
-  recoveryContext?: SessionContext;
-  isRecovered: boolean;
-  isSwapped: boolean;
-  swapMeta?: CwdSwapMeta;
-  /**
-   * Pre-resolved CWD change message to inject, or undefined when notifications
-   * are disabled or no swap occurred. Resolved once in `routeToAgents` before
-   * the per-agent fan-out to avoid redundant preference lookups.
-   */
-  cwdMessage?: string;
-  freshMessageHistory?: Message[];
 }
 
 interface RouteToSingleAgentInput {
@@ -68,7 +52,7 @@ interface RouteToSingleAgentInput {
   message: MessageInput;
   messageId: string;
   deliveryMode: 'enqueue' | 'immediate' | undefined;
-  onTurnComplete: (turn: Turn, result: { success: boolean; errors: string[] }) => Promise<void>;
+  onTurnComplete: (call: CallContext, turn: Turn, result: { success: boolean; errors: string[] }) => Promise<void>;
   agent: MakaioSessionAgent;
   agentContext?: SessionContext;
   responseSchema?: ResponseSchemaDescriptor;
@@ -77,12 +61,14 @@ interface RouteToSingleAgentInput {
 
 /**
  * Resolve native fork capabilities for all target agents.
+ * @param call - Call context of the handled message being routed; forwarded to the capability queries
  * @param bus - Bus instance for adapter capability queries
  * @param session - Session being routed
  * @param agents - Target agents that would receive the same fork context
  * @returns Capability signals for fork context assembly
  */
 async function resolveForkContextCapabilities(
+  call: CallContext,
   bus: IMakaioBus,
   session: IMakaioSession,
   agents: MakaioSessionAgent[],
@@ -99,7 +85,7 @@ async function resolveForkContextCapabilities(
   const results = await Promise.all(
     adapterIds.map(async (adapterId) => {
       try {
-        const result = await bus.requestOptional(AdapterSubjects.getCapabilities, { adapterId });
+        const result = await bus.requestOptional(call, AdapterSubjects.getCapabilities, { adapterId });
         const capabilities = result.handled ? new Set(result.data.capabilities) : new Set<string>();
         return {
           supportsNativeFork: capabilities.has('session:fork'),
@@ -115,46 +101,6 @@ async function resolveForkContextCapabilities(
     adapterSupportsNativeFork: results.every((r) => r.supportsNativeFork),
     midHistoryForkSupported: results.every((r) => r.supportsMidHistoryFork),
   };
-}
-
-/**
- * Build agent-specific session context by layering recovery/swap overlays.
- * @param input - Base and overlay context inputs for a single agent
- * @returns Final context for this agent, or undefined when no context applies
- */
-function buildAgentContext(input: PerAgentContextInput): SessionContext | undefined {
-  const { baseContext, recoveryContext, isRecovered, isSwapped, swapMeta, cwdMessage, freshMessageHistory } = input;
-
-  let agentContext = isRecovered && recoveryContext ? { ...baseContext, ...recoveryContext } : baseContext;
-  if (!isSwapped) {
-    // Keep non-swapped agents on their normal resume path.
-    return agentContext;
-  }
-
-  const cwdChangeContext =
-    swapMeta && cwdMessage !== undefined
-      ? {
-          cwdChange: {
-            previousCwd: swapMeta.previousCwd,
-            newCwd: swapMeta.newCwd,
-            message: cwdMessage,
-          },
-        }
-      : undefined;
-
-  agentContext = {
-    ...agentContext,
-    hasConnectorSwap: true,
-    ...(freshMessageHistory !== undefined && { messageHistory: freshMessageHistory }),
-    ...(cwdChangeContext && {
-      turnContext: {
-        ...agentContext?.turnContext,
-        ...cwdChangeContext,
-      },
-    }),
-  };
-
-  return agentContext;
 }
 
 /**
@@ -178,10 +124,15 @@ interface SendAndAcknowledgePayload {
  *
  * This is the single source of truth for the send + acknowledge sequence shared
  * by the native-attempt path and the standard dispatch path.
+ * @param call - Call context of the handled message being routed; forwarded to the send and acknowledgement
  * @param bus - Bus instance
  * @param payload - All fields required for the bus call and the acknowledgement
  */
-async function sendAndAcknowledge(bus: IMakaioBus, payload: SendAndAcknowledgePayload): Promise<void> {
+async function sendAndAcknowledge(
+  call: CallContext,
+  bus: IMakaioBus,
+  payload: SendAndAcknowledgePayload,
+): Promise<void> {
   const {
     agentId,
     adapterId,
@@ -194,7 +145,7 @@ async function sendAndAcknowledge(bus: IMakaioBus, payload: SendAndAcknowledgePa
     responseSchema,
     turn,
   } = payload;
-  await bus.request(AgentSubjects.sendMessage, {
+  await bus.request(call, AgentSubjects.sendMessage, {
     agentId,
     adapterId,
     message,
@@ -205,7 +156,7 @@ async function sendAndAcknowledge(bus: IMakaioBus, payload: SendAndAcknowledgePa
     sessionContext,
     ...(responseSchema !== undefined && { responseSchema }),
   });
-  await emitRoutingAcknowledged(bus, {
+  await emitRoutingAcknowledged(call, bus, {
     sessionId: turn.sessionId,
     turnId: turn.turnId,
     turnNumber: turn.turnNumber,
@@ -220,17 +171,19 @@ async function sendAndAcknowledge(bus: IMakaioBus, payload: SendAndAcknowledgePa
  * The current user message is routed separately as `message`; it may already
  * be persisted before routing starts, so it must not also appear in injected
  * retry history.
+ * @param call - Call context of the handled message being routed; forwarded to the history lookup
  * @param bus - Bus instance
  * @param session - Session to build context for
  * @param currentMessageId - Current user message ID to exclude from history
  * @returns SessionContext with filtered messageHistory and fresh-mode signal
  */
 async function buildNativeFallbackContext(
+  call: CallContext,
   bus: IMakaioBus,
   session: IMakaioSession,
   currentMessageId: string,
 ): Promise<SessionContext> {
-  const contextResult = await getFullConversation(bus, session.sessionId);
+  const contextResult = await getFullConversation(call, bus, session.sessionId);
   const messageHistory = contextResult.messages
     .filter((storedMessage) => storedMessage.messageId !== currentMessageId)
     .map(convertSessionMessage);
@@ -254,6 +207,7 @@ async function buildNativeFallbackContext(
  * catch. An acknowledgement listener failure after a successful send is
  * reported without changing delivery state, so an accepted provider turn is
  * neither retried nor terminalized prematurely.
+ * @param call - Call context of the handled message being routed; forwarded to the send, degrade event and history lookup
  * @param bus - Bus instance
  * @param session - Session for history building on degrade
  * @param payload - Shared request fields for the bus call
@@ -262,6 +216,7 @@ async function buildNativeFallbackContext(
  *   context when it failed (caller must retry on the standard path)
  */
 async function attemptNativeSendOrDegrade(
+  call: CallContext,
   bus: IMakaioBus,
   session: IMakaioSession,
   payload: {
@@ -282,7 +237,7 @@ async function attemptNativeSendOrDegrade(
   // The degrade catch covers only the actual send so fallback cannot duplicate
   // an already accepted provider turn.
   try {
-    await bus.request(AgentSubjects.sendMessage, {
+    await bus.request(call, AgentSubjects.sendMessage, {
       agentId,
       adapterId,
       message,
@@ -299,7 +254,7 @@ async function attemptNativeSendOrDegrade(
     }
     // Native send failed — build degraded context so the caller can retry.
     const degradeVerdict = { kind: 'degrade' as const, reason: 'native-attempt-failed' as const };
-    void emitLocalityDegradeEvent(bus, {
+    void emitLocalityDegradeEvent(call, bus, {
       sessionId,
       intent: nativeContext.nativeFork ? 'fork' : 'resume',
       verdict: degradeVerdict,
@@ -307,7 +262,7 @@ async function attemptNativeSendOrDegrade(
       adapterId,
       turnId,
     });
-    const freshContext = await buildNativeFallbackContext(bus, session, messageId);
+    const freshContext = await buildNativeFallbackContext(call, bus, session, messageId);
     return {
       ...nativeContext,
       ...freshContext,
@@ -317,7 +272,7 @@ async function attemptNativeSendOrDegrade(
   }
 
   // Send succeeded — acknowledgement cannot roll delivery back.
-  await emitRoutingAcknowledged(bus, {
+  await emitRoutingAcknowledged(call, bus, {
     sessionId: turn.sessionId,
     turnId: turn.turnId,
     turnNumber: turn.turnNumber,
@@ -336,9 +291,10 @@ async function attemptNativeSendOrDegrade(
  * context (kind: 'degrade', reason: 'native-attempt-failed') and freshly built
  * message history. If the retry also fails, the error propagates to the standard
  * error handler and the agent is marked as errored.
+ * @param call - Call context of the handled message being routed; forwarded to every send
  * @param input - Routing payload and lifecycle dependencies for one agent
  */
-async function routeToSingleAgent(input: RouteToSingleAgentInput): Promise<void> {
+async function routeToSingleAgent(call: CallContext, input: RouteToSingleAgentInput): Promise<void> {
   const { bus, session, turn, message, messageId, deliveryMode, onTurnComplete, agent, responseSchema, turnManager } =
     input;
   let { agentContext } = input;
@@ -358,12 +314,12 @@ async function routeToSingleAgent(input: RouteToSingleAgentInput): Promise<void>
   try {
     // One-shot degrade retry: null on success, else a fallback retry context.
     if (agentContext?.nativeLocality?.kind === 'native') {
-      const fallback = await attemptNativeSendOrDegrade(bus, session, basePayload, agentContext);
+      const fallback = await attemptNativeSendOrDegrade(call, bus, session, basePayload, agentContext);
       if (fallback === null) return;
       agentContext = fallback;
     }
 
-    await sendAndAcknowledge(bus, {
+    await sendAndAcknowledge(call, bus, {
       agentId: agent.agentId,
       adapterId: agent.adapterId,
       message,
@@ -377,7 +333,7 @@ async function routeToSingleAgent(input: RouteToSingleAgentInput): Promise<void>
     });
   } catch (error) {
     if (getHookAbortError(error)) {
-      await terminalizeRoutingAgent({
+      await terminalizeRoutingAgent(call, {
         bus,
         turn,
         messageId,
@@ -390,7 +346,7 @@ async function routeToSingleAgent(input: RouteToSingleAgentInput): Promise<void>
     }
 
     const errorMessage = error instanceof Error ? error.message : String(error);
-    await terminalizeRoutingAgent({
+    await terminalizeRoutingAgent(call, {
       bus,
       turn,
       messageId,
@@ -422,7 +378,11 @@ export interface RouteToAgentsOptions {
   /** How to deliver the message. */
   readonly deliveryMode: 'enqueue' | 'immediate' | undefined;
   /** Callback when turn completes (all agents done). */
-  readonly onTurnComplete: (turn: Turn, result: { success: boolean; errors: string[] }) => Promise<void>;
+  readonly onTurnComplete: (
+    call: CallContext,
+    turn: Turn,
+    result: { success: boolean; errors: string[] },
+  ) => Promise<void>;
   /** Shared turn ledger owner. */
   readonly turnManager: TurnCompletionRecorder;
   /** Session context with curated messageHistory and decision signals. */
@@ -455,19 +415,21 @@ export interface RouteToAgentsOptions {
  * a native fork directive can never reach the provider. Degrade to
  * fresh-with-history so the child session starts with the projected parent
  * conversation instead of an empty context.
+ * @param call - Call context of the handled message being routed; forwarded to the degrade event and history lookup
  * @param bus - Bus for storage lookups and degrade event emission
  * @param session - Session being routed
  * @param context - Fork-enriched context carrying the nativeFork directive
  * @returns Context with nativeFork removed and history injected
  */
 async function degradeNativeForkForSendMessage(
+  call: CallContext,
   bus: IMakaioBus,
   session: IMakaioSession,
   context: SessionContext,
 ): Promise<SessionContext> {
   const verdict = { kind: 'degrade' as const, reason: 'agent-already-started' as const };
-  void emitLocalityDegradeEvent(bus, { sessionId: session.sessionId, intent: 'fork', verdict });
-  const contextResult = await getFullConversation(bus, session.sessionId);
+  void emitLocalityDegradeEvent(call, bus, { sessionId: session.sessionId, intent: 'fork', verdict });
+  const contextResult = await getFullConversation(call, bus, session.sessionId);
   const messageHistory = contextResult.messages.map(convertSessionMessage);
   return { ...context, messageHistory, nativeFork: undefined, nativeLocality: verdict };
 }
@@ -479,9 +441,10 @@ async function degradeNativeForkForSendMessage(
  * and checks for turn completion.
  *
  * For fork sessions on their first turn, assembles projected context from parent chain.
+ * @param call - Call context of the handled message being routed; forwarded to every send
  * @param options - Routing options including bus, session, agents, message, and lifecycle dependencies
  */
-export async function routeToAgents(options: RouteToAgentsOptions): Promise<void> {
+export async function routeToAgents(call: CallContext, options: RouteToAgentsOptions): Promise<void> {
   const {
     bus,
     session,
@@ -503,8 +466,9 @@ export async function routeToAgents(options: RouteToAgentsOptions): Promise<void
     responseSchema,
     localMachineId,
   } = options;
-  const forkContextCapabilities = await resolveForkContextCapabilities(bus, session, agents);
+  const forkContextCapabilities = await resolveForkContextCapabilities(call, bus, session, agents);
   let forkEnrichedContext = await assembleForkContext(
+    call,
     bus,
     session,
     session.sessionId,
@@ -516,12 +480,13 @@ export async function routeToAgents(options: RouteToAgentsOptions): Promise<void
 
   // nativeFork is only consumable on the startAgent path — degrade it for sendMessage.
   if (forkEnrichedContext?.nativeFork) {
-    forkEnrichedContext = await degradeNativeForkForSendMessage(bus, session, forkEnrichedContext);
+    forkEnrichedContext = await degradeNativeForkForSendMessage(call, bus, session, forkEnrichedContext);
   }
 
+  const originalHistory = forkEnrichedContext?.messageHistory;
   const enrichedMessageHistory = turnContextEnricher
-    ? await turnContextEnricher.enrichForDeliveryMode(forkEnrichedContext?.messageHistory, turn.turnId, deliveryMode)
-    : forkEnrichedContext?.messageHistory;
+    ? await turnContextEnricher.enrichForDeliveryMode(call, originalHistory, turn.turnId, deliveryMode)
+    : originalHistory;
 
   const enrichedSessionContext = forkEnrichedContext
     ? { ...forkEnrichedContext, messageHistory: enrichedMessageHistory }
@@ -529,7 +494,7 @@ export async function routeToAgents(options: RouteToAgentsOptions): Promise<void
 
   // Read the CWD notification preference once before fanning out to agents.
   const cwdChangePref = swappedAgentIds?.size
-    ? await readCwdChangeNotificationPref(bus)
+    ? await readCwdChangeNotificationPref(call, bus)
     : DEFAULT_CWD_CHANGE_NOTIFICATION;
 
   const routingPromises = agents.map(async (agent) => {
@@ -549,7 +514,7 @@ export async function routeToAgents(options: RouteToAgentsOptions): Promise<void
       freshMessageHistory,
     });
 
-    await routeToSingleAgent({
+    await routeToSingleAgent(call, {
       bus,
       session,
       turn,

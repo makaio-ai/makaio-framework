@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import { shellStatusTool } from '../../src/tools/shell-status.js';
 import { DEFAULT_CONSTRAINTS } from '../../src/types.js';
 import { setupShellManagerTest } from './shared.js';
@@ -29,6 +30,7 @@ describe('shellStatusTool', () => {
       });
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_status',
         { shellId: instance.shellId },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -66,6 +68,7 @@ describe('shellStatusTool', () => {
       await instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_status',
         { shellId: instance.shellId },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -99,6 +102,7 @@ describe('shellStatusTool', () => {
       await instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_status',
         { shellId: instance.shellId },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -125,6 +129,7 @@ describe('shellStatusTool', () => {
       await instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_status',
         { shellId: instance.shellId },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -154,6 +159,7 @@ describe('shellStatusTool', () => {
       await instance.waitForExit();
 
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_status',
         { shellId: instance.shellId },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -168,6 +174,7 @@ describe('shellStatusTool', () => {
 
     it('errors for unknown shell ID', async () => {
       const result = await ctx.registry.execute(
+        createTestCall(),
         'shell_status',
         { shellId: 'nonexistent-id' },
         { contextOverrides: { constraints: ctx.constraints } },

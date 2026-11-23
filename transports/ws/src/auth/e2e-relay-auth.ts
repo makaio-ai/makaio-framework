@@ -6,7 +6,7 @@
  * known peer signing keys, deriving a shared session key.
  */
 
-import type { TransportReceiveContext } from '@makaio/core';
+import { MAKAIO_E2E_PEER_PARTY_KIND, type TransportReceiveContext } from '@makaio/core';
 import type { TransportAuth } from './interface.js';
 import type { WebSocketLike } from '../types.js';
 import {
@@ -291,7 +291,9 @@ export class E2ERelayAuth implements TransportAuth {
     }
     return {
       transportName: '',
-      peer: { kind: 'e2e', id: peerId, authenticated: true, encrypted: true },
+      authenticated: true,
+      encrypted: true,
+      caller: { kind: MAKAIO_E2E_PEER_PARTY_KIND, id: peerId },
     };
   }
 

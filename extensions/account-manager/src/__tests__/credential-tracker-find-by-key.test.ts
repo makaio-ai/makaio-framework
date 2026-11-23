@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManager } from '../account-manager.js';
 import { InMemoryCredentialSource } from './testing/in-memory-source.js';
 import { InMemoryAccountStore } from './testing/in-memory-store.js';
@@ -112,7 +113,7 @@ describe('CredentialTracker.findByCredentialKey', () => {
       const corruptedAccountId = randomUUID();
       const now = Date.now();
 
-      await store.metadataStore.upsert('claude-code', {
+      await store.metadataStore.upsert(createTestCall(), 'claude-code', {
         id: corruptedAccountId,
         active: false,
         detectedAt: now,
@@ -168,7 +169,7 @@ describe('CredentialTracker.findByCredentialKey', () => {
       const accountId = randomUUID();
       const now = Date.now();
 
-      await store.metadataStore.upsert('claude-code', {
+      await store.metadataStore.upsert(createTestCall(), 'claude-code', {
         id: accountId,
         active: false,
         detectedAt: now,
@@ -214,7 +215,7 @@ describe('CredentialTracker.findByCredentialKey', () => {
       const accountId = randomUUID();
       const now = Date.now();
 
-      await store.metadataStore.upsert('claude-code', {
+      await store.metadataStore.upsert(createTestCall(), 'claude-code', {
         id: accountId,
         active: false,
         detectedAt: now,

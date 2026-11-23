@@ -98,6 +98,28 @@ def assert_conformance_assertion_shape(case_id, assertion):
         if not isinstance(assertion.get("resultRef"), str):
             raise AssertionError(f"{case_id} auth-handshake assertions must declare a resultRef")
         return
+    # Principal assertion kinds: shape checks of the case fixture only. The
+    # SDK does not decide caller or principal: the receiving core derives and checks them (FACT-375).
+    if kind == "principal-declared":
+        if not isinstance(assertion.get("messageRef"), str):
+            raise AssertionError(f"{case_id} principal-declared assertions must declare a messageRef")
+        if not isinstance(assertion.get("principal"), dict):
+            raise AssertionError(f"{case_id} principal-declared assertions must declare a principal")
+        if not isinstance(assertion.get("caller"), str):
+            raise AssertionError(f"{case_id} principal-declared assertions must declare a caller")
+        return
+    if kind == "envelope-field-ignored":
+        if not isinstance(assertion.get("messageRef"), str):
+            raise AssertionError(f"{case_id} envelope-field-ignored assertions must declare a messageRef")
+        if not isinstance(assertion.get("field"), str):
+            raise AssertionError(f"{case_id} envelope-field-ignored assertions must declare a field")
+        return
+    if kind == "principal-is-caller":
+        if not isinstance(assertion.get("messageRef"), str):
+            raise AssertionError(f"{case_id} principal-is-caller assertions must declare a messageRef")
+        if not isinstance(assertion.get("caller"), str):
+            raise AssertionError(f"{case_id} principal-is-caller assertions must declare a caller")
+        return
     raise AssertionError(f"{case_id} declares unsupported assertion kind {kind!r}")
 
 

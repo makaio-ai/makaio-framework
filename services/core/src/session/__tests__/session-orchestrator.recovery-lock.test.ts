@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createBusInstance, MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, AgentSubjects, SessionOwnershipStorageSubjects, SessionSubjects } from '@makaio/contracts';
-import type { IMakaioSession, MakaioSessionAgent } from '@makaio/contracts';
+import type { CallContext, IMakaioSession, MakaioSessionAgent } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { SessionOrchestrator } from '../session-orchestrator.js';
 import { MakaioSessionService } from '../session-service.js';
@@ -74,12 +75,12 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     await service.init();
     orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
     await publishLiveTestAdapter();
-    const liveAdapter = await MakaioBus.request(AdapterRuntimeSubjects.resolveId, {
+    const liveAdapter = await MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveId, {
       adapterName: 'test-adapter',
       machineId: MACHINE_ID,
     });
     await expect(
-      MakaioBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, {
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveLiveIdentity, {
         adapterId: liveAdapter.adapterId,
         adapterName: 'test-adapter',
         machineId: MACHINE_ID,
@@ -102,14 +103,14 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
    * @param agentIds - Agents to persist into it; the first one leads.
    */
   async function seedSession(sessionId: string, agentIds: readonly string[]): Promise<void> {
-    await MakaioBus.request(SessionSubjects.create, { sessionId, machineId: MACHINE_ID });
+    await MakaioBus.request(createTestCall(), SessionSubjects.create, { sessionId, machineId: MACHINE_ID });
     for (const agentId of agentIds) {
       const agent: MakaioSessionAgent = createTestAgent(agentId, {
         sessionId,
         role: agentId === agentIds[0] ? 'lead' : 'member',
         runtimeOwner: { machineId: MACHINE_ID, instanceId: service.requireOwnershipInstanceId() },
       });
-      await MakaioBus.request(AgentStorageSubjects.set, { agentId, agent });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.set, { agentId, agent });
     }
   }
 
@@ -119,11 +120,11 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
    * seam; a deterministic ID alone proves neither a process nor its owner.
    */
   async function publishLiveTestAdapter(): Promise<void> {
-    const { adapterId } = await MakaioBus.request(AdapterRuntimeSubjects.resolveId, {
+    const { adapterId } = await MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveId, {
       adapterName: 'test-adapter',
       machineId: MACHINE_ID,
     });
-    await MakaioBus.emit(AdapterSubjects.initialized, {
+    await MakaioBus.emit(createTestCall(), AdapterSubjects.initialized, {
       adapterId,
       adapterName: 'test-adapter',
       machineId: MACHINE_ID,
@@ -138,25 +139,33 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
    * This deliberately bypasses the local exclusive-start registry: the test is
    * exercising what a different process observes after the reservation has
    * persisted, not what a second send in this process joins.
+   * @param call - Call context of the recovery being exercised.
    * @param agentId - Agent whose persisted recovery snapshot is reserved.
    * @param ownerInstanceId - Authority incarnation that owns this recovery.
    * @param resumeProviderSessionId - Provider key to reserve, or `null` for a fresh recovery.
    * @returns The real reserved-rehydrate lifecycle.
    */
   async function startForeignReservedRehydrate(
+    call: CallContext,
     agentId: string,
     ownerInstanceId: string,
     resumeProviderSessionId: string | null,
   ): Promise<ReservedRehydrateOutcome> {
-    const snapshot = await readRecoveryPlanningSnapshot(MakaioBus, agentId);
+    const snapshot = await readRecoveryPlanningSnapshot(call, MakaioBus, agentId);
     if (snapshot === null) throw new Error(`expected recovery snapshot for ${agentId}`);
-    const { adapterId } = await MakaioBus.request(AdapterRuntimeSubjects.resolveId, {
+    const { adapterId } = await MakaioBus.request(call, AdapterRuntimeSubjects.resolveId, {
       adapterName: snapshot.agent.adapterName,
       machineId: MACHINE_ID,
     });
     const instance = { adapterId, machineId: MACHINE_ID, ownerInstanceId };
-    const recoveryGuard = await buildRecoveryReservationGuard(MakaioBus, snapshot, instance, resumeProviderSessionId);
-    return runReservedRehydrate(MakaioBus, {
+    const recoveryGuard = await buildRecoveryReservationGuard(
+      call,
+      MakaioBus,
+      snapshot,
+      instance,
+      resumeProviderSessionId,
+    );
+    return runReservedRehydrate(call, MakaioBus, {
       agent: snapshot.agent,
       sessionId: snapshot.agent.sessionId,
       instance,
@@ -187,13 +196,13 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     const sent = registerSendCapture();
     orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
 
-    const first = MakaioBus.request(SessionSubjects.sendMessage, {
+    const first = MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'overlap-superset',
       agentIds: ['agent-1', 'agent-2'],
     });
     await firstRehydrateStarted.promise;
-    const second = MakaioBus.request(SessionSubjects.sendMessage, {
+    const second = MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'overlap-subset',
       agentIds: ['agent-1'],
@@ -247,7 +256,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
       return 'connected';
     });
 
-    const send = MakaioBus.request(SessionSubjects.sendMessage, {
+    const send = MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'joins-the-attempt',
       agentIds: ['agent-1'],
@@ -306,11 +315,14 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     const attempt = createDeferred<void>();
     const inFlight = runExclusiveStart('agent-1', async () => {
       await attempt.promise;
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'dead' });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-1',
+        status: 'dead',
+      });
       return 'no-connector';
     });
 
-    const send = MakaioBus.request(SessionSubjects.sendMessage, {
+    const send = MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'joins-then-recovers',
       agentIds: ['agent-1'],
@@ -348,7 +360,10 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     // ask is whether a *connector* answers, and here one does.
     const sessionId = 'session-live-peer';
     await seedSession(sessionId, ['agent-1']);
-    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'starting' });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+      agentId: 'agent-1',
+      status: 'starting',
+    });
     // The peer's start landed: its connector is registered and answers.
     probeUnsub?.();
     probeUnsub = MakaioBus.on(AdapterSubjects.getAgent, (ctx) => {
@@ -366,7 +381,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     const sent = registerSendCapture();
     orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
 
-    await MakaioBus.request(SessionSubjects.sendMessage, {
+    await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'races a live peer',
       agentIds: ['agent-1'],
@@ -385,7 +400,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
 
     // Which is what the next send needs: it re-reads the row, finds a usable
     // agent instead of a recoverable one, and neither arbitrates nor rebuilds.
-    await MakaioBus.request(SessionSubjects.sendMessage, {
+    await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'the send after the veto',
       agentIds: ['agent-1'],
@@ -405,7 +420,10 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     // rebuilding it, which is the case the compare-and-swap rule exists for.
     const sessionId = 'session-dead-peer';
     await seedSession(sessionId, ['agent-1']);
-    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'starting' });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+      agentId: 'agent-1',
+      status: 'starting',
+    });
     probeUnsub?.();
 
     let rehydrateCallCount = 0;
@@ -417,7 +435,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     const sent = registerSendCapture();
     orchestrator = new SessionOrchestrator(MakaioBus, 'test-machine');
 
-    await MakaioBus.request(SessionSubjects.sendMessage, {
+    await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'races a dead peer',
       agentIds: ['agent-1'],
@@ -443,7 +461,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     });
     const session = createMockSession({ sessionId: 'session-no-storage', agents: [agent], leadAgentId: agentId });
 
-    const resolution = await resolveInFlightStarts(bare, session);
+    const resolution = await resolveInFlightStarts(createTestCall(), bare, session);
 
     // Recovered, not dropped: an absent arbiter is not evidence the agent is gone.
     expect([...resolution.recoveringAgentIds]).toEqual([agentId]);
@@ -461,8 +479,11 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     // moved off.
     const sessionId = 'session-rebound-by-join';
     await seedSession(sessionId, ['agent-1']);
-    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'starting' });
-    const read = (await MakaioBus.request(SessionSubjects.get, { sessionId })).session;
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+      agentId: 'agent-1',
+      status: 'starting',
+    });
+    const read = (await MakaioBus.request(createTestCall(), SessionSubjects.get, { sessionId })).session;
     if (!read) throw new Error('seeded session is missing');
     // Detached explicitly, which is what a send holds: a snapshot taken before
     // the attempt ran. Both backends materialise their reads now, so the copy is
@@ -475,15 +496,18 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     const attempt = createDeferred<void>();
     const inFlight = runExclusiveStart('agent-1', async () => {
       await attempt.promise;
-      await MakaioBus.request(AgentStorageSubjects.updateRuntime, {
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateRuntime, {
         agentId: 'agent-1',
         adapterId: 'rebound-adapter',
       });
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'idle' });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-1',
+        status: 'idle',
+      });
       return 'connected';
     });
 
-    const resolving = resolveInFlightStarts(MakaioBus, session);
+    const resolving = resolveInFlightStarts(createTestCall(), MakaioBus, session);
     attempt.resolve();
     await inFlight.settled;
     const resolution = await resolving;
@@ -503,8 +527,14 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     // the one that just landed.
     const sessionId = 'session-joined-start-refreshes-sibling';
     await seedSession(sessionId, ['agent-1', 'agent-2']);
-    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'starting' });
-    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'dead' });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+      agentId: 'agent-1',
+      status: 'starting',
+    });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+      agentId: 'agent-2',
+      status: 'dead',
+    });
 
     probeUnsub?.();
     probeUnsub = MakaioBus.on(AdapterSubjects.getAgent, (ctx) => {
@@ -528,16 +558,22 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     const releaseStart = createDeferred<void>();
     const inFlight = runExclusiveStart('agent-1', async () => {
       await releaseStart.promise;
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'idle' });
-      await MakaioBus.request(AgentStorageSubjects.updateRuntime, {
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-1',
+        status: 'idle',
+      });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateRuntime, {
         agentId: 'agent-2',
         adapterId: 'agent-2-live',
       });
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'idle' });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-2',
+        status: 'idle',
+      });
       return 'connected';
     });
 
-    const send = MakaioBus.request(SessionSubjects.sendMessage, {
+    const send = MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'uses-the-sibling-that-landed',
       agentIds: ['agent-2'],
@@ -562,23 +598,35 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     // compare-and-swap arbitration and provenance as an originally starting row.
     const sessionId = 'session-joined-start-refreshes-starting-sibling';
     await seedSession(sessionId, ['agent-1', 'agent-2']);
-    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'starting' });
-    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'dead' });
-    const read = (await MakaioBus.request(SessionSubjects.get, { sessionId })).session;
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+      agentId: 'agent-1',
+      status: 'starting',
+    });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+      agentId: 'agent-2',
+      status: 'dead',
+    });
+    const read = (await MakaioBus.request(createTestCall(), SessionSubjects.get, { sessionId })).session;
     if (!read) throw new Error('seeded session is missing');
     const session: IMakaioSession = { ...read, agents: read.agents.map((agent) => ({ ...agent })) };
 
     const releaseStart = createDeferred<void>();
     const inFlight = runExclusiveStart('agent-1', async () => {
       await releaseStart.promise;
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'idle' });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-1',
+        status: 'idle',
+      });
       return 'connected';
     });
 
-    const resolving = resolveInFlightStarts(MakaioBus, session);
+    const resolving = resolveInFlightStarts(createTestCall(), MakaioBus, session);
     try {
       await settleEventLoop();
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'starting' });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-2',
+        status: 'starting',
+      });
     } finally {
       releaseStart.resolve();
     }
@@ -605,8 +653,8 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     const agentId = 'agent-1';
     await seedSession(sessionId, [agentId]);
     const resumeProviderSessionId = `provider-${agentId}`;
-    await MakaioBus.request(AgentStorageSubjects.delete, { agentId });
-    await MakaioBus.request(AgentStorageSubjects.set, {
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.delete, { agentId });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.set, {
       agentId,
       agent: createTestAgent(agentId, {
         sessionId,
@@ -657,13 +705,14 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
 
     const foreignRecovery = startForeignReservedRehydrate(
+      createTestCall(),
       agentId,
       service.requireOwnershipInstanceId(),
       resumeProviderSessionId,
     );
     await firstRehydrateEntered.promise;
 
-    const failure = await MakaioBus.request(SessionSubjects.sendMessage, {
+    const failure = await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'must-not-touch-foreign-recovery',
       agentIds: [agentId],
@@ -679,7 +728,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     expect(rehydrated).toBe(1);
     expect(stopped).toBe(0);
     expect(sent).toEqual([]);
-    const { agent } = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+    const { agent } = await MakaioBus.request(createTestCall(), AgentStorageSubjects.get, { agentId });
     expect(agent).toMatchObject({
       status: 'starting',
       runtimeOwner: { machineId: MACHINE_ID, instanceId: service.requireOwnershipInstanceId() },
@@ -693,8 +742,8 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     const agentId = 'agent-retired-guarded-recovery';
     await seedSession(sessionId, [agentId]);
     const resumeProviderSessionId = `provider-${agentId}`;
-    await MakaioBus.request(AgentStorageSubjects.delete, { agentId });
-    await MakaioBus.request(AgentStorageSubjects.set, {
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.delete, { agentId });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.set, {
       agentId,
       agent: createTestAgent(agentId, {
         sessionId,
@@ -713,9 +762,9 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     });
 
     const retiredOwnerInstanceId = service.requireOwnershipInstanceId();
-    const firstRecovery = startForeignReservedRehydrate(agentId, retiredOwnerInstanceId, null);
+    const firstRecovery = startForeignReservedRehydrate(createTestCall(), agentId, retiredOwnerInstanceId, null);
     await firstRehydrateEntered.promise;
-    const guarded = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+    const guarded = await MakaioBus.request(createTestCall(), AgentStorageSubjects.get, { agentId });
     const guardedAgent = guarded.agent;
     if (guardedAgent === null || guardedAgent.recoveryAttemptId === undefined) {
       throw new Error('expected the real reservation attempt fence');
@@ -725,23 +774,27 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     // The authority records retirement only after real teardown evidence; a
     // made-up runtime row would not exercise the ownership lifecycle this
     // consumer relies on.
-    await MakaioBus.emit(AdapterRuntimeSubjects.teardownCompleted, {
+    await MakaioBus.emit(createTestCall(), AdapterRuntimeSubjects.teardownCompleted, {
       ownerInstanceId: retiredOwnerInstanceId,
       evidence: 'released',
     });
-    await MakaioBus.emit(AdapterSubjects.deinitialized, {
+    await MakaioBus.emit(createTestCall(), AdapterSubjects.deinitialized, {
       adapterId: guardedAgent.adapterId,
       adapterName: guardedAgent.adapterName,
       machineId: MACHINE_ID,
       ownerInstanceId: retiredOwnerInstanceId,
     });
     await service.destroy();
-    const optionalRetired = await MakaioBus.requestOptional(SessionOwnershipStorageSubjects.getRuntimeInstance, {
-      instanceId: retiredOwnerInstanceId,
-      machineId: MACHINE_ID,
-    });
+    const optionalRetired = await MakaioBus.requestOptional(
+      createTestCall(),
+      SessionOwnershipStorageSubjects.getRuntimeInstance,
+      {
+        instanceId: retiredOwnerInstanceId,
+        machineId: MACHINE_ID,
+      },
+    );
     expect(optionalRetired).toMatchObject({ handled: true, data: { instance: { retiredAt: expect.any(Number) } } });
-    expect((await MakaioBus.request(AgentStorageSubjects.get, { agentId })).agent).toMatchObject({
+    expect((await MakaioBus.request(createTestCall(), AgentStorageSubjects.get, { agentId })).agent).toMatchObject({
       status: 'starting',
       recoveryAttemptId: retiredAttemptId,
       runtimeOwner: { machineId: MACHINE_ID, instanceId: retiredOwnerInstanceId },
@@ -774,7 +827,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
     await publishLiveTestAdapter();
     const sent = registerSendCapture();
-    await MakaioBus.request(SessionSubjects.sendMessage, {
+    await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'recover exactly once',
       agentIds: [agentId],
@@ -782,7 +835,9 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     expect(finalizations[0]).toEqual({ attemptId: retiredAttemptId, action: 'failed' });
     expect(recoveryDispatches).toBe(1);
     expect(sent).toEqual([{ agentId, message: 'recover exactly once' }]);
-    expect((await MakaioBus.request(AgentStorageSubjects.get, { agentId })).agent).toMatchObject({ status: 'idle' });
+    expect((await MakaioBus.request(createTestCall(), AgentStorageSubjects.get, { agentId })).agent).toMatchObject({
+      status: 'idle',
+    });
     releaseFirstRehydrate.resolve();
     await firstRecovery;
   });
@@ -792,8 +847,8 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     const agentId = 'agent-stale-retired-finalizer';
     await seedSession(sessionId, [agentId]);
     const resumeProviderSessionId = `provider-${agentId}`;
-    await MakaioBus.request(AgentStorageSubjects.delete, { agentId });
-    await MakaioBus.request(AgentStorageSubjects.set, {
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.delete, { agentId });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.set, {
       agentId,
       agent: createTestAgent(agentId, {
         sessionId,
@@ -829,20 +884,25 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     );
 
     const retiredOwnerInstanceId = service.requireOwnershipInstanceId();
-    const firstRecovery = startForeignReservedRehydrate(agentId, retiredOwnerInstanceId, resumeProviderSessionId);
+    const firstRecovery = startForeignReservedRehydrate(
+      createTestCall(),
+      agentId,
+      retiredOwnerInstanceId,
+      resumeProviderSessionId,
+    );
     await firstRehydrateEntered.promise;
-    const guarded = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+    const guarded = await MakaioBus.request(createTestCall(), AgentStorageSubjects.get, { agentId });
     const guardedAgent = guarded.agent;
     if (guardedAgent === null || guardedAgent.recoveryAttemptId === undefined) {
       throw new Error('expected the first real reservation attempt fence');
     }
     const retiredAttemptId = guardedAgent.recoveryAttemptId;
     expect(guardedAgent.runtimeOwner).toEqual({ machineId: MACHINE_ID, instanceId: retiredOwnerInstanceId });
-    await MakaioBus.emit(AdapterRuntimeSubjects.teardownCompleted, {
+    await MakaioBus.emit(createTestCall(), AdapterRuntimeSubjects.teardownCompleted, {
       ownerInstanceId: retiredOwnerInstanceId,
       evidence: 'released',
     });
-    await MakaioBus.emit(AdapterSubjects.deinitialized, {
+    await MakaioBus.emit(createTestCall(), AdapterSubjects.deinitialized, {
       adapterId: guardedAgent.adapterId,
       adapterName: guardedAgent.adapterName,
       machineId: MACHINE_ID,
@@ -866,6 +926,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
             // owns the row. No synthetic guarded row or direct state mutation
             // can establish that ordering.
             supersedingOutcome = await startForeignReservedRehydrate(
+              ctx.call,
               agentId,
               service.requireOwnershipInstanceId(),
               resumeProviderSessionId,
@@ -882,7 +943,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
       ctx.setResult({ agent: { agentId: ctx.payload.agentId, sessionId, adapterSessionId: resumeProviderSessionId } });
     });
     const sent = registerSendCapture();
-    await MakaioBus.request(SessionSubjects.sendMessage, {
+    await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'uses the superseding recovery',
       agentIds: [agentId],
@@ -890,7 +951,9 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     expect(supersedingOutcome).toMatchObject({ kind: 'rehydrated' });
     expect(rehydrateCalls).toBe(2);
     expect(sent).toEqual([{ agentId, message: 'uses the superseding recovery' }]);
-    expect((await MakaioBus.request(AgentStorageSubjects.get, { agentId })).agent).toMatchObject({ status: 'idle' });
+    expect((await MakaioBus.request(createTestCall(), AgentStorageSubjects.get, { agentId })).agent).toMatchObject({
+      status: 'idle',
+    });
     expect(stopped).toEqual([]);
 
     releaseFirstRehydrate.resolve();
@@ -904,9 +967,18 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     // and the send must probe the final identity rather than the earlier row.
     const sessionId = 'session-joined-start-stable-sibling-refresh';
     await seedSession(sessionId, ['agent-1', 'agent-2', 'agent-3']);
-    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'starting' });
-    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'dead' });
-    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-3', status: 'dead' });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+      agentId: 'agent-1',
+      status: 'starting',
+    });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+      agentId: 'agent-2',
+      status: 'dead',
+    });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+      agentId: 'agent-3',
+      status: 'dead',
+    });
 
     const probedAgent2AdapterIds: string[] = [];
     probeUnsub?.();
@@ -950,34 +1022,49 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     const releaseFirstStart = createDeferred<void>();
     const firstStart = runExclusiveStart('agent-1', async () => {
       await releaseFirstStart.promise;
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'idle' });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-1',
+        status: 'idle',
+      });
       return 'connected';
     });
     const releaseLaterStart = createDeferred<void>();
     const laterStart = runExclusiveStart('agent-3', async () => {
       await releaseLaterStart.promise;
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-3', status: 'idle' });
-      await MakaioBus.request(AgentStorageSubjects.updateRuntime, {
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-3',
+        status: 'idle',
+      });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateRuntime, {
         agentId: 'agent-2',
         adapterId: 'agent-2-final',
       });
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'idle' });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-2',
+        status: 'idle',
+      });
       return 'connected';
     });
 
-    const send = MakaioBus.request(SessionSubjects.sendMessage, {
+    const send = MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'uses-the-final-sibling-identity',
       agentIds: ['agent-2'],
     });
     try {
       await settleEventLoop();
-      await MakaioBus.request(AgentStorageSubjects.updateRuntime, {
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateRuntime, {
         agentId: 'agent-2',
         adapterId: 'agent-2-first-refresh',
       });
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'idle' });
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-3', status: 'starting' });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-2',
+        status: 'idle',
+      });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-3',
+        status: 'starting',
+      });
       releaseFirstStart.resolve();
       await firstStart.settled;
       await agent2FirstRefresh.promise;
@@ -992,7 +1079,9 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     expect(rehydrateCallCount).toBe(0);
     expect(probedAgent2AdapterIds).toEqual(['agent-2-final']);
     expect(sent).toEqual([{ agentId: 'agent-2', message: 'uses-the-final-sibling-identity' }]);
-    const { agent: storedAgent2 } = await MakaioBus.request(AgentStorageSubjects.get, { agentId: 'agent-2' });
+    const { agent: storedAgent2 } = await MakaioBus.request(createTestCall(), AgentStorageSubjects.get, {
+      agentId: 'agent-2',
+    });
     expect(storedAgent2).toMatchObject({ adapterId: 'agent-2-final', status: 'idle' });
   });
 
@@ -1004,11 +1093,14 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     // that a local producer can keep invalidating forever.
     const sessionId = 'session-joined-start-refresh-pass-bound';
     await seedSession(sessionId, ['agent-1', 'agent-2', 'agent-3', 'agent-4']);
-    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'starting' });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+      agentId: 'agent-1',
+      status: 'starting',
+    });
     for (const agentId of ['agent-2', 'agent-3', 'agent-4']) {
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId, status: 'dead' });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, { agentId, status: 'dead' });
     }
-    const read = (await MakaioBus.request(SessionSubjects.get, { sessionId })).session;
+    const read = (await MakaioBus.request(createTestCall(), SessionSubjects.get, { sessionId })).session;
     if (!read) throw new Error('seeded session is missing');
     const agent = (agentId: string): MakaioSessionAgent => {
       const found = read.agents.find((candidate) => candidate.agentId === agentId);
@@ -1044,34 +1136,55 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     const releaseAgent1 = createDeferred<void>();
     const firstStart = runExclusiveStart('agent-1', async () => {
       await releaseAgent1.promise;
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'idle' });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-1',
+        status: 'idle',
+      });
       return 'connected';
     });
     const releaseAgent2 = createDeferred<void>();
     const secondStart = runExclusiveStart('agent-2', async () => {
       await releaseAgent2.promise;
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'idle' });
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-3', status: 'starting' });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-2',
+        status: 'idle',
+      });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-3',
+        status: 'starting',
+      });
       return 'connected';
     });
     const releaseAgent3 = createDeferred<void>();
     const thirdStart = runExclusiveStart('agent-3', async () => {
       await releaseAgent3.promise;
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-3', status: 'idle' });
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-4', status: 'starting' });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-3',
+        status: 'idle',
+      });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-4',
+        status: 'starting',
+      });
       return 'connected';
     });
     const releaseAgent4 = createDeferred<void>();
     const fourthStart = runExclusiveStart('agent-4', async () => {
       await releaseAgent4.promise;
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-4', status: 'idle' });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-4',
+        status: 'idle',
+      });
       return 'connected';
     });
 
-    const resolving = resolveInFlightStarts(MakaioBus, session);
+    const resolving = resolveInFlightStarts(createTestCall(), MakaioBus, session);
     try {
       await settleEventLoop();
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-2', status: 'starting' });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+        agentId: 'agent-2',
+        status: 'starting',
+      });
       releaseAgent1.resolve();
       await firstStart.settled;
       await agent2Observed.promise;
@@ -1125,7 +1238,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
       return 'no-connector';
     });
 
-    const send = MakaioBus.request(SessionSubjects.sendMessage, {
+    const send = MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'joins-a-rolled-back-attempt',
       agentIds: ['agent-1'],
@@ -1155,7 +1268,10 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     // rehydrate dispatched onto a live connector replaces it.
     const sessionId = 'session-starting-rolled-back';
     await seedSession(sessionId, ['agent-1']);
-    await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'starting' });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+      agentId: 'agent-1',
+      status: 'starting',
+    });
     probeUnsub?.();
     probeUnsub = MakaioBus.on(AdapterSubjects.getAgent, (ctx) => {
       ctx.setResult({
@@ -1177,7 +1293,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
       await attempt.promise;
       // The rollback rule, verbatim: the row returns to the status the claim
       // swapped out, and this attempt reports that it built nothing.
-      await MakaioBus.request(AgentStorageSubjects.updateStatus, {
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
         agentId: 'agent-1',
         status: 'idle',
         expectedStatus: ['starting'],
@@ -1185,7 +1301,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
       return 'no-connector';
     });
 
-    const send = MakaioBus.request(SessionSubjects.sendMessage, {
+    const send = MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'joins-a-starting-row',
       agentIds: ['agent-1'],
@@ -1235,7 +1351,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     const sent = registerSendCapture();
     orchestrator = new SessionOrchestrator(MakaioBus, MACHINE_ID);
 
-    await MakaioBus.request(SessionSubjects.sendMessage, {
+    await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'delivered-to-the-drivable-one',
       agentIds: ['agent-1', 'agent-2'],
@@ -1244,7 +1360,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     // Nothing dispatched and nothing claimed for the agent this runtime may not
     // act for; the send narrows to the agent it can drive rather than failing.
     expect(rehydrateCallCount).toBe(0);
-    const { claims } = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, {
+    const { claims } = await MakaioBus.request(createTestCall(), SessionOwnershipStorageSubjects.listClaims, {
       machineId: MACHINE_ID,
     });
     expect(claims).toEqual([]);
@@ -1272,14 +1388,17 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
     const inFlight = runExclusiveStart('agent-1', async () => {
       await attempt.promise;
       if (dispose) {
-        await MakaioBus.request(AgentStorageSubjects.updateStatus, { agentId: 'agent-1', status: 'disposed' });
+        await MakaioBus.request(createTestCall(), AgentStorageSubjects.updateStatus, {
+          agentId: 'agent-1',
+          status: 'disposed',
+        });
         return 'no-connector';
       }
-      await MakaioBus.request(AgentStorageSubjects.delete, { agentId: 'agent-1' });
+      await MakaioBus.request(createTestCall(), AgentStorageSubjects.delete, { agentId: 'agent-1' });
       return 'no-connector';
     });
 
-    const send = MakaioBus.request(SessionSubjects.sendMessage, {
+    const send = MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'joins-a-removed-agent',
       agentIds: ['agent-1'],
@@ -1304,7 +1423,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
    * @returns The status, or `undefined` when the row is gone.
    */
   async function readStatus(agentId: string): Promise<string | undefined> {
-    const { agent } = await MakaioBus.request(AgentStorageSubjects.get, { agentId });
+    const { agent } = await MakaioBus.request(createTestCall(), AgentStorageSubjects.get, { agentId });
     return agent?.status;
   }
 
@@ -1369,7 +1488,7 @@ describe('SessionOrchestrator - Recovery Overlap', () => {
       throw new Error('connector refused to come back');
     });
 
-    const send = MakaioBus.request(SessionSubjects.sendMessage, {
+    const send = MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
       sessionId,
       message: 'joins-a-failing-attempt',
       agentIds: ['agent-1'],

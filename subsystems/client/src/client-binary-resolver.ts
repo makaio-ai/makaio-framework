@@ -12,6 +12,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { ClientSubjects } from '@makaio/contracts/client';
 import type { ClientDefinition, ClientExecutionContext, VersionCommand } from '@makaio/contracts/client';
 import { ClientBinaryStorageSubjects } from './storage/client-binary-storage-namespace.js';
@@ -111,10 +112,11 @@ export class ClientBinaryResolver {
    * - No definition is registered for `clientId`.
    * - The global scan finds no binary (either the scan returns `found: false`
    *   or returns no result entry for the client).
+   * @param call - Call context of the handled message that requests the resolution, forwarded to storage and scan requests
    * @param clientId - Stable client identifier to resolve
    * @returns Fully populated {@link ClientExecutionContext}
    */
-  public async resolve(clientId: string): Promise<ClientExecutionContext> {
+  public async resolve(call: CallContext, clientId: string): Promise<ClientExecutionContext> {
     const definition = this.definitionLookup.getDefinition(clientId);
     if (definition === undefined) {
       throw new Error(`client.resolveBinary: no definition registered for client '${clientId}'`);
@@ -124,7 +126,7 @@ export class ClientBinaryResolver {
       // Read the active pointer and installed-version rows from one storage
       // snapshot so a version change cannot pair an activeVersion from one
       // commit with version rows from another.
-      const { state, versions } = await this.bus.request(ClientBinaryStorageSubjects.getSnapshot, { clientId });
+      const { state, versions } = await this.bus.request(call, ClientBinaryStorageSubjects.getSnapshot, { clientId });
       const activeVersion = state?.activeVersion ?? null;
 
       if (activeVersion !== null) {
@@ -133,7 +135,7 @@ export class ClientBinaryResolver {
     }
 
     // No accessible managed version — fall back to this runtime's PATH.
-    return this.buildGlobalContext(clientId, definition);
+    return this.buildGlobalContext(call, clientId, definition);
   }
 
   // -------------------------------------------------------------------------
@@ -256,11 +258,16 @@ export class ClientBinaryResolver {
    *
    * Sends a `client.scan` request for the client's declared binary name.
    * Throws when the scan reports `found: false` or returns no entry.
+   * @param call - Call context forwarded to the scan request
    * @param clientId - Stable client identifier
    * @param definition - Client definition
    * @returns Global execution context with the detected absolute binary path when available
    */
-  private async buildGlobalContext(clientId: string, definition: ClientDefinition): Promise<ClientExecutionContext> {
+  private async buildGlobalContext(
+    call: CallContext,
+    clientId: string,
+    definition: ClientDefinition,
+  ): Promise<ClientExecutionContext> {
     if (!definition.binary?.name) {
       throw new Error(`client.resolveBinary: definition for '${clientId}' has no binary.name — cannot scan PATH`);
     }
@@ -270,7 +277,7 @@ export class ClientBinaryResolver {
       binaryName: definition.binary.name,
       supportedVersions: definition.binary.supportedVersions,
     };
-    const { results } = await this.bus.request(ClientSubjects.scan, { targets: [scanTarget] });
+    const { results } = await this.bus.request(call, ClientSubjects.scan, { targets: [scanTarget] });
 
     const scanResult = results.find((r) => r.clientId === clientId);
     if (scanResult === undefined || !scanResult.found) {

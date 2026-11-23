@@ -32,7 +32,13 @@ import {
   handleCorrelationResponse,
   trackMessageCorrelation,
 } from '@makaio/bus-core';
-import type { PayloadFilter } from '@makaio/core';
+import {
+  ATTESTING_CONNECTION_ROLES,
+  type OutboundAttestingConnectionRole,
+  type Party,
+  type PayloadFilter,
+  type TransportReceiveContext,
+} from '@makaio/core';
 import type { MessagePortTransportOptions } from './types.js';
 
 /**
@@ -86,6 +92,22 @@ export interface MessagePortTransport extends BusTransport {
 }
 
 /**
+ * Options for {@link createMessagePortTransport}: the plain port options plus
+ * local trust configuration for the messages it receives.
+ */
+export type MessagePortCallerTransportOptions = MessagePortTransportOptions & {
+  /**
+   * Party the transport declares as the caller of every message it receives
+   * (for example `makaio.worker-thread` for a channel without a peer).
+   * Surfaced as `BusTransport.declaredCaller`; the core still refuses a
+   * declared caller of kind `makaio.extension` or `makaio.host`.
+   */
+  declaredCaller?: Party;
+  /** Explicit role for a port trusted to attest principals. */
+  attestingRole?: OutboundAttestingConnectionRole;
+};
+
+/**
  * Create a `BusTransport` backed by a {@link MessagePortLike}.
  *
  * The transport is suitable for any environment that exposes a MessageChannel
@@ -109,9 +131,13 @@ export interface MessagePortTransport extends BusTransport {
  * ```
  */
 // eslint-disable-next-line max-lines-per-function -- Transport is cohesive; splitting would scatter related logic
-export function createMessagePortTransport(options: MessagePortTransportOptions): MessagePortTransport {
-  const { port, debug = false } = options;
+export function createMessagePortTransport(options: MessagePortCallerTransportOptions): MessagePortTransport {
+  const { port, debug = false, attestingRole } = options;
   const transportName = options.name ?? 'message-port';
+  const receiveContext: TransportReceiveContext = Object.freeze({
+    transportName,
+    ...(attestingRole === undefined ? {} : { attests: ATTESTING_CONNECTION_ROLES[attestingRole] }),
+  });
   const useEnvelope = options.envelope ?? false;
 
   const handlers = new Set<BusReceiveHandler>();
@@ -233,7 +259,6 @@ export function createMessagePortTransport(options: MessagePortTransportOptions)
         return;
       }
 
-      const receiveContext = { transportName };
       // Call all registered handlers in parallel
       await Promise.all(
         Array.from(handlers).map(async (handler) => {
@@ -343,7 +368,6 @@ export function createMessagePortTransport(options: MessagePortTransportOptions)
       // replay could race when multiple subscribe updates target the same subject.
       const buffered = preRegistrationBuffer.splice(0);
       // Use an async IIFE so onReceive returns the unsubscribe fn synchronously.
-      const receiveContext = { transportName };
       void (async () => {
         for (const msg of buffered) {
           try {
@@ -461,6 +485,7 @@ export function createMessagePortTransport(options: MessagePortTransportOptions)
 
   return {
     name: transportName,
+    ...(options.declaredCaller === undefined ? {} : { declaredCaller: options.declaredCaller }),
     connect,
     disconnect,
     send,

@@ -20,6 +20,8 @@ import {
   SettingsManager,
 } from '@mariozechner/pi-coding-agent';
 import type {
+  AgentToolApproveResponse,
+  CallContext,
   AIReasoningLevel,
   ConnectorTeardownResult,
   ProtocolId,
@@ -29,12 +31,26 @@ import type {
 import type { PiSdkBus } from './namespaces/index.js';
 import { PiSdkSubjects } from './namespaces/index.js';
 import { PiConnectorSession } from './session.js';
+import type { PiToolCallPayload } from './tool-handling.js';
 import type { PiConnectorConfig, PiThinkingLevel } from './types/index.js';
 import { PiSdkAdapterName } from './constants.js';
 import { fetchToolsForPi, type PiToolHandlerContext } from './tool-conversion.js';
 import { REASONING_TO_THINKING } from './provider-registry.js';
 import { buildPiModelRegistry, resolvePiModel, type PiRegistryIdentity } from './model-registry.js';
 import { requirePiProviderContext, requirePiProviderProtocol, resolvePiProviderApiKey } from './provider-auth.js';
+
+/**
+ * Normalize the system prompt to DefaultResourceLoader override callbacks.
+ * @param systemPrompt - The Makaio system prompt (string or append-mode object)
+ * @returns Resource-loader prompt override callbacks
+ */
+function resolveSystemPromptOptions(
+  systemPrompt: SystemPrompt | undefined,
+): Pick<ConstructorParameters<typeof DefaultResourceLoader>[0], 'systemPromptOverride' | 'appendSystemPromptOverride'> {
+  if (systemPrompt === undefined) return {};
+  if (typeof systemPrompt === 'string') return { systemPromptOverride: () => systemPrompt };
+  return { appendSystemPromptOverride: (base) => [...base, systemPrompt.content] };
+}
 
 /**
  * Pi SDK Connector — wraps `createAgentSession()` + `session.prompt()`.
@@ -92,10 +108,7 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
     this.providerProtocol = requirePiProviderProtocol(config.providerProtocol);
   }
 
-  // ---------------------------------------------------------------------------
   // ProceduralAgentConnector abstract implementations
-  // ---------------------------------------------------------------------------
-
   /**
    * Get the current session instance.
    * @returns The session or undefined if not yet initialized
@@ -109,9 +122,10 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
    *
    * Coalesces concurrent callers via `sessionInitPromise`. Cleared on failure
    * so callers can retry after a transient error.
+   * @param call - Call of the operation requesting the session
    * @returns The initialized session
    */
-  protected async ensureSession(): Promise<ProceduralConnectorSession> {
+  protected async ensureSession(call: CallContext): Promise<ProceduralConnectorSession> {
     if (this.closed) {
       throw new Error('[PiConnector] Cannot initialize a closed connector');
     }
@@ -121,7 +135,7 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
       // safe: it builds this connector's own registry and loader, and starts the
       // Pi reload, model lookup and tool-registry request. None of them calls
       // `ensureSession()`, and the bus defers its message observers to microtasks.
-      this.sessionInitPromise = this.initializeSession().catch((err: unknown) => {
+      this.sessionInitPromise = this.initializeSession(call).catch((err: unknown) => {
         this.sessionInitPromise = undefined;
         throw err;
       });
@@ -159,27 +173,25 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
    */
   protected override getWireSessionConfig() {
     return {
-      onTurnStarted: async () => {
+      onTurnStarted: async (call: CallContext) => {
         this.consumeTurnNumber();
         if (this.toolRefreshPending) {
           this.toolRefreshPending = false;
-          await this.refreshRegistryTools();
+          await this.refreshRegistryTools(call);
         }
       },
     };
   }
 
-  // ---------------------------------------------------------------------------
   // Session initialization
-  // ---------------------------------------------------------------------------
-
   /**
    * Initialize the Pi SDK session.
    *
    * Builds the model registry, constructs the resource loader and Pi session,
    * then wires turn lifecycle events. Called once via `ensureSession()`.
+   * @param call - Call of the operation initializing the session
    */
-  private async initializeSession(): Promise<void> {
+  private async initializeSession(call: CallContext): Promise<void> {
     const registry = buildPiModelRegistry(this.registryIdentity, this.model);
     const { authStorage, modelRegistry } = registry;
 
@@ -189,7 +201,7 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
     const agentDir = getAgentDir();
     const cwd = this.cwd;
     const systemPrompt = this.systemPrompt;
-    const systemPromptOptions = this.resolveSystemPromptOptions(systemPrompt);
+    const systemPromptOptions = resolveSystemPromptOptions(systemPrompt);
 
     const resourceLoader = new DefaultResourceLoader({
       cwd,
@@ -208,7 +220,7 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
     const [, piModel, customTools] = await Promise.all([
       resourceLoader.reload(),
       resolvePiModel(registry, this.model),
-      fetchToolsForPi(this.globalBus, this.adapterId, this.adapterName, this.toolContext, {
+      fetchToolsForPi(call, this.globalBus, this.adapterId, this.adapterName, this.toolContext, {
         allowedTools: this.config.allowedTools,
         disallowedTools: this.config.disallowedTools,
       }),
@@ -225,7 +237,7 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
       env: { ...(this.config.contextEnv ?? {}) },
       systemPrompt,
       initialCustomToolNames: customTools.map((t) => t.name),
-      requestToolApproval: (payload) => this.requestToolApproval(PiSdkSubjects.tool_approval, payload),
+      requestToolApproval: (payload) => this.requestPiToolApproval(payload),
       onTurnStart: (handle) => {
         this.pendingMessageHandle = handle;
       },
@@ -277,7 +289,10 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
       cwd: this.cwd,
       env: { ...(this.config.contextEnv ?? {}) },
       allowedDirectories: this.config.allowedDirectories,
-      getTurnExecutionContext: () => this.session?.getToolExecutionTurnContext() ?? {},
+      getTurnExecutionContext: () => {
+        if (!this.session) throw new Error('[PiConnector] Tool execution requires an initialized session');
+        return this.session.getToolExecutionTurnContext();
+      },
       consumeApprovedToolInput: (toolCallId) => this.session?.consumeApprovedToolInput(toolCallId),
     };
   }
@@ -295,28 +310,6 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
   }
 
   /**
-   * Normalize the system prompt to DefaultResourceLoader override callbacks.
-   * @param systemPrompt - The Makaio system prompt (string or append-mode object)
-   * @returns Resource-loader prompt override callbacks
-   */
-  private resolveSystemPromptOptions(
-    systemPrompt: SystemPrompt | undefined,
-  ): Pick<
-    ConstructorParameters<typeof DefaultResourceLoader>[0],
-    'systemPromptOverride' | 'appendSystemPromptOverride'
-  > {
-    if (systemPrompt === undefined) return {};
-    if (typeof systemPrompt === 'string') {
-      return {
-        systemPromptOverride: () => systemPrompt,
-      };
-    }
-    return {
-      appendSystemPromptOverride: (base) => [...base, systemPrompt.content],
-    };
-  }
-
-  /**
    * Map the connector's reasoning effort level to Pi's thinking level.
    * @returns Pi SDK ThinkingLevel string
    */
@@ -329,11 +322,14 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
     return 'medium'; // Pi SDK default
   }
 
-  /** Refresh registry custom tools and push them to the Pi session. No-ops without a session. */
-  private async refreshRegistryTools(): Promise<void> {
+  /**
+   * Refresh registry custom tools and push them to the Pi session. No-ops without a session.
+   * @param call - Call of the handled turn-start event
+   */
+  private async refreshRegistryTools(call: CallContext): Promise<void> {
     if (!this.session) return;
     try {
-      const tools = await fetchToolsForPi(this.globalBus, this.adapterId, this.adapterName, this.toolContext, {
+      const tools = await fetchToolsForPi(call, this.globalBus, this.adapterId, this.adapterName, this.toolContext, {
         allowedTools: this.config.allowedTools,
         disallowedTools: this.config.disallowedTools,
       });
@@ -343,24 +339,55 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
     }
   }
 
-  // ---------------------------------------------------------------------------
+  /**
+   * Route a Pi tool approval through the bus under the call of the turn that raised it.
+   *
+   * The pending handle is captured first, before any await: it is the most recent
+   * started, not yet completed turn. Without one there is no operation to attribute
+   * the request to, so it is declined without an approval round trip.
+   * @param payload - Tool call fields from Pi's `beforeToolCall` hook
+   * @returns The approval decision, or a typed denial when no turn is pending
+   */
+  protected requestPiToolApproval(payload: PiToolCallPayload): Promise<AgentToolApproveResponse> {
+    const handle = this.pendingMessageHandle;
+    if (handle === undefined) {
+      return Promise.resolve({
+        action: 'deny',
+        message: 'Tool use denied: no operation attributable to this approval request',
+        shouldAbort: false,
+      });
+    }
+    return this.requestToolApproval<typeof PiSdkSubjects.tool_approval>(
+      handle.call,
+      PiSdkSubjects.tool_approval,
+      payload,
+    );
+  }
+
   // Connector API
-  // ---------------------------------------------------------------------------
+  /**
+   * Initialize the SDK session for the requesting operation.
+   * @param options - Start options carrying the operation's call and system prompt
+   */
+  public override async initialize(options: ConnectorStartOptions): Promise<void> {
+    this.captureSystemPrompt(options.systemPrompt);
+    await this.ensureSession(options.call);
+  }
 
   /**
    * Start the connector with an initial user message.
    * @param message - The initial user message
-   * @param options - Optional start options including system prompt
+   * @param options - Start options including the call and system prompt
    * @returns Session ID, agent ID, and message handle
    */
   public override async start(
     message: NormalizedMessageInput,
-    options?: ConnectorStartOptions,
+    options: ConnectorStartOptions,
   ): Promise<AgentStartResult> {
-    this.captureSystemPrompt(options?.systemPrompt);
+    this.captureSystemPrompt(options.systemPrompt);
     const messageHandle = await this.sendMessage(message, options);
     return {
-      adapterSessionId: await this.getAdapterSessionId(),
+      adapterSessionId: await this.getAdapterSessionId(options.call),
       messageHandle,
       agentId: this.agentId,
     };
@@ -372,18 +399,18 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
    * Creates a message handle, enqueues it, and processes the queue via the
    * inherited `processUserMessages()` which delegates to the session.
    * @param message - The user message to send
-   * @param options - Optional delivery mode options
+   * @param options - Send options including the call and delivery mode
    * @returns Message handle for tracking acknowledgment and completion
    */
   public async sendMessage(
     message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
+    options: ConnectorSendMessageOptions,
   ): Promise<MessageHandle> {
     // Initialize the session first so adapterSessionId is available when
     // createMessageHandle fires onMessageSent (which emits user_message.sent).
-    await this.ensureSession();
+    await this.ensureSession(options.call);
     const handle = this.createMessageHandle(message, options);
-    await this.processUserMessages([handle]);
+    await this.processUserMessages(options.call, [handle]);
     return handle;
   }
 
@@ -392,18 +419,20 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
    *
    * Pi reuses the same session after abort — the next `session.prompt()` call
    * starts a new turn in the same conversation context.
+   * @param call - Call of the operation requesting interruption
    */
-  public async interrupt(): Promise<void> {
-    await this.session?.abort();
+  public async interrupt(call: CallContext): Promise<void> {
+    await this.session?.abort(call);
   }
 
   /**
    * Abort the connector (fire-and-forget).
    *
    * Signals Pi's agentic loop to stop at the next safe point.
+   * @param call - Call of the operation requesting abort
    */
-  public override abort(): void {
-    void this.session?.abort();
+  public override abort(call: CallContext): void {
+    void this.session?.abort(call);
   }
 
   /**
@@ -416,9 +445,10 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
    * both are gone no callback can reach this runtime — which for an in-process
    * object with no external end is the whole of what closure means. An abort whose
    * outcome the session could not establish reports `unknown` instead.
+   * @param call - Call of the operation requesting shutdown
    * @returns What this runtime observed about the end of its Pi session.
    */
-  public override async close(): Promise<ConnectorTeardownResult> {
+  public override async close(call: CallContext): Promise<ConnectorTeardownResult> {
     if (this.closed) return reportRepeatTeardown();
     this.closed = true;
     // Before anything is awaited: the claim below is that no callback can arrive
@@ -436,7 +466,7 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
     const session = this.session;
     try {
       // No session means nothing was created, so nothing can still be running.
-      return session === undefined ? { evidence: 'released' } : await session.close();
+      return session === undefined ? { evidence: 'released' } : await session.close(call);
     } finally {
       this.session = undefined;
       this.sessionInitPromise = undefined;
@@ -448,10 +478,11 @@ export class PiConnector extends ProceduralAgentConnector<PiSdkBus, PiConnectorC
    *
    * Ensures the session is initialized before returning, so callers that race
    * with session creation receive a valid ID rather than `undefined`.
+   * @param call - Call of the operation requesting the session ID
    * @returns The adapter session ID
    */
-  public async getAdapterSessionId(): Promise<string> {
-    await this.ensureSession();
+  public async getAdapterSessionId(call: CallContext): Promise<string> {
+    await this.ensureSession(call);
     return this.adapterSessionId as string;
   }
 

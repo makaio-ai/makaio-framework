@@ -5,6 +5,7 @@ import { ClientRuntimeStorageSubjects } from '../storage/runtime-storage-namespa
 import type { ClientRuntimeObserveRequest } from '@makaio/contracts/client';
 import type { ClientRuntimeRecord } from '../client-runtime-registry-types.js';
 import type { IMakaioBus } from '@makaio/bus-core';
+import { createMockBus, createTestCall } from '@makaio/test-utils';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -50,6 +51,7 @@ describe('ClientRuntimeRegistry', () => {
   describe('create new runtime from pid', () => {
     it('creates a new runtime record with observed status when only pid is present', async () => {
       const result = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           pid: 12345,
@@ -69,21 +71,27 @@ describe('ClientRuntimeRegistry', () => {
     });
 
     it('assigns a stable UUID on creation', async () => {
-      const first = await registry.upsertRuntime(makeObservation({ clientId: 'codex', pid: 1 }));
-      const second = await registry.upsertRuntime(makeObservation({ clientId: 'codex', pid: 2 }));
+      const first = await registry.upsertRuntime(createTestCall(), makeObservation({ clientId: 'codex', pid: 1 }));
+      const second = await registry.upsertRuntime(createTestCall(), makeObservation({ clientId: 'codex', pid: 2 }));
 
       expect(first.clientRuntimeId).not.toBe(second.clientRuntimeId);
     });
 
     it('returns created=true and promoted=false for a new pid-based runtime', async () => {
-      const result = await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 9999 }));
+      const result = await registry.upsertRuntime(
+        createTestCall(),
+        makeObservation({ clientId: 'claude-code', pid: 9999 }),
+      );
 
       expect(result.created).toBe(true);
       expect(result.promoted).toBe(false);
     });
 
     it('stores pid and parentPid on the new record', async () => {
-      const result = await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 100, parentPid: 1 }));
+      const result = await registry.upsertRuntime(
+        createTestCall(),
+        makeObservation({ clientId: 'claude-code', pid: 100, parentPid: 1 }),
+      );
 
       const record = registry.getRuntime(result.clientRuntimeId);
       expect(record?.pid).toBe(100);
@@ -96,6 +104,7 @@ describe('ClientRuntimeRegistry', () => {
       const metadata: Record<string, unknown> = { nested };
 
       const result = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', pid: 321, argv, metadata }),
       );
 
@@ -115,6 +124,7 @@ describe('ClientRuntimeRegistry', () => {
   describe('create new runtime from adapterSessionId', () => {
     it('creates a new runtime with started status when adapterSessionId is present', async () => {
       const result = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           adapterSessionId: 'adapter-sess-abc',
@@ -131,9 +141,11 @@ describe('ClientRuntimeRegistry', () => {
 
     it('different adapterSessionIds for the same clientId create separate records', async () => {
       const first = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', adapterSessionId: 'sess-1' }),
       );
       const second = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', adapterSessionId: 'sess-2' }),
       );
 
@@ -144,9 +156,11 @@ describe('ClientRuntimeRegistry', () => {
 
     it('same adapterSessionId + same clientId matches the existing record', async () => {
       const first = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', adapterSessionId: 'sess-shared' }),
       );
       const second = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', adapterSessionId: 'sess-shared' }),
       );
 
@@ -162,9 +176,11 @@ describe('ClientRuntimeRegistry', () => {
   describe('match existing runtime by supervisorSessionId', () => {
     it('returns the same clientRuntimeId for a repeated supervisorSessionId', async () => {
       const first = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', supervisorSessionId: 'sup-sess-1' }),
       );
       const second = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', supervisorSessionId: 'sup-sess-1' }),
       );
 
@@ -175,6 +191,7 @@ describe('ClientRuntimeRegistry', () => {
 
     it('creates a new record with started status for a supervisorSessionId', async () => {
       const result = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', supervisorSessionId: 'sup-sess-new' }),
       );
 
@@ -186,10 +203,14 @@ describe('ClientRuntimeRegistry', () => {
 
     it('supervisorSessionId takes matching priority over pid when both are present', async () => {
       // Create via pid first
-      const pidResult = await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 5555 }));
+      const pidResult = await registry.upsertRuntime(
+        createTestCall(),
+        makeObservation({ clientId: 'claude-code', pid: 5555 }),
+      );
 
       // Now observe with supervisorSessionId only (no pid) — creates a separate record
       const supResult = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', supervisorSessionId: 'sup-unique' }),
       );
 
@@ -198,6 +219,7 @@ describe('ClientRuntimeRegistry', () => {
 
       // Now send supervisorSessionId again — should match the sup record, not the pid record
       const rematch = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', supervisorSessionId: 'sup-unique', pid: 5555 }),
       );
 
@@ -207,6 +229,7 @@ describe('ClientRuntimeRegistry', () => {
 
     it('preserves historical supervisor records when a resumed native session has a new supervisor', async () => {
       const primary = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           supervisorSessionId: 'sup-identity-primary',
@@ -215,6 +238,7 @@ describe('ClientRuntimeRegistry', () => {
         }),
       );
       const resumed = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           supervisorSessionId: 'sup-identity-primary',
@@ -223,6 +247,7 @@ describe('ClientRuntimeRegistry', () => {
         }),
       );
       const resumedWithNewSupervisor = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           supervisorSessionId: 'sup-identity-resumed',
@@ -238,6 +263,7 @@ describe('ClientRuntimeRegistry', () => {
 
       await expect(
         registry.upsertRuntime(
+          createTestCall(),
           makeObservation({
             clientId: 'claude-code',
             supervisorSessionId: 'sup-identity-primary',
@@ -254,6 +280,7 @@ describe('ClientRuntimeRegistry', () => {
       expect(registry.getRuntime(primary.clientRuntimeId)).toEqual(primary.record);
 
       const originalSupervisorUpdate = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           supervisorSessionId: 'sup-identity-primary',
@@ -264,11 +291,13 @@ describe('ClientRuntimeRegistry', () => {
       expect(originalSupervisorUpdate.clientRuntimeId).toBe(primary.clientRuntimeId);
 
       const activeAdapterLookup = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', adapterSessionId: 'adapter-native-primary' }),
       );
       expect(activeAdapterLookup.clientRuntimeId).toBe(resumedWithNewSupervisor.clientRuntimeId);
 
       const resumedSupervisorLookup = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', supervisorSessionId: 'sup-identity-resumed' }),
       );
       expect(resumedSupervisorLookup.clientRuntimeId).toBe(resumedWithNewSupervisor.clientRuntimeId);
@@ -276,6 +305,7 @@ describe('ClientRuntimeRegistry', () => {
 
     it('rotates the trusted Codex root after clear and drops its stale framework session correlation', async () => {
       const initial = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'codex',
           source: { layer: 'client-hook', producer: 'codex-client-session-service' },
@@ -286,6 +316,7 @@ describe('ClientRuntimeRegistry', () => {
       );
 
       const cleared = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'codex',
           source: { layer: 'client-hook', producer: 'codex-client-session-service' },
@@ -304,6 +335,7 @@ describe('ClientRuntimeRegistry', () => {
       });
 
       const staleAdapter = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'codex', adapterSessionId: 'native-before-clear' }),
       );
       expect(staleAdapter.created).toBe(true);
@@ -312,6 +344,7 @@ describe('ClientRuntimeRegistry', () => {
 
     it('does not rotate a native root for ordinary differing IDs or an invalid root-clear producer', async () => {
       await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'codex',
           source: { layer: 'client-hook', producer: 'codex-client-session-service' },
@@ -322,6 +355,7 @@ describe('ClientRuntimeRegistry', () => {
 
       await expect(
         registry.upsertRuntime(
+          createTestCall(),
           makeObservation({
             clientId: 'codex',
             supervisorSessionId: 'sup-codex-conflict',
@@ -332,6 +366,7 @@ describe('ClientRuntimeRegistry', () => {
 
       await expect(
         registry.upsertRuntime(
+          createTestCall(),
           makeObservation({
             clientId: 'codex',
             source: { layer: 'client-hook', producer: 'another-hook-producer' },
@@ -344,6 +379,7 @@ describe('ClientRuntimeRegistry', () => {
 
       await expect(
         registry.upsertRuntime(
+          createTestCall(),
           makeObservation({
             clientId: 'claude-code',
             source: { layer: 'client-hook', producer: 'codex-client-session-service' },
@@ -357,6 +393,7 @@ describe('ClientRuntimeRegistry', () => {
 
     it('does not clear the framework session when root-clear reports the same native ID', async () => {
       const initial = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'codex',
           source: { layer: 'client-hook', producer: 'codex-client-session-service' },
@@ -367,6 +404,7 @@ describe('ClientRuntimeRegistry', () => {
       );
 
       await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'codex',
           source: { layer: 'client-hook', producer: 'codex-client-session-service' },
@@ -384,6 +422,7 @@ describe('ClientRuntimeRegistry', () => {
       vi.setSystemTime(BASE_OBSERVED_AT);
 
       const primary = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'codex',
           supervisorSessionId: 'sup-fixed-clock-s1',
@@ -391,6 +430,7 @@ describe('ClientRuntimeRegistry', () => {
         }),
       );
       const resumed = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'codex',
           supervisorSessionId: 'sup-fixed-clock-s2',
@@ -400,6 +440,7 @@ describe('ClientRuntimeRegistry', () => {
 
       expect(resumed.record.createdAt).toBeGreaterThan(primary.record.createdAt);
       const active = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'codex', adapterSessionId: 'native-fixed-clock-a1' }),
       );
       expect(active.clientRuntimeId).toBe(resumed.clientRuntimeId);
@@ -412,9 +453,13 @@ describe('ClientRuntimeRegistry', () => {
 
   describe('enrich existing runtime with stronger evidence', () => {
     it('enriches a pid-based record with a supervisorSessionId and promotes it', async () => {
-      const initial = await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 7777 }));
+      const initial = await registry.upsertRuntime(
+        createTestCall(),
+        makeObservation({ clientId: 'claude-code', pid: 7777 }),
+      );
 
       const enriched = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           pid: 7777,
@@ -434,12 +479,14 @@ describe('ClientRuntimeRegistry', () => {
 
     it('does not promote a record that is already started', async () => {
       const initial = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', supervisorSessionId: 'sup-already-started' }),
       );
 
       expect(initial.created).toBe(true);
 
       const second = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           supervisorSessionId: 'sup-already-started',
@@ -457,6 +504,7 @@ describe('ClientRuntimeRegistry', () => {
 
     it('enriches metadata without clearing previously set evidence fields', async () => {
       const initial = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           pid: 8888,
@@ -466,6 +514,7 @@ describe('ClientRuntimeRegistry', () => {
       );
 
       await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           pid: 8888,
@@ -480,11 +529,14 @@ describe('ClientRuntimeRegistry', () => {
     });
 
     it('stores detached metadata snapshots on enrichment', async () => {
-      const initial = await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 8181 }));
+      const initial = await registry.upsertRuntime(
+        createTestCall(),
+        makeObservation({ clientId: 'claude-code', pid: 8181 }),
+      );
       const nested = { label: 'initial' };
       const metadata: Record<string, unknown> = { nested };
 
-      await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 8181, metadata }));
+      await registry.upsertRuntime(createTestCall(), makeObservation({ clientId: 'claude-code', pid: 8181, metadata }));
 
       nested.label = 'mutated';
 
@@ -494,10 +546,12 @@ describe('ClientRuntimeRegistry', () => {
 
     it('enriches an adapterSessionId-based record with a pid and keeps started status', async () => {
       const initial = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'codex', adapterSessionId: 'adapter-codex-1' }),
       );
 
       const enriched = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'codex', adapterSessionId: 'adapter-codex-1', pid: 4242 }),
       );
 
@@ -510,6 +564,7 @@ describe('ClientRuntimeRegistry', () => {
 
     it('allows an unmanaged pid runtime to replace its adapter session ID', async () => {
       const initial = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           pid: 4243,
@@ -518,6 +573,7 @@ describe('ClientRuntimeRegistry', () => {
       );
 
       const updated = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           pid: 4243,
@@ -533,10 +589,14 @@ describe('ClientRuntimeRegistry', () => {
       vi.useFakeTimers();
       vi.setSystemTime(BASE_OBSERVED_AT + 1_000);
 
-      const initial = await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 9191 }));
+      const initial = await registry.upsertRuntime(
+        createTestCall(),
+        makeObservation({ clientId: 'claude-code', pid: 9191 }),
+      );
 
       vi.setSystemTime(BASE_OBSERVED_AT + 5_000);
       await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           pid: 9191,
@@ -552,11 +612,13 @@ describe('ClientRuntimeRegistry', () => {
 
     it('does not regress observedAt when an older captured observation arrives later', async () => {
       const initial = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', pid: 9192, observedAt: BASE_OBSERVED_AT + 4_000 }),
       );
       const initialUpdatedAt = initial.record.updatedAt;
 
       await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', pid: 9192, observedAt: BASE_OBSERVED_AT + 1_000 }),
       );
 
@@ -569,10 +631,14 @@ describe('ClientRuntimeRegistry', () => {
       vi.useFakeTimers();
       vi.setSystemTime(BASE_OBSERVED_AT + 1_000);
 
-      const initial = await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 9292 }));
+      const initial = await registry.upsertRuntime(
+        createTestCall(),
+        makeObservation({ clientId: 'claude-code', pid: 9292 }),
+      );
 
       vi.setSystemTime(BASE_OBSERVED_AT + 6_000);
       await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           pid: 9292,
@@ -591,11 +657,16 @@ describe('ClientRuntimeRegistry', () => {
       vi.useFakeTimers();
       vi.setSystemTime(BASE_OBSERVED_AT + 1_000);
 
-      const initial = await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 9393 }));
+      const initial = await registry.upsertRuntime(
+        createTestCall(),
+        makeObservation({ clientId: 'claude-code', pid: 9393 }),
+      );
       const enriched = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', pid: 9393, cwd: '/workspace' }),
       );
       const promoted = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', pid: 9393, supervisorSessionId: 'sup-same-ms' }),
       );
 
@@ -611,6 +682,7 @@ describe('ClientRuntimeRegistry', () => {
   describe('snapshot isolation', () => {
     it('returns detached record snapshots from creation results and getRuntime', async () => {
       const result = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           pid: 1234,
@@ -639,13 +711,17 @@ describe('ClientRuntimeRegistry', () => {
 
     it('returns detached record snapshots from existing-record results', async () => {
       const initial = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           pid: 4321,
           metadata: { nested: { label: 'initial' } },
         }),
       );
-      const existing = await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 4321 }));
+      const existing = await registry.upsertRuntime(
+        createTestCall(),
+        makeObservation({ clientId: 'claude-code', pid: 4321 }),
+      );
 
       const existingNested = existing.record.metadata?.nested;
       if (typeof existingNested === 'object' && existingNested !== null && 'label' in existingNested) {
@@ -665,21 +741,24 @@ describe('ClientRuntimeRegistry', () => {
       const firstPersistence = Promise.withResolvers<void>();
       const releasePersistence = Promise.withResolvers<void>();
       let upserts = 0;
-      const bus = {
-        requestOptional: vi.fn(async () => {
-          upserts += 1;
-          if (upserts === 1) {
-            firstPersistence.resolve();
-            await releasePersistence.promise;
-          }
-          return { handled: true, data: { success: true } };
-        }),
-      } as unknown as IMakaioBus;
+      const { bus, requestOptional } = createMockBus();
+      requestOptional.mockImplementation(async () => {
+        upserts += 1;
+        if (upserts === 1) {
+          firstPersistence.resolve();
+          await releasePersistence.promise;
+        }
+        return { handled: true, data: { success: true } };
+      });
       const persistedRegistry = new ClientRuntimeRegistry(bus);
 
-      const first = persistedRegistry.upsertRuntime(makeObservation({ clientId: 'codex', pid: 5050 }));
+      const first = persistedRegistry.upsertRuntime(
+        createTestCall(),
+        makeObservation({ clientId: 'codex', pid: 5050 }),
+      );
       await firstPersistence.promise;
       const overlapping = persistedRegistry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'codex', pid: 5050, supervisorSessionId: 'sup-serialized' }),
       );
 
@@ -700,14 +779,14 @@ describe('ClientRuntimeRegistry', () => {
 
     it('keeps the last committed snapshot when persistence rejects an enrichment', async () => {
       let rejectPersistence = false;
-      const bus = {
-        requestOptional: vi.fn(async () => {
-          if (rejectPersistence) throw new Error('storage unavailable');
-          return { handled: true, data: { success: true } };
-        }),
-      } as unknown as IMakaioBus;
+      const { bus, requestOptional } = createMockBus();
+      requestOptional.mockImplementation(async () => {
+        if (rejectPersistence) throw new Error('storage unavailable');
+        return { handled: true, data: { success: true } };
+      });
       const persistedRegistry = new ClientRuntimeRegistry(bus);
       const created = await persistedRegistry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'codex', supervisorSessionId: 'sup-committed', pid: 5051 }),
       );
       const committed = persistedRegistry.getRuntime(created.clientRuntimeId);
@@ -715,6 +794,7 @@ describe('ClientRuntimeRegistry', () => {
       rejectPersistence = true;
       await expect(
         persistedRegistry.upsertRuntime(
+          createTestCall(),
           makeObservation({
             clientId: 'codex',
             supervisorSessionId: 'sup-committed',
@@ -742,14 +822,14 @@ describe('ClientRuntimeRegistry', () => {
     });
 
     it('reflects the correct size after upserts', async () => {
-      await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 1 }));
-      await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 2 }));
+      await registry.upsertRuntime(createTestCall(), makeObservation({ clientId: 'claude-code', pid: 1 }));
+      await registry.upsertRuntime(createTestCall(), makeObservation({ clientId: 'claude-code', pid: 2 }));
 
       expect(registry.size).toBe(2);
     });
 
     it('clears all records', async () => {
-      await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 1 }));
+      await registry.upsertRuntime(createTestCall(), makeObservation({ clientId: 'claude-code', pid: 1 }));
       await registry.clear();
 
       expect(registry.size).toBe(0);
@@ -781,16 +861,16 @@ describe('ClientRuntimeRegistry', () => {
     /**
      * Build a minimal mock bus whose `requestOptional` returns a fixed loadAll response.
      * @param records - Records to return from the storage loadAll response
-     * @returns Mock bus implementing only the `requestOptional` method
+     * @returns Mock bus configured for storage requests
      */
     function makeMockBus(records: ClientRuntimeRecord[]): IMakaioBus {
-      return {
-        requestOptional: vi.fn(async (subject) =>
-          subject === ClientRuntimeStorageSubjects.loadAll
-            ? { handled: true, data: { records } }
-            : { handled: true, data: { success: true } },
-        ),
-      } as unknown as IMakaioBus;
+      const { bus, requestOptional } = createMockBus();
+      requestOptional.mockImplementation(async (_call, subject) =>
+        subject === ClientRuntimeStorageSubjects.loadAll
+          ? { handled: true, data: { records } }
+          : { handled: true, data: { success: true } },
+      );
+      return bus;
     }
 
     it('skips pid index for records whose updatedAt exceeds the 24-hour threshold', async () => {
@@ -805,13 +885,16 @@ describe('ClientRuntimeRegistry', () => {
       });
 
       const busRegistry = new ClientRuntimeRegistry(makeMockBus([staleRecord]));
-      await busRegistry.loadFromStorage();
+      await busRegistry.loadFromStorage(createTestCall());
 
       // Primary record should be present
       expect(busRegistry.getRuntime('stale-runtime-1')).toBeDefined();
 
       // pid-based upsert must create a NEW record (not match the stale one)
-      const result = await busRegistry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 9001 }));
+      const result = await busRegistry.upsertRuntime(
+        createTestCall(),
+        makeObservation({ clientId: 'claude-code', pid: 9001 }),
+      );
 
       expect(result.created).toBe(true);
       expect(result.clientRuntimeId).not.toBe('stale-runtime-1');
@@ -829,10 +912,11 @@ describe('ClientRuntimeRegistry', () => {
       });
 
       const busRegistry = new ClientRuntimeRegistry(makeMockBus([staleRecord]));
-      await busRegistry.loadFromStorage();
+      await busRegistry.loadFromStorage(createTestCall());
 
       // adapterSessionId-based upsert must create a NEW record
       const result = await busRegistry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', adapterSessionId: 'adapter-stale-sess' }),
       );
 
@@ -853,10 +937,11 @@ describe('ClientRuntimeRegistry', () => {
       });
 
       const busRegistry = new ClientRuntimeRegistry(makeMockBus([staleRecord]));
-      await busRegistry.loadFromStorage();
+      await busRegistry.loadFromStorage(createTestCall());
 
       // supervisorSessionId must still match even for stale records
       const result = await busRegistry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', supervisorSessionId: 'sup-old-but-uuid' }),
       );
 
@@ -877,13 +962,17 @@ describe('ClientRuntimeRegistry', () => {
       });
 
       const busRegistry = new ClientRuntimeRegistry(makeMockBus([freshRecord]));
-      await busRegistry.loadFromStorage();
+      await busRegistry.loadFromStorage(createTestCall());
 
-      const pidResult = await busRegistry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 8001 }));
+      const pidResult = await busRegistry.upsertRuntime(
+        createTestCall(),
+        makeObservation({ clientId: 'claude-code', pid: 8001 }),
+      );
       expect(pidResult.created).toBe(false);
       expect(pidResult.clientRuntimeId).toBe('fresh-runtime-1');
 
       const adapterResult = await busRegistry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', adapterSessionId: 'adapter-fresh-sess' }),
       );
       expect(adapterResult.created).toBe(false);
@@ -901,12 +990,14 @@ describe('ClientRuntimeRegistry', () => {
         updatedAt: now,
       });
       const busRegistry = new ClientRuntimeRegistry(makeMockBus([historical]));
-      await busRegistry.loadFromStorage();
+      await busRegistry.loadFromStorage(createTestCall());
 
       const resumed = await busRegistry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'codex', supervisorSessionId: 'sup-hydrated-s2' }),
       );
       await busRegistry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'codex',
           supervisorSessionId: 'sup-hydrated-s2',
@@ -914,6 +1005,7 @@ describe('ClientRuntimeRegistry', () => {
         }),
       );
       const historicalWithPid = await busRegistry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'codex',
           supervisorSessionId: 'sup-hydrated-s1',
@@ -923,6 +1015,7 @@ describe('ClientRuntimeRegistry', () => {
       );
 
       const active = await busRegistry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'codex', adapterSessionId: 'native-hydrated-a1' }),
       );
 
@@ -953,9 +1046,10 @@ describe('ClientRuntimeRegistry', () => {
         updatedAt: BASE_OBSERVED_AT,
       });
       const busRegistry = new ClientRuntimeRegistry(makeMockBus([futureRecord]));
-      await busRegistry.loadFromStorage();
+      await busRegistry.loadFromStorage(createTestCall());
 
       const created = await busRegistry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'codex', supervisorSessionId: 'sup-after-hydration' }),
       );
 
@@ -971,12 +1065,14 @@ describe('ClientRuntimeRegistry', () => {
     it('resolves the correct record when pid is added via enrichment', async () => {
       // Create a runtime record using adapterSessionId only
       const initial = await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({ clientId: 'claude-code', adapterSessionId: 'adapter-enrich-ro7' }),
       );
       expect(initial.created).toBe(true);
 
       // Enrich the same record with a pid
       await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           adapterSessionId: 'adapter-enrich-ro7',
@@ -988,7 +1084,10 @@ describe('ClientRuntimeRegistry', () => {
       expect(record?.pid).toBe(7070);
 
       // Subsequent upsert by pid alone must resolve back to the original record
-      const pidLookup = await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 7070 }));
+      const pidLookup = await registry.upsertRuntime(
+        createTestCall(),
+        makeObservation({ clientId: 'claude-code', pid: 7070 }),
+      );
 
       expect(pidLookup.created).toBe(false);
       expect(pidLookup.clientRuntimeId).toBe(initial.clientRuntimeId);
@@ -996,12 +1095,16 @@ describe('ClientRuntimeRegistry', () => {
 
     it('does not leak a stale pid index entry when pid changes on an existing record', async () => {
       // Create a runtime record with an initial pid
-      const initial = await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 8080 }));
+      const initial = await registry.upsertRuntime(
+        createTestCall(),
+        makeObservation({ clientId: 'claude-code', pid: 8080 }),
+      );
       expect(initial.created).toBe(true);
 
       // A new observation arrives with a different pid for the same supervisorSessionId
       // (tests that the secondary index for the old pid is removed on re-set)
       await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           pid: 8080,
@@ -1010,6 +1113,7 @@ describe('ClientRuntimeRegistry', () => {
       );
       // Now enrich with a new pid value (simulating pid recycling or correction)
       await registry.upsertRuntime(
+        createTestCall(),
         makeObservation({
           clientId: 'claude-code',
           supervisorSessionId: 'sup-pid-change',
@@ -1021,7 +1125,10 @@ describe('ClientRuntimeRegistry', () => {
       // — supervisorSessionId wins in this case, so the second upsert will match
       // via supervisorSessionId and update the pid. A fresh pid-only lookup
       // should resolve to the new value.
-      const newPidResult = await registry.upsertRuntime(makeObservation({ clientId: 'claude-code', pid: 8081 }));
+      const newPidResult = await registry.upsertRuntime(
+        createTestCall(),
+        makeObservation({ clientId: 'claude-code', pid: 8081 }),
+      );
 
       expect(newPidResult.created).toBe(false);
       expect(newPidResult.clientRuntimeId).toBe(initial.clientRuntimeId);

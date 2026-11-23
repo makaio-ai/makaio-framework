@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createMockGlobalBus, createMockScopedBus } from '@makaio/test-utils';
+import { createMockGlobalBus, createMockScopedBus, createTestCall } from '@makaio/test-utils';
 import { AIAgent } from '../ai-agent.js';
 import { AgentSubjects, AdapterSubjects } from '@makaio/contracts';
+import type { CallContext } from '@makaio/contracts';
 import type { ResolveHints } from '../tool-call-tracker.js';
 import type { AIAgentConfig } from '../types.js';
 import type { IMakaioBus } from '@makaio/bus-core';
@@ -23,6 +24,7 @@ class TestAgent extends AIAgent {
       globalBus: mockGlobalBusInstance,
       configFactory: async () => ({
         bus: mockBus,
+        globalBus: mockGlobalBusInstance,
         agentId: 'test-agent',
         adapterId: 'test-adapter',
         adapterName: 'test',
@@ -43,11 +45,12 @@ class TestAgent extends AIAgent {
   }
 
   public async emitOutput(
+    call: CallContext,
     messageId: string,
     output: string,
     hints: ResolveHints,
   ): Promise<{ toolCallId: string; toolName: string; args?: Record<string, unknown> }> {
-    return this.emitToolOutput(messageId, output, hints);
+    return this.emitToolOutput(call, messageId, output, hints);
   }
 
   public override async getAdapterSessionId(): Promise<string> {
@@ -69,16 +72,19 @@ describe('AIAgent.emitToolOutput', () => {
   });
 
   it('logs warning and generates fallback id when no pending tool calls', async () => {
-    const result = await agent.emitOutput('message-1', 'output', { toolName: 'Read' });
+    const call = createTestCall();
+    const result = await agent.emitOutput(call, 'message-1', 'output', { toolName: 'Read' });
 
     const emitCalls = mockGlobalBusResult.emit.mock.calls;
-    const logCall = emitCalls.find(([subject]) => subject === AdapterSubjects.log);
-    const outputCall = emitCalls.find(([subject]) => subject === AgentSubjects.tool.output);
+    const logCall = emitCalls.find(([, subject]) => subject === AdapterSubjects.log);
+    const outputCall = emitCalls.find(([, subject]) => subject === AgentSubjects.tool.output);
 
     expect(logCall).toBeDefined();
-    expect(logCall?.[1]).toMatchObject({ level: 'warn' });
+    expect(logCall?.[0]).toBe(call);
+    expect(logCall?.[2]).toMatchObject({ level: 'warn' });
     expect(outputCall).toBeDefined();
-    expect(outputCall?.[1]).toMatchObject({ output: 'output', toolCallId: result.toolCallId });
+    expect(outputCall?.[0]).toBe(call);
+    expect(outputCall?.[2]).toMatchObject({ output: 'output', toolCallId: result.toolCallId });
     expect(result.toolName).toBe('Read');
   });
 
@@ -86,32 +92,37 @@ describe('AIAgent.emitToolOutput', () => {
     const first = agent.registerPending('message-1', 'Bash', 'toolu-1');
     agent.registerPending('message-1', 'Read', 'toolu-2');
 
-    const result = await agent.emitOutput('message-1', 'output', {});
+    const call = createTestCall();
+    const result = await agent.emitOutput(call, 'message-1', 'output', {});
 
     expect(result.toolCallId).toBe(first);
 
     const emitCalls = mockGlobalBusResult.emit.mock.calls;
-    const logCall = emitCalls.find(([subject]) => subject === AdapterSubjects.log);
-    const outputCall = emitCalls.find(([subject]) => subject === AgentSubjects.tool.output);
+    const logCall = emitCalls.find(([, subject]) => subject === AdapterSubjects.log);
+    const outputCall = emitCalls.find(([, subject]) => subject === AgentSubjects.tool.output);
 
-    expect(logCall?.[1]).toMatchObject({ level: 'warn' });
-    expect(outputCall?.[1]).toMatchObject({ toolCallId: first });
+    expect(logCall?.[0]).toBe(call);
+    expect(logCall?.[2]).toMatchObject({ level: 'warn' });
+    expect(outputCall?.[0]).toBe(call);
+    expect(outputCall?.[2]).toMatchObject({ toolCallId: first });
   });
 
   it('does not log warning when nativeId matches', async () => {
     agent.registerPending('message-1', 'Bash', 'toolu-1');
 
-    const result = await agent.emitOutput('message-1', 'output', { nativeId: 'toolu-1' });
+    const call = createTestCall();
+    const result = await agent.emitOutput(call, 'message-1', 'output', { nativeId: 'toolu-1' });
 
     expect(result.toolCallId).toBe('toolu-1');
     expect(result.toolName).toBe('Bash');
 
     const emitCalls = mockGlobalBusResult.emit.mock.calls;
-    const logCall = emitCalls.find(([subject]) => subject === AdapterSubjects.log);
-    const outputCall = emitCalls.find(([subject]) => subject === AgentSubjects.tool.output);
+    const logCall = emitCalls.find(([, subject]) => subject === AdapterSubjects.log);
+    const outputCall = emitCalls.find(([, subject]) => subject === AgentSubjects.tool.output);
 
     expect(logCall).toBeUndefined();
-    expect(outputCall?.[1]).toMatchObject({ toolCallId: 'toolu-1' });
+    expect(outputCall?.[0]).toBe(call);
+    expect(outputCall?.[2]).toMatchObject({ toolCallId: 'toolu-1' });
   });
 
   it('isolates same-named pending calls by their originating message', async () => {
@@ -120,7 +131,8 @@ describe('AIAgent.emitToolOutput', () => {
 
     agent.clearMessageToolCalls('superseded-message');
 
-    const result = await agent.emitOutput('immediate-message', 'output', { toolName: 'Bash' });
+    const call = createTestCall();
+    const result = await agent.emitOutput(call, 'immediate-message', 'output', { toolName: 'Bash' });
     expect(result).toMatchObject({ toolCallId: 'toolu-new', toolName: 'Bash' });
   });
 });

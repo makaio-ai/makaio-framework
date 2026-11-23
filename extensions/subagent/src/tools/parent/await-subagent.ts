@@ -58,6 +58,7 @@ export function awaitSubagentTool() {
         // 300s) — without this, every await longer than 60s would die in
         // the RPC envelope regardless of the requested timeoutMs.
         const result = await context.bus.request(
+          context.call,
           SubagentSubjects.await,
           {
             subagentId: input.subagentId,

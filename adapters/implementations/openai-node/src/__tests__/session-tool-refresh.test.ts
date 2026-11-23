@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatCompletionMessageParam, ChatCompletionTool } from 'openai/resources/index.js';
 import { MessageHandle, type MessageResult } from '@makaio/ai-adapters-core';
+import type { CallContext } from '@makaio/contracts';
+import { createTestBusInstance, createTestCall } from '@makaio/test-utils';
 import { OpenAIConnectorSession } from '../session.js';
 import type { OpenAISessionConfig } from '../types/index.js';
 import type { OpenAIConnectorTurn } from '../turn.js';
@@ -24,11 +26,11 @@ function createOpenAITool(name: string): ChatCompletionTool {
 
 /** Thin subclass that exposes the protected `getEffectiveToolNames` for assertions. */
 class TestOpenAIConnectorSession extends OpenAIConnectorSession {
-  public apiCallFn: (adapterSessionId: string) => Promise<void> = async () => {};
+  public apiCallFn: (call: CallContext, adapterSessionId: string) => Promise<void> = async () => {};
   public lastRequestTools: ChatCompletionTool[] = [];
   public lastRequestResponseSchema: MessageHandle['responseSchema'] = undefined;
 
-  public constructor(config: OpenAISessionConfig) {
+  public constructor(config: ConstructorParameters<typeof OpenAIConnectorSession>[0]) {
     super(config);
   }
 
@@ -49,18 +51,19 @@ class TestOpenAIConnectorSession extends OpenAIConnectorSession {
   }
 
   protected override async executeApiCall(
-    _turn: OpenAIConnectorTurn,
+    turn: OpenAIConnectorTurn,
     _abortSignal: AbortSignal,
     adapterSessionId: string,
   ): Promise<void> {
     this.lastRequestTools = this.buildRequestTools();
     this.lastRequestResponseSchema = this.getRequestResponseSchema();
-    await this.apiCallFn(adapterSessionId);
+    await this.apiCallFn(turn.getMessageHandle().call, adapterSessionId);
   }
 }
 
 function createHandle(responseSchema?: MessageHandle['responseSchema']): MessageHandle {
   return new MessageHandle(
+    createTestCall(),
     'message-1',
     {
       role: 'user',
@@ -78,11 +81,12 @@ function getToolName(tool: ChatCompletionTool): string {
   return tool.type === 'function' ? tool.function.name : tool.custom.name;
 }
 
-function createSession(
-  bus: OpenAINodeConnectorBus = {} as OpenAINodeConnectorBus,
+async function createSession(
   overrides: Partial<OpenAISessionConfig> = {},
-): TestOpenAIConnectorSession {
-  return new TestOpenAIConnectorSession({
+): Promise<{ session: TestOpenAIConnectorSession; bus: OpenAINodeConnectorBus }> {
+  const globalBus = createTestBusInstance();
+  const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
+  const session = new TestOpenAIConnectorSession({
     bus,
     adapterId: 'adapter-id',
     adapterName: 'openai-node',
@@ -98,12 +102,14 @@ function createSession(
     handleError: () => {},
     requestToolApproval: async () => ({ action: 'allow' }),
     ...overrides,
+    globalBus,
   });
+  return { session, bus };
 }
 
 describe('OpenAIConnectorSession tool refresh', () => {
-  it('rebuilds the live tool set from the latest native tools after refresh', () => {
-    const session = createSession();
+  it('rebuilds the live tool set from the latest native tools after refresh', async () => {
+    const { session } = await createSession();
 
     session.replaceNativeTools([createOpenAITool('native_after')]);
     session.updateTools([
@@ -119,8 +125,7 @@ describe('OpenAIConnectorSession tool refresh', () => {
   });
 
   it('compacts provisional retry history when completion returns corrected structured output', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = createSession(bus);
+    const { session, bus } = await createSession();
     const handle = createHandle();
     handle.addCompletionTransform(
       (result): MessageResult => ({
@@ -138,8 +143,8 @@ describe('OpenAIConnectorSession tool refresh', () => {
       return result;
     });
 
-    session.apiCallFn = async (adapterSessionId) => {
-      await bus.emit(OpenAINodeConnectorSubjects.sdk.event, {
+    session.apiCallFn = async (call, adapterSessionId) => {
+      await bus.emit(call, OpenAINodeConnectorSubjects.sdk.event, {
         event: {
           eventType: 'message_complete',
           content: 'not json',
@@ -162,7 +167,6 @@ describe('OpenAIConnectorSession tool refresh', () => {
   });
 
   it('keeps direct response_format routing when structured output has no tools', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
     const responseSchema = {
       schema: {
         type: 'object',
@@ -173,11 +177,11 @@ describe('OpenAIConnectorSession tool refresh', () => {
       name: 'ok_schema',
       strict: true,
     } satisfies NonNullable<MessageHandle['responseSchema']>;
-    const session = createSession(bus, { openAITools: [] });
+    const { session, bus } = await createSession({ openAITools: [] });
     const handle = createHandle(responseSchema);
 
-    session.apiCallFn = async (adapterSessionId) => {
-      await bus.emit(OpenAINodeConnectorSubjects.sdk.event, {
+    session.apiCallFn = async (call, adapterSessionId) => {
+      await bus.emit(call, OpenAINodeConnectorSubjects.sdk.event, {
         event: {
           eventType: 'message_complete',
           content: '{"ok":true}',
@@ -205,7 +209,6 @@ describe('OpenAIConnectorSession tool refresh', () => {
   });
 
   it('sends response_format alongside tools when provider supports it', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
     const responseSchema = {
       schema: {
         type: 'object',
@@ -216,11 +219,11 @@ describe('OpenAIConnectorSession tool refresh', () => {
       name: 'ok_schema',
       strict: true,
     } satisfies NonNullable<MessageHandle['responseSchema']>;
-    const session = createSession(bus, { supportsResponseFormatWithTools: true });
+    const { session, bus } = await createSession({ supportsResponseFormatWithTools: true });
     const handle = createHandle(responseSchema);
 
-    session.apiCallFn = async (adapterSessionId) => {
-      await bus.emit(OpenAINodeConnectorSubjects.sdk.event, {
+    session.apiCallFn = async (call, adapterSessionId) => {
+      await bus.emit(call, OpenAINodeConnectorSubjects.sdk.event, {
         event: {
           eventType: 'message_complete',
           content: '{"ok":true}',
@@ -244,9 +247,8 @@ describe('OpenAIConnectorSession tool refresh', () => {
   });
 
   it('uses the internal finalizer tool instead of response_format when provider does not support response_format with tools', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
     const approval = vi.fn(async () => ({ action: 'allow' as const }));
-    const session = createSession(bus, {
+    const { session, bus } = await createSession({
       requestToolApproval: approval,
       supportsResponseFormatWithTools: false,
     });
@@ -261,8 +263,8 @@ describe('OpenAIConnectorSession tool refresh', () => {
       strict: true,
     });
 
-    session.apiCallFn = async (adapterSessionId) => {
-      await bus.emit(OpenAINodeConnectorSubjects.sdk.event, {
+    session.apiCallFn = async (call, adapterSessionId) => {
+      await bus.emit(call, OpenAINodeConnectorSubjects.sdk.event, {
         event: {
           eventType: 'message_complete',
           content: null,
@@ -304,8 +306,7 @@ describe('OpenAIConnectorSession tool refresh', () => {
   });
 
   it('rejects registry tools that collide with the reserved structured-output finalizer name', async () => {
-    const bus = await OpenAINodeConnectorNamespace.scopedBus();
-    const session = createSession(bus, {
+    const { session } = await createSession({
       openAITools: [createOpenAITool(STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME)],
       supportsResponseFormatWithTools: false,
     });

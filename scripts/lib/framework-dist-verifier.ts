@@ -7,6 +7,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { normalizePackageExports, type PackageExportsField } from '../../build-tooling/package-exports.js';
 import {
+  checkBusBundlesNoCoreRuntime,
+  checkBusDeclaresNoCoreTypes,
   checkDeclarationImports,
   checkDeclarationSurface,
   DECLARATION_TARGET_PATTERN,
@@ -23,6 +25,8 @@ export interface FrameworkDistIssue {
    */
   readonly exportKey: string;
   readonly kind:
+    | 'bus-bundles-core-runtime'
+    | 'bus-declares-core-type'
     | 'declaration-target-without-surface'
     | 'export-target-not-file'
     | 'export-target-outside-root'
@@ -268,7 +272,14 @@ function isLocalFileTarget(target: string): boolean {
  *    with `@makaio/storage-pg`.
  * 5. Every declaration bundle that must inline its workspace types carries no
  *    surviving workspace import, so consumers never resolve a specifier that
- *    only exists inside the workspace.
+ *    only exists inside the workspace. The bus declarations additionally
+ *    declare no type the core declarations export: the bus stage externalizes
+ *    the core, so a re-inlined copy would give consumers two incompatible
+ *    declarations of the same type. The declaration checks run only when
+ *    `expectDeclarations` is not disabled.
+ *    The bus runtime modules likewise carry no string literal of the core
+ *    runtime, which would mean a second runtime copy of the core; this check
+ *    reads only `.mjs` files and runs for runtime-only distributions too.
  * 6. Every required runtime asset exists as a regular file.
  * 7. Every bundled migration chain ships with a journal that matches its
  *    `.sql` migration files and contains no source-only Drizzle artifacts.
@@ -298,7 +309,9 @@ export function verifyFrameworkDist(
   const scannedModules = checkDistImports(root, exportKeys, declaredDependencies, issues);
   if (expectDeclarations) {
     checkDeclarationImports(root, manifest.name, exportKeys, declaredDependencies, issues);
+    checkBusDeclaresNoCoreTypes(root, issues);
   }
+  checkBusBundlesNoCoreRuntime(root, issues);
   checkRuntimeAssets(root, options.runtimeAssets ?? BUNDLED_RUNTIME_ASSETS, issues);
   checkMigrationChains(root, options.migrationChains ?? BUNDLED_MIGRATION_CHAINS, issues);
   checkLightEntries(root, options.lightEntries ?? LIGHT_DIST_ENTRY_ALLOWED_IMPORTS, issues);

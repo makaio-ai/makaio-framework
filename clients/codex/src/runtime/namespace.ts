@@ -1,7 +1,8 @@
 /**
  * Codex client namespace registration.
  *
- * Registers `client:codex` on the singleton bus using the shared
+ * Defines `client:codex` (registered by the extension coordinator through the
+ * runtime manifest's `namespaces`) using the shared
  * {@link createClientNamespace} factory, which pre-registers the raw catch-all
  * hook ingress subject `hook.received` with the canonical
  * {@link RawClientHookPayloadSchema}.
@@ -35,7 +36,7 @@ import {
 import { CodexConfigSchemas } from '../schemas/config.js';
 import { CodexWiringSchemas } from '../schemas/wiring.js';
 
-const { subjects, namespaceDomain } = createClientNamespace('codex', {
+const { subjects, namespaceDomain, definition } = createClientNamespace('codex', {
   ...CodexConfigSchemas,
   ...CodexWiringSchemas,
   'config.prime': ClientConfigPrimeSchema,
@@ -74,3 +75,9 @@ export const CodexClientSubjects = subjects;
  * Value: `'client:codex'`
  */
 export const CODEX_CLIENT_NAMESPACE = namespaceDomain;
+
+/**
+ * Namespace definition for `client:codex`, declared in the runtime manifest's
+ * `namespaces` so the extension coordinator registers it on load.
+ */
+export const CodexClientNamespace = definition;

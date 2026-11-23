@@ -10,12 +10,17 @@ import type { OnceOptions } from './methods/once.js';
 import type { IScopedBusBase } from './scoped-bus-base.js';
 import { on } from './methods/on.js';
 import { once } from './methods/once.js';
-import { emit } from './methods/emit.js';
-import { request, requestOptional } from './methods/request.js';
 import { intercept } from './methods/intercept.js';
+import { createSendSurface } from './send-surface.js';
 import { validateMessage } from './utils/message-safeguards.js';
 import { mergeFilters } from './utils/payload-filter.js';
-import type { HandlerForSubjectDefinition, PayloadFilter, SubjectDefinition, TypedPayloadFilter } from '@makaio/core';
+import type {
+  HandlerForSubjectDefinition,
+  PartyRef,
+  PayloadFilter,
+  SubjectDefinition,
+  TypedPayloadFilter,
+} from '@makaio/core';
 
 /**
  * Filtered bus that applies a base filter to all subscriptions.
@@ -85,13 +90,17 @@ function resolveOptions<T extends { filter?: Record<string, unknown> }>(
  * @param context - Bus context
  * @param namespace - Namespace for validation
  * @param baseFilter - Base filter to apply to all subscriptions
+ * @param carrier - The party the view acts as: the owner of its handlers and the caller of its sends.
+ *   It is the carrier of the parent bus; a view never gets a carrier of its own.
  * @returns FilteredBus instance
  */
 export function createFilteredBus<Namespace extends string, Subjects = unknown, FilterPayload = unknown>(
   context: MakaioBusContext,
   namespace: Namespace,
-  baseFilter?: PayloadFilter,
+  baseFilter: PayloadFilter | undefined,
+  carrier: PartyRef,
 ): IFilteredBus<Namespace, Subjects, FilterPayload> {
+  const sends = createSendSurface(context, carrier, namespace);
   const filteredBus: IFilteredBus<Namespace, Subjects, FilterPayload> = {
     namespace,
 
@@ -104,17 +113,18 @@ export function createFilteredBus<Namespace extends string, Subjects = unknown, 
         context,
         namespace,
         mergeFilters(baseFilter, filter),
+        carrier,
       );
     }) as IFilteredBus<Namespace, Subjects, FilterPayload>['withFilter'],
 
     on(subject, handler, options) {
       validateMessage('on', subject, namespace);
-      return on(context, subject, handler, resolveOptions(baseFilter, options));
+      return on(context, carrier, subject, handler, resolveOptions(baseFilter, options));
     },
 
     intercept(subject, handler, options) {
       validateMessage('intercept', subject, namespace);
-      return intercept(context, subject, handler, resolveOptions(baseFilter, options));
+      return intercept(context, carrier, subject, handler, resolveOptions(baseFilter, options));
     },
 
     once: ((subject: SubjectDefinition, handlerOrOptions?: unknown) => {
@@ -134,7 +144,7 @@ export function createFilteredBus<Namespace extends string, Subjects = unknown, 
           return (handler as (ctx: unknown) => void | Promise<void>)(ctx);
         }) as HandlerForSubjectDefinition<typeof subject>;
 
-        unsubscribe = on(context, subject, wrappedHandler, resolveOptions<OnOptions>(baseFilter, undefined));
+        unsubscribe = on(context, carrier, subject, wrappedHandler, resolveOptions<OnOptions>(baseFilter, undefined));
 
         return () => {
           if (unsubscribe) {
@@ -147,6 +157,7 @@ export function createFilteredBus<Namespace extends string, Subjects = unknown, 
       // Promise version
       return once(
         context,
+        carrier,
         subject,
         resolveOptions(baseFilter, handlerOrOptions as OnceOptions<typeof subject> | undefined),
       );
@@ -157,20 +168,9 @@ export function createFilteredBus<Namespace extends string, Subjects = unknown, 
     // this wrapper's to reinterpret either. Dropping `options` here would
     // silently rewrite routing: a caller that emitted local-only through this
     // bus would have the message relayed to every ready transport instead.
-    async emit(subject, payload, options) {
-      validateMessage('emit', subject, namespace);
-      return emit(context, subject, payload, options);
-    },
-
-    async request(subject, payload, options) {
-      validateMessage('request', subject, namespace);
-      return request(context, subject, payload, options);
-    },
-
-    async requestOptional(subject, payload, options) {
-      validateMessage('request', subject, namespace);
-      return requestOptional(context, subject, payload, options);
-    },
+    emit: sends.emit as IFilteredBus<Namespace, Subjects, FilterPayload>['emit'],
+    request: sends.request as IFilteredBus<Namespace, Subjects, FilterPayload>['request'],
+    requestOptional: sends.requestOptional as IFilteredBus<Namespace, Subjects, FilterPayload>['requestOptional'],
   };
 
   return filteredBus;

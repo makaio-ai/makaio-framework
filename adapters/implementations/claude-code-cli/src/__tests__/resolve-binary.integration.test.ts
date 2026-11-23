@@ -3,6 +3,7 @@
 import os from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { ClientSubjects, type ClientExecutionContext } from '@makaio/contracts/client';
 import { ClaudeCodeCliConnectorNamespace, type ClaudeCodeCliConnectorBus } from '../namespace/index.js';
 import { ClaudeCliConnector } from '../connector.js';
@@ -58,11 +59,12 @@ async function makeConnector(
     disallowedTools?: string[];
   } = {},
 ): Promise<ClaudeCliConnector> {
-  const bus = (await ClaudeCodeCliConnectorNamespace.scopedBus()) as ClaudeCodeCliConnectorBus;
+  const bus = (await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus)) as ClaudeCodeCliConnectorBus;
   const providerConfig: TestProviderConfig | undefined =
     options.baseUrl === undefined ? undefined : { baseUrl: options.baseUrl };
   return new ClaudeCliConnector({
     bus,
+    globalBus: MakaioBus,
     adapterId: 'test-adapter',
     adapterName: 'claude-code-cli',
     agentId: 'test-agent',
@@ -95,7 +97,7 @@ describe('ClaudeCliConnector — central runtime config', () => {
     });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(getSessionConfig(connector)).toMatchObject({
       binaryPath: '/managed/bin/claude',
@@ -108,7 +110,7 @@ describe('ClaudeCliConnector — central runtime config', () => {
     const connector = await makeConnector({ clientExecution: execution(null) });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(getSessionConfig(connector)?.binaryPath).toBeUndefined();
   });
@@ -124,7 +126,7 @@ describe('ClaudeCliConnector — central runtime config', () => {
     });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(getSessionConfig(connector)?.env).toEqual({
       ANTHROPIC_API_KEY: 'api-secret',
@@ -137,7 +139,7 @@ describe('ClaudeCliConnector — central runtime config', () => {
     const connector = await makeConnector({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret' } });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(getSessionConfig(connector)?.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret' });
     expect(getSessionConfig(connector)?.env).not.toHaveProperty('ANTHROPIC_API_KEY');
@@ -147,7 +149,7 @@ describe('ClaudeCliConnector — central runtime config', () => {
     const connector = await makeConnector({ env: { CLAUDE_CONFIG_DIR: '/native/claude' } });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(getSessionConfig(connector)?.env).toEqual({ CLAUDE_CONFIG_DIR: '/native/claude' });
     expect(getSessionConfig(connector)?.env).not.toHaveProperty('ANTHROPIC_API_KEY');
@@ -163,7 +165,7 @@ describe('ClaudeCliConnector — central runtime config', () => {
     const connector = await makeConnector({ clientExecution: execution('/selected/bin/claude') });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
     cleanup();
 
     expect(resolveBinary).not.toHaveBeenCalled();
@@ -177,7 +179,7 @@ describe('ClaudeCliConnector — central runtime config', () => {
     });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(getSessionConfig(connector)?.allowedTools).toEqual(['Bash(git status)', 'Edit']);
     expect(getSessionConfig(connector)?.disallowedTools).toEqual(['WebSearch']);

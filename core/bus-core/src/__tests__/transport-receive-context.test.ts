@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
-import { createBusContext, createBusInstance } from '../index.js';
+import { createBusInstance } from '../index.js';
+import { createBusContext } from '../kernel-api.js';
 import { MockTransport } from './helpers/transport-fixtures.js';
 
 describe('transport receive context', () => {
@@ -19,9 +20,10 @@ describe('transport receive context', () => {
     bus.registerTransport(transport);
 
     const observed = vi.fn();
+    const caller = { kind: 'acme.user', id: 'user-1' };
     bus.on(namespace.subjects.read, (ctx) => {
-      observed(ctx.transport);
-      ctx.setResult({ principalId: ctx.transport?.principal?.id });
+      observed(ctx.transport, ctx.call.principal);
+      ctx.setResult({ principalId: ctx.call.principal.id });
     });
 
     await transport.simulateReceive(
@@ -36,15 +38,18 @@ describe('transport receive context', () => {
       {
         transportName: 'context-transport',
         connectionId: 'conn-1',
-        principal: { kind: 'user', id: 'user-1' },
+        caller,
       },
     );
 
-    expect(observed).toHaveBeenCalledWith({
-      transportName: 'context-transport',
-      connectionId: 'conn-1',
-      principal: { kind: 'user', id: 'user-1' },
-    });
+    expect(observed).toHaveBeenCalledWith(
+      {
+        transportName: 'context-transport',
+        connectionId: 'conn-1',
+        caller,
+      },
+      caller,
+    );
     expect(transport.messages).toContainEqual({
       type: 'response',
       correlationId: 'corr-1',
@@ -63,8 +68,9 @@ describe('transport receive context', () => {
     bus.registerTransport(transport);
 
     const observed = vi.fn();
+    const caller = { kind: 'acme.user', id: 'user-event-1' };
     bus.on(namespace.subjects.changed, (ctx) => {
-      observed(ctx.transport);
+      observed(ctx.transport, ctx.call.principal);
     });
 
     await transport.simulateReceive(
@@ -78,15 +84,18 @@ describe('transport receive context', () => {
       {
         transportName: 'context-transport',
         connectionId: 'conn-event-1',
-        principal: { kind: 'user', id: 'user-event-1' },
+        caller,
       },
     );
 
-    expect(observed).toHaveBeenCalledWith({
-      transportName: 'context-transport',
-      connectionId: 'conn-event-1',
-      principal: { kind: 'user', id: 'user-event-1' },
-    });
+    expect(observed).toHaveBeenCalledWith(
+      {
+        transportName: 'context-transport',
+        connectionId: 'conn-event-1',
+        caller,
+      },
+      caller,
+    );
   });
 
   it('threads trusted transport context into broadcast handlers', async () => {
@@ -104,7 +113,7 @@ describe('transport receive context', () => {
 
     bus.on(namespace.subjects.collect, (ctx) => {
       ctx.identify?.('local');
-      ctx.setResult({ principalId: ctx.transport?.principal?.id });
+      ctx.setResult({ principalId: ctx.call.principal.id });
     });
 
     await transport.simulateReceive(
@@ -119,7 +128,7 @@ describe('transport receive context', () => {
       {
         transportName: 'context-transport',
         connectionId: 'conn-broadcast-1',
-        principal: { kind: 'user', id: 'user-broadcast-1' },
+        caller: { kind: 'acme.user', id: 'user-broadcast-1' },
       },
     );
 
@@ -148,7 +157,7 @@ describe('transport receive context', () => {
       {
         transportName: 'source',
         connectionId: 'conn-relay-1',
-        principal: { kind: 'user', id: 'user-relay-1' },
+        caller: { kind: 'acme.user', id: 'user-relay-1' },
       },
     );
 
@@ -159,8 +168,11 @@ describe('transport receive context', () => {
       subject: 'event',
       payload: { value: 'a' },
       messageId: 'msg-relay-1',
+      // The relaying host vouches for the principal it received; nothing of the receive context crosses.
+      metadata: { principal: { kind: 'acme.user', id: 'user-relay-1' } },
     });
     expect(peer.messages[0]).not.toHaveProperty('transport');
     expect(peer.messages[0]).not.toHaveProperty('principal');
+    expect(peer.messages[0]).not.toHaveProperty('caller');
   });
 });

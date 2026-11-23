@@ -42,9 +42,10 @@ export async function createGateConnector(
   lists: GateConnectorLists,
   centralApproval: (...args: never[]) => Promise<unknown>,
 ): Promise<GateConnector> {
-  const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+  const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
   const connector = new ClaudeSdkConnector({
     bus,
+    globalBus: MakaioBus,
     adapterId: 'adapter-test',
     adapterName: ClaudeCodeAdapterName,
     agentId: 'agent-test',

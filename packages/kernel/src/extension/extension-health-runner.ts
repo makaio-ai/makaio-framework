@@ -51,7 +51,8 @@ export async function runExtensionHealthCheck(host: ExtensionHealthHost, name: s
   entry.warnings = warnings;
 
   try {
-    await host.bus.emit(ExtensionSubjects.warnings.changed, {
+    // ORIGIN: The host publishes its own snapshot after the extension's lifecycle health hook.
+    await host.bus.emit(host.bus.own('observer'), ExtensionSubjects.warnings.changed, {
       extensionName: name,
       // Snapshot copy: safeParse already produces fresh objects, but spreading
       // the array prevents subscriber mutations from leaking back into

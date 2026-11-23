@@ -2,6 +2,18 @@ import { type SubjectDefinition, WildcardSubjectKey } from '@makaio/core';
 import { ChannelOnlyError } from '../errors/channel-only-error.js';
 
 /**
+ * Build the error for a value that is not a subject definition.
+ *
+ * The single source of this error: {@link validateMessage} raises it for a missing definition, and the
+ * send normalisation raises it for a call-form second argument that has no snapshot.
+ * @param method - The message operation type being performed
+ * @returns The error to throw
+ */
+export function invalidSubjectDefinitionError(method: 'on' | 'once' | 'emit' | 'request' | 'intercept'): Error {
+  return new Error(`Invalid subject definition provided to ${method}()`);
+}
+
+/**
  * Validates message operations to ensure subjects are used correctly
  * according to bus rules. Checks for valid subject metadata, namespace
  * matching, and method-specific constraints (e.g., no wildcard emits,
@@ -20,7 +32,7 @@ export function validateMessage(
   scopeNamespace?: string,
 ) {
   if (!subject?.$meta) {
-    throw new Error(`Invalid subject definition provided to ${method}()`);
+    throw invalidSubjectDefinitionError(method);
   }
 
   if (subject.$meta.channel) {

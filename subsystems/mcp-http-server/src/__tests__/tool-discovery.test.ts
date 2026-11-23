@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { ToolRegistry } from '@makaio/services-core/tools';
 import { defineToolset, defineTool, toolSuccess } from '@makaio/tools-core';
 import type { ToolInfo } from '@makaio/tools-core';
@@ -60,7 +61,7 @@ describe('resolveMcpTools', () => {
         }),
       );
 
-      const result = await resolveMcpTools(bus, {
+      const result = await resolveMcpTools(createTestCall(), bus, {
         pluginToolsets: { 'my-toolset': 'my-plugin' },
       });
 
@@ -84,7 +85,7 @@ describe('resolveMcpTools', () => {
         }),
       );
 
-      const result = await resolveMcpTools(bus);
+      const result = await resolveMcpTools(createTestCall(), bus);
 
       expect(result.tools).toHaveLength(1);
       expect(result.tools[0].name).toBe('readFile');
@@ -105,7 +106,7 @@ describe('resolveMcpTools', () => {
         { name: 'run', description: 'Run from B', toolsetName: 'toolset-b' },
       ];
 
-      const result = await resolveMcpTools(bus, {
+      const result = await resolveMcpTools(createTestCall(), bus, {
         getExposedTools: () => colliding,
       });
 
@@ -126,7 +127,7 @@ describe('resolveMcpTools', () => {
       ];
 
       await expect(
-        resolveMcpTools(bus, {
+        resolveMcpTools(createTestCall(), bus, {
           getExposedTools: () => duplicates,
         }),
       ).rejects.toThrow(/Duplicate resolved MCP tool name: toolset-a.run/);
@@ -147,7 +148,7 @@ describe('resolveMcpTools', () => {
         }),
       );
 
-      const result = await resolveMcpTools(bus);
+      const result = await resolveMcpTools(createTestCall(), bus);
 
       expect(result.tools).toHaveLength(2);
       const names = result.tools.map((t) => t.name);
@@ -170,12 +171,12 @@ describe('resolveMcpTools', () => {
         }),
       );
 
-      const before = await resolveMcpTools(bus);
+      const before = await resolveMcpTools(createTestCall(), bus);
       expect(before.tools).toHaveLength(1);
 
       await registry.deregister('temp-toolset');
 
-      const after = await resolveMcpTools(bus);
+      const after = await resolveMcpTools(createTestCall(), bus);
       expect(after.tools).toHaveLength(0);
     });
   });
@@ -194,7 +195,7 @@ describe('resolveMcpTools', () => {
         }),
       );
 
-      const result = await resolveMcpTools(bus, {
+      const result = await resolveMcpTools(createTestCall(), bus, {
         pluginToolsets: { 'exec-toolset': 'exec-plugin' },
       });
 
@@ -207,7 +208,7 @@ describe('resolveMcpTools', () => {
       // No ToolRegistry registered on this bus → no handler for ToolSubjects.list
       const bus = createBusInstance();
 
-      const result = await resolveMcpTools(bus, {
+      const result = await resolveMcpTools(createTestCall(), bus, {
         staticFallback: [{ name: 'fallbackTool', description: 'Fallback tool', toolsetName: 'fallback-toolset' }],
       });
 
@@ -219,7 +220,7 @@ describe('resolveMcpTools', () => {
     it('returns empty when no handler and no static fallback provided', async () => {
       const bus = createBusInstance();
 
-      const result = await resolveMcpTools(bus);
+      const result = await resolveMcpTools(createTestCall(), bus);
 
       expect(result.tools).toHaveLength(0);
       expect(result.byMcpName.size).toBe(0);
@@ -240,7 +241,7 @@ describe('resolveMcpTools', () => {
         }),
       );
 
-      const result = await resolveMcpTools(bus, {
+      const result = await resolveMcpTools(createTestCall(), bus, {
         getExposedTools: () => [],
       });
 
@@ -282,7 +283,7 @@ describe('resolveMcpTools', () => {
         },
       ];
 
-      const result = await resolveMcpTools(bus, { getExposedTools: () => unionTool });
+      const result = await resolveMcpTools(createTestCall(), bus, { getExposedTools: () => unionTool });
       const schema = result.tools[0].inputSchema as Record<string, unknown>;
 
       expect(result.tools).toHaveLength(1);
@@ -315,7 +316,7 @@ describe('resolveMcpTools', () => {
         },
       ];
 
-      const result = await resolveMcpTools(bus, { getExposedTools: () => objectTool });
+      const result = await resolveMcpTools(createTestCall(), bus, { getExposedTools: () => objectTool });
 
       expect(result.tools[0].inputSchema).toEqual({
         type: 'object',
@@ -385,7 +386,7 @@ describe('resolveMcpTools', () => {
         }),
       );
 
-      const result = await resolveMcpTools(bus, {
+      const result = await resolveMcpTools(createTestCall(), bus, {
         getExposedTools: (tools) => tools.filter((t) => t.name === 'allowedTool'),
       });
 
@@ -409,7 +410,7 @@ describe('resolveMcpTools', () => {
       });
 
       try {
-        await resolveMcpTools(bus, undefined, {
+        await resolveMcpTools(createTestCall(), bus, undefined, {
           adapterId: 'test-adapter-id',
           adapterName: 'test-adapter',
         });
@@ -435,7 +436,7 @@ describe('resolveMcpTools', () => {
       });
 
       try {
-        await resolveMcpTools(bus);
+        await resolveMcpTools(createTestCall(), bus);
 
         expect(captured).toHaveLength(1);
         expect(captured[0].adapterId).toBeUndefined();
@@ -458,12 +459,12 @@ describe('resolveMcpTools', () => {
         }),
       );
 
-      const withIdentity = await resolveMcpTools(bus, undefined, {
+      const withIdentity = await resolveMcpTools(createTestCall(), bus, undefined, {
         adapterId: 'adapter-1',
         adapterName: 'my-adapter',
       });
 
-      const withoutIdentity = await resolveMcpTools(bus);
+      const withoutIdentity = await resolveMcpTools(createTestCall(), bus);
 
       expect(withIdentity.tools.map((t) => t.name)).toEqual(withoutIdentity.tools.map((t) => t.name));
     });

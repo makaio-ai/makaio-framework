@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
 import { MakaioBus } from '../index.js';
+import { busContextOf } from '../kernel-api.js';
 import type { BusEventMessage, BusMessage, BusRequestMessage, BusTransportRegistry, BusTransport } from '../index.js';
 
 class RecordingTransport implements BusTransport {
@@ -63,7 +64,7 @@ describe('Transport relay isolation', () => {
     source = new RecordingTransport();
     relay = new RecordingTransport();
     failing = new FailingTransport();
-    const { registerTransport } = MakaioBus.getContext().transportRegistry;
+    const { registerTransport } = busContextOf(MakaioBus).transportRegistry;
     unregisterSource = registerTransport('source' as keyof BusTransportRegistry, source).unregister;
     unregisterRelay = registerTransport('relay' as keyof BusTransportRegistry, relay).unregister;
     unregisterFailing = registerTransport('failing' as keyof BusTransportRegistry, failing).unregister;

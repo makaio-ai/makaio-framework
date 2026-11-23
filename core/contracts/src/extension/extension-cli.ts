@@ -1,4 +1,4 @@
-import type { MakaioBusLike } from '@makaio/core';
+import type { CallContext, MakaioBusLike } from '@makaio/core';
 import type { CliManifest } from './manifest.js';
 
 /**
@@ -28,6 +28,11 @@ export interface ExtensionCliHandlerContext<TBus extends MakaioBusLike = MakaioB
    * hook opted into offline execution.
    */
   readonly bus: TBus | null;
+  /**
+   * Call context of the invocation: the user's input or the handled message.
+   * Send through {@link bus} with this context; never mint a new root.
+   */
+  readonly call: CallContext;
   /** Output channel for writing to stdout and stderr. */
   readonly output: ExtensionCliOutputWriter;
   /** Abort signal triggered when the invocation is cancelled. */
@@ -50,6 +55,11 @@ export interface ExtensionCliInteractiveContext<TBus extends MakaioBusLike = Mak
    * hook opted into bus-optional execution.
    */
   readonly bus: TBus | null;
+  /**
+   * Call context of the invocation: the user's input or the handled message.
+   * Send through {@link bus} with this context; never mint a new root.
+   */
+  readonly call: CallContext;
   /** Abort signal triggered when the interactive invocation is cancelled. */
   readonly signal: AbortSignal;
 }
@@ -81,6 +91,11 @@ export interface ExtensionCliBeforeRunContext<TBus extends MakaioBusLike = Makai
   readonly args: Record<string, unknown>;
   /** Bus client, or `null` when the server is unreachable. */
   readonly bus: TBus | null;
+  /**
+   * Call context of the invocation: the user's input or the handled message.
+   * Send through {@link bus} with this context; never mint a new root.
+   */
+  readonly call: CallContext;
 }
 
 /**

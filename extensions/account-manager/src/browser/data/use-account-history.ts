@@ -109,7 +109,7 @@ function loadHistoryEntries(
   }
 
   const request = bus
-    .request(AccountManagerSubjects.usage.history, payload)
+    .request(bus.own('shared-work'), AccountManagerSubjects.usage.history, payload)
     .then((result) => {
       // Only cache if this request has not been superseded by a reload().
       if (historyRequestCache.get(key) === request) {

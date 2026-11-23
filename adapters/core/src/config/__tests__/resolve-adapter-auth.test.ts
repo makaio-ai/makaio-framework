@@ -7,6 +7,7 @@ import {
   type AdapterProviderAuth,
   type ResolvedProviderAuth,
 } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { bindProviderAuth, resolveBoundProviderAuth } from '../resolve-adapter-auth.js';
 
 type ResolvedExplicitAuth = Extract<ResolvedProviderAuth, { mode: 'explicit' }>;
@@ -124,10 +125,11 @@ describe('normalized adapter auth resolver', () => {
     ]);
 
     const resolveRefs = vi.fn().mockResolvedValue({ apiKey: 'secret-key', tenantId: 'tenant-42' });
-    const resolved = await resolveBoundProviderAuth(bound, resolveRefs);
+    const call = createTestCall();
+    const resolved = await resolveBoundProviderAuth(call, bound, resolveRefs);
 
     expect(resolveRefs).toHaveBeenCalledOnce();
-    expect(resolveRefs).toHaveBeenCalledWith(auth.credentialRefs);
+    expect(resolveRefs).toHaveBeenCalledWith(call, auth.credentialRefs);
     expect(resolved).toEqual({
       processEnv: { RUNTIME_API_KEY: 'secret-key', RUNTIME_TENANT: 'tenant-42' },
       connectorDeliveries: [
@@ -171,7 +173,7 @@ describe('normalized adapter auth resolver', () => {
       ]),
     });
 
-    const resolved = await resolveBoundProviderAuth(bound, async () => ({ apiKey: 'secret-key' }));
+    const resolved = await resolveBoundProviderAuth(createTestCall(), bound, async () => ({ apiKey: 'secret-key' }));
     const values = resolved.connectorDeliveries[0].values;
 
     expect(Object.getPrototypeOf(values)).toBe(Object.prototype);
@@ -205,7 +207,7 @@ describe('normalized adapter auth resolver', () => {
       ]),
     });
 
-    const resolved = await resolveBoundProviderAuth(bound, async () => ({ apiKey: 'secret-key' }));
+    const resolved = await resolveBoundProviderAuth(createTestCall(), bound, async () => ({ apiKey: 'secret-key' }));
 
     expect(resolved.processEnv).toEqual({ RUNTIME_API_KEY: 'secret-key' });
   });
@@ -230,9 +232,9 @@ describe('normalized adapter auth resolver', () => {
       adapterProviderAuth: createSelectedDeclaration([{ kind: 'process-env', fields: { apiKey: 'RUNTIME_API_KEY' } }]),
     });
 
-    await expect(resolveBoundProviderAuth(bound, async () => ({ tenantId: 'tenant-42' }))).rejects.toThrow(
-      'Required authentication field "apiKey" could not be resolved.',
-    );
+    await expect(
+      resolveBoundProviderAuth(createTestCall(), bound, async () => ({ tenantId: 'tenant-42' })),
+    ).rejects.toThrow('Required authentication field "apiKey" could not be resolved.');
   });
 
   it('rejects an explicit binding that does not deliver every required field', () => {
@@ -420,7 +422,7 @@ describe('normalized adapter auth resolver', () => {
     const resolveRefs = vi.fn();
 
     const bound = bindProviderAuth({ auth, adapterProviderAuth: declaration });
-    const resolved = await resolveBoundProviderAuth(bound, resolveRefs);
+    const resolved = await resolveBoundProviderAuth(createTestCall(), bound, resolveRefs);
 
     expect(bound.scrubEnvVars).toEqual(['AMBIENT_TOKEN', 'AUTH_CONTROL']);
     expect(resolveRefs).not.toHaveBeenCalled();
@@ -445,6 +447,7 @@ describe('normalized adapter auth resolver', () => {
     const resolveRefs = vi.fn();
 
     const resolved = await resolveBoundProviderAuth(
+      createTestCall(),
       bindProviderAuth({ auth, adapterProviderAuth: declaration }),
       resolveRefs,
     );
@@ -462,7 +465,7 @@ describe('normalized adapter auth resolver', () => {
 
     let captured: Error | undefined;
     try {
-      await resolveBoundProviderAuth(bound, async () => {
+      await resolveBoundProviderAuth(createTestCall(), bound, async () => {
         throw new Error(`Could not resolve ${credentialRef}`);
       });
     } catch (error) {
@@ -485,7 +488,10 @@ describe('normalized adapter auth resolver', () => {
 
     let captured: Error | undefined;
     try {
-      await resolveBoundProviderAuth(bound, async () => ({ apiKey: 'secret-key', [leakedRef]: 'secret-value' }));
+      await resolveBoundProviderAuth(createTestCall(), bound, async () => ({
+        apiKey: 'secret-key',
+        [leakedRef]: 'secret-value',
+      }));
     } catch (error) {
       if (error instanceof Error) {
         captured = error;
@@ -505,7 +511,10 @@ describe('normalized adapter auth resolver', () => {
     });
 
     await expect(
-      resolveBoundProviderAuth(bound, async () => ({ apiKey: 'secret-key', tenantId: 'unselected-value' })),
+      resolveBoundProviderAuth(createTestCall(), bound, async () => ({
+        apiKey: 'secret-key',
+        tenantId: 'unselected-value',
+      })),
     ).rejects.toThrow('Credential resolver returned values outside the selected authentication fields.');
   });
 
@@ -525,7 +534,7 @@ describe('normalized adapter auth resolver', () => {
 
     let captured: Error | undefined;
     try {
-      await resolveBoundProviderAuth(bound, async () => returnedValues);
+      await resolveBoundProviderAuth(createTestCall(), bound, async () => returnedValues);
     } catch (error) {
       if (error instanceof Error) {
         captured = error;
@@ -543,7 +552,7 @@ describe('normalized adapter auth resolver', () => {
     });
     const inheritedValues: Record<string, string> = Object.create({ apiKey: 'prototype-secret' });
 
-    await expect(resolveBoundProviderAuth(bound, async () => inheritedValues)).rejects.toThrow(
+    await expect(resolveBoundProviderAuth(createTestCall(), bound, async () => inheritedValues)).rejects.toThrow(
       'Required authentication field "apiKey" could not be resolved.',
     );
   });

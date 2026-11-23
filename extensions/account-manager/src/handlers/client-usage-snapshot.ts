@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { ClientUsageSnapshot } from '@makaio/contracts/client';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { AccountUsage } from '../bus/schemas.js';
@@ -10,6 +11,8 @@ import { scheduleUsagePersistence } from './usage-tracker-lifecycle.js';
 import { resolveLinkedClientSnapshotFreshUntil, type UsageSourceConfig } from './usage-tracker-types.js';
 
 interface IngestLinkedClientSnapshotOptions {
+  /** Call context of the `client.usage.snapshot` message this ingestion serves. */
+  readonly call: CallContext;
   bus: IMakaioBus;
   metadataStore: IAccountMetadataStore;
   usageSnapshotStore: IAccountUsageSnapshotStore | undefined;
@@ -41,6 +44,7 @@ interface IngestLinkedClientSnapshotOptions {
  */
 export async function ingestLinkedClientSnapshot(opts: IngestLinkedClientSnapshotOptions): Promise<void> {
   const linkedAccounts = await opts.metadataStore.listByLinkedClientAccountId(
+    opts.call,
     opts.snapshot.clientId,
     opts.snapshot.clientAccountId,
   );
@@ -83,6 +87,7 @@ export async function ingestLinkedClientSnapshot(opts: IngestLinkedClientSnapsho
     opts.cacheKeyIndex.set(key, { clientId: opts.snapshot.clientId, accountId: account.id });
 
     scheduleUsagePersistence({
+      call: opts.call,
       clientId: opts.snapshot.clientId,
       accountId: account.id,
       usage: bridgedUsage,
@@ -97,7 +102,7 @@ export async function ingestLinkedClientSnapshot(opts: IngestLinkedClientSnapsho
       },
     });
 
-    await opts.bus.emit(AccountManagerSubjects.usage.updated, {
+    await opts.bus.emit(opts.call, AccountManagerSubjects.usage.updated, {
       clientId: opts.snapshot.clientId,
       accountId: account.id,
       usage: bridgedUsage,

@@ -2,14 +2,9 @@
 import { StrictMode, type ReactNode } from 'react';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { UiNamespace, UiSubjects } from '@makaio/ui-kernel';
 let currentBus: IMakaioBus | null = null;
-
-const UiSubjects = { ready: 'ui.ready', navigate: 'ui.navigate' };
-
-vi.mock('@makaio/ui-kernel', () => ({
-  UiSubjects,
-}));
 
 vi.mock('@makaio/ui-hooks', () => ({
   BusProvider: ({ bus, children }: { bus: IMakaioBus; children: ReactNode }) => {
@@ -29,6 +24,16 @@ vi.mock('@makaio/ui-views', () => ({
   ExtensionBrowserLoader: () => <div>Shared renderer shell</div>,
 }));
 
+/**
+ * Create an isolated renderer bus and observe its real sends.
+ * @returns The renderer bus and its emit spy.
+ */
+function createRendererBus() {
+  const bus = createBusInstance();
+  bus.registerNamespace(UiNamespace);
+  return { bus, emit: vi.spyOn(bus, 'emit') };
+}
+
 describe('shared renderer App', () => {
   afterEach(() => {
     cleanup();
@@ -38,8 +43,7 @@ describe('shared renderer App', () => {
   });
 
   it('emits ui.ready once in StrictMode for the provided surface and renders the shared shell', async () => {
-    const emit = vi.fn().mockResolvedValue(undefined);
-    const bus = { emit } as Pick<IMakaioBus, 'emit'> as IMakaioBus;
+    const { bus, emit } = createRendererBus();
     const { App } = await import('../src/renderer/App.js');
 
     render(
@@ -54,15 +58,15 @@ describe('shared renderer App', () => {
       expect(emit).toHaveBeenCalledTimes(1);
     });
 
-    expect(emit).toHaveBeenCalledWith(UiSubjects.ready, {
+    expect(emit.mock.calls[0]?.[0]).toBe(bus.own('start'));
+    expect(emit).toHaveBeenCalledWith(bus.own('start'), UiSubjects.ready, {
       surface: 'electron',
       timestamp: expect.any(Number),
     });
   });
 
   it('parameterizes the ui.ready surface literal', async () => {
-    const emit = vi.fn().mockResolvedValue(undefined);
-    const bus = { emit } as Pick<IMakaioBus, 'emit'> as IMakaioBus;
+    const { bus, emit } = createRendererBus();
     const { App } = await import('../src/renderer/App.js');
 
     render(<App bus={bus} surface="electrobun" />);
@@ -71,7 +75,7 @@ describe('shared renderer App', () => {
       expect(emit).toHaveBeenCalledTimes(1);
     });
 
-    expect(emit).toHaveBeenCalledWith(UiSubjects.ready, {
+    expect(emit).toHaveBeenCalledWith(bus.own('start'), UiSubjects.ready, {
       surface: 'electrobun',
       timestamp: expect.any(Number),
     });
@@ -81,8 +85,7 @@ describe('shared renderer App', () => {
     vi.useFakeTimers();
 
     try {
-      const emit = vi.fn().mockResolvedValue(undefined);
-      const bus = { emit } as Pick<IMakaioBus, 'emit'> as IMakaioBus;
+      const { bus, emit } = createRendererBus();
       const { App } = await import('../src/renderer/App.js');
 
       const firstRender = render(<App bus={bus} surface="electron" />);
@@ -101,8 +104,7 @@ describe('shared renderer App', () => {
   });
 
   it('allows an immediate same-surface remount after explicit cleanup reset', async () => {
-    const emit = vi.fn().mockResolvedValue(undefined);
-    const bus = { emit } as Pick<IMakaioBus, 'emit'> as IMakaioBus;
+    const { bus, emit } = createRendererBus();
     const { App, resetReadySurface } = await import('../src/renderer/App.js');
 
     const firstRender = render(<App bus={bus} surface="electron" />);

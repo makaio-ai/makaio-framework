@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import { UserMessageQueue } from '../user-message-queue.js';
 import { MessageHandle } from '../../message-handle/index.js';
 import { normalizeMessageInput } from '../../utils/normalizeMessageInput.js';
@@ -9,6 +10,7 @@ function createHandle(
   internalRetry = false,
 ): MessageHandle {
   return new MessageHandle(
+    createTestCall(),
     crypto.randomUUID(),
     normalizeMessageInput(message),
     deliveryMode,

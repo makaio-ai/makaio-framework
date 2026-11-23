@@ -12,6 +12,7 @@
 import * as fs from 'node:fs/promises';
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { TurnIngestionMarker } from '@makaio/contracts';
 import { LogImportSubjects } from './namespace.js';
 import { importFromFileContent } from './generic-import-handlers.js';
@@ -40,6 +41,7 @@ const importChainByFilePath = new Map<string, Promise<unknown>>();
 
 /**
  * Execute one importFile request (registration lookup, stat, read, import).
+ * @param call - Call context of the handled `log-import.importFile` message
  * @param bus - Bus instance used by the import pipeline
  * @param getRegistration - Registration lookup by adapter name
  * @param payload - Validated `log-import.importFile` request payload
@@ -47,6 +49,7 @@ const importChainByFilePath = new Map<string, Promise<unknown>>();
  * @throws Genuine importer/storage errors (only the two skip cases are handled results)
  */
 async function executeImportFile(
+  call: CallContext,
   bus: IMakaioBus,
   getRegistration: (adapterName: string) => LogImporterRegistration | undefined,
   payload: { filePath: string; adapterName: string; ingestionMarker?: TurnIngestionMarker },
@@ -71,6 +74,7 @@ async function executeImportFile(
   const isJsonl = registration.logFilePattern.endsWith('.jsonl');
 
   const { sessionId, messageCount, turnCount } = await importFromFileContent({
+    call,
     bus,
     importer: registration.importer,
     content,
@@ -110,7 +114,7 @@ export function registerImportFileHandler(
 
     // Chain onto the previous execution for this file, regardless of outcome.
     const previous = importChainByFilePath.get(filePath) ?? Promise.resolve();
-    const execution = previous.then(() => executeImportFile(bus, getRegistration, ctx.payload));
+    const execution = previous.then(() => executeImportFile(ctx.call, bus, getRegistration, ctx.payload));
 
     // The stored tail never rejects, so later chains cannot inherit a rejection.
     const tail = execution.then(

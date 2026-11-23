@@ -6,6 +6,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import type { ResolvedAdapterAuth } from '@makaio/ai-adapters-core/config';
 import { ClientSubjects, type ClientExecutionContext } from '@makaio/contracts/client';
 import { CodexAppServerConnector } from '../connector.js';
@@ -59,22 +61,25 @@ function execution(binaryPath: string | null, env: Record<string, string> = {}):
 
 /**
  * Create a connector and advance it only as far as subprocess spawn.
+ * @param call - Call forwarded through connector initialization
  * @param options - Finalized runtime inputs supplied to the connector
  * @returns Connector whose initialization has reached the spawn boundary
  */
 async function makeConnector(
+  call: CallContext,
   options: {
     env?: Record<string, string>;
     clientExecution?: ClientExecutionContext;
     adapterAuth?: ResolvedAdapterAuth;
   } = {},
 ): Promise<CodexAppServerConnector> {
-  const bus = await CodexAppServerNamespace.scopedBus();
+  const bus = await CodexAppServerNamespace.scopedBus(MakaioBus);
   const cwd = mkdtempSync(join(tmpdir(), 'codex-central-runtime-test-'));
   tempDirectories.push(cwd);
 
   const connector = new CodexAppServerConnector({
     bus,
+    globalBus: MakaioBus,
     adapterId: 'adapter-test',
     adapterName: 'codex-app-server',
     agentId: 'agent-test',
@@ -86,7 +91,7 @@ async function makeConnector(
     adapterAuth: options.adapterAuth,
   });
   connectors.push(connector);
-  void connector.initialize().catch(() => undefined);
+  void connector.initialize({ call }).catch(() => undefined);
   return connector;
 }
 
@@ -107,7 +112,7 @@ afterEach(() => {
 
 describe('CodexAppServerConnector — central runtime config', () => {
   it('uses the centrally selected managed binary and finalized lease environment', async () => {
-    await makeConnector({
+    await makeConnector(createTestCall(), {
       env: { PATH: '/base/bin', CODEX_HOME: '/isolated/codex' },
       clientExecution: execution('/managed/bin/codex', { CODEX_HOME: '/must-not-be-merged-again' }),
     });
@@ -119,12 +124,12 @@ describe('CodexAppServerConnector — central runtime config', () => {
   });
 
   it('uses PATH lookup for a global or absent central binary selection', async () => {
-    await makeConnector({ clientExecution: execution(null) });
+    await makeConnector(createTestCall(), { clientExecution: execution(null) });
     expect((await waitForSpawn()).binary).toBe('codex');
 
     connectors.splice(0).forEach((connector) => connector.abort());
     mockSpawn.mockClear();
-    await makeConnector();
+    await makeConnector(createTestCall());
     expect((await waitForSpawn()).binary).toBe('codex');
   });
 
@@ -133,13 +138,13 @@ describe('CodexAppServerConnector — central runtime config', () => {
     vi.stubEnv('CODEX_API_KEY', 'ambient-codex-key');
     vi.stubEnv('CODEX_ACCESS_TOKEN', 'ambient-access-token');
 
-    await makeConnector();
+    await makeConnector(createTestCall());
 
     expect((await waitForSpawn()).env).toEqual({});
   });
 
   it('passes only the selected access-token process auth', async () => {
-    await makeConnector({
+    await makeConnector(createTestCall(), {
       env: { CODEX_HOME: '/isolated/codex', CODEX_ACCESS_TOKEN: 'selected-access-token' },
       adapterAuth: {
         processEnv: { CODEX_ACCESS_TOKEN: 'selected-access-token' },
@@ -159,7 +164,7 @@ describe('CodexAppServerConnector — central runtime config', () => {
     vi.stubEnv('OPENAI_API_KEY', 'ambient-openai-key');
     vi.stubEnv('CODEX_API_KEY', 'ambient-codex-key');
     vi.stubEnv('CODEX_ACCESS_TOKEN', 'ambient-access-token');
-    await makeConnector({
+    await makeConnector(createTestCall(), {
       env: { CODEX_HOME: '/isolated/native-codex' },
       adapterAuth: { processEnv: {}, connectorDeliveries: [], configInheritance: 'auth-only' },
     });
@@ -173,7 +178,7 @@ describe('CodexAppServerConnector — central runtime config', () => {
   });
 
   it('keeps provider API-key delivery out of the subprocess environment', async () => {
-    await makeConnector({
+    await makeConnector(createTestCall(), {
       env: { CODEX_HOME: '/isolated/api-key-codex' },
       adapterAuth: createApiKeyAdapterAuth('private-api-key'),
     });
@@ -192,7 +197,7 @@ describe('CodexAppServerConnector — central runtime config', () => {
       resolveBinary();
       ctx.setResult(execution('/unexpected/bin/codex'));
     });
-    await makeConnector({ clientExecution: execution('/selected/bin/codex') });
+    await makeConnector(createTestCall(), { clientExecution: execution('/selected/bin/codex') });
 
     const spawn = await waitForSpawn();
     cleanup();

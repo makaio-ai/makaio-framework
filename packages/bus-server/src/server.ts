@@ -5,7 +5,8 @@
  * lifecycle management and MakaioBus integration.
  */
 
-import { MakaioBus, type IMakaioBus, type BusTransport, type TransportRegistration } from '@makaio/bus-core';
+import type { IMakaioBus, BusTransport, TransportRegistration } from '@makaio/bus-core';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
 import { ServerTransport } from '@makaio/bus-transport-websocket';
 import type { BusServer, BusServerConfig } from './types.js';
 import { LoopbackTransport } from './loopback-transport.js';
@@ -106,7 +107,8 @@ async function startServerTransport(
   debug: boolean,
   state: BusServerRuntimeState,
 ): Promise<void> {
-  const { transportRegistry } = bus.getContext();
+  // transport wiring only through the kernel entry busContextOf (FACT-375)
+  const { transportRegistry } = busContextOf(bus);
   let transportConnected = false;
 
   try {
@@ -154,7 +156,7 @@ async function stopServerTransport(transport: BusTransport, state: BusServerRunt
  * - Handle optional authentication
  * - Broadcast messages to all connected clients
  * - Integrate with MakaioBus for message routing
- * @param config - Server configuration
+ * @param config - Server configuration; `config.bus` is required (no process-bus default)
  * @returns BusServer instance with start/stop methods
  * @example
  * ```typescript
@@ -165,6 +167,7 @@ async function stopServerTransport(transport: BusTransport, state: BusServerRunt
  * const wss = new WebSocketServer({ port: 8080 });
  * const server = createBusServer({
  *   websocket: wss,
+ *   bus,
  *   auth: new HmacAuth({ secret: process.env.BUS_SECRET! }),
  *   debug: true,
  * });
@@ -178,8 +181,7 @@ async function stopServerTransport(transport: BusTransport, state: BusServerRunt
  * ```
  */
 export function createBusServer(config: BusServerConfig): BusServer {
-  const { websocket, auth, debug = false, bus: providedBus, loopbackName } = config;
-  const bus: IMakaioBus = providedBus ?? MakaioBus;
+  const { websocket, auth, debug = false, bus, loopbackName } = config;
   const normalizedLoopbackName = normalizeLoopbackName(loopbackName);
 
   // Create the server transport

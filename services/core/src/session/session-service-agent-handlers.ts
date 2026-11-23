@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AgentSubjects, SessionSubjects, type SessionOwnershipClaimResult } from '@makaio/contracts';
 import { SessionStorageSubjects } from './storage/namespace.js';
 import { AgentStorageSubjects } from './storage/agent-namespace.js';
@@ -87,7 +88,7 @@ async function attemptRemovalAct(action: () => Promise<void>): Promise<unknown |
  */
 export function registerAgentAddedHandler(bus: IMakaioBus): () => void {
   return bus.on(SessionSubjects.agent.added, async (ctx) => {
-    const result = await bus.requestOptional(SessionStorageSubjects.get, {
+    const result = await bus.requestOptional(ctx.call, SessionStorageSubjects.get, {
       sessionId: ctx.payload.sessionId,
     });
 
@@ -104,7 +105,7 @@ export function registerAgentAddedHandler(bus: IMakaioBus): () => void {
     // because nothing can reopen it afterwards.
     const designation =
       resolvedRole === 'lead'
-        ? await designateSessionLead(bus, {
+        ? await designateSessionLead(ctx.call, bus, {
             sessionId: ctx.payload.sessionId,
             agentId: ctx.payload.agentId,
             expectedLeadAgentId: session.leadAgentId ?? null,
@@ -144,7 +145,7 @@ export function registerAgentAddedHandler(bus: IMakaioBus): () => void {
       // A replacement lead is the first case, not a third: its swap answers
       // `claimed` against the lead it replaced, so it expects itself.
       const expectedLeadAgentId = thisAgentLeads ? ctx.payload.agentId : session.leadAgentId;
-      await establishSessionAdapterIdentity(bus, ctx.payload, expectedLeadAgentId);
+      await establishSessionAdapterIdentity(ctx.call, bus, ctx.payload, expectedLeadAgentId);
       return;
     }
 
@@ -154,7 +155,7 @@ export function registerAgentAddedHandler(bus: IMakaioBus): () => void {
     // by it: `status` would go back to what the read saw, reviving a session
     // whose connector may already be gone. Activity is the only thing this
     // agent's arrival changes, so it is the only thing written.
-    await bus.requestOptional(SessionStorageSubjects.update, {
+    await bus.requestOptional(ctx.call, SessionStorageSubjects.update, {
       sessionId: ctx.payload.sessionId,
       lastActivityAt: Date.now(),
     });
@@ -177,6 +178,7 @@ export function registerAgentAddedHandler(bus: IMakaioBus): () => void {
  * Activity travels **with** the guarded write, so a refusal withholds it too, and
  * the refusal path writes it separately: the announcement happened either way,
  * and the row's last activity is the one fact it produces unconditionally.
+ * @param call - Call context of the handled agent announcement.
  * @param bus - Bus the writes are issued on.
  * @param payload - The announcement whose adapter identity is published.
  * @param expectedLeadAgentId - The designation the row must still carry for this
@@ -186,11 +188,12 @@ export function registerAgentAddedHandler(bus: IMakaioBus): () => void {
  *   designation authority at all.
  */
 async function establishSessionAdapterIdentity(
+  call: CallContext,
   bus: IMakaioBus,
   payload: { sessionId: string; agentId: string; adapterId: string; adapterName: string; adapterSessionId?: string },
   expectedLeadAgentId: string | undefined,
 ): Promise<void> {
-  const established = await bus.requestOptional(SessionStorageSubjects.update, {
+  const established = await bus.requestOptional(call, SessionStorageSubjects.update, {
     sessionId: payload.sessionId,
     lastActivityAt: Date.now(),
     identity: {
@@ -205,7 +208,7 @@ async function establishSessionAdapterIdentity(
   // Refused, or the row is gone — storage does not distinguish them and this
   // handler does not need it to: neither leaves an identity for this agent to
   // publish, and an activity write against a missing row is a no-op.
-  await bus.requestOptional(SessionStorageSubjects.update, {
+  await bus.requestOptional(call, SessionStorageSubjects.update, {
     sessionId: payload.sessionId,
     lastActivityAt: Date.now(),
   });
@@ -235,7 +238,7 @@ async function establishSessionAdapterIdentity(
  */
 export function registerAgentRemovedHandler(bus: IMakaioBus): () => void {
   return bus.on(SessionSubjects.agent.removed, async (ctx) => {
-    const result = await bus.requestOptional(SessionStorageSubjects.get, {
+    const result = await bus.requestOptional(ctx.call, SessionStorageSubjects.get, {
       sessionId: ctx.payload.sessionId,
     });
 
@@ -243,7 +246,7 @@ export function registerAgentRemovedHandler(bus: IMakaioBus): () => void {
     if (!session) return;
 
     const terminalizationError = await attemptRemovalAct(async () => {
-      const status = await bus.requestOptional(AgentStorageSubjects.updateStatus, {
+      const status = await bus.requestOptional(ctx.call, AgentStorageSubjects.updateStatus, {
         agentId: ctx.payload.agentId,
         status: 'disposed',
       });
@@ -254,7 +257,7 @@ export function registerAgentRemovedHandler(bus: IMakaioBus): () => void {
       }
     });
     const leadError = await attemptRemovalAct(async () => {
-      await designateSessionLead(bus, {
+      await designateSessionLead(ctx.call, bus, {
         sessionId: ctx.payload.sessionId,
         agentId: ctx.payload.agentId,
         expectedLeadAgentId: ctx.payload.agentId,
@@ -262,10 +265,12 @@ export function registerAgentRemovedHandler(bus: IMakaioBus): () => void {
       });
     });
     const teardownError = await attemptRemovalAct(async () => {
-      await retireTerminalAgentClaims(bus, ctx.payload.agentId, { releaseClaims: terminalizationError === undefined });
+      await retireTerminalAgentClaims(ctx.call, bus, ctx.payload.agentId, {
+        releaseClaims: terminalizationError === undefined,
+      });
     });
     const activityError = await attemptRemovalAct(async () => {
-      await bus.requestOptional(SessionStorageSubjects.update, {
+      await bus.requestOptional(ctx.call, SessionStorageSubjects.update, {
         sessionId: ctx.payload.sessionId,
         lastActivityAt: Date.now(),
       });
@@ -315,17 +320,17 @@ export function registerAdapterSessionIdReconciliationHandler(bus: IMakaioBus): 
 
     // ── Agent storage reconciliation ─────────────────────────────────
     // Unconditional: each agent owns its own provider session ID.
-    const agentResult = await bus.requestOptional(AgentStorageSubjects.get, { agentId });
+    const agentResult = await bus.requestOptional(ctx.call, AgentStorageSubjects.get, { agentId });
     const agent = agentResult.handled ? agentResult.data.agent : null;
 
     if (agent && !agent.adapterSessionId) {
-      await bus.requestOptional(AgentStorageSubjects.updateRuntime, {
+      await bus.requestOptional(ctx.call, AgentStorageSubjects.updateRuntime, {
         agentId,
         adapterSessionId,
       });
     }
 
-    await bus.requestOptional(SessionStorageSubjects.update, {
+    await bus.requestOptional(ctx.call, SessionStorageSubjects.update, {
       sessionId,
       reconcileAdapterSession: {
         agentId,

@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { ClientHookProviderContractRegistry, ClientHookResponseRegistry } from '@makaio/subsystem-client';
 import type { ContributorDefinition } from '@makaio/contracts/client';
 import { createAppendEffect } from '@makaio/contracts/client';
+import { createTestCall } from '@makaio/test-utils';
 import { composeHookResponse } from '../hook-response-composer.js';
 import { claudeCodeToolResponseContract, createApproveEffect } from '../hook-response-contracts.js';
 import { CLAUDE_CODE_HOOK_POST_TOOL_USE, CLAUDE_CODE_HOOK_PRE_TOOL_USE } from '../schemas.js';
@@ -87,7 +88,11 @@ describe('composeHookResponse', () => {
         respond: () => ({ canonicalEffects: [createAppendEffect('tool guidance')] }),
       });
 
-      const result = await composeHookResponse(responseRegistry, toolPayload(CLAUDE_CODE_HOOK_PRE_TOOL_USE));
+      const result = await composeHookResponse(
+        createTestCall(),
+        responseRegistry,
+        toolPayload(CLAUDE_CODE_HOOK_PRE_TOOL_USE),
+      );
 
       expect(JSON.parse(result.stdout)).toEqual({
         hookSpecificOutput: {
@@ -112,7 +117,11 @@ describe('composeHookResponse', () => {
         respond: () => ({ canonicalEffects: [createAppendEffect('tool result note')] }),
       });
 
-      const result = await composeHookResponse(responseRegistry, toolPayload(CLAUDE_CODE_HOOK_POST_TOOL_USE));
+      const result = await composeHookResponse(
+        createTestCall(),
+        responseRegistry,
+        toolPayload(CLAUDE_CODE_HOOK_POST_TOOL_USE),
+      );
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');
@@ -126,7 +135,11 @@ describe('composeHookResponse', () => {
     it('returns the no-op response when no contributors are registered', async () => {
       const responseRegistry = createResponseRegistry();
 
-      const result = await composeHookResponse(responseRegistry, toolPayload(CLAUDE_CODE_HOOK_POST_TOOL_USE));
+      const result = await composeHookResponse(
+        createTestCall(),
+        responseRegistry,
+        toolPayload(CLAUDE_CODE_HOOK_POST_TOOL_USE),
+      );
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe('');
@@ -148,7 +161,11 @@ describe('composeHookResponse', () => {
         },
       });
 
-      const result = await composeHookResponse(responseRegistry, toolPayload(CLAUDE_CODE_HOOK_POST_TOOL_USE));
+      const result = await composeHookResponse(
+        createTestCall(),
+        responseRegistry,
+        toolPayload(CLAUDE_CODE_HOOK_POST_TOOL_USE),
+      );
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toBe('');
@@ -179,7 +196,11 @@ describe('composeHookResponse', () => {
         respond: () => ({ canonicalEffects: [createAppendEffect('tool result note')] }),
       });
 
-      const result = await composeHookResponse(responseRegistry, toolPayload(CLAUDE_CODE_HOOK_POST_TOOL_USE));
+      const result = await composeHookResponse(
+        createTestCall(),
+        responseRegistry,
+        toolPayload(CLAUDE_CODE_HOOK_POST_TOOL_USE),
+      );
 
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toBe('');

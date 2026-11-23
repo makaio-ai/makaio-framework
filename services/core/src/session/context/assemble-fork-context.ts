@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { IMakaioSession, NativeForkDirective, NativeLocalityVerdict, SessionContext } from '@makaio/contracts';
 import { TurnStorageSubjects } from '../turns/index.js';
 import { SessionStorageSubjects } from '../storage/namespace.js';
@@ -62,6 +63,7 @@ export interface AssembleForkContextCapabilities {
  * Build a fresh-with-history context by injecting the full conversation and
  * attaching the given locality verdict. Shared by the non-native path and
  * the mid-history degrade path.
+ * @param call - Call context of the handled message the fork is assembled for; forwarded to the degrade event and the conversation load
  * @param bus - Bus instance for RPC calls
  * @param sessionId - Session whose projected conversation should be loaded
  * @param originalContext - Original sessionContext to spread into the result
@@ -70,6 +72,7 @@ export interface AssembleForkContextCapabilities {
  * @returns SessionContext with messageHistory injected
  */
 async function buildFreshWithHistory(
+  call: CallContext,
   bus: IMakaioBus,
   sessionId: string,
   originalContext: SessionContext | undefined,
@@ -78,9 +81,9 @@ async function buildFreshWithHistory(
 ): Promise<SessionContext> {
   // Emit the degrade event at the converging fork-degrade path.
   // Both evaluator-determined degrades and fork-point-unresolvable flow here.
-  void emitLocalityDegradeEvent(bus, { sessionId, intent: 'fork', verdict });
+  void emitLocalityDegradeEvent(call, bus, { sessionId, intent: 'fork', verdict });
 
-  const contextResult = await getFullConversation(bus, sessionId);
+  const contextResult = await getFullConversation(call, bus, sessionId);
   const messageHistory = contextResult.messages.map(convertSessionMessage);
   return {
     ...originalContext,
@@ -97,6 +100,7 @@ async function buildFreshWithHistory(
  * `session.forkPointMessageId` is a session-storage UUID assigned by the
  * fork handler.  The adapter layer needs the provider-native
  * `adapterMessageId` (used as `resumeSessionAt` in the Claude SDK path).
+ * @param call - Call context of the handled message the fork is assembled for
  * @param bus - Bus instance for the message lookup
  * @param storageMessageId - Session-storage message ID of the fork point
  * @returns The provider-native message ID, or `undefined` when the stored
@@ -104,10 +108,11 @@ async function buildFreshWithHistory(
  *   SessionBridge stamped a fresh UUID)
  */
 async function resolveForkPointAdapterMessageId(
+  call: CallContext,
   bus: IMakaioBus,
   storageMessageId: string,
 ): Promise<string | undefined> {
-  const { message } = await bus.request(MessageStorageSubjects.get, {
+  const { message } = await bus.request(call, MessageStorageSubjects.get, {
     messageId: storageMessageId,
   });
   return message?.adapterMessageId ?? undefined;
@@ -126,6 +131,7 @@ async function resolveForkPointAdapterMessageId(
  * 5. Returns enriched SessionContext
  *
  * If not a fork first turn, returns the original sessionContext unchanged.
+ * @param call - Call context of the handled message that triggers the fork; forwarded to every request
  * @param bus - Bus instance for RPC calls
  * @param session - Session to check for fork context
  * @param sessionId - Session ID
@@ -149,6 +155,7 @@ async function resolveForkPointAdapterMessageId(
  * @returns Enriched or original SessionContext
  */
 export async function assembleForkContext(
+  call: CallContext,
   bus: IMakaioBus,
   session: IMakaioSession,
   sessionId: string,
@@ -172,7 +179,7 @@ export async function assembleForkContext(
   // Determine if this is the first turn.
   // Use isNewTurn flag combined with storage query to distinguish
   // "just the one we created" from "had prior turns".
-  const { turns } = await bus.request(TurnStorageSubjects.getBySession, {
+  const { turns } = await bus.request(call, TurnStorageSubjects.getBySession, {
     sessionId,
     limit: 2,
   });
@@ -187,7 +194,7 @@ export async function assembleForkContext(
     return originalContext;
   }
 
-  const { session: sourceSession } = await bus.request(SessionStorageSubjects.get, {
+  const { session: sourceSession } = await bus.request(call, SessionStorageSubjects.get, {
     sessionId: parentSessionId,
   });
 
@@ -236,10 +243,10 @@ export async function assembleForkContext(
     // (forwarded as resumeSessionAt in the Claude SDK path).
     let forkPointAdapterMessageId: string | undefined;
     if (session.forkPointMessageId !== undefined) {
-      forkPointAdapterMessageId = await resolveForkPointAdapterMessageId(bus, session.forkPointMessageId);
+      forkPointAdapterMessageId = await resolveForkPointAdapterMessageId(call, bus, session.forkPointMessageId);
       if (forkPointAdapterMessageId === undefined) {
         // Degrade: the provider cannot resolve this checkpoint.
-        return buildFreshWithHistory(bus, sessionId, originalContext, session, {
+        return buildFreshWithHistory(call, bus, sessionId, originalContext, session, {
           kind: 'degrade',
           reason: 'fork-point-unresolvable',
         });
@@ -258,5 +265,5 @@ export async function assembleForkContext(
   }
 
   // Non-native fork: inject message history and attach the locality verdict.
-  return buildFreshWithHistory(bus, sessionId, originalContext, session, verdict);
+  return buildFreshWithHistory(call, bus, sessionId, originalContext, session, verdict);
 }

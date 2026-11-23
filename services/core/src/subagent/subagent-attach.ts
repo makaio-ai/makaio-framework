@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { SessionSubjects, type SubagentConfig } from '@makaio/contracts';
 import {
   resolveRuntimeProviderContext,
@@ -19,10 +20,11 @@ export interface SubagentAttachParams {
 
 /**
  * Attach a subagent and admit its initial task as one session transaction.
+ * @param call - Call context of the handled message that triggered the attach; forwarded to every send.
  * @param bus - Bus providing provider resolution and session attach.
  * @param params - Resolved subagent attach inputs and admission assertion.
  */
-export async function attachSubagent(bus: IMakaioBus, params: SubagentAttachParams): Promise<void> {
+export async function attachSubagent(call: CallContext, bus: IMakaioBus, params: SubagentAttachParams): Promise<void> {
   const { subagentId, adapterName, config, sessionId, task, targetWorkingDirectory, assertAdmission } = params;
   const suppliedProviderContext = config.providerContext;
   if (
@@ -44,9 +46,10 @@ export async function attachSubagent(bus: IMakaioBus, params: SubagentAttachPara
   const providerContext =
     suppliedProviderContext ??
     (config.providerConfigId
-      ? await resolveRuntimeProviderContext(bus, { adapterName, providerConfigId: config.providerConfigId })
+      ? await resolveRuntimeProviderContext(call, bus, { adapterName, providerConfigId: config.providerConfigId })
       : undefined);
   await bus.request(
+    call,
     SessionSubjects.agent.attachResolved,
     {
       sessionId,

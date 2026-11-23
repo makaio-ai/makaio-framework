@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMockBus, createTestBusInstance, type MockBusResult } from '@makaio/test-utils';
+import { createMockBus, createTestBusInstance, createTestCall, type MockBusResult } from '@makaio/test-utils';
 import { ClientSubjects } from '@makaio/contracts/client';
 import { loadClientInventory, activateManagedPins, type ClientInventoryResult } from '../bus/client-ops.js';
 import type { SetupClientBinaryInventory } from '../types.js';
@@ -27,13 +27,14 @@ describe('loadClientInventory', () => {
   it('issues scan and list requests in parallel', async () => {
     mockBus.request.mockResolvedValueOnce({ results: [] }).mockResolvedValueOnce({ clients: [] });
 
-    await loadClientInventory(mockBus.bus, []);
+    const call = createTestCall();
+    await loadClientInventory(call, mockBus.bus, []);
 
     expect(mockBus.request).toHaveBeenCalledTimes(2);
-    expect(mockBus.request).toHaveBeenCalledWith(ClientSubjects.scan, {
+    expect(mockBus.request).toHaveBeenCalledWith(call, ClientSubjects.scan, {
       targets: [],
     });
-    expect(mockBus.request).toHaveBeenCalledWith(ClientSubjects.list, {});
+    expect(mockBus.request).toHaveBeenCalledWith(call, ClientSubjects.list, {});
   });
 
   it('forwards targets to the scan request', async () => {
@@ -42,12 +43,13 @@ describe('loadClientInventory', () => {
       .mockResolvedValueOnce({ results: [] })
       .mockResolvedValueOnce({ clients: [] });
 
-    await loadClientInventory(mockBus.bus, [
+    const call = createTestCall();
+    await loadClientInventory(call, mockBus.bus, [
       { clientId: 'claude-code', binaryName: 'claude' },
       { clientId: 'codex', binaryName: 'codex' },
     ]);
 
-    expect(mockBus.request).toHaveBeenCalledWith(ClientSubjects.scan, {
+    expect(mockBus.request).toHaveBeenCalledWith(call, ClientSubjects.scan, {
       targets: [
         { clientId: 'claude-code', binaryName: 'claude' },
         { clientId: 'codex', binaryName: 'codex' },
@@ -65,7 +67,7 @@ describe('loadClientInventory', () => {
       })
       .mockResolvedValueOnce({ clients: [] });
 
-    const result: ClientInventoryResult = await loadClientInventory(mockBus.bus, []);
+    const result: ClientInventoryResult = await loadClientInventory(createTestCall(), mockBus.bus, []);
 
     expect(result.globalResults.get('claude-code')).toBe('1.2.3');
     expect(result.globalResults.get('codex')).toBeNull();
@@ -84,7 +86,7 @@ describe('loadClientInventory', () => {
       ],
     });
 
-    const result = await loadClientInventory(mockBus.bus, []);
+    const result = await loadClientInventory(createTestCall(), mockBus.bus, []);
 
     const entry = result.managedClients.get('claude-code');
     expect(entry).toBeDefined();
@@ -97,7 +99,7 @@ describe('loadClientInventory', () => {
   it('returns empty maps when both responses are empty', async () => {
     mockBus.request.mockResolvedValueOnce({ results: [] }).mockResolvedValueOnce({ clients: [] });
 
-    const result = await loadClientInventory(mockBus.bus, []);
+    const result = await loadClientInventory(createTestCall(), mockBus.bus, []);
 
     expect(result.globalResults.size).toBe(0);
     expect(result.managedClients.size).toBe(0);
@@ -123,7 +125,7 @@ describe('loadClientInventory', () => {
       });
     });
 
-    const result = await loadClientInventory(bus, [{ clientId: 'claude-code', binaryName: 'claude' }]);
+    const result = await loadClientInventory(bus.own('root'), bus, [{ clientId: 'claude-code', binaryName: 'claude' }]);
 
     expect(result.globalResults.get('claude-code')).toBe('1.2.3');
     expect(result.managedClients.get('claude-code')).toEqual({
@@ -164,7 +166,7 @@ describe('activateManagedPins', () => {
   });
 
   it('is a no-op when the map is empty', async () => {
-    await activateManagedPins(mockBus.bus, new Map());
+    await activateManagedPins(createTestCall(), mockBus.bus, new Map());
 
     expect(mockBus.request).not.toHaveBeenCalled();
     expect(mockBus.on).not.toHaveBeenCalled();
@@ -173,7 +175,7 @@ describe('activateManagedPins', () => {
   it('skips clients with null pinnedVersion', async () => {
     const clients = new Map([['no-pin', makeInventory({ pinnedVersion: null })]]);
 
-    await activateManagedPins(mockBus.bus, clients);
+    await activateManagedPins(createTestCall(), mockBus.bus, clients);
 
     expect(mockBus.request).not.toHaveBeenCalled();
   });
@@ -181,7 +183,7 @@ describe('activateManagedPins', () => {
   it('skips clients where activeVersion already equals pinnedVersion', async () => {
     const clients = new Map([['up-to-date', makeInventory({ activeVersion: '1.0.0', pinnedVersion: '1.0.0' })]]);
 
-    await activateManagedPins(mockBus.bus, clients);
+    await activateManagedPins(createTestCall(), mockBus.bus, clients);
 
     expect(mockBus.request).not.toHaveBeenCalled();
   });
@@ -204,10 +206,11 @@ describe('activateManagedPins', () => {
       ],
     ]);
 
-    await activateManagedPins(mockBus.bus, clients);
+    const call = createTestCall();
+    await activateManagedPins(call, mockBus.bus, clients);
 
     expect(mockBus.request).toHaveBeenCalledOnce();
-    expect(mockBus.request).toHaveBeenCalledWith(ClientSubjects.setActive, {
+    expect(mockBus.request).toHaveBeenCalledWith(call, ClientSubjects.setActive, {
       clientId: 'test-client',
       version: '1.1.0',
     });
@@ -231,7 +234,7 @@ describe('activateManagedPins', () => {
       ],
     ]);
 
-    await activateManagedPins(bus, clients);
+    await activateManagedPins(bus.own('root'), bus, clients);
 
     cleanup();
   });
@@ -254,7 +257,7 @@ describe('activateManagedPins', () => {
       ],
     ]);
 
-    await activateManagedPins(mockBus.bus, clients);
+    await activateManagedPins(createTestCall(), mockBus.bus, clients);
 
     expect(mockBus.on).not.toHaveBeenCalled();
   });
@@ -268,6 +271,7 @@ describe('activateManagedPins', () => {
       // Fire the handler asynchronously so the Promise resolves
       void Promise.resolve().then(() => {
         handler({
+          call: createTestCall(),
           payload: { jobId, clientId: 'test-client', status: 'success', strategy: 'npm', activeVersion: '2.0.0' },
         });
       });
@@ -286,10 +290,11 @@ describe('activateManagedPins', () => {
       ],
     ]);
 
-    await activateManagedPins(mockBus.bus, clients);
+    const call = createTestCall();
+    await activateManagedPins(call, mockBus.bus, clients);
 
     expect(mockBus.request).toHaveBeenCalledOnce();
-    expect(mockBus.request).toHaveBeenCalledWith(ClientSubjects.update, {
+    expect(mockBus.request).toHaveBeenCalledWith(call, ClientSubjects.update, {
       clientId: 'test-client',
     });
     // Verify the correct subject and jobId filter are passed to bus.on
@@ -305,6 +310,7 @@ describe('activateManagedPins', () => {
     mockBus.on.mockImplementation((_subject, handler) => {
       void Promise.resolve().then(() => {
         handler({
+          call: createTestCall(),
           payload: {
             jobId,
             clientId: 'test-client',
@@ -330,7 +336,7 @@ describe('activateManagedPins', () => {
       ],
     ]);
 
-    await expect(activateManagedPins(mockBus.bus, clients)).rejects.toThrow(
+    await expect(activateManagedPins(createTestCall(), mockBus.bus, clients)).rejects.toThrow(
       'Binary install failed for test-client: disk full',
     );
   });
@@ -342,6 +348,7 @@ describe('activateManagedPins', () => {
     mockBus.on.mockImplementation((_subject, handler) => {
       void Promise.resolve().then(() => {
         handler({
+          call: createTestCall(),
           payload: {
             jobId,
             clientId: 'test-client',
@@ -366,7 +373,7 @@ describe('activateManagedPins', () => {
       ],
     ]);
 
-    await expect(activateManagedPins(mockBus.bus, clients)).rejects.toThrow(
+    await expect(activateManagedPins(createTestCall(), mockBus.bus, clients)).rejects.toThrow(
       'Binary install failed for test-client: unknown error',
     );
   });
@@ -382,6 +389,7 @@ describe('activateManagedPins', () => {
     mockBus.on.mockImplementation((_subject, handler) => {
       void Promise.resolve().then(() => {
         handler({
+          call: createTestCall(),
           payload: { jobId, clientId: 'test-client', status: 'success', strategy: 'npm', activeVersion: '2.0.0' },
         });
       });
@@ -400,7 +408,7 @@ describe('activateManagedPins', () => {
       ],
     ]);
 
-    await activateManagedPins(mockBus.bus, clients);
+    await activateManagedPins(createTestCall(), mockBus.bus, clients);
 
     expect(unsubSpy.called).toBe(true);
   });
@@ -434,7 +442,7 @@ describe('activateManagedPins', () => {
 
       // Wire up the rejection assertion before advancing time so the
       // unhandled-rejection handler never fires.
-      const promise = expect(activateManagedPins(mockBus.bus, clients)).rejects.toThrow(
+      const promise = expect(activateManagedPins(createTestCall(), mockBus.bus, clients)).rejects.toThrow(
         'Binary install for test-client timed out after 120s',
       );
 

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { defineAdapterProviderAuth } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { AdapterSubsystemSubjects } from '../adapter-subsystem/namespace.js';
 import type { AdapterRuntimeSnapshotResolution } from '../adapter-subsystem/schemas.js';
 import {
@@ -83,15 +84,17 @@ describe('resolveRuntimeProviderContext', () => {
   });
 
   it('returns only the resolved context from the adapter-qualified atomic snapshot', async () => {
+    const call = createTestCall();
     cleanups.push(
       MakaioBus.on(AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot, (ctx) => {
+        expect(ctx.call.principal).toEqual(call.principal);
         expect(ctx.payload).toEqual({ adapterName: 'adapter-1', providerConfigId: 'cfg-1' });
         ctx.setResult(resolvedRuntimeResponse());
       }),
     );
 
     await expect(
-      resolveRuntimeProviderContext(MakaioBus, { adapterName: 'adapter-1', providerConfigId: 'cfg-1' }),
+      resolveRuntimeProviderContext(call, MakaioBus, { adapterName: 'adapter-1', providerConfigId: 'cfg-1' }),
     ).resolves.toEqual(RESOLVED_CONTEXT);
   });
 
@@ -105,7 +108,7 @@ describe('resolveRuntimeProviderContext', () => {
       }),
     );
 
-    const error = await resolveRuntimeProviderContext(MakaioBus, {
+    const error = await resolveRuntimeProviderContext(createTestCall(), MakaioBus, {
       adapterName: 'adapter-1',
       providerConfigId: 'cfg-1',
     }).catch((value: unknown) => value);
@@ -122,7 +125,7 @@ describe('resolveRuntimeProviderContext', () => {
       }),
     );
 
-    const error = await resolveRuntimeProviderContext(MakaioBus, {
+    const error = await resolveRuntimeProviderContext(createTestCall(), MakaioBus, {
       adapterName: 'requested-adapter',
       providerConfigId: 'requested-config',
     }).catch((value: unknown) => value);

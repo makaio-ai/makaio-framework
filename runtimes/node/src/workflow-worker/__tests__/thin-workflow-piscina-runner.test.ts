@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { WorkflowWorkerConfig } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import type { ThinWorkflowPiscinaRunnerOptions } from '../types.js';
 import { createWorkflowWorkerReadyMessage } from '../worker-ready-message.js';
 import { acceptPiscinaBootstrapHandoff, type PiscinaBootstrapBinding } from '../piscina-bootstrap-handoff.js';
@@ -211,7 +212,7 @@ describe('ThinWorkflowPiscinaRunner', () => {
     const config = makeConfig();
     const signal = new AbortController().signal;
 
-    const result = await runner.run(config, signal);
+    const result = await runner.run(createTestCall(), config, signal);
 
     expect(mockPoolRun).toHaveBeenCalledOnce();
     expect(mockPoolRun).toHaveBeenCalledWith(
@@ -257,7 +258,7 @@ describe('ThinWorkflowPiscinaRunner', () => {
     mockPoolRun.mockResolvedValueOnce(expectedResult);
 
     const runner = new ThinWorkflowPiscinaRunner({ ...makeOptions(), resolveWorkspaceRoot });
-    await runner.run(config, new AbortController().signal, manifest);
+    await runner.run(createTestCall(), config, new AbortController().signal, manifest);
 
     expect(mockMaterializeLocalDirectory).toHaveBeenCalledWith(config.materializationSpec, manifest.contributionRefs, {
       resolveWorkspaceRoot,
@@ -298,7 +299,7 @@ describe('ThinWorkflowPiscinaRunner', () => {
       ],
     };
 
-    await expect(runner.run(config, signal, perCallManifest)).rejects.toThrow(
+    await expect(runner.run(createTestCall(), config, signal, perCallManifest)).rejects.toThrow(
       'requires a local-directory materialization spec',
     );
     expect(mockPoolRun).not.toHaveBeenCalled();
@@ -311,7 +312,7 @@ describe('ThinWorkflowPiscinaRunner', () => {
     const runner = new ThinWorkflowPiscinaRunner(makeOptions());
     controller.abort();
 
-    await expect(runner.run(makeConfig(), controller.signal)).rejects.toThrow('aborted');
+    await expect(runner.run(createTestCall(), makeConfig(), controller.signal)).rejects.toThrow('aborted');
     expect(mockPoolRun).not.toHaveBeenCalled();
   });
 
@@ -321,7 +322,9 @@ describe('ThinWorkflowPiscinaRunner', () => {
 
     const runner = new ThinWorkflowPiscinaRunner(makeOptions());
 
-    await expect(runner.run(makeConfig(), new AbortController().signal)).rejects.toThrow('Worker thread crashed');
+    await expect(runner.run(createTestCall(), makeConfig(), new AbortController().signal)).rejects.toThrow(
+      'Worker thread crashed',
+    );
   });
 
   it('dispatches an attempt-bound task when readiness is requested', async () => {

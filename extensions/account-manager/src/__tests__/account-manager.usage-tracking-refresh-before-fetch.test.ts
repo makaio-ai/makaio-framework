@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus, createBusInstance } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { RawCredential } from '../interfaces/credential-source.js';
 import { AccountManager } from '../account-manager.js';
@@ -92,7 +93,7 @@ describe('AccountManager', () => {
       try {
         await isolatedService.init();
 
-        const result = await isolatedBus.request(AccountManagerSubjects.usage.refresh, {
+        const result = await isolatedBus.request(createTestCall(), AccountManagerSubjects.usage.refresh, {
           clientId: 'claude-code',
           accountId,
         });

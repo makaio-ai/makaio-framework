@@ -16,7 +16,12 @@ import {
 import type { AgentSessionEvent, AgentSession, ToolDefinition } from '@mariozechner/pi-coding-agent';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { Model } from '@mariozechner/pi-ai';
-import type { ConnectorTeardownResult, SystemPrompt, ToolExecutionContextOverrides } from '@makaio/contracts';
+import type {
+  CallContext,
+  ConnectorTeardownResult,
+  SystemPrompt,
+  ToolExecutionContextOverrides,
+} from '@makaio/contracts';
 import { PiConnectorTurn } from './turn.js';
 import { PiSdkSubjects } from './namespaces/index.js';
 import type { PiSdkBus } from './namespaces/index.js';
@@ -349,7 +354,7 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
         eventType: 'text_delta',
         delta: ame.delta,
       });
-      await this.advanceToStepStarted();
+      await this.advanceToStepStarted(turnSnapshot.messageHandle.call, turnSnapshot);
     } else if (ame.type === 'text_end') {
       this.appendTurnAssistantText(turnSnapshot, ame.content);
       await this.emitEvent(PiSdkSubjects.text_complete, {
@@ -361,7 +366,7 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
         eventType: 'thinking_delta',
         delta: ame.delta,
       });
-      await this.advanceToStepStarted();
+      await this.advanceToStepStarted(turnSnapshot.messageHandle.call, turnSnapshot);
     } else if (ame.type === 'thinking_end') {
       await this.emitEvent(PiSdkSubjects.thinking_complete, {
         eventType: 'thinking_complete',
@@ -408,7 +413,7 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
       }
     }
 
-    await this.advanceToStepFinished(turnSnapshot);
+    await this.advanceToStepFinished(turnSnapshot.messageHandle.call, turnSnapshot);
   }
 
   /**
@@ -503,22 +508,25 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
   /**
    * Advance the current turn to step_started (idempotent).
    * Called on first content arrival (text_delta or thinking_delta).
+   * @param call - Call of the turn that produced the content
+   * @param turn - Turn captured when the content arrived
    */
-  private async advanceToStepStarted(): Promise<void> {
-    if (this.stepStarted || !this.activeTurn) return;
+  private async advanceToStepStarted(call: CallContext, turn: PiConnectorTurn): Promise<void> {
+    if (this.stepStarted || this.activeTurn !== turn) return;
     this.stepStarted = true;
-    await this.activeTurn.markStepStarted();
+    await turn.markStepStarted(call);
   }
 
   /**
    * Advance the current turn to step_finished when a step was in progress.
    * Called on message_end for assistant messages.
+   * @param call - Call of the turn that produced the message
    * @param turn - The turn that owns the message_end event
    */
-  private async advanceToStepFinished(turn: PiConnectorTurn): Promise<void> {
+  private async advanceToStepFinished(call: CallContext, turn: PiConnectorTurn): Promise<void> {
     if (this.activeTurn !== turn || !this.stepStarted) return;
     this.stepStarted = false;
-    await turn.markStepFinished();
+    await turn.markStepFinished(call);
   }
 
   /**
@@ -577,7 +585,7 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
     this.assistantTextByTurn.set(turn, '');
     handle.adapterSessionId = this.sessionId;
     handle.markAcknowledged();
-    await turn.start();
+    await turn.start(handle.call);
 
     const promptText = this.buildPromptText(handle, mergedContent);
 
@@ -681,7 +689,7 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
     }
 
     if (!turn.isPaused()) {
-      await turn.markTurnFinished();
+      await turn.markTurnFinished(handle.call);
       if (this.activeTurn === turn) {
         this.activeTurn = undefined;
       }
@@ -696,9 +704,10 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
    *
    * Overrides BaseConnectorSession.abort() to also call Pi's session.abort(),
    * which signals the in-process agentic loop to stop at the next opportunity.
+   * @param call - Call of the operation requesting abort
    */
-  public override async abort(): Promise<void> {
-    await super.abort();
+  public override async abort(call: CallContext): Promise<void> {
+    await super.abort(call);
     await this.piSession?.abort();
   }
 
@@ -734,12 +743,13 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
    * detach and disposal behind it must happen regardless — but a session that
    * could not tell whether its own abort landed has an unaccounted stage, and
    * `unknown` is the honest report of one.
+   * @param call - Call of the operation requesting shutdown
    * @returns What this session observed about the end of its Pi session.
    */
-  public async close(): Promise<ConnectorTeardownResult> {
+  public async close(call: CallContext): Promise<ConnectorTeardownResult> {
     this.piUnsubscribe?.();
     this.piUnsubscribe = undefined;
-    await this.currentTurn?.pause();
+    await this.currentTurn?.pause(call);
     const unaccounted: string[] = [];
     try {
       await this.piSession?.abort();
@@ -772,13 +782,19 @@ export class PiConnectorSession extends BaseConnectorSession<PiConnectorSessionC
    * so the handler must ask the session for the current message handle when the
    * SDK invokes a tool. This keeps turnContext and turnId aligned with the live
    * prompt instead of the initialization-time adapter snapshot.
-   * @returns Current turn ID and turnContext, or an empty object outside a turn
+   * @returns Current turn call, ID and turnContext
+   * @throws Error when no turn owns the tool invocation
    */
-  public getToolExecutionTurnContext(): Pick<ToolExecutionContextOverrides, 'turnId' | 'turnContext'> {
+  public getToolExecutionTurnContext(): { call: CallContext } & Pick<
+    ToolExecutionContextOverrides,
+    'turnId' | 'turnContext'
+  > {
     const handle = this.activeTurn?.messageHandle;
+    if (!handle) throw new Error('[PiConnectorSession] Tool execution requires an active turn');
     return {
-      ...(handle?.messageId !== undefined && { turnId: handle.messageId }),
-      ...(handle?.turnContext !== undefined && { turnContext: handle.turnContext }),
+      call: handle.call,
+      ...(handle.messageId !== undefined && { turnId: handle.messageId }),
+      ...(handle.turnContext !== undefined && { turnContext: handle.turnContext }),
     };
   }
 

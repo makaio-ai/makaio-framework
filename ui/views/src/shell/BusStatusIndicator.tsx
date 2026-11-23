@@ -28,7 +28,8 @@ export function BusStatusIndicator(): JSX.Element {
 
     const checkConnection = async (): Promise<void> => {
       try {
-        await bus.request(KernelSubjects.isReady, {});
+        // ORIGIN: The effect polls readiness independently of any handled message.
+        await bus.request(bus.own('observer'), KernelSubjects.isReady, {});
         if (isCurrentRun()) {
           setStatus('connected');
         }

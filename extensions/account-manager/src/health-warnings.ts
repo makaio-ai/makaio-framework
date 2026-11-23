@@ -1,6 +1,7 @@
 import { ClientSubjects } from '@makaio/contracts/client';
 import type { ExtensionWarning } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { CredentialSourceWithOptionalLabel } from './handlers/index.js';
 
 /**
@@ -25,12 +26,14 @@ export interface AccountManagerHealthWarningOptions {
  * produces an `'info'` warning; an installed but misconfigured or unwired
  * source produces a `'recommended'` warning with a `configure-integration`
  * action so the UI can route the user directly to integration settings.
+ * @param call - Call context for the health check
  * @param bus - Bus used to request clients-core wiring status
  * @param sources - Credential sources registered with account-manager
  * @param options - Host-owned health-check inputs
  * @returns Active health warnings, one per affected source/integration issue
  */
 export async function collectAccountManagerHealthWarnings(
+  call: CallContext,
   bus: IMakaioBus,
   sources: ReadonlyArray<CredentialSourceWithOptionalLabel>,
   options: AccountManagerHealthWarningOptions,
@@ -66,7 +69,7 @@ export async function collectAccountManagerHealthWarnings(
       warnings.push(configWarning);
     }
 
-    const wiringWarning = await checkIntegrationWiringHealth(bus, source, options);
+    const wiringWarning = await checkIntegrationWiringHealth(call, bus, source, options);
     if (wiringWarning) {
       warnings.push(wiringWarning);
     }
@@ -111,12 +114,14 @@ async function checkSourceConfigHealth(source: CredentialSourceWithOptionalLabel
  * integration health invariant also requires host hook wiring to be
  * installed, so this uses the global clients-core aggregator instead of
  * duplicating per-client config parsing inside account-manager.
+ * @param call - Call context for the health check
  * @param bus - Bus used to request clients-core wiring status
  * @param source - Credential source whose client wiring should be inspected
  * @param options - Host-owned wiring command used to inspect expected entries
  * @returns A health warning when wiring is incomplete or unavailable
  */
 export async function checkIntegrationWiringHealth(
+  call: CallContext,
   bus: IMakaioBus,
   source: CredentialSourceWithOptionalLabel,
   options: AccountManagerHealthWarningOptions,
@@ -125,7 +130,7 @@ export async function checkIntegrationWiringHealth(
     // The global wiring contract compares concrete command strings. Hosts own
     // this value via AccountManagerHealthWarningOptions so rebranded launchers
     // do not leak host-specific defaults into the health-check logic.
-    const result = await bus.requestOptional(ClientSubjects.wiring.list, {
+    const result = await bus.requestOptional(call, ClientSubjects.wiring.list, {
       clientId: source.clientId,
       makaioCommand: options.makaioCommand,
     });

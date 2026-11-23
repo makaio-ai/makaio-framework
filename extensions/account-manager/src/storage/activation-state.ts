@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type {
   AccountTimelineEntry,
   IAccountCredentialStore,
@@ -58,15 +59,16 @@ export interface ActivationStateRollbackInput {
  * This owns the Makaio-side activation invariant: clear prior active rows,
  * mark the target active, and persist the target's current credential bytes.
  * Native credential-store writes happen outside this helper.
+ * @param call - Call context forwarded to every store operation
  * @param input - Activation commit inputs
  */
-export async function commitActivatedAccountState(input: ActivationStateCommitInput): Promise<void> {
+export async function commitActivatedAccountState(call: CallContext, input: ActivationStateCommitInput): Promise<void> {
   const { metadataStore, credentialStore, clientId, accounts, target, activatedAt } = input;
 
-  await deactivateAccounts(metadataStore, clientId, accounts);
+  await deactivateAccounts(call, metadataStore, clientId, accounts);
   target.active = true;
   target.lastSeenAt = activatedAt;
-  await upsertStoredAccount(metadataStore, credentialStore, clientId, target);
+  await upsertStoredAccount(call, metadataStore, credentialStore, clientId, target);
 }
 
 /**
@@ -74,40 +76,46 @@ export async function commitActivatedAccountState(input: ActivationStateCommitIn
  *
  * Replays the pre-activation snapshots for the target and previously-active
  * accounts so Makaio's durable state matches the last known good state.
+ * @param call - Call context forwarded to every store operation
  * @param input - Rollback inputs captured before the failed activation attempt
  */
-export async function rollbackActivatedAccountState(input: ActivationStateRollbackInput): Promise<void> {
+export async function rollbackActivatedAccountState(
+  call: CallContext,
+  input: ActivationStateRollbackInput,
+): Promise<void> {
   const { metadataStore, credentialStore, clientId, previousTarget, previousActive } = input;
   const targetId = input.targetId ?? previousTarget?.id;
   if (!targetId) {
     throw new Error('rollbackActivatedAccountState requires targetId when previousTarget is null');
   }
 
-  await metadataStore.deactivateAll(clientId);
+  await metadataStore.deactivateAll(call, clientId);
   if (previousTarget) {
-    await upsertStoredAccount(metadataStore, credentialStore, clientId, previousTarget);
+    await upsertStoredAccount(call, metadataStore, credentialStore, clientId, previousTarget);
   } else {
-    await removeStoredAccount(metadataStore, credentialStore, clientId, targetId);
+    await removeStoredAccount(call, metadataStore, credentialStore, clientId, targetId);
   }
   if (previousActive && previousActive.id !== targetId) {
-    await upsertStoredAccount(metadataStore, credentialStore, clientId, previousActive);
+    await upsertStoredAccount(call, metadataStore, credentialStore, clientId, previousActive);
   }
 }
 
 /**
  * Persist one activation timeline row without letting auxiliary history writes
  * fail the already-committed activation itself.
+ * @param call - Call context forwarded to the metadata store
  * @param metadataStore - Public metadata store
  * @param entry - Timeline row to append
  * @param warningPrefix - Prefix used for the warning log
  */
 export async function appendActivationTimelineBestEffort(
+  call: CallContext,
   metadataStore: IAccountMetadataStore,
   entry: AccountTimelineEntry,
   warningPrefix: string,
 ): Promise<void> {
   try {
-    await metadataStore.appendTimeline(entry);
+    await metadataStore.appendTimeline(call, entry);
   } catch (error) {
     console.warn(warningPrefix, error);
   }

@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   resolveResumableAdapterSessionId,
   SessionOwnershipStorageSubjects,
@@ -45,19 +46,21 @@ export interface RecoveryPlanningSnapshot {
  * the authoritative currency projection. The returned agent is rebuilt from
  * both so a plan and its guard cannot accidentally describe different currency
  * snapshots. A torn pair is allowed: the later atomic guard detects it.
+ * @param call - Call context of the handled message this read belongs to.
  * @param bus - Bus carrying agent and ownership reads.
  * @param agentId - Agent being planned.
  * @returns Canonical planning input, or `null` when either durable row is absent.
  */
 export async function readRecoveryPlanningSnapshot(
+  call: CallContext,
   bus: IMakaioBus,
   agentId: string,
 ): Promise<RecoveryPlanningSnapshot | null> {
-  const rowResult = await bus.requestOptional(AgentStorageSubjects.get, { agentId });
+  const rowResult = await bus.requestOptional(call, AgentStorageSubjects.get, { agentId });
   const row = rowResult.handled ? rowResult.data.agent : null;
   if (row === null) return null;
 
-  const ownershipResult = await bus.requestOptional(SessionOwnershipStorageSubjects.read, { agentId });
+  const ownershipResult = await bus.requestOptional(call, SessionOwnershipStorageSubjects.read, { agentId });
   const ownership = ownershipResult.handled ? ownershipResult.data.ownership : null;
   if (ownership === null) return null;
 
@@ -101,6 +104,7 @@ export async function readRecoveryPlanningSnapshot(
  * The holder lookup is intentionally a separate read. Storage compares it
  * again while locked, so a change between this read and the claim is a modeled
  * recovery conflict rather than authority for a stale dispatch.
+ * @param call - Call context of the handled message this lookup belongs to.
  * @param bus - Bus carrying ownership diagnostics.
  * @param snapshot - Canonical plan input.
  * @param instance - Adapter/machine pair the recovery will dispatch to.
@@ -108,6 +112,7 @@ export async function readRecoveryPlanningSnapshot(
  * @returns Atomic storage guard for that plan and key.
  */
 export async function buildRecoveryReservationGuard(
+  call: CallContext,
   bus: IMakaioBus,
   snapshot: RecoveryPlanningSnapshot,
   instance: OwnedAdapterInstance,
@@ -116,7 +121,7 @@ export async function buildRecoveryReservationGuard(
   if (instance.machineId === undefined || providerSessionId === null) {
     return { ...snapshot.guard, ownerGeneration: null };
   }
-  const listed = await bus.request(SessionOwnershipStorageSubjects.listClaims, {
+  const listed = await bus.request(call, SessionOwnershipStorageSubjects.listClaims, {
     machineId: instance.machineId,
     adapterId: instance.adapterId,
     providerSessionId,

@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { AgentSubjects, type AgentToolApproveRequest } from '@makaio/contracts';
 import { createClaudeConnectorNamespace } from '../namespace/index.js';
 import { registerToolApprovalHandler, toGlobalToolApproval } from './tool-handling.js';
+
+type ToolApprovalHandler = (ctx: {
+  call: CallContext;
+  payload: AgentToolApproveRequest;
+  setResult: (result: unknown) => void;
+}) => Promise<void>;
 
 describe('toGlobalToolApproval', () => {
   it('applies full context identity while preserving non-identity payload fields', () => {
@@ -67,9 +75,7 @@ describe('registerToolApprovalHandler', () => {
       hostBus,
     );
 
-    const handler = on.mock.calls[0]?.[1] as
-      | ((ctx: { payload: AgentToolApproveRequest; setResult: (result: unknown) => void }) => Promise<void>)
-      | undefined;
+    const handler = on.mock.calls[0]?.[1] as ToolApprovalHandler | undefined;
     expect(handler).toBeDefined();
 
     const setResult = vi.fn();
@@ -84,9 +90,10 @@ describe('registerToolApprovalHandler', () => {
       args: { path: '/tmp/a.ts' },
     };
 
-    await handler!({ payload, setResult });
+    const call = createTestCall();
+    await handler!({ call, payload, setResult });
 
-    expect(requestSpy).toHaveBeenCalledWith(AgentSubjects.toolApprove, {
+    expect(requestSpy).toHaveBeenCalledWith(call, AgentSubjects.toolApprove, {
       ...payload,
       adapterId: 'adapter-override',
       adapterName: 'claude-override',
@@ -122,13 +129,12 @@ describe('registerToolApprovalHandler', () => {
       hostBus,
     );
 
-    const handler = on.mock.calls[0]?.[1] as
-      | ((ctx: { payload: AgentToolApproveRequest; setResult: (result: unknown) => void }) => Promise<void>)
-      | undefined;
+    const handler = on.mock.calls[0]?.[1] as ToolApprovalHandler | undefined;
     expect(handler).toBeDefined();
 
     const setResult = vi.fn();
     await handler!({
+      call: createTestCall(),
       payload: {
         adapterId: 'adapter-1',
         adapterName: 'claude-code',
@@ -167,13 +173,12 @@ describe('registerToolApprovalHandler', () => {
       hostBus,
     );
 
-    const handler = on.mock.calls[0]?.[1] as
-      | ((ctx: { payload: AgentToolApproveRequest; setResult: (result: unknown) => void }) => Promise<void>)
-      | undefined;
+    const handler = on.mock.calls[0]?.[1] as ToolApprovalHandler | undefined;
     expect(handler).toBeDefined();
 
     const setResult = vi.fn();
     await handler!({
+      call: createTestCall(),
       payload: {
         adapterId: 'adapter-1',
         adapterName: 'claude-code',

@@ -24,6 +24,7 @@ import {
   registerMemoryAgentStorage,
   type SessionStorageMemoryState,
 } from '@makaio/services-core/session';
+import { createTestCall } from '@makaio/test-utils';
 import { DeferredPromise } from '@makaio/utils';
 import { AgentTeardownArbiter } from '../../agent/agent-teardown-arbiter.js';
 import { createTestableAgent, MockConnector, type TestableAgent } from '../../agent/__tests__/helpers/mock-agent.js';
@@ -147,7 +148,7 @@ async function registerLiveAgent(
       return connector;
     },
   });
-  await agent.init();
+  await agent.init(createTestCall());
   const connector = built[0];
   if (connector === undefined) throw new Error('the agent built no connector generation');
   registry.set(AGENT_ID, {
@@ -179,11 +180,11 @@ async function abandonReplacementInFlight(
     replacementCloseGate: options.replacementCloseGate,
   });
 
-  const swap = agent.swapConnector({ cwd: os.tmpdir() }).catch(() => undefined);
+  const swap = agent.swapConnector(createTestCall(), { cwd: os.tmpdir() }).catch(() => undefined);
   await flushMicrotasks();
   if (!arbiter.hasReplacementInFlight(AGENT_ID)) throw new Error('the swap installed no replacement');
 
-  const abandoned = await registry.evictSilently(AGENT_ID, { deadline: Date.now() });
+  const abandoned = await registry.evictSilently(createTestCall(), AGENT_ID, { deadline: Date.now() });
   if (abandoned.evidence !== 'unknown') throw new Error(`the wait was not abandoned: ${abandoned.evidence}`);
   const replacement = replacements[1];
   if (replacement === undefined) throw new Error('the swap built no replacement connector');
@@ -199,7 +200,7 @@ describe('case 204: `dispose` awaits what `evict` always awaited, and `evict` st
     connector.closeOutcome = { evidence: 'exited' };
 
     let settled = false;
-    const disposal = registry.dispose(AGENT_ID).then((report) => {
+    const disposal = registry.dispose(createTestCall(), AGENT_ID).then((report) => {
       settled = true;
       return report;
     });
@@ -221,7 +222,7 @@ describe('case 204: `dispose` awaits what `evict` always awaited, and `evict` st
     const { connector } = await registerLiveAgent();
     connector.closeOutcome = { evidence: 'detached', detail: 'supervisor outlives us' };
 
-    const report = await registry.dispose(AGENT_ID);
+    const report = await registry.dispose(createTestCall(), AGENT_ID);
 
     expect(report.evidence).toBe('detached');
     expect(await storedStatus()).toBe('disposed');
@@ -233,7 +234,7 @@ describe('case 204: `dispose` awaits what `evict` always awaited, and `evict` st
     const closeError = new Error('close exploded');
     connector.closeOutcome = closeError;
 
-    await expect(registry.evict(AGENT_ID)).rejects.toBe(closeError);
+    await expect(registry.evict(createTestCall(), AGENT_ID)).rejects.toBe(closeError);
 
     // The rethrow is what the failed-start rollback builds its aggregate from, and
     // the status write happens despite it.
@@ -246,7 +247,7 @@ describe('case 204: `dispose` awaits what `evict` always awaited, and `evict` st
     const { connector } = await registerLiveAgent();
     connector.closeOutcome = { evidence: 'closed' };
 
-    await expect(registry.evict(AGENT_ID)).resolves.toMatchObject({ evidence: 'closed' });
+    await expect(registry.evict(createTestCall(), AGENT_ID)).resolves.toMatchObject({ evidence: 'closed' });
     expect(await storedStatus()).toBe('dead');
   });
 });
@@ -259,11 +260,11 @@ describe('case 204b: single-flight teardown joins, it does not restart', () => {
     connector.closeGate = closeGate.getPromise();
     connector.closeOutcome = { evidence: 'exited' };
 
-    const first = registry.dispose(AGENT_ID);
+    const first = registry.dispose(createTestCall(), AGENT_ID);
     // The close is blocked, so the second call provably arrives mid-teardown.
     await Promise.resolve();
     expect(connector.closeCount).toBe(1);
-    const second = registry.dispose(AGENT_ID);
+    const second = registry.dispose(createTestCall(), AGENT_ID);
 
     closeGate.resolve();
     const [firstReport, secondReport] = await Promise.all([first, second]);
@@ -284,9 +285,9 @@ describe('case 204b: single-flight teardown joins, it does not restart', () => {
     const closeGate = new DeferredPromise<void>();
     connector.closeGate = closeGate.getPromise();
 
-    const disposal = registry.dispose(AGENT_ID);
+    const disposal = registry.dispose(createTestCall(), AGENT_ID);
     await Promise.resolve();
-    const eviction = registry.evict(AGENT_ID);
+    const eviction = registry.evict(createTestCall(), AGENT_ID);
 
     closeGate.resolve();
     await Promise.all([disposal, eviction]);
@@ -298,7 +299,10 @@ describe('case 204b: single-flight teardown joins, it does not restart', () => {
 
 describe('case 204d: "nothing here" is only answerable when nothing is in flight', () => {
   it('answers `released` with no entry and no teardown in flight', async () => {
-    await expect(registry.dispose('never-existed')).resolves.toEqual({ found: false, evidence: 'released' });
+    await expect(registry.dispose(createTestCall(), 'never-existed')).resolves.toEqual({
+      found: false,
+      evidence: 'released',
+    });
   });
 
   it('joins an in-flight teardown and reports its real evidence, never `released`', async () => {
@@ -308,11 +312,11 @@ describe('case 204d: "nothing here" is only answerable when nothing is in flight
     connector.closeGate = closeGate.getPromise();
     connector.closeOutcome = { evidence: 'detached', detail: 'child was not ours' };
 
-    const first = registry.evict(AGENT_ID);
+    const first = registry.evict(createTestCall(), AGENT_ID);
     await Promise.resolve();
     // The entry is already gone from this angle only after the close settles, but
     // the flight is what makes the answer real either way.
-    const joined = registry.dispose(AGENT_ID);
+    const joined = registry.dispose(createTestCall(), AGENT_ID);
 
     closeGate.resolve();
     const [, joinedReport] = await Promise.all([first, joined]);
@@ -325,7 +329,7 @@ describe('case 204d: "nothing here" is only answerable when nothing is in flight
   it('answers `unknown` for an identity a start claimed and has not registered', async () => {
     expect(registry.claimAgentIdentity(AGENT_ID)).toBe(true);
 
-    const report = await registry.dispose(AGENT_ID);
+    const report = await registry.dispose(createTestCall(), AGENT_ID);
 
     expect(report.found).toBe(false);
     expect(report.evidence).toBe('unknown');
@@ -345,7 +349,7 @@ describe('case 204d: "nothing here" is only answerable when nothing is in flight
     expect(arbiter.hasTeardownInFlight(AGENT_ID)).toBe(false);
     expect(arbiter.hasReplacementInFlight(AGENT_ID)).toBe(true);
 
-    const report = await registry.dispose(AGENT_ID);
+    const report = await registry.dispose(createTestCall(), AGENT_ID);
 
     // `released` is the one answer that frees an identity, and it would be a lie
     // while the replacement can still publish and speak.
@@ -357,7 +361,7 @@ describe('case 204d: "nothing here" is only answerable when nothing is in flight
     held.release();
     await held.swap;
     await flushMicrotasks();
-    await expect(registry.dispose(AGENT_ID)).resolves.toEqual({ found: false, evidence: 'released' });
+    await expect(registry.dispose(createTestCall(), AGENT_ID)).resolves.toEqual({ found: false, evidence: 'released' });
   });
 
   it('keeps an abandoned replacement visible until its inherited close retires', async () => {
@@ -371,11 +375,14 @@ describe('case 204d: "nothing here" is only answerable when nothing is in flight
     // Settlement removed this replacement from current-runtime handover, but its
     // inherited close still owns a live runtime. A no-entry disposal cannot free
     // the identity until that post-settlement obligation retires.
-    await expect(registry.dispose(AGENT_ID)).resolves.toMatchObject({ found: false, evidence: 'unknown' });
+    await expect(registry.dispose(createTestCall(), AGENT_ID)).resolves.toMatchObject({
+      found: false,
+      evidence: 'unknown',
+    });
 
     closeGate.resolve();
     await held.swap;
-    await expect(registry.dispose(AGENT_ID)).resolves.toEqual({ found: false, evidence: 'released' });
+    await expect(registry.dispose(createTestCall(), AGENT_ID)).resolves.toEqual({ found: false, evidence: 'released' });
   });
 });
 
@@ -395,13 +402,16 @@ describe('replacements separate current-runtime handover from identity visibilit
     // The successor settled first, leaving no current handover entry. The older
     // replacement remains visible solely through the identity-wide count.
     expect(arbiter.hasReplacementInFlight(AGENT_ID)).toBe(true);
-    await expect(registry.dispose(AGENT_ID)).resolves.toMatchObject({ found: false, evidence: 'unknown' });
+    await expect(registry.dispose(createTestCall(), AGENT_ID)).resolves.toMatchObject({
+      found: false,
+      evidence: 'unknown',
+    });
 
     held.release();
     await held.swap;
     await flushMicrotasks();
     expect(arbiter.hasReplacementInFlight(AGENT_ID)).toBe(false);
-    await expect(registry.dispose(AGENT_ID)).resolves.toEqual({ found: false, evidence: 'released' });
+    await expect(registry.dispose(createTestCall(), AGENT_ID)).resolves.toEqual({ found: false, evidence: 'released' });
   });
 
   it('closes a live successor runtime after its own replacement settles first', async () => {
@@ -501,7 +511,7 @@ describe('an abandoned wait gives the identity up where it becomes free', () => 
       initialCwd: os.tmpdir(),
       mockConnectorFactory: (config) => new ReentrantCloseConnector(config.model, config.cwd),
     });
-    await successor.init();
+    await successor.init(createTestCall());
     try {
       // The window a settlement-time release leaves open: both agents subscribed,
       // and the stale one registered first, so it is the one that would answer.
@@ -540,10 +550,10 @@ describe('the flight is installed before any close begins', () => {
       // Fire-and-forget, exactly as the emission that provokes this in production
       // is: awaiting it here would be a reentrant handler waiting on the close it is
       // running inside.
-      reentrant = registry.dispose(AGENT_ID);
+      reentrant = registry.dispose(createTestCall(), AGENT_ID);
     };
 
-    const outer = registry.dispose(AGENT_ID);
+    const outer = registry.dispose(createTestCall(), AGENT_ID);
     closeGate.resolve();
     const outerReport = await outer;
     if (reentrant === undefined) throw new Error('the close never re-entered the registry');
@@ -573,11 +583,19 @@ describe('case 204e: the four agent-teardown entry points join one flight', () =
     /** Whether this entry point writes a terminal status of its own. */
     readonly writesStatus: 'dead' | 'disposed' | undefined;
   }> = [
-    { name: 'evict', run: async (target) => (await target.evict(AGENT_ID)).evidence, writesStatus: 'dead' },
-    { name: 'dispose', run: async (target) => (await target.dispose(AGENT_ID)).evidence, writesStatus: 'disposed' },
+    {
+      name: 'evict',
+      run: async (target) => (await target.evict(createTestCall(), AGENT_ID)).evidence,
+      writesStatus: 'dead',
+    },
+    {
+      name: 'dispose',
+      run: async (target) => (await target.dispose(createTestCall(), AGENT_ID)).evidence,
+      writesStatus: 'disposed',
+    },
     {
       name: 'evictSilently',
-      run: async (target) => (await target.evictSilently(AGENT_ID)).evidence,
+      run: async (target) => (await target.evictSilently(createTestCall(), AGENT_ID)).evidence,
       writesStatus: undefined,
     },
     { name: 'closeAll', run: async (target) => (await target.closeAll())[0]?.evidence, writesStatus: undefined },
@@ -599,7 +617,7 @@ describe('case 204e: the four agent-teardown entry points join one flight', () =
     connector.closeGate = closeGate.getPromise();
     connector.closeOutcome = { evidence: 'exited' };
 
-    const incumbent = registry.dispose(AGENT_ID);
+    const incumbent = registry.dispose(createTestCall(), AGENT_ID);
     await Promise.resolve();
     const joiner = run(registry);
 
@@ -636,7 +654,9 @@ describe('case 204e: the four agent-teardown entry points join one flight', () =
       connector.closeGate = closeGate.getPromise();
 
       const runs = order.map((name) =>
-        name === 'dispose' ? registry.dispose(AGENT_ID) : registry.evict(AGENT_ID).catch(() => undefined),
+        name === 'dispose'
+          ? registry.dispose(createTestCall(), AGENT_ID)
+          : registry.evict(createTestCall(), AGENT_ID).catch(() => undefined),
       );
       closeGate.resolve();
       await Promise.all(runs);
@@ -655,7 +675,7 @@ describe('adapter shutdown retains every teardown observation', () => {
     connector.closeGate = closeGate.getPromise();
     connector.closeOutcome = { evidence: 'detached', detail: 'the provider did not confirm the runtime exit' };
 
-    const disposal = registry.dispose(AGENT_ID);
+    const disposal = registry.dispose(createTestCall(), AGENT_ID);
     await Promise.resolve();
     const shutdown = registry.closeAll();
 
@@ -671,14 +691,14 @@ describe('adapter shutdown retains every teardown observation', () => {
   it('returns an abandoned replacement wait without making its unknown evidence sticky', async () => {
     const initGate = new DeferredPromise<void>();
     const { agent, replacements } = await registerLiveAgent({ replacementInitializeGate: initGate.getPromise() });
-    const swap = agent.swapConnector({ cwd: os.tmpdir() }).catch(() => undefined);
+    const swap = agent.swapConnector(createTestCall(), { cwd: os.tmpdir() }).catch(() => undefined);
     await flushMicrotasks();
     expect(arbiter.hasReplacementInFlight(AGENT_ID)).toBe(true);
 
     // Install the bounded flight first, then make closeAll join it. Its expiry
     // owns no connector close, so the evidence must be reported by closeAll even
     // though the terminal ledger intentionally does not retain it.
-    const eviction = registry.evictSilently(AGENT_ID, { deadline: Date.now() });
+    const eviction = registry.evictSilently(createTestCall(), AGENT_ID, { deadline: Date.now() });
     const reports = await registry.closeAll();
 
     await expect(eviction).resolves.toMatchObject({ evidence: 'unknown' });
@@ -696,20 +716,20 @@ describe('adapter shutdown retains every teardown observation', () => {
     const replacement = replacements[1];
     if (replacement === undefined) throw new Error('the swap built no replacement connector');
     expect(replacement.closeCount).toBe(1);
-    await expect(registry.dispose(AGENT_ID)).resolves.toEqual({ found: false, evidence: 'released' });
+    await expect(registry.dispose(createTestCall(), AGENT_ID)).resolves.toEqual({ found: false, evidence: 'released' });
   });
 
   it('merges a retained terminal report with a joined transient replacement wait', async () => {
     const retainedAgent = await registerLiveAgent();
     retainedAgent.connector.closeOutcome = { evidence: 'detached', detail: 'first runtime exit was not observed' };
-    await registry.dispose(AGENT_ID);
+    await registry.dispose(createTestCall(), AGENT_ID);
 
     const initGate = new DeferredPromise<void>();
     const { agent } = await registerLiveAgent({ replacementInitializeGate: initGate.getPromise() });
-    const swap = agent.swapConnector({ cwd: os.tmpdir() }).catch(() => undefined);
+    const swap = agent.swapConnector(createTestCall(), { cwd: os.tmpdir() }).catch(() => undefined);
     await flushMicrotasks();
 
-    const eviction = registry.evictSilently(AGENT_ID, { deadline: Date.now() });
+    const eviction = registry.evictSilently(createTestCall(), AGENT_ID, { deadline: Date.now() });
     const reports = await registry.closeAll();
 
     await expect(eviction).resolves.toMatchObject({ evidence: 'unknown' });
@@ -746,13 +766,13 @@ describe('adapter shutdown retains every teardown observation', () => {
     const endStart = registry.beginStart();
     expect(endStart).toBeTypeOf('function');
     endStart?.();
-    await expect(registry.dispose(AGENT_ID)).resolves.toEqual({ found: false, evidence: 'released' });
+    await expect(registry.dispose(createTestCall(), AGENT_ID)).resolves.toEqual({ found: false, evidence: 'released' });
   });
 
   it('merges prior terminal evidence with an already-expired replacement-only identity', async () => {
     const retainedAgent = await registerLiveAgent();
     retainedAgent.connector.closeOutcome = { evidence: 'detached', detail: 'prior runtime exit was not observed' };
-    await registry.dispose(AGENT_ID);
+    await registry.dispose(createTestCall(), AGENT_ID);
 
     const held = await abandonReplacementInFlight();
     const reports = await registry.closeAll();
@@ -767,6 +787,6 @@ describe('adapter shutdown retains every teardown observation', () => {
 
     held.release();
     await held.swap;
-    await expect(registry.dispose(AGENT_ID)).resolves.toEqual({ found: false, evidence: 'released' });
+    await expect(registry.dispose(createTestCall(), AGENT_ID)).resolves.toEqual({ found: false, evidence: 'released' });
   });
 });

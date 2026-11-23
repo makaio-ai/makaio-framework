@@ -13,6 +13,7 @@
  * Pattern: Connector creates stream, stream-bridge owns processing.
  * Connector listens for message_complete event to get normalized result.
  */
+import type { CallContext } from '@makaio/core';
 import type { ChatCompletionChunk, ChatCompletionMessageFunctionToolCall } from 'openai/resources/index.js';
 import { OpenAINodeConnectorSubjects, type SdkEventMessage } from './namespaces/index.js';
 import type { StreamBridgeConfig, ToolCallAccumulator } from './types/index.js';
@@ -286,16 +287,18 @@ function normalizeResult(
 }
 
 /** Event emitter function type for stream processing. */
-type EventEmitter = (event: SdkEventMessage) => Promise<void>;
+type EventEmitter = (call: CallContext, event: SdkEventMessage) => Promise<void>;
 
 /**
  * Process a choice delta and accumulate state.
+ * @param call - Call context of the handled message
  * @param choice - Stream choice containing delta
  * @param chunk - Full chunk for usage extraction
  * @param state - Mutable aggregation state
  * @param emitEvent - Event emitter function
  */
 async function processChoiceDelta(
+  call: CallContext,
   choice: ChatCompletionChunk.Choice,
   chunk: ChatCompletionChunk,
   state: StreamState,
@@ -313,7 +316,7 @@ async function processChoiceDelta(
     (delta as { reasoning?: string; reasoning_content?: string }).reasoning_content;
   if (reasoningDelta) {
     state.reasoning += reasoningDelta;
-    await emitEvent({ eventType: 'reasoning_delta', content: reasoningDelta });
+    await emitEvent(call, { eventType: 'reasoning_delta', content: reasoningDelta });
   }
 
   if (delta.tool_calls) {
@@ -326,18 +329,20 @@ async function processChoiceDelta(
   if (chunk.usage && !state.usage) {
     state.usage = extractUsage(chunk);
     if (state.usage) {
-      await emitEvent(buildUsageEventPayload(state.usage));
+      await emitEvent(call, buildUsageEventPayload(state.usage));
     }
   }
 }
 
 /**
  * Emit final events after stream completes.
+ * @param call - Call context of the handled message
  * @param state - Final aggregation state
  * @param emitEvent - Event emitter function
  * @param hiddenToolCallNames - Tool names kept out of public tool lifecycle events
  */
 async function emitFinalEvents(
+  call: CallContext,
   state: StreamState,
   emitEvent: EventEmitter,
   hiddenToolCallNames: readonly string[] = [],
@@ -349,10 +354,10 @@ async function emitFinalEvents(
   );
 
   if (publicToolCalls.length > 0) {
-    await emitEvent({ eventType: 'tool_calls', toolCalls: publicToolCalls });
+    await emitEvent(call, { eventType: 'tool_calls', toolCalls: publicToolCalls });
   }
 
-  await emitEvent({
+  await emitEvent(call, {
     eventType: 'message_complete',
     content: normalized.content || null,
     reasoning: normalized.reasoning || undefined,
@@ -367,7 +372,7 @@ async function emitFinalEvents(
   });
 
   if (normalized.reasoning) {
-    await emitEvent({ eventType: 'reasoning_complete', content: normalized.reasoning });
+    await emitEvent(call, { eventType: 'reasoning_complete', content: normalized.reasoning });
   }
 }
 
@@ -381,10 +386,12 @@ async function emitFinalEvents(
  * Applies normalizations before emitting final events:
  * - GLM: Strips trailing `\{\}` from tool call arguments
  * - DeepSeek: Extracts XML tool calls from content
+ * @param call - Call context of the handled message
  * @param stream - OpenAI streaming response
  * @param config - Bus and metadata configuration
  */
 export async function processStream(
+  call: CallContext,
   stream: AsyncIterable<ChatCompletionChunk>,
   config: StreamBridgeConfig,
 ): Promise<void> {
@@ -396,14 +403,14 @@ export async function processStream(
     ...(config.adapterSessionId ? { adapterSessionId: config.adapterSessionId } : {}),
   };
 
-  const emitRaw = async (chunk: ChatCompletionChunk): Promise<void> => {
-    await config.bus.emit(OpenAINodeConnectorSubjects.sdk.raw, {
+  const emitRaw = async (call: CallContext, chunk: ChatCompletionChunk): Promise<void> => {
+    await config.bus.emit(call, OpenAINodeConnectorSubjects.sdk.raw, {
       ...chunk,
       ...metadata,
     });
   };
 
-  const emitEvent: EventEmitter = async (event) => {
+  const emitEvent: EventEmitter = async (call, event) => {
     const correlatedEvent =
       event.eventType === 'usage' && config.requestCorrelation !== undefined
         ? {
@@ -415,7 +422,7 @@ export async function processStream(
             ...(config.requestCorrelation.frameId !== undefined ? { frameId: config.requestCorrelation.frameId } : {}),
           }
         : event;
-    await config.bus.emit(OpenAINodeConnectorSubjects.sdk.event, {
+    await config.bus.emit(call, OpenAINodeConnectorSubjects.sdk.event, {
       event: correlatedEvent,
       ...metadata,
     });
@@ -423,7 +430,7 @@ export async function processStream(
 
   for await (const chunk of stream) {
     config.logLowLevelEvent?.(chunk);
-    await emitRaw(chunk);
+    await emitRaw(call, chunk);
 
     const choice = chunk.choices[0];
     if (!choice) {
@@ -431,12 +438,12 @@ export async function processStream(
       const usage = extractUsage(chunk);
       if (usage && !state.usage) {
         state.usage = usage;
-        await emitEvent(buildUsageEventPayload(usage));
+        await emitEvent(call, buildUsageEventPayload(usage));
       }
       continue;
     }
 
-    await processChoiceDelta(choice, chunk, state, emitEvent);
+    await processChoiceDelta(call, choice, chunk, state, emitEvent);
   }
-  await emitFinalEvents(state, emitEvent, config.hiddenToolCallNames);
+  await emitFinalEvents(call, state, emitEvent, config.hiddenToolCallNames);
 }

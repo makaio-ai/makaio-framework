@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createBusContext, createBusInstance, MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, MakaioBus } from '@makaio/bus-core';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
 import { AdapterNamespace, AdapterSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { WebSocketServer } from 'ws';
 import { createBidirectionalTransportPair } from '../../../../core/bus-core/src/__tests__/helpers/transport-fixtures.js';
 import { ServerTransport } from '../../../../transports/ws/src/server-transport.js';
@@ -28,10 +30,10 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
     }).cleanup;
 
     await expect(
-      MakaioBus.request(AdapterRuntimeSubjects.resolveId, { adapterName: 'local-adapter' }),
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveId, { adapterName: 'local-adapter' }),
     ).resolves.toEqual({ adapterId: 'explicit-live-id' });
     await expect(
-      MakaioBus.request(AdapterRuntimeSubjects.resolveName, { adapterId: 'explicit-live-id' }),
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveName, { adapterId: 'explicit-live-id' }),
     ).resolves.toEqual({ adapterName: 'local-adapter' });
   });
 
@@ -42,13 +44,13 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
     }).cleanup;
 
     await expect(
-      MakaioBus.request(AdapterRuntimeSubjects.resolveId, { adapterName: 'disabled-adapter' }),
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveId, { adapterName: 'disabled-adapter' }),
     ).rejects.toThrow(/No live local adapter is registered/);
   });
 
   it('delegates a same-machine name miss to the sibling runtime that owns the adapter', async () => {
-    const ownerBus = createBusInstance({ context: createBusContext() });
-    const siblingBus = createBusInstance({ context: createBusContext() });
+    const ownerBus = createBusInstance();
+    const siblingBus = createBusInstance();
     for (const bus of [ownerBus, siblingBus]) bus.registerNamespace(AdapterRuntimeNamespace);
 
     const ownerHandlers = registerAdapterRuntimeIdentityHandlers(ownerBus, {
@@ -62,13 +64,13 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
     const { sideA, sideB } = createBidirectionalTransportPair({ label: 'same-machine-resolve-id' });
     ownerBus.registerTransport(sideA);
     siblingBus.registerTransport(sideB);
-    siblingBus
-      .getContext()
-      .remoteRequestHandlers.set('adapterRuntime.resolveId', [{ transport: sideB.name, priority: 0 }]);
+    busContextOf(siblingBus).remoteRequestHandlers.set('adapterRuntime.resolveId', [
+      { transport: sideB.name, priority: 0 },
+    ]);
 
     try {
       await expect(
-        siblingBus.request(AdapterRuntimeSubjects.resolveId, {
+        siblingBus.request(createTestCall(), AdapterRuntimeSubjects.resolveId, {
           adapterName: 'owned-adapter',
           machineId: 'shared-machine',
         }),
@@ -92,7 +94,7 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
     }).cleanup;
 
     await expect(
-      MakaioBus.request(AdapterRuntimeSubjects.resolveId, {
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveId, {
         adapterName: 'local-adapter',
         machineId: 'foreign-machine',
       }),
@@ -105,7 +107,7 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
   it('indexes opaque initialized IDs by their exact adapter name and machine', async () => {
     cleanup = registerAdapterRuntimeIdentityHandlers(MakaioBus, { currentMachineId: 'local-machine' }).cleanup;
 
-    await MakaioBus.emit(AdapterSubjects.initialized, {
+    await MakaioBus.emit(createTestCall(), AdapterSubjects.initialized, {
       adapterId: 'host-issued/opaque:id',
       adapterName: 'opaque-adapter',
       machineId: 'foreign-machine',
@@ -114,7 +116,7 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
     });
 
     await expect(
-      MakaioBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, {
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveLiveIdentity, {
         adapterId: 'host-issued/opaque:id',
         adapterName: 'opaque-adapter',
         machineId: 'foreign-machine',
@@ -126,7 +128,7 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
       ownerInstanceId: 'foreign-owner',
     });
     await expect(
-      MakaioBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, {
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveLiveIdentity, {
         adapterId: 'host-issued/opaque:id',
         adapterName: 'opaque-adapter',
         machineId: 'local-machine',
@@ -156,14 +158,16 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
     }).cleanup;
 
     const request = { adapterId: 'opaque-local-id', adapterName: 'local-adapter', machineId: 'local-machine' };
-    await expect(MakaioBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, request)).resolves.toEqual({
+    await expect(
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveLiveIdentity, request),
+    ).resolves.toEqual({
       ...request,
       ownerInstanceId: 'local-owner',
     });
     live = false;
-    await expect(MakaioBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, request)).rejects.toThrow(
-      /No live adapter matches/,
-    );
+    await expect(
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveLiveIdentity, request),
+    ).rejects.toThrow(/No live adapter matches/);
   });
 
   it('evicts a remote announcement when its lifecycle retraction arrives', async () => {
@@ -174,17 +178,19 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
       machineId: 'remote-machine',
       ownerInstanceId: 'remote-owner',
     };
-    await MakaioBus.emit(AdapterSubjects.initialized, { ...identity, capabilities: [] });
-    await expect(MakaioBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, identity)).resolves.toEqual(identity);
-    await MakaioBus.emit(AdapterSubjects.deinitialized, identity);
-    await expect(MakaioBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, identity)).rejects.toThrow(
-      /No live adapter matches/,
-    );
+    await MakaioBus.emit(createTestCall(), AdapterSubjects.initialized, { ...identity, capabilities: [] });
+    await expect(
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveLiveIdentity, identity),
+    ).resolves.toEqual(identity);
+    await MakaioBus.emit(createTestCall(), AdapterSubjects.deinitialized, identity);
+    await expect(
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveLiveIdentity, identity),
+    ).rejects.toThrow(/No live adapter matches/);
   });
 
   it('delegates a sibling runtime miss to the adapter-owning runtime on the same machine', async () => {
-    const targetBus = createBusInstance({ context: createBusContext() });
-    const lateBus = createBusInstance({ context: createBusContext() });
+    const targetBus = createBusInstance();
+    const lateBus = createBusInstance();
     for (const bus of [targetBus, lateBus]) {
       bus.registerNamespace(AdapterNamespace);
       bus.registerNamespace(AdapterRuntimeNamespace);
@@ -200,7 +206,7 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
       currentMachineId: identity.machineId,
       resolveLiveAdapterIdentity: (adapterId) => (adapterId === identity.adapterId ? identity : undefined),
     });
-    await targetBus.emit(AdapterSubjects.initialized, { ...identity, capabilities: [] });
+    await targetBus.emit(createTestCall(), AdapterSubjects.initialized, { ...identity, capabilities: [] });
 
     const lateHandlers = registerAdapterRuntimeIdentityHandlers(lateBus, {
       currentMachineId: identity.machineId,
@@ -211,12 +217,14 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
     const { sideA, sideB } = createBidirectionalTransportPair({ label: 'late-identity' });
     targetBus.registerTransport(sideA);
     lateBus.registerTransport(sideB);
-    lateBus
-      .getContext()
-      .remoteRequestHandlers.set('adapterRuntime.resolveLiveIdentity', [{ transport: sideB.name, priority: 0 }]);
+    busContextOf(lateBus).remoteRequestHandlers.set('adapterRuntime.resolveLiveIdentity', [
+      { transport: sideB.name, priority: 0 },
+    ]);
 
     try {
-      await expect(lateBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, identity)).resolves.toEqual(identity);
+      await expect(
+        lateBus.request(createTestCall(), AdapterRuntimeSubjects.resolveLiveIdentity, identity),
+      ).resolves.toEqual(identity);
     } finally {
       lateBus.disconnect();
       targetBus.disconnect();
@@ -231,17 +239,21 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
     const triple = { adapterId: 'shared-adapter', adapterName: 'shared', machineId: 'shared-machine' };
     const first = { ...triple, ownerInstanceId: 'owner-a' };
     const second = { ...triple, ownerInstanceId: 'owner-b' };
-    await MakaioBus.emit(AdapterSubjects.initialized, { ...first, capabilities: [] });
-    await MakaioBus.emit(AdapterSubjects.initialized, { ...second, capabilities: [] });
-    await expect(MakaioBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, triple)).rejects.toThrow(
-      /No live adapter matches/,
-    );
-    await expect(MakaioBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, first)).resolves.toEqual(first);
-    await MakaioBus.emit(AdapterSubjects.deinitialized, first);
-    await expect(MakaioBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, first)).rejects.toThrow(
-      /No live adapter matches/,
-    );
-    await expect(MakaioBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, triple)).resolves.toEqual(second);
+    await MakaioBus.emit(createTestCall(), AdapterSubjects.initialized, { ...first, capabilities: [] });
+    await MakaioBus.emit(createTestCall(), AdapterSubjects.initialized, { ...second, capabilities: [] });
+    await expect(
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveLiveIdentity, triple),
+    ).rejects.toThrow(/No live adapter matches/);
+    await expect(
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveLiveIdentity, first),
+    ).resolves.toEqual(first);
+    await MakaioBus.emit(createTestCall(), AdapterSubjects.deinitialized, first);
+    await expect(
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveLiveIdentity, first),
+    ).rejects.toThrow(/No live adapter matches/);
+    await expect(
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveLiveIdentity, triple),
+    ).resolves.toEqual(second);
   });
 
   it('does not let a local resolver choose an ownerless shared-machine target', async () => {
@@ -255,17 +267,25 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
       }),
     }).cleanup;
     const triple = { adapterId: 'shared-adapter', adapterName: 'shared', machineId: 'shared-machine' };
-    await MakaioBus.emit(AdapterSubjects.initialized, { ...triple, ownerInstanceId: 'owner-a', capabilities: [] });
-    await MakaioBus.emit(AdapterSubjects.initialized, { ...triple, ownerInstanceId: 'owner-b', capabilities: [] });
+    await MakaioBus.emit(createTestCall(), AdapterSubjects.initialized, {
+      ...triple,
+      ownerInstanceId: 'owner-a',
+      capabilities: [],
+    });
+    await MakaioBus.emit(createTestCall(), AdapterSubjects.initialized, {
+      ...triple,
+      ownerInstanceId: 'owner-b',
+      capabilities: [],
+    });
 
-    await expect(MakaioBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, triple)).rejects.toThrow(
-      /No live adapter matches/,
-    );
+    await expect(
+      MakaioBus.request(createTestCall(), AdapterRuntimeSubjects.resolveLiveIdentity, triple),
+    ).rejects.toThrow(/No live adapter matches/);
   });
 
   it('delegates an exact owner target past a non-owning same-machine runtime', async () => {
-    const targetBus = createBusInstance({ context: createBusContext() });
-    const nonOwnerBus = createBusInstance({ context: createBusContext() });
+    const targetBus = createBusInstance();
+    const nonOwnerBus = createBusInstance();
     for (const bus of [targetBus, nonOwnerBus]) {
       bus.registerNamespace(AdapterNamespace);
       bus.registerNamespace(AdapterRuntimeNamespace);
@@ -288,12 +308,14 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
     const { sideA, sideB } = createBidirectionalTransportPair({ label: 'owner-targeted-identity' });
     targetBus.registerTransport(sideA);
     nonOwnerBus.registerTransport(sideB);
-    nonOwnerBus
-      .getContext()
-      .remoteRequestHandlers.set('adapterRuntime.resolveLiveIdentity', [{ transport: sideB.name, priority: 0 }]);
+    busContextOf(nonOwnerBus).remoteRequestHandlers.set('adapterRuntime.resolveLiveIdentity', [
+      { transport: sideB.name, priority: 0 },
+    ]);
 
     try {
-      await expect(nonOwnerBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, target)).resolves.toEqual(target);
+      await expect(
+        nonOwnerBus.request(createTestCall(), AdapterRuntimeSubjects.resolveLiveIdentity, target),
+      ).resolves.toEqual(target);
     } finally {
       nonOwnerBus.disconnect();
       targetBus.disconnect();
@@ -303,9 +325,9 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
   });
 
   it('routes same-machine resolver misses through a real WebSocket hub to the owning runtime', async () => {
-    const hubBus = createBusInstance({ context: createBusContext() });
-    const callerBus = createBusInstance({ context: createBusContext() });
-    const ownerBus = createBusInstance({ context: createBusContext() });
+    const hubBus = createBusInstance();
+    const callerBus = createBusInstance();
+    const ownerBus = createBusInstance();
     for (const bus of [hubBus, callerBus, ownerBus]) {
       bus.registerNamespace(AdapterNamespace);
       bus.registerNamespace(AdapterRuntimeNamespace);
@@ -354,18 +376,20 @@ describe('registerAdapterRuntimeIdentityHandlers', () => {
     try {
       await Promise.all([hubBus.connect(), callerBus.connect(), ownerBus.connect()]);
       await Promise.all([hubBus.ready, callerBus.ready, ownerBus.ready]);
-      await expect.poll(() => callerBus.getContext().remoteRequestHandlers.has('adapterRuntime.resolveId')).toBe(true);
+      await expect.poll(() => busContextOf(callerBus).remoteRequestHandlers.has('adapterRuntime.resolveId')).toBe(true);
       await expect
-        .poll(() => callerBus.getContext().remoteRequestHandlers.has('adapterRuntime.resolveLiveIdentity'))
+        .poll(() => busContextOf(callerBus).remoteRequestHandlers.has('adapterRuntime.resolveLiveIdentity'))
         .toBe(true);
 
       await expect(
-        callerBus.request(AdapterRuntimeSubjects.resolveId, {
+        callerBus.request(createTestCall(), AdapterRuntimeSubjects.resolveId, {
           adapterName: identity.adapterName,
           machineId: identity.machineId,
         }),
       ).resolves.toEqual({ adapterId: identity.adapterId });
-      await expect(callerBus.request(AdapterRuntimeSubjects.resolveLiveIdentity, identity)).resolves.toEqual(identity);
+      await expect(
+        callerBus.request(createTestCall(), AdapterRuntimeSubjects.resolveLiveIdentity, identity),
+      ).resolves.toEqual(identity);
     } finally {
       nonOwnerHandlers.cleanup();
       ownerHandlers.cleanup();

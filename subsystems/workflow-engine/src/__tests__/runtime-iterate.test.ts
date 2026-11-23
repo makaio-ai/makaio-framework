@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import {
   WorkflowNamespace,
+  type CallContext,
   type JsonValue,
   type StationHandler,
   type WorkflowDefinition,
@@ -12,6 +13,7 @@ import {
   type WorkflowSequenceNode,
   type WorkflowStationNode,
 } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { RuntimeContext, type RuntimeExecutionOptions } from '../runtime/runtime-context.js';
 import { executeIterateNode, type IterateOutput } from '../runtime/iterate-node.js';
 import { executeIterateChainNode, type IterateChainOutput } from '../runtime/iterate-chain-node.js';
@@ -174,17 +176,19 @@ function makeIterateChainNode(
 /**
  * Create a container iterate frame and return it alongside its parent path,
  * mirroring how the sequence loop in primitive-runtime.ts calls executeNode.
+ * @param call - Call context driving frame creation and execution.
  * @param ctx - Runtime context.
  * @param nodeId - Iterate node ID.
  * @param nodeType - 'iterate' or 'iterate-chain'.
  * @returns Object with frameId and path.
  */
 function makeContainerFrame(
+  call: CallContext,
   ctx: RuntimeContext,
   nodeId: string,
   nodeType: 'iterate' | 'iterate-chain',
 ): { frameId: string; path: string[] } {
-  const frame = ctx.createFrame({ nodeId, nodeType, path: [] });
+  const frame = ctx.createFrame(call, { nodeId, nodeType, path: [] });
   return { frameId: frame.frameId, path: frame.path };
 }
 
@@ -194,6 +198,7 @@ function makeContainerFrame(
 
 describe('executeIterateNode', () => {
   it('runs the body once per collection item and collects outputs', async () => {
+    const call = createTestCall();
     const received: unknown[] = [];
     const { node, handlers } = makeIterateNode('iter-1', 'iter-1__item', 'inputs.items', (ctx) => {
       received.push(ctx.item);
@@ -201,10 +206,18 @@ describe('executeIterateNode', () => {
     });
 
     const ctx = makeCtx(handlers);
-    const iterFrame = makeContainerFrame(ctx, 'iter-1', 'iterate');
+    const iterFrame = makeContainerFrame(call, ctx, 'iter-1', 'iterate');
 
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['a', 'b', 'c'] } };
-    const outcome = await executeIterateNode(node, ctx, exprCtx, executeSequence, iterFrame.frameId, iterFrame.path);
+    const outcome = await executeIterateNode(
+      call,
+      node,
+      ctx,
+      exprCtx,
+      executeSequence,
+      iterFrame.frameId,
+      iterFrame.path,
+    );
 
     expect(outcome.status).toBe('completed');
     if (outcome.status === 'completed') {
@@ -217,6 +230,7 @@ describe('executeIterateNode', () => {
   });
 
   it('evaluates collection expressions against the documented ctx alias', async () => {
+    const call = createTestCall();
     const received: unknown[] = [];
     const { node, handlers } = makeIterateNode('iter-ctx', 'iter-ctx__item', 'ctx.inputs.items', (ctx) => {
       received.push(ctx.item);
@@ -224,15 +238,24 @@ describe('executeIterateNode', () => {
     });
 
     const ctx = makeCtx(handlers);
-    const iterFrame = makeContainerFrame(ctx, 'iter-ctx', 'iterate');
+    const iterFrame = makeContainerFrame(call, ctx, 'iter-ctx', 'iterate');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['x', 'y'] } };
-    const outcome = await executeIterateNode(node, ctx, exprCtx, executeSequence, iterFrame.frameId, iterFrame.path);
+    const outcome = await executeIterateNode(
+      call,
+      node,
+      ctx,
+      exprCtx,
+      executeSequence,
+      iterFrame.frameId,
+      iterFrame.path,
+    );
 
     expect(outcome.status).toBe('completed');
     expect(received).toEqual(['x', 'y']);
   });
 
   it('uses the final body station by sequence order when start timestamps tie', async () => {
+    const call = createTestCall();
     const dateNow = vi.spyOn(Date, 'now').mockReturnValue(1_000);
     try {
       const node: WorkflowIterateNode = {
@@ -253,10 +276,18 @@ describe('executeIterateNode', () => {
         'iter-order__draft': () => 'draft-output',
         'iter-order__final': () => 'final-output',
       });
-      const iterFrame = makeContainerFrame(ctx, 'iter-order', 'iterate');
+      const iterFrame = makeContainerFrame(call, ctx, 'iter-order', 'iterate');
       const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['a'] } };
 
-      const outcome = await executeIterateNode(node, ctx, exprCtx, executeSequence, iterFrame.frameId, iterFrame.path);
+      const outcome = await executeIterateNode(
+        call,
+        node,
+        ctx,
+        exprCtx,
+        executeSequence,
+        iterFrame.frameId,
+        iterFrame.path,
+      );
 
       expect(outcome.status).toBe('completed');
       if (outcome.status === 'completed') {
@@ -269,6 +300,7 @@ describe('executeIterateNode', () => {
   });
 
   it('passes item and index to the station handler', async () => {
+    const call = createTestCall();
     const calls: Array<{ item: unknown; index: unknown }> = [];
     const { node, handlers } = makeIterateNode('iter-ctx', 'iter-ctx__item', 'inputs.items', (ctx) => {
       calls.push({ item: ctx.item, index: ctx.index });
@@ -276,10 +308,10 @@ describe('executeIterateNode', () => {
     });
 
     const ctx = makeCtx(handlers);
-    const iterFrame = makeContainerFrame(ctx, 'iter-ctx', 'iterate');
+    const iterFrame = makeContainerFrame(call, ctx, 'iter-ctx', 'iterate');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['x', 'y'] } };
 
-    await executeIterateNode(node, ctx, exprCtx, executeSequence, iterFrame.frameId, iterFrame.path);
+    await executeIterateNode(call, node, ctx, exprCtx, executeSequence, iterFrame.frameId, iterFrame.path);
 
     expect(calls).toEqual([
       { item: 'x', index: 0 },
@@ -288,13 +320,14 @@ describe('executeIterateNode', () => {
   });
 
   it('creates one per-item frame with the correct iteration number', async () => {
+    const call = createTestCall();
     const { node, handlers } = makeIterateNode('iter-frames', 'iter-frames__item', 'inputs.items', () => 'ok');
 
     const ctx = makeCtx(handlers);
-    const iterFrame = makeContainerFrame(ctx, 'iter-frames', 'iterate');
+    const iterFrame = makeContainerFrame(call, ctx, 'iter-frames', 'iterate');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: [10, 20] } };
 
-    await executeIterateNode(node, ctx, exprCtx, executeSequence, iterFrame.frameId, iterFrame.path);
+    await executeIterateNode(call, node, ctx, exprCtx, executeSequence, iterFrame.frameId, iterFrame.path);
 
     // Collect iteration frames for this node ID.
     const iterFrames = ctx.getFramesByNodeId('iter-frames');
@@ -307,13 +340,22 @@ describe('executeIterateNode', () => {
   });
 
   it('returns completed with empty items for an empty collection', async () => {
+    const call = createTestCall();
     const { node, handlers } = makeIterateNode('iter-empty', 'iter-empty__item', 'inputs.items', () => 'ok');
 
     const ctx = makeCtx(handlers);
-    const iterFrame = makeContainerFrame(ctx, 'iter-empty', 'iterate');
+    const iterFrame = makeContainerFrame(call, ctx, 'iter-empty', 'iterate');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: [] } };
 
-    const outcome = await executeIterateNode(node, ctx, exprCtx, executeSequence, iterFrame.frameId, iterFrame.path);
+    const outcome = await executeIterateNode(
+      call,
+      node,
+      ctx,
+      exprCtx,
+      executeSequence,
+      iterFrame.frameId,
+      iterFrame.path,
+    );
 
     expect(outcome.status).toBe('completed');
     if (outcome.status === 'completed') {
@@ -323,13 +365,22 @@ describe('executeIterateNode', () => {
   });
 
   it('fails when the collection expression does not resolve to an array', async () => {
+    const call = createTestCall();
     const { node, handlers } = makeIterateNode('iter-bad-coll', 'iter-bad-coll__item', 'inputs.notAnArray', () => null);
 
     const ctx = makeCtx(handlers);
-    const iterFrame = makeContainerFrame(ctx, 'iter-bad-coll', 'iterate');
+    const iterFrame = makeContainerFrame(call, ctx, 'iter-bad-coll', 'iterate');
     const exprCtx = { ...emptyExpressionCtx, inputs: { notAnArray: 'hello' } };
 
-    const outcome = await executeIterateNode(node, ctx, exprCtx, executeSequence, iterFrame.frameId, iterFrame.path);
+    const outcome = await executeIterateNode(
+      call,
+      node,
+      ctx,
+      exprCtx,
+      executeSequence,
+      iterFrame.frameId,
+      iterFrame.path,
+    );
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
@@ -339,16 +390,25 @@ describe('executeIterateNode', () => {
   });
 
   it('captures item handler failures in the settled output without failing the node', async () => {
+    const call = createTestCall();
     const { node, handlers } = makeIterateNode('iter-partial', 'iter-partial__item', 'inputs.items', (ctx) => {
       if (ctx.item === 'bad') throw new Error('Bad item');
       return `ok-${String(ctx.item)}`;
     });
 
     const ctx = makeCtx(handlers);
-    const iterFrame = makeContainerFrame(ctx, 'iter-partial', 'iterate');
+    const iterFrame = makeContainerFrame(call, ctx, 'iter-partial', 'iterate');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['good', 'bad', 'good2'] } };
 
-    const outcome = await executeIterateNode(node, ctx, exprCtx, executeSequence, iterFrame.frameId, iterFrame.path);
+    const outcome = await executeIterateNode(
+      call,
+      node,
+      ctx,
+      exprCtx,
+      executeSequence,
+      iterFrame.frameId,
+      iterFrame.path,
+    );
 
     // iterate always completes — failures are captured per-item.
     expect(outcome.status).toBe('completed');
@@ -361,6 +421,7 @@ describe('executeIterateNode', () => {
   });
 
   it('cancels immediately when the outer signal is already aborted', async () => {
+    const call = createTestCall();
     const { node, handlers } = makeIterateNode('iter-aborted', 'iter-aborted__item', 'inputs.items', async () => {
       await new Promise((resolve) => setTimeout(resolve, 500));
       return 'should not complete';
@@ -369,15 +430,24 @@ describe('executeIterateNode', () => {
     const abortCtrl = new AbortController();
     abortCtrl.abort();
     const ctx = makeCtx(handlers, abortCtrl.signal);
-    const iterFrame = makeContainerFrame(ctx, 'iter-aborted', 'iterate');
+    const iterFrame = makeContainerFrame(call, ctx, 'iter-aborted', 'iterate');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: [1, 2, 3] } };
 
-    const outcome = await executeIterateNode(node, ctx, exprCtx, executeSequence, iterFrame.frameId, iterFrame.path);
+    const outcome = await executeIterateNode(
+      call,
+      node,
+      ctx,
+      exprCtx,
+      executeSequence,
+      iterFrame.frameId,
+      iterFrame.path,
+    );
 
     expect(outcome.status).toBe('cancelled');
   });
 
   it('respects concurrency limit by processing items in batches', async () => {
+    const call = createTestCall();
     // Track concurrent executions to verify the batch limit.
     let concurrent = 0;
     let maxConcurrent = 0;
@@ -397,10 +467,18 @@ describe('executeIterateNode', () => {
     );
 
     const ctx = makeCtx(handlers);
-    const iterFrame = makeContainerFrame(ctx, 'iter-conc', 'iterate');
+    const iterFrame = makeContainerFrame(call, ctx, 'iter-conc', 'iterate');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: [1, 2, 3, 4] } };
 
-    const outcome = await executeIterateNode(node, ctx, exprCtx, executeSequence, iterFrame.frameId, iterFrame.path);
+    const outcome = await executeIterateNode(
+      call,
+      node,
+      ctx,
+      exprCtx,
+      executeSequence,
+      iterFrame.frameId,
+      iterFrame.path,
+    );
 
     expect(outcome.status).toBe('completed');
     // With concurrency=2 and 4 items, max concurrent must be ≤ 2.
@@ -408,6 +486,7 @@ describe('executeIterateNode', () => {
   });
 
   it('stops bounded batches and cancels running siblings when an exit-based item parks', async () => {
+    const call = createTestCall();
     let slowStartedResolve: () => void = () => {};
     const slowStarted = new Promise<void>((resolve) => {
       slowStartedResolve = resolve;
@@ -485,10 +564,18 @@ describe('executeIterateNode', () => {
       { suspensionStrategy: 'exit-and-redispatch' },
     );
     registerGateParkingStorage(ctx.bus);
-    const iterFrame = makeContainerFrame(ctx, 'iter-pause', 'iterate');
+    const iterFrame = makeContainerFrame(call, ctx, 'iter-pause', 'iterate');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['pause', 'slow', 'later'] } };
 
-    const outcome = await executeIterateNode(node, ctx, exprCtx, executeSequence, iterFrame.frameId, iterFrame.path);
+    const outcome = await executeIterateNode(
+      call,
+      node,
+      ctx,
+      exprCtx,
+      executeSequence,
+      iterFrame.frameId,
+      iterFrame.path,
+    );
 
     expect(outcome).toMatchObject({
       status: 'paused',
@@ -509,6 +596,7 @@ describe('executeIterateNode', () => {
 
 describe('executeIterateChainNode', () => {
   it('runs the body once per item in sequential order', async () => {
+    const call = createTestCall();
     const order: unknown[] = [];
     const { node, handlers } = makeIterateChainNode('chain-1', 'chain-1__item', 'inputs.items', (ctx) => {
       order.push(ctx.item);
@@ -516,10 +604,11 @@ describe('executeIterateChainNode', () => {
     });
 
     const ctx = makeCtx(handlers);
-    const chainFrame = makeContainerFrame(ctx, 'chain-1', 'iterate-chain');
+    const chainFrame = makeContainerFrame(call, ctx, 'chain-1', 'iterate-chain');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['a', 'b', 'c'] } };
 
     const outcome = await executeIterateChainNode(
+      call,
       node,
       ctx,
       exprCtx,
@@ -541,6 +630,7 @@ describe('executeIterateChainNode', () => {
   });
 
   it('passes item, index, and previous to the station handler', async () => {
+    const call = createTestCall();
     const calls: Array<{ item: unknown; index: unknown; previous: unknown }> = [];
     const { node, handlers } = makeIterateChainNode('chain-ctx', 'chain-ctx__item', 'inputs.items', (ctx) => {
       calls.push({ item: ctx.item, index: ctx.index, previous: ctx.previous });
@@ -548,10 +638,10 @@ describe('executeIterateChainNode', () => {
     });
 
     const ctx = makeCtx(handlers);
-    const chainFrame = makeContainerFrame(ctx, 'chain-ctx', 'iterate-chain');
+    const chainFrame = makeContainerFrame(call, ctx, 'chain-ctx', 'iterate-chain');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['x', 'y', 'z'] } };
 
-    await executeIterateChainNode(node, ctx, exprCtx, executeSequence, chainFrame.frameId, chainFrame.path);
+    await executeIterateChainNode(call, node, ctx, exprCtx, executeSequence, chainFrame.frameId, chainFrame.path);
 
     // First item: no previous.
     expect(calls[0]).toEqual({ item: 'x', index: 0, previous: undefined });
@@ -562,6 +652,7 @@ describe('executeIterateChainNode', () => {
   });
 
   it('chains previous output correctly through all items', async () => {
+    const call = createTestCall();
     // Build an accumulator: each item adds its value to the running total.
     const { node, handlers } = makeIterateChainNode('chain-acc', 'chain-acc__item', 'inputs.items', (ctx) => {
       const prev = typeof ctx.previous === 'number' ? ctx.previous : 0;
@@ -569,10 +660,11 @@ describe('executeIterateChainNode', () => {
     });
 
     const ctx = makeCtx(handlers);
-    const chainFrame = makeContainerFrame(ctx, 'chain-acc', 'iterate-chain');
+    const chainFrame = makeContainerFrame(call, ctx, 'chain-acc', 'iterate-chain');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: [1, 2, 3, 4] } };
 
     const outcome = await executeIterateChainNode(
+      call,
       node,
       ctx,
       exprCtx,
@@ -593,6 +685,7 @@ describe('executeIterateChainNode', () => {
   });
 
   it('chains the final body station output when start timestamps tie', async () => {
+    const call = createTestCall();
     const dateNow = vi.spyOn(Date, 'now').mockReturnValue(2_000);
     try {
       const node: WorkflowIterateChainNode = {
@@ -613,10 +706,11 @@ describe('executeIterateChainNode', () => {
         'chain-order__draft': (ctx) => `draft-${String(ctx.item)}`,
         'chain-order__final': (ctx) => `final-${String(ctx.item)}-${String(ctx.previous ?? 'none')}`,
       });
-      const chainFrame = makeContainerFrame(ctx, 'chain-order', 'iterate-chain');
+      const chainFrame = makeContainerFrame(call, ctx, 'chain-order', 'iterate-chain');
       const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['a', 'b'] } };
 
       const outcome = await executeIterateChainNode(
+        call,
         node,
         ctx,
         exprCtx,
@@ -637,13 +731,14 @@ describe('executeIterateChainNode', () => {
   });
 
   it('creates one per-item frame with the correct iteration number', async () => {
+    const call = createTestCall();
     const { node, handlers } = makeIterateChainNode('chain-frames', 'chain-frames__item', 'inputs.items', () => 'ok');
 
     const ctx = makeCtx(handlers);
-    const chainFrame = makeContainerFrame(ctx, 'chain-frames', 'iterate-chain');
+    const chainFrame = makeContainerFrame(call, ctx, 'chain-frames', 'iterate-chain');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['a', 'b', 'c'] } };
 
-    await executeIterateChainNode(node, ctx, exprCtx, executeSequence, chainFrame.frameId, chainFrame.path);
+    await executeIterateChainNode(call, node, ctx, exprCtx, executeSequence, chainFrame.frameId, chainFrame.path);
 
     const chainFrames = ctx.getFramesByNodeId('chain-frames');
     const itemFrames = chainFrames.filter((f) => f.iteration !== undefined);
@@ -653,13 +748,15 @@ describe('executeIterateChainNode', () => {
   });
 
   it('returns completed with empty items for an empty collection', async () => {
+    const call = createTestCall();
     const { node, handlers } = makeIterateChainNode('chain-empty', 'chain-empty__item', 'inputs.items', () => null);
 
     const ctx = makeCtx(handlers);
-    const chainFrame = makeContainerFrame(ctx, 'chain-empty', 'iterate-chain');
+    const chainFrame = makeContainerFrame(call, ctx, 'chain-empty', 'iterate-chain');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: [] } };
 
     const outcome = await executeIterateChainNode(
+      call,
       node,
       ctx,
       exprCtx,
@@ -676,6 +773,7 @@ describe('executeIterateChainNode', () => {
   });
 
   it('fails and stops when an item handler throws', async () => {
+    const call = createTestCall();
     const executed: string[] = [];
     const { node, handlers } = makeIterateChainNode('chain-fail', 'chain-fail__item', 'inputs.items', (ctx) => {
       executed.push(String(ctx.item));
@@ -684,10 +782,11 @@ describe('executeIterateChainNode', () => {
     });
 
     const ctx = makeCtx(handlers);
-    const chainFrame = makeContainerFrame(ctx, 'chain-fail', 'iterate-chain');
+    const chainFrame = makeContainerFrame(call, ctx, 'chain-fail', 'iterate-chain');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['a', 'bad', 'c'] } };
 
     const outcome = await executeIterateChainNode(
+      call,
       node,
       ctx,
       exprCtx,
@@ -706,6 +805,7 @@ describe('executeIterateChainNode', () => {
   });
 
   it('fails when the collection expression does not resolve to an array', async () => {
+    const call = createTestCall();
     const { node, handlers } = makeIterateChainNode(
       'chain-bad-coll',
       'chain-bad-coll__item',
@@ -714,10 +814,11 @@ describe('executeIterateChainNode', () => {
     );
 
     const ctx = makeCtx(handlers);
-    const chainFrame = makeContainerFrame(ctx, 'chain-bad-coll', 'iterate-chain');
+    const chainFrame = makeContainerFrame(call, ctx, 'chain-bad-coll', 'iterate-chain');
     const exprCtx = { ...emptyExpressionCtx, inputs: { notAnArray: 42 } };
 
     const outcome = await executeIterateChainNode(
+      call,
       node,
       ctx,
       exprCtx,
@@ -734,6 +835,7 @@ describe('executeIterateChainNode', () => {
   });
 
   it('cancels immediately when the outer signal is already aborted', async () => {
+    const call = createTestCall();
     const { node, handlers } = makeIterateChainNode(
       'chain-aborted',
       'chain-aborted__item',
@@ -747,10 +849,11 @@ describe('executeIterateChainNode', () => {
     const abortCtrl = new AbortController();
     abortCtrl.abort();
     const ctx = makeCtx(handlers, abortCtrl.signal);
-    const chainFrame = makeContainerFrame(ctx, 'chain-aborted', 'iterate-chain');
+    const chainFrame = makeContainerFrame(call, ctx, 'chain-aborted', 'iterate-chain');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: [1, 2, 3] } };
 
     const outcome = await executeIterateChainNode(
+      call,
       node,
       ctx,
       exprCtx,
@@ -763,6 +866,7 @@ describe('executeIterateChainNode', () => {
   });
 
   it('executes items strictly sequentially (never concurrently)', async () => {
+    const call = createTestCall();
     // Verify sequential execution by tracking concurrent active executions.
     let concurrent = 0;
     let maxConcurrent = 0;
@@ -776,16 +880,17 @@ describe('executeIterateChainNode', () => {
     });
 
     const ctx = makeCtx(handlers);
-    const chainFrame = makeContainerFrame(ctx, 'chain-seq', 'iterate-chain');
+    const chainFrame = makeContainerFrame(call, ctx, 'chain-seq', 'iterate-chain');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: [1, 2, 3, 4] } };
 
-    await executeIterateChainNode(node, ctx, exprCtx, executeSequence, chainFrame.frameId, chainFrame.path);
+    await executeIterateChainNode(call, node, ctx, exprCtx, executeSequence, chainFrame.frameId, chainFrame.path);
 
     // Strictly sequential: max concurrent must be 1 at all times.
     expect(maxConcurrent).toBe(1);
   });
 
   it('passes item and index to jexl when/skip conditions in body nodes', async () => {
+    const call = createTestCall();
     // A body station with a `when` condition that references `index`.
     const executed: number[] = [];
     const { node, handlers } = makeIterateChainNode('chain-when', 'chain-when__item', 'inputs.items', (ctx) => {
@@ -799,10 +904,11 @@ describe('executeIterateChainNode', () => {
     (bodyNode as { when?: string }).when = 'index % 2 == 0';
 
     const ctx = makeCtx(handlers);
-    const chainFrame = makeContainerFrame(ctx, 'chain-when', 'iterate-chain');
+    const chainFrame = makeContainerFrame(call, ctx, 'chain-when', 'iterate-chain');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['a', 'b', 'c', 'd'] } };
 
     const outcome = await executeIterateChainNode(
+      call,
       node,
       ctx,
       exprCtx,
@@ -817,6 +923,7 @@ describe('executeIterateChainNode', () => {
   });
 
   it('iterate node passes item and index to when/skip jexl conditions', async () => {
+    const call = createTestCall();
     const executed: number[] = [];
     const { node, handlers } = makeIterateNode('iter-when', 'iter-when__item', 'inputs.items', (ctx) => {
       executed.push(ctx.index as number);
@@ -828,10 +935,18 @@ describe('executeIterateChainNode', () => {
     (bodyNode as { when?: string }).when = 'index < 2';
 
     const ctx = makeCtx(handlers);
-    const iterFrame = makeContainerFrame(ctx, 'iter-when', 'iterate');
+    const iterFrame = makeContainerFrame(call, ctx, 'iter-when', 'iterate');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['a', 'b', 'c', 'd'] } };
 
-    const outcome = await executeIterateNode(node, ctx, exprCtx, executeSequence, iterFrame.frameId, iterFrame.path);
+    const outcome = await executeIterateNode(
+      call,
+      node,
+      ctx,
+      exprCtx,
+      executeSequence,
+      iterFrame.frameId,
+      iterFrame.path,
+    );
 
     expect(outcome.status).toBe('completed');
     // Only items at indices 0 and 1 should have executed the station.
@@ -845,13 +960,14 @@ describe('executeIterateChainNode', () => {
 
 describe('iterate/iterate-chain frame path tracking', () => {
   it('iterate item frames are children of the container frame', async () => {
+    const call = createTestCall();
     const { node, handlers } = makeIterateNode('iter-path', 'iter-path__item', 'inputs.items', () => 'ok');
 
     const ctx = makeCtx(handlers);
-    const containerFrame = makeContainerFrame(ctx, 'iter-path', 'iterate');
+    const containerFrame = makeContainerFrame(call, ctx, 'iter-path', 'iterate');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['a', 'b'] } };
 
-    await executeIterateNode(node, ctx, exprCtx, executeSequence, containerFrame.frameId, containerFrame.path);
+    await executeIterateNode(call, node, ctx, exprCtx, executeSequence, containerFrame.frameId, containerFrame.path);
 
     const itemFrames = ctx.getFramesByNodeId('iter-path').filter((f) => f.iteration !== undefined);
     for (const frame of itemFrames) {
@@ -863,13 +979,22 @@ describe('iterate/iterate-chain frame path tracking', () => {
   });
 
   it('iterate-chain item frames are children of the container frame', async () => {
+    const call = createTestCall();
     const { node, handlers } = makeIterateChainNode('chain-path', 'chain-path__item', 'inputs.items', () => 'ok');
 
     const ctx = makeCtx(handlers);
-    const containerFrame = makeContainerFrame(ctx, 'chain-path', 'iterate-chain');
+    const containerFrame = makeContainerFrame(call, ctx, 'chain-path', 'iterate-chain');
     const exprCtx = { ...emptyExpressionCtx, inputs: { items: ['a', 'b'] } };
 
-    await executeIterateChainNode(node, ctx, exprCtx, executeSequence, containerFrame.frameId, containerFrame.path);
+    await executeIterateChainNode(
+      call,
+      node,
+      ctx,
+      exprCtx,
+      executeSequence,
+      containerFrame.frameId,
+      containerFrame.path,
+    );
 
     const itemFrames = ctx.getFramesByNodeId('chain-path').filter((f) => f.iteration !== undefined);
     for (const frame of itemFrames) {
@@ -885,6 +1010,7 @@ describe('iterate/iterate-chain frame path tracking', () => {
 
 describe('iterate and iterate-chain via full dispatch (executeSequence)', () => {
   it('executes an iterate node inside a sequence', async () => {
+    const call = createTestCall();
     const received: JsonValue[] = [];
 
     // Build a workflow definition with a root sequence containing one iterate node.
@@ -930,13 +1056,14 @@ describe('iterate and iterate-chain via full dispatch (executeSequence)', () => 
       new AbortController().signal,
     );
 
-    const outcome = await executeSequence(definition.root, ctx, ctx.buildExpressionContext());
+    const outcome = await executeSequence(call, definition.root, ctx, ctx.buildExpressionContext());
 
     expect(outcome.status).toBe('completed');
     expect(received.sort()).toEqual([1, 2, 3]);
   });
 
   it('executes an iterate-chain node inside a sequence with chaining', async () => {
+    const call = createTestCall();
     const calls: Array<{ item: unknown; previous: unknown }> = [];
 
     const chainNode: WorkflowIterateChainNode = {
@@ -980,7 +1107,7 @@ describe('iterate and iterate-chain via full dispatch (executeSequence)', () => 
       new AbortController().signal,
     );
 
-    const outcome = await executeSequence(definition.root, ctx, ctx.buildExpressionContext());
+    const outcome = await executeSequence(call, definition.root, ctx, ctx.buildExpressionContext());
 
     expect(outcome.status).toBe('completed');
     expect(calls[0]).toEqual({ item: 'a', previous: undefined });

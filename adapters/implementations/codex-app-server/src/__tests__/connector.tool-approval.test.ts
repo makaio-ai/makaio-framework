@@ -10,10 +10,12 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createBusInstance, MakaioBus } from '@makaio/bus-core';
-import { HarnessSubjects, ToolSubjects } from '@makaio/contracts';
+import { HarnessSubjects, ToolSubjects, type CallContext, type Party } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { CodexAppServerNamespace } from '../namespaces/index.js';
 import {
   createConnectorTestContext,
+  createMockThread,
   createMockTurn,
   cleanupConnectorTestContext,
   startConnectorWithTurn,
@@ -440,5 +442,131 @@ describe('CodexAppServerConnector - Dynamic tool call approval', () => {
     });
 
     expect(recordCall).toHaveBeenCalledWith('github__create_issue', 9);
+  });
+});
+
+describe('CodexAppServerConnector - call attribution of approvals', () => {
+  const PERSON: Party = { kind: 'acme.person', id: 'person-approver' };
+  const UNATTRIBUTABLE_TURN_ID = 'turn-not-pending';
+  let ctx: ConnectorTestContext;
+
+  /**
+   * Start the connector under a call whose principal is {@link PERSON} and announce its provider turn.
+   * @param call - Call of the start operation
+   */
+  async function startUnderCall(call: CallContext): Promise<void> {
+    const started = ctx.connector.start(
+      { role: 'user', message: 'Run ls command', blocks: [{ type: 'text', content: 'Run ls command' }] },
+      { call },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await ctx.mockJsonRpcClient.receiveNotification('thread/started', { thread: createMockThread() });
+    await started;
+    await ctx.mockJsonRpcClient.receiveNotification('turn/started', {
+      threadId: 'thread-123',
+      turn: createMockTurn(),
+    });
+  }
+
+  /**
+   * Build a command approval server request.
+   * @param turnId - Provider turn id the request carries
+   */
+  function commandApprovalRequest(turnId: string) {
+    return {
+      id: 400,
+      method: 'item/commandExecution/requestApproval',
+      params: { threadId: 'thread-123', turnId, itemId: 'item-call', reason: 'Needs approval' },
+    };
+  }
+
+  afterEach(() => {
+    cleanupConnectorTestContext(ctx);
+    MakaioBus.__resetHandlers?.();
+  });
+
+  it('requests approval under the call of the handle whose turn id matches', async () => {
+    ctx = await createConnectorTestContext();
+    await startUnderCall(createTestCall({ principal: PERSON }));
+
+    const principals: Party[] = [];
+    ctx.mockBus.on(CodexAppServerNamespace.subjects.exec_approval_request, (busCtx) => {
+      principals.push(busCtx.call.principal);
+      busCtx.setResult({ decision: 'accept' });
+    });
+    await ctx.mockJsonRpcClient.receiveNotification('item/started', {
+      threadId: 'thread-123',
+      turnId: 'turn-456',
+      item: {
+        type: 'commandExecution',
+        id: 'item-call',
+        command: 'echo hello',
+        cwd: '/workspace',
+        processId: null,
+        status: 'pending',
+        commandActions: [],
+        aggregatedOutput: null,
+        exitCode: null,
+        durationMs: null,
+      },
+    });
+
+    const response = await ctx.mockJsonRpcClient.receiveServerRequest(commandApprovalRequest('turn-456'));
+
+    expect(response).toMatchObject({ decision: 'accept' });
+    expect(principals).toEqual([PERSON]);
+  });
+
+  it('declines a command approval without an attributable handle and sends no approval request', async () => {
+    ctx = await createConnectorTestContext();
+    await startUnderCall(createTestCall({ principal: PERSON }));
+
+    const approvalRequests: unknown[] = [];
+    ctx.mockBus.on(CodexAppServerNamespace.subjects.exec_approval_request, (busCtx) => {
+      approvalRequests.push(busCtx.payload);
+      busCtx.setResult({ decision: 'accept' });
+    });
+
+    const response = await ctx.mockJsonRpcClient.receiveServerRequest(commandApprovalRequest(UNATTRIBUTABLE_TURN_ID));
+
+    expect(response).toMatchObject({
+      decision: 'decline',
+      message: 'no operation attributable to this approval request',
+    });
+    expect(approvalRequests).toHaveLength(0);
+  });
+
+  it('denies a dynamic tool call without an attributable handle and does not execute the tool', async () => {
+    const hostBus = createBusInstance();
+    ctx = await createConnectorTestContext({ globalBus: hostBus });
+    await startUnderCall(createTestCall({ principal: PERSON }));
+
+    const approvalRequests: unknown[] = [];
+    ctx.mockBus.on(CodexAppServerNamespace.subjects.dynamic_tool_call_approval_request, (busCtx) => {
+      approvalRequests.push(busCtx.payload);
+      busCtx.setResult({ decision: 'accept' });
+    });
+    const executions: unknown[] = [];
+    hostBus.on(ToolSubjects.execute, (busCtx) => {
+      executions.push(busCtx.payload);
+      busCtx.setResult({ success: true, data: {} });
+    });
+
+    const response = await ctx.mockJsonRpcClient.receiveServerRequest({
+      id: 401,
+      method: 'item/tool/call',
+      params: {
+        threadId: 'thread-123',
+        turnId: UNATTRIBUTABLE_TURN_ID,
+        itemId: 'item-tool-orphan',
+        name: 'my_tool',
+        arguments: { query: 'hello' },
+      },
+    });
+
+    expect(approvalRequests).toHaveLength(0);
+    expect(executions).toHaveLength(0);
+    const text = (response as { content: [{ text: string }] }).content[0].text;
+    expect(JSON.parse(text)).toMatchObject({ error: 'no operation attributable to this approval request' });
   });
 });

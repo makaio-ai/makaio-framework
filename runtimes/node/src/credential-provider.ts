@@ -1,11 +1,14 @@
 import fs from 'node:fs/promises';
 import type { IDirectChannel, IMakaioBus } from '@makaio/bus-core';
 import { openChannel, ChannelClosedError } from '@makaio/bus-core';
+import { assertCallCarrier, busContextOf, hostPartyOf } from '@makaio/bus-core/kernel-api';
+import type { CallContext, PartyRef } from '@makaio/core';
 import type { CredentialRef } from '@makaio/contracts/config';
 import { parseStoredCredentialRef } from '@makaio/contracts/config';
 import { CredentialSubjects } from '@makaio/contracts';
 import type { CredentialResolver } from '@makaio/contracts/extension';
 import { resolveCredentialRef } from '@makaio/ai-adapters-core/config';
+import type { CredentialResolverBinder } from '@makaio/kernel';
 import { launch as realLaunch, launchForOutput, type LaunchFunction } from '@makaio/subprocess';
 
 /**
@@ -50,10 +53,14 @@ export class NodeCredentialProvider implements CredentialProvider {
    * Returns null (never throws) for `stored:` refs — those require a
    * credential service handler registered on the bus. Returns null (never
    * throws) for `file:` refs that are missing or unreadable.
+   *
+   * The lookups of `env:`, `file:`, and `keychain:` refs do not depend on who
+   * asks, so the call context is accepted but not read.
+   * @param _call - Call context of the work the lookup belongs to (not read)
    * @param ref - Credential reference (`env:`, `file:`, or `keychain:`)
    * @returns Resolved credential value, or null when unavailable
    */
-  public async resolve(ref: CredentialRef): Promise<string | null> {
+  public async resolve(_call: CallContext, ref: CredentialRef): Promise<string | null> {
     if (ref.startsWith('stored:')) {
       console.warn(
         `[NodeCredentialProvider] Cannot resolve "stored:" credential ref "${ref}": ` +
@@ -98,6 +105,9 @@ export class NodeCredentialProvider implements CredentialProvider {
  *
  * Falls back to NodeCredentialProvider for env/file/keychain refs.
  * Uses a lazy-opened DirectChannel for the channel-only `credential.get` subject.
+ *
+ * One provider serves exactly one requesting carrier: its bus is the instance the
+ * kernel bound to that carrier, and its channel belongs to that instance.
  */
 export class StoredCredentialProvider implements CredentialProvider {
   private readonly fallbackProvider = new NodeCredentialProvider();
@@ -112,10 +122,23 @@ export class StoredCredentialProvider implements CredentialProvider {
   private channelPromise?: Promise<IDirectChannel | null>;
 
   /**
-   * Create a new stored credential provider.
-   * @param bus - Bus instance for credential retrieval
+   * Create a new stored credential provider for one requesting carrier.
+   * @param bus - Bus instance bound to `carrier`, used for credential retrieval
+   * @param carrier - The carrier that asks; every call passed to {@link resolve} must be usable by it
    */
-  public constructor(private readonly bus: IMakaioBus) {}
+  public constructor(
+    private readonly bus: IMakaioBus,
+    private readonly carrier: PartyRef,
+  ) {}
+
+  /**
+   * Create a provider for host code: the carrier is the host of the bus instance.
+   * @param bus - Bus instance of the host
+   * @returns A provider whose carrier is the party of the host of `bus`
+   */
+  public static forHost(bus: IMakaioBus): StoredCredentialProvider {
+    return new StoredCredentialProvider(bus, hostPartyOf(busContextOf(bus)));
+  }
 
   /**
    * Resolve a credential reference, including stored refs.
@@ -123,10 +146,13 @@ export class StoredCredentialProvider implements CredentialProvider {
    * Handles the `stored:providerConfig:<configId>:<key>` format via
    * `CredentialSubjects.get` over an encrypted DirectChannel. Falls back to
    * NodeCredentialProvider for env:, file:, and keychain: refs.
+   * @param call - Call context of the work the lookup belongs to
    * @param ref - Credential reference to resolve
    * @returns Resolved credential value, or null when unavailable
+   * @throws ForeignOwnContextError When `call` is the own context of another carrier
    */
-  public async resolve(ref: CredentialRef): Promise<string | null> {
+  public async resolve(call: CallContext, ref: CredentialRef): Promise<string | null> {
+    assertCallCarrier(call, this.carrier, busContextOf(this.bus));
     const parsed = parseStoredCredentialRef(ref);
     if (parsed) {
       const { configId, key } = parsed;
@@ -153,7 +179,7 @@ export class StoredCredentialProvider implements CredentialProvider {
             );
             return null;
           }
-          const result = await channel.request(CredentialSubjects.get, { configId });
+          const result = await channel.request(call, CredentialSubjects.get, { configId });
           return result.credentials?.[key] ?? null;
         } catch (e) {
           if (e instanceof ChannelClosedError) {
@@ -180,7 +206,7 @@ export class StoredCredentialProvider implements CredentialProvider {
       return null;
     }
 
-    return this.fallbackProvider.resolve(ref);
+    return this.fallbackProvider.resolve(call, ref);
   }
 
   /**
@@ -240,11 +266,47 @@ export class StoredCredentialProvider implements CredentialProvider {
    * @returns Newly opened DirectChannel, or null when the service is absent
    */
   private async openCredentialChannel(): Promise<IDirectChannel | null> {
-    const result = await this.bus.requestOptional(CredentialSubjects.getChannelToken, {});
+    // ORIGIN: The provider owns the channel and shares it across request principals.
+    const result = await this.bus.requestOptional(this.bus.own('shared-work'), CredentialSubjects.getChannelToken, {});
     if (!result.handled) {
       return null;
     }
     const { token } = result.data;
-    return openChannel(this.bus.getContext(), 'credentials', { token, transports: [] });
+    return openChannel(this.bus, 'credentials', { token, transports: [] });
   }
+}
+
+/** Result of {@link createCredentialBinder}. */
+export interface CredentialBinder {
+  /** Hands each requesting carrier its own bound resolver; pass it as `credentialsFor` of the extension context base. */
+  readonly credentialsFor: CredentialResolverBinder;
+  /** Close the channels of all providers built so far. Idempotent. */
+  close(): void;
+}
+
+/**
+ * Create the binder that gives every requesting carrier its own credential resolver.
+ *
+ * Builds exactly one {@link StoredCredentialProvider} per carrier (key `kind|id`):
+ * the same carrier gets the same provider and therefore the same channel.
+ * @returns The binder and its shutdown hook
+ */
+export function createCredentialBinder(): CredentialBinder {
+  const providers = new Map<string, StoredCredentialProvider>();
+  return {
+    credentialsFor: (requester, bus) => {
+      const key = `${requester.kind}|${requester.id}`;
+      let provider = providers.get(key);
+      if (provider === undefined) {
+        provider = new StoredCredentialProvider(bus, requester);
+        providers.set(key, provider);
+      }
+      return provider;
+    },
+    close: () => {
+      for (const provider of providers.values()) {
+        provider.close();
+      }
+    },
+  };
 }

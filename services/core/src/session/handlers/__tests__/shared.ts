@@ -1,4 +1,5 @@
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   AdapterSubjects,
   AgentSubjects,
@@ -163,11 +164,11 @@ export async function routeToAgentsWithTestLedger(options: Omit<RouteToAgentsOpt
     beginFinalization: () => undefined,
   };
 
-  await routeToAgents({
+  await routeToAgents(createTestCall(), {
     ...options,
     turnManager: {
-      recordAgentCompletion: async (agentId, messageId, outcome, error, onTurnComplete, turnId) => {
-        await recordTurnPairCompletion(options.bus, hooks, {
+      recordAgentCompletion: async (call, agentId, messageId, outcome, error, onTurnComplete, turnId) => {
+        await recordTurnPairCompletion(call, options.bus, hooks, {
           agentId,
           messageId,
           outcome,

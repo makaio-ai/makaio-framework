@@ -1,5 +1,6 @@
 import path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
+import { isInProcessCaller, MAKAIO_WORKER_THREAD_PARTY_KIND, type CallContext } from '@makaio/core';
 import { FsSubjects } from '@makaio/services-core/filesystem/namespace';
 import { BaseService } from '@makaio/service-base';
 import { GitSubjects } from '@makaio/services-core/git/namespace';
@@ -133,7 +134,7 @@ export class GitService extends BaseService {
 
     // localBranchExists handler — uncached and host-owned
     this.registerHandler(GitSubjects.localBranchExists, async (ctx) => {
-      this.requireHostOwnedOrigin(ctx, 'localBranchExists');
+      this.requireHostOwnedCaller(ctx.call, 'localBranchExists');
       const git = getGit(ctx.payload.repoPath);
       const branches = await git.branchLocal();
       ctx.setResult({ exists: branches.all.includes(ctx.payload.name) });
@@ -288,14 +289,14 @@ export class GitService extends BaseService {
   private registerWorktreeManagementHandlers(): void {
     // initRepo handler — mutates filesystem, host-owned
     this.registerHandler(GitSubjects.initRepo, async (ctx) => {
-      this.requireHostOwnedOrigin(ctx, 'initRepo');
+      this.requireHostOwnedCaller(ctx.call, 'initRepo');
       const result = await initRepo(ctx.payload.path, ctx.payload.defaultBranch);
       ctx.setResult(result);
     });
 
     // createWorktree handler — mutates filesystem, host-owned
     this.registerHandler(GitSubjects.createWorktree, async (ctx) => {
-      this.requireHostOwnedOrigin(ctx, 'createWorktree');
+      this.requireHostOwnedCaller(ctx.call, 'createWorktree');
       const git = getGit(ctx.payload.repoPath);
       const result = await createWorktree(git, ctx.payload.path, ctx.payload.branch, {
         baseBranch: ctx.payload.baseBranch,
@@ -309,7 +310,7 @@ export class GitService extends BaseService {
 
     // removeWorktree handler — mutates filesystem, host-owned
     this.registerHandler(GitSubjects.removeWorktree, async (ctx) => {
-      this.requireHostOwnedOrigin(ctx, 'removeWorktree');
+      this.requireHostOwnedCaller(ctx.call, 'removeWorktree');
       const git = getGit(ctx.payload.repoPath);
       const result = await removeWorktree(git, ctx.payload.path, {
         force: ctx.payload.force,
@@ -323,7 +324,7 @@ export class GitService extends BaseService {
 
     // deleteBranch handler — mutates a local ref, host-owned
     this.registerHandler(GitSubjects.deleteBranch, async (ctx) => {
-      this.requireHostOwnedOrigin(ctx, 'deleteBranch');
+      this.requireHostOwnedCaller(ctx.call, 'deleteBranch');
       const repoPath = this.resolveRepoPath(ctx.payload);
       const git = getGit(repoPath);
       try {
@@ -336,7 +337,7 @@ export class GitService extends BaseService {
 
     // stage handler — mutates git index, host-owned
     this.registerHandler(GitSubjects.stage, async (ctx) => {
-      this.requireHostOwnedOrigin(ctx, 'stage');
+      this.requireHostOwnedCaller(ctx.call, 'stage');
       const { repoPath, paths } = ctx.payload;
       const git = getGit(repoPath);
       const result = await stageFiles(git, paths);
@@ -345,7 +346,7 @@ export class GitService extends BaseService {
 
     // unstage handler — mutates git index, host-owned
     this.registerHandler(GitSubjects.unstage, async (ctx) => {
-      this.requireHostOwnedOrigin(ctx, 'unstage');
+      this.requireHostOwnedCaller(ctx.call, 'unstage');
       const { repoPath, paths } = ctx.payload;
       const git = getGit(repoPath);
       const result = await unstageFiles(git, paths);
@@ -355,14 +356,11 @@ export class GitService extends BaseService {
 
   /**
    * Assert that a git mutation came from host-owned code or the host UI bridge.
-   * @param ctx - Bus handler context carrying origin and transport metadata.
+   * @param call - `ctx.call` of the handled message.
    * @param handlerName - Git handler name used in the error message.
    */
-  private requireHostOwnedOrigin(
-    ctx: { origin: { local: boolean }; transport?: { transportName: string; peer?: unknown } },
-    handlerName: string,
-  ): void {
-    if (ctx.origin.local || (ctx.transport?.transportName === 'worker' && ctx.transport.peer === undefined)) {
+  private requireHostOwnedCaller(call: CallContext, handlerName: string): void {
+    if (isInProcessCaller(call) || call.caller.kind === MAKAIO_WORKER_THREAD_PARTY_KIND) {
       return;
     }
     throw new Error(`Unauthorized: git.${handlerName} requires a host-owned request`);

@@ -1,5 +1,6 @@
 import * as os from 'node:os';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { ExpressionContext } from '@makaio/expression';
 import type {
   BuiltWorkflow,
@@ -485,10 +486,11 @@ export class RuntimeContext {
    * registry, direct mutations are sufficient for lifecycle helpers. Callers that
    * know only the frame ID (e.g. gate suspension) use {@link updateFrame} instead.
    * The frame ID is auto-generated and included in the returned path.
+   * @param call - Call context of the message that drives this execution run.
    * @param params - Node identity and tree position for the new frame.
    * @returns The newly created frame (status `pending`).
    */
-  public createFrame(params: CreateFrameParams): WorkflowFrameState {
+  public createFrame(call: CallContext, params: CreateFrameParams): WorkflowFrameState {
     const frameId = generateId('frm');
     const path = [...params.path, frameId];
     const frame: WorkflowFrameState = {
@@ -507,7 +509,7 @@ export class RuntimeContext {
     // lifecycle helpers await their own required writes, so observe this
     // promise here only to prevent unhandled rejections from the fire-and-forget
     // pending checkpoint.
-    void this.persistFrame(frame).catch(() => undefined);
+    void this.persistFrame(call, frame).catch(() => undefined);
     return frame;
   }
 
@@ -520,10 +522,15 @@ export class RuntimeContext {
    * for isolated in-process unit tests; exit-based suspension strategies make
    * frame storage mandatory so a failed checkpoint write fails the execution
    * before it can park and later replay side effects.
+   * @param call - Call context of the message that drives this execution run.
    * @param frame - Frame state to persist.
    * @param options - Persistence behavior for this write.
    */
-  public async persistFrame(frame: WorkflowFrameState, options: FramePersistenceOptions = {}): Promise<void> {
+  public async persistFrame(
+    call: CallContext,
+    frame: WorkflowFrameState,
+    options: FramePersistenceOptions = {},
+  ): Promise<void> {
     const requireFrameStorage = options.requireFrameStorage === true || this.suspensionStrategy !== 'wait-in-process';
     const snapshot = snapshotFrame(frame);
     const span = toFrameSpanRecord(this.executionId, snapshot);
@@ -532,18 +539,18 @@ export class RuntimeContext {
       .catch(() => undefined)
       .then(async () => {
         if (requireFrameStorage) {
-          await this.bus.request(WorkflowStorageSubjects.setFrame, {
+          await this.bus.request(call, WorkflowStorageSubjects.setFrame, {
             executionId: this.executionId,
             frame: snapshot,
           });
         } else {
-          await this.bus.requestOptional(WorkflowStorageSubjects.setFrame, {
+          await this.bus.requestOptional(call, WorkflowStorageSubjects.setFrame, {
             executionId: this.executionId,
             frame: snapshot,
           });
         }
         if (span !== undefined) {
-          await this.bus.requestOptional(WorkflowStorageSubjects.setSpan, { span });
+          await this.bus.requestOptional(call, WorkflowStorageSubjects.setSpan, { span });
         }
       })
       .catch((error: unknown) => {
@@ -568,11 +575,13 @@ export class RuntimeContext {
    *
    * Only the provided fields are merged; all other fields remain unchanged.
    * Throws if the frame ID is not found in the registry.
+   * @param call - Call context of the message that drives this execution run.
    * @param frameId - The frame to update.
    * @param patch - Fields to merge into the frame.
    * @param options - Persistence behavior for this update.
    */
   public async updateFrame(
+    call: CallContext,
     frameId: string,
     patch: Partial<WorkflowFrameState>,
     options: FramePersistenceOptions = {},
@@ -582,7 +591,7 @@ export class RuntimeContext {
       throw new Error(`Frame not found: ${frameId}`);
     }
     Object.assign(frame, patch);
-    await this.persistFrame(frame, options);
+    await this.persistFrame(call, frame, options);
   }
 
   /**
@@ -620,11 +629,12 @@ export class RuntimeContext {
    * The frame must already be registered and in `running` status before
    * this method is called. Failures from observers are swallowed so a
    * misbehaving subscriber cannot abort the execution.
+   * @param call - Call context of the message that drives this execution run.
    * @param frame - The started frame.
    */
-  public async emitFrameStarted(frame: WorkflowFrameState): Promise<void> {
+  public async emitFrameStarted(call: CallContext, frame: WorkflowFrameState): Promise<void> {
     try {
-      await this.bus.emit(WorkflowSubjects.frame.started, {
+      await this.bus.emit(call, WorkflowSubjects.frame.started, {
         executionId: this.executionId,
         frameId: frame.frameId,
         nodeId: frame.nodeId,
@@ -643,12 +653,13 @@ export class RuntimeContext {
    *
    * Failures from observers are swallowed so a misbehaving subscriber
    * cannot corrupt the execution outcome.
+   * @param call - Call context of the message that drives this execution run.
    * @param frame - The completed frame.
    * @param durationMs - Wall-clock duration from frame start to completion.
    */
-  public async emitFrameCompleted(frame: WorkflowFrameState, durationMs?: number): Promise<void> {
+  public async emitFrameCompleted(call: CallContext, frame: WorkflowFrameState, durationMs?: number): Promise<void> {
     try {
-      await this.bus.emit(WorkflowSubjects.frame.completed, {
+      await this.bus.emit(call, WorkflowSubjects.frame.completed, {
         executionId: this.executionId,
         frameId: frame.frameId,
         nodeId: frame.nodeId,
@@ -666,13 +677,19 @@ export class RuntimeContext {
    *
    * Failures from observers are swallowed so a misbehaving subscriber
    * cannot mask the original error.
+   * @param call - Call context of the message that drives this execution run.
    * @param frame - The failed frame.
    * @param error - Human-readable failure reason.
    * @param durationMs - Wall-clock duration from frame start to failure.
    */
-  public async emitFrameFailed(frame: WorkflowFrameState, error: string, durationMs?: number): Promise<void> {
+  public async emitFrameFailed(
+    call: CallContext,
+    frame: WorkflowFrameState,
+    error: string,
+    durationMs?: number,
+  ): Promise<void> {
     try {
-      await this.bus.emit(WorkflowSubjects.frame.failed, {
+      await this.bus.emit(call, WorkflowSubjects.frame.failed, {
         executionId: this.executionId,
         frameId: frame.frameId,
         nodeId: frame.nodeId,

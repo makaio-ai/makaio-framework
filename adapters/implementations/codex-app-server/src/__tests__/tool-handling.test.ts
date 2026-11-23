@@ -6,6 +6,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   toGlobalToolApproval,
   toGlobalFileApproval,
@@ -224,7 +225,7 @@ describe('dynamic tool loading', () => {
 
     try {
       await expect(
-        fetchToolsForCodex(hostBus, 'adapter-1', 'codex-app-server', {
+        fetchToolsForCodex(createTestCall(), hostBus, 'adapter-1', 'codex-app-server', {
           allowedTools: ['search_repo', 'write_file'],
           disallowedTools: ['write_file'],
         }),
@@ -236,9 +237,9 @@ describe('dynamic tool loading', () => {
         },
       ]);
 
-      await expect(fetchToolsForCodex(hostBus, 'adapter-1', 'codex-app-server', { allowedTools: [] })).resolves.toEqual(
-        [],
-      );
+      await expect(
+        fetchToolsForCodex(createTestCall(), hostBus, 'adapter-1', 'codex-app-server', { allowedTools: [] }),
+      ).resolves.toEqual([]);
     } finally {
       off();
     }

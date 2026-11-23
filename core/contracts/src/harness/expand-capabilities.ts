@@ -7,7 +7,7 @@
  * @packageDocumentation
  */
 
-import type { MakaioBusLike } from '@makaio/core';
+import type { CallContext, MakaioBusLike } from '@makaio/core';
 import type { ToolCapability } from '../tool-capability/index.js';
 import { HarnessSubjects } from './namespace.js';
 
@@ -155,11 +155,13 @@ function emptyCapabilityResult(
  *
  * Results are unioned with the explicit tool lists (Stance B): explicit names
  * are never removed by capability expansion.
+ * @param call - Call context the harness lookup is sent under
  * @param bus - Bus for harness RPC
  * @param config - Object with capability and explicit tool list fields
  * @returns Expanded `allowedTools` and `disallowedTools` (Stance B union applied)
  */
 export async function expandProfileToolCapabilities(
+  call: CallContext,
   bus: MakaioBusLike,
   config: ProfileToolCapabilitiesConfig,
 ): Promise<{ allowedTools?: string[]; disallowedTools?: string[] }> {
@@ -171,7 +173,7 @@ export async function expandProfileToolCapabilities(
     return emptyCapabilityResult(allowedTools, disallowedTools);
   }
 
-  const harness = await bus.request(HarnessSubjects.get, { id: harnessId });
+  const harness = await bus.request(call, HarnessSubjects.get, { id: harnessId });
 
   if (!harness.toolCapabilityMap) {
     return emptyCapabilityResult(allowedTools, disallowedTools);

@@ -1,4 +1,5 @@
 import type { IWorkflowRunner } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type { StartExecutionDeps } from './workflow-execution-start.js';
 import { buildExecutionTask, type DefinitionRunnerTaskParams } from './workflow-runner-tasks.js';
 import { createWorkerDispatchRunner } from './worker-dispatch-runner.js';
@@ -38,21 +39,23 @@ export function selectDefinitionExecutionDispatch(
 
 /**
  * Launch a definition with its already-selected runner or in-process scheduler.
+ * @param call - Call context of the message that triggered this execution.
  * @param deps - Shared executor state and callbacks.
  * @param params - Bound execution data needed by the runner task.
  * @param dispatch - Selection retained from persistence, or selected here for resume callers.
  * @returns Settled execution task promise.
  */
 export function launchDefinitionExecutionTask(
+  call: CallContext,
   deps: StartExecutionDeps,
   params: DefinitionRunnerTaskParams,
   dispatch: DefinitionExecutionDispatch = selectDefinitionExecutionDispatch(deps, params),
 ): Promise<void> {
   if (dispatch.runner !== undefined) {
-    return buildExecutionTask(deps.buildRunnerTaskDeps(dispatch.runner), {
+    return buildExecutionTask(call, deps.buildRunnerTaskDeps(dispatch.runner), {
       ...params,
       terminalAuthority: params.terminalAuthority ?? dispatch.runner.terminalAuthority,
     });
   }
-  return deps.runExecution(params.executionId);
+  return deps.runExecution(call, params.executionId);
 }

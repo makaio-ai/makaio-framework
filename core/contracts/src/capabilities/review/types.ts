@@ -1,3 +1,5 @@
+import type { CallContext } from '@makaio/core';
+
 import type { ICapabilityProvider } from '../../capability/types.js';
 import type { FindingTarget, ReviewFinding, ReviewIssueComment, ReviewSourceRateLimit } from './schemas.js';
 import type { VCSReviewComment, VCSReview } from '../vcs/schemas/index.js';
@@ -133,16 +135,18 @@ export interface IReviewSource extends ICapabilityProvider {
   };
   /**
    * Trigger a review (e.g., post "\@coderabbitai review" comment).
+   * @param call - Call context of the request this source works for; every bus send made while triggering names it
    * @param params - Trigger parameters merged with VCS routing context
    * @returns Result indicating whether the trigger succeeded
    */
-  trigger?(params: ReviewTriggerParams & ReviewRequestContext): Promise<ReviewTriggerResult>;
+  trigger?(call: CallContext, params: ReviewTriggerParams & ReviewRequestContext): Promise<ReviewTriggerResult>;
   /**
    * Fetch raw snapshot from the source.
+   * @param call - Call context of the request this source works for; every bus send made while fetching names it
    * @param params - Fetch parameters merged with VCS routing context
    * @returns Raw snapshot of source data before processing
    */
-  fetchSnapshot?(params: FetchFindingsParams & ReviewRequestContext): Promise<ReviewSourceSnapshot>;
+  fetchSnapshot?(call: CallContext, params: FetchFindingsParams & ReviewRequestContext): Promise<ReviewSourceSnapshot>;
   /**
    * Get current rate limit state.
    * @returns Current rate limit or null if not applicable

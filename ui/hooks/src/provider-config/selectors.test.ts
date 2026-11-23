@@ -39,7 +39,7 @@ describe('provider config selectors', () => {
       });
     });
 
-    await expect(getProviderConfigDetailView(bus, SAFE_CONFIG.id)).resolves.toEqual({
+    await expect(getProviderConfigDetailView(bus.own('root'), bus, SAFE_CONFIG.id)).resolves.toEqual({
       ...SAFE_CONFIG,
       supportedProtocols: ['anthropic'],
     });
@@ -54,7 +54,7 @@ describe('provider config selectors', () => {
       throw new Error('provider metadata must not be read for a missing config');
     });
 
-    await expect(getProviderConfigDetailView(bus, 'missing')).resolves.toBeNull();
+    await expect(getProviderConfigDetailView(bus.own('root'), bus, 'missing')).resolves.toBeNull();
     expect(providerReads).toBe(0);
   });
 
@@ -71,7 +71,7 @@ describe('provider config selectors', () => {
     };
     bus.on(AdapterSubsystemSubjects.listCompatibleAuthOptions, (ctx) => ctx.setResult({ options: [option] }));
 
-    const options = await listCompatibleAuthOptions(bus, 'anthropic');
+    const options = await listCompatibleAuthOptions(bus.own('root'), bus, 'anthropic');
     expect(options).toEqual([option]);
     expect(JSON.stringify(options)).not.toContain('credentialRefs');
   });

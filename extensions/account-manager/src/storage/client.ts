@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { Account } from '../bus/schemas.js';
 import type { UsageEntry } from '../bus/usage-entry.js';
 import type {
@@ -15,29 +16,41 @@ import { AccountManagerStorageSubjects } from './namespace.js';
 export class BusAccountMetadataStore implements IAccountMetadataStore {
   public constructor(private readonly bus: IMakaioBus) {}
 
-  public async list(clientId: string): Promise<Account[]> {
-    const { accounts } = await this.bus.request(AccountManagerStorageSubjects.metadata.list, { clientId });
+  public async list(call: CallContext, clientId: string): Promise<Account[]> {
+    const { accounts } = await this.bus.request(call, AccountManagerStorageSubjects.metadata.list, { clientId });
     return accounts;
   }
 
-  public async listByLinkedClientAccountId(clientId: string, linkedClientAccountId: string): Promise<Account[]> {
-    const { accounts } = await this.bus.request(AccountManagerStorageSubjects.metadata.listByLinkedClientAccountId, {
+  public async listByLinkedClientAccountId(
+    call: CallContext,
+    clientId: string,
+    linkedClientAccountId: string,
+  ): Promise<Account[]> {
+    const { accounts } = await this.bus.request(
+      call,
+      AccountManagerStorageSubjects.metadata.listByLinkedClientAccountId,
+      {
+        clientId,
+        linkedClientAccountId,
+      },
+    );
+    return accounts;
+  }
+
+  public async get(call: CallContext, clientId: string, accountId: string): Promise<Account | null> {
+    const { account } = await this.bus.request(call, AccountManagerStorageSubjects.metadata.get, {
       clientId,
-      linkedClientAccountId,
+      accountId,
     });
-    return accounts;
-  }
-
-  public async get(clientId: string, accountId: string): Promise<Account | null> {
-    const { account } = await this.bus.request(AccountManagerStorageSubjects.metadata.get, { clientId, accountId });
     return account;
   }
 
   public async getWithMetadataGeneration(
+    call: CallContext,
     clientId: string,
     accountId: string,
   ): Promise<{ account: Account; metadataGeneration: number } | null> {
-    const result = await this.bus.request(AccountManagerStorageSubjects.metadata.getWithMetadataGeneration, {
+    const result = await this.bus.request(call, AccountManagerStorageSubjects.metadata.getWithMetadataGeneration, {
       clientId,
       accountId,
     });
@@ -46,21 +59,21 @@ export class BusAccountMetadataStore implements IAccountMetadataStore {
       : null;
   }
 
-  public async upsert(clientId: string, account: Account): Promise<void> {
-    await this.bus.request(AccountManagerStorageSubjects.metadata.upsert, { clientId, account });
+  public async upsert(call: CallContext, clientId: string, account: Account): Promise<void> {
+    await this.bus.request(call, AccountManagerStorageSubjects.metadata.upsert, { clientId, account });
   }
 
-  public async remove(clientId: string, accountId: string): Promise<void> {
-    await this.bus.request(AccountManagerStorageSubjects.metadata.remove, { clientId, accountId });
+  public async remove(call: CallContext, clientId: string, accountId: string): Promise<void> {
+    await this.bus.request(call, AccountManagerStorageSubjects.metadata.remove, { clientId, accountId });
   }
 
-  public async getActive(clientId: string): Promise<Account | null> {
-    const { account } = await this.bus.request(AccountManagerStorageSubjects.metadata.getActive, { clientId });
+  public async getActive(call: CallContext, clientId: string): Promise<Account | null> {
+    const { account } = await this.bus.request(call, AccountManagerStorageSubjects.metadata.getActive, { clientId });
     return account;
   }
 
-  public async getActiveAtTimestamp(clientId: string, timestamp: number): Promise<string | null> {
-    const { accountId } = await this.bus.request(AccountManagerStorageSubjects.metadata.getActiveAtTimestamp, {
+  public async getActiveAtTimestamp(call: CallContext, clientId: string, timestamp: number): Promise<string | null> {
+    const { accountId } = await this.bus.request(call, AccountManagerStorageSubjects.metadata.getActiveAtTimestamp, {
       clientId,
       timestamp,
     });
@@ -68,22 +81,28 @@ export class BusAccountMetadataStore implements IAccountMetadataStore {
   }
 
   public async getLatestTimelineEntry(
+    call: CallContext,
     clientId: string,
     reason?: AccountTimelineReason,
   ): Promise<AccountTimelineEntry | null> {
-    const { entry } = await this.bus.request(AccountManagerStorageSubjects.metadata.getLatestTimelineEntry, {
+    const { entry } = await this.bus.request(call, AccountManagerStorageSubjects.metadata.getLatestTimelineEntry, {
       clientId,
       reason,
     });
     return entry;
   }
 
-  public async deactivateAll(clientId: string): Promise<void> {
-    await this.bus.request(AccountManagerStorageSubjects.metadata.deactivateAll, { clientId });
+  public async deactivateAll(call: CallContext, clientId: string): Promise<void> {
+    await this.bus.request(call, AccountManagerStorageSubjects.metadata.deactivateAll, { clientId });
   }
 
-  public async setLabel(clientId: string, accountId: string, label: string): Promise<Account | null> {
-    const { account } = await this.bus.request(AccountManagerStorageSubjects.metadata.setLabel, {
+  public async setLabel(
+    call: CallContext,
+    clientId: string,
+    accountId: string,
+    label: string,
+  ): Promise<Account | null> {
+    const { account } = await this.bus.request(call, AccountManagerStorageSubjects.metadata.setLabel, {
       clientId,
       accountId,
       label,
@@ -92,11 +111,12 @@ export class BusAccountMetadataStore implements IAccountMetadataStore {
   }
 
   public async setLinkedClientAccountId(
+    call: CallContext,
     clientId: string,
     accountId: string,
     linkedClientAccountId: string | null,
   ): Promise<Account | null> {
-    const { account } = await this.bus.request(AccountManagerStorageSubjects.metadata.setLinkedClientAccountId, {
+    const { account } = await this.bus.request(call, AccountManagerStorageSubjects.metadata.setLinkedClientAccountId, {
       clientId,
       accountId,
       linkedClientAccountId,
@@ -104,16 +124,16 @@ export class BusAccountMetadataStore implements IAccountMetadataStore {
     return account;
   }
 
-  public async getMetadataGeneration(clientId: string, accountId: string): Promise<number | null> {
-    const result = await this.bus.requestOptional(AccountManagerStorageSubjects.metadata.getMetadataGeneration, {
+  public async getMetadataGeneration(call: CallContext, clientId: string, accountId: string): Promise<number | null> {
+    const result = await this.bus.requestOptional(call, AccountManagerStorageSubjects.metadata.getMetadataGeneration, {
       clientId,
       accountId,
     });
     return result.handled ? result.data.generation : null;
   }
 
-  public async bumpMetadataGeneration(clientId: string, accountId: string): Promise<number | null> {
-    const result = await this.bus.requestOptional(AccountManagerStorageSubjects.metadata.bumpMetadataGeneration, {
+  public async bumpMetadataGeneration(call: CallContext, clientId: string, accountId: string): Promise<number | null> {
+    const result = await this.bus.requestOptional(call, AccountManagerStorageSubjects.metadata.bumpMetadataGeneration, {
       clientId,
       accountId,
     });
@@ -121,12 +141,13 @@ export class BusAccountMetadataStore implements IAccountMetadataStore {
   }
 
   public async patchMetadata(
+    call: CallContext,
     clientId: string,
     accountId: string,
     expectedGeneration: number,
     patches: Record<string, unknown>,
   ): Promise<Account | null> {
-    const { account } = await this.bus.request(AccountManagerStorageSubjects.metadata.patchMetadata, {
+    const { account } = await this.bus.request(call, AccountManagerStorageSubjects.metadata.patchMetadata, {
       clientId,
       accountId,
       expectedGeneration,
@@ -135,12 +156,12 @@ export class BusAccountMetadataStore implements IAccountMetadataStore {
     return account;
   }
 
-  public async appendTimeline(entry: AccountTimelineEntry): Promise<void> {
-    await this.bus.request(AccountManagerStorageSubjects.metadata.appendTimeline, entry);
+  public async appendTimeline(call: CallContext, entry: AccountTimelineEntry): Promise<void> {
+    await this.bus.request(call, AccountManagerStorageSubjects.metadata.appendTimeline, entry);
   }
 
-  public async hasAnyAccounts(): Promise<boolean> {
-    const { hasAnyAccounts } = await this.bus.request(AccountManagerStorageSubjects.metadata.hasAnyAccounts, {});
+  public async hasAnyAccounts(call: CallContext): Promise<boolean> {
+    const { hasAnyAccounts } = await this.bus.request(call, AccountManagerStorageSubjects.metadata.hasAnyAccounts, {});
     return hasAnyAccounts;
   }
 }
@@ -151,8 +172,8 @@ export class BusAccountMetadataStore implements IAccountMetadataStore {
 export class BusAccountUsageSnapshotStore implements IAccountUsageSnapshotStore {
   public constructor(private readonly bus: IMakaioBus) {}
 
-  public async append(clientId: string, accountId: string, entry: UsageEntry): Promise<boolean> {
-    const { persisted } = await this.bus.request(AccountManagerStorageSubjects.snapshots.append, {
+  public async append(call: CallContext, clientId: string, accountId: string, entry: UsageEntry): Promise<boolean> {
+    const { persisted } = await this.bus.request(call, AccountManagerStorageSubjects.snapshots.append, {
       clientId,
       accountId,
       entry,
@@ -161,11 +182,12 @@ export class BusAccountUsageSnapshotStore implements IAccountUsageSnapshotStore 
   }
 
   public async *read(
+    call: CallContext,
     clientId: string,
     accountId: string,
     opts: { from: number; to: number; windowId?: string },
   ): AsyncIterable<UsageEntry> {
-    const { entries } = await this.bus.request(AccountManagerStorageSubjects.snapshots.read, {
+    const { entries } = await this.bus.request(call, AccountManagerStorageSubjects.snapshots.read, {
       clientId,
       accountId,
       ...opts,
@@ -175,8 +197,12 @@ export class BusAccountUsageSnapshotStore implements IAccountUsageSnapshotStore 
     }
   }
 
-  public async hasAnySnapshots(): Promise<boolean> {
-    const { hasAnySnapshots } = await this.bus.request(AccountManagerStorageSubjects.snapshots.hasAnySnapshots, {});
+  public async hasAnySnapshots(call: CallContext): Promise<boolean> {
+    const { hasAnySnapshots } = await this.bus.request(
+      call,
+      AccountManagerStorageSubjects.snapshots.hasAnySnapshots,
+      {},
+    );
     return hasAnySnapshots;
   }
 }

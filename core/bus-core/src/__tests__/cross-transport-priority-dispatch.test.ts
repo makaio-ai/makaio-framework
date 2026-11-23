@@ -14,6 +14,7 @@ import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
 import { MakaioBus, type BusTransport, type BusMessage, type BusTransportRegistry, NoHandlerError } from '../index.js';
 import { createStubTransport } from './helpers/transport-fixtures.js';
+import { busContextOf } from '../kernel-api.js';
 
 // ---------------------------------------------------------------------------
 // Namespace registration
@@ -81,7 +82,7 @@ function createRecordingTransport(
 // Tests
 // ---------------------------------------------------------------------------
 
-const { registerTransport } = MakaioBus.getContext().transportRegistry;
+const { registerTransport } = busContextOf(MakaioBus).transportRegistry;
 
 describe('Cross-transport priority dispatch', () => {
   beforeEach(() => {
@@ -99,7 +100,7 @@ describe('Cross-transport priority dispatch', () => {
   describe('Scenario 1: correct cross-transport execution order', () => {
     it('routes entries in descending priority order across local and remote boundaries', async () => {
       const order: string[] = [];
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
 
       // Local handler at priority 400 — calls next() so the chain continues.
       const cleanup400 = MakaioBus.on(
@@ -145,7 +146,7 @@ describe('Cross-transport priority dispatch', () => {
           { transport: 'remote-ab', priority: 200 },
         ]);
 
-        const result = await MakaioBus.request(CrossDispatchSubjects.compute, { value: 1 });
+        const result = await MakaioBus.request(MakaioBus.own('root'), CrossDispatchSubjects.compute, { value: 1 });
 
         // One hop with the local-400 cursor covers the transport's whole chain, so
         // its 200 entry is not re-sent; NoHandlerError falls through to local-100.
@@ -160,7 +161,7 @@ describe('Cross-transport priority dispatch', () => {
 
     it('stops at the first remote entry that returns a result', async () => {
       const order: string[] = [];
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
 
       const cleanup400 = MakaioBus.on(
         CrossDispatchSubjects.compute,
@@ -197,7 +198,7 @@ describe('Cross-transport priority dispatch', () => {
           { transport: 'remote-handled', priority: 200 },
         ]);
 
-        const result = await MakaioBus.request(CrossDispatchSubjects.compute, { value: 1 });
+        const result = await MakaioBus.request(MakaioBus.own('root'), CrossDispatchSubjects.compute, { value: 1 });
 
         // Transport returns a result at priority 300 → chain stops there.
         // local-100 never runs, remote is called only once.
@@ -217,7 +218,7 @@ describe('Cross-transport priority dispatch', () => {
 
   describe('Scenario 2: local handler wins priority tie over remote', () => {
     it('runs local handler before remote when both are at the same priority', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
 
       // Local handler at priority 100 that sets the result — transport should not be called.
       const cleanup = MakaioBus.on(
@@ -237,7 +238,7 @@ describe('Cross-transport priority dispatch', () => {
       try {
         context.remoteRequestHandlers.set('crossDispatch.compute', [{ transport: 'remote-tied', priority: 100 }]);
 
-        const result = await MakaioBus.request(CrossDispatchSubjects.compute, { value: 1 });
+        const result = await MakaioBus.request(MakaioBus.own('root'), CrossDispatchSubjects.compute, { value: 1 });
 
         // Local handler wins the tie — remote transport should not have been called.
         expect(result.result).toBe(42);
@@ -252,7 +253,7 @@ describe('Cross-transport priority dispatch', () => {
     });
 
     it('calls remote after local when local explicitly calls next() at tied priority', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
 
       // Local handler at priority 100 that delegates to next().
       const cleanup = MakaioBus.on(
@@ -277,7 +278,7 @@ describe('Cross-transport priority dispatch', () => {
           { transport: 'remote-after-local', priority: 100 },
         ]);
 
-        const result = await MakaioBus.request(CrossDispatchSubjects.compute, { value: 1 });
+        const result = await MakaioBus.request(MakaioBus.own('root'), CrossDispatchSubjects.compute, { value: 1 });
 
         // Local called next() → remote at same priority (next in merged list) handles it.
         expect(result.result).toBe(99);
@@ -298,7 +299,7 @@ describe('Cross-transport priority dispatch', () => {
 
   describe('Scenario 3: hot plugin enable/disable', () => {
     it('dispatches through the updated remote entry list after a plugin is enabled', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const order: string[] = [];
 
       const cleanup300 = MakaioBus.on(
@@ -320,7 +321,7 @@ describe('Cross-transport priority dispatch', () => {
       );
 
       // Before enabling the plugin: no remote entries.
-      const firstResult = await MakaioBus.request(CrossDispatchSubjects.compute, { value: 1 });
+      const firstResult = await MakaioBus.request(MakaioBus.own('root'), CrossDispatchSubjects.compute, { value: 1 });
       expect(order).toEqual(['local-300', 'local-100']);
       expect(firstResult.result).toBe(1);
 
@@ -343,7 +344,9 @@ describe('Cross-transport priority dispatch', () => {
       try {
         context.remoteRequestHandlers.set('crossDispatch.compute', [{ transport: 'plugin-transport', priority: 200 }]);
 
-        const secondResult = await MakaioBus.request(CrossDispatchSubjects.compute, { value: 1 });
+        const secondResult = await MakaioBus.request(MakaioBus.own('root'), CrossDispatchSubjects.compute, {
+          value: 1,
+        });
 
         // Remote at 200 is now interleaved between local-300 and local-100.
         expect(order).toEqual(['local-300', 'remote-200', 'local-100']);
@@ -356,7 +359,7 @@ describe('Cross-transport priority dispatch', () => {
     });
 
     it('omits the remote entry after the plugin is disabled', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const order: string[] = [];
 
       const cleanup300 = MakaioBus.on(
@@ -393,7 +396,9 @@ describe('Cross-transport priority dispatch', () => {
       context.remoteRequestHandlers.set('crossDispatch.compute', [{ transport: 'removable-plugin', priority: 200 }]);
 
       // With plugin: remote entry participates in the chain.
-      const withPluginResult = await MakaioBus.request(CrossDispatchSubjects.compute, { value: 1 });
+      const withPluginResult = await MakaioBus.request(MakaioBus.own('root'), CrossDispatchSubjects.compute, {
+        value: 1,
+      });
       expect(order).toEqual(['local-300', 'remote-200', 'local-100']);
       expect(withPluginResult.result).toBe(1);
 
@@ -404,7 +409,9 @@ describe('Cross-transport priority dispatch', () => {
       unregister();
 
       try {
-        const withoutPluginResult = await MakaioBus.request(CrossDispatchSubjects.compute, { value: 1 });
+        const withoutPluginResult = await MakaioBus.request(MakaioBus.own('root'), CrossDispatchSubjects.compute, {
+          value: 1,
+        });
 
         // Remote no longer in the chain.
         expect(order).toEqual(['local-300', 'local-100']);
@@ -422,7 +429,7 @@ describe('Cross-transport priority dispatch', () => {
 
   describe('Scenario 4: ref-counting remote entries', () => {
     it('routes to transport while at least one remote entry for it remains', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
 
       // Register a fallback local handler so requests never throw NoHandlerError.
       const fallback = MakaioBus.on(
@@ -450,7 +457,7 @@ describe('Cross-transport priority dispatch', () => {
         ]);
 
         // Both entries present — transport handles the request at priority 200.
-        const resultBoth = await MakaioBus.request(CrossDispatchSubjects.compute, { value: 1 });
+        const resultBoth = await MakaioBus.request(MakaioBus.own('root'), CrossDispatchSubjects.compute, { value: 1 });
         expect(resultBoth.result).toBe(77);
 
         // Remove the higher-priority entry — transport still has one entry left.
@@ -458,13 +465,15 @@ describe('Cross-transport priority dispatch', () => {
           { transport: 'ref-counted-transport', priority: 100 },
         ]);
 
-        const resultOneLeft = await MakaioBus.request(CrossDispatchSubjects.compute, { value: 1 });
+        const resultOneLeft = await MakaioBus.request(MakaioBus.own('root'), CrossDispatchSubjects.compute, {
+          value: 1,
+        });
         expect(resultOneLeft.result).toBe(77);
 
         // Remove last entry — transport no longer participates.
         context.remoteRequestHandlers.delete('crossDispatch.compute');
 
-        const resultNone = await MakaioBus.request(CrossDispatchSubjects.compute, { value: 1 });
+        const resultNone = await MakaioBus.request(MakaioBus.own('root'), CrossDispatchSubjects.compute, { value: 1 });
         expect(resultNone.result).toBe(0); // Fallback local handler ran.
         expect(remoteTransport.send).toHaveBeenCalledTimes(2); // Only during the two steps above.
       } finally {
@@ -480,7 +489,7 @@ describe('Cross-transport priority dispatch', () => {
 
   describe('Scenario 5: replacePayload propagates across transport boundary', () => {
     it('forwards the replaced payload to the remote transport entry', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
 
       // Local handler at priority 200: replaces payload then delegates.
       const cleanup = MakaioBus.on(
@@ -508,7 +517,9 @@ describe('Cross-transport priority dispatch', () => {
         // Remote handler at priority 100 — lower than local so it runs after.
         context.remoteRequestHandlers.set('crossDispatch.relay', [{ transport: 'relay-transport', priority: 100 }]);
 
-        const result = await MakaioBus.request(CrossDispatchSubjects.relay, { data: 'original' });
+        const result = await MakaioBus.request(MakaioBus.own('root'), CrossDispatchSubjects.relay, {
+          data: 'original',
+        });
 
         // Transport must receive the modified payload, not the original.
         expect(capturedPayload).toEqual({ data: 'modified:original' });

@@ -67,6 +67,7 @@ function createTestAgent(AgentCtor: typeof TestAgent = TestAgent): TestAgent {
     globalBus: mockGlobalBus,
     configFactory: async () => ({
       bus: mockBus,
+      globalBus: mockGlobalBus,
       agentId: 'test-agent',
       adapterId: 'test-adapter',
       adapterName: 'test',

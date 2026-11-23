@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type EmitSubject } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
-import type { ExtractSubjectPayload, SubjectDefinition } from '@makaio/core';
+import type { CallContext, ExtractSubjectPayload, SubjectDefinition } from '@makaio/core';
 import { createBusNamespace } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { MakaioSession, type MakaioSessionConfig } from '../makaio-session.js';
 import { Turn } from '../turn.js';
 import { SessionEventStorageSubjects } from '../../session-events/index.js';
@@ -61,15 +62,16 @@ describe('MakaioSession', () => {
       // Use the protected emit via a test subclass
       class TestableSession extends MakaioSession {
         public async testEmit<S extends SubjectDefinition>(
-          subject: S,
+          call: CallContext,
+          subject: EmitSubject<S>,
           payload: Omit<ExtractSubjectPayload<S>, 'sessionId'>,
         ) {
-          await this.emit(subject, payload);
+          await this.emit(call, subject, payload);
         }
       }
 
       const testSession = new TestableSession({ sessionId: 'sess-123', bus: MakaioBus });
-      await testSession.testEmit(TestSubjects.testEvent, { foo: 'bar' });
+      await testSession.testEmit(createTestCall(), TestSubjects.testEvent, { foo: 'bar' });
 
       expect(received).toHaveLength(1);
       expect(received[0]).toEqual({
@@ -85,7 +87,11 @@ describe('MakaioSession', () => {
     it('creates Turn and adds to turns array', async () => {
       const session = new MakaioSession({ sessionId: 'sess-123', bus: MakaioBus });
 
-      const turn = await session.startTurn({ agentIds: ['agent-1'], messageId: 'msg-1', turnNumber: 1 });
+      const turn = await session.startTurn(createTestCall(), {
+        agentIds: ['agent-1'],
+        messageId: 'msg-1',
+        turnNumber: 1,
+      });
 
       expect(turn).toBeInstanceOf(Turn);
       expect(session.turns).toHaveLength(1);
@@ -100,7 +106,11 @@ describe('MakaioSession', () => {
         received.push(ctx.payload);
       });
 
-      const turn = await session.startTurn({ agentIds: ['agent-1'], messageId: 'msg-1', turnNumber: 1 });
+      const turn = await session.startTurn(createTestCall(), {
+        agentIds: ['agent-1'],
+        messageId: 'msg-1',
+        turnNumber: 1,
+      });
 
       expect(received).toHaveLength(1);
       expect(received[0]).toMatchObject({
@@ -116,7 +126,7 @@ describe('MakaioSession', () => {
     it('uses provided turnId if given', async () => {
       const session = new MakaioSession({ sessionId: 'sess-123', bus: MakaioBus });
 
-      const turn = await session.startTurn({
+      const turn = await session.startTurn(createTestCall(), {
         agentIds: ['agent-1'],
         messageId: 'msg-1',
         turnNumber: 1,
@@ -130,9 +140,9 @@ describe('MakaioSession', () => {
       const session = new MakaioSession({ sessionId: 'sess-123', bus: MakaioBus });
       session.status = 'closed';
 
-      await expect(session.startTurn({ agentIds: ['agent-1'], messageId: 'msg-1', turnNumber: 1 })).rejects.toThrow(
-        'Cannot start turn on non-active session',
-      );
+      await expect(
+        session.startTurn(createTestCall(), { agentIds: ['agent-1'], messageId: 'msg-1', turnNumber: 1 }),
+      ).rejects.toThrow('Cannot start turn on non-active session');
     });
   });
 
@@ -145,17 +155,25 @@ describe('MakaioSession', () => {
 
     it('returns the last incomplete turn', async () => {
       const session = new MakaioSession({ sessionId: 'sess-123', bus: MakaioBus });
-      const turn = await session.startTurn({ agentIds: ['agent-1'], messageId: 'msg-1', turnNumber: 1 });
+      const turn = await session.startTurn(createTestCall(), {
+        agentIds: ['agent-1'],
+        messageId: 'msg-1',
+        turnNumber: 1,
+      });
 
       expect(session.getActiveTurn()).toBe(turn);
     });
 
     it('returns undefined after turn completes', async () => {
       const session = new MakaioSession({ sessionId: 'sess-123', bus: MakaioBus });
-      const turn = await session.startTurn({ agentIds: ['agent-1'], messageId: 'msg-1', turnNumber: 1 });
+      const turn = await session.startTurn(createTestCall(), {
+        agentIds: ['agent-1'],
+        messageId: 'msg-1',
+        turnNumber: 1,
+      });
 
       turn.recordPairTerminal('msg-1', 'agent-1', 'completed');
-      await session.completeTurn(turn);
+      await session.completeTurn(createTestCall(), turn);
 
       expect(session.getActiveTurn()).toBeUndefined();
     });
@@ -164,7 +182,11 @@ describe('MakaioSession', () => {
   describe('completeTurn', () => {
     it('persists turn.completed before emitting the completion event', async () => {
       const session = new MakaioSession({ sessionId: 'sess-123', bus: MakaioBus });
-      const turn = await session.startTurn({ agentIds: ['agent-1'], messageId: 'msg-1', turnNumber: 1 });
+      const turn = await session.startTurn(createTestCall(), {
+        agentIds: ['agent-1'],
+        messageId: 'msg-1',
+        turnNumber: 1,
+      });
       const sequence: string[] = [];
 
       const storageCleanup = MakaioBus.on(SessionEventStorageSubjects.append, (ctx) => {
@@ -188,7 +210,7 @@ describe('MakaioSession', () => {
       });
 
       turn.recordPairTerminal('msg-1', 'agent-1', 'completed');
-      await session.completeTurn(turn);
+      await session.completeTurn(createTestCall(), turn);
 
       expect(sequence).toEqual(['stored', 'emitted']);
 
@@ -198,7 +220,11 @@ describe('MakaioSession', () => {
 
     it('emits turn.completed with success result', async () => {
       const session = new MakaioSession({ sessionId: 'sess-123', bus: MakaioBus });
-      const turn = await session.startTurn({ agentIds: ['agent-1'], messageId: 'msg-1', turnNumber: 1 });
+      const turn = await session.startTurn(createTestCall(), {
+        agentIds: ['agent-1'],
+        messageId: 'msg-1',
+        turnNumber: 1,
+      });
       const received: unknown[] = [];
 
       const cleanup = MakaioBus.on(SessionSubjects.turn.completed, (ctx) => {
@@ -206,7 +232,7 @@ describe('MakaioSession', () => {
       });
 
       turn.recordPairTerminal('msg-1', 'agent-1', 'completed');
-      await session.completeTurn(turn);
+      await session.completeTurn(createTestCall(), turn);
 
       expect(received).toHaveLength(1);
       expect(received[0]).toMatchObject({
@@ -220,7 +246,11 @@ describe('MakaioSession', () => {
 
     it('emits turn.completed with error result', async () => {
       const session = new MakaioSession({ sessionId: 'sess-123', bus: MakaioBus });
-      const turn = await session.startTurn({ agentIds: ['agent-1'], messageId: 'msg-1', turnNumber: 1 });
+      const turn = await session.startTurn(createTestCall(), {
+        agentIds: ['agent-1'],
+        messageId: 'msg-1',
+        turnNumber: 1,
+      });
       const received: unknown[] = [];
 
       const cleanup = MakaioBus.on(SessionSubjects.turn.completed, (ctx) => {
@@ -228,7 +258,7 @@ describe('MakaioSession', () => {
       });
 
       turn.recordPairTerminal('msg-1', 'agent-1', 'error', 'Something went wrong');
-      await session.completeTurn(turn);
+      await session.completeTurn(createTestCall(), turn);
 
       expect(received).toHaveLength(1);
       expect(received[0]).toMatchObject({

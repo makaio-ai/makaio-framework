@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import { defineArtifactKind, defineArtifactLifecycleHooks, type ExtensionToken } from '@makaio/contracts';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { createTestCall, makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { ArtifactLifecycleHookRegistryToken } from '../../framework-packages.js';
 import { ArtifactLifecycleHookRegistry } from '../artifact-lifecycle-hook-registry.js';
@@ -53,7 +53,7 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
     };
 
     await processor.processActivated('planner', pkg, makeContext(bus, registry));
-    await registry.runAfterCreate({
+    await registry.runAfterCreate(createTestCall(), {
       artifact: {
         kind: 'implementation-plan',
         id: 'artifact-1',
@@ -120,7 +120,7 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
     };
 
     await processor.processActivated('planner', pkg, makeContext(bus, registry));
-    await registry.runAfterCreate({
+    await registry.runAfterCreate(createTestCall(), {
       artifact: {
         kind: 'implementation-plan',
         id: 'artifact-1',
@@ -140,7 +140,7 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
     expect(planKindHook).toHaveBeenCalledTimes(1);
     expect(reviewKindHook).not.toHaveBeenCalled();
 
-    await registry.runAfterCreate({
+    await registry.runAfterCreate(createTestCall(), {
       artifact: {
         kind: 'review-findings',
         id: 'artifact-2',
@@ -179,7 +179,7 @@ describe('createArtifactLifecycleHookContributionProcessor', () => {
     await processor.processStopped?.('planner');
     await processor.processStopped?.('planner');
 
-    await registry.runAfterCreate({
+    await registry.runAfterCreate(createTestCall(), {
       artifact: {
         kind: 'implementation-plan',
         id: 'artifact-1',

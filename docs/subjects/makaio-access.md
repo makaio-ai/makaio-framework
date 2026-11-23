@@ -40,7 +40,7 @@ Type: Event
 |-------|------|----------|
 | `at` | `string` | yes |
 | `by` | `string \| undefined` | no |
-| `ctx` | `{ caller: { kind: string; id: string; claims?: Record<string, CallClaim> \| undefined; }; principal: { kind: string; id: string; claims?: Record<string, CallClaim> \| undefined; }; attestedBy?: { kind: string; id: string; claims?: Record<string, CallClaim> \| undefined; } \| undefined; } \| undefined` | no |
+| `ctx` | `{ caller: { kind: string; id: string; claims?: { readonly [key: string]: CallClaim; } \| undefined; }; principal: { kind: string; id: string; claims?: { readonly [key: string]: CallClaim; } \| undefined; }; attestedBy?: { kind: string; id: string; claims?: { readonly [key: string]: CallClaim; } \| undefined; } \| undefined; } \| undefined` | no |
 | `reason` | `string` | yes |
 | `right` | `string \| undefined` | no |
 | `subject` | `string \| undefined` | no |

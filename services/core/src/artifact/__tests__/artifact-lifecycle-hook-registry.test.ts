@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { ArtifactLifecycleHookRegistration, ArtifactRevision } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import {
   ArtifactLifecycleHookRegistry,
   ArtifactLifecycleHookRejectedError,
@@ -65,7 +66,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
       },
     ]);
 
-    const result = await registry.runBeforeCreate({
+    const result = await registry.runBeforeCreate(createTestCall(), {
       draft: baseArtifact,
       kindRegistration: undefined,
     });
@@ -100,7 +101,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
       },
     ]);
 
-    const result = await registry.runBeforeCreate({ draft: source, kindRegistration: undefined });
+    const result = await registry.runBeforeCreate(createTestCall(), { draft: source, kindRegistration: undefined });
 
     expect(observed).toEqual([initialEvidence, replacementEvidence]);
     expect(result.draft.evidence).toEqual(replacementEvidence);
@@ -120,7 +121,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
       },
     ]);
 
-    const result = await registry.runBeforeRevise({
+    const result = await registry.runBeforeRevise(createTestCall(), {
       draft: {
         ...baseArtifact,
         evidence: initialEvidence,
@@ -157,7 +158,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
     ]);
 
     await expect(
-      registry.runBeforeCreate({
+      registry.runBeforeCreate(createTestCall(), {
         draft: baseArtifact,
         kindRegistration: undefined,
       }),
@@ -190,7 +191,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
       },
     ]);
 
-    await registry.runAfterCreate({
+    await registry.runAfterCreate(createTestCall(), {
       artifact: baseArtifact,
       meta: new Map(),
       kindRegistration: undefined,
@@ -220,7 +221,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
       },
     ]);
 
-    await registry.runAfterCreate({
+    await registry.runAfterCreate(createTestCall(), {
       artifact: baseArtifact,
       meta: new Map(),
       kindRegistration: undefined,
@@ -254,7 +255,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
     ]);
 
     try {
-      await registry.runAfterCreate({
+      await registry.runAfterCreate(createTestCall(), {
         artifact: baseArtifact,
         meta: new Map(),
         kindRegistration: undefined,
@@ -278,7 +279,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
     cleanupOld();
     cleanupOld();
 
-    await registry.runAfterCreate({
+    await registry.runAfterCreate(createTestCall(), {
       artifact: baseArtifact,
       meta: new Map(),
       kindRegistration: undefined,
@@ -288,7 +289,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
     expect(newHook).toHaveBeenCalledTimes(1);
 
     cleanupNew();
-    await registry.runAfterCreate({
+    await registry.runAfterCreate(createTestCall(), {
       artifact: baseArtifact,
       meta: new Map(),
       kindRegistration: undefined,
@@ -313,7 +314,7 @@ describe('ArtifactLifecycleHookRegistry', () => {
     ];
     registry.registerHooks('filters', hooks);
 
-    await registry.runAfterCreate({
+    await registry.runAfterCreate(createTestCall(), {
       artifact: baseArtifact,
       meta: new Map(),
       kindRegistration: undefined,

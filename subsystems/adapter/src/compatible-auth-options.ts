@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   assertAdapterAuthBindingMatchesMethod,
   type AuthMethodRef,
@@ -24,12 +25,14 @@ interface AggregatedCompatibleAuthOption {
 /**
  * Build UI-safe authentication choices from loaded adapter bindings plus the
  * referenced provider/client method definitions.
+ * @param call - Call of the handled message requesting authentication choices.
  * @param bus - Bus used to resolve client-owned method definitions.
  * @param adapters - Current loaded-adapter snapshot.
  * @param definitionId - Provider definition whose compatible methods are requested.
  * @returns Deduplicated options with deterministic adapter ordering.
  */
 export async function buildCompatibleAuthOptions(
+  call: CallContext,
   bus: IMakaioBus,
   adapters: readonly LoadedAdapter[],
   definitionId: string,
@@ -40,7 +43,7 @@ export async function buildCompatibleAuthOptions(
   for (const adapter of [...adapters].sort((left, right) => left.name.localeCompare(right.name))) {
     for (const provider of adapter.providers.filter(({ definition }) => definition.id === definitionId)) {
       for (const binding of provider.auth?.bindings ?? []) {
-        const method = await resolveBoundMethod(bus, adapter, provider, binding.method, clients);
+        const method = await resolveBoundMethod(call, bus, adapter, provider, binding.method, clients);
         assertAdapterAuthBindingMatchesMethod(binding, method);
         const key = methodRefKey(definitionId, binding.method);
         const option = toCompatibleAuthOption(definitionId, binding.method, method);
@@ -86,6 +89,7 @@ function compatibleAuthOptionsEqual(left: CompatibleAuthOptionCore, right: Compa
 
 /**
  * Resolve one binding to its authoritative static method definition.
+ * @param call - Call of the handled message requesting authentication choices.
  * @param bus - Bus used for client storage reads.
  * @param adapter - Adapter that declared the binding.
  * @param provider - Provider path that owns the binding.
@@ -94,6 +98,7 @@ function compatibleAuthOptionsEqual(left: CompatibleAuthOptionCore, right: Compa
  * @returns Matching provider/client method definition.
  */
 async function resolveBoundMethod(
+  call: CallContext,
   bus: IMakaioBus,
   adapter: LoadedAdapter,
   provider: LoadedAdapterProvider,
@@ -126,7 +131,7 @@ async function resolveBoundMethod(
 
   let clientPromise = clients.get(methodRef.clientId);
   if (!clientPromise) {
-    clientPromise = loadClient(bus, methodRef.clientId);
+    clientPromise = loadClient(call, bus, methodRef.clientId);
     clients.set(methodRef.clientId, clientPromise);
   }
   const client = await clientPromise;
@@ -142,12 +147,13 @@ async function resolveBoundMethod(
 
 /**
  * Load one client record or fail with a binding diagnostic.
+ * @param call - Call of the handled message requesting authentication choices.
  * @param bus - Bus used for the storage request.
  * @param clientId - Referenced client identifier.
  * @returns Existing client record.
  */
-async function loadClient(bus: IMakaioBus, clientId: string): Promise<ClientRecord> {
-  const { client } = await bus.request(ClientStorageSubjects.get, { id: clientId });
+async function loadClient(call: CallContext, bus: IMakaioBus, clientId: string): Promise<ClientRecord> {
+  const { client } = await bus.request(call, ClientStorageSubjects.get, { id: clientId });
   if (!client) {
     throw new Error(`Authentication binding references missing client definition "${clientId}".`);
   }

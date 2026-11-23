@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { SessionMessageSchema, type SessionMessage } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 
 /**
  * Category of pipeline action.
@@ -35,8 +36,11 @@ export interface SessionEditorAction {
   description: string;
   /** Category for grouping in UI */
   category: ActionCategory;
-  /** Execute the action on messages */
-  execute(messages: SessionMessage[], options?: Record<string, unknown>): Promise<ActionResult>;
+  /**
+   * Execute the action on messages.
+   * The call context is that of the operation the pipeline runs for; actions that send forward it.
+   */
+  execute(call: CallContext, messages: SessionMessage[], options?: Record<string, unknown>): Promise<ActionResult>;
   /** Optional: estimate resulting token count */
   estimateTokens?(messages: SessionMessage[]): Promise<number>;
 }

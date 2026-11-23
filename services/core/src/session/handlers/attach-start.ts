@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { SessionContext, SessionOwnershipReservation, StartAgentResponse } from '@makaio/contracts';
 import { seedAttachContextWithHistory } from '../context/seed-attach-context.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
@@ -71,18 +72,20 @@ export interface StartedAttachAgent {
  * cleanly; every failure from the dispatch onward keeps the row as `dead` and
  * retires the key, because nothing after that point can prove the provider is
  * not holding a live session.
+ * @param call - Call context of the handled attach message, forwarded to the sends this seam owns.
  * @param bus - Bus every step is issued on.
  * @param input - The attach to run, resolved but for its final verdict.
  * @returns The live connector, its context, and the handle its completion needs.
  * @throws An {@link AttachStartError} for every refusal this seam models.
  */
 export async function startReservedAttachAgent(
+  call: CallContext,
   bus: IMakaioBus,
   input: ReservedAttachStart,
 ): Promise<StartedAttachAgent> {
   const { agentId, launch, identity } = input;
   try {
-    await persistAttachAgentRow(bus, {
+    await persistAttachAgentRow(call, bus, {
       agentId,
       instance: input.instance,
       identity,
@@ -99,7 +102,7 @@ export async function startReservedAttachAgent(
     // rule arbitrates as a phantom attach. Which is why the adapter records its
     // own row acquisition at the write's *issue* rather than its return (I20);
     // this path had the rollback and simply did not cover the write.
-    await rollbackReservedStart(bus, agentId, undefined);
+    await rollbackReservedStart(call, bus, agentId, undefined);
     throw new AttachStartError(
       'start-failed',
       `[attach-handler] persisting the agent row for ${agentId} failed`,
@@ -108,11 +111,11 @@ export async function startReservedAttachAgent(
     );
   }
 
-  const reserved = await reserveOrRollBack(bus, input);
+  const reserved = await reserveOrRollBack(call, bus, input);
   const reservation = reserved.reservation;
   const native = reserved.kind === 'reserved' && reservation?.claim != null;
   if (reserved.kind === 'degrade') {
-    void emitLocalityDegradeEvent(bus, {
+    void emitLocalityDegradeEvent(call, bus, {
       sessionId: identity.sessionId,
       intent: 'resume',
       verdict: { kind: 'degrade', reason: reserved.reason },
@@ -128,9 +131,9 @@ export async function startReservedAttachAgent(
   // has no handle yet with which to take them back.
   let sessionContext: SessionContext | undefined;
   try {
-    sessionContext = native ? undefined : await seedFinalContext(bus, input);
+    sessionContext = native ? undefined : await seedFinalContext(call, bus, input);
   } catch (error) {
-    await rollbackReservedStart(bus, agentId, reservation);
+    await rollbackReservedStart(call, bus, agentId, reservation);
     throw new AttachStartError(
       'start-failed',
       `[attach-handler] seeding the conversation for agent ${agentId} failed`,
@@ -138,28 +141,9 @@ export async function startReservedAttachAgent(
       { cause: error },
     );
   }
-  const claimTokens = new StartClaimTokens([reservation?.claim?.claimToken]);
-  // Minted before the settle and releasable from the moment it exists: a
-  // settlement whose transaction commits and whose response is then lost leaves
-  // nothing else that names the successor generation (I15b).
-  const settlementClaimToken = mintClaimToken();
-  claimTokens.add(settlementClaimToken);
-  const dispatched: CallerOwnedStart = {
-    sessionId: identity.sessionId,
-    agentId,
-    adapterId: launch.adapterId,
-    adapterName: identity.adapterName,
-    claimTokens,
-    settlementClaimToken,
-    policy: buildAttachCleanupPolicy(input.leadTransition, reservation),
-    ...(identity.providerConfigId !== undefined && { providerConfigId: identity.providerConfigId }),
-    // Keyless designation can use the authority sentinel, but a live connector
-    // always settles and persists the machine that its dispatch targeted.
-    machineId: input.instance.machineId,
-    ownerInstanceId: reservation.ownerInstanceId,
-  };
+  const dispatched = buildCallerOwnedStart(input, reservation);
 
-  const startResult = await dispatchAttach(bus, input, reservation, dispatched, {
+  const startResult = await dispatchAttach(call, bus, input, reservation, dispatched, {
     ...launch,
     agentId,
     ownerInstanceId: reservation.ownerInstanceId,
@@ -181,6 +165,7 @@ export async function startReservedAttachAgent(
   // settlement, exactly as Path A's does; the initial turn is the next
   // operation, not the last stage of this one.
   await completeCallerOwnedStart(
+    call,
     bus,
     dispatched,
     startResult.adapterSessionId,
@@ -188,6 +173,39 @@ export async function startReservedAttachAgent(
     startResult.ownerInstanceId,
   );
   return { startResult, sessionContext, dispatched };
+}
+
+/**
+ * Compose the handle a dispatched attach is completed and unwound through.
+ *
+ * Mints the settlement claim token and registers it with the start's claim
+ * tokens before anything is sent, so every later failure can release it.
+ * @param input - The attach being started.
+ * @param reservation - The reservation the start holds.
+ * @returns The caller-owned start handle.
+ */
+function buildCallerOwnedStart(input: ReservedAttachStart, reservation: SessionOwnershipReservation): CallerOwnedStart {
+  const { agentId, launch, identity } = input;
+  const claimTokens = new StartClaimTokens([reservation?.claim?.claimToken]);
+  // Minted before the settle and releasable from the moment it exists: a
+  // settlement whose transaction commits and whose response is then lost leaves
+  // nothing else that names the successor generation (I15b).
+  const settlementClaimToken = mintClaimToken();
+  claimTokens.add(settlementClaimToken);
+  return {
+    sessionId: identity.sessionId,
+    agentId,
+    adapterId: launch.adapterId,
+    adapterName: identity.adapterName,
+    claimTokens,
+    settlementClaimToken,
+    policy: buildAttachCleanupPolicy(input.leadTransition, reservation),
+    ...(identity.providerConfigId !== undefined && { providerConfigId: identity.providerConfigId }),
+    // Keyless designation can use the authority sentinel, but a live connector
+    // always settles and persists the machine that its dispatch targeted.
+    machineId: input.instance.machineId,
+    ownerInstanceId: reservation.ownerInstanceId,
+  };
 }
 
 /**
@@ -224,14 +242,19 @@ function buildAttachCleanupPolicy(
  * `idle` or `active`. Left there, the row advertises an agent this runtime can
  * drive and no longer can — the phantom the whole reserved-start discipline
  * exists to remove.
+ * @param call - Call context of the handled attach message.
  * @param bus - Bus the cleanup is issued on.
  * @param started - The dispatched attach being retired.
  */
-export async function retireStartedAttach(bus: IMakaioBus, started: StartedAttachAgent): Promise<void> {
+export async function retireStartedAttach(
+  call: CallContext,
+  bus: IMakaioBus,
+  started: StartedAttachAgent,
+): Promise<void> {
   const { dispatched } = started;
-  await abandonDispatchedStart(bus, dispatched.agentId, dispatched.policy, dispatched.claimTokens);
+  await abandonDispatchedStart(call, bus, dispatched.agentId, dispatched.policy, dispatched.claimTokens);
   try {
-    await bus.requestOptional(AgentStorageSubjects.updateStatus, {
+    await bus.requestOptional(call, AgentStorageSubjects.updateStatus, {
       agentId: dispatched.agentId,
       status: 'dead',
       expectedStatus: ['idle', 'active'],
@@ -239,7 +262,7 @@ export async function retireStartedAttach(bus: IMakaioBus, started: StartedAttac
   } catch (error) {
     console.debug(`[attach-handler] marking started agent ${dispatched.agentId} dead failed:`, error);
   }
-  await stopStartedConnector(bus, dispatched.adapterId, dispatched.agentId, dispatched.ownerInstanceId, true);
+  await stopStartedConnector(call, bus, dispatched.adapterId, dispatched.agentId, dispatched.ownerInstanceId, true);
 }
 
 /**
@@ -252,19 +275,21 @@ export async function retireStartedAttach(bus: IMakaioBus, started: StartedAttac
  * making the adoption safe would need an atomic "reserve as member iff this
  * other agent is still the lead" predicate — a storage change this wave does not
  * make. The caller retries from a fresh session read if it wants a member.
+ * @param call - Call context of the handled attach message.
  * @param bus - Bus the reservation is issued on.
  * @param input - The attach being reserved for.
  * @returns The verdict this attach dispatches under.
  * @throws An {@link AttachStartError} carrying `not-dispatched` for every refusal.
  */
 async function reserveOrRollBack(
+  call: CallContext,
   bus: IMakaioBus,
   input: ReservedAttachStart,
 ): Promise<Extract<AttachReservationResult, { kind: 'reserved' | 'degrade' }>> {
   const { agentId, identity } = input;
   let reserved: AttachReservationResult;
   try {
-    reserved = await reserveAttachStart(bus, {
+    reserved = await reserveAttachStart(call, bus, {
       sessionId: identity.sessionId,
       agentId,
       instance: input.instance,
@@ -275,6 +300,7 @@ async function reserveOrRollBack(
     });
   } catch (error) {
     await rollbackReservedStart(
+      call,
       bus,
       agentId,
       undefined,
@@ -299,7 +325,7 @@ async function reserveOrRollBack(
   // Nothing was designated and nothing was claimed — a refused reservation rolls
   // its whole transaction back — so the row this attempt wrote is all there is
   // to take back.
-  const rollback = await rollbackReservedStart(bus, agentId, undefined);
+  const rollback = await rollbackReservedStart(call, bus, agentId, undefined);
   if (reserved.kind === 'conflict') {
     if (!rollback.rowDeleted) {
       throw new AttachStartError(
@@ -336,15 +362,20 @@ async function reserveOrRollBack(
  * Branches on the **final** verdict: a reservation-driven degrade has no
  * structural context to seed, so one is composed from the verdict the
  * reservation produced.
+ * @param call - Call context of the handled attach message.
  * @param bus - Bus the conversation is read on.
  * @param input - The attach being started.
  * @returns The seeded session context.
  */
-async function seedFinalContext(bus: IMakaioBus, input: ReservedAttachStart): Promise<SessionContext> {
+async function seedFinalContext(
+  call: CallContext,
+  bus: IMakaioBus,
+  input: ReservedAttachStart,
+): Promise<SessionContext> {
   const context: SessionContext = input.locality.attachSessionContext ?? {
     nativeLocality: { kind: 'degrade', reason: 'agent-already-started' },
   };
-  return seedAttachContextWithHistory(bus, input.identity.sessionId, context);
+  return seedAttachContextWithHistory(call, bus, input.identity.sessionId, context);
 }
 
 /**
@@ -354,6 +385,7 @@ async function seedFinalContext(bus: IMakaioBus, input: ReservedAttachStart): Pr
  * {@link AttachStartError} instead of a bare `Error`: a modeled
  * `not-dispatched` refusal is provably pre-dispatch and gives the key back
  * cleanly, while a throw carries no disposition at all and must retire it.
+ * @param call - Call context of the handled attach message.
  * @param bus - Bus the dispatch is issued on.
  * @param input - The attach being started.
  * @param reservation - Reservation used by the pre-dispatch rollback, irrespective of later cleanup policy.
@@ -362,28 +394,29 @@ async function seedFinalContext(bus: IMakaioBus, input: ReservedAttachStart): Pr
  * @returns The successful start, re-stamped with the identity attach minted.
  */
 async function dispatchAttach(
+  call: CallContext,
   bus: IMakaioBus,
   input: ReservedAttachStart,
   reservation: SessionOwnershipReservation,
   dispatched: CallerOwnedStart,
-  target: Parameters<typeof launchAttachAgent>[1],
+  target: Parameters<typeof launchAttachAgent>[2],
 ): Promise<Extract<StartAgentResponse, { success: true }> & { readonly ownerInstanceId: string }> {
   const { agentId } = input;
   let startResult: Extract<StartAgentResponse, { success: true }>;
   try {
-    startResult = await launchAttachAgent(bus, target);
+    startResult = await launchAttachAgent(call, bus, target);
   } catch (error) {
     const notDispatched = error instanceof AttachStartError && error.dispatch === 'not-dispatched';
-    if (notDispatched) await rollbackReservedStart(bus, agentId, reservation);
+    if (notDispatched) await rollbackReservedStart(call, bus, agentId, reservation);
     else {
-      await abandonDispatchedStart(bus, agentId, dispatched.policy, dispatched.claimTokens);
-      await stopStartedConnector(bus, target.adapterId, agentId, target.ownerInstanceId, true);
+      await abandonDispatchedStart(call, bus, agentId, dispatched.policy, dispatched.claimTokens);
+      await stopStartedConnector(call, bus, target.adapterId, agentId, target.ownerInstanceId, true);
     }
     throw error;
   }
   if (startResult.ownerInstanceId === undefined) {
-    await abandonDispatchedStart(bus, agentId, dispatched.policy, dispatched.claimTokens);
-    await stopStartedConnector(bus, target.adapterId, agentId, target.ownerInstanceId, true);
+    await abandonDispatchedStart(call, bus, agentId, dispatched.policy, dispatched.claimTokens);
+    await stopStartedConnector(call, bus, target.adapterId, agentId, target.ownerInstanceId, true);
     throw new AttachStartError(
       'start-failed',
       `[attach-handler] adapter omitted its owner instance for agent ${agentId}`,
@@ -391,8 +424,8 @@ async function dispatchAttach(
     );
   }
   if (startResult.ownerInstanceId !== target.ownerInstanceId) {
-    await abandonDispatchedStart(bus, agentId, dispatched.policy, dispatched.claimTokens);
-    await stopStartedConnector(bus, target.adapterId, agentId, target.ownerInstanceId, true);
+    await abandonDispatchedStart(call, bus, agentId, dispatched.policy, dispatched.claimTokens);
+    await stopStartedConnector(call, bus, target.adapterId, agentId, target.ownerInstanceId, true);
     throw new AttachStartError(
       'start-failed',
       `[attach-handler] adapter owner mismatch for agent ${agentId}: expected ${target.ownerInstanceId}, received ${startResult.ownerInstanceId}`,
@@ -404,8 +437,8 @@ async function dispatchAttach(
     startResult.adapterId !== target.adapterId ||
     startResult.sessionId !== target.sessionId
   ) {
-    await abandonDispatchedStart(bus, agentId, dispatched.policy, dispatched.claimTokens);
-    await stopStartedConnector(bus, target.adapterId, agentId, target.ownerInstanceId, true);
+    await abandonDispatchedStart(call, bus, agentId, dispatched.policy, dispatched.claimTokens);
+    await stopStartedConnector(call, bus, target.adapterId, agentId, target.ownerInstanceId, true);
     throw new AttachStartError(
       'start-failed',
       `[attach-handler] adapter response identity mismatch for agent ${agentId}`,

@@ -1,3 +1,5 @@
+import { isInProcessCaller, type CallContext } from '@makaio/core';
+
 /** Identifies one provider object participating in a materialization operation. */
 export interface MaterializationProviderObject {
   readonly provider: string;
@@ -14,11 +16,6 @@ export interface MaterializationOperationScope {
 export interface MaterializationOperationLease {
   readonly id: string;
   readonly scope: MaterializationOperationScope;
-}
-
-/** Trusted origin metadata supplied by a bus request handler context. */
-export interface MaterializationOperationRequestOrigin {
-  readonly local: boolean;
 }
 
 interface ActiveLease {
@@ -146,14 +143,14 @@ export class MaterializationOperationCoordinator {
    * @param scope - Resources required by the operation.
    * @param operation - Work to run with an active lease.
    * @param messageId - Bus message ID that may carry one-shot authorization.
-   * @param origin - Trusted origin from the bus handler context.
+   * @param call - Call context of the bus handler message; only an in-process caller may consume the authorization.
    * @returns Operation result.
    */
   public async runExclusive<T>(
     scope: MaterializationOperationScope,
     operation: (lease: MaterializationOperationLease) => Promise<T> | T,
     messageId?: string,
-    origin?: MaterializationOperationRequestOrigin,
+    call?: CallContext,
   ): Promise<T> {
     const normalizedScope = normalizeScope(scope);
     if (messageId) {
@@ -165,7 +162,12 @@ export class MaterializationOperationCoordinator {
         this.authorizedRequests.delete(messageId);
         this.consumedAuthorizedRequestIds.add(messageId);
         const active = this.activeLeases.get(authorization.leaseId);
-        if (!origin?.local || !active || authorization.scopeKey !== scopeKey(normalizedScope)) {
+        if (
+          call === undefined ||
+          !isInProcessCaller(call) ||
+          !active ||
+          authorization.scopeKey !== scopeKey(normalizedScope)
+        ) {
           throw new Error('Materialization operation authorization does not match this scope');
         }
         return operation(active.lease);

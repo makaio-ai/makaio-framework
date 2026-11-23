@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   AdapterSubjects,
   SessionOwnershipStorageSubjects,
@@ -41,6 +42,7 @@ interface AgentRuntimeOwner {
  * A retired runtime needs no request: retirement is stamped only after its
  * adapter teardown was observed. A live runtime is addressed by owner-instance
  * identity; an unhandled, throwing or weak stop response remains unproven.
+ * @param call - Handled message the teardown proof is performed for.
  * @param bus - Bus carrying runtime-instance reads and targeted adapter stops.
  * @param agentId - Agent whose connector must be absent.
  * @param target - Exact runtime process and adapter instance named by the claim.
@@ -48,13 +50,14 @@ interface AgentRuntimeOwner {
  * @returns Whether teardown is durably or directly observed.
  */
 async function ownerTeardownWasObserved(
+  call: CallContext,
   bus: IMakaioBus,
   agentId: string,
   target: ClaimOwnerTarget,
   connectorOnly: boolean,
 ): Promise<boolean> {
   try {
-    const runtime = await bus.requestOptional(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+    const runtime = await bus.requestOptional(call, SessionOwnershipStorageSubjects.getRuntimeInstance, {
       instanceId: target.ownerInstanceId,
       machineId: target.machineId,
     });
@@ -68,7 +71,7 @@ async function ownerTeardownWasObserved(
   // recovery does create one before publishing its owner, but absence of durable
   // proof still falls through to the independent adapter proof.
   try {
-    const stopped = await bus.requestOptional(AdapterSubjects.stopAgent, {
+    const stopped = await bus.requestOptional(call, AdapterSubjects.stopAgent, {
       adapterId: target.adapterId,
       agentId,
       ownerInstanceId: target.ownerInstanceId,
@@ -127,30 +130,34 @@ function claimOwnerTargets(
  * record is not: ordinary keyless starts deliberately create none, so the exact
  * runtime owner recorded on the agent is still addressed directly. None is converted
  * into permission by `success`, elapsed time or agent status.
+ * @param call - Handled message the retirement is performed for.
  * @param bus - Bus carrying ownership storage and adapter teardown requests.
  * @param agentId - Terminal agent whose claims are being retired.
  * @param options - Whether terminal status was proven and claims may be released.
  * @returns Whether all claims were released, plus the assessed claim count.
  */
 export async function retireTerminalAgentClaims(
+  call: CallContext,
   bus: IMakaioBus,
   agentId: string,
   options: RetireTerminalAgentClaimsOptions = { releaseClaims: true },
 ): Promise<RetireAgentClaimsResult> {
-  const read = await bus.requestOptional(SessionOwnershipStorageSubjects.read, { agentId }).catch(() => undefined);
+  const read = await bus
+    .requestOptional(call, SessionOwnershipStorageSubjects.read, { agentId })
+    .catch(() => undefined);
   if (read === undefined) return { released: false, claimCount: 0 };
   const ownership = read.handled ? read.data.ownership : null;
   if (ownership === null) return { released: false, claimCount: 0 };
 
   const claims = ownership.claims;
-  const agentRead = await bus.requestOptional(AgentStorageSubjects.get, { agentId }).catch(() => undefined);
+  const agentRead = await bus.requestOptional(call, AgentStorageSubjects.get, { agentId }).catch(() => undefined);
   const agent = agentRead?.handled ? agentRead.data.agent : null;
 
   const targets = claimOwnerTargets(claims, agent?.runtimeOwner, agent?.adapterId);
   const observed =
     targets !== null &&
     (await Promise.all(
-      targets.map((target) => ownerTeardownWasObserved(bus, agentId, target, !options.releaseClaims)),
+      targets.map((target) => ownerTeardownWasObserved(call, bus, agentId, target, !options.releaseClaims)),
     ));
   const allObserved = observed !== false && observed.every(Boolean);
 
@@ -158,7 +165,7 @@ export async function retireTerminalAgentClaims(
   if (claims.length === 0) return { released: allObserved, claimCount: 0 };
 
   try {
-    const retired = await bus.request(SessionSubjects.ownership.release, {
+    const retired = await bus.request(call, SessionSubjects.ownership.release, {
       agentId,
       disposition: allObserved ? 'released' : 'abandoned',
     });
@@ -171,7 +178,7 @@ export async function retireTerminalAgentClaims(
     // The release may have committed before its response was lost. A second,
     // conservative fan-out either marks what remains or finds nothing.
     try {
-      await bus.request(SessionSubjects.ownership.release, { agentId, disposition: 'abandoned' });
+      await bus.request(call, SessionSubjects.ownership.release, { agentId, disposition: 'abandoned' });
     } catch {
       // The caller retains its terminal row/session and can retry later.
     }

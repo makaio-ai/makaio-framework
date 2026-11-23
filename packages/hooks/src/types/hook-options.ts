@@ -1,3 +1,4 @@
+import type { IMakaioBus } from '@makaio/bus-core';
 import type { SubjectDefinition } from '@makaio/core';
 import type { StartMode, StepType } from '@makaio/contracts';
 
@@ -19,6 +20,11 @@ export interface BusMessageHookOptions<S extends SubjectDefinition = SubjectDefi
 
 // Placeholder options for named hooks (Phase 3 will add enrichment options)
 export interface PreUserMessageHookOptions extends BaseHookOptions {
+  /**
+   * Bus of the registering extension. Becomes `ctx.bus` of the hook, so every
+   * send the hook makes is attributed to that extension.
+   */
+  bus: IMakaioBus;
   /** Hook name for error attribution (default: 'anonymous') */
   name?: string;
   /** Number of recent turns to include (default: 5) */
@@ -27,6 +33,11 @@ export interface PreUserMessageHookOptions extends BaseHookOptions {
 
 // PostUserMessage hook options with name field
 export interface PostUserMessageHookOptions extends BaseHookOptions {
+  /**
+   * Bus of the registering extension. Becomes `ctx.bus` of the hook, so every
+   * send the hook makes is attributed to that extension.
+   */
+  bus: IMakaioBus;
   /** Hook name for error attribution (default: 'anonymous') */
   name?: string;
 }

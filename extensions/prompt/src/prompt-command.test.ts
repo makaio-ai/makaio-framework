@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import type { CommandContext } from '@makaio/kernel/cli';
 import { SessionStorageSubjects, SessionSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { handlePrompt, type PromptArgs, PromptArgsSchema } from './prompt-command.js';
 
 function stubPipedStdin(): () => void {
@@ -25,6 +26,7 @@ describe('handlePrompt', () => {
       error: vi.fn<(text: string) => void>(),
     };
     const ctx: CommandContext<PromptArgs> = {
+      call: createTestCall(),
       args: PromptArgsSchema.parse({}),
       bus: {} as IMakaioBus,
       output,
@@ -63,6 +65,7 @@ describe('handlePrompt', () => {
       error: vi.fn<(text: string) => void>(),
     };
     const ctx: CommandContext<PromptArgs> = {
+      call: createTestCall(),
       args: PromptArgsSchema.parse({ prompt: 'hello' }),
       bus,
       output,
@@ -117,6 +120,7 @@ describe('handlePrompt', () => {
       error: vi.fn<(text: string) => void>(),
     };
     const ctx: CommandContext<PromptArgs> = {
+      call: createTestCall(),
       args: PromptArgsSchema.parse({ prompt: 'hello', dangerouslySkipPermissions: true }),
       bus,
       output,

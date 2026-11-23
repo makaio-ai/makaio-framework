@@ -1,6 +1,7 @@
 import os from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { MessageHandle, type MessageResult } from '@makaio/ai-adapters-core';
 import { clientDefinition as claudeClientDefinition } from '@makaio/client-claude-code';
 import {
@@ -105,9 +106,10 @@ let connectors: ClaudeSdkConnector[] = [];
  * @returns Initialized connector instance.
  */
 async function makeConnector(sessionId = 'session-1'): Promise<ClaudeSdkConnector> {
-  const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+  const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
   const connector = new ClaudeSdkConnector({
     bus,
+    globalBus: MakaioBus,
     adapterId: 'adapter-test',
     adapterName: ClaudeCodeAdapterName,
     agentId: 'agent-test',
@@ -118,7 +120,7 @@ async function makeConnector(sessionId = 'session-1'): Promise<ClaudeSdkConnecto
     clientId: claudeClientDefinition.id,
     requestSessionAccountObservation: createSessionAccountObservationRequester(MakaioBus),
   });
-  await connector.initialize();
+  await connector.initialize({ call: createTestCall() });
   connectors.push(connector);
   return connector;
 }
@@ -130,6 +132,7 @@ async function makeConnector(sessionId = 'session-1'): Promise<ClaudeSdkConnecto
  */
 function createMessageHandle(messageId = 'message-1'): MessageHandle {
   return new MessageHandle(
+    createTestCall(),
     messageId,
     {
       role: 'user',
@@ -172,7 +175,7 @@ describe('ClaudeSdkConnector account observation emission', () => {
   });
 
   afterEach(async () => {
-    await Promise.all(connectors.map(async (connector) => connector.close()));
+    await Promise.all(connectors.map(async (connector) => connector.close(createTestCall())));
     connectors = [];
     for (const fn of cleanup) {
       fn();
@@ -317,6 +320,7 @@ describe('ClaudeSdkConnector account observation emission', () => {
 
     await vi.waitFor(() => {
       expect(requestOptionalSpy).toHaveBeenCalledWith(
+        handle.call,
         ClientSubjects.session.account.observe,
         expect.objectContaining({
           clientId: claudeClientDefinition.id,

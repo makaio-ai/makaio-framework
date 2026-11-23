@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { CredentialSubjects } from '@makaio/contracts';
 import { ProviderConfigAuthSchema } from '@makaio/contracts/auth';
 import { resolveModelVisibility, type ModelFilterMode } from '@makaio/contracts/provider';
@@ -90,14 +91,18 @@ export class AdapterProviderConfigService {
 
   /**
    * Create a provider config and persist it through the repository.
+   * @param call - Call context of the operation; every bus send passes it on.
    * @param input - Creation payload from the bus request.
    * @returns Newly created provider config read model.
    */
-  public async createProviderConfig(input: ProviderConfigCreateInput): Promise<{ config: ProviderConfigFileRecord }> {
-    const provider = await this.getProviderDefinitionOrThrow(input.definitionId);
+  public async createProviderConfig(
+    call: CallContext,
+    input: ProviderConfigCreateInput,
+  ): Promise<{ config: ProviderConfigFileRecord }> {
+    const provider = await this.getProviderDefinitionOrThrow(call, input.definitionId);
     const auth = ProviderConfigAuthSchema.parse(input.auth);
     const enabled = input.enabled ?? true;
-    const validatedAuth = await validateProviderConfigAuth(this.bus, input.definitionId, auth, provider);
+    const validatedAuth = await validateProviderConfigAuth(call, this.bus, input.definitionId, auth, provider);
     if (enabled) {
       assertProviderConfigAuthDefinitionsEnabled(validatedAuth);
     }
@@ -131,42 +136,46 @@ export class AdapterProviderConfigService {
       },
       () => this.configStore.requireProviderConfig(id, 'creation'),
     );
-    await this.bus.emit(AdapterSubsystemSubjects.providerConfig.created, config);
+    await this.bus.emit(call, AdapterSubsystemSubjects.providerConfig.created, config);
     return { config };
   }
 
   /**
    * Update a provider config.
+   * @param call - Call context of the operation; every bus send passes it on.
    * @param id - Provider config ID.
    * @param patch - Partial mutation payload.
    * @returns Updated provider config read model.
    */
   public async updateProviderConfig(
+    call: CallContext,
     id: string,
     patch: ProviderConfigPatch,
   ): Promise<{ config: ProviderConfigFileRecord }> {
     let defaultChanged: ProviderConfigDefaultChange | undefined;
     const config = await this.configStore.commitSnapshotMutation(
       async (nextSnapshot) => {
-        defaultChanged = await this.applyProviderConfigPatch(nextSnapshot, id, patch);
+        defaultChanged = await this.applyProviderConfigPatch(call, nextSnapshot, id, patch);
       },
       () => this.configStore.requireProviderConfig(id, 'update'),
     );
-    await this.bus.emit(AdapterSubsystemSubjects.providerConfig.updated, config);
+    await this.bus.emit(call, AdapterSubsystemSubjects.providerConfig.updated, config);
     if (defaultChanged) {
-      await this.bus.emit(AdapterSubsystemSubjects.providerConfig.defaultChanged, defaultChanged);
+      await this.bus.emit(call, AdapterSubsystemSubjects.providerConfig.defaultChanged, defaultChanged);
     }
     return { config };
   }
 
   /**
    * Apply one normalized provider-config patch to a captured snapshot.
+   * @param call - Call context of the operation; every bus send passes it on.
    * @param snapshot - Mutable snapshot owned by the serialized mutation.
    * @param id - Provider config being updated.
    * @param patch - Validated patch payload.
    * @returns Default-change event payload when default ownership changed.
    */
   private async applyProviderConfigPatch(
+    call: CallContext,
     snapshot: SnapshotState,
     id: string,
     patch: ProviderConfigPatch,
@@ -177,7 +186,7 @@ export class AdapterProviderConfigService {
     if (patch.name !== undefined) this.configStore.assertProviderConfigNameUnique(nextName, id);
     const nextEnabled = patch.enabled ?? existing.enabled ?? true;
     if (nextEnabled && !(existing.enabled ?? true)) {
-      const validatedAuth = await validateProviderConfigAuth(this.bus, existing.definitionId, existing.auth);
+      const validatedAuth = await validateProviderConfigAuth(call, this.bus, existing.definitionId, existing.auth);
       assertProviderConfigAuthDefinitionsEnabled(validatedAuth);
     }
     const nextIsDefault = resolveUpdatedDefault(snapshot.providerConfigs, id, existing, nextEnabled);
@@ -210,11 +219,13 @@ export class AdapterProviderConfigService {
 
   /**
    * Replace the complete normalized auth selection for one provider config.
+   * @param call - Call context of the operation; every bus send passes it on.
    * @param id - Provider config ID.
    * @param authInput - Full replacement authentication selection.
    * @returns Updated provider config read model.
    */
   public async setProviderConfigAuth(
+    call: CallContext,
     id: string,
     authInput: ProviderConfigAuthInput,
   ): Promise<{ config: ProviderConfigFileRecord }> {
@@ -225,7 +236,7 @@ export class AdapterProviderConfigService {
         if (!existing) {
           throw new Error(`Provider config not found: ${id}`);
         }
-        const validatedAuth = await validateProviderConfigAuth(this.bus, existing.definitionId, auth);
+        const validatedAuth = await validateProviderConfigAuth(call, this.bus, existing.definitionId, auth);
         if (existing.enabled ?? true) {
           assertProviderConfigAuthDefinitionsEnabled(validatedAuth);
         }
@@ -234,16 +245,17 @@ export class AdapterProviderConfigService {
       () => this.configStore.requireProviderConfig(id, 'auth update'),
     );
 
-    await this.bus.emit(AdapterSubsystemSubjects.providerConfig.updated, config);
+    await this.bus.emit(call, AdapterSubsystemSubjects.providerConfig.updated, config);
     return { config };
   }
 
   /**
    * Delete or soft-delete a provider config.
+   * @param call - Call context of the operation; every bus send passes it on.
    * @param id - Provider config ID.
    * @returns Deletion result payload.
    */
-  public async deleteProviderConfig(id: string): Promise<{ deleted: boolean }> {
+  public async deleteProviderConfig(call: CallContext, id: string): Promise<{ deleted: boolean }> {
     let deleted = false;
     let updatedConfigId: string | undefined;
     let definitionId = '';
@@ -295,25 +307,25 @@ export class AdapterProviderConfigService {
       if (!updatedConfigId) {
         return { deleted: false };
       }
-      await this.bus.emit(AdapterSubsystemSubjects.providerConfig.updated, managedConfig!);
+      await this.bus.emit(call, AdapterSubsystemSubjects.providerConfig.updated, managedConfig!);
       if (wasDefault) {
-        await this.bus.emit(AdapterSubsystemSubjects.providerConfig.defaultChanged, {
+        await this.bus.emit(call, AdapterSubsystemSubjects.providerConfig.defaultChanged, {
           definitionId,
           configId: promoted,
         });
       }
       return { deleted: false };
     }
-    await this.cleanupDeletedProviderCredentials(id);
+    await this.cleanupDeletedProviderCredentials(call, id);
     for (const binding of affectedBindings.deletedBindings) {
-      await this.bus.emit(AdapterSubsystemSubjects.binding.deleted, binding);
+      await this.bus.emit(call, AdapterSubsystemSubjects.binding.deleted, binding);
     }
     for (const binding of affectedBindings.defaultChangedBindings) {
-      await this.bus.emit(AdapterSubsystemSubjects.binding.defaultChanged, binding);
+      await this.bus.emit(call, AdapterSubsystemSubjects.binding.defaultChanged, binding);
     }
-    await this.bus.emit(AdapterSubsystemSubjects.providerConfig.deleted, { id });
+    await this.bus.emit(call, AdapterSubsystemSubjects.providerConfig.deleted, { id });
     if (wasDefault) {
-      await this.bus.emit(AdapterSubsystemSubjects.providerConfig.defaultChanged, {
+      await this.bus.emit(call, AdapterSubsystemSubjects.providerConfig.defaultChanged, {
         definitionId,
         configId: promoted,
       });
@@ -323,10 +335,11 @@ export class AdapterProviderConfigService {
 
   /**
    * Set the default provider config for its definition.
+   * @param call - Call context of the operation; every bus send passes it on.
    * @param id - Provider config ID to promote.
    * @returns Updated config read model.
    */
-  public async setDefaultProviderConfig(id: string): Promise<{ config: ProviderConfigFileRecord }> {
+  public async setDefaultProviderConfig(call: CallContext, id: string): Promise<{ config: ProviderConfigFileRecord }> {
     let definitionId = '';
     const config = await this.configStore.commitSnapshotMutation(
       (nextSnapshot) => {
@@ -347,8 +360,8 @@ export class AdapterProviderConfigService {
       () => this.configStore.requireProviderConfig(id, 'setDefault'),
     );
 
-    await this.bus.emit(AdapterSubsystemSubjects.providerConfig.updated, config);
-    await this.bus.emit(AdapterSubsystemSubjects.providerConfig.defaultChanged, {
+    await this.bus.emit(call, AdapterSubsystemSubjects.providerConfig.updated, config);
+    await this.bus.emit(call, AdapterSubsystemSubjects.providerConfig.defaultChanged, {
       definitionId,
       configId: id,
     });
@@ -357,12 +370,14 @@ export class AdapterProviderConfigService {
 
   /**
    * Update the model filter mode for a provider config.
+   * @param call - Call context of the operation; every bus send passes it on.
    * @param id - Provider config ID.
    * @param modelFilterMode - Requested filter mode.
    * @param preferredModel - Optional keeper model name.
    * @returns Updated config read model.
    */
   public async setModelFilterMode(
+    call: CallContext,
     id: string,
     modelFilterMode: ModelFilterMode,
     preferredModel?: string,
@@ -375,7 +390,7 @@ export class AdapterProviderConfigService {
         }
         let nextModelVisibility = existing.modelVisibility;
         if (modelFilterMode === 'allowlist') {
-          const keeper = await this.selectAllowlistKeeper(existing.definitionId, existing, preferredModel);
+          const keeper = await this.selectAllowlistKeeper(call, existing.definitionId, existing, preferredModel);
           if (keeper) {
             nextModelVisibility = { ...(existing.modelVisibility ?? {}), [keeper]: 'visible' };
           }
@@ -385,7 +400,7 @@ export class AdapterProviderConfigService {
       () => this.configStore.requireProviderConfig(id, 'setModelFilterMode'),
     );
 
-    await this.bus.emit(AdapterSubsystemSubjects.providerConfig.updated, config);
+    await this.bus.emit(call, AdapterSubsystemSubjects.providerConfig.updated, config);
     return { config };
   }
 
@@ -394,11 +409,12 @@ export class AdapterProviderConfigService {
    *
    * Failures are swallowed with a warning so that a missing credential
    * handler never blocks provider config deletion.
+   * @param call - Call context of the operation; every bus send passes it on.
    * @param providerConfigId - Provider config ID whose credentials should be removed.
    */
-  public async cleanupDeletedProviderCredentials(providerConfigId: string): Promise<void> {
+  public async cleanupDeletedProviderCredentials(call: CallContext, providerConfigId: string): Promise<void> {
     try {
-      await this.bus.requestOptional(CredentialSubjects.delete, { configId: providerConfigId });
+      await this.bus.requestOptional(call, CredentialSubjects.delete, { configId: providerConfigId });
     } catch (error) {
       console.warn(
         `[AdapterProviderConfigService] Failed to delete credentials for removed provider config "${providerConfigId}":`,
@@ -409,12 +425,13 @@ export class AdapterProviderConfigService {
 
   /**
    * Resolve the canonical provider config name from the definition and caller input.
+   * @param call - Call context of the operation; every bus send passes it on.
    * @param definitionId - Provider definition ID.
    * @param name - Caller-supplied display name.
    * @returns Trimmed name or a derived fallback from the provider definition.
    */
-  public async resolveProviderConfigName(definitionId: string, name?: string): Promise<string> {
-    const provider = await this.getProviderDefinitionOrThrow(definitionId);
+  public async resolveProviderConfigName(call: CallContext, definitionId: string, name?: string): Promise<string> {
+    const provider = await this.getProviderDefinitionOrThrow(call, definitionId);
     return this.resolveProviderConfigNameFromDefinition(definitionId, provider.name, name);
   }
 
@@ -440,11 +457,12 @@ export class AdapterProviderConfigService {
 
   /**
    * Fetch a provider definition from the bus or throw when not found.
+   * @param call - Call context of the operation; every bus send passes it on.
    * @param definitionId - Provider definition ID.
    * @returns Provider definition record.
    */
-  public async getProviderDefinitionOrThrow(definitionId: string) {
-    const { provider } = await this.bus.request(ProviderStorageSubjects.get, { id: definitionId });
+  public async getProviderDefinitionOrThrow(call: CallContext, definitionId: string) {
+    const { provider } = await this.bus.request(call, ProviderStorageSubjects.get, { id: definitionId });
     if (!provider) {
       throw new Error(`Provider definition not found: ${definitionId}`);
     }
@@ -458,17 +476,19 @@ export class AdapterProviderConfigService {
    * When switching to `allowlist` filter mode, at least one model must remain
    * visible. This method returns a keeper candidate if no existing visibility
    * entry already satisfies the requirement.
+   * @param call - Call context of the operation; every bus send passes it on.
    * @param definitionId - Provider definition ID.
    * @param existing - Existing provider config file.
    * @param preferredModel - Optional preferred keeper model.
    * @returns Keeper model name, or `undefined` when no promotion is required.
    */
   public async selectAllowlistKeeper(
+    call: CallContext,
     definitionId: string,
     existing: ProviderConfigFile,
     preferredModel?: string,
   ): Promise<string | undefined> {
-    const { provider } = await this.bus.request(ProviderStorageSubjects.get, { id: definitionId });
+    const { provider } = await this.bus.request(call, ProviderStorageSubjects.get, { id: definitionId });
     const modelNames = provider?.availableModels?.map((model) => model.name) ?? [];
     const candidates = [preferredModel, ...modelNames, ...Object.keys(existing.modelVisibility ?? {})].filter(
       (candidate): candidate is string => typeof candidate === 'string' && candidate.length > 0,

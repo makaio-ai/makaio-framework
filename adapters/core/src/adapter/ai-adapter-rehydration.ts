@@ -12,7 +12,7 @@ import type { ActiveAgentEntry, ActiveAgentRegistry } from './agent-registry.js'
 import { occupiedAdapterSessionId } from './agent-registry.js';
 import type { AgentCreationOptions } from './types.js';
 import type { McpSessionContext, MakaioSessionAgent } from '@makaio/contracts';
-import type { ExtractSubjectPayload, ExtractSubjectResponse, RequestContext } from '@makaio/core';
+import type { CallContext, ExtractSubjectPayload, ExtractSubjectResponse, RequestContext } from '@makaio/core';
 import { AdapterSubjects, McpSubjects, SessionSubjects } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 import {
@@ -37,11 +37,8 @@ import {
   type ProviderContextActivationLifecycle,
 } from './provider-context-activation-lifecycle.js';
 
-type RehydrateAgentRequestPayload = ExtractSubjectPayload<typeof AdapterSubjects.rehydrateAgent>;
-type RehydrateAgentResponsePayload = ExtractSubjectResponse<typeof AdapterSubjects.rehydrateAgent>;
-
 /**
- * Whether a warm rehydrate has any runtime-row field to persist.
+ * Whether a rehydrate has any runtime-row field to persist.
  * @param input - Candidate runtime fields.
  * @returns Whether at least one candidate is present.
  */
@@ -68,6 +65,10 @@ function hostedRuntimeOwner(
 ): { readonly machineId: string; readonly instanceId: string } | undefined {
   return callerOwnsAgentRow === true || machineId === undefined ? undefined : { machineId, instanceId };
 }
+
+type RehydrateAgentRequestPayload = ExtractSubjectPayload<typeof AdapterSubjects.rehydrateAgent>;
+type RehydrateAgentResponsePayload = ExtractSubjectResponse<typeof AdapterSubjects.rehydrateAgent>;
+
 /**
  * Configuration for AgentRehydrationManager construction.
  * @typeParam TBus - Scoped bus type for adapter-specific events
@@ -118,11 +119,7 @@ export class AgentRehydrationManager<
   private readonly ownerInstanceId: string;
   private readonly machineId: string | undefined;
   private readonly registry: ActiveAgentRegistry<TBus, TConnector, TAgent>;
-  private readonly createAgentFn: (
-    agentId: string,
-    sessionId: string,
-    options: AgentCreationOptions,
-  ) => Promise<TAgent>;
+  private readonly createAgentFn: AgentRehydrationManagerConfig<TBus, TConnector, TAgent>['createAgent'];
 
   public constructor(config: AgentRehydrationManagerConfig<TBus, TConnector, TAgent>) {
     this.globalBus = config.globalBus;
@@ -173,13 +170,7 @@ export class AgentRehydrationManager<
       return;
     }
 
-    const rehydratePromise = (async (): Promise<RehydrateAgentResponsePayload> => {
-      const entry = this.registry.get(agentId);
-      if (entry) {
-        return await this.rehydrateRegisteredAgent(agentId, entry, runtime);
-      }
-      return await this.rehydrateFromStorage(agentId, runtime);
-    })().catch((error): never => {
+    const rehydratePromise = this.runSharedAttempt(ctx.call, agentId, runtime).catch((error): never => {
       if (error instanceof AggregateError) {
         throw new AggregateError(error.errors, `Failed to recover agent ${agentId}: ${error.message}`);
       }
@@ -201,13 +192,36 @@ export class AgentRehydrationManager<
   };
 
   /**
+   * Run the single-flight attempt for one agent.
+   *
+   * The initiating request owns the attempt and supplies its call. Joiners await
+   * that attempt's result without starting work under a different principal.
+   * @param call - Call context of the request that starts the rehydrate attempt
+   * @param agentId - Agent identifier to rehydrate
+   * @param runtime - Runtime overrides and ownership mode from the rehydrate RPC payload
+   * @returns The rehydrate response — a success carrying the confirmed provider session, or a modeled refusal
+   */
+  private async runSharedAttempt(
+    call: CallContext,
+    agentId: string,
+    runtime: RehydrateRuntime,
+  ): Promise<RehydrateAgentResponsePayload> {
+    const entry = this.registry.get(agentId);
+    if (entry) {
+      return await this.rehydrateRegisteredAgent(call, agentId, entry, runtime);
+    }
+    return await this.rehydrateFromStorage(call, agentId, runtime);
+  }
+
+  /**
    * The reads the cold preflight performs on this adapter's behalf.
    * @returns Bus and MCP resolver bound to this manager.
    */
   private preflightDeps(): ColdRehydratePreflightDeps {
     return {
       globalBus: this.globalBus,
-      resolveMcpSessionContext: (sessionId, profileId) => this.resolveMcpSessionContext(sessionId, profileId),
+      resolveMcpSessionContext: (call: CallContext, sessionId: string, profileId: string | undefined) =>
+        this.resolveMcpSessionContext(call, sessionId, profileId),
     };
   }
 
@@ -226,11 +240,13 @@ export class AgentRehydrationManager<
    * leaked identity claim makes the agent permanently un-stoppable, which is worse
    * than the window the claim closes. Success needs no special case — `registry.set`
    * settles the claim, and the `finally`'s release then deletes nothing.
+   * @param call - Call context every send of this attempt carries
    * @param agentId - Agent identifier to rehydrate
    * @param runtime - Runtime overrides and ownership mode from the rehydrate RPC payload
    * @returns The rehydrate response — a success carrying the confirmed provider session, or a modeled refusal
    */
   private async rehydrateFromStorage(
+    call: CallContext,
     agentId: string,
     runtime: RehydrateRuntime,
   ): Promise<RehydrateAgentResponsePayload> {
@@ -238,7 +254,7 @@ export class AgentRehydrationManager<
       return notDispatched(`Agent ${agentId} is already claimed by another in-flight start or rehydrate`);
     }
     try {
-      return await this.rehydrateClaimedFromStorage(agentId, runtime);
+      return await this.rehydrateClaimedFromStorage(call, agentId, runtime);
     } finally {
       this.registry.releaseAgentIdentityClaim(agentId);
     }
@@ -246,19 +262,21 @@ export class AgentRehydrationManager<
 
   /**
    * Resurrect an agent from storage while this call holds its identity claim.
+   * @param call - Call context every send of this attempt carries
    * @param agentId - Agent identifier to rehydrate
    * @param runtime - Runtime overrides and ownership mode from the rehydrate RPC payload
    * @returns The rehydrate response — a success carrying the confirmed provider session, or a modeled refusal
    */
   private async rehydrateClaimedFromStorage(
+    call: CallContext,
     agentId: string,
     runtime: RehydrateRuntime,
   ): Promise<RehydrateAgentResponsePayload> {
     const { rpcResumeId, cwd, model, callerOwnsAgentRow } = runtime;
-    const preflight = await prepareColdRehydrate(this.preflightDeps(), agentId, runtime);
+    const preflight = await prepareColdRehydrate(call, this.preflightDeps(), agentId, runtime);
     if ('success' in preflight) return preflight;
     const { persisted, agentCreationRequest, restoredUsage } = preflight;
-    const created = await this.claimAndCreateAgent(agentId, persisted, agentCreationRequest, rpcResumeId);
+    const created = await this.claimAndCreateAgent(call, agentId, persisted, agentCreationRequest, rpcResumeId);
     // A refusal is returned verbatim: only the response arm carries `success`.
     if ('success' in created) return created;
     const { agent: newAgent, adapterSessionId: recoveredAdapterSessionId } = created;
@@ -284,14 +302,14 @@ export class AgentRehydrationManager<
       },
       rpcResumeId,
     );
-    await this.publishRehydratedRuntime(agentId, persisted, newAgent, {
+    await this.publishRehydratedRuntime(call, agentId, persisted, newAgent, {
       cwd,
       model,
       recoveredAdapterSessionId,
       publication: runtime.publication,
     });
     if (!callerOwnsAgentRow) {
-      await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+      await this.globalBus.requestOptional(call, AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
     }
     return {
       success: true,
@@ -337,12 +355,14 @@ export class AgentRehydrationManager<
    * marked dead. One movement, one settle producer: the same gate that decides
    * whether the start handler announces stays closed until the caller returns
    * the adapter-minted token after settlement.
+   * @param call - Call context the runtime write carries
    * @param agentId - Agent identifier being rehydrated
    * @param persisted - Persisted agent record supplying stable identity fields
    * @param agent - Rehydrated agent instance owning the movement tracker
    * @param runtime - Requested cwd/model overrides, the confirmed session ID, and who settles it
    */
   private async publishRehydratedRuntime(
+    call: CallContext,
     agentId: string,
     persisted: MakaioSessionAgent,
     agent: TAgent,
@@ -359,7 +379,7 @@ export class AgentRehydrationManager<
     // occupancy but remains unpublished until the caller's acknowledgement.
     const callerSettlesCurrency = !providerKeyIsPublishable(runtime.publication);
     if (adapterSessionIdMoved) {
-      await agent.recordConfirmedAdapterSession(recoveredAdapterSessionId, callerSettlesCurrency);
+      await agent.recordConfirmedAdapterSession(call, recoveredAdapterSessionId, callerSettlesCurrency);
     }
     // The row write is a publication route like any other, so it takes its key
     // from the gate: a caller-owned rehydrate's answer *is* the hand-over, and
@@ -370,14 +390,8 @@ export class AgentRehydrationManager<
       ? publishedProviderKey(runtime.publication, recoveredAdapterSessionId)
       : undefined;
     const runtimeOwner = hostedRuntimeOwner(this.machineId, this.ownerInstanceId, callerSettlesCurrency);
-    if (
-      cwd === undefined &&
-      model === undefined &&
-      publishedAdapterSessionId === undefined &&
-      runtimeOwner === undefined
-    )
-      return;
-    await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, {
+    if (!hasRuntimeUpdate({ cwd, model, adapterSessionId: publishedAdapterSessionId, runtimeOwner })) return;
+    await this.globalBus.requestOptional(call, AgentStorageSubjects.updateRuntime, {
       agentId,
       cwd,
       model,
@@ -403,6 +417,7 @@ export class AgentRehydrationManager<
    * the same logical agent ID, which is a harder-to-diagnose corruption. The
    * refusal is *modeled* rather than thrown — nothing reached the provider, so
    * a reserving caller may release its reservation instead of retiring the key.
+   * @param call - Call context the sends of this creation carry
    * @param agentId - Agent identifier being rehydrated
    * @param persisted - Persisted agent record
    * @param creationRequest - Agent creation options (includes resumeAdapterSessionId when resuming)
@@ -410,6 +425,7 @@ export class AgentRehydrationManager<
    * @returns Newly created ready agent with its provider-confirmed session ID, or the modeled refusal to return verbatim
    */
   private async claimAndCreateAgent(
+    call: CallContext,
     agentId: string,
     persisted: MakaioSessionAgent,
     creationRequest: AgentCreationOptions,
@@ -431,6 +447,7 @@ export class AgentRehydrationManager<
     let activation: ProviderContextActivationLifecycle;
     try {
       activation = await prepareAdapterProviderContextActivation(
+        call,
         this.globalBus,
         creationRequest.providerContext ?? { state: 'unresolved' },
       );
@@ -449,27 +466,28 @@ export class AgentRehydrationManager<
       // best-effort: if the host handler is unavailable the agent still
       // initialises, just without its runtime system prompt.
       const systemPrompt = await this.resolvePersistedSystemPrompt(
+        call,
         persisted.sessionId,
         persisted.personaId,
         persisted.profileId,
       );
-      await newAgent.initialize({ ...(systemPrompt !== undefined && { systemPrompt }) });
+      await newAgent.initialize(call, { ...(systemPrompt !== undefined && { systemPrompt }) });
       // Prefer the live connector session ID. Persisted values can be stale
       // after restart or connector replacement.
-      const recoveredAdapterSessionId = (await newAgent.getAdapterSessionId()) || persisted.adapterSessionId;
+      const recoveredAdapterSessionId = (await newAgent.getAdapterSessionId(call)) || persisted.adapterSessionId;
       if (!recoveredAdapterSessionId) {
         throw new Error(`Recovered agent ${agentId} has no adapterSessionId`);
       }
-      await commitAdapterProviderContextActivation(activation);
+      await commitAdapterProviderContextActivation(call, activation);
       return { agent: newAgent, adapterSessionId: recoveredAdapterSessionId };
     } catch (error) {
       try {
         const failedAgent = newAgent;
-        return await rollbackAdapterProviderContextActivationAfterFailure({
+        return await rollbackAdapterProviderContextActivationAfterFailure(call, {
           activation,
           primaryError: error,
           ...(failedAgent !== undefined && {
-            cleanup: () => rethrowTeardownFailure(failedAgent.close({ emitSessionClosed: false })),
+            cleanup: (call) => rethrowTeardownFailure(failedAgent.close({ emitSessionClosed: false, call })),
           }),
           operation: `Cold rehydrate for agent ${agentId}`,
           cleanupFailureMessage: `Cold rehydrate and connector cleanup both failed for agent ${agentId}.`,
@@ -488,12 +506,14 @@ export class AgentRehydrationManager<
    * Applies the same native-resume gate as the cold path: only the caller's
    * explicit `resumeAdapterSessionId` resumes the provider session, and
    * without it the replacement connector starts fresh (no provider resume).
+   * @param call - Call context the sends of this rehydrate carry
    * @param agentId - Agent identifier being rehydrated
    * @param entry - Active registry entry for the agent
    * @param runtime - Runtime overrides and ownership mode from the rehydrate request
    * @returns The rehydrate response — a success carrying the confirmed provider session, or a modeled refusal
    */
   private async rehydrateRegisteredAgent(
+    call: CallContext,
     agentId: string,
     entry: ActiveAgentEntry<TBus, TConnector, TAgent>,
     runtime: RehydrateRuntime,
@@ -506,6 +526,7 @@ export class AgentRehydrationManager<
     // agent for occupying its own provider session.
     const ownAdapterSessionId = occupiedAdapterSessionId(entry);
     const effectiveResumeId = runtime.rpcResumeId;
+    const { cwd, model } = runtime;
     // Same claim discipline as the cold path when the resume target is not
     // the session this entry already owns: without the claim, a stale RPC
     // payload could attach this live agent to another live agent's provider
@@ -542,9 +563,10 @@ export class AgentRehydrationManager<
       // resume decision today (restartAgents defers non-native agents to
       // dead-agent recovery, which builds the recovery context itself).
       await entry.agent.swapConnector(
+        call,
         {
-          cwd: runtime.cwd,
-          model: runtime.model,
+          cwd,
+          model,
           ...(effectiveResumeId !== undefined && { adapterSessionId: effectiveResumeId }),
           resumeAdapterSessionId: effectiveResumeId,
         },
@@ -557,7 +579,7 @@ export class AgentRehydrationManager<
         // settles this" form.
         callerSettlesCurrency,
       );
-      const refreshedAdapterSessionId = await entry.agent.getAdapterSessionId();
+      const refreshedAdapterSessionId = await entry.agent.getAdapterSessionId(call);
       if (refreshedAdapterSessionId) {
         entry.adapterSessionId = refreshedAdapterSessionId;
       }
@@ -596,24 +618,17 @@ export class AgentRehydrationManager<
     // claims it first.
     const publishedAdapterSessionId = publishedProviderKey(runtime.publication, movedAdapterSessionId);
     const runtimeOwner = hostedRuntimeOwner(this.machineId, this.ownerInstanceId, runtime.callerOwnsAgentRow);
-    if (
-      hasRuntimeUpdate({
-        cwd: runtime.cwd,
-        model: runtime.model,
-        adapterSessionId: publishedAdapterSessionId,
-        runtimeOwner,
-      })
-    ) {
-      await this.globalBus.requestOptional(AgentStorageSubjects.updateRuntime, {
+    if (hasRuntimeUpdate({ cwd, model, adapterSessionId: publishedAdapterSessionId, runtimeOwner })) {
+      await this.globalBus.requestOptional(call, AgentStorageSubjects.updateRuntime, {
         agentId,
-        cwd: runtime.cwd,
-        model: runtime.model,
+        cwd,
+        model,
         ...(runtimeOwner !== undefined && { runtimeOwner }),
         ...(publishedAdapterSessionId !== undefined && { adapterSessionId: publishedAdapterSessionId }),
       });
     }
     if (!runtime.callerOwnsAgentRow) {
-      await this.globalBus.requestOptional(AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
+      await this.globalBus.requestOptional(call, AgentStorageSubjects.updateStatus, { agentId, status: 'idle' });
     } else if (runtime.settlementAckToken !== undefined) {
       entry.callerOwnsAgentRow = true;
       entry.pendingCallerSettlement = {
@@ -654,20 +669,22 @@ export class AgentRehydrationManager<
    * trade-off: the agent resumes with correct server connectivity but without
    * per-profile direct/discovery overrides until the next full turn is initiated
    * through the orchestrator.
+   * @param call - Call context the lookups carry
    * @param sessionId - Makaio session ID (used as the MCP resolution key)
    * @param profileId - Profile ID persisted with the agent, or `undefined`
    * @returns Resolved MCP session context, or `undefined` if unavailable
    */
   private async resolveMcpSessionContext(
+    call: CallContext,
     sessionId: string,
     profileId: string | undefined,
   ): Promise<McpSessionContext | undefined> {
     // Fetch the session to verify it still exists before attempting MCP resolution.
-    const sessionResult = await this.globalBus.requestOptional(SessionSubjects.get, { sessionId });
+    const sessionResult = await this.globalBus.requestOptional(call, SessionSubjects.get, { sessionId });
     if (!sessionResult.handled || !sessionResult.data.session) {
       return undefined;
     }
-    const mcpResult = await this.globalBus.requestOptional(McpSubjects.session.resolve, {
+    const mcpResult = await this.globalBus.requestOptional(call, McpSubjects.session.resolve, {
       sessionId,
       projectId: null,
       profileId: profileId ?? null,
@@ -686,19 +703,21 @@ export class AgentRehydrationManager<
    * host-tier storage subject imports. Resolution is best-effort: if the
    * host handler is unavailable the method returns `undefined` and the
    * agent initialises without a system prompt rather than failing.
+   * @param call - Call context the RPC carries
    * @param sessionId - Session ID for the RPC call
    * @param personaId - Persisted persona ID, if any
    * @param profileId - Persisted profile ID, if any
    * @returns Resolved system prompt string, or `undefined` if unavailable
    */
   private async resolvePersistedSystemPrompt(
+    call: CallContext,
     sessionId: string,
     personaId: string | undefined,
     profileId: string | undefined,
   ): Promise<string | undefined> {
     if (!personaId && !profileId) return undefined;
     try {
-      const result = await this.globalBus.requestOptional(SessionSubjects.resolveSystemPrompt, {
+      const result = await this.globalBus.requestOptional(call, SessionSubjects.resolveSystemPrompt, {
         sessionId,
         personaId,
         profileId,

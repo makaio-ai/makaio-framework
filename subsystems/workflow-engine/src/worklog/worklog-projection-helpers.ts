@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { WorkflowSubjects } from '../namespace.js';
 
 /**
@@ -27,12 +28,13 @@ export async function safeProject(label: string, fn: () => Promise<void>): Promi
  *
  * Emit failures are swallowed because `worklog.changed` is advisory — a missed
  * notification only causes a temporary stale cache, not data loss.
+ * @param call - Call context of the lifecycle event whose projection changed the WorkLog.
  * @param bus - Message bus to emit on.
  * @param executionId - Execution whose WorkLog record changed.
  */
-export async function emitWorklogChanged(bus: IMakaioBus, executionId: string): Promise<void> {
+export async function emitWorklogChanged(call: CallContext, bus: IMakaioBus, executionId: string): Promise<void> {
   try {
-    await bus.emit(WorkflowSubjects.worklog.changed, { executionId });
+    await bus.emit(call, WorkflowSubjects.worklog.changed, { executionId });
   } catch (error) {
     console.error(`[WorklogProjection] worklog.changed emit failed for ${executionId}:`, error);
   }

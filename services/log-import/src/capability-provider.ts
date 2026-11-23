@@ -8,6 +8,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type {
   LogImportConfig,
   LogImportOrchestrator,
@@ -47,10 +48,11 @@ export interface CapabilityProviderRegistrar {
   setOrchestratorFactory(importerId: string, factory: OrchestratorFactory): void;
   /**
    * Switches the import mode for a registered importer.
+   * @param call - Call context for the triggering message or lifecycle operation
    * @param importerId - Unique importer ID
    * @param mode - Target import mode
    */
-  switchMode(importerId: string, mode: LogImportMode): Promise<void>;
+  switchMode(call: CallContext, importerId: string, mode: LogImportMode): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -149,19 +151,21 @@ export function buildOrchestratorFactory(
  * If no mode handler is present (not handled), or if the persisted mode is
  * `'disabled'`, no orchestrator is started. Errors from the mode query are
  * caught and logged so they don't abort provider registration.
+ * @param call - Call context for the triggering message or lifecycle operation
  * @param importerId - Runtime importer ID
  * @param adapterName - Stable adapter name used for the mode lookup
  * @param bus - Message bus instance
  * @param switchMode - Bound `switchMode` from the registry
  */
 async function restorePersistedMode(
+  call: CallContext,
   importerId: string,
   adapterName: string,
   bus: IMakaioBus,
-  switchMode: (id: string, mode: LogImportMode) => Promise<void>,
+  switchMode: (call: CallContext, id: string, mode: LogImportMode) => Promise<void>,
 ): Promise<void> {
   try {
-    const modeResult = await bus.requestOptional(LogImportSubjects.getMode, {
+    const modeResult = await bus.requestOptional(call, LogImportSubjects.getMode, {
       adapterName,
     });
     if (!modeResult.handled) {
@@ -173,7 +177,7 @@ async function restorePersistedMode(
       return;
     }
 
-    await switchMode(importerId, mode);
+    await switchMode(call, importerId, mode);
   } catch (error) {
     console.warn(`[LogImport] Failed to restore persisted mode for '${adapterName}':`, error);
   }
@@ -184,11 +188,13 @@ async function restorePersistedMode(
  *
  * Skips registration silently when the payload is not a valid log-import
  * provider or when the importer is already registered (idempotent).
+ * @param call - Call context for the triggering message or lifecycle operation
  * @param providerValue - Runtime capability provider payload (opaque `unknown`)
  * @param bus - Message bus instance
  * @param registrar - Registry operations required to complete the registration
  */
 export async function registerFromProvider(
+  call: CallContext,
   providerValue: unknown,
   bus: IMakaioBus,
   registrar: CapabilityProviderRegistrar,
@@ -224,8 +230,8 @@ export async function registerFromProvider(
     registrar.setOrchestratorFactory(providerValue.id, factory);
   }
 
-  await restorePersistedMode(providerValue.id, providerValue.adapterName, bus, (id, mode) =>
-    registrar.switchMode(id, mode),
+  await restorePersistedMode(call, providerValue.id, providerValue.adapterName, bus, (call, id, mode) =>
+    registrar.switchMode(call, id, mode),
   );
 }
 
@@ -252,7 +258,7 @@ export async function registerCapabilitySubscription(
   const cleanup = bus.on(
     CapabilitySubjects.register,
     async (ctx) => {
-      await registerFromProvider(ctx.payload.provider, bus, registrar);
+      await registerFromProvider(ctx.call, ctx.payload.provider, bus, registrar);
     },
     { filter: { capabilityId: 'log-import' } },
   );
@@ -260,7 +266,7 @@ export async function registerCapabilitySubscription(
   // Subscribe first, then backfill. This avoids a drop window between
   // enumerating existing providers and attaching the live listener.
   for (const provider of capabilityService?.getProviders('log-import') ?? []) {
-    await registerFromProvider(provider, bus, registrar);
+    await registerFromProvider(bus.own('start'), provider, bus, registrar);
   }
 
   return cleanup;

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
 import { HookAbortError } from '@makaio/hooks';
+import { createTestCall } from '@makaio/test-utils';
 import { SessionTurnManager } from '../../session-turn-manager.js';
 import { createTestAgent, createTestSession } from '../../__tests__/shared.js';
 import { routeToAgentsCore } from '../route-to-agents-core.js';
@@ -35,10 +36,12 @@ describe('routeToAgentsCore persistence settlement', () => {
       }),
     );
 
+    const call = createTestCall();
     const agents = [createTestAgent('agent-1'), createTestAgent('agent-2')];
     const session = createTestSession(sessionId, { agents });
     const turnManager = new SessionTurnManager(MakaioBus);
     const admission = await turnManager.acquireMessageAdmission(
+      call,
       sessionId,
       agents.map((agent) => agent.agentId),
       messageId,
@@ -52,6 +55,7 @@ describe('routeToAgentsCore persistence settlement', () => {
     });
 
     const outcomes = await routeToAgentsCore(
+      call,
       MakaioBus,
       session,
       agents,
@@ -107,10 +111,12 @@ describe('routeToAgentsCore persistence settlement', () => {
       }),
     );
 
+    const call = createTestCall();
     const agent = createTestAgent('agent-1');
     const session = createTestSession(sessionId, { agents: [agent] });
     const turnManager = new SessionTurnManager(MakaioBus);
     const admission = await turnManager.acquireMessageAdmission(
+      call,
       sessionId,
       [agent.agentId],
       messageId,
@@ -122,6 +128,7 @@ describe('routeToAgentsCore persistence settlement', () => {
     const onTurnComplete = vi.fn().mockResolvedValue(undefined);
 
     await routeToAgentsCore(
+      call,
       MakaioBus,
       session,
       [agent],
@@ -137,7 +144,7 @@ describe('routeToAgentsCore persistence settlement', () => {
 
     expect(observerCalls).toBe(1);
     expect(onTurnComplete).toHaveBeenCalledTimes(1);
-    expect(onTurnComplete).toHaveBeenCalledWith(turn, {
+    expect(onTurnComplete).toHaveBeenCalledWith(call, turn, {
       success: false,
       errors: [expect.stringContaining('routing failed')],
     });

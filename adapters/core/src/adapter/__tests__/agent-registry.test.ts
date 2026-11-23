@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
+import { createTestCall } from '@makaio/test-utils';
 import type { AIAgent } from '../../agent/ai-agent.js';
 import { ConfirmedAdapterSessionTracker } from '../../agent/agent-adapter-session-movement.js';
 import { AgentTeardownArbiter } from '../../agent/agent-teardown-arbiter.js';
@@ -139,7 +140,7 @@ describe('ActiveAgentRegistry', () => {
         adapterSessionId: 'session-Y',
         usage: { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0 },
       });
-      await registry.evictSilently('agent-A');
+      await registry.evictSilently(createTestCall(), 'agent-A');
 
       expect(registry.claimAdapterSession('session-Y')).toBe(false);
     });
@@ -232,7 +233,7 @@ describe('ActiveAgentRegistry', () => {
       const registry = createRegistry();
       const tracker = registerTrackedAgent(registry, 'session-old');
 
-      await tracker.record('session-new');
+      await tracker.record(createTestCall(), 'session-new');
 
       expect(registry.claimAdapterSession('session-new')).toBe(false);
       expect(registry.hasAdapterSession('session-new')).toBe(true);
@@ -251,7 +252,7 @@ describe('ActiveAgentRegistry', () => {
       });
 
       try {
-        await tracker.record('session-new');
+        await tracker.record(createTestCall(), 'session-new');
       } finally {
         consumer();
       }
@@ -282,7 +283,7 @@ describe('ActiveAgentRegistry', () => {
       const registry = createRegistry();
       const tracker = registerTrackedAgent(registry, 'session-old');
 
-      await tracker.record('session-new');
+      await tracker.record(createTestCall(), 'session-new');
 
       expect(registry.claimAdapterSession('session-old')).toBe(true);
     });
@@ -334,8 +335,14 @@ describe('ActiveAgentRegistry', () => {
       usage: { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0 },
     });
 
-    await expect(registry.dispose('agent-weak')).resolves.toMatchObject({ found: true, evidence: 'detached' });
-    await expect(registry.dispose('agent-weak')).resolves.toMatchObject({ found: false, evidence: 'detached' });
+    await expect(registry.dispose(createTestCall(), 'agent-weak')).resolves.toMatchObject({
+      found: true,
+      evidence: 'detached',
+    });
+    await expect(registry.dispose(createTestCall(), 'agent-weak')).resolves.toMatchObject({
+      found: false,
+      evidence: 'detached',
+    });
     await expect(registry.closeAll()).resolves.toEqual([
       expect.objectContaining({ evidence: 'detached', detail: 'exit was not observed' }),
     ]);
@@ -369,7 +376,7 @@ describe('ActiveAgentRegistry', () => {
         },
       });
 
-      await expect(registry.evict('agent-1')).rejects.toBe(closeError);
+      await expect(registry.evict(createTestCall(), 'agent-1')).rejects.toBe(closeError);
 
       expect(updates).toEqual([{ agentId: 'agent-1', status: 'dead' }]);
       expect(registry.get('agent-1')).toBeUndefined();

@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { ExtensionSubjects } from '../observability/extension-namespace.js';
 import type { ComponentState } from '../observability/shared-schemas.js';
 import type { KernelMakaioExtension } from './types.js';
@@ -58,16 +59,22 @@ function deriveContributes(pkg: KernelMakaioExtension): ContributionFlags {
 
 /**
  * Transition an extension entry and emit the observable state change.
+ * @param call - Call responsible for the lifecycle transition.
  * @param bus - Bus that receives `kernel:extension.stateChanged`.
  * @param entry - Extension entry to transition.
  * @param to - Target lifecycle state.
  */
-export function transitionPackageEntry(bus: IMakaioBus, entry: TransitionEntry, to: ComponentState): void {
+export function transitionPackageEntry(
+  call: CallContext,
+  bus: IMakaioBus,
+  entry: TransitionEntry,
+  to: ComponentState,
+): void {
   const from = entry.state;
   entry.state = to;
 
   void bus
-    .emit(ExtensionSubjects.stateChanged, {
+    .emit(call, ExtensionSubjects.stateChanged, {
       name: entry.pkg.name,
       displayName: entry.pkg.displayName,
       from,

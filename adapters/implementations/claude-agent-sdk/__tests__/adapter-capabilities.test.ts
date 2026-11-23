@@ -1,30 +1,21 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { AIAdapterRuntimeConfig } from '@makaio/ai-adapters-core';
+import { createBusInstance } from '@makaio/bus-core';
 import { ClaudeCodeAdapter } from '../src/adapter.js';
 
 const allowedRuntimeConfig: AIAdapterRuntimeConfig = {
   adapterId: 'adapter-test',
   machineId: 'test-machine',
   ownerInstanceId: 'test-owner-instance',
+  globalBus: createBusInstance(),
 };
 
-const forbiddenRuntimeConfig: AIAdapterRuntimeConfig = {
-  machineId: 'test-machine',
-  ownerInstanceId: 'test-owner-instance',
-  // @ts-expect-error Adapter implementations, not hosts, define capabilities.
-  capabilities: ['forged-capability'],
-};
-
-void allowedRuntimeConfig;
-void forbiddenRuntimeConfig;
+// Adapter implementations, not hosts, define capabilities.
+expectTypeOf<AIAdapterRuntimeConfig>().not.toHaveProperty('capabilities');
 
 describe('ClaudeCodeAdapter capabilities', () => {
   it('declares native structured output support', () => {
-    const adapter = new ClaudeCodeAdapter({
-      adapterId: 'adapter-test',
-      machineId: 'test-machine',
-      ownerInstanceId: 'test-owner-instance',
-    });
+    const adapter = new ClaudeCodeAdapter(allowedRuntimeConfig);
 
     expect(adapter.capabilities).toContain('structuredOutput');
   });

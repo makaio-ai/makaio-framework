@@ -15,6 +15,7 @@ import type {
   ReviewSourceSnapshot,
   VCSReviewComment,
 } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { ReviewFindingsService } from '../service.js';
 import { ReviewStorageSubjects } from '../storage/namespace.js';
 
@@ -97,7 +98,7 @@ function makeSource(id: string, reviewer: string, comments: VCSReviewComment[]):
     capabilityId: 'review-source',
     reviewer,
     capabilities: { canTrigger: false, canFetch: true, isPush: false },
-    async fetchSnapshot(params): Promise<ReviewSourceSnapshot> {
+    async fetchSnapshot(_call, params): Promise<ReviewSourceSnapshot> {
       return {
         sourceId: id,
         reviewer,
@@ -232,16 +233,16 @@ describe('ReviewFindingsService', () => {
       }),
     );
 
-    await harness.bus.emit(CapabilitySubjects.register, {
+    await harness.bus.emit(createTestCall(), CapabilitySubjects.register, {
       capabilityId: REVIEW_SOURCE_CAPABILITY_ID,
       provider: makeSource('source-a', 'alpha', [makeComment(1)]),
     });
-    await harness.bus.emit(CapabilitySubjects.register, {
+    await harness.bus.emit(createTestCall(), CapabilitySubjects.register, {
       capabilityId: REVIEWER_PROCESSOR_CAPABILITY_ID,
       provider: makeProcessor('alpha'),
     });
 
-    const result = await harness.bus.request(ReviewSubjects.findings.fetch, {
+    const result = await harness.bus.request(createTestCall(), ReviewSubjects.findings.fetch, {
       target: TARGET,
       repoPath: '/repo',
     });
@@ -268,17 +269,17 @@ describe('ReviewFindingsService', () => {
       ['source-a', 'alpha', 1],
       ['source-b', 'beta', 2],
     ] as const) {
-      await harness.bus.emit(CapabilitySubjects.register, {
+      await harness.bus.emit(createTestCall(), CapabilitySubjects.register, {
         capabilityId: REVIEW_SOURCE_CAPABILITY_ID,
         provider: makeSource(sourceId, reviewer, [makeComment(commentId)]),
       });
-      await harness.bus.emit(CapabilitySubjects.register, {
+      await harness.bus.emit(createTestCall(), CapabilitySubjects.register, {
         capabilityId: REVIEWER_PROCESSOR_CAPABILITY_ID,
         provider: makeProcessor(reviewer),
       });
     }
 
-    const result = await harness.bus.request(ReviewSubjects.findings.fetch, {
+    const result = await harness.bus.request(createTestCall(), ReviewSubjects.findings.fetch, {
       target: TARGET,
       repoPath: '/repo',
     });
@@ -303,17 +304,17 @@ describe('ReviewFindingsService', () => {
       ['source-a', 'alpha', 1],
       ['source-b', 'beta', 2],
     ] as const) {
-      await harness.bus.emit(CapabilitySubjects.register, {
+      await harness.bus.emit(createTestCall(), CapabilitySubjects.register, {
         capabilityId: REVIEW_SOURCE_CAPABILITY_ID,
         provider: makeSource(sourceId, reviewer, [makeComment(commentId)]),
       });
-      await harness.bus.emit(CapabilitySubjects.register, {
+      await harness.bus.emit(createTestCall(), CapabilitySubjects.register, {
         capabilityId: REVIEWER_PROCESSOR_CAPABILITY_ID,
         provider: makeProcessor(reviewer),
       });
     }
 
-    const result = await harness.bus.request(ReviewSubjects.findings.fetch, {
+    const result = await harness.bus.request(createTestCall(), ReviewSubjects.findings.fetch, {
       target: TARGET,
       repoPath: '/repo',
     });
@@ -333,16 +334,16 @@ describe('ReviewFindingsService', () => {
       arrivalCount += 1;
     });
 
-    await harness.bus.emit(CapabilitySubjects.register, {
+    await harness.bus.emit(createTestCall(), CapabilitySubjects.register, {
       capabilityId: REVIEW_SOURCE_CAPABILITY_ID,
       provider: makeSource('source-a', 'alpha', [makeComment(1)]),
     });
-    await harness.bus.emit(CapabilitySubjects.register, {
+    await harness.bus.emit(createTestCall(), CapabilitySubjects.register, {
       capabilityId: REVIEWER_PROCESSOR_CAPABILITY_ID,
       provider: makeProcessor('alpha'),
     });
 
-    await harness.bus.request(ReviewSubjects.findings.fetch, { target: TARGET, repoPath: '/repo' });
+    await harness.bus.request(createTestCall(), ReviewSubjects.findings.fetch, { target: TARGET, repoPath: '/repo' });
 
     expect(arrivalCount).toBe(0);
 
@@ -352,16 +353,16 @@ describe('ReviewFindingsService', () => {
   it('updates an existing open finding when the fresh source marks the same ID verified', async () => {
     harness.store.set('source-a:inline:1', makeFinding({ id: 'source-a:inline:1', sourceId: 'source-a' }));
 
-    await harness.bus.emit(CapabilitySubjects.register, {
+    await harness.bus.emit(createTestCall(), CapabilitySubjects.register, {
       capabilityId: REVIEW_SOURCE_CAPABILITY_ID,
       provider: makeSource('source-a', 'alpha', [makeComment(1, { isResolved: true })]),
     });
-    await harness.bus.emit(CapabilitySubjects.register, {
+    await harness.bus.emit(createTestCall(), CapabilitySubjects.register, {
       capabilityId: REVIEWER_PROCESSOR_CAPABILITY_ID,
       provider: makeProcessor('alpha'),
     });
 
-    const result = await harness.bus.request(ReviewSubjects.findings.fetch, {
+    const result = await harness.bus.request(createTestCall(), ReviewSubjects.findings.fetch, {
       target: TARGET,
       repoPath: '/repo',
     });
@@ -386,16 +387,16 @@ describe('ReviewFindingsService', () => {
       }),
     );
 
-    await harness.bus.emit(CapabilitySubjects.register, {
+    await harness.bus.emit(createTestCall(), CapabilitySubjects.register, {
       capabilityId: REVIEW_SOURCE_CAPABILITY_ID,
       provider: makeSource('source-a', 'alpha', [makeComment(1, { isResolved: true })]),
     });
-    await harness.bus.emit(CapabilitySubjects.register, {
+    await harness.bus.emit(createTestCall(), CapabilitySubjects.register, {
       capabilityId: REVIEWER_PROCESSOR_CAPABILITY_ID,
       provider: makeProcessor('alpha'),
     });
 
-    const result = await harness.bus.request(ReviewSubjects.findings.fetch, {
+    const result = await harness.bus.request(createTestCall(), ReviewSubjects.findings.fetch, {
       target: TARGET,
       repoPath: '/repo',
     });
@@ -418,16 +419,16 @@ describe('ReviewFindingsService', () => {
       }),
     );
 
-    await harness.bus.emit(CapabilitySubjects.register, {
+    await harness.bus.emit(createTestCall(), CapabilitySubjects.register, {
       capabilityId: REVIEW_SOURCE_CAPABILITY_ID,
       provider: makeSource('source-a', 'alpha', [makeComment(1)]),
     });
-    await harness.bus.emit(CapabilitySubjects.register, {
+    await harness.bus.emit(createTestCall(), CapabilitySubjects.register, {
       capabilityId: REVIEWER_PROCESSOR_CAPABILITY_ID,
       provider: makeProcessor('alpha'),
     });
 
-    const result = await harness.bus.request(ReviewSubjects.findings.fetch, {
+    const result = await harness.bus.request(createTestCall(), ReviewSubjects.findings.fetch, {
       target: TARGET,
       repoPath: '/repo',
     });
@@ -449,7 +450,7 @@ describe('ReviewFindingsService', () => {
     );
 
     await expect(
-      harness.bus.request(ReviewSubjects.finding.updateStatus, {
+      harness.bus.request(createTestCall(), ReviewSubjects.finding.updateStatus, {
         findingId: 'finding-1',
         target: { repository: 'owner/repo', prNumber: 42, headSha: 'head-b' },
         status: 'dismissed',
@@ -465,7 +466,7 @@ describe('ReviewFindingsService', () => {
       status: 'dismissed',
       dismissedReason: 'stale input',
     });
-    const result = await harness.bus.request(ReviewSubjects.findings.submit, {
+    const result = await harness.bus.request(createTestCall(), ReviewSubjects.findings.submit, {
       finding: {
         id: staleInput.id,
         target: staleInput.target,
@@ -507,7 +508,7 @@ describe('ReviewFindingsService', () => {
       }),
     );
 
-    const addressed = await harness.bus.request(ReviewSubjects.finding.updateStatus, {
+    const addressed = await harness.bus.request(createTestCall(), ReviewSubjects.finding.updateStatus, {
       findingId: 'finding-1',
       target: TARGET,
       status: 'addressed',
@@ -520,7 +521,7 @@ describe('ReviewFindingsService', () => {
     expect(addressed.finding.dismissedReason).toBeNull();
     expect(addressed.finding.verifiedAt).toBeNull();
 
-    const reopened = await harness.bus.request(ReviewSubjects.finding.updateStatus, {
+    const reopened = await harness.bus.request(createTestCall(), ReviewSubjects.finding.updateStatus, {
       findingId: 'finding-1',
       target: TARGET,
       status: 'open',

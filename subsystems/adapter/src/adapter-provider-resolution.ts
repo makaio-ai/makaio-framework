@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   AdapterProviderAuthSchema,
   assertAdapterAuthBindingMatchesMethod,
@@ -64,6 +65,7 @@ function isRegistryProviderMiss(error: unknown): boolean {
 
 /**
  * Resolve adapter-declared provider IDs to full provider definitions.
+ * @param call - Call context forwarded to the contributions catalog request.
  * @param bus - Bus used to query the contributions catalog.
  * @param providerRefs - Adapter-declared provider references to resolve.
  * @param adapterName - Adapter name used for error messages.
@@ -71,6 +73,7 @@ function isRegistryProviderMiss(error: unknown): boolean {
  * @returns Resolved provider definitions with schemas applied.
  */
 export async function resolveProviderDefinitions(
+  call: CallContext,
   bus: IMakaioBus,
   providerRefs: readonly AdapterProviderRef[],
   adapterName: string,
@@ -79,7 +82,7 @@ export async function resolveProviderDefinitions(
   let definitionMap = options.providerDefinitionCache;
   if (!definitionMap) {
     definitionMap = new Map<string, ProviderDefinitionCacheEntry>();
-    const catalog = await bus.request(ExtensionSubjects.contributions.catalog, {});
+    const catalog = await bus.request(call, ExtensionSubjects.contributions.catalog, {});
     for (const entry of catalog.providers) {
       definitionMap.set(entry.definition.id, entry);
     }
@@ -219,6 +222,7 @@ function collectSourceHintVariables(
 
 /**
  * Populate available models on resolved provider definitions.
+ * @param call - Call context forwarded to the model-registry request.
  * @param bus - Bus used to query the model registry.
  * @param adapterName - Adapter name used for diagnostics.
  * @param providers - Provider definitions resolved from the contribution catalog.
@@ -226,6 +230,7 @@ function collectSourceHintVariables(
  * @returns Provider definitions with model catalogs applied.
  */
 export async function populateProviderModels(
+  call: CallContext,
   bus: IMakaioBus,
   adapterName: string,
   providers: readonly LoadedAdapterProvider[],
@@ -237,7 +242,7 @@ export async function populateProviderModels(
       try {
         let models = providerModelCache.get(providerId);
         if (models === undefined) {
-          const result = await bus.requestOptional(ModelRegistrySubjects.getProviderModels, { providerId });
+          const result = await bus.requestOptional(call, ModelRegistrySubjects.getProviderModels, { providerId });
           models = result.handled ? result.data.models : (provider.definition.availableModels ?? []);
           providerModelCache.set(providerId, models);
         }
@@ -269,6 +274,7 @@ export async function populateProviderModels(
 
 /**
  * Resolve a loaded adapter's provider refs against the current active extension catalog.
+ * @param call - Call context forwarded to the catalog and model-registry requests.
  * @param adapter - Loaded adapter whose providers should be refreshed.
  * @param bus - Bus used to query extension and model registry subjects.
  * @param providerModelCache - Per-batch model cache.
@@ -276,15 +282,16 @@ export async function populateProviderModels(
  * @returns Fresh provider definitions for the adapter.
  */
 export async function resolveLoadedAdapterProviders(
+  call: CallContext,
   adapter: LoadedAdapter,
   bus: IMakaioBus,
   providerModelCache: Map<string, ProviderAIModel[]>,
   providerDefinitionCache?: Map<string, ProviderDefinitionCacheEntry>,
 ): Promise<LoadedAdapterProvider[]> {
-  const providers = await resolveProviderDefinitions(bus, adapter.providerRefs, adapter.name, {
+  const providers = await resolveProviderDefinitions(call, bus, adapter.providerRefs, adapter.name, {
     ...(adapter.providerConfigSchema !== undefined && { adapterConfigSchema: adapter.providerConfigSchema }),
     ...(adapter.clientDefinitions !== undefined && { clientDefinitions: adapter.clientDefinitions }),
     ...(providerDefinitionCache !== undefined && { providerDefinitionCache }),
   });
-  return populateProviderModels(bus, adapter.name, providers, providerModelCache);
+  return populateProviderModels(call, bus, adapter.name, providers, providerModelCache);
 }

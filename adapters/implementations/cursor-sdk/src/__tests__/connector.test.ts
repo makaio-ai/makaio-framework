@@ -1,7 +1,7 @@
 import type { ProceduralConnectorSession, ProcessingState } from '@makaio/ai-adapters-core';
 import { MakaioBus } from '@makaio/bus-core';
 import { McpSubjects } from '@makaio/contracts';
-import { createTestBusInstance } from '@makaio/test-utils';
+import { createTestBusInstance, createTestCall } from '@makaio/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CursorSdkProviderConfig } from '../schemas.js';
 
@@ -61,7 +61,7 @@ async function createConnector(
   hostBus = MakaioBus,
 ): Promise<TestCursorSdkConnector> {
   return new TestCursorSdkConnector({
-    bus: await CursorSdkNamespace.scopedBus(hostBus.getContext()),
+    bus: await CursorSdkNamespace.scopedBus(hostBus),
     globalBus: hostBus,
     adapterId: 'adapter-1',
     adapterName: 'cursor-sdk',
@@ -92,21 +92,21 @@ describe('CursorSdkConnector', () => {
     const connector = await createConnector();
     sdkControls.failCreate = true;
 
-    await expect(connector.initialize()).rejects.toThrow('cursor init failed');
+    await expect(connector.initialize({ call: createTestCall() })).rejects.toThrow('cursor init failed');
     expect(connector.currentSession()).toBeUndefined();
 
     sdkControls.failCreate = false;
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(connector.currentSession()).toBeDefined();
-    expect(await connector.getAdapterSessionId()).toMatch(/^cursor-/);
+    expect(await connector.getAdapterSessionId(createTestCall())).toMatch(/^cursor-/);
     expect(sdkControls.createCalls).toHaveLength(2);
   });
 
   it('passes provider mode through lazy session initialization', async () => {
     const connector = await createConnector({ mode: 'plan' });
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(sdkControls.createCalls[0]).toMatchObject({ mode: 'plan' });
   });
@@ -114,7 +114,7 @@ describe('CursorSdkConnector', () => {
   it('passes only the selected connector delivery to Agent.create', async () => {
     const connector = await createConnector();
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(sdkControls.createCalls[0]).toMatchObject({ apiKey: 'test-key' });
   });
@@ -127,7 +127,7 @@ describe('CursorSdkConnector', () => {
     });
     const connector = await createConnector();
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(registrations).toHaveLength(1);
     expect(registrations[0]).toMatchObject({
@@ -142,22 +142,22 @@ describe('CursorSdkConnector', () => {
   it('removes all turn handlers on close so only a same-agent successor receives turn events', async () => {
     const hostBus = createTestBusInstance();
     const connector = await createConnector(undefined, hostBus);
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
     const closedUpdates = vi.spyOn(connector, 'updateProcessingState');
 
     await connector.close();
 
     const successor = await createConnector(undefined, hostBus);
-    await successor.initialize();
+    await successor.initialize({ call: createTestCall() });
     const successorUpdates = vi.spyOn(successor, 'updateProcessingState');
-    const bus = await CursorSdkNamespace.scopedBus(hostBus.getContext());
+    const bus = await CursorSdkNamespace.scopedBus(hostBus);
     for (const [subject, oldState, newState] of [
       [CursorSdkSubjects.turn.turn_started, 'idle', 'turn_started'],
       [CursorSdkSubjects.turn.step_started, 'turn_started', 'step_started'],
       [CursorSdkSubjects.turn.step_finished, 'step_started', 'step_finished'],
       [CursorSdkSubjects.turn.turn_finished, 'step_finished', 'turn_finished'],
     ] as const) {
-      await bus.emit(subject, {
+      await bus.emit(createTestCall(), subject, {
         adapterId: 'adapter-1',
         agentId: 'agent-1',
         oldState,
@@ -179,7 +179,7 @@ describe('CursorSdkConnector', () => {
     });
     const hostBus = createTestBusInstance();
     const connector = await createConnector(undefined, hostBus);
-    const initialization = connector.initialize();
+    const initialization = connector.initialize({ call: createTestCall() });
 
     await vi.waitFor(() => expect(sdkControls.createCalls).toHaveLength(1));
     const closing = connector.close();
@@ -188,7 +188,7 @@ describe('CursorSdkConnector', () => {
     await expect(initialization).rejects.toThrow('closed connector');
     await closing;
     const updates = vi.spyOn(connector, 'updateProcessingState');
-    await (await CursorSdkNamespace.scopedBus(hostBus.getContext())).emit(CursorSdkSubjects.turn.turn_started, {
+    await (await CursorSdkNamespace.scopedBus(hostBus)).emit(createTestCall(), CursorSdkSubjects.turn.turn_started, {
       adapterId: 'adapter-1',
       agentId: 'agent-1',
       oldState: 'idle',

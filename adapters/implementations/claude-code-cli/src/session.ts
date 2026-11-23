@@ -1,6 +1,7 @@
 import { isKnownSdkMessageForRouting, type SDKMessage } from '@makaio/client-claude-code';
 import { McpSubjects, type ConnectorTeardownResult, type McpTransportConfig } from '@makaio/contracts';
 import { MakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   BaseConnectorSession,
   markCompletedWithFinalResult,
@@ -125,17 +126,14 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
    * resume target makes payload enrichment withhold the identity it would
    * otherwise heal from.
    * @param handle - Message handle driving the turn (carries the caller's native-resume decision)
-   * @param mergedContent - Optional merged content from immediate-mode supersede
+   * @param merged - Optional merged content from immediate-mode supersede
    * @returns Session identity values for turn startup
    */
-  private async resolveTurnSessionIdentity(
-    handle: MessageHandle,
-    mergedContent?: string[],
-  ): Promise<TurnSessionIdentity> {
-    const isImmediateRestart = mergedContent !== undefined && mergedContent.length > 0;
+  private async resolveTurnSessionIdentity(handle: MessageHandle, merged?: string[]): Promise<TurnSessionIdentity> {
+    const isImmediateRestart = merged !== undefined && merged.length > 0;
     if (isImmediateRestart) {
-      await this.config.onAdapterSessionMoved?.();
-      this.resetForImmediateRestart();
+      await this.config.onAdapterSessionMoved?.(handle.call);
+      this.resetForImmediateRestart(handle.call);
     }
     this.suppressStartResumeIfRequested(handle);
 
@@ -188,7 +186,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
       // Identity was seeded from the resume target: mint a fresh ID so the
       // `--session-id` pin does not collide with the provider's durable
       // session store ("Session ID already in use").
-      this.rotateSessionIdentity();
+      this.rotateSessionIdentity(handle.call);
     }
   }
 
@@ -198,9 +196,10 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
    * Drops the stale MCP routing entry first: any registration made under the
    * previous identity (e.g. by a turn whose `system.init` never arrived) must
    * not keep routing approvals to an ID no future turn will use.
+   * @param call - Call of the message driving the identity rotation
    */
-  private rotateSessionIdentity(): void {
-    this.unregisterMcpSession();
+  private rotateSessionIdentity(call: CallContext): void {
+    this.unregisterMcpSession(call);
     this.sessionId = globalThis.crypto.randomUUID();
     this.deferredSessionId = new DeferredPromise<string>();
     this.deferredSessionId.resolve(this.sessionId);
@@ -235,18 +234,20 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
    *
    * Uses `requestOptional` for graceful degradation: when the bridge service is not
    * running, upstream servers are still provided if available.
+   * @param call - Call of the message starting the turn
    * @param sessionIdForMcp - Adapter session ID to route MCP approvals for this turn
    * @returns Config with serialized JSON and bridge availability flag, or `undefined`
    *   when neither the bridge nor upstream servers are available
    */
   private async registerMcpContextAndBuildConfig(
+    call: CallContext,
     sessionIdForMcp: string,
   ): Promise<{ config: string; hasBridge: boolean } | undefined> {
     // MakaioBus (global singleton) is intentional here — MCP subjects live in
     // the `mcp` namespace, which is unreachable from the adapter's scoped bus.
     // Same pattern used by ToolSubjects.execute and AgentSubjects throughout
     // the adapter layer for all cross-namespace RPCs.
-    const result = await MakaioBus.requestOptional(McpSubjects.session.register, {
+    const result = await MakaioBus.requestOptional(call, McpSubjects.session.register, {
       adapterSessionId: sessionIdForMcp,
       agentId: this.config.agentId,
       adapterId: this.config.adapterId,
@@ -295,14 +296,15 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
    * Best-effort: fire-and-forget via `requestOptional`. If the bridge service
    * is not available or the unregister fails, the stale mapping will be
    * cleaned up by the bridge service's own session expiry logic.
+   * @param call - Call driving rotation or the lifecycle cleanup origin
    */
-  private unregisterMcpSession(): void {
+  private unregisterMcpSession(call: CallContext): void {
     if (!this.registeredMcpSessionId) {
       return;
     }
     const sessionId = this.registeredMcpSessionId;
     this.registeredMcpSessionId = undefined;
-    void MakaioBus.requestOptional(McpSubjects.session.unregister, {
+    void MakaioBus.requestOptional(call, McpSubjects.session.unregister, {
       adapterSessionId: sessionId,
     }).catch(() => {
       // Best-effort cleanup — ignore bridge failures during teardown.
@@ -311,10 +313,11 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
 
   /**
    * Reset session identity for immediate-mode restart after superseding a live subprocess.
+   * @param call - Call of the message superseding the previous turn
    */
-  private resetForImmediateRestart(): void {
+  private resetForImmediateRestart(call: CallContext): void {
     this.confirmedSessionId = false;
-    this.rotateSessionIdentity();
+    this.rotateSessionIdentity(call);
   }
 
   /**
@@ -413,7 +416,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     // never arrive.
     if (this.completeHandleIfClosing(handle)) return false;
 
-    const mcpResult = await this.registerMcpContextAndBuildConfig(sessionIdForMcp);
+    const mcpResult = await this.registerMcpContextAndBuildConfig(handle.call, sessionIdForMcp);
     // Recheck: close() may have started during MCP registration.
     if (this.completeHandleIfClosing(handle)) return false;
     const mcpConfig = mcpResult?.config;
@@ -476,7 +479,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
       });
     });
 
-    await this.currentTurn.start();
+    await this.currentTurn.start(handle.call);
   }
 
   /**
@@ -502,13 +505,15 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     // Emission is diagnostic only; it must not block routing of system.init or
     // result payloads that drive the session state machine.
     if (this.emitSdkEvent) {
-      void this.emitSdkEvent(msg).catch((error: unknown) => {
+      void this.emitSdkEvent(handle.call, msg).catch((error: unknown) => {
         console.error('[ClaudeCliSession] Failed to emit SDK event', error);
       });
     } else {
-      void this.bus.emit(ClaudeCodeCliConnectorSubjects.sdk.event, msg as SDKMessage).catch((error: unknown) => {
-        console.error('[ClaudeCliSession] Failed to emit SDK event', error);
-      });
+      void this.bus
+        .emit(handle.call, ClaudeCodeCliConnectorSubjects.sdk.event, msg as SDKMessage)
+        .catch((error: unknown) => {
+          console.error('[ClaudeCliSession] Failed to emit SDK event', error);
+        });
     }
     if (!sdkMessage) return;
 
@@ -551,7 +556,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
 
     // Advance turn state machine
     if (this.currentTurn) {
-      await this.currentTurn.handleSdkEvent(sdkMessage);
+      await this.currentTurn.handleSdkEvent(handle.call, sdkMessage);
     }
 
     if (sdkMessage.type === 'result') {
@@ -624,7 +629,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     const result: MessageResult = { outcome: 'error', error };
     await markCompletedWithFinalResult(handle, result, this.onTurnComplete);
     try {
-      await turn.finishOnError();
+      await turn.finishOnError(handle.call);
     } catch (finishError) {
       console.error('[Session] Failed to finish errored turn:', finishError);
       return stageFailure('turn finalisation', finishError);
@@ -755,7 +760,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
         console.error('[Session] Failed to close transport during close', error);
         unaccounted.push(stageFailure('transport close', error));
       }
-      this.unregisterMcpSession();
+      this.unregisterMcpSession(MakaioBus.own('stop'));
     }
 
     const unaccountedReport = reportBestEffortStages('Claude CLI close', unaccounted);

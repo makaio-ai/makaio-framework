@@ -252,6 +252,8 @@ function registerHarnessGetHandler(harness: typeof minimalHarness | typeof harne
 }
 
 describe('expandProfileToolCapabilities', () => {
+  const call = MakaioBus.own('root');
+
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
   });
@@ -261,7 +263,7 @@ describe('expandProfileToolCapabilities', () => {
   });
 
   it('returns explicit tool lists unchanged when no capabilities are set', async () => {
-    const result = await expandProfileToolCapabilities(MakaioBus, {
+    const result = await expandProfileToolCapabilities(call, MakaioBus, {
       allowedTools: ['explicit-tool'],
       disallowedTools: ['blocked-tool'],
     });
@@ -271,7 +273,7 @@ describe('expandProfileToolCapabilities', () => {
   });
 
   it('returns explicit tool lists unchanged when no harnessId is provided', async () => {
-    const result = await expandProfileToolCapabilities(MakaioBus, {
+    const result = await expandProfileToolCapabilities(call, MakaioBus, {
       allowedCapabilities: [ToolCapability.FILE_READ],
       allowedTools: ['explicit-tool'],
       disallowedTools: ['blocked-tool'],
@@ -284,7 +286,7 @@ describe('expandProfileToolCapabilities', () => {
   it('returns explicit tool lists unchanged when harness has no toolCapabilityMap', async () => {
     const cleanup = registerHarnessGetHandler(minimalHarness);
 
-    const result = await expandProfileToolCapabilities(MakaioBus, {
+    const result = await expandProfileToolCapabilities(call, MakaioBus, {
       harnessId: minimalHarness.id,
       allowedCapabilities: [ToolCapability.FILE_READ],
       allowedTools: ['explicit-tool'],
@@ -299,7 +301,7 @@ describe('expandProfileToolCapabilities', () => {
   it('expands allowedCapabilities and unions results with explicit allowedTools', async () => {
     const cleanup = registerHarnessGetHandler(harnessWithCapabilityMap);
 
-    const result = await expandProfileToolCapabilities(MakaioBus, {
+    const result = await expandProfileToolCapabilities(call, MakaioBus, {
       harnessId: harnessWithCapabilityMap.id,
       allowedCapabilities: [ToolCapability.FILE_READ],
       allowedTools: ['explicit-allowed'],
@@ -315,7 +317,7 @@ describe('expandProfileToolCapabilities', () => {
   it('expands disallowedCapabilities and unions results with explicit disallowedTools', async () => {
     const cleanup = registerHarnessGetHandler(harnessWithCapabilityMap);
 
-    const result = await expandProfileToolCapabilities(MakaioBus, {
+    const result = await expandProfileToolCapabilities(call, MakaioBus, {
       harnessId: harnessWithCapabilityMap.id,
       disallowedCapabilities: [ToolCapability.FILE_WRITE],
       disallowedTools: ['explicit-blocked'],

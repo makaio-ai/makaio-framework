@@ -2,6 +2,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { CANONICAL_HOOK_RESPONSE_CAPABILITIES } from '@makaio/contracts/client';
 import type { CanonicalEffect, ProviderContributionEnvelope } from '@makaio/contracts/client';
+import type { CallContext } from '@makaio/core';
 import {
   collectContributions,
   NOOP_HOOK_HANDLE_RESPONSE,
@@ -278,6 +279,7 @@ function resolveSessionTokenScope(
 
 /**
  * Compose one terminal Codex native hook response.
+ * @param call - Call of the hook-request message being answered.
  * @param registry - Active response contributor registry.
  * @param payload - Normalized native hook payload.
  * @param options - Request deadline, cancellation, diagnostics hooks, and
@@ -285,6 +287,7 @@ function resolveSessionTokenScope(
  * @returns The composed native response envelope.
  */
 export async function composeCodexHookResponse(
+  call: CallContext,
   registry: ClientHookResponseRegistry,
   payload: RawClientHookPayload,
   options?: ComposeCodexHookResponseOptions,
@@ -297,6 +300,7 @@ export async function composeCodexHookResponse(
   );
   if (!snapshot.length) return NOOP_HOOK_HANDLE_RESPONSE;
   const result = await collectContributions(
+    call,
     snapshot,
     CODEX_CLIENT_ID,
     options?.deadline,

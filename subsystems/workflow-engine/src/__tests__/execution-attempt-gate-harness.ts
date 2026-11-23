@@ -1,5 +1,4 @@
 import {
-  createBusContext,
   createBusInstance,
   type BusBroadcastMessage,
   type BusMessage,
@@ -10,7 +9,7 @@ import {
   type IMakaioBus,
 } from '@makaio/bus-core';
 import { ExecutionAttemptNamespace, type WorkflowRunResult } from '@makaio/contracts';
-import type { TransportReceiveContext } from '@makaio/core';
+import { MAKAIO_JOB_RUN_PARTY_KIND, type TransportReceiveContext } from '@makaio/core';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import {
   createInMemoryAttemptRepository,
@@ -22,7 +21,7 @@ import {
 /**
  * Transport fixture that injects authenticated remote requests.
  *
- * Both authority gates take `executionId` from the authenticated peer and
+ * Both authority gates take `executionId` from the authenticated caller and
  * refuse a caller that has none, so a gate cannot be exercised through a local
  * `bus.request`. This transport is the smallest thing that supplies a real
  * receive context: it hands a request to the bus's own receive handler and
@@ -60,7 +59,7 @@ export class AttemptGateTransport implements BusTransport {
    * @param namespace - Bus namespace of the subject.
    * @param subject - Subject name within the namespace.
    * @param payload - Request payload.
-   * @param peer - Authenticated peer the receiving transport resolved.
+   * @param caller - Authenticated caller the receiving transport resolved.
    * @returns The response message the bus sent back.
    * @throws When the bus produced no response for the request.
    */
@@ -68,13 +67,13 @@ export class AttemptGateTransport implements BusTransport {
     namespace: string,
     subject: string,
     payload: unknown,
-    peer: TransportReceiveContext['peer'],
+    caller: TransportReceiveContext['caller'],
   ): Promise<BusResponseMessage> {
     this.sequence += 1;
     const correlationId = `attempt-gate-${this.sequence}`;
     await this.handler?.(
       { type: 'request', namespace, subject, payload, correlationId, messageId: `msg-${correlationId}` },
-      { transportName: this.name, peer },
+      { transportName: this.name, caller },
     );
     const response = this.messages.find(
       (message): message is BusResponseMessage =>
@@ -86,16 +85,15 @@ export class AttemptGateTransport implements BusTransport {
 }
 
 /**
- * Build the authenticated peer of one execution attempt.
- * @param executionAttemptId - Attempt the peer is bound to.
- * @param executionId - Authority-issued execution claim the peer carries.
- * @returns A receive-context peer of kind `workflow-execution-attempt`.
+ * Build the authenticated caller of one execution attempt.
+ * @param executionAttemptId - Attempt the caller is bound to.
+ * @param executionId - Authority-issued execution claim the caller carries.
+ * @returns A receive-context caller of kind `makaio.job-run`.
  */
-export function attemptPeer(executionAttemptId: string, executionId: string): TransportReceiveContext['peer'] {
+export function attemptPeer(executionAttemptId: string, executionId: string): TransportReceiveContext['caller'] {
   return {
-    kind: 'workflow-execution-attempt',
+    kind: MAKAIO_JOB_RUN_PARTY_KIND,
     id: executionAttemptId,
-    authenticated: true,
     claims: { executionId },
   };
 }
@@ -122,7 +120,7 @@ export interface AttemptGateHarness {
 export function createAttemptGateHarness(): AttemptGateHarness {
   const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
   const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
-  const bus = createBusInstance({ context: createBusContext() });
+  const bus = createBusInstance();
   bus.registerNamespace(ExecutionAttemptNamespace);
   const transport = new AttemptGateTransport();
   bus.registerTransport(transport);

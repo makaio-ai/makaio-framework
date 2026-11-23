@@ -4,6 +4,7 @@ import { UsageHistoryRequestSchema } from './bus/schemas.js';
 import { CredentialSubjects } from '@makaio/contracts';
 import type { ExtensionWarning } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { UsageEntry } from './bus/usage-entry.js';
 import type {
   IAccountCredentialStore,
@@ -117,8 +118,15 @@ export class AccountManager extends BaseService {
       usageSnapshotStore: this.usageSnapshotStore,
       pollIntervalMs: options.usagePollIntervalMs,
       sourceConfigs: options.usageSourceConfigs,
-      readCredential: async (clientId, accountId) =>
-        prepareUsageCredential(clientId, accountId, this.getSource(clientId), this.metadataStore, this.credentialStore),
+      readCredential: async (call, clientId, accountId) =>
+        prepareUsageCredential(
+          call,
+          clientId,
+          accountId,
+          this.getSource(clientId),
+          this.metadataStore,
+          this.credentialStore,
+        ),
     });
 
     if (hasEnabledAutoActivationSource(options.autoActivation)) {
@@ -143,6 +151,7 @@ export class AccountManager extends BaseService {
       this.addCleanup(() => windowActivator.stop());
     }
     this.registerHandlers();
+    this.registerUsageHistoryHandler();
     this.addHandlerCleanup(
       registerAccountManagerSourceHandlers({
         bus: this.bus,
@@ -151,7 +160,7 @@ export class AccountManager extends BaseService {
       }),
     );
     this.registerCredentialLifecycleHandlers(activationTransactions);
-    await this.credentialTracker.start();
+    await this.credentialTracker.start(this.bus.own('start'));
     this.addCleanup(() => this.credentialTracker.stop());
     this.addCleanup(() => this.usageTracker.stop());
     await this.clientAccountLinker.syncExistingAccounts();
@@ -165,7 +174,7 @@ export class AccountManager extends BaseService {
   /** Roll back every unconsumed activation before service-owned handlers are removed. */
   protected override async onDestroy(): Promise<void> {
     this.usageTracker.requestStop();
-    await this.activationTransactions?.shutdown();
+    await this.activationTransactions?.shutdown(this.bus.own('stop'));
   }
 
   /**
@@ -175,11 +184,11 @@ export class AccountManager extends BaseService {
   private createActivationTransactions(): AccountActivationTransactions {
     return new AccountActivationTransactions({
       clientMutations: this.clientMutations,
-      prepareActivation: async (clientId, accountId) => {
-        const target = await getStoredAccount(this.metadataStore, this.credentialStore, clientId, accountId);
+      prepareActivation: async (call, clientId, accountId) => {
+        const target = await getStoredAccount(call, this.metadataStore, this.credentialStore, clientId, accountId);
         return target === null
           ? null
-          : prepareAccountActivation(clientId, accountId, this.buildActivationDeps(clientId), undefined, target);
+          : prepareAccountActivation(call, clientId, accountId, this.buildActivationDeps(clientId), undefined, target);
       },
     });
   }
@@ -190,31 +199,40 @@ export class AccountManager extends BaseService {
   private registerHandlers(): void {
     this.registerHandler(AccountManagerSubjects.accounts.list, async (ctx) => {
       const accounts = await this.clientMutations.run(ctx.payload.clientId, async () =>
-        listStoredAccounts(this.metadataStore, this.credentialStore, ctx.payload.clientId),
+        listStoredAccounts(ctx.call, this.metadataStore, this.credentialStore, ctx.payload.clientId),
       );
       ctx.setResult({ accounts: accounts.map(toPublicAccount) });
     });
 
     this.registerHandler(AccountManagerSubjects.accounts.getActive, async (ctx) => {
       const active = await this.clientMutations.run(ctx.payload.clientId, async () =>
-        this.metadataStore.getActive(ctx.payload.clientId),
+        this.metadataStore.getActive(ctx.call, ctx.payload.clientId),
       );
       ctx.setResult({ account: active });
     });
 
     this.registerHandler(AccountManagerSubjects.accounts.getActiveAtTimestamp, async (ctx) => {
-      const accountId = await this.metadataStore.getActiveAtTimestamp(ctx.payload.clientId, ctx.payload.timestamp);
+      const accountId = await this.metadataStore.getActiveAtTimestamp(
+        ctx.call,
+        ctx.payload.clientId,
+        ctx.payload.timestamp,
+      );
       ctx.setResult({ accountId });
     });
 
     this.registerHandler(AccountManagerSubjects.credentials.switch, async (ctx) => {
       try {
         const activatedAccountId = await this.clientMutations.run(ctx.payload.clientId, async () =>
-          switchAccount(ctx.payload.clientId, ctx.payload.accountId, this.buildActivationDeps(ctx.payload.clientId)),
+          switchAccount(
+            ctx.call,
+            ctx.payload.clientId,
+            ctx.payload.accountId,
+            this.buildActivationDeps(ctx.payload.clientId),
+          ),
         );
         // Credential fanout runs outside the mutation lock — see poll() comment.
         if (activatedAccountId !== undefined) {
-          await emitCredentialChangedForClient(this.bus, ctx.payload.clientId, activatedAccountId);
+          await emitCredentialChangedForClient(ctx.call, this.bus, ctx.payload.clientId, activatedAccountId);
         }
         ctx.setResult({ success: true });
       } catch (error) {
@@ -231,7 +249,7 @@ export class AccountManager extends BaseService {
     this.registerHandler(AccountManagerSubjects.accounts.label, async (ctx) => {
       await this.clientMutations.run(ctx.payload.clientId, async () => {
         const { clientId, accountId, label } = ctx.payload;
-        const account = await this.metadataStore.setLabel(clientId, accountId, label);
+        const account = await this.metadataStore.setLabel(ctx.call, clientId, accountId, label);
         if (!account) {
           ctx.setResult({ success: false });
           return;
@@ -245,17 +263,24 @@ export class AccountManager extends BaseService {
         const { clientId, accountId } = ctx.payload;
         // Fetch before removal so we can compare the fingerprint below.
         const accountToRemove = await this.credentialStore.get(clientId, accountId);
-        await removeStoredAccount(this.metadataStore, this.credentialStore, clientId, accountId);
+        await removeStoredAccount(ctx.call, this.metadataStore, this.credentialStore, clientId, accountId);
         // Clear cached state so the next poll re-detects this credential
         // if the user logs in again after removal.
-        return accountToRemove ? () => this.clearDerivedState(clientId, accountId, accountToRemove.fingerprint) : null;
+        return accountToRemove
+          ? () => this.clearDerivedState(ctx.call, clientId, accountId, accountToRemove.fingerprint)
+          : null;
       });
       if (quiesceFactory) {
         await quiesceFactory();
       }
       ctx.setResult({ success: true });
     });
+  }
 
+  /**
+   * Registers the `usage.history` bus handler.
+   */
+  private registerUsageHistoryHandler(): void {
     this.registerHandler(AccountManagerSubjects.usage.history, async (ctx) => {
       // Re-parse with the shared schema so isolated test/runtime bus instances
       // keep the same request contract even when namespace validation is not
@@ -272,7 +297,7 @@ export class AccountManager extends BaseService {
       // not as an ad-hoc truncation here.
       const entries: UsageEntry[] = [];
       try {
-        for await (const entry of this.usageSnapshotStore.read(clientId, accountId, { from, to, windowId })) {
+        for await (const entry of this.usageSnapshotStore.read(ctx.call, clientId, accountId, { from, to, windowId })) {
           entries.push(entry);
         }
       } catch (error) {
@@ -293,7 +318,8 @@ export class AccountManager extends BaseService {
     if (makaioCommand.length === 0) {
       throw new Error('AccountManager.checkHealth requires a host-provided launcher command.');
     }
-    return collectAccountManagerHealthWarnings(this.bus, this.sources, { makaioCommand });
+    // ORIGIN: The lifecycle health hook sends on this extension's carrier, independently of the host.
+    return collectAccountManagerHealthWarnings(this.bus.own('observer'), this.bus, this.sources, { makaioCommand });
   }
 
   /**
@@ -318,6 +344,7 @@ export class AccountManager extends BaseService {
       const result = await this.clientMutations.run(method.clientId, async () => {
         try {
           const target = await getStoredAccount(
+            ctx.call,
             this.metadataStore,
             this.credentialStore,
             method.clientId,
@@ -327,6 +354,7 @@ export class AccountManager extends BaseService {
             return { success: false as const, code: 'account-not-found' as const };
           }
           await activateAccount(
+            ctx.call,
             method.clientId,
             account.accountId,
             this.buildActivationDeps(method.clientId),
@@ -360,19 +388,19 @@ export class AccountManager extends BaseService {
           await ctx.next();
           return;
         }
-        ctx.setResult(await activationTransactions.prepare(method.clientId, account.accountId));
+        ctx.setResult(await activationTransactions.prepare(ctx.call, method.clientId, account.accountId));
       }),
     );
 
     this.addCleanup(
       this.bus.on(CredentialSubjects.activation.commit, async (ctx) => {
-        ctx.setResult(await activationTransactions.commit(ctx.payload.transactionId));
+        ctx.setResult(await activationTransactions.commit(ctx.call, ctx.payload.transactionId));
       }),
     );
 
     this.addCleanup(
       this.bus.on(CredentialSubjects.activation.rollback, async (ctx) => {
-        ctx.setResult(await activationTransactions.rollback(ctx.payload.transactionId));
+        ctx.setResult(await activationTransactions.rollback(ctx.call, ctx.payload.transactionId));
       }),
     );
   }
@@ -391,8 +419,8 @@ export class AccountManager extends BaseService {
       credentialStore: this.credentialStore,
       source: this.getSource(clientId),
       setLastSeen: (cid: string, fingerprint: string) => this.credentialTracker.setLastSeen(cid, fingerprint),
-      clearDerivedState: (cid: string, accountId: string, fingerprint: string) =>
-        this.clearDerivedState(cid, accountId, fingerprint),
+      clearDerivedState: (call: CallContext, cid: string, accountId: string, fingerprint: string) =>
+        this.clearDerivedState(call, cid, accountId, fingerprint),
       bus: this.bus,
     };
   }
@@ -402,17 +430,23 @@ export class AccountManager extends BaseService {
    *
    * Shared by the `accounts.remove` handler and zombie pruning in
    * {@link activateAccount} so both paths stay in sync.
+   * @param call - Call context of the removal or activation that triggers the cleanup
    * @param clientId - Client whose caches should be cleared
    * @param accountId - Account being removed
    * @param fingerprint - Fingerprint of the removed account
    * @returns Promise that settles once account-owned tracker work has drained
    */
-  private clearDerivedState(clientId: string, accountId: string, fingerprint: string): Promise<void> {
+  private clearDerivedState(
+    call: CallContext,
+    clientId: string,
+    accountId: string,
+    fingerprint: string,
+  ): Promise<void> {
     if (this.credentialTracker.getLastSeen(clientId) === fingerprint) {
       this.credentialTracker.deleteLastSeen(clientId);
     }
     this.labelResolver.clearRetryState(clientId, accountId);
-    this.usageTracker.clearAccountState(clientId, accountId);
+    this.usageTracker.clearAccountState(call, clientId, accountId);
     return this.usageTracker.waitForAccountQuiescence(clientId, accountId);
   }
 

@@ -9,6 +9,8 @@ import type {
   JsonSchema,
   JsonValue,
 } from '@makaio/contracts';
+import { ForeignOwnContextError } from '@makaio/bus-core';
+import { ownCarrierOf } from '@makaio/bus-core/kernel-api';
 import { JsonRecordSchema, JsonValueSchema, createAutomationTriggerDescriptor } from '@makaio/contracts';
 import { SerialLane } from '@makaio/utils';
 import { canonicalizeJsonRecord, createCanonicalBindingKey } from './canonical-binding-key.js';
@@ -700,7 +702,7 @@ export class AutomationTriggerBindingRuntime {
     return {
       bindingKey: entry.bindingKey,
       signal: entry.controller.signal,
-      emit: (payload, metadata) => this.dispatch(entry, payload, metadata?.correlationId),
+      emit: (payload, metadata) => this.dispatch(entry, payload, metadata),
     };
   }
 
@@ -712,17 +714,35 @@ export class AutomationTriggerBindingRuntime {
    * `activate`.
    * @param entry - Activation that emitted.
    * @param payload - Raw payload supplied by the trigger.
-   * @param correlationId - Optional correlation id propagated by the source.
+   * @param metadata - Optional correlation id and causing call propagated by the source.
    * @returns Resolves once every listener has settled.
    * @throws When the payload fails the activation's captured `eventSchema` or is
    *   not JSON-compatible.
+   * @throws ForeignOwnContextError When `metadata.call` is an own context (`bus.own`)
+   *   instead of the call of a received message.
    */
-  private async dispatch(entry: ActiveBinding, payload: unknown, correlationId: string | undefined): Promise<void> {
+  private async dispatch(
+    entry: ActiveBinding,
+    payload: unknown,
+    metadata: Parameters<AutomationTriggerActivationContext<unknown>['emit']>[1],
+  ): Promise<void> {
     // Late emit from a retired or superseded activation: silently ignored so a
     // source that outlives its cleanup cannot resurrect listeners or bleed into a
     // newer activation of the same canonical key. One check covers both cases —
     // see invariant 3.
     if (this.bindings.get(entry.bindingKey) !== entry) return;
+
+    // Listeners send the causing call on their own bus, where an own context of the
+    // trigger is foreign. Rejected here, at the emitting trigger, because a listener
+    // failure is only logged and the work it would start would silently not happen.
+    const call = metadata?.call;
+    if (call !== undefined && ownCarrierOf(call) !== undefined) {
+      const error = new ForeignOwnContextError(
+        `Trigger '${entry.kind}' emitted an own context as the causing call; forward the received ctx.call or omit it`,
+      );
+      console.error(`${LOG_PREFIX} rejected emit from '${entry.kind}':`, error);
+      throw error;
+    }
 
     let validated: JsonValue;
     try {
@@ -749,7 +769,8 @@ export class AutomationTriggerBindingRuntime {
       kind: entry.kind,
       payload: validated,
       observedAt: Date.now(),
-      ...(correlationId === undefined ? {} : { correlationId }),
+      ...(metadata?.correlationId === undefined ? {} : { correlationId: metadata.correlationId }),
+      ...(metadata?.call === undefined ? {} : { call: metadata.call }),
     };
 
     // Snapshot the listeners so a listener that subscribes or detaches during

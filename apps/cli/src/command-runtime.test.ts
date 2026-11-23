@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import { resourceStepStopBudgetMs } from '@makaio/runtime-node';
-import { createMockBus } from '@makaio/test-utils';
+import { createMockBus, createTestCall } from '@makaio/test-utils';
 import { outerBoundMs } from '@makaio/utils';
 import {
   createProcessCommandContext,
@@ -427,6 +427,7 @@ describe('evaluateBeforeRunGate', () => {
   const context: BeforeRunContext = {
     subcommandName: 'status',
     args: {},
+    call: createTestCall(),
     bus: null,
   };
 

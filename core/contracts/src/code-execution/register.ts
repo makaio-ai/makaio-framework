@@ -1,4 +1,4 @@
-import type { MakaioBusLike } from '@makaio/core';
+import type { CallContext, MakaioBusLike } from '@makaio/core';
 import { CapabilitySubjects } from '../capability/index.js';
 import { CODE_EXECUTION_CAPABILITY_ID, type ICodeExecutionProvider } from './types.js';
 
@@ -35,12 +35,18 @@ const LOCAL_COMPOSITION_ONLY = { transports: [] } as const;
  * Registration is local runtime composition: the provider is handed to the
  * registry as a live object reference, is never serialized, and — see
  * {@link LOCAL_COMPOSITION_ONLY} — never reaches a transport.
- * @param bus - Makaio bus instance.
+ * @param call - The call context the emission is sent with.
+ * @param bus - Any bus that can emit, including a filtered bus; only `emit` is used.
  * @param provider - Provider instance to register.
  * @returns Promise that resolves after registration handlers have completed.
  */
-export function registerCodeExecutionProvider(bus: MakaioBusLike, provider: ICodeExecutionProvider): Promise<void> {
+export function registerCodeExecutionProvider(
+  call: CallContext,
+  bus: Pick<MakaioBusLike, 'emit'>,
+  provider: ICodeExecutionProvider,
+): Promise<void> {
   return bus.emit(
+    call,
     CapabilitySubjects.register,
     {
       capabilityId: CODE_EXECUTION_CAPABILITY_ID,
@@ -56,12 +62,18 @@ export function registerCodeExecutionProvider(bus: MakaioBusLike, provider: ICod
  * Routed local-only for the same reason the registration is: the bucket this
  * removes from only ever held a locally composed provider, so a peer has
  * nothing to remove and the two emissions must not disagree about scope.
- * @param bus - Makaio bus instance.
+ * @param call - The call context the emission is sent with.
+ * @param bus - Any bus that can emit, including a filtered bus; only `emit` is used.
  * @param providerId - Provider identifier to remove.
  * @returns Promise that resolves after unregistration handlers have completed.
  */
-export function unregisterCodeExecutionProvider(bus: MakaioBusLike, providerId: string): Promise<void> {
+export function unregisterCodeExecutionProvider(
+  call: CallContext,
+  bus: Pick<MakaioBusLike, 'emit'>,
+  providerId: string,
+): Promise<void> {
   return bus.emit(
+    call,
     CapabilitySubjects.unregister,
     {
       capabilityId: CODE_EXECUTION_CAPABILITY_ID,

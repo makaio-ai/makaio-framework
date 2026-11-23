@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { AvailableAdapter } from '@makaio/services-core/settings';
 import { teardownWasObserved } from '@makaio/contracts';
 import {
@@ -474,10 +475,12 @@ export class AdapterRuntimeRegistry {
     const { adapterName, displayName, packageName, enabled, adapterId, providerDefinitionIds } = options;
     const initialized = this.adapterEntries.get(adapterId)?.state === 'live';
 
+    // The chain serves every publisher and no inbound message, so the publication runs under the bus carrier's own context.
+    const call = this.bus.own('shared-work');
     const publication = this.publicationChain
       .catch(() => undefined)
       .then(() =>
-        this.bus.emit(AdapterSubsystemSubjects.adapter.registered, {
+        this.bus.emit(call, AdapterSubsystemSubjects.adapter.registered, {
           adapterName,
           displayName: displayName ?? adapterName,
           packageName,
@@ -622,7 +625,10 @@ export class AdapterRuntimeRegistry {
       report,
       flight,
     });
+    // The retirement flight is joined by every later caller, so no single requester's context owns it.
+    const call: CallContext = this.bus.own('shared-work');
     const attempt = await startAdapterRetirementAttempt(
+      call,
       this.bus,
       deinitializedAdapterIdentity(this.adapterEntries, this.machineId, adapterId, adapterName),
       () => retireAdapterInstance(adapterId, entry.instance),

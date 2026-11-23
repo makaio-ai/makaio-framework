@@ -1,4 +1,5 @@
 import type { ComponentType } from 'react';
+import type { CallContext, MakaioBusLike } from '@makaio/core';
 import type { FormFieldProps } from '../../shared/ui-config.js';
 import type { UiContextSnapshot } from './ui-context-types.js';
 
@@ -28,25 +29,50 @@ export interface LoaderContext {
 }
 
 /**
- * Loader function that fetches data for a WebUI route.
+ * Execution context handed to WebUI loaders and actions as their first argument.
  *
- * Receives a {@link LoaderContext} with active session, UI context, and URL
- * params so loaders can return visibility-appropriate data. The resolved data
- * is passed to the component as `loaderData`.
- * @typeParam TData - Type of data returned by the loader.
- * @param context - Request context with session, UI context, and URL params.
- * @returns Promise resolving to the loader data.
+ * Loaders and actions run in the browser. The host binds this context to the
+ * bus of the UI and supplies `own('root')` of that bus as `call`, because a
+ * loader run or an action is a user action or a navigation, which starts new work (FACT-375). Handlers send
+ * with `ctx.bus.request(ctx.call, ...)`.
+ * @typeParam TBus - Bus type carried by the context.
  */
-export type MakaioWebUiLoader<TData = unknown> = (context: LoaderContext) => Promise<TData>;
+export interface MakaioWebUiExecutionContext<TBus extends MakaioBusLike = MakaioBusLike> {
+  /** Bus of the UI the host bound this context to. */
+  readonly bus: TBus;
+  /** Call context for sends: the UI bus's `own('root')`. */
+  readonly call: CallContext;
+}
 
 /**
- * Action function that performs server-side operations.
+ * Loader function that fetches data for a WebUI route.
+ *
+ * Runs in the browser. Receives a {@link MakaioWebUiExecutionContext} for sends
+ * and a {@link LoaderContext} with active session, UI context, and URL params so
+ * loaders can return visibility-appropriate data. The resolved data is passed to
+ * the component as `loaderData`.
+ * @typeParam TData - Type of data returned by the loader.
+ * @param ctx - Bus and call context bound by the host.
+ * @param loaderContext - Request context with session, UI context, and URL params.
+ * @returns Promise resolving to the loader data.
+ */
+export type MakaioWebUiLoader<TData = unknown> = (
+  ctx: MakaioWebUiExecutionContext,
+  loaderContext: LoaderContext,
+) => Promise<TData>;
+
+/**
+ * Action function that performs an operation on behalf of the UI.
+ *
+ * Runs in the browser; the host binds the leading {@link MakaioWebUiExecutionContext}.
  * @typeParam TData - Type of data returned by the action.
- * @typeParam TArgs - Tuple type of arguments accepted by the action.
+ * @typeParam TArgs - Tuple type of arguments accepted by the action after `ctx`.
+ * @param ctx - Bus and call context bound by the host.
  * @param args - Arguments passed to the action.
  * @returns Promise resolving to the action result.
  */
 export type MakaioWebUiAction<TData = unknown, TArgs extends unknown[] = unknown[]> = (
+  ctx: MakaioWebUiExecutionContext,
   ...args: TArgs
 ) => Promise<TData>;
 
@@ -58,14 +84,17 @@ export type MakaioWebUiAction<TData = unknown, TArgs extends unknown[] = unknown
 export type MakaioWebUiActions = Record<string, MakaioWebUiAction<unknown, unknown[]>>;
 
 /**
- * Transforms server-side action definitions into client-side Promise-based
- * executors.
+ * Transforms action definitions into component-side Promise-based executors.
  *
- * Used in component props to provide an async/await API for actions.
- * @typeParam TActions - The server-side action record shape.
+ * Removes the leading {@link MakaioWebUiExecutionContext} parameter: the host
+ * binds it, so components call `props.actions.create(data)`.
+ * @typeParam TActions - The action record shape.
  */
 export type PromisifiedActions<TActions extends MakaioWebUiActions> = {
-  [K in keyof TActions]: TActions[K] extends (...args: infer Args) => Promise<infer Result>
+  [K in keyof TActions]: TActions[K] extends (
+    ctx: MakaioWebUiExecutionContext,
+    ...args: infer Args
+  ) => Promise<infer Result>
     ? (...args: Args) => Promise<Result>
     : never;
 };
@@ -110,7 +139,7 @@ export type MakaioWebUiComponentProps<
 > = {
   /** Data resolved by the loader before the component was rendered. */
   loaderData: TLoaderData;
-  /** Promisified action executors for mutating server-side state. */
+  /** Promisified action executors; the host-bound context is already applied. */
   actions: TActions extends MakaioWebUiActions ? PromisifiedActions<TActions> : Record<string, never>;
   /** The loader context that was active when the loader ran. */
   loaderContext: LoaderContext;

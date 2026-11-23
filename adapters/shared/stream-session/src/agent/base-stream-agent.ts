@@ -8,7 +8,7 @@ import type {
   AgentCompleteEvent,
 } from '@makaio/ai-adapters-core';
 import type { ScopedBus } from '@makaio/bus-core';
-import type { EventMessagePayload } from '@makaio/core';
+import type { CallContext, EventMessagePayload } from '@makaio/core';
 import { AgentSubjects } from '@makaio/contracts';
 import type { SessionMessageBlock, StepType, BlockData } from '@makaio/contracts';
 import type { ReasoningDeltaEvent, MessageCompleteEvent, ToolCall } from '../namespaces/schemas/index.js';
@@ -238,9 +238,10 @@ export abstract class BaseStreamAgent<
    *
    * Adapters differ in which fields provide the cached token count and the default
    * max context window size. Called from `wireUsageEvents` after `trackUsage()`.
+   * @param call - Call context of the usage event being translated
    * @param payload - Raw usage event payload (same object passed to `extractUsagePayload`)
    */
-  protected abstract emitUsageContextWindowUpdate(payload: Record<string, unknown>): Promise<void>;
+  protected abstract emitUsageContextWindowUpdate(call: CallContext, payload: Record<string, unknown>): Promise<void>;
 
   /**
    * Reserve a block index for a tool call from the tool_calls event.
@@ -357,7 +358,7 @@ export abstract class BaseStreamAgent<
     this.subscribeConnector(connector, subjects.chunk, async (ctx) => {
       const text = this.extractChunkText(ctx.payload);
       if (text) {
-        await this.emitGlobal(AgentSubjects.message_delta, { text });
+        await this.emitGlobal(ctx.call, AgentSubjects.message_delta, { text });
       }
     });
 
@@ -367,11 +368,11 @@ export abstract class BaseStreamAgent<
 
       // Emit step.started and step.finished for text content blocks
       if (content) {
-        await this.emitStepStarted('text');
-        await this.emitStepFinished('text', { type: 'text', content });
+        await this.emitStepStarted(ctx.call, 'text');
+        await this.emitStepFinished(ctx.call, 'text', { type: 'text', content });
       }
 
-      await this.emitGlobal(AgentSubjects.message, { content: content ?? '' });
+      await this.emitGlobal(ctx.call, AgentSubjects.message, { content: content ?? '' });
     });
   }
 
@@ -386,8 +387,8 @@ export abstract class BaseStreamAgent<
   private wireUsageEvents(connector: TConnector, subjects: TSpec): void {
     this.subscribeConnector(connector, subjects.usage, async (ctx) => {
       const normalized = this.extractUsagePayload(ctx.payload);
-      await this.trackUsage(normalized);
-      await this.emitUsageContextWindowUpdate(ctx.payload);
+      await this.trackUsage(ctx.call, normalized);
+      await this.emitUsageContextWindowUpdate(ctx.call, ctx.payload);
     });
   }
 
@@ -417,7 +418,7 @@ export abstract class BaseStreamAgent<
         const blockIndex = this.reserveToolCallBlockIndex(tc);
         this.toolBlockIndexMap.set(tc.id, blockIndex);
 
-        await this.emitGlobal(AgentSubjects.step.started, {
+        await this.emitGlobal(ctx.call, AgentSubjects.step.started, {
           stepType: 'tool_use' as StepType,
           blockIndex,
           blockData: {
@@ -435,7 +436,7 @@ export abstract class BaseStreamAgent<
 
         this.afterToolCallStepEmitted(blockIndex);
 
-        await this.emitGlobal(AgentSubjects.tool.use, {
+        await this.emitGlobal(ctx.call, AgentSubjects.tool.use, {
           toolName: tc.function.name,
           args,
           toolCallId: tc.id,
@@ -446,7 +447,7 @@ export abstract class BaseStreamAgent<
     // tool_started -> agent.tool.started
     this.subscribeConnector(connector, subjects.toolStarted, async (ctx) => {
       const { toolName, toolCallId } = ctx.payload as ToolStartedEvent;
-      await this.emitGlobal(AgentSubjects.tool.started, { toolName, toolCallId });
+      await this.emitGlobal(ctx.call, AgentSubjects.tool.started, { toolName, toolCallId });
     });
 
     // tool_completed -> agent.tool.completed + step.finished
@@ -461,7 +462,7 @@ export abstract class BaseStreamAgent<
       const resolvedBlockIndex = storedBlockIndex ?? this.getFallbackToolCompletedBlockIndex();
       this.toolBlockIndexMap.delete(toolCallId);
 
-      await this.emitGlobal(AgentSubjects.step.finished, {
+      await this.emitGlobal(ctx.call, AgentSubjects.step.finished, {
         stepType: 'tool_use' as StepType,
         blockIndex: resolvedBlockIndex,
         content: {
@@ -480,7 +481,7 @@ export abstract class BaseStreamAgent<
         console.warn(`[BaseStreamAgent] toolCallId ${toolCallId} missing args for tool ${toolName}`);
       }
 
-      await this.emitGlobal(AgentSubjects.tool.completed, {
+      await this.emitGlobal(ctx.call, AgentSubjects.tool.completed, {
         toolName,
         args,
         result: { output: result },
@@ -502,7 +503,7 @@ export abstract class BaseStreamAgent<
     // reasoning_delta -> agent.reasoning_delta
     this.subscribeConnector(connector, subjects.reasoningDelta, async (ctx) => {
       const { content } = ctx.payload as ReasoningDeltaEvent;
-      await this.emitGlobal(AgentSubjects.reasoning_delta, { content });
+      await this.emitGlobal(ctx.call, AgentSubjects.reasoning_delta, { content });
     });
 
     // reasoning_complete -> agent.reasoning + step events
@@ -511,11 +512,11 @@ export abstract class BaseStreamAgent<
 
       if (content) {
         const reasoningBlock = this.buildReasoningBlock(ctx.payload);
-        await this.emitStepStarted('reasoning');
-        await this.emitStepFinished('reasoning', reasoningBlock);
+        await this.emitStepStarted(ctx.call, 'reasoning');
+        await this.emitStepFinished(ctx.call, 'reasoning', reasoningBlock);
       }
 
-      await this.emitGlobal(AgentSubjects.reasoning, { content: content ?? '' });
+      await this.emitGlobal(ctx.call, AgentSubjects.reasoning, { content: content ?? '' });
     });
   }
 
@@ -534,7 +535,7 @@ export abstract class BaseStreamAgent<
     this.subscribeConnector(connector, subjects.agentStarted, async (ctx) => {
       const _agentStarted = ctx.payload as AgentStartedEvent;
       this.resetPerTurnToolTracking();
-      await this.emitStart();
+      await this.emitStart(ctx.call);
     });
 
     // agent_complete -> clear per-turn state

@@ -8,14 +8,21 @@ import type {
   EventMessagePayload,
   RequestMessagePayload,
   EventHandler,
+  CallContext,
+  PartyRef,
+  WildcardSubject,
 } from '@makaio/core';
 import type { OnOptions } from '../types/index.js';
 import { encrypt, decrypt } from './crypto.js';
 import { ChannelClosedError } from '../errors/channel-closed-error.js';
 import { NoHandlerError } from '../errors/no-handler-error.js';
 import { on as internalOn } from '../methods/on.js';
-import { emit as internalEmit } from '../methods/emit.js';
-import { request as internalRequest } from '../methods/request.js';
+import { emitReceived } from '../methods/emit.js';
+import { requestWithMintedCall } from '../methods/request.js';
+import { enterSend } from '../call-context/send-entry.js';
+import { own as ownContextOf } from '../call-context/carrier.js';
+import { normalizeSendArgs } from '../call-context/send-args.js';
+import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 
 /**
  * Encrypted payload shape transmitted over the bus for all channel messages.
@@ -131,6 +138,11 @@ function makeChannelRequestDef(channelId: string, subject: string): ChannelReque
  * The channel uses a dedicated namespace (`channel:<channelId>`) so its subjects
  * are isolated from the regular bus and cannot leak to transport observers.
  *
+ * The channel belongs to the carrier of the bus instance that opened it. Every
+ * send enters through `enterSend` with that carrier, the channel's own protocol
+ * traffic (the `$close` event) included: it is sent with the carrier's own `observer`
+ * context.
+ *
  * Lifecycle: call {@link DirectChannel.close} to notify the peer, unsubscribe all
  * handlers, and zeroize the shared key reference. Once closed, all public methods
  * throw {@link ChannelClosedError}.
@@ -140,6 +152,7 @@ export class DirectChannel implements IDirectChannel {
 
   private sharedKey: CryptoKey | null;
   private readonly context: MakaioBusContext;
+  private readonly carrier: PartyRef;
   private readonly transportNames?: ReadonlyArray<BusTransportKeys>;
   private readonly cleanups: Array<() => void> = [];
   private readonly pendingRequests = new Set<AbortController>();
@@ -153,17 +166,21 @@ export class DirectChannel implements IDirectChannel {
    * @param channelId - Unique channel identifier
    * @param sharedKey - AES-256-GCM key derived from the ECDH handshake
    * @param context - Bus context for registering internal handlers
+   * @param carrier - Carrier of the bus instance that opened the channel: the caller of every
+   *   application send and the owner of every handler registered through the channel
    * @param transportNames - Explicit transport targets for this channel when known
    */
   public constructor(
     channelId: string,
     sharedKey: CryptoKey,
     context: MakaioBusContext,
+    carrier: PartyRef,
     transportNames?: ReadonlyArray<BusTransportKeys>,
   ) {
     this.channelId = channelId;
     this.sharedKey = sharedKey;
     this.context = context;
+    this.carrier = carrier;
     this.transportNames = transportNames;
 
     // Listen for peer-initiated close events. Routed through registerEventHandler
@@ -268,53 +285,76 @@ export class DirectChannel implements IDirectChannel {
 
   /**
    * Fire-and-forget encrypted event to the peer.
-   * @param subject - Subject definition
-   * @param payload - Event payload (will be encrypted before dispatch)
+   * @param args - `(call, subject, payload)` or `(subject, payload)`, see {@link IDirectChannel.emit}
    */
-  public async emit<Subject extends SubjectDefinition>(
-    subject: Subject,
+  public emit<
+    Subject extends SubjectDefinition,
+    IsRequest = Subject['$meta']['isRequest'],
+    IsWildcard = Subject['subject'] extends WildcardSubject ? true : false,
+  >(
+    call: CallContext,
+    subject: IsRequest extends false ? (IsWildcard extends false ? Subject : never) : never,
     payload: Subject['$meta']['payload'],
-  ): Promise<void> {
+  ): Promise<void>;
+  public emit<
+    Subject extends SubjectDefinition,
+    IsRequest = Subject['$meta']['isRequest'],
+    IsWildcard = Subject['subject'] extends WildcardSubject ? true : false,
+  >(
+    subject: IsRequest extends false ? (IsWildcard extends false ? Subject : never) : never,
+    payload: Subject['$meta']['payload'],
+  ): Promise<void>;
+  public async emit(...args: readonly unknown[]): Promise<void> {
     this.assertOpen();
     const key = this.requireKey();
+    const { call, subject, payload } = normalizeSendArgs(this.context, this.carrier, 'emit', args);
 
     const channelSubject = makeChannelEventDef(this.channelId, subject.subject);
+    const sent = enterSend(call, this.context, this.carrier, getFullSubjectForSubjectDefinition(channelSubject));
     const encrypted = await encrypt(key, JSON.stringify(payload), `${this.channelId}:${subject.subject}:evt`);
 
-    await internalEmit(this.context, channelSubject, encrypted, {
+    await emitReceived(this.context, sent, channelSubject, encrypted, {
       ...(this.transportNames ? { transports: [...this.transportNames] } : {}),
     });
   }
 
   /**
    * Encrypted request-response to the peer.
-   * @param subject - Subject definition (must be a request subject)
-   * @param payload - Request payload (will be encrypted before dispatch)
-   * @param options - Request options (timeout, etc.)
+   * @param args - `(call, subject, payload, options?)` or `(subject, payload, options?)`, see {@link IDirectChannel.request}
    * @returns Decrypted response
    */
-  public async request<Subject extends SubjectDefinition>(
-    subject: Subject,
+  public request<Subject extends SubjectDefinition, IsRequest = Subject['$meta']['isRequest']>(
+    call: CallContext,
+    subject: IsRequest extends true ? Subject : never,
     payload: Subject['$meta']['payload']['request'],
     options?: { timeout?: number },
-  ): Promise<Subject['$meta']['payload']['response']> {
+  ): Promise<IsRequest extends true ? Subject['$meta']['payload']['response'] : never>;
+  public request<Subject extends SubjectDefinition, IsRequest = Subject['$meta']['isRequest']>(
+    subject: IsRequest extends true ? Subject : never,
+    payload: Subject['$meta']['payload']['request'],
+    options?: { timeout?: number },
+  ): Promise<IsRequest extends true ? Subject['$meta']['payload']['response'] : never>;
+  public async request(...args: readonly unknown[]): Promise<unknown> {
     this.assertOpen();
     const key = this.requireKey();
+    const { call, subject, payload, options } = normalizeSendArgs(this.context, this.carrier, 'request', args);
+    const timeout = (options as { timeout?: number } | undefined)?.timeout;
+    const channelSubject = makeChannelRequestDef(this.channelId, subject.subject);
+    const sent = enterSend(call, this.context, this.carrier, getFullSubjectForSubjectDefinition(channelSubject));
     const controller = new AbortController();
     this.pendingRequests.add(controller);
 
     try {
-      const channelSubject = makeChannelRequestDef(this.channelId, subject.subject);
       const encryptedRequest = await encrypt(key, JSON.stringify(payload), `${this.channelId}:${subject.subject}:req`);
 
-      const encryptedResponse = await internalRequest(this.context, channelSubject, encryptedRequest, {
+      const encryptedResponse = await requestWithMintedCall(this.context, sent, channelSubject, encryptedRequest, {
         signal: controller.signal,
-        ...(options?.timeout !== undefined ? { timeout: options.timeout } : {}),
+        ...(timeout !== undefined ? { timeout } : {}),
         ...(this.transportNames ? { transports: [...this.transportNames] } : {}),
       });
 
       const decryptedJson = await decrypt(key, encryptedResponse, `${this.channelId}:${subject.subject}:res`);
-      return JSON.parse(decryptedJson) as Subject['$meta']['payload']['response'];
+      return JSON.parse(decryptedJson) as unknown;
     } finally {
       this.pendingRequests.delete(controller);
     }
@@ -322,18 +362,32 @@ export class DirectChannel implements IDirectChannel {
 
   /**
    * Encrypted request-response, returns `handled: false` instead of throwing `NoHandlerError`.
-   * @param subject - Subject definition (must be a request subject)
-   * @param payload - Request payload
-   * @param options - Request options
+   *
+   * The arguments are normalised here and `request` is called in call form with the
+   * resulting context, so the send is entered exactly once.
+   * @param args - `(call, subject, payload, options?)` or `(subject, payload, options?)`, see {@link IDirectChannel.requestOptional}
    * @returns `OptionalResult` wrapping the response
    */
-  public async requestOptional<Subject extends SubjectDefinition>(
-    subject: Subject,
+  public requestOptional<Subject extends SubjectDefinition, IsRequest = Subject['$meta']['isRequest']>(
+    call: CallContext,
+    subject: IsRequest extends true ? Subject : never,
     payload: Subject['$meta']['payload']['request'],
     options?: { timeout?: number },
-  ): Promise<OptionalResult<Subject['$meta']['payload']['response']>> {
+  ): Promise<OptionalResult<IsRequest extends true ? Subject['$meta']['payload']['response'] : never>>;
+  public requestOptional<Subject extends SubjectDefinition, IsRequest = Subject['$meta']['isRequest']>(
+    subject: IsRequest extends true ? Subject : never,
+    payload: Subject['$meta']['payload']['request'],
+    options?: { timeout?: number },
+  ): Promise<OptionalResult<IsRequest extends true ? Subject['$meta']['payload']['response'] : never>>;
+  public async requestOptional(...args: readonly unknown[]): Promise<OptionalResult<unknown>> {
+    const { call, subject, payload, options } = normalizeSendArgs(this.context, this.carrier, 'request', args);
     try {
-      const data = await this.request(subject, payload, options);
+      const data: unknown = await this.request(
+        call,
+        subject,
+        payload as SubjectDefinition['$meta']['payload']['request'],
+        options as { timeout?: number } | undefined,
+      );
       return { handled: true, data };
     } catch (e) {
       if (e instanceof NoHandlerError) {
@@ -350,12 +404,20 @@ export class DirectChannel implements IDirectChannel {
 
     // Best-effort: notify the peer. Errors are silently swallowed because the
     // channel is already being torn down — there is no meaningful recovery.
+    // The `$close` event is protocol traffic of the channel, sent by its carrier:
+    // the carrier's own `observer` context enters like any other send.
     const key = this.sharedKey;
     if (key) {
       const closeSubject = makeChannelEventDef(this.channelId, '$close');
+      const protocolCall = enterSend(
+        ownContextOf(this.context, this.carrier, 'observer'),
+        this.context,
+        this.carrier,
+        getFullSubjectForSubjectDefinition(closeSubject),
+      );
       void encrypt(key, JSON.stringify({}), `${this.channelId}:$close:evt`)
         .then((encrypted) =>
-          internalEmit(this.context, closeSubject, encrypted, {
+          emitReceived(this.context, protocolCall, closeSubject, encrypted, {
             ...(this.transportNames ? { transports: [...this.transportNames] } : {}),
           }),
         )
@@ -422,7 +484,7 @@ export class DirectChannel implements IDirectChannel {
       });
     };
 
-    return internalOn(this.context, channelSubject, proxyHandler, options);
+    return internalOn(this.context, this.carrier, channelSubject, proxyHandler, options);
   }
 
   /**
@@ -511,7 +573,7 @@ export class DirectChannel implements IDirectChannel {
       }
     };
 
-    return internalOn(this.context, channelSubject, proxyHandler, options);
+    return internalOn(this.context, this.carrier, channelSubject, proxyHandler, options);
   }
 
   /**

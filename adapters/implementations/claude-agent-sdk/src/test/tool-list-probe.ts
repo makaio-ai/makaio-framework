@@ -6,9 +6,15 @@ import type {
   HookJSONOutput,
   Options,
 } from '@anthropic-ai/claude-agent-sdk';
-import { SessionLifecycle } from '@makaio/ai-adapters-core';
+import {
+  markCompletedWithFinalResult,
+  MessageHandle,
+  normalizeMessageInput,
+  SessionLifecycle,
+} from '@makaio/ai-adapters-core';
 import { toNativeToolName } from '@makaio/contracts';
 import type { ResponseSchemaDescriptor } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { buildQueryOptions } from '../utils/buildQueryOptions.js';
 import { createGateConnector, preToolUseInput } from './gate-test-helpers.js';
 import type { GateConnectorLists } from './gate-test-helpers.js';
@@ -263,6 +269,28 @@ function isAutoApproved(rules: readonly string[], toolName: string): boolean {
 /** Result of one `ToolListProbe.gate` call, before central-approval bookkeeping. */
 type GateVerdict = Pick<ToolListProbeGateResult, 'allowed' | 'reason'> & { persistsRules?: boolean };
 
+/** Central approval payload overrides for a probed call. */
+type NativeApproval = { updatedInput?: Record<string, unknown>; updatedPermissions?: unknown[] };
+
+/**
+ * Map a semantic approval answer onto the central approval payload for one call.
+ * @param call - The probed call.
+ * @param approval - Semantic approval answer.
+ * @returns The native `updatedInput` / `updatedPermissions` overrides.
+ */
+function toNativeApproval(call: ToolListProbeCall, approval: ToolListProbeApproval | undefined): NativeApproval {
+  return {
+    ...(approval?.rewriteCommand !== undefined && {
+      updatedInput: { ...call.input, command: approval.rewriteCommand },
+    }),
+    ...(approval?.alwaysAllow === true && {
+      updatedPermissions: [
+        { type: 'addRules', rules: [{ toolName: call.name }], behavior: 'allow', destination: 'session' },
+      ],
+    }),
+  };
+}
+
 /**
  * Build a tool-list probe for the Claude Agent SDK adapter.
  *
@@ -303,35 +331,16 @@ export async function createToolListProbe(options: ToolListProbeOptions): Promis
     ...(providerQueryOptions !== undefined && { providerConfig: { queryOptions: providerQueryOptions } }),
   };
 
-  let pendingApproval: { updatedInput?: Record<string, unknown>; updatedPermissions?: unknown[] } | undefined;
+  let pendingApproval: NativeApproval | undefined;
   let centralCalls = 0;
   const centralApproval = (): Promise<unknown> => {
     centralCalls += 1;
     return Promise.resolve({ action: 'allow', ...pendingApproval });
   };
-  /**
-   * Map a semantic approval answer onto the central approval payload for one call.
-   * @param call - The probed call.
-   * @param approval - Semantic approval answer.
-   * @returns The native `updatedInput` / `updatedPermissions` overrides.
-   */
-  const toNativeApproval = (
-    call: ToolListProbeCall,
-    approval: ToolListProbeApproval | undefined,
-  ): typeof pendingApproval => ({
-    ...(approval?.rewriteCommand !== undefined && {
-      updatedInput: { ...call.input, command: approval.rewriteCommand },
-    }),
-    ...(approval?.alwaysAllow === true && {
-      updatedPermissions: [
-        { type: 'addRules', rules: [{ toolName: call.name }], behavior: 'allow', destination: 'session' },
-      ],
-    }),
-  });
   const { createToolApprovalHandler, buildSessionConfig } = await createGateConnector(lists, centralApproval);
-
+  const sessionConfig = buildSessionConfig();
   const queryOptions = buildQueryOptions({
-    config: buildSessionConfig(),
+    config: sessionConfig,
     lifecycle: new SessionLifecycle(),
     createToolApprovalHandler,
     sessionId: 'session-probe',
@@ -383,8 +392,14 @@ export async function createToolListProbe(options: ToolListProbeOptions): Promis
     async gate(call, approval) {
       pendingApproval = toNativeApproval(call, approval);
       const before = centralCalls;
-      const { persistsRules = false, ...verdict } = await decide(call.name, call.input);
-      return { ...verdict, centralApprovalCalled: centralCalls > before, persistsRules };
+      const handle = new MessageHandle(createTestCall(), 'message-probe', normalizeMessageInput('probe'), 'enqueue');
+      sessionConfig.onTurnStart?.(handle);
+      try {
+        const { persistsRules = false, ...verdict } = await decide(call.name, call.input);
+        return { ...verdict, centralApprovalCalled: centralCalls > before, persistsRules };
+      } finally {
+        await markCompletedWithFinalResult(handle, { outcome: 'completed' }, sessionConfig.onTurnComplete);
+      }
     },
   };
 }

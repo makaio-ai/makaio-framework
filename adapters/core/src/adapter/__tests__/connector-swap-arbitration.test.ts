@@ -12,6 +12,7 @@ import os from 'node:os';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, AgentSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import {
   createSessionStorageMemoryState,
   registerMemoryAgentStorage,
@@ -51,6 +52,7 @@ beforeEach(async () => {
       if (configFactoryFailure !== undefined) throw configFactoryFailure;
       return {
         bus: adapterScopedBus,
+        globalBus: input.globalBus,
         agentId: input.agentId ?? 'agent',
         adapterId: input.adapterId ?? 'adapter',
         adapterName: 'arbitration-adapter',
@@ -416,13 +418,13 @@ describe('case 204h: the door refuses after a teardown has already finished', ()
         return connector;
       },
     });
-    await agent.init();
+    await agent.init(createTestCall());
     expect(built).toHaveLength(1);
 
     await agent.close({ emitSessionClosed: false });
     expect(arbiter.hasTeardownInFlight('agent-204h')).toBe(false);
 
-    const refusal = await agent.swapConnector({ cwd: os.tmpdir() }).catch((error: unknown) => error);
+    const refusal = await agent.swapConnector(createTestCall(), { cwd: os.tmpdir() }).catch((error: unknown) => error);
 
     // Half one: the refusal is **typed**, which is what lets the warm path answer
     // `not-dispatched` instead of leaving its caller uncertain.
@@ -461,7 +463,7 @@ describe('the door reads the teardown map first, and its two refusals are distin
         return connector;
       },
     });
-    await agent.init();
+    await agent.init(createTestCall());
     registry.set('agent-door-order', {
       agent,
       sessionId: 'session-door-order',
@@ -469,11 +471,11 @@ describe('the door reads the teardown map first, and its two refusals are distin
       usage: { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0 },
     });
 
-    const teardown = registry.evictSilently('agent-door-order');
+    const teardown = registry.evictSilently(createTestCall(), 'agent-door-order');
     await drain();
     expect(arbiter.hasTeardownInFlight('agent-door-order')).toBe(true);
 
-    const refusal = await agent.swapConnector({ cwd: os.tmpdir() }).catch((error: unknown) => error);
+    const refusal = await agent.swapConnector(createTestCall(), { cwd: os.tmpdir() }).catch((error: unknown) => error);
 
     expect(refusal).toBeInstanceOf(ConnectorSwapVetoedError);
     expect((refusal as ConnectorSwapVetoedError).reason).toBe('teardown-in-flight');

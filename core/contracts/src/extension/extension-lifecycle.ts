@@ -39,10 +39,16 @@ export interface ExtensionInitOptions {
 export interface ExtensionServiceLifecycle {
   /**
    * Initialize the service when startup work is not constructor-owned.
+   *
+   * Messages sent from here use the context from `ctx.bus.own('start')`.
    * @param options - What the host offers the start; see {@link ExtensionInitOptions}.
    */
   init?(options?: ExtensionInitOptions): Promise<void> | void;
-  /** Destroy the service and release resources when teardown is required. */
+  /**
+   * Destroy the service and release resources when teardown is required.
+   *
+   * Messages sent from here use the context from `ctx.bus.own('stop')`.
+   */
   destroy?(): Promise<void> | void;
   /**
    * Longest time, in milliseconds, the host should wait for this extension to
@@ -67,6 +73,9 @@ export interface ExtensionServiceLifecycle {
    * Returns zero or more {@link ExtensionWarning} entries describing integration
    * health issues the user may want to act on. An empty array (or omitting the
    * hook entirely) signals that the extension is fully healthy.
+   * The hook runs inside a host lifecycle step whose context cannot cross to
+   * the extension's carrier. Implementations that send messages mint
+   * `own('observer')` on their own bus.
    * @returns Active health warnings, or an empty array when the extension is healthy.
    */
   checkHealth?(): Promise<ExtensionWarning[]> | ExtensionWarning[];

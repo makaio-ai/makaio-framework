@@ -1,4 +1,5 @@
 export type { IMakaioBus, MakaioBusContext, TransportRegistration, ConnectOptions } from './bus.js';
+export type { BusSendOperations, EmitSubject } from './bus-send.js';
 export type { HandlerEntry } from './handler-entry.js';
 export type {
   InterceptorContext,

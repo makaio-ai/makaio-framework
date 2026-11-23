@@ -16,7 +16,7 @@ import { DEFAULT_CODEC } from '../ws-client-options.js';
 import { MockWebSocket } from './test-helpers.js';
 import { waitForCondition } from './test-utils.js';
 import type { ClientTransportCodec, TransportAuth } from '../types.js';
-import type { TransportReceiveContext } from '@makaio/core';
+import type { OutboundAttestingConnectionRole, TransportReceiveContext } from '@makaio/core';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -59,6 +59,7 @@ function makeTransport(options: {
   onDisconnected?: () => void;
   autoReconnect?: { baseMs: number; maxMs: number } | false;
   auth?: TransportAuth;
+  attestingRole?: OutboundAttestingConnectionRole;
   readiness?: WebSocketClientTransportReadinessMode;
   codec?: ClientTransportCodec;
 }): { transport: WebSocketClientTransport; mock: MockWebSocket } {
@@ -70,6 +71,7 @@ function makeTransport(options: {
     onConnected: options.onConnected,
     onDisconnected: options.onDisconnected,
     auth: options.auth,
+    attestingRole: options.attestingRole,
     ...(options.readiness !== undefined && { readiness: options.readiness }),
     ...(options.codec !== undefined && { codec: options.codec }),
   });
@@ -681,10 +683,19 @@ describe('WebSocketClientTransport — readiness mode', () => {
 // ---------------------------------------------------------------------------
 
 describe('WebSocketClientTransport — auth lifecycle', () => {
-  it('merges auth receive context into inbound handler context', async () => {
+  it.each([
+    { kind: 'makaio.job-run', attestingRole: undefined, attests: undefined },
+    { kind: 'makaio.e2e-peer', attestingRole: undefined, attests: undefined },
+    { kind: 'makaio.job-run', attestingRole: 'core-uplink', attests: 'outbound' },
+  ] as const)('merges auth context and applies role $attestingRole for $kind', async ({
+    kind,
+    attestingRole,
+    attests,
+  }) => {
     const receiveContext: TransportReceiveContext = {
       transportName: '',
-      peer: { kind: 'workflow-execution', id: 'exec-1', authenticated: true },
+      authenticated: true,
+      caller: { kind, id: 'peer-1' },
     };
     const auth: TransportAuth = {
       authenticateClient: vi.fn(async () => {}),
@@ -694,7 +705,7 @@ describe('WebSocketClientTransport — auth lifecycle', () => {
       cleanupSocket: vi.fn(),
       cleanup: vi.fn(),
     };
-    const { transport, mock } = makeTransport({ auth });
+    const { transport, mock } = makeTransport({ auth, attestingRole });
     const receivedContexts: Array<TransportReceiveContext | undefined> = [];
     transport.onReceive(async (_message, context) => {
       receivedContexts.push(context);
@@ -708,14 +719,17 @@ describe('WebSocketClientTransport — auth lifecycle', () => {
         subject: 'received',
         messageId: 'msg-auth-context',
         payload: {},
+        metadata: { principal: { kind: 'makaio.host', id: 'remote-host' } },
       }),
     );
 
     await waitForCondition(() => receivedContexts.length === 1, 1000, 'inbound handler did not receive message');
     expect(auth.getReceiveContext).toHaveBeenCalledTimes(1);
-    expect(receivedContexts[0]).toEqual({
+    expect(receivedContexts[0]).toStrictEqual({
       transportName: 'ws-client',
-      peer: { kind: 'workflow-execution', id: 'exec-1', authenticated: true },
+      authenticated: true,
+      caller: { kind, id: 'peer-1' },
+      ...(attests === undefined ? {} : { attests }),
     });
 
     await transport.disconnect();

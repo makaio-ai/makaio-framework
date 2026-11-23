@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
 import { HookAbortError } from '@makaio/hooks';
+import type { CallContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { Turn, type TurnResult } from '../../entities/turn.js';
 import {
   registerFailingSendHandler,
@@ -14,7 +16,11 @@ import {
 import { createTestAgent, createTestSession, waitForAsync } from '../../__tests__/shared.js';
 
 /** Type for the onTurnComplete callback */
-type OnTurnCompleteCallback = (turn: Turn, result: { success: boolean; errors: string[] }) => Promise<void>;
+type OnTurnCompleteCallback = (
+  call: CallContext,
+  turn: Turn,
+  result: { success: boolean; errors: string[] },
+) => Promise<void>;
 
 describe('routeToAgents - error handling', () => {
   const { sessionId, messageId, turnId, testMessage } = ROUTE_TEST_IDS;
@@ -130,7 +136,7 @@ describe('routeToAgents - error handling', () => {
       expect(observerCalls).toBe(1);
       expect(turn.isComplete()).toBe(true);
       expect(onTurnComplete).toHaveBeenCalledTimes(1);
-      expect(onTurnComplete).toHaveBeenCalledWith(turn, expect.objectContaining({ success: true }));
+      expect(onTurnComplete).toHaveBeenCalledWith(createTestCall(), turn, expect.objectContaining({ success: true }));
     });
 
     it('keeps the accepted agent active when acknowledgement observation fails', async () => {
@@ -341,13 +347,14 @@ describe('routeToAgents - error handling', () => {
 
       expect(onTurnComplete).toHaveBeenCalledTimes(1);
       expect(onTurnComplete).toHaveBeenCalledWith(
+        createTestCall(),
         turn,
         expect.objectContaining({
           success: false,
         }),
       );
       // Bus wraps request errors, so verify the error contains our message
-      const callArgs = onTurnComplete.mock.calls[0][1] as TurnResult;
+      const callArgs = onTurnComplete.mock.calls[0][2] as TurnResult;
       expect(callArgs.errors).toHaveLength(1);
       expect(callArgs.errors[0]).toContain('Fatal error');
     });
@@ -458,7 +465,7 @@ describe('routeToAgents - error handling', () => {
 
       // The final call should have both errors
       const lastCall = onTurnComplete.mock.calls[onTurnComplete.mock.calls.length - 1];
-      const result = lastCall[1] as TurnResult;
+      const result = lastCall[2] as TurnResult;
       expect(result.success).toBe(false);
       expect(result.errors).toHaveLength(2);
       // Bus wraps request errors, so verify errors contain our message

@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { createMockScopedBus } from '@makaio/test-utils';
+import { createMockBus, createMockScopedBus } from '@makaio/test-utils';
 import { MessageHandle } from '../../message-handle/index.js';
 import type { ConnectorTeardownResult } from '@makaio/contracts';
 import { AIAgentConnector } from '../agent-connector.js';
-import type { AgentStartResult, BaseAgentConnectorConfig, ConnectorStartOptions } from '../../agent/types.js';
+import type {
+  AgentStartResult,
+  BaseAgentConnectorConfig,
+  ConnectorSendMessageOptions,
+  ConnectorStartOptions,
+} from '../../agent/types.js';
 import type { MessageResult } from '../../message-handle/index.js';
 import type { NormalizedMessageInput } from '../../utils/normalizeMessageInput.js';
 
@@ -15,18 +20,21 @@ class TurnNumberConnector extends AIAgentConnector<TestBus> {
     super(config);
   }
 
-  public async initialize(_options?: ConnectorStartOptions): Promise<void> {}
+  public async initialize(_options: ConnectorStartOptions): Promise<void> {}
 
-  public async start(message: NormalizedMessageInput): Promise<AgentStartResult> {
+  public async start(message: NormalizedMessageInput, options: ConnectorStartOptions): Promise<AgentStartResult> {
     return {
       adapterSessionId: 'adapter-session-1',
       agentId: this.getAgentId(),
-      messageHandle: new MessageHandle('message-1', message, 'enqueue'),
+      messageHandle: new MessageHandle(options.call, 'message-1', message, 'enqueue'),
     };
   }
 
-  public async sendMessage(message: NormalizedMessageInput): Promise<MessageHandle> {
-    return new MessageHandle('message-1', message, 'enqueue');
+  public async sendMessage(
+    message: NormalizedMessageInput,
+    options: ConnectorSendMessageOptions,
+  ): Promise<MessageHandle> {
+    return new MessageHandle(options.call, 'message-1', message, 'enqueue');
   }
 
   public abort(): void {}
@@ -69,6 +77,7 @@ function createConnector(): TurnNumberConnector {
   const { bus } = createMockScopedBus();
   return new TurnNumberConnector({
     bus,
+    globalBus: createMockBus().bus,
     adapterId: 'adapter-1',
     adapterName: 'test-adapter',
     agentId: 'agent-1',

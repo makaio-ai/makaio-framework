@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { SessionMessage } from '@makaio/contracts';
 import { SessionEventStorageSubjects } from '../session-events/index.js';
 import { MessageStorageSubjects } from './namespace.js';
@@ -11,17 +12,19 @@ import { MessageStorageSubjects } from './namespace.js';
  * the virtualized chat pagination store) can react immediately after persistence.
  * The session event RPC is then executed; errors are caught and logged so that
  * session event emission failure does not fail message storage.
+ * @param call - Call context of the storage request whose message is announced
  * @param bus - The bus instance to emit on
  * @param message - The fully persisted session message
  */
 export async function emitMessageSessionEvent(
+  call: CallContext,
   bus: Pick<IMakaioBus, 'emit' | 'request'>,
   message: SessionMessage,
 ): Promise<void> {
-  bus.emit(MessageStorageSubjects.stored, { message: structuredClone(message) });
+  bus.emit(call, MessageStorageSubjects.stored, { message: structuredClone(message) });
 
   try {
-    await bus.request(SessionEventStorageSubjects.append, {
+    await bus.request(call, SessionEventStorageSubjects.append, {
       event: {
         sessionId: message.sessionId,
         eventId: crypto.randomUUID(),

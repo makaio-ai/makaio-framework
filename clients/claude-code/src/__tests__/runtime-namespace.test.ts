@@ -1,15 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance } from '@makaio/bus-core';
 import { z } from 'zod';
 import { ClaudeCodeStatuslineRawPayloadSchema } from '../index.js';
-import { ClaudeCodeClientSubjects } from '../runtime/namespace.js';
+import { ClaudeCodeClientNamespace, ClaudeCodeClientSubjects } from '../runtime/namespace.js';
 
 describe('ClaudeCodeClientSubjects', () => {
   it('registers the raw Claude statusline event schema', () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(ClaudeCodeClientNamespace);
+
     expect(ClaudeCodeClientSubjects.statusline.received.subject).toBe('statusline.received');
     expect(ClaudeCodeClientSubjects.statusline.received.$meta.namespace).toBe('client:claude-code');
 
-    const schema = MakaioBus.getSchema(ClaudeCodeClientSubjects.statusline.received) as z.ZodType;
+    const schema = bus.getSchema(ClaudeCodeClientSubjects.statusline.received) as z.ZodType;
 
     expect(schema).toBe(ClaudeCodeStatuslineRawPayloadSchema);
     expect(
@@ -49,10 +52,13 @@ describe('ClaudeCodeClientSubjects', () => {
   });
 
   it('registers the Claude hook handle request schema', () => {
+    const bus = createBusInstance();
+    bus.registerNamespace(ClaudeCodeClientNamespace);
+
     expect(ClaudeCodeClientSubjects.hook.handle.subject).toBe('hook.handle');
     expect(ClaudeCodeClientSubjects.hook.handle.$meta.namespace).toBe('client:claude-code');
     expect(ClaudeCodeClientSubjects.hook.handle.$meta.isRequest).toBe(true);
 
-    expect(MakaioBus.getSchema(ClaudeCodeClientSubjects.hook.handle)).toBeDefined();
+    expect(bus.getSchema(ClaudeCodeClientSubjects.hook.handle)).toBeDefined();
   });
 });

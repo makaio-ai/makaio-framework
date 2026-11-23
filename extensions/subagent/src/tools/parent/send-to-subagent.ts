@@ -45,7 +45,7 @@ export function sendToSubagentTool() {
       }
 
       try {
-        const result = await context.bus.request(SubagentSubjects.send, {
+        const result = await context.bus.request(context.call, SubagentSubjects.send, {
           subagentId: input.subagentId,
           content: input.content,
           inResponseTo: input.inResponseTo,

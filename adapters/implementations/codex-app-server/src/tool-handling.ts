@@ -12,7 +12,7 @@
  * @packageDocumentation
  */
 
-import type { AgentToolApproveRequest, AgentToolApproveResponse } from '@makaio/contracts';
+import type { AgentToolApproveRequest, AgentToolApproveResponse, CallContext } from '@makaio/contracts';
 import { AgentSubjects } from '@makaio/contracts';
 import { AIAgentConnector } from '@makaio/ai-adapters-core';
 import type { ToolApprovalContext } from '@makaio/ai-adapters-core';
@@ -37,6 +37,8 @@ export type CodexToolApprovalResponse = {
  * Minimal shape of connector request contexts used for approval handling.
  */
 type ApprovalRequestContext<TPayload> = {
+  /** Call context of the connector request; the approval request is sent under it. */
+  call: CallContext;
   payload: TPayload;
   setResult: (result: CodexToolApprovalResponse) => void;
 };
@@ -163,7 +165,7 @@ export function fromGlobalToolApproval(response: AgentToolApproveResponse): Code
  */
 export function registerToolApprovalHandler(
   connector: AIAgentConnector,
-  context: ToolApprovalContext | (() => Promise<ToolApprovalContext>),
+  context: ToolApprovalContext | ((call: CallContext) => Promise<ToolApprovalContext>),
   globalBus: IMakaioBus,
 ): () => void {
   // Use connector's configured timeout (must be shorter than JSON-RPC server's request timeout)
@@ -171,10 +173,11 @@ export function registerToolApprovalHandler(
 
   /**
    * Resolve adapter context lazily (callback avoids race condition with adapterSessionId)
+   * @param call - Call of the approval request that needs the adapter context
    * @returns Resolved ToolApprovalContext
    */
-  const resolveContext = async (): Promise<ToolApprovalContext> => {
-    const providedContext = typeof context === 'function' ? await context() : context;
+  const resolveContext = async (call: CallContext): Promise<ToolApprovalContext> => {
+    const providedContext = typeof context === 'function' ? await context(call) : context;
     if (
       providedContext == null ||
       typeof providedContext !== 'object' ||
@@ -190,7 +193,7 @@ export function registerToolApprovalHandler(
       adapterId: providedContext?.adapterId ?? connector.adapterId,
       adapterName: providedContext?.adapterName ?? connector.getAdapterName(),
       agentId: providedContext?.agentId ?? connector.getAgentId(),
-      adapterSessionId: providedContext?.adapterSessionId ?? (await connector.getAdapterSessionId()),
+      adapterSessionId: providedContext?.adapterSessionId ?? (await connector.getAdapterSessionId(call)),
       sessionId,
     };
   };
@@ -212,7 +215,7 @@ export function registerToolApprovalHandler(
 
     let globalResponse: AgentToolApproveResponse;
     try {
-      const resolvedContext = await resolveContext();
+      const resolvedContext = await resolveContext(ctx.call);
       if (logTag) {
         logToolApprovalDebug('resolved context', { agentId: resolvedContext.agentId, timestamp: Date.now() });
       }
@@ -222,7 +225,7 @@ export function registerToolApprovalHandler(
         logToolApprovalDebug('requesting global approval', { agentId: request.agentId, timestamp: Date.now() });
       }
 
-      globalResponse = await globalBus.request(AgentSubjects.toolApprove, request, { timeout });
+      globalResponse = await globalBus.request(ctx.call, AgentSubjects.toolApprove, request, { timeout });
     } catch (error) {
       console.error('[registerToolApprovalHandler] Tool approval request failed:', error);
       const errorDetails = error instanceof Error ? `: ${error.message}` : '';

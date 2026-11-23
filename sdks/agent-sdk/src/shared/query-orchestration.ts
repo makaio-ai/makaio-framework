@@ -9,7 +9,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, SessionSubjects } from '@makaio/contracts';
 import type { ResponseSchemaDescriptor } from '@makaio/contracts';
-import type { HandlerForSubjectDefinition } from '@makaio/core';
+import type { CallContext, HandlerForSubjectDefinition } from '@makaio/core';
 import { createQueryGenerator } from './query-generator.js';
 import { registerToolApprovalHandler } from './permissions.js';
 import { buildMcpSessionContext, prepareMcpServersForSession } from './mcp.js';
@@ -86,6 +86,7 @@ interface McpServerReplacementController {
   readonly close: () => void;
   readonly drainDeferred: () => void;
   readonly setMcpServers: (
+    call: CallContext,
     identity: AgentIdentityForMcpReplacement,
     servers: Record<string, McpServerConfig>,
   ) => Promise<McpSetServersResult>;
@@ -178,13 +179,14 @@ const diffServerNames = (
 };
 
 const dispatchMessage = async (
+  call: CallContext,
   bus: IMakaioBus,
   sessionId: string,
   message: string,
   agentPayload?: ReturnType<typeof buildAgentPayload>,
   responseSchema?: ResponseSchemaDescriptor,
 ): Promise<void> => {
-  await bus.request(SessionSubjects.sendMessage, {
+  await bus.request(call, SessionSubjects.sendMessage, {
     sessionId,
     message,
     ...(agentPayload !== undefined ? { agent: agentPayload } : {}),
@@ -215,7 +217,7 @@ const runFollowUpDispatcher = async (
       onComplete();
       return;
     }
-    await dispatchMessage(bus, sessionId, getMessageText(next.value), undefined, responseSchema);
+    await dispatchMessage(bus.own('schedule'), bus, sessionId, getMessageText(next.value), undefined, responseSchema);
   }
 };
 
@@ -258,7 +260,7 @@ const registerAbortController = (
   if (abortController === undefined) return;
   const { signal } = abortController;
   const abortQuery = (): void => {
-    void bus.emit(SessionSubjects.closed, { sessionId, reason: 'aborted' });
+    void bus.emit(bus.own('stop'), SessionSubjects.closed, { sessionId, reason: 'aborted' });
     generator.close();
   };
   if (signal.aborted) {
@@ -301,11 +303,11 @@ const createMcpServerReplacementController = (
       if (preparedMcpServers !== undefined) closePreparedMcpServers(preparedMcpServers, 'active');
     },
     drainDeferred,
-    setMcpServers: async (identity, servers) => {
+    setMcpServers: async (call, identity, servers) => {
       const nextPrepared = await prepareMcpServersForSession(servers);
       const previousPrepared = preparedMcpServers;
       try {
-        const result = await bus.request(AgentSubjects.mcp.servers.set, {
+        const result = await bus.request(call, AgentSubjects.mcp.servers.set, {
           agentId: identity.agentId,
           adapterId: identity.adapterId,
           adapterName: identity.adapterName,
@@ -347,12 +349,14 @@ const createMcpServerReplacementController = (
  * callbacks (e.g. tool-approval unsubscribes) are passed via the `onClose`
  * param of {@link createQueryGenerator} so they fire at generator teardown
  * without monkey-patching `close()`.
+ * @param call - Call context forwarded to the initial session message.
  * @param bus - Connected bus instance (local or remote).
  * @param params - Query parameters (prompt + options).
  * @param config - Resolved (normalised) query config.
  * @returns A {@link MakaioQuery} async generator.
  */
 export async function buildQuery(
+  call: CallContext,
   bus: IMakaioBus,
   params: QueryParams,
   config: ResolvedQueryConfig,
@@ -426,7 +430,7 @@ export async function buildQuery(
     if (config.abortController?.signal.aborted) {
       throw new Error('Query aborted before dispatch');
     }
-    await dispatchMessage(bus, sessionId, message, agentPayload, responseSchema);
+    await dispatchMessage(call, bus, sessionId, message, agentPayload, responseSchema);
   } catch (err) {
     generator.close();
     throw err;

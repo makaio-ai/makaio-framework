@@ -24,7 +24,7 @@ export function registerMergeHandler(bus: IMakaioBus): () => void {
     const eventId = `merge:${parentSessionId}:${childSessionId}`;
 
     // 1. Validate parent exists and is active
-    const { session: parentSession } = await bus.request(SessionSubjects.get, {
+    const { session: parentSession } = await bus.request(ctx.call, SessionSubjects.get, {
       sessionId: parentSessionId,
     });
 
@@ -37,7 +37,7 @@ export function registerMergeHandler(bus: IMakaioBus): () => void {
     }
 
     // 2. Validate child exists
-    const { session: childSession } = await bus.request(SessionSubjects.get, {
+    const { session: childSession } = await bus.request(ctx.call, SessionSubjects.get, {
       sessionId: childSessionId,
     });
 
@@ -56,7 +56,7 @@ export function registerMergeHandler(bus: IMakaioBus): () => void {
     }
 
     // 4. Emit merging event (extensions can contribute)
-    await bus.emit(SessionSubjects.merging, {
+    await bus.emit(ctx.call, SessionSubjects.merging, {
       parentSessionId,
       childSessionId,
     });
@@ -67,7 +67,7 @@ export function registerMergeHandler(bus: IMakaioBus): () => void {
     // 6. Close child session
     // close is intentionally idempotent. When child is already closed, this still returns success
     // without re-emitting session.closed; merge only depends on persisted closed state.
-    const closeResult = await bus.request(SessionSubjects.close, {
+    const closeResult = await bus.request(ctx.call, SessionSubjects.close, {
       sessionId: childSessionId,
     });
 
@@ -93,7 +93,7 @@ export function registerMergeHandler(bus: IMakaioBus): () => void {
     // means: (a) the deterministic eventId prevents duplicate branch.merged rows
     // while still allowing append-time metadata backfill on conflict, and (b) a
     // subscriber throw can no longer duplicate the audit record.
-    await bus.request(SessionEventStorageSubjects.append, {
+    await bus.request(ctx.call, SessionEventStorageSubjects.append, {
       event: {
         sessionId: parentSessionId,
         eventId,
@@ -109,7 +109,7 @@ export function registerMergeHandler(bus: IMakaioBus): () => void {
 
     // 8. Emit branch lifecycle event for remaining observers (e.g. UI updates).
     // Persistence is already done above; this emit is observer-only.
-    await bus.emit(SessionSubjects.branch.merged, {
+    await bus.emit(ctx.call, SessionSubjects.branch.merged, {
       sessionId: parentSessionId,
       childSessionId,
       parentSessionId,
@@ -117,7 +117,7 @@ export function registerMergeHandler(bus: IMakaioBus): () => void {
     });
 
     // 9. Emit merged event
-    await bus.emit(SessionSubjects.merged, {
+    await bus.emit(ctx.call, SessionSubjects.merged, {
       parentSessionId,
       childSessionId,
       handoff,

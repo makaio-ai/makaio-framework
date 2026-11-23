@@ -1,6 +1,6 @@
-import type { IMakaioBus } from '@makaio/bus-core';
+import type { EmitSubject, IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
-import type { ExtractSubjectPayload, SubjectDefinition } from '@makaio/core';
+import type { CallContext, ExtractSubjectPayload, SubjectDefinition } from '@makaio/core';
 import { appendSessionLifecycleEvent, emitSessionTurnStarted } from '../session-lifecycle-events.js';
 import { Turn, type TurnConfig } from './turn.js';
 
@@ -74,11 +74,12 @@ export class MakaioSession {
    * Creates a Turn child entity and emits turn.started event.
    * This is the key pattern: state change + event emission happen together
    * inside the aggregate, not in external orchestration code.
+   * @param call - Call context of the operation that starts the turn; used for every send
    * @param options - Turn configuration
    * @returns The created Turn
    * @throws Error if session is not active (for example closed or archived)
    */
-  public async startTurn(options: StartTurnOptions): Promise<Turn> {
+  public async startTurn(call: CallContext, options: StartTurnOptions): Promise<Turn> {
     if (this.status !== 'active') {
       throw new Error('Cannot start turn on non-active session');
     }
@@ -99,7 +100,7 @@ export class MakaioSession {
     // Emit from within the entity - the key architectural pattern.
     // Routed through the sanctioned turn.started emit helper so the
     // session_events lifecycle row persists before consumers see the event.
-    await emitSessionTurnStarted(this.bus, {
+    await emitSessionTurnStarted(call, this.bus, {
       sessionId: this.sessionId,
       turnId: turn.turnId,
       turnNumber: turn.turnNumber,
@@ -128,9 +129,10 @@ export class MakaioSession {
 
   /**
    * Complete a turn and emit turn.completed event.
+   * @param call - Call context of the operation that completes the turn; used for every send
    * @param turn - The turn to complete
    */
-  public async completeTurn(turn: Turn): Promise<void> {
+  public async completeTurn(call: CallContext, turn: Turn): Promise<void> {
     if (!turn.isComplete()) {
       throw new Error(`Turn ${turn.turnId} is not complete yet`);
     }
@@ -144,7 +146,7 @@ export class MakaioSession {
       error: result.errors.length > 0 ? result.errors.join('; ') : undefined,
     };
 
-    await appendSessionLifecycleEvent(this.bus, {
+    await appendSessionLifecycleEvent(call, this.bus, {
       type: 'turn.completed',
       sessionId: this.sessionId,
       payload: {
@@ -152,7 +154,7 @@ export class MakaioSession {
         ...completedPayload,
       },
     });
-    await this.emit(SessionSubjects.turn.completed, completedPayload);
+    await this.emit(call, SessionSubjects.turn.completed, completedPayload);
     this._completedTurnIds.add(turn.turnId);
   }
 
@@ -161,19 +163,15 @@ export class MakaioSession {
    *
    * Mirrors AIAgent.emitGlobal pattern - entity emits its own events
    * with context automatically included.
+   * @param call - Call context of the operation on whose behalf the event is emitted
    * @param subject - The subject to emit to
    * @param payload - The payload (without sessionId - it's added automatically)
    */
   protected async emit<S extends SubjectDefinition>(
-    subject: S,
+    call: CallContext,
+    subject: EmitSubject<S>,
     payload: Omit<ExtractSubjectPayload<S>, 'sessionId'>,
   ): Promise<void> {
-    await this.bus.emit(
-      subject as Parameters<IMakaioBus['emit']>[0],
-      {
-        ...payload,
-        sessionId: this.sessionId,
-      } as Parameters<IMakaioBus['emit']>[1],
-    );
+    await this.bus.emit<S>(call, subject, { ...payload, sessionId: this.sessionId } as S['$meta']['payload']);
   }
 }

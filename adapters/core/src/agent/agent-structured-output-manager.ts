@@ -2,6 +2,7 @@ import Ajv, { type AnySchemaObject, type ErrorObject, type ValidateFunction } fr
 import Ajv2019 from 'ajv/dist/2019.js';
 import Ajv2020 from 'ajv/dist/2020.js';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   AgentSubjects,
   type ResponseSchemaDescriptor,
@@ -174,10 +175,14 @@ export class AgentStructuredOutputManager {
    * 5. After retries are exhausted → request enforcement via `agent.structuredOutput.enforce`.
    *    - If enforced and the result is valid → return `status: 'enforced'` with the corrected message.
    *    - Otherwise → return `status: 'failed'` with accumulated errors.
+   * @param call - Call context of the turn whose terminal result is validated
    * @param input - Validation input including schema descriptor, message, and optional retry callback
    * @returns Resolved message and structured-output validation metadata
    */
-  public async validateTerminalResult(input: ValidateTerminalResultInput): Promise<ValidateTerminalResultOutput> {
+  public async validateTerminalResult(
+    call: CallContext,
+    input: ValidateTerminalResultInput,
+  ): Promise<ValidateTerminalResultOutput> {
     const { responseSchema, message, sessionId } = input;
 
     const firstValidation = this.validate(responseSchema, message);
@@ -193,7 +198,7 @@ export class AgentStructuredOutputManager {
       // Consult the retry policy before enforcement. Default to maxRetries: 0
       // when no handler is registered so callers without a retryPolicy handler
       // fall through directly to enforcement.
-      const retryPolicyOptional = await this.bus.requestOptional(AgentSubjects.structuredOutput.retryPolicy, {
+      const retryPolicyOptional = await this.bus.requestOptional(call, AgentSubjects.structuredOutput.retryPolicy, {
         agentId: this.agentId,
         adapterId: this.adapterId,
         adapterCapabilities: this.adapterCapabilities,
@@ -214,7 +219,7 @@ export class AgentStructuredOutputManager {
     }
 
     // Retries exhausted — attempt enforcement via bus
-    const enforceOptional = await this.bus.requestOptional(AgentSubjects.structuredOutput.enforce, {
+    const enforceOptional = await this.bus.requestOptional(call, AgentSubjects.structuredOutput.enforce, {
       agentId: this.agentId,
       adapterId: this.adapterId,
       sessionId,

@@ -36,7 +36,7 @@ export function registerImportSessionHandler(
     const { adapterSessionId, adapterName, ingestionMarker } = ctx.payload;
 
     // Step 1: Look up the source-scoped session row by its adapter session ID to get logFilePath
-    const { session } = await bus.request(SessionStorageSubjects.getByAdapterSessionId, {
+    const { session } = await bus.request(ctx.call, SessionStorageSubjects.getByAdapterSessionId, {
       adapterSessionId,
       source: adapterName,
     });
@@ -70,6 +70,7 @@ export function registerImportSessionHandler(
 
     // Step 4: Run the full import pipeline
     const { sessionId, messageCount } = await importFromFileContent({
+      call: ctx.call,
       bus,
       importer,
       content,

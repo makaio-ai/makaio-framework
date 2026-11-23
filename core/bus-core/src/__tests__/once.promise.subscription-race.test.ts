@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
 import type { BusMessage, BusTransport } from '../index.js';
-import { createBusContext, createBusInstance } from '../bus.js';
+import { createBusInstance } from '../bus.js';
+import { createBusContext } from '../kernel-api.js';
 import { OnceTimeoutError } from '../methods/once.js';
 
 class DeferredSubscribeTransport implements BusTransport {
@@ -91,7 +92,7 @@ describe('once() subscription race', () => {
     transport.resolveNextSubscribe();
     await Promise.resolve();
 
-    const emitPromise = bus.emit(subjects.ping, { seq: 1 });
+    const emitPromise = bus.emit(bus.own('root'), subjects.ping, { seq: 1 });
     await Promise.all([emitPromise, oncePromise]).then(([, ctx]) => {
       expect(ctx.payload.seq).toBe(1);
     });

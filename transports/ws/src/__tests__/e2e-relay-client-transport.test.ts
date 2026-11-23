@@ -14,7 +14,9 @@ import {
   type BusTransportRegistry,
   type BusUnsubscribeMessage,
 } from '@makaio/bus-core';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
 import { createBusNamespace } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { createE2ERelayClientTransport, createE2ERelayCodec } from '../e2e-relay-client-transport.js';
 import { WebSocketClientTransport } from '../ws-client-transport.js';
 import { E2ERelayAuth } from '../auth/e2e-relay-auth.js';
@@ -182,7 +184,7 @@ describe('createE2ERelayClientTransport', () => {
     });
   });
 
-  it('accepts relay control envelopes before session key is established', async () => {
+  it('discards principal metadata on relay control before the handshake and after reconnect', async () => {
     const signingKeys = await generateSigningKeyPair();
     const e2eAuth = new E2ERelayAuth({
       signingKeyPair: signingKeys,
@@ -192,35 +194,38 @@ describe('createE2ERelayClientTransport', () => {
       blocking: false,
     });
 
-    const ws = new MockWebSocket();
-    const transport = createE2ERelayClientTransport({ websocket: ws, e2eAuth, registry: testRegistry });
+    // Reconnection replaces the caller-owned WebSocket and transport.
+    for (const messageId of ['initial-control', 'reconnected-control']) {
+      const ws = new MockWebSocket();
+      const transport = createE2ERelayClientTransport({ websocket: ws, e2eAuth, registry: testRegistry });
+      const received = vi.fn();
+      transport.onReceive(async (message, context) => {
+        received(message, context);
+      });
+      await transport.connect();
 
-    const received = vi.fn();
-    transport.onReceive(async (message) => {
-      received(message);
-    });
+      try {
+        const envelope = createRelayControlEnvelope({
+          type: 'event',
+          subject: 'error',
+          namespace: 'relay',
+          payload: { code: 'connection_error', message: 'oops', timestamp: Date.now() },
+          messageId,
+          metadata: { principal: { kind: 'makaio.host', id: 'relay' } },
+        });
 
-    await transport.connect();
+        ws.receiveMessage(JSON.stringify(envelope));
+        await waitForCondition(() => received.mock.calls.length === 1, 1000, 'relay control was not delivered');
 
-    const envelope = createRelayControlEnvelope({
-      type: 'event',
-      subject: 'error',
-      namespace: 'relay',
-      payload: { code: 'connection_error', message: 'oops', timestamp: Date.now() },
-      messageId: 'relay-ctrl-1',
-    });
-
-    ws.receiveMessage(JSON.stringify(envelope));
-
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    expect(received).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'event',
-        subject: 'error',
-        namespace: 'relay',
-      }),
-    );
+        const [message, context] = received.mock.calls[0];
+        expect(message).toMatchObject({ type: 'event', subject: 'error', namespace: 'relay', messageId });
+        expect(message).not.toHaveProperty('metadata');
+        expect(context).toBeDefined();
+        expect(context).not.toHaveProperty('attests');
+      } finally {
+        await transport.disconnect();
+      }
+    }
   });
 
   it('sends subscribe/unsubscribe in plaintext before session key is established', async () => {
@@ -756,7 +761,7 @@ describe('E2E relay transport — emit integration (issue #1372)', () => {
       const bus = createBusInstance();
       bus.registerNamespace(relayReadinessNamespace);
       bus.registerNamespace(relayControlTestNamespace);
-      const { registerTransport } = bus.getContext().transportRegistry;
+      const { registerTransport } = busContextOf(bus).transportRegistry;
 
       // -----------------------------------------------------------------------
       // Phase 1: pre-session — plain WebSocketClientTransport composition (the
@@ -800,7 +805,7 @@ describe('E2E relay transport — emit integration (issue #1372)', () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       ws.clearSentMessages();
 
-      await bus.emit(relayReadinessNamespace.subjects.testEvent, { value: 'pre-session' });
+      await bus.emit(createTestCall(), relayReadinessNamespace.subjects.testEvent, { value: 'pre-session' });
 
       // Normal event was excluded by canSend — console.error must be silent and no wire frame.
       expect(errorSpy).not.toHaveBeenCalled();
@@ -813,7 +818,7 @@ describe('E2E relay transport — emit integration (issue #1372)', () => {
       // relay.error is registered in testRegistry as a control event subject.
       // -----------------------------------------------------------------------
       ws.clearSentMessages();
-      await bus.emit(relayControlTestNamespace.subjects.error, {
+      await bus.emit(createTestCall(), relayControlTestNamespace.subjects.error, {
         code: 'connection_error',
         message: 'relay down',
         timestamp: Date.now(),
@@ -876,7 +881,7 @@ describe('E2E relay transport — emit integration (issue #1372)', () => {
       );
 
       sessionWs.clearSentMessages();
-      await bus.emit(relayReadinessNamespace.subjects.testEvent, { value: 'post-session' });
+      await bus.emit(createTestCall(), relayReadinessNamespace.subjects.testEvent, { value: 'post-session' });
 
       // Locate the encrypted event frame by decrypting each wire message and
       // filtering for the event — avoids assuming positional indexing.

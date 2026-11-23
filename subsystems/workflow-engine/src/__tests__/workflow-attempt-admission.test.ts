@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import type { IWorkflowRunner } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { runAuthorityDispatchedAttempt } from '../authority-dispatch-runner.js';
 import { WorkflowSubjects } from '../namespace.js';
@@ -44,7 +45,7 @@ describe('workflow owner attempt admission', () => {
     );
     let dispatched = false;
     const runner: IWorkflowRunner = {
-      async run(config, _signal, _manifest, options) {
+      async run(_call, config, _signal, _manifest, options) {
         if (order === 'cancellation-first') {
           entered.resolve();
           await release.promise;
@@ -69,10 +70,15 @@ describe('workflow owner attempt admission', () => {
     };
     setup = await setupWorkflowExecutorTest({ executionAttemptAuthority: authority, workflowRunner: runner });
     const definition = createWorkflowDefinition();
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: definition });
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: definition.id });
+    await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.set, { workflow: definition });
+    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
+      workflowId: definition.id,
+    });
     await entered.promise;
-    const cancellation = MakaioBus.request(WorkflowSubjects.cancel, { executionId, reason: 'operator' });
+    const cancellation = MakaioBus.request(createTestCall(), WorkflowSubjects.cancel, {
+      executionId,
+      reason: 'operator',
+    });
     try {
       if (order === 'cancellation-first') await expect(cancellation).resolves.toEqual({ cancelled: true });
       release.resolve();
@@ -87,7 +93,9 @@ describe('workflow owner attempt admission', () => {
         expect(await authority.readCancellation(attempt.executionAttemptId)).toMatchObject({ reason: 'operator' });
         expect(attempt.operationStartGate).toBe('closed');
       }
-      expect((await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution).toMatchObject({
+      expect(
+        (await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getExecution, { executionId })).execution,
+      ).toMatchObject({
         status: 'cancelled',
       });
     } finally {

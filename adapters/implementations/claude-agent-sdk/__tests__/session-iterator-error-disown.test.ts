@@ -1,6 +1,7 @@
 import os from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { MessageHandle, UserMessageQueue, type MessageResult } from '@makaio/ai-adapters-core';
 
 const queryHarness = vi.hoisted(() => {
@@ -36,19 +37,22 @@ describe('ClaudeConnectorSession iterator error query disowning', () => {
 
   it('disowns the dead query after an iterator-level error so the next message gets a fresh query', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
     const onTurnComplete = vi.fn<(handle: MessageHandle, result: MessageResult) => void>();
-    const session = new ClaudeConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'claude-agent-sdk',
-      agentId: 'agent-test',
-      cwd: os.tmpdir(),
-      model: 'claude-sonnet-4-20250514',
-      env: {},
-      onTurnComplete,
-      emitSdkEvent: vi.fn(async () => undefined),
-    });
+    const session = new ClaudeConnectorSession(
+      {
+        bus,
+        adapterId: 'adapter-test',
+        adapterName: 'claude-agent-sdk',
+        agentId: 'agent-test',
+        cwd: os.tmpdir(),
+        model: 'claude-sonnet-4-20250514',
+        env: {},
+        onTurnComplete,
+        emitSdkEvent: vi.fn(async () => undefined),
+      },
+      MakaioBus,
+    );
 
     // First query: iterator throws after yielding system.init (confirms session ID)
     // so the session can resume on the next query.
@@ -72,12 +76,12 @@ describe('ClaudeConnectorSession iterator error query disowning', () => {
               throw new Error('SDK transport failure');
             }
           },
-        } as unknown as ReturnType<typeof queryHarness.query>;
+        };
       },
     );
 
     try {
-      await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+      await session.initialize(createTestCall(), () => vi.fn(async () => ({ behavior: 'allow' as const })));
       expect(queryHarness.query).toHaveBeenCalledTimes(1);
 
       // Send first message — will trigger the iterator error
@@ -114,23 +118,26 @@ describe('ClaudeConnectorSession iterator error query disowning', () => {
       expect((result2 as { result: { message: string } }).result.message).toBe('session completed');
     } finally {
       consoleError.mockRestore();
-      await session.close();
+      await session.close(createTestCall());
     }
   });
 
   it('clears queryInstance before turn_finished so connector queue processing cannot reuse dead query', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
-    const session = new ClaudeConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'claude-agent-sdk',
-      agentId: 'agent-test',
-      cwd: os.tmpdir(),
-      model: 'claude-sonnet-4-20250514',
-      env: {},
-      emitSdkEvent: vi.fn(async () => undefined),
-    });
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
+    const session = new ClaudeConnectorSession(
+      {
+        bus,
+        adapterId: 'adapter-test',
+        adapterName: 'claude-agent-sdk',
+        agentId: 'agent-test',
+        cwd: os.tmpdir(),
+        model: 'claude-sonnet-4-20250514',
+        env: {},
+        emitSdkEvent: vi.fn(async () => undefined),
+      },
+      MakaioBus,
+    );
 
     let messageReceived: () => void;
     const messageReceivedPromise = new Promise<void>((resolve) => {
@@ -151,7 +158,7 @@ describe('ClaudeConnectorSession iterator error query disowning', () => {
               throw new Error('iterator crash');
             }
           },
-        } as unknown as ReturnType<typeof queryHarness.query>;
+        };
       },
     );
 
@@ -178,7 +185,7 @@ describe('ClaudeConnectorSession iterator error query disowning', () => {
     };
 
     try {
-      await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+      await session.initialize(createTestCall(), () => vi.fn(async () => ({ behavior: 'allow' as const })));
 
       // Inject the stub turn
       Reflect.set(session, 'currentTurn', currentTurn);
@@ -197,23 +204,26 @@ describe('ClaudeConnectorSession iterator error query disowning', () => {
       expect(queryInstanceAtFinishOnError).toBeUndefined();
     } finally {
       consoleError.mockRestore();
-      await session.close();
+      await session.close(createTestCall());
     }
   });
 
   it('disowns the dead query even when the turn is already completed, so the next message gets a fresh query', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
-    const session = new ClaudeConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'claude-agent-sdk',
-      agentId: 'agent-test',
-      cwd: os.tmpdir(),
-      model: 'claude-sonnet-4-20250514',
-      env: {},
-      emitSdkEvent: vi.fn(async () => undefined),
-    });
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
+    const session = new ClaudeConnectorSession(
+      {
+        bus,
+        adapterId: 'adapter-test',
+        adapterName: 'claude-agent-sdk',
+        agentId: 'agent-test',
+        cwd: os.tmpdir(),
+        model: 'claude-sonnet-4-20250514',
+        env: {},
+        emitSdkEvent: vi.fn(async () => undefined),
+      },
+      MakaioBus,
+    );
 
     // Iterator yields a result (completing the turn), then throws.
     let messageReceived: () => void;
@@ -238,12 +248,12 @@ describe('ClaudeConnectorSession iterator error query disowning', () => {
               throw new Error('post-result transport failure');
             }
           },
-        } as unknown as ReturnType<typeof queryHarness.query>;
+        };
       },
     );
 
     try {
-      await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+      await session.initialize(createTestCall(), () => vi.fn(async () => ({ behavior: 'allow' as const })));
       expect(queryHarness.query).toHaveBeenCalledTimes(1);
 
       // Send first message — turn will complete successfully, then iterator throws
@@ -277,7 +287,7 @@ describe('ClaudeConnectorSession iterator error query disowning', () => {
       expect((result2 as { result: { message: string } }).result.message).toBe('session completed');
     } finally {
       consoleError.mockRestore();
-      await session.close();
+      await session.close(createTestCall());
     }
   });
 });

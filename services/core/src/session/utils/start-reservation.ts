@@ -15,6 +15,7 @@
  * @packageDocumentation
  */
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   SessionSubjects,
   type AgentRole,
@@ -82,16 +83,18 @@ export type StartReservationRequest = StartReservationIdentity &
  * misconfiguration indistinguishable from a supported topology. Each caller owns
  * what a throw means for its own rollback, so no attempt is made to classify it
  * here.
+ * @param call - Call context of the handled message this reservation serves.
  * @param bus - Bus the reservation is issued on.
  * @param request - Identity, instance, role and resume target of the start being reserved for.
  * @returns What the authority answered, verbatim.
  */
 export async function reserveStartFor(
+  call: CallContext,
   bus: IMakaioBus,
   request: StartReservationRequest,
 ): Promise<SessionOwnershipReserveStartServiceResult> {
   const { instance } = request;
-  return bus.request(SessionSubjects.ownership.reserveStart, {
+  return bus.request(call, SessionSubjects.ownership.reserveStart, {
     sessionId: request.sessionId,
     agentId: request.agentId,
     adapterId: instance.adapterId,

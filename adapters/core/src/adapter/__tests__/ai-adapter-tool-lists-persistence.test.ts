@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import os from 'node:os';
 import { MakaioBus } from '@makaio/bus-core';
-import { AdapterSubjects, type MakaioSessionAgent } from '@makaio/contracts';
+import { AdapterSubjects, type CallContext, type MakaioSessionAgent } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
+import { createTestCall } from '@makaio/test-utils';
 import { prepareColdRehydrate } from '../ai-adapter-rehydrate-preflight.js';
 import { providerKeyPublicationFor } from '../adapter-provider-key-publication.js';
 import { createTestAdapter, registerStartReservationAuthority } from './shared.js';
@@ -30,10 +31,14 @@ describe('agent row tool lists', () => {
   describe('prepareColdRehydrate', () => {
     /**
      * Serve one persisted agent row and run the preflight against it.
+     * @param call - Call context of the rehydrate request.
      * @param toolLists - Tool list fields to put on the persisted row
      * @returns The preflight result
      */
-    async function preflightWith(toolLists: Pick<MakaioSessionAgent, 'allowedTools' | 'disallowedTools'>) {
+    async function preflightWith(
+      call: CallContext,
+      toolLists: Pick<MakaioSessionAgent, 'allowedTools' | 'disallowedTools'>,
+    ) {
       cleanupFns.push(
         MakaioBus.on(AgentStorageSubjects.get, (ctx) => {
           ctx.setResult({
@@ -54,6 +59,7 @@ describe('agent row tool lists', () => {
         }),
       );
       return prepareColdRehydrate(
+        call,
         { globalBus: MakaioBus, resolveMcpSessionContext: async () => undefined },
         'persisted-agent',
         { publication: providerKeyPublicationFor({ callerOwnsAgentRow: false }) },
@@ -61,7 +67,7 @@ describe('agent row tool lists', () => {
     }
 
     it('passes a persisted empty allowlist and a denylist into the creation request', async () => {
-      const result = await preflightWith({ allowedTools: [], disallowedTools: ['shell_exec'] });
+      const result = await preflightWith(createTestCall(), { allowedTools: [], disallowedTools: ['shell_exec'] });
 
       if (!('agentCreationRequest' in result)) throw new Error(`Expected a preflight, got ${result.message}`);
       expect(result.agentCreationRequest.allowedTools).toEqual([]);
@@ -69,7 +75,7 @@ describe('agent row tool lists', () => {
     });
 
     it('omits the lists when the row has none', async () => {
-      const result = await preflightWith({});
+      const result = await preflightWith(createTestCall(), {});
 
       if (!('agentCreationRequest' in result)) throw new Error(`Expected a preflight, got ${result.message}`);
       expect('allowedTools' in result.agentCreationRequest).toBe(false);

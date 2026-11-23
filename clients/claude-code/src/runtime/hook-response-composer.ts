@@ -52,6 +52,7 @@
 
 import type { CanonicalEffect, ProviderContributionEnvelope } from '@makaio/contracts/client';
 import { CANONICAL_HOOK_RESPONSE_CAPABILITIES } from '@makaio/contracts/client';
+import type { CallContext } from '@makaio/core';
 import type { ClientHookHandleResponse, RawClientHookPayload } from '@makaio/subsystem-client';
 import type { ClientHookResponseRegistry } from '@makaio/subsystem-client';
 import {
@@ -406,12 +407,14 @@ export interface ComposeHookResponseOptions {
  *
  * Observer-only events should not reach this composer — the service
  * dispatches them on the `hook.received` pathway instead.
+ * @param call - Call of the hook-request message being answered.
  * @param registry - Hook response contributor registry.
  * @param payload - Raw hook payload from the `hook.handle` request.
  * @param options - Request-scoped deadline and signal from the bus context.
  * @returns Native Claude Code hook handle response.
  */
 export async function composeHookResponse(
+  call: CallContext,
   registry: ClientHookResponseRegistry,
   payload: RawClientHookPayload,
   options?: ComposeHookResponseOptions,
@@ -428,6 +431,7 @@ export async function composeHookResponse(
 
   // 2. Collect contributions concurrently
   const result: CollectionResult = await collectContributions(
+    call,
     snapshot,
     'claude-code',
     options?.deadline,

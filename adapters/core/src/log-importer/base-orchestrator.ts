@@ -206,7 +206,8 @@ export abstract class BaseLogOrchestrator<TRecord, TState = unknown> {
 
     this.unsubscribeDeleted = this.watcher.onDeleted(({ filePath }) => {
       this.watcherTasks.track(
-        MakaioBus.request(ImportCursorStorageSubjects.delete, { filePath })
+        // ORIGIN: The file watcher observed removal of the log file.
+        MakaioBus.request(MakaioBus.own('observer'), ImportCursorStorageSubjects.delete, { filePath })
           .then(() => undefined)
           .catch(() => {}),
       );
@@ -282,7 +283,8 @@ export abstract class BaseLogOrchestrator<TRecord, TState = unknown> {
     mtime: Date,
     sessionContext?: ImportCursorPosition['sessionContext'],
   ): Promise<void> {
-    await MakaioBus.request(ImportCursorStorageSubjects.set, {
+    // ORIGIN: Persist cursor progress from the file watcher's import work.
+    await MakaioBus.request(MakaioBus.own('observer'), ImportCursorStorageSubjects.set, {
       filePath,
       bytesRead,
       lastModified: mtime.toISOString(),
@@ -307,7 +309,10 @@ export abstract class BaseLogOrchestrator<TRecord, TState = unknown> {
 
     // Handle file rotation — delete cursor so we re-read from start
     if (changeType === 'rotated') {
-      await MakaioBus.request(ImportCursorStorageSubjects.delete, { filePath }).catch(() => {});
+      // ORIGIN: The file watcher observed rotation, requiring a fresh read.
+      await MakaioBus.request(MakaioBus.own('observer'), ImportCursorStorageSubjects.delete, { filePath }).catch(
+        () => {},
+      );
     }
 
     const cursor = await getCursorWithMigration(filePath, isJsonFormat, event, (e) => this.trackFileChange(e));
@@ -465,12 +470,15 @@ export abstract class BaseLogOrchestrator<TRecord, TState = unknown> {
         `${this.logPrefix} Corrupted cursor state for ${filePath}, deleting cursor and re-importing.`,
         error instanceof Error ? error.message : String(error),
       );
-      await MakaioBus.request(ImportCursorStorageSubjects.delete, { filePath }).catch((deleteError) => {
-        console.warn(
-          `${this.logPrefix} Failed to delete corrupted cursor for ${filePath}.`,
-          deleteError instanceof Error ? deleteError.message : String(deleteError),
-        );
-      });
+      // ORIGIN: The file watcher's incremental import found a corrupted cursor.
+      await MakaioBus.request(MakaioBus.own('observer'), ImportCursorStorageSubjects.delete, { filePath }).catch(
+        (deleteError) => {
+          console.warn(
+            `${this.logPrefix} Failed to delete corrupted cursor for ${filePath}.`,
+            deleteError instanceof Error ? deleteError.message : String(deleteError),
+          );
+        },
+      );
       await reParseAndHandleFirstRead(filePath, mtime, isJsonFormat, true, this.logPrefix, {
         parseFile: (fp, offset) => this.parseFile(fp, offset),
         validateRecords: (r) => this.validateRecords(r),

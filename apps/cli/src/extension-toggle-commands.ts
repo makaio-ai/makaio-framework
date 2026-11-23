@@ -264,7 +264,7 @@ async function applyLiveToggle(options: LiveToggleOptions): Promise<void> {
   try {
     let result: { readonly outcome: TransitionOutcome; readonly reason?: SetEnabledReason };
     try {
-      result = await bus.request(ExtensionSubjects.setEnabled, { name, enabled });
+      result = await bus.request(bus.own('root'), ExtensionSubjects.setEnabled, { name, enabled });
     } catch (error) {
       // Every refusal the server can reason about arrives as a response, so a
       // thrown request is a transport- or runtime-level failure instead: it

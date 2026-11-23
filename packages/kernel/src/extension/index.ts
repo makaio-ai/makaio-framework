@@ -1,5 +1,6 @@
 export type {
   ContributionProcessor,
+  CredentialResolverBinder,
   ExtensionContextBase,
   ExtensionRuntimeSurface,
   KernelExtensionContext,

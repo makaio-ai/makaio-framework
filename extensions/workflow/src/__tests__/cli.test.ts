@@ -15,6 +15,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ProvideBusContext } from '@makaio/kernel/cli';
+import { createTestCall } from '@makaio/test-utils';
 import type { CoreBootOptions, MakaioRuntime, ServerTransportProvider } from '@makaio/runtime-node';
 
 // ---------------------------------------------------------------------------
@@ -84,6 +85,7 @@ describe('workflowCli contribution', () => {
 
   it('declares beforeRun that unconditionally returns { proceed: true }', () => {
     const result = workflowCli.beforeRun?.({
+      call: createTestCall(),
       subcommandName: 'run',
       args: {},
       bus: null,

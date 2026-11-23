@@ -292,7 +292,7 @@ async function handleLaunch(
   };
 
   try {
-    const response = await bus.request(NativeSessionSupervisorSubjects.launch, request);
+    const response = await bus.request(bus.own('root'), NativeSessionSupervisorSubjects.launch, request);
     process.stdout.write(`Launched ${client.clientId}\n`);
     process.stdout.write(`  supervisor session: ${response.supervisorSessionId}\n`);
     process.stdout.write(`  pid: ${response.pid}\n`);
@@ -326,7 +326,7 @@ async function handleStop(request: NativeSupervisorStopRequest, ctx: NativeClien
   if (!bus) return;
 
   try {
-    const response = await bus.request(NativeSessionSupervisorSubjects.stop, request);
+    const response = await bus.request(bus.own('root'), NativeSessionSupervisorSubjects.stop, request);
     if (!response.success) {
       process.stderr.write(`stop: failed to stop runtime ${request.supervisorSessionId}\n`);
       process.exitCode = 1;
@@ -349,7 +349,7 @@ async function handleStatus(request: NativeSupervisorStatusRequest, ctx: NativeC
   if (!bus) return;
 
   try {
-    const response = await bus.request(NativeSessionSupervisorSubjects.status, request);
+    const response = await bus.request(bus.own('root'), NativeSessionSupervisorSubjects.status, request);
     if (response.runtimes.length === 0) {
       process.stdout.write('No supervised runtimes found\n');
       return;

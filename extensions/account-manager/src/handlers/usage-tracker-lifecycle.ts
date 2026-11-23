@@ -1,5 +1,6 @@
 /* eslint max-lines: ["error", { "max": 500, "skipBlankLines": true, "skipComments": true }] */
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { AccountUsage } from '../bus/schemas.js';
 import { RateLimitedError, UsageAuthInvalidError } from '../interfaces/usage-provider.js';
@@ -9,6 +10,7 @@ import type {
   IAccountMetadataStore,
   IAccountUsageSnapshotStore,
 } from '../interfaces/account-store.js';
+import { logAccountManagerError } from '../utils/diagnostics.js';
 import { metadataPatchChanges } from '../utils/json-merge-patch.js';
 import {
   buildUsageAuthClearMetadata,
@@ -44,6 +46,8 @@ interface TrackerQuiescenceOptions {
 }
 
 interface ScheduleUsagePersistenceOptions {
+  /** Call context of the fetch or persistence pass this chain serves. */
+  call: CallContext;
   clientId: string;
   accountId: string;
   usage: AccountUsage;
@@ -57,6 +61,8 @@ interface ScheduleUsagePersistenceOptions {
 }
 
 interface ApplyMetadataPatchesOptions {
+  /** Call context of the fetch or persistence pass these patches serve. */
+  call: CallContext;
   bus: IMakaioBus;
   clientId: string;
   accountId: string;
@@ -80,6 +86,8 @@ interface ApplyResolvedUsageOptions extends ApplyFreshUsageOptions {
 }
 
 interface ScheduleMetadataInvalidationOptions {
+  /** Call context of the invalidation pass this bump serves. */
+  call: CallContext;
   clientId: string;
   accountId: string;
   metadataStore: IAccountMetadataStore;
@@ -105,6 +113,8 @@ interface InvalidateTrackerAccountStateOptions extends ScheduleMetadataInvalidat
 }
 
 interface EmitStaleSnapshotOptions {
+  /** Call context of the fetch pass that triggered this stale re-emission. */
+  call: CallContext;
   bus: IMakaioBus;
   clientId: string;
   accountId: string;
@@ -115,6 +125,8 @@ interface EmitStaleSnapshotOptions {
 }
 
 interface PersistUsageAuthInvalidOptions {
+  /** Call context of the fetch pass that observed the auth-invalid failure. */
+  call: CallContext;
   bus: IMakaioBus;
   clientId: string;
   accountId: string;
@@ -145,6 +157,8 @@ interface IsFetchSuppressedOptions {
 }
 
 interface StartUsageRefreshesOptions {
+  /** Call context of the `usage.refresh` request this resolution serves. */
+  call: CallContext;
   sources: Map<string, IUsageProvider>;
   metadataStore: IAccountMetadataStore;
   credentialStore: IAccountCredentialStore;
@@ -228,7 +242,7 @@ export function scheduleUsagePersistence(opts: ScheduleUsagePersistenceOptions):
 export function scheduleMetadataInvalidation(opts: ScheduleMetadataInvalidationOptions): Promise<void> {
   const key = createUsageCacheKey(opts.clientId, opts.accountId);
   const invalidation = opts.metadataStore
-    .bumpMetadataGeneration(opts.clientId, opts.accountId)
+    .bumpMetadataGeneration(opts.call, opts.clientId, opts.accountId)
     .then(() => undefined)
     .catch((error: unknown) => {
       opts.onInvalidationError(opts.clientId, error);
@@ -250,6 +264,7 @@ export function scheduleTrackedMetadataInvalidations(opts: ScheduleTrackedMetada
   for (const key of opts.trackedKeys) {
     const { clientId, accountId } = parseUsageCacheKey(key);
     void scheduleMetadataInvalidation({
+      call: opts.call,
       clientId,
       accountId,
       metadataStore: opts.metadataStore,
@@ -300,7 +315,7 @@ export async function emitStaleSnapshotIfCurrent(opts: EmitStaleSnapshotOptions)
     opts.usageCache.delete(opts.key);
     return;
   }
-  await opts.bus.emit(AccountManagerSubjects.usage.updated, {
+  await opts.bus.emit(opts.call, AccountManagerSubjects.usage.updated, {
     clientId: opts.clientId,
     accountId: opts.accountId,
     usage: staleSnapshot,
@@ -318,7 +333,7 @@ export async function applyMetadataPatchesIfCurrent(opts: ApplyMetadataPatchesOp
   const key = createUsageCacheKey(opts.clientId, opts.accountId);
   if (opts.isAccountGone(key, opts.generation)) return;
 
-  const latest = await opts.metadataStore.getWithMetadataGeneration(opts.clientId, opts.accountId);
+  const latest = await opts.metadataStore.getWithMetadataGeneration(opts.call, opts.clientId, opts.accountId);
   if (opts.isAccountGone(key, opts.generation) || !latest) return;
 
   const changed = metadataPatchChanges(latest.account.metadata, opts.patches);
@@ -326,19 +341,22 @@ export async function applyMetadataPatchesIfCurrent(opts: ApplyMetadataPatchesOp
 
   if (opts.isAccountGone(key, opts.generation)) return;
   const updated = await opts.metadataStore.patchMetadata(
+    opts.call,
     opts.clientId,
     opts.accountId,
     latest.metadataGeneration,
     opts.patches,
   );
   if (!updated || opts.isAccountGone(key, opts.generation)) return;
-  await opts.bus.emit(AccountManagerSubjects.accounts.metadataPatched, {
+  await opts.bus.emit(opts.call, AccountManagerSubjects.accounts.metadataPatched, {
     clientId: opts.clientId,
     account: updated,
   });
 }
 
 interface CheckAndEmitPendingResetsOptions {
+  /** Call context of the fetch pass that observed the fresh snapshot. */
+  call: CallContext;
   bus: IMakaioBus;
   clientId: string;
   accountId: string;
@@ -385,7 +403,7 @@ export async function checkAndEmitPendingResets(opts: CheckAndEmitPendingResetsO
           opts.pendingResets.set(opts.key, windowMap);
         }
         windowMap.set(window.id, window.resetsAt);
-        await opts.bus.emit(AccountManagerSubjects.usage.windowResetAvailable, {
+        await opts.bus.emit(opts.call, AccountManagerSubjects.usage.windowResetAvailable, {
           clientId: opts.clientId,
           accountId: opts.accountId,
           windowId: window.id,
@@ -429,7 +447,7 @@ export async function applyFreshUsage(opts: ApplyFreshUsageOptions): Promise<voi
     opts.usageCache.delete(opts.key);
     return;
   }
-  await opts.bus.emit(AccountManagerSubjects.usage.updated, {
+  await opts.bus.emit(opts.call, AccountManagerSubjects.usage.updated, {
     clientId: opts.clientId,
     accountId: opts.accountId,
     usage: fresh,
@@ -442,6 +460,7 @@ export async function applyFreshUsage(opts: ApplyFreshUsageOptions): Promise<voi
   }
   if (opts.isAccountGone(opts.key, opts.generation)) return;
   scheduleUsagePersistence({
+    call: opts.call,
     clientId: opts.clientId,
     accountId: opts.accountId,
     usage: fresh,
@@ -471,17 +490,18 @@ export async function applyResolvedUsage(opts: ApplyResolvedUsageOptions): Promi
  * @returns Nothing
  */
 export async function persistUsageAuthInvalidIfCurrent(opts: PersistUsageAuthInvalidOptions): Promise<void> {
-  const latest = await opts.metadataStore.getWithMetadataGeneration(opts.clientId, opts.accountId);
+  const latest = await opts.metadataStore.getWithMetadataGeneration(opts.call, opts.clientId, opts.accountId);
   if (!latest || opts.isAccountGone(opts.key, opts.generation)) return;
   const patches = buildUsageAuthInvalidMetadata(opts.fingerprint, opts.reason, Date.now(), opts.usageAuthCode);
   const updated = await opts.metadataStore.patchMetadata(
+    opts.call,
     opts.clientId,
     opts.accountId,
     latest.metadataGeneration,
     patches,
   );
   if (updated && !opts.isAccountGone(opts.key, opts.generation)) {
-    await opts.bus.emit(AccountManagerSubjects.accounts.metadataPatched, {
+    await opts.bus.emit(opts.call, AccountManagerSubjects.accounts.metadataPatched, {
       clientId: opts.clientId,
       account: updated,
     });
@@ -527,6 +547,7 @@ export function isFetchSuppressed(opts: IsFetchSuppressedOptions): boolean {
  */
 export async function startUsageRefreshes(opts: StartUsageRefreshesOptions): Promise<number> {
   const targets = await collectUsageRefreshTargets(
+    opts.call,
     opts.sources,
     opts.metadataStore,
     opts.credentialStore,
@@ -613,7 +634,7 @@ async function runPersistence(opts: RunPersistenceOptions): Promise<void> {
   const previous = opts.persistedWindows.get(opts.cacheKey) ?? new Map<string, PersistedWindowState>();
   const result = await persistChangedWindows(
     {
-      append: (entry) => opts.usageSnapshotStore!.append(opts.clientId, opts.accountId, entry),
+      append: (entry) => opts.usageSnapshotStore!.append(opts.call, opts.clientId, opts.accountId, entry),
     },
     opts.usage,
     previous,
@@ -622,4 +643,58 @@ async function runPersistence(opts: RunPersistenceOptions): Promise<void> {
   if (result && !opts.isStopped() && opts.isCurrentGeneration(opts.cacheKey, opts.generation)) {
     opts.persistedWindows.set(opts.cacheKey, result);
   }
+}
+
+/**
+ * Builds an error hook that logs a failed tracker operation for one usage source.
+ * @param operation - Name of the operation that failed, used in the log line.
+ * @returns Hook receiving the source client identifier and the error.
+ */
+export function createSourceErrorLogger(operation: string): (clientId: string, error: unknown) => void {
+  return (clientId, error) => {
+    logAccountManagerError(`[UsageTracker] ${operation} failed for source ${clientId}:`, error);
+  };
+}
+
+/**
+ * Logs that a tracker quiescence wait gave up after the shared timeout.
+ * @param description - What timed out, e.g. `stop timed out waiting for tracker quiescence`.
+ * @param reason - Message of the error attached to the log line.
+ */
+export function logQuiescenceTimeout(description: string, reason: string): void {
+  logAccountManagerError(
+    `[UsageTracker] ${description} after ${USAGE_TRACKER_QUIESCENCE_TIMEOUT_MS}ms:`,
+    new Error(reason),
+  );
+}
+
+/**
+ * Resolves after a delay without keeping the process alive.
+ * @param ms - Delay in milliseconds.
+ * @returns Promise that resolves once the delay has elapsed.
+ */
+export function sleepUnref(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timeout = setTimeout(resolve, ms);
+    timeout.unref();
+  });
+}
+
+/**
+ * Checks whether a cached usage snapshot ingested from a linked client is still fresh, pruning
+ * the freshness marker once it has expired.
+ * @param freshUntilByKey - Freshness deadlines for linked-client snapshots, keyed by usage cache key.
+ * @param key - Usage cache key to check.
+ * @returns `true` when the snapshot at `key` is still fresh.
+ */
+export function hasFreshLinkedClientSnapshot(freshUntilByKey: Map<string, number>, key: string): boolean {
+  const freshUntil = freshUntilByKey.get(key);
+  if (freshUntil === undefined) {
+    return false;
+  }
+  if (Date.now() < freshUntil) {
+    return true;
+  }
+  freshUntilByKey.delete(key);
+  return false;
 }

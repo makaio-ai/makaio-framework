@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PreferencesSubjects } from '@makaio/services-core/preferences';
+import { createTestCall } from '@makaio/test-utils';
 import {
   loadWindowSession,
   saveWindowSession,
@@ -85,10 +86,11 @@ describe('window-session', () => {
       },
     });
 
-    await saveWindowSession(busClient, windowSource, HOST_SCOPE);
+    const call = createTestCall();
+    await saveWindowSession(call, busClient, windowSource, HOST_SCOPE);
 
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(PreferencesSubjects.set, {
+    expect(request).toHaveBeenCalledWith(call, PreferencesSubjects.set, {
       key: { scope: HOST_SCOPE },
       category: 'window-session',
       value: {
@@ -125,9 +127,10 @@ describe('window-session', () => {
       }),
     });
 
-    await saveWindowSession(busClient, windowSource, HOST_SCOPE);
+    const call = createTestCall();
+    await saveWindowSession(call, busClient, windowSource, HOST_SCOPE);
 
-    expect(request).toHaveBeenCalledWith(PreferencesSubjects.set, {
+    expect(request).toHaveBeenCalledWith(call, PreferencesSubjects.set, {
       key: { scope: HOST_SCOPE },
       category: 'window-session',
       value: {
@@ -146,10 +149,11 @@ describe('window-session', () => {
     const request = vi.fn<WindowSessionBusClient['request']>().mockResolvedValue({ success: true });
     const busClient = createBusClientStub(request);
 
-    await saveWindowSession(busClient, createWindowSourceStub({ listWindows: () => [] }), HOST_SCOPE);
+    const call = createTestCall();
+    await saveWindowSession(call, busClient, createWindowSourceStub({ listWindows: () => [] }), HOST_SCOPE);
 
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(PreferencesSubjects.delete, {
+    expect(request).toHaveBeenCalledWith(call, PreferencesSubjects.delete, {
       key: { scope: HOST_SCOPE },
       category: 'window-session',
     });
@@ -170,7 +174,8 @@ describe('window-session', () => {
     });
     const busClient = createBusClientStub(request);
 
-    await expect(loadWindowSession(busClient, HOST_SCOPE)).resolves.toEqual({
+    const call = createTestCall();
+    await expect(loadWindowSession(call, busClient, HOST_SCOPE)).resolves.toEqual({
       version: 1,
       windows: [
         {
@@ -181,7 +186,7 @@ describe('window-session', () => {
       ],
     });
 
-    expect(request).toHaveBeenCalledWith(PreferencesSubjects.get, {
+    expect(request).toHaveBeenCalledWith(call, PreferencesSubjects.get, {
       key: { scope: HOST_SCOPE },
       category: 'window-session',
     });
@@ -198,7 +203,7 @@ describe('window-session', () => {
       }),
     );
 
-    await expect(loadWindowSession(busClient, HOST_SCOPE)).resolves.toBeNull();
+    await expect(loadWindowSession(createTestCall(), busClient, HOST_SCOPE)).resolves.toBeNull();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
@@ -214,7 +219,7 @@ describe('window-session', () => {
       }),
     );
 
-    await expect(loadWindowSession(busClient, HOST_SCOPE)).resolves.toBeNull();
+    await expect(loadWindowSession(createTestCall(), busClient, HOST_SCOPE)).resolves.toBeNull();
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
@@ -223,7 +228,7 @@ describe('window-session', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const busClient = createBusClientStub(vi.fn().mockRejectedValue(new Error('Transport disconnected')));
 
-    await expect(loadWindowSession(busClient, HOST_SCOPE)).resolves.toBeNull();
+    await expect(loadWindowSession(createTestCall(), busClient, HOST_SCOPE)).resolves.toBeNull();
     expect(warn).toHaveBeenCalledWith(
       '[WindowSession] Failed to load window session from preferences:',
       expect.any(Error),
@@ -241,7 +246,9 @@ describe('window-session', () => {
       }),
     });
 
-    await expect(saveWindowSession(busClient, windowSource, HOST_SCOPE)).rejects.toThrow('Transport disconnected');
+    await expect(saveWindowSession(createTestCall(), busClient, windowSource, HOST_SCOPE)).rejects.toThrow(
+      'Transport disconnected',
+    );
   });
 
   it('deletes the stored session when all windows are destroyed', async () => {
@@ -258,10 +265,11 @@ describe('window-session', () => {
       }),
     });
 
-    await saveWindowSession(busClient, windowSource, HOST_SCOPE);
+    const call = createTestCall();
+    await saveWindowSession(call, busClient, windowSource, HOST_SCOPE);
 
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith(PreferencesSubjects.delete, {
+    expect(request).toHaveBeenCalledWith(call, PreferencesSubjects.delete, {
       key: { scope: HOST_SCOPE },
       category: 'window-session',
     });

@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import {
   type JsonValue,
   type ResponseSchemaDescriptor,
@@ -43,6 +44,7 @@ import { WorkflowSchemas, WorkflowSubjects } from '../namespace.js';
  * - `state` is injected when the workflow declares a state contract via the
  *   `state` field on the definition, providing `get()` and `update()` for
  *   run-scoped mutable state.
+ * @param call - Call context of the handled message this execution serves; forwarded to every bus send.
  * @param node - The station node to execute.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context (for previousSteps).
@@ -50,6 +52,7 @@ import { WorkflowSchemas, WorkflowSubjects } from '../namespace.js';
  * @returns Terminal execution outcome for this station.
  */
 export async function executeStationNode(
+  call: CallContext,
   node: WorkflowStationNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
@@ -65,13 +68,14 @@ export async function executeStationNode(
 
   const handler: StationHandler | undefined = ctx.runtimeHandlers.get(node.id);
   if (handler === undefined) {
-    return executeRoleStationNode(node, ctx, expressionCtx, frameId);
+    return executeRoleStationNode(call, node, ctx, expressionCtx, frameId);
   }
 
   // Build artifact context when the execution has an active artifact binding.
   const artifact =
     ctx.artifactBinding !== undefined && frameId !== undefined
       ? createArtifactContext({
+          call,
           executionId: ctx.executionId,
           frameId,
           bindingState: ctx.artifactBinding,
@@ -81,7 +85,7 @@ export async function executeStationNode(
 
   // Build state context when the workflow declares a state contract.
   const stateCtx =
-    ctx.definition.state !== undefined ? createWorkflowStateContext(ctx.executionId, ctx.bus) : undefined;
+    ctx.definition.state !== undefined ? createWorkflowStateContext(call, ctx.executionId, ctx.bus) : undefined;
 
   /**
    * Emit a structured progress signal to the `execution.progress` bus subject.
@@ -109,7 +113,7 @@ export async function executeStationNode(
       emittedAt: Date.now(),
     });
     try {
-      await ctx.bus.emit(WorkflowSubjects.execution.progress, payload);
+      await ctx.bus.emit(call, WorkflowSubjects.execution.progress, payload);
     } catch (error) {
       // The producer payload is parsed before emit; rejections here are
       // observer-side delivery failures and must not abort the station.
@@ -161,6 +165,7 @@ export async function executeStationNode(
  * Code-authored station handlers are preferred when present. This path exists
  * for persisted or GUI-authored workflow definitions, where a station is
  * function-free and carries a role/prompt contract instead.
+ * @param call - Call context of the handled message this execution serves.
  * @param node - Station node without a registered runtime handler.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context.
@@ -168,6 +173,7 @@ export async function executeStationNode(
  * @returns Terminal execution outcome for the role-backed station.
  */
 async function executeRoleStationNode(
+  call: CallContext,
   node: WorkflowStationNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
@@ -183,6 +189,7 @@ async function executeRoleStationNode(
   const outputSchema: ResponseSchemaDescriptor | undefined =
     node.outputSchema !== undefined ? { schema: node.outputSchema } : undefined;
   return executeRoleSubagentNode(
+    call,
     {
       nodeId: node.id,
       nodeLabel: 'Station node',

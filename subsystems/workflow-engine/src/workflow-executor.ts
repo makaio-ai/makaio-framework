@@ -1,5 +1,7 @@
 /* eslint max-lines: ["error", { "max": 620, "skipBlankLines": true, "skipComments": true }], max-lines-per-function: ["error", { "max": 130, "skipBlankLines": true, "skipComments": true }] */
 import type { IMakaioBus } from '@makaio/bus-core';
+import { createBusNamespace, isInProcessCaller, localSubject, type CallContext } from '@makaio/core';
+import { z } from 'zod';
 import {
   SessionSubjects,
   WORKFLOW_CANCELLED_REASON,
@@ -33,16 +35,11 @@ import {
   withExecutionDurableTransition,
   completeExecutionWithFailure,
   completeExecutionWithSuccess,
-  isAcceptedRunnerResultStatus,
   recoverSuccessFinalizations,
   type FinalizerDeps,
   type WorkflowSuccessFinalizer,
 } from './workflow-execution-finalizer.js';
-import {
-  buildDefinitionRunnerParamsFromRunContext,
-  finalizeResolvedRunnerResult,
-  type RunnerTaskDeps,
-} from './workflow-runner-tasks.js';
+import { buildDefinitionRunnerParamsFromRunContext, type RunnerTaskDeps } from './workflow-runner-tasks.js';
 import { startExecution, startFileExecution, type StartExecutionDeps } from './workflow-execution-start.js';
 import { rerunExecution } from './workflow-execution-rerun.js';
 import { launchDefinitionExecutionTask, selectDefinitionExecutionDispatch } from './workflow-definition-dispatch.js';
@@ -75,9 +72,18 @@ import type {
 } from './workflow-attempt-outcome.js';
 import { acceptWorkflowTechnicalFailure } from './workflow-technical-failure.js';
 import { acceptWorkflowCancellation } from './workflow-cancellation-outcome.js';
-import { acceptWorkflowOwnerOutcome, resolveAuthorityRunnerReplay } from './workflow-owner-outcome.js';
+import { acceptWorkflowOwnerOutcome } from './workflow-owner-outcome.js';
 import type { OutcomeConvergenceInput } from './outcome-convergence.js';
 import { registerExecutionTask } from './workflow-execution-task-registration.js';
+import {
+  acceptAuthorityRunnerResult as acceptRunnerResult,
+  loadAuthorityRunnerContext as loadRunnerContext,
+} from './authority-runner.js';
+
+const GateTimeoutNamespace = createBusNamespace('workflow-gate-timeout', {
+  resume: localSubject({ request: z.object({ executionId: z.string() }), response: z.object({}) }),
+});
+const GateTimeoutSubjects = GateTimeoutNamespace.subjects;
 
 /**
  * Core workflow executor service.
@@ -126,9 +132,10 @@ export class WorkflowExecutor extends BaseService {
   ) {
     super(bus);
     this.config = { ...DEFAULT_EXECUTOR_CONFIG, ...config };
-    this.gateTimeoutScheduler = new WorkflowGateTimeoutScheduler(bus, (executionId) =>
-      this.resumePausedExecution(executionId),
-    );
+    // ORIGIN: A timer wakeup enters through a local request so the runner receives a forwardable call.
+    this.gateTimeoutScheduler = new WorkflowGateTimeoutScheduler(bus, async (executionId) => {
+      await bus.request(bus.own('schedule'), GateTimeoutSubjects.resume, { executionId });
+    });
   }
 
   /**
@@ -153,7 +160,25 @@ export class WorkflowExecutor extends BaseService {
    * @returns Idempotent cleanup after any recoverable claims have been drained.
    * @throws When another active registration already owns `finalizerId`.
    */
-  public async registerSuccessFinalizer(finalizerId: string): Promise<() => void> {
+  public registerSuccessFinalizer(finalizerId: string): Promise<() => void> {
+    // ORIGIN: Host registration drains the durable claims of every run under the executor carrier.
+    // Shared work, not start: the sweep finalizes many runs, so no single run's principal applies.
+    return this.registerSuccessFinalizerWithCall(this.bus.own('shared-work'), finalizerId);
+  }
+
+  /**
+   * Register one success finalizer and recover its claims.
+   * @param call - Context for the result being replayed, or the carrier's own context for a standalone sweep.
+   * @param finalizerId - Stable finalizer identity used by the durable claim.
+   * @param replayingExecutionId - Execution receiving the current result, if any.
+   * @returns Idempotent cleanup after any recoverable claims have been drained.
+   * @throws When another active registration already owns `finalizerId`.
+   */
+  private async registerSuccessFinalizerWithCall(
+    call: CallContext,
+    finalizerId: string,
+    replayingExecutionId?: string,
+  ): Promise<() => void> {
     if (!this.initialized) {
       throw new Error('[WorkflowExecutor] Initialize the executor before registering success finalizers');
     }
@@ -165,7 +190,7 @@ export class WorkflowExecutor extends BaseService {
     const registration: WorkflowSuccessFinalizer = { finalizerId, finalizeSubject: subjects.finalize };
     this.successFinalizers.set(finalizerId, registration);
     try {
-      await recoverSuccessFinalizations(this.buildFinalizerDeps());
+      await recoverSuccessFinalizations(call, { ...this.buildFinalizerDeps(), replayingExecutionId });
     } catch (error) {
       if (this.successFinalizers.get(finalizerId) === registration) this.successFinalizers.delete(finalizerId);
       throw error;
@@ -188,133 +213,93 @@ export class WorkflowExecutor extends BaseService {
    * Durable execution and run-context rows remain the source of truth. The
    * executor temporarily adopts a missing active entry and delegates to the
    * same runner-result finalization path used by executor-owned tasks.
+   * @param call - Call context of the message that delivers the result.
    * @param executionId - Durable authority-owned execution identity.
    * @param result - Correlated terminal runner result.
    * @returns The durable status after acceptance, including pending success finalization.
    */
   public async acceptAuthorityRunnerResult(
+    call: CallContext,
     executionId: string,
     result: WorkflowRunResult,
   ): Promise<{ accepted: boolean; status: WorkflowExecution['status'] }> {
-    if (result.status === 'paused') throw new Error('authority runner result must be terminal');
-    if (result.executionId !== executionId) throw new Error('authority runner result execution identity mismatch');
-    const { execution } = await this.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
-    if (!execution) throw new Error(`Authority runner execution not found: ${executionId}`);
-    if (execution.workflowId !== result.workflowId)
-      throw new Error('authority runner result workflow identity mismatch');
-    if (execution.status === 'cancelled' && result.status !== 'cancelled') {
-      return { accepted: false, status: execution.status };
-    }
-
-    let replayCleanup: (() => void) | undefined;
-    if (execution.status === 'finalizing') {
-      const { workflow } = await this.loadAuthorityRunnerContext(executionId, result.workflowId);
-      replayCleanup = await this.registerAuthorityResultFinalizer(workflow);
-    }
-    const replayStatus = await resolveAuthorityRunnerReplay(this.buildFinalizerDeps(), execution, result).finally(() =>
-      replayCleanup?.(),
+    return acceptRunnerResult(
+      call,
+      {
+        bus: this.bus,
+        activeExecutions: this.activeExecutions,
+        buildFinalizerDeps: () => this.buildFinalizerDeps(),
+        registerResultFinalizer: (resultCall, workflow, executionId) =>
+          this.registerAuthorityResultFinalizer(resultCall, workflow, executionId),
+      },
+      executionId,
+      result,
     );
-    if (replayStatus !== undefined) return { accepted: true, status: replayStatus };
-    if (execution.status !== 'running') throw new Error(`Authority runner execution is ${execution.status}`);
-
-    const { runContext, workflow } = await this.loadAuthorityRunnerContext(executionId, result.workflowId);
-    const unregisterFinalizer = await this.registerAuthorityResultFinalizer(workflow);
-
-    const existing = this.activeExecutions.get(executionId);
-    let adopted = false;
-    if (!existing) {
-      this.activeExecutions.set(executionId, {
-        execution,
-        workflow,
-        runContext,
-        runtimeHandlers: new Map(),
-        runtimeLoopGates: new Map(),
-      });
-      adopted = true;
-    } else if (existing.execution.workflowId !== result.workflowId) {
-      throw new Error('authority runner active execution identity mismatch');
-    }
-    try {
-      await finalizeResolvedRunnerResult(
-        {
-          activeExecutions: this.activeExecutions,
-          buildFinalizerDeps: () => this.buildFinalizerDeps(),
-        },
-        result,
-      );
-    } finally {
-      if (adopted) this.activeExecutions.delete(executionId);
-      unregisterFinalizer?.();
-    }
-    const settled = await this.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
-    if (settled.execution?.status === 'cancelled' && result.status !== 'cancelled') {
-      return { accepted: false, status: settled.execution.status };
-    }
-    if (!settled.execution || !isAcceptedRunnerResultStatus(settled.execution.status, result.status)) {
-      throw new Error(`Authority runner result did not settle compatibly with ${result.status}`);
-    }
-    return { accepted: true, status: settled.execution.status };
   }
 
   /**
    * Fail the workflow owner after a technical Attempt outcome has been committed.
    * Startup and Preparation failures can precede loading the workflow definition,
    * so this path uses the durable owner context, not a fabricated runner result.
+   * @param call - Call context of the work that commits the failure.
    * @param executionId - Durable authority-owned execution identity.
    * @param failure - Canonical technical failure retained in Attempt storage.
    * @returns The durable status after idempotent failure convergence.
    */
-  public readonly acceptAuthorityTechnicalFailure = (executionId: string, failure: WorkflowAttemptTechnicalFailure) =>
-    acceptWorkflowTechnicalFailure(this.buildFinalizerDeps(), executionId, failure);
+  public readonly acceptAuthorityTechnicalFailure = (
+    call: CallContext,
+    executionId: string,
+    failure: WorkflowAttemptTechnicalFailure,
+  ) => acceptWorkflowTechnicalFailure(call, this.buildFinalizerDeps(), executionId, failure);
 
   /**
    * Cancel the workflow owner after its technical Attempt cancellation is committed.
+   * @param call - Call context of the work that commits the cancellation.
    * @param executionId - Durable authority-owned execution identity.
    * @param cancellation - Canonical cancellation retained in Attempt storage.
    * @returns The durable status after idempotent cancellation convergence.
    */
-  public readonly acceptAuthorityCancellation = (executionId: string, cancellation: WorkflowAttemptCancellation) =>
-    acceptWorkflowCancellation(this.buildFinalizerDeps(), executionId, cancellation);
+  public readonly acceptAuthorityCancellation = (
+    call: CallContext,
+    executionId: string,
+    cancellation: WorkflowAttemptCancellation,
+  ) => acceptWorkflowCancellation(call, this.buildFinalizerDeps(), executionId, cancellation);
 
   /**
    * Interpret a canonical Attempt outcome under durable owner lifecycle ordering.
    * @param input - Committed outcome and its frozen control observation.
    * @returns Explicit lifecycle projection or technical-fact-only acceptance.
    */
-  public readonly acceptAuthorityOutcome = (input: OutcomeConvergenceInput<WorkflowAttemptOutcome>) =>
-    acceptWorkflowOwnerOutcome(
+  public readonly acceptAuthorityOutcome = (input: OutcomeConvergenceInput<WorkflowAttemptOutcome>) => {
+    const { call } = input;
+    return acceptWorkflowOwnerOutcome(
+      call,
       {
         lifecycle: this.buildFinalizerDeps(),
-        acceptTerminalResult: (executionId, result) => this.acceptAuthorityRunnerResult(executionId, result),
-        acceptTechnicalFailure: this.acceptAuthorityTechnicalFailure,
-        acceptCancellation: this.acceptAuthorityCancellation,
+        acceptTerminalResult: (outcomeCall, executionId, result) =>
+          this.acceptAuthorityRunnerResult(outcomeCall, executionId, result),
+        acceptTechnicalFailure: (outcomeCall, executionId, failure) =>
+          this.acceptAuthorityTechnicalFailure(outcomeCall, executionId, failure),
+        acceptCancellation: (outcomeCall, executionId, cancellation) =>
+          this.acceptAuthorityCancellation(outcomeCall, executionId, cancellation),
       },
       input,
     );
+  };
 
-  private async loadAuthorityRunnerContext(executionId: string, workflowId: string) {
-    const { runContext } = await this.bus.request(WorkflowStorageSubjects.getRunContext, { executionId });
-    if (!runContext) throw new Error(`Authority runner run context not found: ${executionId}`);
-    if (runContext.executionId !== executionId || runContext.workflowId !== workflowId) {
-      throw new Error('authority runner run context identity mismatch');
-    }
-    if (runContext.terminalAuthority !== 'authority') {
-      throw new Error('authority runner result requires terminalAuthority=authority');
-    }
-    const workflow =
-      runContext.definitionSnapshot ??
-      (await this.bus.request(WorkflowStorageSubjects.get, { id: runContext.workflowId })).workflow;
-    if (!workflow || workflow.id !== workflowId) {
-      throw new Error('authority runner workflow definition is unavailable or mismatched');
-    }
-    return { runContext, workflow };
+  private async loadAuthorityRunnerContext(call: CallContext, executionId: string, workflowId: string) {
+    return loadRunnerContext(call, this.bus, executionId, workflowId);
   }
 
-  private registerAuthorityResultFinalizer(workflow: WorkflowDefinition): Promise<(() => void) | undefined> {
+  private registerAuthorityResultFinalizer(
+    call: CallContext,
+    workflow: WorkflowDefinition,
+    executionId: string,
+  ): Promise<(() => void) | undefined> {
     if (!workflow.successFinalizerId || this.successFinalizers.has(workflow.successFinalizerId)) {
       return Promise.resolve(undefined);
     }
-    return this.registerSuccessFinalizer(workflow.successFinalizerId);
+    return this.registerSuccessFinalizerWithCall(call, workflow.successFinalizerId, executionId);
   }
 
   /**
@@ -323,6 +308,11 @@ export class WorkflowExecutor extends BaseService {
    */
   protected async onInit(): Promise<void> {
     this.registerExecutionHandlers();
+    this.bus.registerNamespace(GateTimeoutNamespace);
+    this.registerHandler(GateTimeoutSubjects.resume, async (ctx) => {
+      await this.resumePausedExecution(ctx.call, ctx.payload.executionId);
+      ctx.setResult({});
+    });
     // An authority runner can finish bootstrap while onDestroy drains its
     // admitted execution, so this completion protocol remains available until
     // the drain is finished.
@@ -362,10 +352,16 @@ export class WorkflowExecutor extends BaseService {
     // BaseService runs addCleanup after onDestroy: stop bootstrap waits before draining work.
     this.stopBootstrapWaits?.();
     const finalizerDeps = this.buildFinalizerDeps();
+    const call = this.bus.own('stop');
     // 1. Cancel all active executions (aborts controllers, schedules hard-kill timers).
     await Promise.allSettled(
       [...this.activeExecutions.keys()].map(async (executionId) => {
-        const cancelled = await requestExecutionCancellation(finalizerDeps, executionId, 'Workflow engine shutdown');
+        const cancelled = await requestExecutionCancellation(
+          call,
+          finalizerDeps,
+          executionId,
+          'Workflow engine shutdown',
+        );
         if (cancelled) {
           this.workflowAbortControllers.get(executionId)?.abort();
           this.workflowAbortControllers.delete(executionId);
@@ -414,7 +410,8 @@ export class WorkflowExecutor extends BaseService {
         authority === undefined
           ? undefined
           : (executionId, reason) => authority.requestCancellation({ executionId, reason }),
-      notifyAttemptCancellation: (executionId, reason) => this.notifyAttemptCancellation(executionId, reason),
+      notifyAttemptCancellation: (call, executionId, reason) =>
+        this.notifyAttemptCancellation(call, executionId, reason),
       successFinalizers: this.successFinalizers,
       resolveSuccessFinalizerId: (executionId) => this.activeExecutions.get(executionId)?.workflow.successFinalizerId,
       durableLifecycleTransitions: this.durableLifecycleTransitions,
@@ -425,13 +422,14 @@ export class WorkflowExecutor extends BaseService {
 
   /**
    * Deliver best-effort worker control only after owner-authorized intent commits.
+   * @param call - Call context of the cancellation that was accepted.
    * @param executionId - Owner whose cancellation request was accepted.
    * @param reason - Optional cancellation explanation.
    */
-  private async notifyAttemptCancellation(executionId: string, reason?: string): Promise<void> {
+  private async notifyAttemptCancellation(call: CallContext, executionId: string, reason?: string): Promise<void> {
     this.workflowAbortControllers.get(executionId)?.abort(reason ?? WORKFLOW_CANCELLED_REASON);
     await this.bus
-      .emit(createWorkflowCancelSubject(`workflow.${executionId}.cancel`), { executionId, reason })
+      .emit(call, createWorkflowCancelSubject(`workflow.${executionId}.cancel`), { executionId, reason })
       .catch((error: unknown) => {
         console.error(`[WorkflowExecutor] Failed to emit workflow cancel for ${executionId}:`, error);
       });
@@ -463,16 +461,17 @@ export class WorkflowExecutor extends BaseService {
    * Throws when a `parentSessionId` is supplied but the session does not exist.
    * The session create handler enforces the same invariant, but throwing here
    * provides a cleaner error before any coordinator session is created.
+   * @param call - Call context of the start request.
    * @param parentSessionId - Optional parent session identifier.
    * @returns Parent session working directory, or the executor default cwd.
    * @throws When `parentSessionId` is provided but the session is not found.
    */
-  private async resolveExecutionWorkspaceRoot(parentSessionId?: string): Promise<string> {
+  private async resolveExecutionWorkspaceRoot(call: CallContext, parentSessionId?: string): Promise<string> {
     if (!parentSessionId) {
       return this.config.platformDefaults.cwd;
     }
 
-    const { session } = await this.bus.request(SessionSubjects.get, { sessionId: parentSessionId });
+    const { session } = await this.bus.request(call, SessionSubjects.get, { sessionId: parentSessionId });
     if (session === null) {
       throw new Error(`[WorkflowExecutor] Parent session not found: ${parentSessionId}`);
     }
@@ -505,8 +504,9 @@ export class WorkflowExecutor extends BaseService {
       buildRunContext: (params) => buildWorkflowRunContext(params, this.config),
       buildRunnerTaskDeps: (runner) => this.buildRunnerTaskDeps(runner),
       buildFinalizerDeps: () => this.buildFinalizerDeps(),
-      resolveExecutionWorkspaceRoot: (parentSessionId) => this.resolveExecutionWorkspaceRoot(parentSessionId),
-      runExecution: (executionId) => this.runExecution(executionId),
+      resolveExecutionWorkspaceRoot: (call, parentSessionId) =>
+        this.resolveExecutionWorkspaceRoot(call, parentSessionId),
+      runExecution: (call, executionId) => this.runExecution(call, executionId),
       executionAttemptAuthority: this.executionAttemptAuthority,
       materializationSpecResolvers: this.materializationSpecResolvers,
     };
@@ -515,16 +515,16 @@ export class WorkflowExecutor extends BaseService {
   /** Register execution control handlers (start, cancel). */
   private registerExecutionHandlers(): void {
     this.registerHandler(WorkflowSubjects.acceptAuthorityRunnerResult, async (ctx) => {
-      if (!ctx.origin.local) throw new Error('authority runner result acceptance is local-authority only');
+      if (!isInProcessCaller(ctx.call)) throw new Error('authority runner result acceptance is local-authority only');
       const { executionId, result } = ctx.payload;
       // Runtime parsing has already established the worker-result contract.
       // Its inferred artifact shape is wider than the hand-authored interface.
-      ctx.setResult(await this.acceptAuthorityRunnerResult(executionId, result as WorkflowRunResult));
+      ctx.setResult(await this.acceptAuthorityRunnerResult(ctx.call, executionId, result as WorkflowRunResult));
     });
     this.registerHandler(WorkflowSubjects.start, async (ctx) => {
       const { workflowId, input, config, parentSessionId, triggerPayload, artifactRef, scope } = ctx.payload;
       try {
-        const executionId = await startExecution(this.buildStartDeps(), workflowId, {
+        const executionId = await startExecution(ctx.call, this.buildStartDeps(), workflowId, {
           input: normalizeStartInput(input),
           config: normalizeConfig(config) ?? {},
           parentSessionId,
@@ -544,7 +544,7 @@ export class WorkflowExecutor extends BaseService {
       const { executionId, mode, input, config, parentSessionId, triggerPayload, artifactRef, scope, reason } =
         ctx.payload;
       try {
-        const rerunExecutionId = await rerunExecution(this.buildStartDeps(), {
+        const rerunExecutionId = await rerunExecution(ctx.call, this.buildStartDeps(), {
           executionId,
           mode,
           input: normalizeStartInput(input),
@@ -571,7 +571,7 @@ export class WorkflowExecutor extends BaseService {
       }
       const { filePath, materializationSpec, triggerPayload, triggerMode, scope } = ctx.payload;
       try {
-        const executionId = await startFileExecution(this.buildStartDeps(), filePath, {
+        const executionId = await startFileExecution(ctx.call, this.buildStartDeps(), filePath, {
           ...(materializationSpec !== undefined ? { materializationSpec } : {}),
           triggerPayload,
           triggerMode,
@@ -586,7 +586,7 @@ export class WorkflowExecutor extends BaseService {
 
     this.registerHandler(WorkflowSubjects.cancel, async (ctx) => {
       const { executionId, reason } = ctx.payload;
-      const cancelled = await requestExecutionCancellation(this.buildFinalizerDeps(), executionId, reason);
+      const cancelled = await requestExecutionCancellation(ctx.call, this.buildFinalizerDeps(), executionId, reason);
       ctx.setResult({ cancelled });
     });
 
@@ -601,7 +601,7 @@ export class WorkflowExecutor extends BaseService {
         WorkflowSubjects.gate.respond,
         async (ctx) => {
           const { executionId, executionAttemptId, gateId, frameId, action, resumeData, reason } = ctx.payload;
-          const accepted = await this.respondToPausedGate({
+          const accepted = await this.respondToPausedGate(ctx.call, {
             executionId,
             executionAttemptId,
             gateId,
@@ -641,7 +641,7 @@ export class WorkflowExecutor extends BaseService {
    * timeout path used for live suspensions.
    */
   private async rehydratePausedGateTimeouts(): Promise<void> {
-    const { gates } = await this.bus.request(WorkflowStorageSubjects.listPausedGateTimeouts, {});
+    const { gates } = await this.bus.request(this.bus.own('start'), WorkflowStorageSubjects.listPausedGateTimeouts, {});
     for (const gate of gates) {
       this.gateTimeoutScheduler.schedule(toGateTimeoutPayload(gate));
     }
@@ -655,9 +655,10 @@ export class WorkflowExecutor extends BaseService {
    * delegates to {@link executeSequence} to walk the node tree. The abort
    * controller is registered in `workflowAbortControllers` so the cancel
    * handler can interrupt a running execution.
+   * @param call - Call context of the message that launched or resumed this run.
    * @param executionId - The execution ID.
    */
-  private async runExecution(executionId: string): Promise<void> {
+  private async runExecution(call: CallContext, executionId: string): Promise<void> {
     const active = this.activeExecutions.get(executionId);
     if (!active) return;
 
@@ -672,6 +673,7 @@ export class WorkflowExecutor extends BaseService {
           execution: active.execution,
           runContext: active.runContext,
           bus: this.bus,
+          call,
         });
         const runtimeCtx = new RuntimeContext(
           executionId,
@@ -688,28 +690,34 @@ export class WorkflowExecutor extends BaseService {
         );
         assertLoopGateHandlersPresent(active.workflow, active.runtimeLoopGates);
         const expressionCtx = runtimeCtx.buildExpressionContext();
-        outcome = await executeSequence(active.workflow.root, runtimeCtx, expressionCtx);
+        outcome = await executeSequence(call, active.workflow.root, runtimeCtx, expressionCtx);
       } catch (error) {
         if (abortController.signal.aborted || active.execution.status === 'cancelled') {
-          await cancelExecution(this.buildFinalizerDeps(), executionId, WORKFLOW_CANCELLED_REASON);
+          await cancelExecution(call, this.buildFinalizerDeps(), executionId, WORKFLOW_CANCELLED_REASON);
           return;
         }
         const message = error instanceof Error ? error.message : String(error);
-        await completeExecutionWithFailure(this.buildFinalizerDeps(), active.execution, executionId, message);
+        await completeExecutionWithFailure(call, this.buildFinalizerDeps(), active.execution, executionId, message);
         return;
       }
 
       const finalizerDeps = this.buildFinalizerDeps();
       if (outcome.status === 'cancelled' || abortController.signal.aborted || active.execution.status === 'cancelled') {
-        await cancelExecution(finalizerDeps, executionId, WORKFLOW_CANCELLED_REASON);
+        await cancelExecution(call, finalizerDeps, executionId, WORKFLOW_CANCELLED_REASON);
       } else if (outcome.status === 'failed') {
-        await completeExecutionWithFailure(finalizerDeps, active.execution, executionId, outcome.error);
+        await completeExecutionWithFailure(call, finalizerDeps, active.execution, executionId, outcome.error);
       } else if (outcome.status === 'paused') {
         active.execution.status = 'paused';
-        await this.bus.request(WorkflowStorageSubjects.setExecution, { execution: active.execution });
+        await this.bus.request(call, WorkflowStorageSubjects.setExecution, { execution: active.execution });
         this.activeExecutions.delete(executionId);
       } else {
-        await completeExecutionWithSuccess(finalizerDeps, active.execution, executionId, active.execution.startedAt);
+        await completeExecutionWithSuccess(
+          call,
+          finalizerDeps,
+          active.execution,
+          executionId,
+          active.execution.startedAt,
+        );
       }
     } finally {
       this.workflowAbortControllers.delete(executionId);
@@ -728,36 +736,40 @@ export class WorkflowExecutor extends BaseService {
    * Returns `false` without modifying state when the execution is not paused
    * or the gate response is ambiguous or invalid, allowing the bus to continue
    * to the next handler.
+   * @param call - Call context of the gate response message.
    * @param payload - Gate response payload from the bus request context.
    * @returns `true` when the gate was accepted and resume dispatched; `false` otherwise.
    */
-  private async respondToPausedGate(payload: {
-    readonly executionId: string;
-    readonly executionAttemptId?: string;
-    readonly gateId: string;
-    readonly frameId?: string;
-    readonly action: 'approve' | 'reject';
-    readonly resumeData: JsonValue;
-    readonly reason?: string;
-  }): Promise<boolean> {
+  private async respondToPausedGate(
+    call: CallContext,
+    payload: {
+      readonly executionId: string;
+      readonly executionAttemptId?: string;
+      readonly gateId: string;
+      readonly frameId?: string;
+      readonly action: 'approve' | 'reject';
+      readonly resumeData: JsonValue;
+      readonly reason?: string;
+    },
+  ): Promise<boolean> {
     const { executionId, executionAttemptId, gateId, frameId, resumeData, reason } = payload;
-    const { execution } = await this.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+    const { execution } = await this.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId });
     if (!isPausedWorkflowExecution(execution)) return false;
 
-    const gate = await loadUniqueWaitingGateInstance(this.bus, { executionId, nodeId: gateId, frameId });
+    const gate = await loadUniqueWaitingGateInstance(call, this.bus, { executionId, nodeId: gateId, frameId });
     if (gate === null) return false;
     if (executionAttemptId !== gate.executionAttemptId) return false;
 
     const validation = validateGateResumeDataForSchema(gateId, gate.schema, resumeData);
     if (!validation.valid) return false;
 
-    const { runContext } = await this.bus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    const { runContext } = await this.bus.request(call, WorkflowStorageSubjects.getRunContext, { executionId });
     if (runContext === null) {
       throw new Error(`[WorkflowExecutor] Run context not found for paused execution: ${executionId}`);
     }
-    await assertDurableResumeFramesPresent(this.bus, runContext);
+    await assertDurableResumeFramesPresent(call, this.bus, runContext);
 
-    const { accepted } = await this.bus.request(WorkflowStorageSubjects.resolveWaitingGateInstance, {
+    const { accepted } = await this.bus.request(call, WorkflowStorageSubjects.resolveWaitingGateInstance, {
       gate: {
         ...gate,
         status: payload.action === 'reject' ? 'rejected' : 'resumed',
@@ -769,9 +781,10 @@ export class WorkflowExecutor extends BaseService {
     if (!accepted) return false;
 
     try {
-      await this.resumePausedExecution(execution.id);
+      await this.resumePausedExecution(call, execution.id);
     } catch (error) {
       await restorePausedGateAfterResumeFailure(
+        call,
         this.buildFinalizerDeps(),
         this.activeExecutions,
         this.executionTasks,
@@ -789,22 +802,23 @@ export class WorkflowExecutor extends BaseService {
 
   /**
    * Dispatch a paused execution once durable resume state is available.
+   * @param call - Call context of the message or wakeup that resumes the execution.
    * @param executionId - Execution to resume.
    */
-  private async resumePausedExecution(executionId: string): Promise<void> {
-    const { runContext } = await this.bus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+  private async resumePausedExecution(call: CallContext, executionId: string): Promise<void> {
+    const { runContext } = await this.bus.request(call, WorkflowStorageSubjects.getRunContext, { executionId });
     if (runContext === null) {
       throw new Error(`[WorkflowExecutor] Run context not found for paused execution: ${executionId}`);
     }
 
     const definition: WorkflowDefinition =
       runContext.definitionSnapshot ??
-      (await this.bus.request(WorkflowStorageSubjects.get, { id: runContext.workflowId })).workflow ??
+      (await this.bus.request(call, WorkflowStorageSubjects.get, { id: runContext.workflowId })).workflow ??
       (() => {
         throw new Error(`[WorkflowExecutor] Workflow definition not found for paused execution: ${executionId}`);
       })();
 
-    await assertDurableResumeFramesPresent(this.bus, runContext);
+    await assertDurableResumeFramesPresent(call, this.bus, runContext);
 
     const params = buildDefinitionRunnerParamsFromRunContext(runContext, definition, { resume: true });
     const dispatch = selectDefinitionExecutionDispatch(this.buildStartDeps(), params);
@@ -812,13 +826,13 @@ export class WorkflowExecutor extends BaseService {
     await withExecutionDurableTransition(this.buildFinalizerDeps(), executionId, async () => {
       // Frame loading may have yielded to cancellation. Re-read under the same
       // owner boundary that admits the next attempt; never resurrect stale state.
-      const { execution } = await this.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+      const { execution } = await this.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId });
       if (execution === null)
         throw new Error(`[WorkflowExecutor] Execution not found for paused execution: ${executionId}`);
       // Durable paused → running admission excludes duplicate gate/timeout
       // responses without blocking the next gate during this task's publication.
       if (execution.status !== 'paused') return;
-      await this.bus.request(WorkflowStorageSubjects.setExecution, {
+      await this.bus.request(call, WorkflowStorageSubjects.setExecution, {
         execution: { ...execution, status: 'running' },
       });
 
@@ -830,7 +844,7 @@ export class WorkflowExecutor extends BaseService {
         runtimeLoopGates: new Map(),
       });
 
-      const trackedExecutionTask = launchDefinitionExecutionTask(this.buildStartDeps(), params, dispatch);
+      const trackedExecutionTask = launchDefinitionExecutionTask(call, this.buildStartDeps(), params, dispatch);
       registerExecutionTask(this.executionTasks, executionId, trackedExecutionTask);
     });
   }

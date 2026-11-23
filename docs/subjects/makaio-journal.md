@@ -49,7 +49,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `entries` | `{ entryId: string; position: number; subject: string; payload: JsonValue; schemaVersion: string; key: string; origin: { caller: { kind: string; id: string; claims?: Record<string, CallClaim> \| undefined; }; principal: { kind: string; id: string; claims?: Record<string, CallClaim> \| undefined; }; extension: string; attestedBy?: { kind: string; id: string; claims?: Record<string, CallClaim> \| undefined; } \| undefined; edge?: string \| undefined; witnessed?: { extension: string; site: string; accountId: string; display?: string \| undefined; } \| undefined; }; recordedAt: string; orderKey?: string \| undefined; }[]` | yes |
+| `entries` | `{ entryId: string; position: number; subject: string; payload: JsonValue; schemaVersion: string; key: string; origin: { caller: { kind: string; id: string; claims?: { readonly [key: string]: CallClaim; } \| undefined; }; principal: { kind: string; id: string; claims?: { readonly [key: string]: CallClaim; } \| undefined; }; extension: string; attestedBy?: { kind: string; id: string; claims?: { readonly [key: string]: CallClaim; } \| undefined; } \| undefined; edge?: string \| undefined; witnessed?: { extension: string; site: string; accountId: string; display?: string \| undefined; } \| undefined; }; recordedAt: string; orderKey?: string \| undefined; }[]` | yes |
 | `nextCursor` | `string \| undefined` | no |
 
 ### <a id="makaio:journal.reader-states"></a>`makaio:journal.reader-states` (rpc)
@@ -112,7 +112,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `code` | `"not-found" \| "not-unresolved" \| "participant-unavailable" \| undefined` | no |
-| `record` | `{ writeRecordId: string; key: string; writer: string; state: "resolved" \| "unresolved" \| "released" \| "intended" \| "written" \| "not-written"; object: ExternalObjectRef \| null; parent: ExternalObjectRef \| null; intentId: string \| null; checksum: string \| null; appliedOrder: number \| null; intendedSince: string \| null; ctx: { caller: { kind: string; id: string; claims?: Record<string, CallClaim> \| undefined; }; principal: { kind: string; id: string; claims?: Record<string, CallClaim> \| undefined; }; attestedBy?: { kind: string; id: string; claims?: Record<string, CallClaim> \| undefined; } \| undefined; }; } \| undefined` | no |
+| `record` | `{ writeRecordId: string; key: string; writer: string; state: "resolved" \| "unresolved" \| "released" \| "intended" \| "written" \| "not-written"; object: ExternalObjectRef \| null; parent: ExternalObjectRef \| null; intentId: string \| null; checksum: string \| null; appliedOrder: number \| null; intendedSince: string \| null; ctx: { caller: { kind: string; id: string; claims?: { readonly [key: string]: CallClaim; } \| undefined; }; principal: { kind: string; id: string; claims?: { readonly [key: string]: CallClaim; } \| undefined; }; attestedBy?: { kind: string; id: string; claims?: { readonly [key: string]: CallClaim; } \| undefined; } \| undefined; }; } \| undefined` | no |
 | `success` | `true \| false` | yes |
 
 ### <a id="makaio:journal.writes"></a>`makaio:journal.writes` (rpc)
@@ -134,7 +134,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `nextCursor` | `string \| undefined` | no |
-| `writes` | `{ writeRecordId: string; key: string; writer: string; state: "resolved" \| "unresolved" \| "released" \| "intended" \| "written" \| "not-written"; object: ExternalObjectRef \| null; parent: ExternalObjectRef \| null; intentId: string \| null; checksum: string \| null; appliedOrder: number \| null; intendedSince: string \| null; ctx: { caller: { kind: string; id: string; claims?: Record<string, CallClaim> \| undefined; }; principal: { kind: string; id: string; claims?: Record<string, CallClaim> \| undefined; }; attestedBy?: { kind: string; id: string; claims?: Record<string, CallClaim> \| undefined; } \| undefined; }; }[]` | yes |
+| `writes` | `{ writeRecordId: string; key: string; writer: string; state: "resolved" \| "unresolved" \| "released" \| "intended" \| "written" \| "not-written"; object: ExternalObjectRef \| null; parent: ExternalObjectRef \| null; intentId: string \| null; checksum: string \| null; appliedOrder: number \| null; intendedSince: string \| null; ctx: { caller: { kind: string; id: string; claims?: { readonly [key: string]: CallClaim; } \| undefined; }; principal: { kind: string; id: string; claims?: { readonly [key: string]: CallClaim; } \| undefined; }; attestedBy?: { kind: string; id: string; claims?: { readonly [key: string]: CallClaim; } \| undefined; } \| undefined; }; }[]` | yes |
 
 ---
 

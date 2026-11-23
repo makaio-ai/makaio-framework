@@ -15,6 +15,7 @@ Each test function exercises one conformance case end-to-end using a real
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -517,3 +518,174 @@ async def test_auth_challenge_response() -> None:
     )
 
     assert result_fixture["success"] is True
+
+
+# ---------------------------------------------------------------------------
+# Principal-related cases (scope: what the SDK itself does)
+#
+# The Python SDK is a client without caller, principal or attestation fields.
+# The receiver's decision (caller, principal, attestation) is verified by the
+# core against the real implementation (``call-context-wire.test.ts``); these
+# tests only verify the SDK's own sending and receiving behaviour and do not
+# re-implement that decision.
+# ---------------------------------------------------------------------------
+
+_PRINCIPAL_ASSERTION_KINDS = frozenset(
+    {"principal-declared", "envelope-field-ignored", "principal-is-caller"}
+)
+
+
+async def _serve_fixture_request(message_ref: str) -> tuple[RequestContext, dict, FakeWebSocket]:
+    """Deliver one request fixture to a real ``BusClient`` and collect the outcome.
+
+    @param message_ref: Key of the request fixture in ``messages.json``.
+    @returns: The ``RequestContext`` the handler saw, the response frame the SDK
+        sent back, and the fake socket.
+    """
+    ws = _ready_ws()
+    client = BusClient("ws://test", websocket_factory=lambda url: ws)
+    seen: list[RequestContext] = []
+
+    async def handler(ctx: RequestContext) -> None:
+        seen.append(ctx)
+        ctx.set_result({"handled": True})
+
+    await client.connect()
+    await client.on_request("approval.request", handler, priority=100)
+    await ws.wait_sent(1)
+
+    ws.push(_msg(message_ref))
+    response = await ws.wait_sent(2)
+    await client.close()
+
+    assert len(seen) == 1, f"handler must run exactly once, ran {len(seen)} times"
+    return seen[0], response, ws
+
+
+async def test_request_without_metadata_is_connector_call() -> None:
+    """Conformance: request-without-metadata-is-connector-call.
+
+    The SDK sender emits a request frame without a ``metadata`` field.
+    """
+    case = _case("request-without-metadata-is-connector-call")
+    request_fixture = _msg(case["wire"][0]["messageRef"])
+    assert "metadata" not in request_fixture
+
+    ws = _ready_ws()
+    client = BusClient("ws://test", websocket_factory=lambda url: ws)
+    await client.connect()
+
+    request_task = asyncio.create_task(
+        client.request(
+            "approval.request",
+            request_fixture["payload"],
+            timeout=request_fixture["timeout"],
+            priority=request_fixture["priority"],
+        )
+    )
+
+    sent_frame = await ws.wait_sent(1)
+    assert sent_frame["type"] == "request"
+    assert "metadata" not in sent_frame, f"SDK must not send metadata: {sent_frame!r}"
+
+    ws.push(
+        {
+            "type": "response",
+            "correlationId": sent_frame["correlationId"],
+            "result": {"ok": True},
+        }
+    )
+    await asyncio.wait_for(request_task, timeout=2.0)
+    await client.close()
+
+
+async def test_request_unknown_envelope_field_ignored() -> None:
+    """Conformance: request-unknown-envelope-field-ignored.
+
+    The SDK receive path treats a request with an unknown envelope field like
+    the same request without it: same payload, same response.  The raw
+    envelope stays available as ``ctx.message``; this test makes no claim that
+    the field is hidden from it.
+    """
+    case = _case("request-unknown-envelope-field-ignored")
+    assertion = case["assertions"][0]
+    field = assertion["field"]
+    fixture = _msg(case["wire"][0]["messageRef"])
+    assert field in fixture
+
+    ctx, response, _ = await _serve_fixture_request(case["wire"][0]["messageRef"])
+
+    assert ctx.payload == fixture["payload"]
+    assert field not in ctx.payload
+    assert response["type"] == "response"
+    assert response["correlationId"] == fixture["correlationId"]
+    assert response["result"] == {"handled": True}
+    assert "error" not in response
+    assert field not in response
+
+    # Baseline: the identical request without the field yields the same outcome.
+    baseline = {k: v for k, v in fixture.items() if k != field}
+    ws = _ready_ws()
+    client = BusClient("ws://test", websocket_factory=lambda url: ws)
+    seen: list[RequestContext] = []
+
+    async def handler(baseline_ctx: RequestContext) -> None:
+        seen.append(baseline_ctx)
+        baseline_ctx.set_result({"handled": True})
+
+    await client.connect()
+    await client.on_request("approval.request", handler, priority=100)
+    await ws.wait_sent(1)
+    ws.push(baseline)
+    baseline_response = await ws.wait_sent(2)
+    await client.close()
+
+    assert seen[0].payload == ctx.payload
+    assert baseline_response == response
+
+
+async def test_request_with_principal_metadata() -> None:
+    """Conformance: request-with-principal-metadata.
+
+    Envelope tolerance only: the SDK receive path accepts a request carrying
+    ``metadata.principal`` and handles it like any other request.  The SDK has
+    no principal or caller concept; the receiver's principal decision is
+    verified by the core, not here.
+    """
+    case = _case("request-with-principal-metadata")
+    fixture = _msg(case["wire"][0]["messageRef"])
+    assert "principal" in fixture["metadata"]
+
+    ctx, response, _ = await _serve_fixture_request(case["wire"][0]["messageRef"])
+
+    assert ctx.payload == fixture["payload"]
+    assert response["type"] == "response"
+    assert response["correlationId"] == fixture["correlationId"]
+    assert response["result"] == {"handled": True}
+    assert "error" not in response
+    assert "metadata" not in response
+
+
+# Maps every case that carries a principal-related assertion kind to the test
+# that runs it against the real SDK implementation.
+PRINCIPAL_CASE_TESTS = {
+    "request-with-principal-metadata": test_request_with_principal_metadata,
+    "request-unknown-envelope-field-ignored": test_request_unknown_envelope_field_ignored,
+    "request-without-metadata-is-connector-call": test_request_without_metadata_is_connector_call,
+}
+
+
+def test_principal_cases_all_have_tests() -> None:
+    """Every case with a principal-related assertion kind maps to a test."""
+    principal_case_ids = {
+        c["id"]
+        for c in _load_cases()
+        if any(a["kind"] in _PRINCIPAL_ASSERTION_KINDS for a in c.get("assertions", []))
+    }
+    assert principal_case_ids == set(PRINCIPAL_CASE_TESTS), (
+        f"principal cases without a mapped test or stale mapping: "
+        f"{principal_case_ids ^ set(PRINCIPAL_CASE_TESTS)!r}"
+    )
+    for case_id, test in PRINCIPAL_CASE_TESTS.items():
+        assert inspect.iscoroutinefunction(test), f"{case_id}: mapped entry is not a test"
+        assert test.__module__ == __name__

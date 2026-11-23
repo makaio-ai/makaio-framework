@@ -6,6 +6,7 @@ import {
   type OutcomeAckDecision,
   type WorkflowRunResult,
 } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 
 // ─────────────────────────────────────────────────────────────
 // Configuration
@@ -437,6 +438,7 @@ async function submitWithAck(
  * all retry attempts are exhausted, the helper throws the last transport
  * error. The overall deadline bounds every wait, reconnect, and in-flight
  * bus request; expiry throws a deterministic {@link OutcomeDeliveryError}.
+ * @param call - Call that triggered the workflow provisioning.
  * @param bus - Worker-local bus connected to the Authority.
  * @param payload - Attempt identity and terminal result.
  * @param options - Optional retry configuration, reconnect callback, and cancellation signal.
@@ -444,6 +446,7 @@ async function submitWithAck(
  * @throws {@link OutcomeDeliveryError} On non-transient rejection or deadline expiry.
  */
 export async function submitOutcomeWithAck(
+  call: CallContext,
   bus: IMakaioBus,
   payload: OutcomeSubmitPayload,
   options?: OutcomeSubmitOptions,
@@ -451,6 +454,7 @@ export async function submitOutcomeWithAck(
   return await submitWithAck(
     async (timeout, signal) => {
       const response = await bus.request(
+        call,
         WorkerSubjects.control.outcome.submit,
         {
           executionAttemptId: payload.executionAttemptId,
@@ -484,7 +488,9 @@ export async function submitAttemptOutcomeWithAck(
 ): Promise<OutcomeAckDecision> {
   return await submitWithAck(
     async (timeout, signal) => {
+      // ORIGIN: The runtime reports its own terminal outcome, not a reply to a bus message.
       const response = await bus.request(
+        bus.own('root'),
         ExecutionAttemptSubjects.outcome.submit,
         payload,
         signal === undefined ? { timeout } : { timeout, signal },

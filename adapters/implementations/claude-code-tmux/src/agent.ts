@@ -34,7 +34,7 @@ import {
 } from '@makaio/ai-adapters-core';
 import type { ClaudeCodeStatuslineRawPayload } from '@makaio/client-claude-code';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
-import { AgentSubjects, type MessageInput } from '@makaio/contracts';
+import { AgentSubjects, type CallContext, type MessageInput } from '@makaio/contracts';
 import { ClientSubjects } from '@makaio/contracts/client';
 import { isRecord } from '@makaio/utils';
 import { ClaudeCodeTmuxConnector } from './connector.js';
@@ -81,28 +81,31 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
   /**
    * Initialize the connector and publish runtime evidence once the tmux-backed
    * Claude Code session ID is known.
+   * @param call - Call context of the operation that starts the agent
    * @param options - Optional initialization options.
    * @returns Confirmed adapter session ID, or `undefined` for unconfirmed fork sessions.
    */
-  public override async initialize(options?: StartAgentOptions): Promise<string | undefined> {
-    const confirmedId = await super.initialize(options);
-    this.observeCurrentRuntime();
+  public override async initialize(call: CallContext, options?: StartAgentOptions): Promise<string | undefined> {
+    const confirmedId = await super.initialize(call, options);
+    this.observeCurrentRuntime(call);
     return confirmedId;
   }
 
   /**
    * Start the first turn and publish runtime evidence for the tmux-backed
    * Claude Code session.
+   * @param call - Call context of the operation that starts the agent
    * @param message - Initial user message.
    * @param options - Optional start options.
    * @returns Agent start result from the connector.
    */
   public override async start(
+    call: CallContext,
     message: NormalizedMessageInput | MessageInput,
     options?: StartAgentOptions,
   ): Promise<AgentStartResult> {
-    const result = await super.start(message, options);
-    this.observeCurrentRuntime();
+    const result = await super.start(call, message, options);
+    this.observeCurrentRuntime(call);
     return result;
   }
 
@@ -117,13 +120,13 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
    * @param connector - The connector to subscribe on
    */
   private wireTurnLifecycleEvents(connector: ClaudeCodeTmuxConnector): void {
-    this.subscribeConnector(connector, ClaudeCodeTmuxConnectorSubjects.turn.turn_started, async () => {
+    this.subscribeConnector(connector, ClaudeCodeTmuxConnectorSubjects.turn.turn_started, async (ctx) => {
       this.statuslineUsageKeys.clear();
-      await this.emitStart();
+      await this.emitStart(ctx.call);
     });
 
     this.subscribeConnector(connector, ClaudeCodeTmuxConnectorSubjects.turn.turn_completed, async (ctx) => {
-      await this.emitGlobal(AgentSubjects.message, { content: ctx.payload.message });
+      await this.emitGlobal(ctx.call, AgentSubjects.message, { content: ctx.payload.message });
     });
   }
 
@@ -143,8 +146,8 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
     this.subscribeConnector(connector, ClaudeCodeTmuxConnectorSubjects.tool_use.started, async (ctx) => {
       const { messageId, toolName, toolUseId, toolInput } = ctx.payload;
       const args = normalizeToolInput(toolInput);
-      await this.emitToolUse(messageId, toolName, args, toolUseId);
-      await this.eventBridge.emitStepStartedForMessage(messageId, 'tool_use', {
+      await this.emitToolUse(ctx.call, messageId, toolName, args, toolUseId);
+      await this.eventBridge.emitStepStartedForMessage(ctx.call, messageId, 'tool_use', {
         type: 'tool_use',
         toolName,
         toolCallId: toolUseId,
@@ -154,8 +157,8 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
     this.subscribeConnector(connector, ClaudeCodeTmuxConnectorSubjects.tool_use.finished, async (ctx) => {
       const { messageId, toolName, toolUseId, toolResult, isError } = ctx.payload;
       const output = normalizeToolOutput(toolResult);
-      const resolved = await this.emitToolOutput(messageId, output, { nativeId: toolUseId, toolName });
-      await this.eventBridge.emitStepFinishedForMessage(messageId, 'tool_use', {
+      const resolved = await this.emitToolOutput(ctx.call, messageId, output, { nativeId: toolUseId, toolName });
+      await this.eventBridge.emitStepFinishedForMessage(ctx.call, messageId, 'tool_use', {
         type: 'tool_output',
         toolCallId: resolved.toolCallId,
         output,
@@ -180,8 +183,8 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
 
     const cleanup = this.globalBus.on(
       ClaudeCodeClientSubjects.statusline.received,
-      async ({ payload }) => {
-        await this.handleStatuslineUsage(payload);
+      async (ctx) => {
+        await this.handleStatuslineUsage(ctx.call, ctx.payload);
       },
       { filter: { session_id: adapterSessionId } },
     );
@@ -190,9 +193,10 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
 
   /**
    * Normalize one raw Claude Code statusline payload into agent usage signals.
+   * @param call - Call context of the statusline event being handled
    * @param payload - Raw statusline payload from Claude Code.
    */
-  private async handleStatuslineUsage(payload: ClaudeCodeStatuslineRawPayload): Promise<void> {
+  private async handleStatuslineUsage(call: CallContext, payload: ClaudeCodeStatuslineRawPayload): Promise<void> {
     const contextWindow = payload.context_window;
     if (!contextWindow) {
       return;
@@ -218,12 +222,12 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
         costUnitType: 'requests',
       };
       // `cost.total_cost_usd` is cumulative for the Claude Code session, not this request.
-      await this.trackUsage(normalized);
+      await this.trackUsage(call, normalized);
     }
 
     const currentTokens = (contextWindow.total_input_tokens ?? 0) + (contextWindow.total_output_tokens ?? 0);
     const maxTokens = contextWindow.context_window_size ?? this.getContextWindowSize() ?? 200_000;
-    await this.emitContextWindowUpdate({
+    await this.emitContextWindowUpdate(call, {
       currentTokens,
       maxTokens,
       cachedTokens: contextWindow.current_usage?.cache_read_input_tokens,
@@ -267,8 +271,9 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
 
   /**
    * Publish best-effort runtime evidence for the current tmux-backed connector.
+   * @param call - Call context of the operation that starts the agent.
    */
-  private observeCurrentRuntime(): void {
+  private observeCurrentRuntime(call: CallContext): void {
     const adapterSessionId = this.connector?.adapterSessionId;
     if (!adapterSessionId) {
       return;
@@ -282,7 +287,7 @@ export class ClaudeCodeTmuxAgent extends AIAgent<ClaudeCodeTmuxConnectorBus, Cla
     this.lastRuntimeObservationKey = observationKey;
 
     void this.globalBus
-      .requestOptional(ClientSubjects.runtime.observe, {
+      .requestOptional(call, ClientSubjects.runtime.observe, {
         clientId,
         source: { layer: 'adapter', producer: 'claude-code-tmux' },
         observedAt: Date.now(),

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { createBusInstance } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { Account, AccountUsage, SourceInfo, UsageWindow } from '../bus/schemas.js';
 import type { SetStateAction } from 'react';
@@ -107,6 +108,7 @@ describe('App load sequencing', () => {
 
     try {
       const staleLoad = loadUsageForAccounts(
+        bus.own('start'),
         { bus, canCommitLoad, setUsageByAccount, setUsageAwaitingResolutionByAccount },
         1,
         { [source.clientId]: [accountA, accountB] },
@@ -119,6 +121,7 @@ describe('App load sequencing', () => {
 
       currentLoadSeq = 2;
       const freshLoad = loadUsageForAccounts(
+        createTestCall(),
         { bus, canCommitLoad, setUsageByAccount, setUsageAwaitingResolutionByAccount },
         2,
         { [source.clientId]: [accountA] },

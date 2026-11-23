@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { IAccountMetadataStore, StoredAccount, AccountTimelineEntry } from '../interfaces/account-store.js';
 import type { RawCredential } from '../interfaces/credential-source.js';
@@ -21,11 +23,12 @@ function makeCredential(token: string): RawCredential {
 }
 
 async function seedAccount(
+  call: CallContext,
   metadataStore: IAccountMetadataStore,
   credentialStore: InMemoryAccountCredentialStore,
   account: StoredAccount,
 ): Promise<void> {
-  await metadataStore.upsert('claude-code', {
+  await metadataStore.upsert(call, 'claude-code', {
     id: account.id,
     label: account.label,
     metadata: account.metadata,
@@ -58,7 +61,7 @@ describe('AccountManager activation transaction', () => {
 
   it('does not mutate native storage when durable activation state cannot be persisted', async () => {
     class FailingDeactivateMetadataStore extends InMemoryAccountMetadataStore {
-      public override async deactivateAll(clientId: string): Promise<void> {
+      public override async deactivateAll(_call: CallContext, clientId: string): Promise<void> {
         void clientId;
         throw new Error('deactivateAll failed');
       }
@@ -96,11 +99,11 @@ describe('AccountManager activation transaction', () => {
       credential: makeCredential('token-b'),
     } satisfies StoredAccount;
 
-    await seedAccount(metadataStore, credentialStore, accountA);
-    await seedAccount(metadataStore, credentialStore, accountB);
+    await seedAccount(createTestCall(), metadataStore, credentialStore, accountA);
+    await seedAccount(createTestCall(), metadataStore, credentialStore, accountB);
 
     try {
-      const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: 'account-b',
       });
@@ -108,7 +111,7 @@ describe('AccountManager activation transaction', () => {
       expect(result.success).toBe(false);
       expect(result.error).toContain('deactivateAll failed');
       expect(source.getLastWritten()).toBeUndefined();
-      expect(await metadataStore.getActive('claude-code')).toMatchObject({ id: 'account-a' });
+      expect(await metadataStore.getActive(createTestCall(), 'claude-code')).toMatchObject({ id: 'account-a' });
     } finally {
       await service.destroy();
     }
@@ -154,18 +157,18 @@ describe('AccountManager activation transaction', () => {
       credential: makeCredential('token-b'),
     } satisfies StoredAccount;
 
-    await seedAccount(metadataStore, credentialStore, accountA);
-    await seedAccount(metadataStore, credentialStore, accountB);
+    await seedAccount(createTestCall(), metadataStore, credentialStore, accountA);
+    await seedAccount(createTestCall(), metadataStore, credentialStore, accountB);
 
     try {
-      const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: 'account-b',
       });
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('native write failed');
-      expect(await metadataStore.getActive('claude-code')).toMatchObject({ id: 'account-a' });
+      expect(await metadataStore.getActive(createTestCall(), 'claude-code')).toMatchObject({ id: 'account-a' });
       expect(await credentialStore.get('claude-code', 'account-a')).toMatchObject({
         credential: accountA.credential,
       });
@@ -219,20 +222,20 @@ describe('AccountManager activation transaction', () => {
       credential: staleCredential,
     } satisfies StoredAccount;
 
-    await seedAccount(metadataStore, credentialStore, accountA);
-    await seedAccount(metadataStore, credentialStore, accountB);
+    await seedAccount(createTestCall(), metadataStore, credentialStore, accountA);
+    await seedAccount(createTestCall(), metadataStore, credentialStore, accountB);
     rejectingSource.setCredentialKeyExtractor((token) => token.split('-')[1] ?? null);
     rejectingSource.setCredential(fresherNativeCredential);
 
     try {
-      const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: 'account-b',
       });
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('native write failed');
-      expect(await metadataStore.getActive('claude-code')).toMatchObject({ id: 'account-a' });
+      expect(await metadataStore.getActive(createTestCall(), 'claude-code')).toMatchObject({ id: 'account-a' });
       expect(await credentialStore.get('claude-code', 'account-b')).toMatchObject({
         credential: fresherNativeCredential,
         fingerprint: fresherNativeCredential.fingerprint,
@@ -244,7 +247,7 @@ describe('AccountManager activation transaction', () => {
 
   it('keeps the switch successful when only timeline persistence fails', async () => {
     class FailingTimelineMetadataStore extends InMemoryAccountMetadataStore {
-      public override async appendTimeline(entry: AccountTimelineEntry): Promise<void> {
+      public override async appendTimeline(_call: CallContext, entry: AccountTimelineEntry): Promise<void> {
         void entry;
         throw new Error('timeline append failed');
       }
@@ -283,18 +286,18 @@ describe('AccountManager activation transaction', () => {
       credential: makeCredential('token-b'),
     } satisfies StoredAccount;
 
-    await seedAccount(metadataStore, credentialStore, accountA);
-    await seedAccount(metadataStore, credentialStore, accountB);
+    await seedAccount(createTestCall(), metadataStore, credentialStore, accountA);
+    await seedAccount(createTestCall(), metadataStore, credentialStore, accountB);
 
     try {
-      const result = await MakaioBus.request(AccountManagerSubjects.credentials.switch, {
+      const result = await MakaioBus.request(createTestCall(), AccountManagerSubjects.credentials.switch, {
         clientId: 'claude-code',
         accountId: 'account-b',
       });
 
       expect(result.success).toBe(true);
       expect(source.getLastWritten()).toEqual(accountB.credential);
-      expect(await metadataStore.getActive('claude-code')).toMatchObject({ id: 'account-b' });
+      expect(await metadataStore.getActive(createTestCall(), 'claude-code')).toMatchObject({ id: 'account-b' });
       expect(warnSpy).toHaveBeenCalledWith(
         '[AccountManager] timeline append failed after successful activation:',
         expect.any(Error),

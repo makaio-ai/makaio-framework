@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { createTestBusInstance, createTestCall } from '@makaio/test-utils';
 import { CodexAppServerNamespace } from '../../namespaces/index.js';
 import {
   handleAgentMessageDelta,
@@ -13,14 +14,17 @@ import {
   handleReasoningDelta,
   handleFileChangeDelta,
 } from '../delta-handlers.js';
+import type { CodexTurnEmit } from '../turn-flow-handlers.js';
 
 describe('delta-handlers - Type guards', () => {
-  let mockBus: Awaited<ReturnType<typeof CodexAppServerNamespace.scopedBus>>;
+  let emit: CodexTurnEmit;
   let consoleWarnSpy: Mock;
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    mockBus = await CodexAppServerNamespace.scopedBus();
+    const bus = await CodexAppServerNamespace.scopedBus(createTestBusInstance());
+    const call = createTestCall();
+    emit = (subject, payload) => bus.emit(call, subject, payload);
     consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
@@ -43,7 +47,7 @@ describe('delta-handlers - Type guards', () => {
         delta: 'Hello world',
       };
 
-      await handleAgentMessageDelta(mockBus.emit.bind(mockBus), validParams, mockAccumulate);
+      await handleAgentMessageDelta(emit, validParams, mockAccumulate);
 
       expect(mockAccumulate).toHaveBeenCalledWith('Hello world');
       expect(wasWarnedWith('[delta-handlers] Skipping invalid')).toBe(false);
@@ -55,7 +59,7 @@ describe('delta-handlers - Type guards', () => {
         delta: 'Hello world',
       };
 
-      await handleAgentMessageDelta(mockBus.emit.bind(mockBus), validParams, mockAccumulate);
+      await handleAgentMessageDelta(emit, validParams, mockAccumulate);
 
       expect(mockAccumulate).toHaveBeenCalledWith('Hello world');
       expect(wasWarnedWith('Agent message delta received without threadId')).toBe(true);
@@ -68,7 +72,7 @@ describe('delta-handlers - Type guards', () => {
         turnId: 'turn-456',
       };
 
-      await handleAgentMessageDelta(mockBus.emit.bind(mockBus), invalidParams, mockAccumulate);
+      await handleAgentMessageDelta(emit, invalidParams, mockAccumulate);
 
       expect(mockAccumulate).not.toHaveBeenCalled();
       expect(wasWarnedWith('[delta-handlers] Invalid agent message delta notification:')).toBe(true);
@@ -83,7 +87,7 @@ describe('delta-handlers - Type guards', () => {
         delta: 42,
       };
 
-      await handleAgentMessageDelta(mockBus.emit.bind(mockBus), invalidParams, mockAccumulate);
+      await handleAgentMessageDelta(emit, invalidParams, mockAccumulate);
 
       expect(mockAccumulate).not.toHaveBeenCalled();
       expect(wasWarnedWith('[delta-handlers] Invalid agent message delta notification:')).toBe(true);
@@ -92,7 +96,7 @@ describe('delta-handlers - Type guards', () => {
     it('should reject notification with null params', async () => {
       const mockAccumulate = vi.fn();
 
-      await handleAgentMessageDelta(mockBus.emit.bind(mockBus), null, mockAccumulate);
+      await handleAgentMessageDelta(emit, null, mockAccumulate);
 
       expect(mockAccumulate).not.toHaveBeenCalled();
       expect(wasWarnedWith('[delta-handlers] Invalid agent message delta notification:')).toBe(true);
@@ -101,7 +105,7 @@ describe('delta-handlers - Type guards', () => {
     it('should reject notification with undefined params', async () => {
       const mockAccumulate = vi.fn();
 
-      await handleAgentMessageDelta(mockBus.emit.bind(mockBus), undefined, mockAccumulate);
+      await handleAgentMessageDelta(emit, undefined, mockAccumulate);
 
       expect(mockAccumulate).not.toHaveBeenCalled();
       expect(wasWarnedWith('[delta-handlers] Invalid agent message delta notification:')).toBe(true);
@@ -117,7 +121,7 @@ describe('delta-handlers - Type guards', () => {
         delta: 'stdout content',
       };
 
-      await handleCommandOutputDelta(mockBus.emit.bind(mockBus), validParams);
+      await handleCommandOutputDelta(emit, validParams);
 
       expect(wasWarnedWith('[delta-handlers] Skipping invalid')).toBe(false);
     });
@@ -129,7 +133,7 @@ describe('delta-handlers - Type guards', () => {
         delta: 'stdout content',
       };
 
-      await handleCommandOutputDelta(mockBus.emit.bind(mockBus), invalidParams);
+      await handleCommandOutputDelta(emit, invalidParams);
 
       expect(wasWarnedWith('[delta-handlers] Invalid command output delta notification:')).toBe(true);
       expect(wasWarnedWith('[delta-handlers] Skipping invalid command output delta notification')).toBe(true);
@@ -142,7 +146,7 @@ describe('delta-handlers - Type guards', () => {
         delta: 'stdout content',
       };
 
-      await handleCommandOutputDelta(mockBus.emit.bind(mockBus), invalidParams);
+      await handleCommandOutputDelta(emit, invalidParams);
 
       expect(wasWarnedWith('[delta-handlers] Invalid command output delta notification:')).toBe(true);
     });
@@ -155,13 +159,13 @@ describe('delta-handlers - Type guards', () => {
         delta: { content: 'stdout' },
       };
 
-      await handleCommandOutputDelta(mockBus.emit.bind(mockBus), invalidParams);
+      await handleCommandOutputDelta(emit, invalidParams);
 
       expect(wasWarnedWith('[delta-handlers] Invalid command output delta notification:')).toBe(true);
     });
 
     it('should reject notification with empty object', async () => {
-      await handleCommandOutputDelta(mockBus.emit.bind(mockBus), {});
+      await handleCommandOutputDelta(emit, {});
 
       expect(wasWarnedWith('[delta-handlers] Invalid command output delta notification:')).toBe(true);
     });
@@ -175,7 +179,7 @@ describe('delta-handlers - Type guards', () => {
         delta: 'Let me think...',
       };
 
-      await handleReasoningDelta(mockBus.emit.bind(mockBus), validParams);
+      await handleReasoningDelta(emit, validParams);
 
       expect(wasWarnedWith('[delta-handlers] Skipping invalid')).toBe(false);
     });
@@ -185,7 +189,7 @@ describe('delta-handlers - Type guards', () => {
         delta: 'Let me think...',
       };
 
-      await handleReasoningDelta(mockBus.emit.bind(mockBus), validParams);
+      await handleReasoningDelta(emit, validParams);
 
       expect(wasWarnedWith('[delta-handlers] Skipping invalid')).toBe(false);
     });
@@ -196,7 +200,7 @@ describe('delta-handlers - Type guards', () => {
         turnId: 'turn-456',
       };
 
-      await handleReasoningDelta(mockBus.emit.bind(mockBus), invalidParams);
+      await handleReasoningDelta(emit, invalidParams);
 
       expect(wasWarnedWith('[delta-handlers] Invalid reasoning delta notification:')).toBe(true);
       expect(wasWarnedWith('[delta-handlers] Skipping invalid reasoning delta notification')).toBe(true);
@@ -209,13 +213,13 @@ describe('delta-handlers - Type guards', () => {
         delta: ['array', 'of', 'strings'],
       };
 
-      await handleReasoningDelta(mockBus.emit.bind(mockBus), invalidParams);
+      await handleReasoningDelta(emit, invalidParams);
 
       expect(wasWarnedWith('[delta-handlers] Invalid reasoning delta notification:')).toBe(true);
     });
 
     it('should reject notification with primitive type', async () => {
-      await handleReasoningDelta(mockBus.emit.bind(mockBus), 'just a string');
+      await handleReasoningDelta(emit, 'just a string');
 
       expect(wasWarnedWith('[delta-handlers] Invalid reasoning delta notification:')).toBe(true);
     });
@@ -230,7 +234,7 @@ describe('delta-handlers - Type guards', () => {
         delta: 'file content delta',
       };
 
-      await handleFileChangeDelta(mockBus.emit.bind(mockBus), validParams);
+      await handleFileChangeDelta(emit, validParams);
 
       expect(wasWarnedWith('[delta-handlers] Skipping invalid')).toBe(false);
     });
@@ -242,7 +246,7 @@ describe('delta-handlers - Type guards', () => {
         delta: 'file content delta',
       };
 
-      await handleFileChangeDelta(mockBus.emit.bind(mockBus), invalidParams);
+      await handleFileChangeDelta(emit, invalidParams);
 
       expect(wasWarnedWith('[delta-handlers] Invalid file change delta notification:')).toBe(true);
       expect(wasWarnedWith('[delta-handlers] Skipping invalid file change delta notification')).toBe(true);
@@ -255,7 +259,7 @@ describe('delta-handlers - Type guards', () => {
         delta: 'file content delta',
       };
 
-      await handleFileChangeDelta(mockBus.emit.bind(mockBus), invalidParams);
+      await handleFileChangeDelta(emit, invalidParams);
 
       expect(wasWarnedWith('[delta-handlers] Invalid file change delta notification:')).toBe(true);
     });
@@ -271,7 +275,7 @@ describe('delta-handlers - Type guards', () => {
 
       // Note: Zod by default allows extra fields, so this should still pass
       // This test documents the current behavior
-      await handleFileChangeDelta(mockBus.emit.bind(mockBus), paramsWithExtra);
+      await handleFileChangeDelta(emit, paramsWithExtra);
 
       // Should not warn because Zod allows extra fields by default
       expect(wasWarnedWith('[delta-handlers] Skipping invalid')).toBe(false);
@@ -280,7 +284,7 @@ describe('delta-handlers - Type guards', () => {
     it('should reject notification with array instead of object', async () => {
       const invalidParams = ['thread-123', 'turn-456', 'item-789', 'delta'];
 
-      await handleFileChangeDelta(mockBus.emit.bind(mockBus), invalidParams);
+      await handleFileChangeDelta(emit, invalidParams);
 
       expect(wasWarnedWith('[delta-handlers] Invalid file change delta notification:')).toBe(true);
     });

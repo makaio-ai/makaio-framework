@@ -85,6 +85,7 @@
  */
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AgentSubjects } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 
 /**
  * Stable identity fields required to attribute a provider-session movement.
@@ -142,12 +143,14 @@ export type AdapterSessionMovement =
  * old provider session, or the agent event that first advertises the new one.
  * Fire-and-forget would leave a window in which a resume attach reads the
  * superseded currency and targets an abandoned provider thread.
+ * @param call - Call context of the work producing the movement
  * @param bus - Global bus carrying the `agent` namespace
  * @param identity - Emitting agent's stable identity fields
  * @param movement - Confirmed successor ID (if any) and confirmation flag
  * @returns Whether every local consumer acknowledged the announcement
  */
 export async function emitAdapterSessionMoved(
+  call: CallContext,
   bus: IMakaioBus,
   identity: AdapterSessionMovementIdentity,
   movement: AdapterSessionMovement,
@@ -188,7 +191,7 @@ export async function emitAdapterSessionMoved(
     // its own failures in-band like the workflow evaluator, or the seam needs
     // an emit path that waits for all local consumers to settle — a bus
     // contract change, to be decided at the bus, not patched around here.
-    await bus.emit(AgentSubjects.adapterSession.moved, {
+    await bus.emit(call, AgentSubjects.adapterSession.moved, {
       agentId: identity.agentId,
       adapterId: identity.adapterId,
       adapterName: identity.adapterName,
@@ -413,11 +416,12 @@ export class ConfirmedAdapterSessionTracker {
    * returns its acknowledgement token. This keeps occupancy evidence current
    * while leaving publication and retry markers closed through the settlement
    * window.
+   * @param call - Call context of the work recording the provider session
    * @param adapterSessionId - Resolved provider session ID, or `undefined`
    * @param settledByCaller - Whether publication is deferred to a caller-owned
    *   settlement acknowledgement
    */
-  public async record(adapterSessionId: string | undefined, settledByCaller = false): Promise<void> {
+  public async record(call: CallContext, adapterSessionId: string | undefined, settledByCaller = false): Promise<void> {
     if (settledByCaller) this.callerSettlementPending = true;
     if (adapterSessionId !== undefined) {
       this.lastKnown = adapterSessionId;
@@ -455,12 +459,12 @@ export class ConfirmedAdapterSessionTracker {
       // rather than `lastKnown` — duty 3 needs an undelivered announcement to
       // remain retryable, which dedup against the observed identity would break.
       if (adapterSessionId !== this.lastAnnounced) {
-        await this.announce({ adapterSessionId, confirmed: true });
+        await this.announce(call, { adapterSessionId, confirmed: true });
         return;
       }
     }
     if (this.undelivered !== undefined) {
-      await this.announce(this.undelivered);
+      await this.announce(call, this.undelivered);
     }
   }
 
@@ -499,11 +503,12 @@ export class ConfirmedAdapterSessionTracker {
    * class of state duty 2 orders: config a concurrent swap reads to pick its
    * resume target must stop naming the abandoned session no later than the
    * currency write that stops advertising it.
+   * @param call - Call context of the work moving the provider session
    * @returns Promise resolving once the movement has been announced
    */
-  public async recordUnconfirmedMove(): Promise<void> {
+  public async recordUnconfirmedMove(call: CallContext): Promise<void> {
     this.host.resumeAdapterSessionId = undefined;
-    await this.announce({ confirmed: false });
+    await this.announce(call, { confirmed: false });
   }
 
   /**
@@ -591,10 +596,11 @@ export class ConfirmedAdapterSessionTracker {
    * no ID), but it is what keeps {@link lastKnown} — intentionally still the
    * abandoned identity — from being re-announced as confirmed when enrichment
    * falls back to the cache during the window before a successor is confirmed.
+   * @param call - Call context of the work announcing the movement
    * @param movement - Movement to announce
    */
-  private async announce(movement: AdapterSessionMovement): Promise<void> {
-    const delivered = await emitAdapterSessionMoved(this.bus, this.identity(), movement);
+  private async announce(call: CallContext, movement: AdapterSessionMovement): Promise<void> {
+    const delivered = await emitAdapterSessionMoved(call, this.bus, this.identity(), movement);
     this.undelivered = delivered ? undefined : movement;
     if (delivered && movement.confirmed) {
       this.lastAnnounced = movement.adapterSessionId;

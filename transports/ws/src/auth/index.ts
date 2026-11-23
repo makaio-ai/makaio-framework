@@ -10,7 +10,6 @@ export { HmacAuth } from './hmac-auth.js';
 export type { HmacAuthOptions } from './hmac-auth.js';
 export {
   MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID,
-  MAKAIO_LOCAL_CLI_PEER_KIND,
   registerMakaioLocalCliHmacIdentity,
 } from './local-cli-identity.js';
 export {
@@ -19,7 +18,7 @@ export {
   registerHmacIdentitySecret,
   resolveHmacIdentityAllowedMessageSubjects,
   resolveHmacIdentityAllowedSubscriptionSubjects,
-  resolveHmacIdentityPeer,
+  resolveHmacIdentityParty,
   resolveHmacIdentitySecret,
   rotateHmacIdentitySecret,
 } from './identity-secret-registry.js';

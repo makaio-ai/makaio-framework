@@ -85,7 +85,8 @@ export abstract class DiscoveryOrchestrator<TRecord, TState = unknown> extends B
    * @returns `true` when the file can be removed from local tracking state
    */
   protected async persistImportedStatus(filePath: string): Promise<boolean> {
-    const { session } = await MakaioBus.request(SessionStorageSubjects.getByLogFilePath, {
+    // ORIGIN: A watcher poll identifies a file whose tracking status needs to be cleared.
+    const { session } = await MakaioBus.request(MakaioBus.own('observer'), SessionStorageSubjects.getByLogFilePath, {
       logFilePath: filePath,
     });
 
@@ -93,7 +94,8 @@ export abstract class DiscoveryOrchestrator<TRecord, TState = unknown> extends B
       return true;
     }
 
-    const statusUpdate = await MakaioBus.request(SessionStorageSubjects.updateImportStatus, {
+    // ORIGIN: The watcher poll restores the tracked session to imported status.
+    const statusUpdate = await MakaioBus.request(MakaioBus.own('observer'), SessionStorageSubjects.updateImportStatus, {
       sessionId: session.sessionId,
       importStatus: 'imported',
     });
@@ -164,7 +166,10 @@ export abstract class DiscoveryOrchestrator<TRecord, TState = unknown> extends B
       return;
     }
 
-    const { cursor } = await MakaioBus.request(ImportCursorStorageSubjects.get, { filePath });
+    // ORIGIN: A filesystem change triggers a discovery cursor lookup.
+    const { cursor } = await MakaioBus.request(MakaioBus.own('observer'), ImportCursorStorageSubjects.get, {
+      filePath,
+    });
 
     if (!cursor) {
       // New file — run lightweight discovery
@@ -195,7 +200,8 @@ export abstract class DiscoveryOrchestrator<TRecord, TState = unknown> extends B
     this.lastSeenMtimeMs.clear();
 
     try {
-      const { sessions } = await MakaioBus.request(SessionStorageSubjects.listImported, {
+      // ORIGIN: Startup reloads the persisted tracking state for this adapter.
+      const { sessions } = await MakaioBus.request(MakaioBus.own('start'), SessionStorageSubjects.listImported, {
         source: this.config.adapterName,
         importStatus: 'tracking',
       });
@@ -204,10 +210,12 @@ export abstract class DiscoveryOrchestrator<TRecord, TState = unknown> extends B
           continue;
         }
         if (!session.logFilePath) {
-          const statusUpdate = await MakaioBus.request(SessionStorageSubjects.updateImportStatus, {
-            sessionId: session.sessionId,
-            importStatus: 'imported',
-          });
+          // ORIGIN: Startup clears tracking for a session without a log file path.
+          const statusUpdate = await MakaioBus.request(
+            MakaioBus.own('start'),
+            SessionStorageSubjects.updateImportStatus,
+            { sessionId: session.sessionId, importStatus: 'imported' },
+          );
           if (!statusUpdate.success) {
             console.warn(`${this.logPrefix} Failed to reset tracking status for session ${session.sessionId}`);
           }
@@ -215,10 +223,12 @@ export abstract class DiscoveryOrchestrator<TRecord, TState = unknown> extends B
         }
         const trackedMtimeMs = this.watcher.getTrackedFileMtimeMs(session.logFilePath);
         if (trackedMtimeMs === undefined) {
-          const statusUpdate = await MakaioBus.request(SessionStorageSubjects.updateImportStatus, {
-            sessionId: session.sessionId,
-            importStatus: 'imported',
-          });
+          // ORIGIN: Startup clears tracking for a file absent from the watcher.
+          const statusUpdate = await MakaioBus.request(
+            MakaioBus.own('start'),
+            SessionStorageSubjects.updateImportStatus,
+            { sessionId: session.sessionId, importStatus: 'imported' },
+          );
           if (!statusUpdate.success) {
             console.warn(`${this.logPrefix} Failed to reset tracking status for ${session.logFilePath}`);
           }
@@ -304,7 +314,8 @@ export abstract class DiscoveryOrchestrator<TRecord, TState = unknown> extends B
    * @param mtime - Current file modification time
    */
   private async handleModifiedImportedFile(filePath: string, event: LogFileChangeEvent, mtime: Date): Promise<void> {
-    const { session } = await MakaioBus.request(SessionStorageSubjects.getByLogFilePath, {
+    // ORIGIN: A modified file triggers a lookup of its imported session.
+    const { session } = await MakaioBus.request(MakaioBus.own('observer'), SessionStorageSubjects.getByLogFilePath, {
       logFilePath: filePath,
     });
 
@@ -329,10 +340,12 @@ export abstract class DiscoveryOrchestrator<TRecord, TState = unknown> extends B
 
     // Transition to 'tracking' if the session was previously just 'imported'
     if (session.importStatus === 'imported') {
-      const statusUpdate = await MakaioBus.request(SessionStorageSubjects.updateImportStatus, {
-        sessionId: session.sessionId,
-        importStatus: 'tracking',
-      });
+      // ORIGIN: A modified file resumes tracking after incremental import.
+      const statusUpdate = await MakaioBus.request(
+        MakaioBus.own('observer'),
+        SessionStorageSubjects.updateImportStatus,
+        { sessionId: session.sessionId, importStatus: 'tracking' },
+      );
       if (!statusUpdate.success) {
         console.warn(`${this.logPrefix} Failed to persist tracking status for ${filePath}`);
         return;

@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import type { query } from '@anthropic-ai/claude-agent-sdk';
+import { createTestCall } from '@makaio/test-utils';
 import type { SDKMessage } from '@makaio/client-claude-code';
 
 /**
  * Stub SDK query whose async iterator yields messages pushed by the test harness.
  * Allows driving the system.init / result flow without a real Claude Agent SDK.
  */
-type MessageCallback = (msg: SDKMessage) => void;
+type HarnessMessage = SDKMessage | { type: 'unknown_future_type' };
+type MessageCallback = (msg: HarnessMessage) => void;
 
 const queryHarness = vi.hoisted(() => {
   let messageCallback: MessageCallback | undefined;
@@ -15,11 +18,11 @@ const queryHarness = vi.hoisted(() => {
   const queryInstance = {
     /** Async iterator that yields messages pushed via emitMessage. */
     [Symbol.asyncIterator]() {
-      const pending: SDKMessage[] = [];
-      let waiting: ((value: IteratorResult<SDKMessage>) => void) | undefined;
+      const pending: HarnessMessage[] = [];
+      let waiting: ((value: IteratorResult<HarnessMessage>) => void) | undefined;
       let done = false;
 
-      messageCallback = (msg: SDKMessage) => {
+      messageCallback = (msg: HarnessMessage) => {
         if (waiting) {
           const resolve = waiting;
           waiting = undefined;
@@ -34,18 +37,19 @@ const queryHarness = vi.hoisted(() => {
         if (waiting) {
           const resolve = waiting;
           waiting = undefined;
-          resolve({ value: undefined as unknown as SDKMessage, done: true });
+          resolve({ value: undefined, done: true });
         }
       };
 
       return {
-        next(): Promise<IteratorResult<SDKMessage>> {
-          if (pending.length > 0) {
-            return Promise.resolve({ value: pending.shift()!, done: false });
+        next(): Promise<IteratorResult<HarnessMessage>> {
+          const message = pending.shift();
+          if (message !== undefined) {
+            return Promise.resolve({ value: message, done: false });
           }
           if (done) {
             return Promise.resolve({
-              value: undefined as unknown as SDKMessage,
+              value: undefined,
               done: true,
             });
           }
@@ -53,10 +57,10 @@ const queryHarness = vi.hoisted(() => {
             waiting = resolve;
           });
         },
-        return(): Promise<IteratorResult<SDKMessage>> {
+        return(): Promise<IteratorResult<HarnessMessage>> {
           done = true;
           return Promise.resolve({
-            value: undefined as unknown as SDKMessage,
+            value: undefined,
             done: true,
           });
         },
@@ -70,13 +74,13 @@ const queryHarness = vi.hoisted(() => {
   };
 
   return {
-    queryFn: vi.fn(() => queryInstance),
+    queryFn: vi.fn((_args: Parameters<typeof query>[0]) => queryInstance),
     queryInstance,
     /**
      * Emit a message into the consumption loop.
      * @param msg - SDK message to emit
      */
-    emitMessage(msg: SDKMessage): void {
+    emitMessage(msg: HarnessMessage): void {
       if (!messageCallback) {
         throw new Error('Query consumption not started');
       }
@@ -115,23 +119,26 @@ describe('ClaudeConnectorSession native fork adapter session ID', () => {
     const childSessionId = 'confirmed-child-session';
     const sourceAdapterSessionId = 'provider-source';
 
-    const session = new ClaudeConnectorSession({
-      bus: await ClaudeCodeConnectorNamespace.scopedBus(),
-      adapterId: 'adapter-test',
-      adapterName: 'claude-code',
-      agentId: 'agent-test',
-      cwd: '/tmp',
-      model: 'claude-sonnet',
-      env: {},
-      emitSdkEvent: vi.fn(async () => undefined),
-      nativeFork: {
-        sourceSessionId: 'makaio-source',
-        sourceAdapterSessionId,
+    const session = new ClaudeConnectorSession(
+      {
+        bus: await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus),
+        adapterId: 'adapter-test',
+        adapterName: 'claude-code',
+        agentId: 'agent-test',
+        cwd: '/tmp',
+        model: 'claude-sonnet',
+        env: {},
+        emitSdkEvent: vi.fn(async () => undefined),
+        nativeFork: {
+          sourceSessionId: 'makaio-source',
+          sourceAdapterSessionId,
+        },
       },
-    });
+      MakaioBus,
+    );
 
     try {
-      await session.initialize(() => vi.fn());
+      await session.initialize(createTestCall(), () => vi.fn());
 
       // After initialize(), getAdapterSessionId() resolves eagerly with a local
       // placeholder UUID to avoid deadlocking idle fork sessions. This is a
@@ -158,24 +165,27 @@ describe('ClaudeConnectorSession native fork adapter session ID', () => {
       expect(confirmedId).not.toBe(placeholderId);
       expect(session.getConfirmedSessionId()).toBe(childSessionId);
     } finally {
-      await session.abort();
+      await session.abort(createTestCall());
     }
   });
 
   it('eagerly resolves adapter session ID for non-fork sessions', async () => {
-    const session = new ClaudeConnectorSession({
-      bus: await ClaudeCodeConnectorNamespace.scopedBus(),
-      adapterId: 'adapter-test',
-      adapterName: 'claude-code',
-      agentId: 'agent-test',
-      cwd: '/tmp',
-      model: 'claude-sonnet',
-      env: {},
-      emitSdkEvent: vi.fn(async () => undefined),
-    });
+    const session = new ClaudeConnectorSession(
+      {
+        bus: await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus),
+        adapterId: 'adapter-test',
+        adapterName: 'claude-code',
+        agentId: 'agent-test',
+        cwd: '/tmp',
+        model: 'claude-sonnet',
+        env: {},
+        emitSdkEvent: vi.fn(async () => undefined),
+      },
+      MakaioBus,
+    );
 
     try {
-      await session.initialize(() => vi.fn());
+      await session.initialize(createTestCall(), () => vi.fn());
 
       // Non-fork sessions should resolve immediately with the local ID
       const raceResult = await Promise.race([
@@ -184,30 +194,33 @@ describe('ClaudeConnectorSession native fork adapter session ID', () => {
       ]);
       expect(raceResult.resolved).toBe(true);
     } finally {
-      await session.abort();
+      await session.abort(createTestCall());
     }
   });
 
   it('getConfirmedSessionId returns undefined before system.init and the confirmed ID after', async () => {
     const childSessionId = 'confirmed-child-session';
 
-    const session = new ClaudeConnectorSession({
-      bus: await ClaudeCodeConnectorNamespace.scopedBus(),
-      adapterId: 'adapter-test',
-      adapterName: 'claude-code',
-      agentId: 'agent-test',
-      cwd: '/tmp',
-      model: 'claude-sonnet',
-      env: {},
-      emitSdkEvent: vi.fn(async () => undefined),
-      nativeFork: {
-        sourceSessionId: 'makaio-source',
-        sourceAdapterSessionId: 'provider-source',
+    const session = new ClaudeConnectorSession(
+      {
+        bus: await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus),
+        adapterId: 'adapter-test',
+        adapterName: 'claude-code',
+        agentId: 'agent-test',
+        cwd: '/tmp',
+        model: 'claude-sonnet',
+        env: {},
+        emitSdkEvent: vi.fn(async () => undefined),
+        nativeFork: {
+          sourceSessionId: 'makaio-source',
+          sourceAdapterSessionId: 'provider-source',
+        },
       },
-    });
+      MakaioBus,
+    );
 
     try {
-      await session.initialize(() => vi.fn());
+      await session.initialize(createTestCall(), () => vi.fn());
 
       // Before system.init, getConfirmedSessionId must return undefined
       expect(session.getConfirmedSessionId()).toBeUndefined();
@@ -225,7 +238,7 @@ describe('ClaudeConnectorSession native fork adapter session ID', () => {
       // After system.init, getConfirmedSessionId must return the provider ID
       expect(session.getConfirmedSessionId()).toBe(childSessionId);
     } finally {
-      await session.abort();
+      await session.abort(createTestCall());
     }
   });
 
@@ -233,30 +246,33 @@ describe('ClaudeConnectorSession native fork adapter session ID', () => {
     const childSessionId = 'confirmed-child-session';
     const emitSdkEvent = vi.fn(async () => undefined);
 
-    const session = new ClaudeConnectorSession({
-      bus: await ClaudeCodeConnectorNamespace.scopedBus(),
-      adapterId: 'adapter-test',
-      adapterName: 'claude-code',
-      agentId: 'agent-test',
-      cwd: '/tmp',
-      model: 'claude-sonnet',
-      env: {},
-      emitSdkEvent,
-      nativeFork: {
-        sourceSessionId: 'makaio-source',
-        sourceAdapterSessionId: 'provider-source',
+    const session = new ClaudeConnectorSession(
+      {
+        bus: await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus),
+        adapterId: 'adapter-test',
+        adapterName: 'claude-code',
+        agentId: 'agent-test',
+        cwd: '/tmp',
+        model: 'claude-sonnet',
+        env: {},
+        emitSdkEvent,
+        nativeFork: {
+          sourceSessionId: 'makaio-source',
+          sourceAdapterSessionId: 'provider-source',
+        },
       },
-    });
+      MakaioBus,
+    );
 
     try {
-      await session.initialize(() => vi.fn());
+      await session.initialize(createTestCall(), () => vi.fn());
 
       // Emit an unknown-type message BEFORE system.init.
-      // This exercises the code path at handleSdkMessage line 460-462
+      // This exercises the unknown-message path in handleSdkMessage
       // where unknown messages are emitted via emitSdkEvent.
       // Before the fix, if emitSdkEvent awaited getAdapterSessionId(),
       // this would deadlock the consumption loop.
-      queryHarness.emitMessage({ type: 'unknown_future_type' } as unknown as SDKMessage);
+      queryHarness.emitMessage({ type: 'unknown_future_type' });
 
       // Allow microtask queue to flush — if the consumption loop is
       // deadlocked, system.init below will never be processed.
@@ -277,9 +293,12 @@ describe('ClaudeConnectorSession native fork adapter session ID', () => {
       expect(resolvedId).toBe(childSessionId);
 
       // The unknown event should have been emitted
-      expect(emitSdkEvent).toHaveBeenCalledWith(expect.objectContaining({ type: 'unknown_future_type' }));
+      expect(emitSdkEvent).toHaveBeenCalledWith(
+        MakaioBus.own('observer'),
+        expect.objectContaining({ type: 'unknown_future_type' }),
+      );
     } finally {
-      await session.abort();
+      await session.abort(createTestCall());
     }
   });
 
@@ -289,7 +308,7 @@ describe('ClaudeConnectorSession native fork adapter session ID', () => {
     // Share the config reference so we can verify nativeFork consumption
     // after the first createQuery (triggered by initialize).
     const sessionConfig = {
-      bus: await ClaudeCodeConnectorNamespace.scopedBus(),
+      bus: await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus),
       adapterId: 'adapter-test',
       adapterName: 'claude-code',
       agentId: 'agent-test',
@@ -303,16 +322,16 @@ describe('ClaudeConnectorSession native fork adapter session ID', () => {
       } as { sourceSessionId: string; sourceAdapterSessionId: string } | undefined,
     };
 
-    const session = new ClaudeConnectorSession(sessionConfig);
+    const session = new ClaudeConnectorSession(sessionConfig, MakaioBus);
 
     try {
-      await session.initialize(() => vi.fn());
+      await session.initialize(createTestCall(), () => vi.fn());
 
       // First query (from initialize) must carry the fork directive
       expect(queryHarness.queryFn).toHaveBeenCalledTimes(1);
-      const firstCallArgs = queryHarness.queryFn.mock.calls[0] as unknown as [{ options: Record<string, unknown> }];
-      expect(firstCallArgs[0].options.resume).toBe(sourceAdapterSessionId);
-      expect(firstCallArgs[0].options.forkSession).toBe(true);
+      const firstCallArgs = queryHarness.queryFn.mock.calls[0];
+      expect(firstCallArgs[0].options?.resume).toBe(sourceAdapterSessionId);
+      expect(firstCallArgs[0].options?.forkSession).toBe(true);
 
       // The session-level one-shot consumption must have cleared nativeFork
       // from the config so any subsequent createQuery (e.g., triggered by
@@ -320,7 +339,7 @@ describe('ClaudeConnectorSession native fork adapter session ID', () => {
       // before system.init) will not re-fork the source session.
       expect(sessionConfig.nativeFork).toBeUndefined();
     } finally {
-      await session.abort();
+      await session.abort(createTestCall());
     }
   });
 });

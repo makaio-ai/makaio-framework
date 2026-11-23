@@ -13,7 +13,7 @@ export class MemoryStorageProvider implements StorageProvider {
    *
    * In-memory bus handler registration is performed by individual service
    * storage factories before service construction.
-   * @param _bus - Unused bus instance
+   * @param _bus - Unused bus instance of the contributing carrier
    * @param _machineId - Unused machine identifier
    * @returns A no-op cleanup handle
    */

@@ -20,8 +20,16 @@ import { getOpenAIToolName } from './utils/getOpenAIToolName.js';
 import { BaseStreamSession, type MessageToolCall } from '@makaio/ai-adapters-stream-session';
 import type { ScopedSubjectDefinition } from '@makaio/core';
 import type { CacheStrategy, ResponseSchemaDescriptor, ToolListItem } from '@makaio/contracts';
-import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME } from './structured-output-finalizer.js';
+
+/**
+ * Session configuration with the host bus required.
+ *
+ * The session no longer falls back to the process-wide bus: the owner that builds the
+ * session passes the bus its tool execution runs on.
+ */
+type OpenAISessionConfigWithBus = OpenAISessionConfig & { globalBus: IMakaioBus };
 
 /**
  * Session for OpenAI SDK lifecycle management.
@@ -35,7 +43,7 @@ import { STRUCTURED_OUTPUT_FINALIZER_TOOL_NAME } from './structured-output-final
  * Each turn rebuilds the messages[] array with full history.
  */
 export class OpenAIConnectorSession extends BaseStreamSession<
-  OpenAISessionConfig,
+  OpenAISessionConfigWithBus,
   OpenAIConnectorTurn,
   MessageCompleteEvent
 > {
@@ -78,7 +86,7 @@ export class OpenAIConnectorSession extends BaseStreamSession<
    * Create an OpenAI connector session.
    * @param config - OpenAI session configuration (bus identity, model/cwd, SDK client, and lifecycle hooks).
    */
-  public constructor(config: OpenAISessionConfig) {
+  public constructor(config: OpenAISessionConfigWithBus) {
     super(config);
     this.nativeTools = config.openAITools;
     this.currentTools = config.openAITools;
@@ -412,10 +420,10 @@ export class OpenAIConnectorSession extends BaseStreamSession<
       },
     );
 
-    await turn.markStepStarted();
+    await turn.markStepStarted(handle.call);
 
     try {
-      await processStream(stream, {
+      await processStream(handle.call, stream, {
         bus: this.config.bus,
         agentId: this.config.agentId,
         adapterId: this.config.adapterId,
@@ -429,7 +437,7 @@ export class OpenAIConnectorSession extends BaseStreamSession<
           : undefined,
       });
     } finally {
-      await turn.markStepFinished();
+      await turn.markStepFinished(handle.call);
     }
   }
 
@@ -492,9 +500,10 @@ export class OpenAIConnectorSession extends BaseStreamSession<
         );
       }
       const messagesFromToolCalls = await handleToolCalls(
+        currentHandle.call,
         result.tool_calls,
         {
-          bus: this.config.globalBus ?? MakaioBus,
+          bus: this.config.globalBus,
           emitSdkEvent: this.config.emitSdkEvent,
           requestToolApproval: this.config.requestToolApproval,
           recordMcpCall: this.config.recordMcpCall,

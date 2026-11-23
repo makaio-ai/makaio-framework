@@ -2,8 +2,10 @@
  * Per-client namespace factory.
  *
  * Concrete client packages call {@link createClientNamespace} once at module
- * load time to register their `client:<clientId>` bus namespace.  The factory
- * pre-registers the shared hook subjects (`hook.received` and `hook.handle`) so
+ * load time to define their `client:<clientId>` bus namespace.  The factory is
+ * pure: it registers nothing.  The runtime manifest declares the returned
+ * {@link ClientNamespaceResult.definition | definition} in `namespaces`, and the
+ * extension coordinator registers it on load.  The factory pre-defines the shared hook subjects (`hook.received` and `hook.handle`) so
  * all client families expose consistent hook ingress and request handling points.
  *
  * Clients that need subjects beyond those shared hook subjects pass them via the
@@ -18,7 +20,6 @@
  * @packageDocumentation
  */
 
-import { MakaioBus } from '@makaio/bus-core';
 import { createBusNamespace, hostLocalRequest, type SchemaRecord } from '@makaio/core';
 import { canonicalizeClientId, ClientHookHandleResponseSchema, RawClientHookPayloadSchema } from './hook-subjects.js';
 
@@ -35,6 +36,11 @@ export interface ClientNamespaceResult<AdditionalSchemas extends SchemaRecord = 
    */
   readonly namespaceDomain: string;
   /**
+   * The namespace definition, to be declared in the runtime manifest's
+   * `namespaces` so the extension coordinator registers it on load.
+   */
+  readonly definition: ReturnType<typeof buildClientDefinition<AdditionalSchemas>>;
+  /**
    * Typed bus subjects for the per-client namespace.
    *
    * Always includes `hook.received` for raw hook ingress and `hook.handle` for
@@ -42,36 +48,33 @@ export interface ClientNamespaceResult<AdditionalSchemas extends SchemaRecord = 
    * When `additionalSchemas` were provided at construction time the extra
    * subjects are also present here, fully typed.
    */
-  readonly subjects: ReturnType<typeof buildClientSubjects<AdditionalSchemas>>;
+  readonly subjects: ReturnType<typeof buildClientDefinition<AdditionalSchemas>>['subjects'];
 }
 
 /**
- * Build the subjects object for a per-client namespace.
+ * Build the namespace definition for a per-client namespace.
  *
  * Extracted to a named generic function so the inferred return type is stable
  * and can be referenced by {@link ClientNamespaceResult} via instantiation
- * expressions.
+ * expressions.  Pure: nothing is registered on any bus.
  * @param clientId - Stable client identifier (e.g. `'codex'`)
- * @param additionalSchemas - Extra subjects to register alongside the shared
+ * @param additionalSchemas - Extra subjects to define alongside the shared
  *   hook subjects.
- * @returns Namespace subjects with shared hook subjects plus any additional
+ * @returns Namespace definition with shared hook subjects plus any additional
  *   subjects.
  */
-function buildClientSubjects<AdditionalSchemas extends SchemaRecord>(
+function buildClientDefinition<AdditionalSchemas extends SchemaRecord>(
   clientId: string,
   additionalSchemas: AdditionalSchemas,
 ) {
-  const namespace = MakaioBus.registerNamespace(
-    createBusNamespace(`client:${clientId}`, {
-      'hook.received': RawClientHookPayloadSchema,
-      'hook.handle': hostLocalRequest({
-        request: RawClientHookPayloadSchema,
-        response: ClientHookHandleResponseSchema,
-      }),
-      ...additionalSchemas,
+  return createBusNamespace(`client:${clientId}`, {
+    'hook.received': RawClientHookPayloadSchema,
+    'hook.handle': hostLocalRequest({
+      request: RawClientHookPayloadSchema,
+      response: ClientHookHandleResponseSchema,
     }),
-  );
-  return namespace.subjects;
+    ...additionalSchemas,
+  });
 }
 
 /**
@@ -101,55 +104,13 @@ function assertNoReservedSubjectOverrides(clientId: string, additionalSchemas: S
 }
 
 /**
- * Check whether a nested subject accessor exists on a namespace subjects object.
- * @param subjects - Subjects object returned from namespace registration.
- * @param subjectKey - Dotted subject key to verify, e.g. `'statusline.received'`.
- * @returns `true` when every path segment exists.
- */
-function hasSubjectAccessor(subjects: unknown, subjectKey: string): boolean {
-  let current: unknown = subjects;
-  for (const segment of subjectKey.split('.')) {
-    if (typeof current !== 'object' || current === null || !(segment in current)) {
-      return false;
-    }
-    current = (current as Record<string, unknown>)[segment];
-  }
-  return true;
-}
-
-/**
- * Fail when an idempotent namespace registration returned an earlier, narrower
- * subject set that does not include the additional subjects requested now.
- * @param clientId - Normalized client identifier.
- * @param subjects - Subjects returned from the bus namespace registry.
- * @param additionalSchemas - Additional subject schemas requested by the caller.
- */
-function assertAdditionalSubjectsRegistered(
-  clientId: string,
-  subjects: unknown,
-  additionalSchemas: SchemaRecord,
-): void {
-  const missingSubjects = Object.keys(additionalSchemas).filter(
-    (subjectKey) => !hasSubjectAccessor(subjects, subjectKey),
-  );
-  if (missingSubjects.length === 0) {
-    return;
-  }
-
-  throw new Error(
-    `[createClientNamespace] client:${clientId} was already registered without required subjects: ${missingSubjects.join(
-      ', ',
-    )}`,
-  );
-}
-
-/**
- * Create (or retrieve) the per-client bus namespace for `client:<clientId>`.
+ * Define the per-client bus namespace for `client:<clientId>`.
  *
- * The namespace is registered idempotently — calling this function multiple
- * times with the same `clientId` returns equivalent subjects.
+ * Pure: the factory registers nothing.  Declare the returned `definition` in
+ * the runtime manifest's `namespaces`; the extension coordinator registers it
+ * on load, before `create`.
  *
- * The resulting namespace pre-registers the `hook.received` and `hook.handle`
+ * The resulting namespace pre-defines the `hook.received` and `hook.handle`
  * subjects so client bridges have consistent hook ingress and request handling
  * points:
  *
@@ -174,7 +135,7 @@ function assertAdditionalSubjectsRegistered(
  *   lowercase and restricted to letters, numbers, and hyphens.
  * @param additionalSchemas - Optional extra subject schemas to register alongside
  *   the shared hook subjects.  Must not include `hook.received` or `hook.handle`.
- * @returns Namespace domain string and typed bus subjects.
+ * @returns Namespace domain string, namespace definition and typed bus subjects.
  */
 export function createClientNamespace<AdditionalSchemas extends SchemaRecord = Record<never, never>>(
   clientId: string,
@@ -184,11 +145,11 @@ export function createClientNamespace<AdditionalSchemas extends SchemaRecord = R
 
   const schemas = (additionalSchemas ?? {}) as AdditionalSchemas;
   assertNoReservedSubjectOverrides(normalizedClientId, schemas);
-  const subjects = buildClientSubjects(normalizedClientId, schemas);
-  assertAdditionalSubjectsRegistered(normalizedClientId, subjects, schemas);
+  const definition = buildClientDefinition(normalizedClientId, schemas);
 
   return {
     namespaceDomain: `client:${normalizedClientId}`,
-    subjects,
+    definition,
+    subjects: definition.subjects,
   };
 }

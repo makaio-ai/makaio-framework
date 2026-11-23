@@ -177,7 +177,7 @@ function registerMessageHandlers(unsubs: Array<() => void>): void {
       messagesByTurn.set(storedMessage.turnId, turnMessages);
       ctx.setResult({ message: storedMessage });
       if (ctx.payload.emitEvent ?? true) {
-        void MakaioBus.emit(MessageStorageSubjects.stored, { message: structuredClone(storedMessage) });
+        void MakaioBus.emit(ctx.call, MessageStorageSubjects.stored, { message: structuredClone(storedMessage) });
       }
     }),
   );
@@ -409,9 +409,13 @@ function registerProviderHandlers(unsubs: Array<() => void>): void {
     MakaioBus.on(
       AdapterSubsystemSubjects.resolveAdapterRuntimeSnapshot,
       async (ctx) => {
-        const { snapshot } = await MakaioBus.request(AdapterSubsystemSubjects.resolveProviderRuntimeSnapshot, {
-          providerConfigId: ctx.payload.providerConfigId,
-        });
+        const { snapshot } = await MakaioBus.request(
+          ctx.call,
+          AdapterSubsystemSubjects.resolveProviderRuntimeSnapshot,
+          {
+            providerConfigId: ctx.payload.providerConfigId,
+          },
+        );
         if (!snapshot) {
           ctx.setResult({ status: 'error', code: 'provider-config-not-found' });
           return;

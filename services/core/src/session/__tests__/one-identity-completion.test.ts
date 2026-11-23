@@ -17,6 +17,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   AdapterSubjects,
   AgentSubjects,
@@ -261,7 +262,7 @@ describe('one-identity completion', () => {
    * @returns The created session ID.
    */
   async function seedSession(sessionId: string): Promise<string> {
-    await MakaioBus.request(SessionSubjects.create, { sessionId, machineId: MACHINE });
+    await MakaioBus.request(createTestCall(), SessionSubjects.create, { sessionId, machineId: MACHINE });
     return sessionId;
   }
 
@@ -287,7 +288,7 @@ describe('one-identity completion', () => {
       lastActivityAt: now,
       ...overrides,
     };
-    await MakaioBus.request(AgentStorageSubjects.set, { agentId, agent });
+    await MakaioBus.request(createTestCall(), AgentStorageSubjects.set, { agentId, agent });
     return structuredClone(agent);
   }
 
@@ -297,7 +298,9 @@ describe('one-identity completion', () => {
    * @returns The claim rows, as the authority stored them.
    */
   async function loadClaims(machineId: string): Promise<AdapterSessionClaimRecord[]> {
-    const { claims } = await MakaioBus.request(SessionOwnershipStorageSubjects.listClaims, { machineId });
+    const { claims } = await MakaioBus.request(createTestCall(), SessionOwnershipStorageSubjects.listClaims, {
+      machineId,
+    });
     return claims;
   }
 
@@ -347,7 +350,7 @@ describe('one-identity completion', () => {
     it('hands back a caller-named instance together with the machine it was named with', async () => {
       composeAdapterIdentity({ announceForeign: true });
 
-      const owned = await resolveOwnedAdapterInstance(MakaioBus, {
+      const owned = await resolveOwnedAdapterInstance(createTestCall(), MakaioBus, {
         adapterName: ADAPTER,
         adapterId: FOREIGN_INSTANCE,
         machineId: FOREIGN_MACHINE,
@@ -362,7 +365,7 @@ describe('one-identity completion', () => {
     it('refuses a named instance whose machine was not named', async () => {
       composeAdapterIdentity();
 
-      const owned = await resolveOwnedAdapterInstance(MakaioBus, {
+      const owned = await resolveOwnedAdapterInstance(createTestCall(), MakaioBus, {
         adapterName: ADAPTER,
         adapterId: FOREIGN_INSTANCE,
       });
@@ -376,7 +379,7 @@ describe('one-identity completion', () => {
     it('derives the instance for a named machine and echoes that machine back', async () => {
       composeAdapterIdentity();
 
-      const owned = await resolveOwnedAdapterInstance(MakaioBus, {
+      const owned = await resolveOwnedAdapterInstance(createTestCall(), MakaioBus, {
         adapterName: ADAPTER,
         machineId: MACHINE,
         storedAdapterId: OPAQUE_INSTANCE,
@@ -392,7 +395,7 @@ describe('one-identity completion', () => {
       composeAdapterIdentity();
       failFirstInstanceResolutions(1);
 
-      const owned = await resolveOwnedAdapterInstance(MakaioBus, {
+      const owned = await resolveOwnedAdapterInstance(createTestCall(), MakaioBus, {
         adapterName: ADAPTER,
         machineId: MACHINE,
         storedAdapterId: OPAQUE_INSTANCE,
@@ -409,7 +412,7 @@ describe('one-identity completion', () => {
       composeAdapterIdentity();
       failFirstInstanceResolutions(1);
 
-      const owned = await resolveOwnedAdapterInstance(MakaioBus, {
+      const owned = await resolveOwnedAdapterInstance(createTestCall(), MakaioBus, {
         adapterName: ADAPTER,
         storedAdapterId: OPAQUE_INSTANCE,
       });
@@ -427,7 +430,7 @@ describe('one-identity completion', () => {
       const sessionId = await seedSession('one-identity-send-defers');
       const agent = await seedAgent('send-deferred-agent', { sessionId, adapterId: OPAQUE_INSTANCE });
 
-      const recovered = await recoverDeadAgentExclusively(MakaioBus, agent, {
+      const recovered = await recoverDeadAgentExclusively(createTestCall(), MakaioBus, agent, {
         resumeProviderSessionId: null,
         machineId: MACHINE,
       });
@@ -460,7 +463,7 @@ describe('one-identity completion', () => {
         adapterSessionId: 'provider-restart-target',
       });
 
-      const { results } = await MakaioBus.request(SessionSubjects.restartAgents, { sessionId });
+      const { results } = await MakaioBus.request(createTestCall(), SessionSubjects.restartAgents, { sessionId });
 
       // Success, and the *stored* instance in the report: nothing was dispatched,
       // so re-stamping the row with a freshly resolved instance would advertise a
@@ -476,7 +479,7 @@ describe('one-identity completion', () => {
       const sessionId = await seedSession('one-identity-recovery-pair');
       const agent = await seedAgent('recovered-agent', { sessionId, adapterId: OPAQUE_INSTANCE });
 
-      const recovered = await recoverDeadAgentExclusively(MakaioBus, agent, {
+      const recovered = await recoverDeadAgentExclusively(createTestCall(), MakaioBus, agent, {
         resumeProviderSessionId: null,
         machineId: MACHINE,
       });
@@ -506,7 +509,7 @@ describe('one-identity completion', () => {
       registerStartAgent('provider-named-instance');
       const sessionId = await seedSession('one-identity-named-instance');
 
-      await MakaioBus.request(SessionSubjects.sendMessage, {
+      await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
         sessionId,
         message: 'start on a named instance',
         agent: { kind: 'adapter', adapterId: FOREIGN_INSTANCE, machineId: FOREIGN_MACHINE },
@@ -534,7 +537,7 @@ describe('one-identity completion', () => {
       registerStartAgent('provider-never-reached');
       const sessionId = await seedSession('one-identity-mixed-announcement');
 
-      const failure = await MakaioBus.request(SessionSubjects.sendMessage, {
+      const failure = await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
         sessionId,
         message: 'start on a mismatched host',
         agent: { kind: 'adapter', adapterId: FOREIGN_INSTANCE, machineId: MACHINE },
@@ -553,7 +556,7 @@ describe('one-identity completion', () => {
       registerStartAgent('provider-own-instance');
       const sessionId = await seedSession('one-identity-own-instance');
 
-      await MakaioBus.request(SessionSubjects.sendMessage, {
+      await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
         sessionId,
         message: 'start on the local instance',
         agent: { kind: 'adapter', adapterName: ADAPTER },
@@ -578,7 +581,7 @@ describe('one-identity completion', () => {
 
       // A payload the schema forbids, dispatched over a bus that does not
       // validate — the composition in which only a handler-side refusal exists.
-      const failure = await MakaioBus.request(SessionSubjects.sendMessage, {
+      const failure = await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
         sessionId,
         message: 'start on half an identity',
         agent: { kind: 'adapter', adapterId: FOREIGN_INSTANCE },
@@ -603,7 +606,7 @@ describe('one-identity completion', () => {
       // This shape had the worse silent outcome of the two: the branch a selection
       // without an instance takes derives for *this* runtime's machine, so the
       // caller's machine was read by nothing and the agent started here.
-      const failure = await MakaioBus.request(SessionSubjects.sendMessage, {
+      const failure = await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
         sessionId,
         message: 'start on a machine and no instance',
         agent: { kind: 'adapter', adapterName: ADAPTER, machineId: FOREIGN_MACHINE },
@@ -644,7 +647,7 @@ describe('one-identity completion', () => {
       // Designated through the ownership seam that owns the column, not by a
       // whole-record write: the designation is a compare-and-swap and the session
       // row deliberately has no other writer for it.
-      await designateSessionLead(MakaioBus, {
+      await designateSessionLead(createTestCall(), MakaioBus, {
         sessionId,
         agentId: 'deferred-lead',
         expectedLeadAgentId: null,
@@ -657,7 +660,10 @@ describe('one-identity completion', () => {
       composeAdapterIdentity({ announceForeign: true });
       composeOrchestrator();
       registerStartAgent('provider-replacement');
-      await MakaioBus.request(SessionSubjects.sendMessage, { sessionId, message: 'continue the conversation' });
+      await MakaioBus.request(createTestCall(), SessionSubjects.sendMessage, {
+        sessionId,
+        message: 'continue the conversation',
+      });
       return sessionId;
     }
 
@@ -676,7 +682,7 @@ describe('one-identity completion', () => {
       // instance — the degrade replaces the agent, not the machine. The deferred
       // row itself stays: this runtime may not drive it, which is not the same as
       // being entitled to delete it.
-      const { session } = await MakaioBus.request(SessionSubjects.get, { sessionId });
+      const { session } = await MakaioBus.request(createTestCall(), SessionSubjects.get, { sessionId });
       const replacement = session?.agents.find((agent) => agent.agentId === session.leadAgentId);
       expect(replacement?.agentId).not.toBe('deferred-lead');
       expect(replacement?.model).toBe('inherited-model');

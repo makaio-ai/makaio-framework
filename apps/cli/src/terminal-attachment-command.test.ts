@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createBusInstance } from '@makaio/bus-core';
 import { NativeSessionSupervisorSubjects } from '@makaio/contracts';
-import { createMockBus } from '@makaio/test-utils';
+import { createMockBus, createTestCall } from '@makaio/test-utils';
 import { attachInteractiveTerminal } from './terminal-attachment-command.js';
 import { createTestTTYFixture } from './test-tty-fixture.js';
 
@@ -35,7 +36,11 @@ describe('attachInteractiveTerminal', () => {
 
     const attach = attachInteractiveTerminal(bus, { supervisorSessionId: 'supervisor-1' });
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith(NativeSessionSupervisorSubjects.terminal.open, expect.anything()),
+      expect(request).toHaveBeenCalledWith(
+        expect.anything(),
+        NativeSessionSupervisorSubjects.terminal.open,
+        expect.anything(),
+      ),
     );
 
     process.stdin.emit('data', Buffer.from('/compact'));
@@ -43,7 +48,7 @@ describe('attachInteractiveTerminal', () => {
     process.stdin.emit('data', Buffer.from('\u001d'));
     await attach;
 
-    const attachmentId = (request.mock.calls[0]?.[1] as { attachmentId: string }).attachmentId;
+    const attachmentId = (request.mock.calls[0]?.[2] as { attachmentId: string }).attachmentId;
     expect(request).toHaveBeenCalledWith(NativeSessionSupervisorSubjects.terminal.input, {
       attachmentId,
       data: '/compact',
@@ -53,7 +58,9 @@ describe('attachInteractiveTerminal', () => {
       cols: 120,
       rows: 40,
     });
-    expect(request).toHaveBeenLastCalledWith(NativeSessionSupervisorSubjects.terminal.close, { attachmentId });
+    expect(request).toHaveBeenLastCalledWith(expect.anything(), NativeSessionSupervisorSubjects.terminal.close, {
+      attachmentId,
+    });
     expect(setRawMode).toHaveBeenNthCalledWith(1, true);
     expect(setRawMode).toHaveBeenLastCalledWith(false);
     expect(pause).toHaveBeenCalledTimes(1);
@@ -65,24 +72,20 @@ describe('attachInteractiveTerminal', () => {
     const setRawMode = vi.fn();
     const pause = vi.spyOn(process.stdin, 'pause');
     Object.defineProperty(process.stdin, 'setRawMode', { configurable: true, value: setRawMode });
-    const handlers = new Map<unknown, (event: { payload: { attachmentId: string } }) => void>();
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ success: true, lastSeq: 0, bufferedOutput: '' })
-      .mockResolvedValueOnce({ success: true });
-    const bus = {
-      on: vi.fn((subject, handler) => {
-        handlers.set(subject, handler);
-        return () => undefined;
-      }),
-      request,
-      emit: vi.fn().mockResolvedValue(undefined),
-    };
+    const bus = createBusInstance();
+    const request = vi.spyOn(bus, 'request');
+    request.mockResolvedValue({ success: true });
+    request.mockResolvedValueOnce({ success: true, lastSeq: 0, bufferedOutput: '' });
 
-    const attach = attachInteractiveTerminal(bus as never, { supervisorSessionId: 'supervisor-1' });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-    const attachmentId = (request.mock.calls[0]?.[1] as { attachmentId: string }).attachmentId;
-    handlers.get(NativeSessionSupervisorSubjects.terminal.closed)?.({ payload: { attachmentId } });
+    const attach = attachInteractiveTerminal(bus, { supervisorSessionId: 'supervisor-1' });
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(setRawMode).toHaveBeenCalledWith(true);
+    });
+    const openPayload: unknown = request.mock.calls[0]?.[2];
+    expect(openPayload).toEqual(expect.objectContaining({ attachmentId: expect.any(String) }));
+    const { attachmentId } = openPayload as { attachmentId: string };
+    await bus.emit(createTestCall(), NativeSessionSupervisorSubjects.terminal.closed, { attachmentId });
     await attach;
 
     expect(setRawMode).toHaveBeenNthCalledWith(1, true);
@@ -151,7 +154,7 @@ describe('attachInteractiveTerminal', () => {
     process.stdin.emit('data', Buffer.from('\u001d'));
     await attach;
 
-    const attachmentId = (request.mock.calls[0]?.[1] as { attachmentId: string }).attachmentId;
+    const attachmentId = (request.mock.calls[0]?.[2] as { attachmentId: string }).attachmentId;
     expect(request).toHaveBeenCalledWith(NativeSessionSupervisorSubjects.terminal.input, { attachmentId, data: '€' });
   });
 });

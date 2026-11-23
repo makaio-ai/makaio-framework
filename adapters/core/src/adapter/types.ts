@@ -166,8 +166,11 @@ export interface AIAdapterConfig<TBus extends ScopedBus<string> = ScopedBus<stri
   namespace: AdapterNamespace;
   /** Optional pre-generated adapter ID. Defaults to UUID. */
   adapterId?: string;
-  /** Optional global bus override. Defaults to MakaioBus singleton. */
-  globalBus?: IMakaioBus;
+  /**
+   * Host bus the adapter registers its namespace on and sends through.
+   * Required: there is no process-bus fallback, the host passes its own bus.
+   */
+  globalBus: IMakaioBus;
   scopedBus?: TBus;
   /**
    * Optional log import configuration.

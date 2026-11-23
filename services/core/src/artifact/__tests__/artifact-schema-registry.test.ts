@@ -7,6 +7,7 @@ import {
   type ArtifactKindRegistration,
   type RelationTypeRegistration,
 } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { ArtifactSchemaRegistry } from '../artifact-schema-registry.js';
 
 /**
@@ -72,9 +73,11 @@ describe('ArtifactSchemaRegistry', () => {
   it('validates an entire owner replacement before removing its existing registrations', () => {
     const owner = { source: 'extension' as const, ownerKey: 'test' };
     const current = makeKind('note', 1);
-    registry.replaceKindRegistrationsForOwner(owner, [current]);
+    registry.replaceKindRegistrationsForOwner(createTestCall(), owner, [current]);
     const invalid = { ...makeKind('other', 1), titlePath: 'absent' };
-    expect(() => registry.replaceKindRegistrationsForOwner(owner, [makeKind('new', 1), invalid])).toThrow();
+    expect(() =>
+      registry.replaceKindRegistrationsForOwner(createTestCall(), owner, [makeKind('new', 1), invalid]),
+    ).toThrow();
     expect(registry.getKind('note', 1)).toEqual(current);
     expect(registry.getKind('new', 1)).toBeUndefined();
   });
@@ -89,7 +92,7 @@ describe('ArtifactSchemaRegistry', () => {
     registry.registerKind(direct);
     expect(registry.getKind('direct', 1)).toEqual(direct);
     const batch = makeKind('batch', 1, dataSchema);
-    registry.replaceKindRegistrationsForOwner({ source: 'extension', ownerKey: 'dialects' }, [batch]);
+    registry.replaceKindRegistrationsForOwner(createTestCall(), { source: 'extension', ownerKey: 'dialects' }, [batch]);
     expect(registry.getKind('batch', 1)).toEqual(batch);
     const busKind = makeKind('bus', 1, dataSchema);
     await bus.request(ArtifactSubjects.kind.register, busKind);
@@ -106,9 +109,9 @@ describe('ArtifactSchemaRegistry', () => {
     const invalid = makeKind('current', 1, titleSchema({ $schema: dialect }));
     expect(() => registry.registerKind(invalid, owner)).toThrow(/Unsupported data schema dialect/);
     expect(registry.getKind('current', 1)).toEqual(current);
-    expect(() => registry.replaceKindRegistrationsForOwner(owner, [makeKind('new', 1), invalid])).toThrow(
-      /Unsupported data schema dialect/,
-    );
+    expect(() =>
+      registry.replaceKindRegistrationsForOwner(createTestCall(), owner, [makeKind('new', 1), invalid]),
+    ).toThrow(/Unsupported data schema dialect/);
     expect(registry.getKind('current', 1)).toEqual(current);
     expect(registry.getKind('new', 1)).toBeUndefined();
     await expect(bus.request(ArtifactSubjects.kind.register, invalid)).rejects.toThrow(
@@ -135,7 +138,9 @@ describe('ArtifactSchemaRegistry', () => {
     expect(registry.getKind('current', 2)).toEqual(current);
     await expect(bus.request(ArtifactSubjects.kind.register, invalid)).rejects.toThrow(failure);
     expect(registry.getKind('current', 2)).toEqual(current);
-    expect(() => registry.replaceKindRegistrationsForOwner(owner, [makeKind('new', 1), invalid])).toThrow(failure);
+    expect(() =>
+      registry.replaceKindRegistrationsForOwner(createTestCall(), owner, [makeKind('new', 1), invalid]),
+    ).toThrow(failure);
     expect(registry.getKind('current', 2)).toEqual(current);
     expect(registry.getKind('new', 1)).toBeUndefined();
   });
@@ -185,7 +190,10 @@ describe('ArtifactSchemaRegistry', () => {
   it('isolates local schema identifiers across different Kind registrations', () => {
     const first = makeKind('first', 1, { $id: 'urn:kind:local', properties: { optional: { type: 'string' } } });
     const second = makeKind('second', 1, { $id: 'urn:kind:local', properties: { optional: { type: 'number' } } });
-    registry.replaceKindRegistrationsForOwner({ source: 'extension', ownerKey: 'isolated' }, [first, second]);
+    registry.replaceKindRegistrationsForOwner(createTestCall(), { source: 'extension', ownerKey: 'isolated' }, [
+      first,
+      second,
+    ]);
     expect(registry.getKind('first', 1)).toEqual(first);
     expect(registry.getKind('second', 1)).toEqual(second);
   });
@@ -473,9 +481,11 @@ describe('ArtifactSchemaRegistry', () => {
         ownerKey: 'target:acme/factory:acme/app',
       });
 
-      registry.replaceKindRegistrationsForOwner({ source: 'factory-repo', ownerKey: 'factory:acme/factory' }, [
-        makeKind('blueprint', 1),
-      ]);
+      registry.replaceKindRegistrationsForOwner(
+        createTestCall(),
+        { source: 'factory-repo', ownerKey: 'factory:acme/factory' },
+        [makeKind('blueprint', 1)],
+      );
 
       expect(registry.getKind('plan', 1)).toBeUndefined();
       expect(registry.getKind('blueprint', 1)).toBeDefined();
@@ -491,15 +501,11 @@ describe('ArtifactSchemaRegistry', () => {
         properties: { owner: { const: 'first' }, refreshed: { type: 'boolean' } },
       });
 
-      registry.replaceKindRegistrationsForOwner({ source: 'target-repo', ownerKey: 'target:acme/factory:acme/app-a' }, [
-        firstKind,
-      ]);
-      registry.replaceKindRegistrationsForOwner({ source: 'target-repo', ownerKey: 'target:acme/factory:acme/app-b' }, [
-        secondKind,
-      ]);
-      registry.replaceKindRegistrationsForOwner({ source: 'target-repo', ownerKey: 'target:acme/factory:acme/app-a' }, [
-        refreshedFirstKind,
-      ]);
+      const firstOwner = { source: 'target-repo' as const, ownerKey: 'target:acme/factory:acme/app-a' };
+      const secondOwner = { source: 'target-repo' as const, ownerKey: 'target:acme/factory:acme/app-b' };
+      registry.replaceKindRegistrationsForOwner(createTestCall(), firstOwner, [firstKind]);
+      registry.replaceKindRegistrationsForOwner(createTestCall(), secondOwner, [secondKind]);
+      registry.replaceKindRegistrationsForOwner(createTestCall(), firstOwner, [refreshedFirstKind]);
 
       expect(registry.getKind('plan', 1)?.dataSchema).toEqual(refreshedFirstKind.dataSchema);
       expect(warnSpy).toHaveBeenCalledOnce();

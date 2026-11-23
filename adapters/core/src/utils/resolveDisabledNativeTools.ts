@@ -1,4 +1,4 @@
-import { HarnessSubjects, type HarnessDefinition } from '@makaio/contracts';
+import { HarnessSubjects, type CallContext, type HarnessDefinition } from '@makaio/contracts';
 
 /** Result of an optional harness lookup — either unhandled or resolved. */
 type OptionalHarnessResult = Promise<{ handled: false } | { handled: true; data: HarnessDefinition }>;
@@ -10,8 +10,13 @@ type OptionalHarnessResult = Promise<{ handled: false } | { handled: true; data:
  * default lookup (`HarnessSubjects.getDefault`).
  */
 export interface HarnessRequester {
-  requestOptional(subject: typeof HarnessSubjects.get, payload: { id: string }): OptionalHarnessResult;
   requestOptional(
+    call: CallContext,
+    subject: typeof HarnessSubjects.get,
+    payload: { id: string },
+  ): OptionalHarnessResult;
+  requestOptional(
+    call: CallContext,
     subject: typeof HarnessSubjects.getDefault,
     payload: { adapterName?: string; clientId?: string },
   ): OptionalHarnessResult;
@@ -26,6 +31,7 @@ export interface HarnessRequester {
  *
  * Uses optional request semantics so callers can run without harness registration
  * (for example, in lightweight test runtimes).
+ * @param call - Call context of the operation this lookup serves; sent with every harness request
  * @param requester - Bus-like requester supporting requestOptional for harness subjects
  * @param adapterName - Adapter name used to look up the default harness (fallback path)
  * @param harnessId - Optional explicit harness ID; takes precedence over the default lookup
@@ -33,6 +39,7 @@ export interface HarnessRequester {
  * @returns Disabled native tool names, or an empty array when unavailable
  */
 export async function resolveDisabledNativeTools(
+  call: CallContext,
   requester: HarnessRequester,
   adapterName: string,
   harnessId?: string,
@@ -40,7 +47,7 @@ export async function resolveDisabledNativeTools(
 ): Promise<readonly string[]> {
   const result =
     harnessId !== undefined
-      ? await requester.requestOptional(HarnessSubjects.get, { id: harnessId })
-      : await requester.requestOptional(HarnessSubjects.getDefault, { adapterName, clientId });
+      ? await requester.requestOptional(call, HarnessSubjects.get, { id: harnessId })
+      : await requester.requestOptional(call, HarnessSubjects.getDefault, { adapterName, clientId });
   return result.handled ? result.data.nativeTools.disabled : [];
 }

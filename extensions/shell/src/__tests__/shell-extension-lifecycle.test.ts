@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { ToolRegistry } from '@makaio/services-core/tools';
 import { shellToolset, ShellService } from '../index.js';
 
@@ -19,7 +20,10 @@ describe('shell extension lifecycle', () => {
     try {
       await service.init();
       await registry.register(shellToolset);
-      const exec = await registry.execute('shell_exec', { command: 'node -e "process.exit(0)"', colors: false });
+      const exec = await registry.execute(createTestCall(), 'shell_exec', {
+        command: 'node -e "process.exit(0)"',
+        colors: false,
+      });
       expect(exec.success).toBe(true);
     } finally {
       await Promise.allSettled([service.destroy(), registry.deregister('shell')]);
@@ -34,7 +38,7 @@ describe('shell extension lifecycle', () => {
     try {
       await service.init();
       await registry.register(shellToolset);
-      const exec = await registry.execute('shell_exec', {
+      const exec = await registry.execute(createTestCall(), 'shell_exec', {
         command: 'node -e "setTimeout(() => {}, 30000)"',
         colors: false,
       });
@@ -42,7 +46,7 @@ describe('shell extension lifecycle', () => {
 
       await service.destroy();
       serviceDestroyed = true;
-      const status = await registry.execute('shell_status', {
+      const status = await registry.execute(createTestCall(), 'shell_status', {
         shellId: exec.success ? (exec.data as { shellId: string }).shellId : 'missing',
       });
       expect(status.success).toBe(false);

@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { RequestHandler } from '@makaio/core';
+import type { PartyRef, RequestHandler } from '@makaio/core';
 import {
   buildMergedList,
   markCoveredRemoteHops,
@@ -20,6 +20,7 @@ import {
 } from '../methods/request/merged-list.js';
 
 const noopHandler: RequestHandler<unknown, unknown> = () => undefined;
+const OWNER: PartyRef = { kind: 'makaio.extension', id: 'merged-list-test' };
 
 /**
  * Render merged entries as compact labels so assertions read like the walk order.
@@ -37,7 +38,7 @@ function labels(entries: ReadonlyArray<MergedEntry>): string[] {
 
 describe('markCoveredRemoteHops', () => {
   const merged = buildMergedList(
-    [{ handler: noopHandler, priority: 250 }],
+    [{ handler: noopHandler, priority: 250, owner: OWNER }],
     [
       { transport: 'peer', priority: 300 },
       { transport: 'peer', priority: 200 },
@@ -64,8 +65,8 @@ describe('markCoveredRemoteHops', () => {
   it('covers per transport and never touches local entries', () => {
     const mixed = buildMergedList(
       [
-        { handler: noopHandler, priority: 290 },
-        { handler: noopHandler, priority: 100 },
+        { handler: noopHandler, priority: 290, owner: OWNER },
+        { handler: noopHandler, priority: 100, owner: OWNER },
       ],
       [
         { transport: 'left', priority: 300 },
@@ -128,7 +129,7 @@ describe('resolveRemoteCursor', () => {
 describe('nextExecutableEntry', () => {
   const walk = markCoveredRemoteHops(
     buildMergedList(
-      [{ handler: noopHandler, priority: 150 }],
+      [{ handler: noopHandler, priority: 150, owner: OWNER }],
       [
         { transport: 'peer', priority: 300 },
         { transport: 'peer', priority: 200 },

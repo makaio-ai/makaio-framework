@@ -12,6 +12,7 @@ import { SessionOwnershipStorageSubjects, type MakaioSessionAgent } from '@makai
 import {
   createReservedRehydrateContext,
   FIRST,
+  MACHINE_ID,
   MOVED_KEY,
   type ReservedRehydrateContext,
 } from './reserved-rehydrate-fixture.js';
@@ -49,7 +50,10 @@ describe('reserved rehydrate ordering', () => {
         SessionOwnershipStorageSubjects.finalizeRecovery,
         async (context) => {
           if (context.payload.action.kind === 'succeeded') {
-            claimedAtRuntimeWrite = (await ctx.listClaims())
+            const { claims } = await bus.request(context.call, SessionOwnershipStorageSubjects.listClaims, {
+              machineId: MACHINE_ID,
+            });
+            claimedAtRuntimeWrite = claims
               .filter((claim) => claim.status === 'held')
               .map((claim) => claim.providerSessionId);
           }

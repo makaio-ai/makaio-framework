@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { createMockScopedBus } from '@makaio/test-utils';
+import { createMockScopedBus, createTestCall } from '@makaio/test-utils';
 import { ClientSubjects, defineAdapterProviderAuth } from '@makaio/contracts';
 import { resolveClientBinary } from '@makaio/subsystem-client';
 import { bindProviderAuth } from '../../config/resolve-adapter-auth.js';
@@ -69,6 +69,7 @@ describe('connector runtime lifecycle', () => {
 
     await expect(
       createConnectorRuntime({
+        call: createTestCall(),
         config: noAuthRuntimeConfig(),
         connectorFactory: () => {
           throw new Error('connector factory failed');
@@ -93,8 +94,8 @@ describe('connector runtime lifecycle', () => {
     // The runtime close reports instead of rejecting, so the aggregate travels in
     // the report rather than out of a throw — and the class it caps is `unknown`,
     // because neither the connector nor the lease could be proven released.
-    const report = await closeConnectorRuntime({
-      connector: { close } as never,
+    const report = await closeConnectorRuntime(createTestCall(), {
+      connector: { close },
       lease: { clientId: 'codex', leaseId: 'lease-1', release },
     });
 
@@ -158,7 +159,7 @@ describe('connector runtime lifecycle', () => {
       reportCleanupFailure: () => undefined,
     });
 
-    await manager.swapConnector({ model: 'new-model' });
+    await manager.swapConnector(createTestCall(), { model: 'new-model' });
 
     expect(events.slice(0, 7)).toEqual([
       'new-lease-created',
@@ -169,7 +170,7 @@ describe('connector runtime lifecycle', () => {
       'old-lease-released',
     ]);
     expect(currentRuntime.connector.model).toBe('new-model');
-    await closeConnectorRuntime(currentRuntime);
+    await closeConnectorRuntime(createTestCall(), currentRuntime);
     expect(events.at(-1)).toBe('new-lease-released');
   });
 
@@ -217,7 +218,7 @@ describe('connector runtime lifecycle', () => {
 
     // The swap resolves despite the old-lease cleanup failure and reports the
     // replacement's provider-confirmed session ID (MockConnector's constant).
-    await expect(manager.swapConnector({ model: 'new-model' })).resolves.toBe('test-session-id');
+    await expect(manager.swapConnector(createTestCall(), { model: 'new-model' })).resolves.toBe('test-session-id');
     expect(currentRuntime.connector.model).toBe('new-model');
     expect(oldConnector.close).toHaveBeenCalledOnce();
     expect(oldLeaseRelease).toHaveBeenCalledOnce();
@@ -226,6 +227,6 @@ describe('connector runtime lifecycle', () => {
       stage: 'swap-old-runtime',
       agentId: 'agent-1',
     });
-    await closeConnectorRuntime(currentRuntime);
+    await closeConnectorRuntime(createTestCall(), currentRuntime);
   });
 });

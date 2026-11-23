@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import { WorkflowError, WorkflowErrorCode, type WorkflowDefinition, type WorkflowRunContext } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import type { DefinitionStartOptions, StartExecutionDeps } from './workflow-execution-start.js';
@@ -17,13 +18,18 @@ export interface RerunExecutionOptions extends DefinitionStartOptions {
 
 /**
  * Load the original run context for the execution being rerun.
+ * @param call - Call context of the message that triggered the rerun.
  * @param deps - Executor dependencies providing the bus.
  * @param executionId - Execution to look up.
  * @returns The persisted run context.
  * @throws When the run context is not found.
  */
-async function loadOriginalRunContext(deps: StartExecutionDeps, executionId: string): Promise<WorkflowRunContext> {
-  const { runContext } = await deps.bus.request(WorkflowStorageSubjects.getRunContext, {
+async function loadOriginalRunContext(
+  call: CallContext,
+  deps: StartExecutionDeps,
+  executionId: string,
+): Promise<WorkflowRunContext> {
+  const { runContext } = await deps.bus.request(call, WorkflowStorageSubjects.getRunContext, {
     executionId,
   });
   if (runContext === null) {
@@ -59,12 +65,17 @@ function buildRerunLinkMetadata(mode: 'snapshot' | 'current', reason: string | u
  *
  * Both modes record provenance via an execution link with `linkType: 'rerun-of'`.
  * Request-level overrides win over original run-context values.
+ * @param call - Call context of the message that triggered the rerun.
  * @param deps - Shared executor state and callbacks.
  * @param options - Rerun configuration.
  * @returns The new execution ID.
  */
-export async function rerunExecution(deps: StartExecutionDeps, options: RerunExecutionOptions): Promise<string> {
-  const originalRunContext = await loadOriginalRunContext(deps, options.executionId);
+export async function rerunExecution(
+  call: CallContext,
+  deps: StartExecutionDeps,
+  options: RerunExecutionOptions,
+): Promise<string> {
+  const originalRunContext = await loadOriginalRunContext(call, deps, options.executionId);
   const input = options.input === undefined ? originalRunContext.inputs : options.input;
   const config = options.config ?? originalRunContext.config ?? {};
   const triggerPayload = options.triggerPayload ?? originalRunContext.triggerPayload;
@@ -90,10 +101,10 @@ export async function rerunExecution(deps: StartExecutionDeps, options: RerunExe
 
   const rerunExecutionId =
     options.mode === 'snapshot'
-      ? await rerunSnapshot(deps, originalRunContext, startOptions)
+      ? await rerunSnapshot(call, deps, originalRunContext, startOptions)
       : isEphemeralSourceBacked(originalRunContext)
-        ? await rerunCurrentSourceBacked(deps, originalRunContext, startOptions)
-        : await startExecution(deps, originalRunContext.workflowId, startOptions);
+        ? await rerunCurrentSourceBacked(call, deps, originalRunContext, startOptions)
+        : await startExecution(call, deps, originalRunContext.workflowId, startOptions);
 
   return rerunExecutionId;
 }
@@ -145,6 +156,7 @@ function requireDefinitionSnapshot(runContext: WorkflowRunContext): WorkflowDefi
 
 /**
  * Execute a snapshot-mode rerun using the original definition snapshot.
+ * @param call - Call context of the message that triggered the rerun.
  * @param deps - Shared executor state and callbacks.
  * @param originalRunContext - The original execution's run context.
  * @param overrides - Caller-supplied option overrides.
@@ -152,13 +164,14 @@ function requireDefinitionSnapshot(runContext: WorkflowRunContext): WorkflowDefi
  * @throws When the original execution has no definition snapshot.
  */
 async function rerunSnapshot(
+  call: CallContext,
   deps: StartExecutionDeps,
   originalRunContext: WorkflowRunContext,
   overrides: DefinitionStartOptions,
 ): Promise<string> {
   const workflow = requireDefinitionSnapshot(originalRunContext);
 
-  return startResolvedDefinitionExecution(deps, resolveSnapshotRerunWorkflowId(originalRunContext, workflow), {
+  return startResolvedDefinitionExecution(call, deps, resolveSnapshotRerunWorkflowId(originalRunContext, workflow), {
     workflow,
     executionSource: originalRunContext.source,
     definitionSnapshot: workflow,
@@ -183,6 +196,7 @@ async function rerunSnapshot(
  * launch-time binding metadata. It is persisted on the rerun context but is
  * intentionally not delivered as the worker `definition`; the worker reloads
  * the current source module and owns the executable topology.
+ * @param call - Call context of the message that triggered the rerun.
  * @param deps - Shared executor state and callbacks.
  * @param originalRunContext - The original execution's run context.
  * @param overrides - Caller-supplied option overrides.
@@ -190,6 +204,7 @@ async function rerunSnapshot(
  * @throws When the original source cannot be reloaded and has no definition snapshot.
  */
 async function rerunCurrentSourceBacked(
+  call: CallContext,
   deps: StartExecutionDeps,
   originalRunContext: WorkflowRunContext,
   overrides: DefinitionStartOptions,
@@ -199,7 +214,7 @@ async function rerunCurrentSourceBacked(
     if (materializationSpec === undefined) {
       throw new Error('Invalid persisted path-backed run context: materializationSpec is required');
     }
-    return startFileExecution(deps, originalRunContext.source.path, {
+    return startFileExecution(call, deps, originalRunContext.source.path, {
       ...overrides,
       materializationSpec,
     });
@@ -209,7 +224,7 @@ async function rerunCurrentSourceBacked(
   // Current source reruns preserve an Authority-owned snapshot on the durable
   // context while the path-source launch deliberately omits `definition` from
   // the worker config so the worker reloads its materialized source.
-  return startResolvedDefinitionExecution(deps, workflow.id, {
+  return startResolvedDefinitionExecution(call, deps, workflow.id, {
     workflow,
     executionSource: originalRunContext.source,
     input: overrides.input,

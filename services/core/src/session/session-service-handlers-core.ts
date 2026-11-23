@@ -1,4 +1,5 @@
 import { TimeoutError, type IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { SessionSubjects, type IMakaioSession, type OwnershipTopology } from '@makaio/contracts';
 import { TurnStorageSubjects } from '../turn/namespace.js';
 import { SessionEventStorageSubjects } from './session-events/namespace.js';
@@ -124,7 +125,7 @@ function registerTurnAwaitHandler(deps: CoreSessionServiceHandlerDeps): () => vo
     });
     completion.catch(() => undefined);
 
-    const storedCompletion = await getStoredTurnCompletion(bus, sessionId, turnId);
+    const storedCompletion = await getStoredTurnCompletion(ctx.call, bus, sessionId, turnId);
     if (storedCompletion !== undefined) {
       controller.abort();
       ctx.setResult({ completion: storedCompletion });
@@ -145,13 +146,14 @@ function registerTurnAwaitHandler(deps: CoreSessionServiceHandlerDeps): () => vo
 
 /**
  * Resolve a completed turn from durable storage, if available.
+ * @param call - Call context of the `session.turn.await` message being served
  * @param bus - Bus used for optional turn storage lookup
  * @param sessionId - Session ID expected by the await call
  * @param turnId - Turn ID expected by the await call
  * @returns Completion payload, or undefined when storage is absent/not terminal
  */
-async function getStoredTurnCompletion(bus: IMakaioBus, sessionId: string, turnId: string) {
-  const storedTurn = await bus.requestOptional(TurnStorageSubjects.get, { turnId });
+async function getStoredTurnCompletion(call: CallContext, bus: IMakaioBus, sessionId: string, turnId: string) {
+  const storedTurn = await bus.requestOptional(call, TurnStorageSubjects.get, { turnId });
   const turn = storedTurn.handled ? storedTurn.data.turn : null;
   if (turn?.sessionId !== sessionId || (turn.status !== 'completed' && turn.status !== 'error')) {
     return undefined;
@@ -206,7 +208,7 @@ function registerCreateHandler(deps: CoreSessionServiceHandlerDeps): () => void 
     const parentSession =
       parentSessionId === undefined
         ? undefined
-        : (await bus.request(SessionSubjects.get, { sessionId: parentSessionId })).session;
+        : (await bus.request(ctx.call, SessionSubjects.get, { sessionId: parentSessionId })).session;
 
     if (parentSessionId !== undefined && parentSession === null) {
       throw new Error(`[session.create] Parent session not found: ${parentSessionId}`);
@@ -236,7 +238,7 @@ function registerCreateHandler(deps: CoreSessionServiceHandlerDeps): () => void 
       ...(machineId !== undefined && { machineId }),
     };
 
-    const setResult = await bus.requestOptional(SessionStorageSubjects.set, {
+    const setResult = await bus.requestOptional(ctx.call, SessionStorageSubjects.set, {
       sessionId,
       session,
       ifAbsent: true,
@@ -247,7 +249,7 @@ function registerCreateHandler(deps: CoreSessionServiceHandlerDeps): () => void 
       return;
     }
 
-    await bus.emit(SessionSubjects.created, {
+    await bus.emit(ctx.call, SessionSubjects.created, {
       sessionId,
       createdAt: session.createdAt,
       parentSessionId: parentSessionId ?? null,
@@ -269,7 +271,7 @@ function registerCreateHandler(deps: CoreSessionServiceHandlerDeps): () => void 
 function registerGetHandler(deps: CoreSessionServiceHandlerDeps): () => void {
   const { bus } = deps;
   return bus.on(SessionSubjects.get, async (ctx) => {
-    const result = await bus.requestOptional(SessionStorageSubjects.get, {
+    const result = await bus.requestOptional(ctx.call, SessionStorageSubjects.get, {
       sessionId: ctx.payload.sessionId,
     });
     const session = result.handled ? result.data.session : null;
@@ -288,7 +290,7 @@ function registerListHandler(deps: CoreSessionServiceHandlerDeps): () => void {
   const { bus } = deps;
   return bus.on(SessionSubjects.list, async (ctx) => {
     const { status, limit, offset, includePreview, executionTargetId } = ctx.payload;
-    const result = await bus.requestOptional(SessionStorageSubjects.list, {
+    const result = await bus.requestOptional(ctx.call, SessionStorageSubjects.list, {
       status: status ?? 'all',
       limit,
       offset,
@@ -317,7 +319,7 @@ function registerCloseHandler(deps: CoreSessionServiceHandlerDeps): () => void {
   const { bus } = deps;
   return bus.on(SessionSubjects.close, async (ctx) => {
     const { sessionId } = ctx.payload;
-    const getResult = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
+    const getResult = await bus.requestOptional(ctx.call, SessionStorageSubjects.get, { sessionId });
     const session = getResult.handled ? getResult.data.session : null;
     if (!session) {
       ctx.setResult({ success: false });
@@ -333,14 +335,14 @@ function registerCloseHandler(deps: CoreSessionServiceHandlerDeps): () => void {
       return;
     }
 
-    const transition = await bus.requestOptional(SessionStorageSubjects.update, {
+    const transition = await bus.requestOptional(ctx.call, SessionStorageSubjects.update, {
       sessionId,
       status: 'closed',
       lastActivityAt: Date.now(),
       expectedStatus: ['active'],
     });
     if (transition.handled && transition.data.success) {
-      await bus.emit(SessionSubjects.closed, { sessionId });
+      await bus.emit(ctx.call, SessionSubjects.closed, { sessionId });
       ctx.setResult({ success: true });
       return;
     }
@@ -348,7 +350,7 @@ function registerCloseHandler(deps: CoreSessionServiceHandlerDeps): () => void {
     // A competing close may have committed between the read and this CAS. It is
     // still idempotently successful, but this caller did not transition it and
     // must not emit a second lifecycle event.
-    const current = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
+    const current = await bus.requestOptional(ctx.call, SessionStorageSubjects.get, { sessionId });
     ctx.setResult({ success: current.handled && current.data.session?.status === 'closed' });
   });
 }
@@ -369,7 +371,7 @@ function registerCoreUpdateHandler(deps: CoreSessionServiceHandlerDeps): () => v
   return bus.on(SessionSubjects.update, async (ctx) => {
     const { sessionId, executionTargetId, approvalPolicyOverride, title, metadata } = ctx.payload;
 
-    const updateResult = await bus.requestOptional(SessionStorageSubjects.update, {
+    const updateResult = await bus.requestOptional(ctx.call, SessionStorageSubjects.update, {
       sessionId,
       executionTargetId,
       approvalPolicyOverride,
@@ -386,7 +388,7 @@ function registerCoreUpdateHandler(deps: CoreSessionServiceHandlerDeps): () => v
       if (metadata !== undefined) changedProperties.push('metadata');
 
       if (changedProperties.length > 0) {
-        await bus.emit(SessionSubjects.updated, { sessionId, changedProperties });
+        await bus.emit(ctx.call, SessionSubjects.updated, { sessionId, changedProperties });
       }
     }
 
@@ -407,7 +409,7 @@ function registerCoreArchiveHandler(deps: CoreSessionServiceHandlerDeps): () => 
   const { bus } = deps;
   return bus.on(SessionSubjects.archive, async (ctx) => {
     const { sessionId } = ctx.payload;
-    const getResult = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
+    const getResult = await bus.requestOptional(ctx.call, SessionStorageSubjects.get, { sessionId });
     const session = getResult.handled ? getResult.data.session : null;
     if (!session) {
       ctx.setResult({ success: false });
@@ -423,21 +425,21 @@ function registerCoreArchiveHandler(deps: CoreSessionServiceHandlerDeps): () => 
       return;
     }
 
-    const transition = await bus.requestOptional(SessionStorageSubjects.update, {
+    const transition = await bus.requestOptional(ctx.call, SessionStorageSubjects.update, {
       sessionId,
       status: 'archived',
       lastActivityAt: Date.now(),
       expectedStatus: ['closed'],
     });
     if (transition.handled && transition.data.success) {
-      await bus.emit(SessionSubjects.archived, { sessionId });
+      await bus.emit(ctx.call, SessionSubjects.archived, { sessionId });
       ctx.setResult({ success: true });
       return;
     }
 
     // As with close, a successful competing archive remains idempotent without
     // granting this losing CAS a second event emission.
-    const current = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
+    const current = await bus.requestOptional(ctx.call, SessionStorageSubjects.get, { sessionId });
     ctx.setResult({ success: current.handled && current.data.session?.status === 'archived' });
   });
 }
@@ -454,7 +456,7 @@ function registerCorePurgeHandler(deps: CoreSessionServiceHandlerDeps): () => vo
   const { bus } = deps;
   return bus.on(SessionSubjects.purge, async (ctx) => {
     const { sessionId } = ctx.payload;
-    const getResult = await bus.requestOptional(SessionStorageSubjects.get, { sessionId });
+    const getResult = await bus.requestOptional(ctx.call, SessionStorageSubjects.get, { sessionId });
     const session = getResult.handled ? getResult.data.session : null;
     if (!session) {
       ctx.setResult({ success: false, error: 'Session not found' });
@@ -466,11 +468,11 @@ function registerCorePurgeHandler(deps: CoreSessionServiceHandlerDeps): () => vo
       return;
     }
 
-    const listedAgents = await bus.requestOptional(AgentStorageSubjects.listBySession, { sessionId });
+    const listedAgents = await bus.requestOptional(ctx.call, AgentStorageSubjects.listBySession, { sessionId });
     const agents = listedAgents.handled ? listedAgents.data.agents : [];
     const sealed = await Promise.all(
       agents.map(async (agent) => {
-        const result = await bus.requestOptional(AgentStorageSubjects.updateStatus, {
+        const result = await bus.requestOptional(ctx.call, AgentStorageSubjects.updateStatus, {
           agentId: agent.agentId,
           status: 'disposed',
         });
@@ -482,7 +484,7 @@ function registerCorePurgeHandler(deps: CoreSessionServiceHandlerDeps): () => vo
       return;
     }
 
-    const retired = await Promise.all(agents.map((agent) => retireTerminalAgentClaims(bus, agent.agentId)));
+    const retired = await Promise.all(agents.map((agent) => retireTerminalAgentClaims(ctx.call, bus, agent.agentId)));
     if (retired.some((result) => !result.released)) {
       ctx.setResult({
         success: false,
@@ -491,25 +493,25 @@ function registerCorePurgeHandler(deps: CoreSessionServiceHandlerDeps): () => vo
       return;
     }
 
-    const listResult = await bus.requestOptional(SessionStorageSubjects.list, { status: 'all' });
+    const listResult = await bus.requestOptional(ctx.call, SessionStorageSubjects.list, { status: 'all' });
     const sessions = listResult.handled ? listResult.data.sessions : [];
     for (const child of sessions) {
       if (child.parentSessionId === sessionId) {
-        await bus.requestOptional(SessionStorageSubjects.update, {
+        await bus.requestOptional(ctx.call, SessionStorageSubjects.update, {
           sessionId: child.sessionId,
           parentSessionId: null,
         });
       }
     }
 
-    const eventsResult = await bus.requestOptional(SessionEventStorageSubjects.getEvents, {
+    const eventsResult = await bus.requestOptional(ctx.call, SessionEventStorageSubjects.getEvents, {
       sessionId,
       options: { limit: 1 },
     });
     const eventsDeleted = eventsResult.handled ? eventsResult.data.totalCount : 0;
-    await bus.requestOptional(SessionEventStorageSubjects.deleteBySession, { sessionId });
-    await bus.requestOptional(SessionStorageSubjects.delete, { sessionId });
-    await bus.emit(SessionSubjects.purged, { sessionId });
+    await bus.requestOptional(ctx.call, SessionEventStorageSubjects.deleteBySession, { sessionId });
+    await bus.requestOptional(ctx.call, SessionStorageSubjects.delete, { sessionId });
+    await bus.emit(ctx.call, SessionSubjects.purged, { sessionId });
     ctx.setResult({ success: true, eventsDeleted });
   });
 }

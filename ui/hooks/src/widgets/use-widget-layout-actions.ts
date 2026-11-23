@@ -14,7 +14,7 @@ export function useWidgetLayoutActions() {
 
   const saveLayout = useCallback(
     async (key: PreferenceKey, layout: WidgetLayout) => {
-      await bus.request(PreferencesSubjects.set, {
+      await bus.request(bus.own('root'), PreferencesSubjects.set, {
         category: LAYOUT_CATEGORY,
         key,
         value: layout,
@@ -25,7 +25,7 @@ export function useWidgetLayoutActions() {
 
   const resetLayout = useCallback(
     async (key: PreferenceKey) => {
-      await bus.request(PreferencesSubjects.delete, {
+      await bus.request(bus.own('root'), PreferencesSubjects.delete, {
         category: LAYOUT_CATEGORY,
         key,
       });

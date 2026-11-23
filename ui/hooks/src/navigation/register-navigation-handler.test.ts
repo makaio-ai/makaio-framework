@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBusContext, createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { UiSubjects } from '@makaio/ui-kernel';
 import { registerNavigationHandler } from './register-navigation-handler.js';
 
@@ -11,7 +12,7 @@ describe('registerNavigationHandler', () => {
 
   beforeEach(() => {
     cleanup = undefined;
-    bus = createBusInstance({ context: createBusContext() });
+    bus = createBusInstance();
   });
 
   afterEach(() => {
@@ -24,7 +25,7 @@ describe('registerNavigationHandler', () => {
     vi.spyOn(window, 'open').mockImplementation(() => null);
     cleanup = registerNavigationHandler(bus);
 
-    const result = await bus.request(UiSubjects.navigate, {
+    const result = await bus.request(createTestCall(), UiSubjects.navigate, {
       url: 'https://example.com/project/abc-123',
     });
 
@@ -41,7 +42,7 @@ describe('registerNavigationHandler', () => {
     const mockOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
     cleanup = registerNavigationHandler(bus);
 
-    const result = await bus.request(UiSubjects.navigate, { url: '/project/abc-123' });
+    const result = await bus.request(createTestCall(), UiSubjects.navigate, { url: '/project/abc-123' });
 
     expect(result).toEqual({ action: 'navigated' });
     // The resolved URL must use the http: protocol (from window.location.href in jsdom)
@@ -54,7 +55,7 @@ describe('registerNavigationHandler', () => {
     const mockOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
     cleanup = registerNavigationHandler(bus);
 
-    await expect(bus.request(UiSubjects.navigate, { url: 'javascript:alert(1)' })).rejects.toThrow(
+    await expect(bus.request(createTestCall(), UiSubjects.navigate, { url: 'javascript:alert(1)' })).rejects.toThrow(
       'Unsafe URL protocol',
     );
     expect(mockOpen).not.toHaveBeenCalled();

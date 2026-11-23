@@ -184,7 +184,7 @@ function registerAppendHandler(
     ctx.setResult({ message });
 
     if (emitEvent ?? true) {
-      await emitMessageSessionEvent(bus, message);
+      await emitMessageSessionEvent(ctx.call, bus, message);
     }
   });
 }
@@ -348,7 +348,7 @@ function registerUpsertByAdapterMessageIdHandler(
     indexMessage(message);
     ctx.setResult({ messageId, created: true });
 
-    await emitMessageSessionEvent(bus, message);
+    await emitMessageSessionEvent(ctx.call, bus, message);
   });
 }
 

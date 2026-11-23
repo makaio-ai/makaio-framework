@@ -130,6 +130,30 @@ configuration, and other extensions. The returned service follows the `BaseServi
 Extensions communicate with the rest of the system through the bus. To send and receive
 typed messages, register an **extension namespace** with Zod schemas.
 
+### Calls and origins
+
+Pass the handled message's `ctx.call` as the first argument to every bus send it causes.
+Forward that same call through awaited work and callbacks. For a helper that sends on
+behalf of the handler, take `call: CallContext` as its first parameter. Carry the call
+for the current invocation only. Read the sender from `ctx.call.caller` and the party
+the work represents from `ctx.call.principal`. Payload fields are application data.
+
+When work starts outside a message handler, mint its call on the bus that sends.
+
+| Call | Use |
+| --- | --- |
+| `bus.own('start')` | A service announces readiness during `init()`. |
+| `bus.own('stop')` | A service announces shutdown during `destroy()`. |
+| `bus.own('schedule')` | A timer starts a periodic refresh. |
+| `bus.own('observer')` | A filesystem watcher reports a change. |
+| `bus.own('shared-work')` | A shared cache fill serves multiple requests. |
+| `bus.own('root')` | A CLI command starts a top-level request. |
+
+An own context belongs to the carrier that minted it. Sending with it on another
+carrier throws `ForeignOwnContextError`. If a service obtained through `getService()`
+starts work of its own, let it mint the call on its sending bus. A received `ctx.call`
+can be forwarded through a service that sends on another bus.
+
 ### Defining an Extension Namespace
 
 ```typescript
@@ -179,19 +203,23 @@ const extension: MakaioExtension = {
   name: 'my-extension',
   displayName: 'My Extension',
 
-  create(ctx: ExtensionContext): ExtensionServiceLifecycle {
+  create({ bus }: ExtensionContext): ExtensionServiceLifecycle {
     let unsubscribe: (() => void) | null = null;
 
     return {
       async init() {
         // Register a typed request handler
-        unsubscribe = ctx.bus.on(MySubjects.getData, ({ payload, setResult }) => {
-          const limit = payload.limit ?? 10;
-          setResult({ items: [{ id: '1', value: 'hello' }].slice(0, limit) });
+        unsubscribe = bus.on(MySubjects.getData, async (ctx) => {
+          const limit = ctx.payload.limit ?? 10;
+          await bus.emit(ctx.call, MySubjects.somethingHappened, {
+            itemId: '1',
+            detail: 'Extension data requested',
+          });
+          ctx.setResult({ items: [{ id: '1', value: 'hello' }].slice(0, limit) });
         });
 
         // Emit a typed event
-        await ctx.bus.emit(MySubjects.somethingHappened, {
+        await bus.emit(bus.own('start'), MySubjects.somethingHappened, {
           itemId: '1',
           detail: 'Extension initialized',
         });
@@ -223,7 +251,7 @@ const fetchData = defineCliSubcommand(
   }),
   async ({ args, bus, output }) => {
     // Typed request — response shape inferred from the Zod schema
-    const { items } = await bus.request(MySubjects.getData, {
+    const { items } = await bus.request(bus.own('root'), MySubjects.getData, {
       limit: args.limit ?? 10,
     });
 
@@ -314,6 +342,11 @@ const extension: MakaioExtension = {
 
 `defineAutomationTrigger` infers `params` and the `emit` payload from your schemas, so
 `activate` is fully typed without casts.
+
+The trigger runtime's `context.emit(payload, metadata?)` callback accepts the received
+call as `metadata.call` when a bus message caused the occurrence. An independent watcher
+like the one above supplies only the payload. Consumers that send on the bus for that
+occurrence mint their own call on their sending carrier.
 
 ### What the runtime guarantees
 

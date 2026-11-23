@@ -414,12 +414,12 @@ export function registerExternalExecutionStorageHandlers(
     // Emit exactly once after the transaction has committed. WorkLog change
     // events are advisory invalidations and intentionally include replays,
     // matching the existing lifecycle projection semantics.
-    await emitWorklogChanged(bus, execution.id);
+    await emitWorklogChanged(ctx.call, bus, execution.id);
     ctx.setResult({ executionId: execution.id, ...(frame !== undefined ? { frameId: frame.frameId } : {}) });
   });
   const unsubscribeSettlement = bus.on(WorkflowStorageSubjects.settleExternalExecution, async (ctx) => {
     const success = await settleExternalExecution(db, ctx.payload as ExternalSettlement);
-    await emitWorklogChanged(bus, ctx.payload.executionId);
+    await emitWorklogChanged(ctx.call, bus, ctx.payload.executionId);
     ctx.setResult({ success });
   });
   return () => {

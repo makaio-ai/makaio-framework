@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useOptionalBus } from '@makaio/ui-hooks';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts/call-context';
 import { AccountManagerSubjects } from '@makaio/extension-account-manager/subjects';
 import type { Account, SourceInfo } from '@makaio/extension-account-manager/schemas';
 import { useEffectGuard } from '../hooks/use-effect-guard.js';
@@ -67,76 +68,84 @@ export function useAccounts(): UseAccountsResult {
    * Extracted to hook scope so both the effect-driven fetch and the manual
    * `refresh` call the same implementation. The `isCurrentRunFn` predicate
    * lets each callsite bind its own run-id snapshot for StrictMode safety.
+   * @param call - Context of the triggering event or UI fetch.
    * @param resolvedBus - The bus instance guaranteed non-null by the caller.
    * @param isCurrentRunFn - Returns `true` while the initiating run is still active.
    */
-  const performFetch = useCallback(async (resolvedBus: IMakaioBus, isCurrentRunFn: () => boolean): Promise<void> => {
-    setLoading(true);
-    try {
-      const { sources: fetchedSources } = await resolvedBus.request(AccountManagerSubjects.accounts.getSources, {});
-      if (!isCurrentRunFn()) return;
+  const performFetch = useCallback(
+    async (call: CallContext, resolvedBus: IMakaioBus, isCurrentRunFn: () => boolean): Promise<void> => {
+      setLoading(true);
+      try {
+        const { sources: fetchedSources } = await resolvedBus.request(
+          call,
+          AccountManagerSubjects.accounts.getSources,
+          {},
+        );
+        if (!isCurrentRunFn()) return;
 
-      const accountResults = await Promise.allSettled(
-        fetchedSources.map(async (source) => {
-          const result = await resolvedBus.request(AccountManagerSubjects.accounts.list, {
-            clientId: source.clientId,
-          });
-          return { clientId: source.clientId, accounts: result.accounts };
-        }),
-      );
-      if (!isCurrentRunFn()) return;
+        const accountResults = await Promise.allSettled(
+          fetchedSources.map(async (source) => {
+            const result = await resolvedBus.request(call, AccountManagerSubjects.accounts.list, {
+              clientId: source.clientId,
+            });
+            return { clientId: source.clientId, accounts: result.accounts };
+          }),
+        );
+        if (!isCurrentRunFn()) return;
 
-      const byClient = new Map<string, Account[]>();
-      const rejected: string[] = [];
-      for (const result of accountResults) {
-        if (result.status === 'fulfilled') {
-          byClient.set(result.value.clientId, result.value.accounts);
-        } else {
-          rejected.push(String(result.reason));
+        const byClient = new Map<string, Account[]>();
+        const rejected: string[] = [];
+        for (const result of accountResults) {
+          if (result.status === 'fulfilled') {
+            byClient.set(result.value.clientId, result.value.accounts);
+          } else {
+            rejected.push(String(result.reason));
+          }
+        }
+
+        // Partial failure is surfaced via `error` — consumers render a "data
+        // may be incomplete" banner when error is non-null while sources are
+        // present. Missing clientIds in byClient render as "No accounts
+        // detected" under the visible banner, which is the intended UX.
+        setSources(fetchedSources);
+        setAccountsByClient(byClient);
+        setError(
+          rejected.length > 0
+            ? new Error(`Failed to fetch accounts for ${rejected.length} source(s): ${rejected.join('; ')}`)
+            : null,
+        );
+      } catch (err) {
+        if (!isCurrentRunFn()) return;
+        setError(err instanceof Error ? err : new Error(String(err)));
+      } finally {
+        if (isCurrentRunFn()) {
+          setLoading(false);
         }
       }
-
-      // Partial failure is surfaced via `error` — consumers render a "data
-      // may be incomplete" banner when error is non-null while sources are
-      // present. Missing clientIds in byClient render as "No accounts
-      // detected" under the visible banner, which is the intended UX.
-      setSources(fetchedSources);
-      setAccountsByClient(byClient);
-      setError(
-        rejected.length > 0
-          ? new Error(`Failed to fetch accounts for ${rejected.length} source(s): ${rejected.join('; ')}`)
-          : null,
-      );
-    } catch (err) {
-      if (!isCurrentRunFn()) return;
-      setError(err instanceof Error ? err : new Error(String(err)));
-    } finally {
-      if (isCurrentRunFn()) {
-        setLoading(false);
-      }
-    }
-  }, []);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!bus) return;
 
-    void performFetch(bus, captureGeneration());
+    void performFetch(bus.own('observer'), bus, captureGeneration());
 
     const cleanups = [
-      bus.on(AccountManagerSubjects.credentials.switched, () => {
-        void performFetch(bus, captureGeneration());
+      bus.on(AccountManagerSubjects.credentials.switched, (ctx) => {
+        void performFetch(ctx.call, bus, captureGeneration());
       }),
-      bus.on(AccountManagerSubjects.credentials.refreshed, () => {
-        void performFetch(bus, captureGeneration());
+      bus.on(AccountManagerSubjects.credentials.refreshed, (ctx) => {
+        void performFetch(ctx.call, bus, captureGeneration());
       }),
-      bus.on(AccountManagerSubjects.credentials.detected, () => {
-        void performFetch(bus, captureGeneration());
+      bus.on(AccountManagerSubjects.credentials.detected, (ctx) => {
+        void performFetch(ctx.call, bus, captureGeneration());
       }),
-      bus.on(AccountManagerSubjects.accounts.metadataPatched, () => {
-        void performFetch(bus, captureGeneration());
+      bus.on(AccountManagerSubjects.accounts.metadataPatched, (ctx) => {
+        void performFetch(ctx.call, bus, captureGeneration());
       }),
-      bus.on(AccountManagerSubjects.accounts.labeled, () => {
-        void performFetch(bus, captureGeneration());
+      bus.on(AccountManagerSubjects.accounts.labeled, (ctx) => {
+        void performFetch(ctx.call, bus, captureGeneration());
       }),
     ];
 
@@ -151,7 +160,7 @@ export function useAccounts(): UseAccountsResult {
    */
   const refresh = useCallback((): void => {
     if (!bus) return;
-    void performFetch(bus, captureGeneration());
+    void performFetch(bus.own('root'), bus, captureGeneration());
   }, [bus, performFetch, captureGeneration]);
 
   if (!bus) {

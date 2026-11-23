@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { buildSessionContext } from '../build-context.js';
 import {
   createCleanupTracker,
@@ -36,7 +37,7 @@ describe('buildSessionContext', () => {
       mockGetMessage(cleanup, 'msg-1', msg1);
       mockGetMessage(cleanup, 'msg-2', msg2);
 
-      const result = await buildSessionContext(MakaioBus, { sessionId: 'session-1' });
+      const result = await buildSessionContext(createTestCall(), MakaioBus, { sessionId: 'session-1' });
 
       expect(result.messages).toHaveLength(2);
       expect(result.messages[0].messageId).toBe('msg-1');
@@ -55,7 +56,7 @@ describe('buildSessionContext', () => {
       ]);
       mockGetMessage(cleanup, 'msg-1', msg1);
 
-      const result = await buildSessionContext(MakaioBus, { sessionId: 'session-1' });
+      const result = await buildSessionContext(createTestCall(), MakaioBus, { sessionId: 'session-1' });
 
       expect(result.messages).toHaveLength(1);
       expect(result.messages[0].messageId).toBe('msg-1');
@@ -78,7 +79,7 @@ describe('buildSessionContext', () => {
       mockGetMessage(cleanup, 'msg-2', msg2);
       mockGetMessage(cleanup, 'msg-3', msg3);
 
-      const result = await buildSessionContext(MakaioBus, { sessionId: 'session-1' });
+      const result = await buildSessionContext(createTestCall(), MakaioBus, { sessionId: 'session-1' });
 
       // Should have squash summary + msg3, NOT msg1/msg2
       expect(result.messages).toHaveLength(2);
@@ -97,7 +98,7 @@ describe('buildSessionContext', () => {
       ]);
       mockGetMessage(cleanup, 'msg-1', msg1);
 
-      const result = await buildSessionContext(MakaioBus, { sessionId: 'session-1' });
+      const result = await buildSessionContext(createTestCall(), MakaioBus, { sessionId: 'session-1' });
 
       expect(result.messages).toHaveLength(2);
       expect(result.messages[0].contentText).toContain('Second squash');
@@ -144,7 +145,7 @@ describe('buildSessionContext', () => {
       mockGetMessage(cleanup, 'msg-2', msg2);
       mockGetMessage(cleanup, 'msg-3', msg3);
 
-      const result = await buildSessionContext(MakaioBus, { sessionId: 'session-1' });
+      const result = await buildSessionContext(createTestCall(), MakaioBus, { sessionId: 'session-1' });
 
       expect(result.messages).toHaveLength(3);
       expect(result.messages[0].messageId).toBe('msg-1');
@@ -160,7 +161,7 @@ describe('buildSessionContext', () => {
       mockGetEvents(cleanup, 'session-1', [messageEvent('msg-1', 1000, { role: 'user' })]);
       mockGetMessage(cleanup, 'msg-1', msg1);
 
-      const result = await buildSessionContext(MakaioBus, { sessionId: 'session-1' });
+      const result = await buildSessionContext(createTestCall(), MakaioBus, { sessionId: 'session-1' });
 
       expect(result.messages).toHaveLength(1);
       expect(result.truncated).toBe(false);
@@ -180,7 +181,7 @@ describe('buildSessionContext', () => {
       mockGetMessage(cleanup, 'msg-2', msg2);
       mockGetMessage(cleanup, 'msg-3', msg3);
 
-      const result = await buildSessionContext(MakaioBus, {
+      const result = await buildSessionContext(createTestCall(), MakaioBus, {
         sessionId: 'session-1',
         limit: 2,
       });
@@ -202,7 +203,7 @@ describe('buildSessionContext', () => {
       mockGetMessage(cleanup, 'msg-1', msg1);
       mockGetMessage(cleanup, 'msg-2', msg2);
 
-      const result = await buildSessionContext(MakaioBus, {
+      const result = await buildSessionContext(createTestCall(), MakaioBus, {
         sessionId: 'session-1',
         limit: 2,
       });
@@ -221,7 +222,7 @@ describe('buildSessionContext', () => {
       ]);
       mockGetMessage(cleanup, 'msg-1', msg1);
 
-      const result = await buildSessionContext(MakaioBus, {
+      const result = await buildSessionContext(createTestCall(), MakaioBus, {
         sessionId: 'session-1',
         limit: 1,
       });

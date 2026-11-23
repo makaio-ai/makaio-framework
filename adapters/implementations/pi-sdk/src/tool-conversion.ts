@@ -19,6 +19,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { ToolSubjects, type ToolExecutionContextOverrides, type ToolListItem } from '@makaio/contracts';
 import {
   loadToolsFromRegistry,
@@ -55,7 +56,7 @@ export interface PiToolHandlerContext {
   /** Optional directory restrictions for filesystem-capable tools. */
   allowedDirectories?: string[];
   /** Resolve live turn-scoped context at tool invocation time. */
-  getTurnExecutionContext?: () => Pick<ToolExecutionContextOverrides, 'turnId' | 'turnContext'>;
+  getTurnExecutionContext: () => { call: CallContext } & Pick<ToolExecutionContextOverrides, 'turnId' | 'turnContext'>;
   /** Consume an approval-rewritten input for this tool call, when one exists. */
   consumeApprovedToolInput?: (toolCallId: string) => Record<string, unknown> | undefined;
 }
@@ -68,11 +69,13 @@ export interface PiToolHandlerContext {
  * Pi invokes the tool.
  * @param context - Adapter and runtime execution context
  * @param toolCallId - Current Pi tool call identifier
+ * @param turnExecutionContext - Execution context resolved for this invocation
  * @returns Tool execution context overrides for the bus request
  */
 function createToolExecutionContextOverrides(
   context: PiToolHandlerContext,
   toolCallId: string,
+  turnExecutionContext: Pick<ToolExecutionContextOverrides, 'turnId' | 'turnContext'>,
 ): ToolExecutionContextOverrides {
   return {
     cwd: context.cwd,
@@ -81,7 +84,7 @@ function createToolExecutionContextOverrides(
     agentId: context.agentId,
     adapterId: context.adapterId,
     adapterName: context.adapterName,
-    ...context.getTurnExecutionContext?.(),
+    ...turnExecutionContext,
     toolCallId,
     ...(context.allowedDirectories !== undefined && {
       constraints: { allowedDirectories: context.allowedDirectories },
@@ -107,13 +110,14 @@ export function createPiToolHandler(
   context: PiToolHandlerContext,
 ): ToolDefinition['execute'] {
   return async (toolCallId, params) => {
+    const { call, ...turnExecutionContext } = context.getTurnExecutionContext();
     const input = context.consumeApprovedToolInput?.(toolCallId) ?? params;
-    const result = await context.bus.request(ToolSubjects.execute, {
+    const result = await context.bus.request(call, ToolSubjects.execute, {
       toolName: tool.name,
       input,
       adapterId: context.adapterId,
       adapterName: context.adapterName,
-      contextOverrides: createToolExecutionContextOverrides(context, toolCallId),
+      contextOverrides: createToolExecutionContextOverrides(context, toolCallId, turnExecutionContext),
     });
 
     if (!result.success) {
@@ -156,6 +160,7 @@ export function toPiToolFormat(tools: ToolListItem[], context: PiToolHandlerCont
  *
  * Wraps `loadToolsFromRegistry` (which never throws) and `toPiToolFormat`.
  * Returns an empty array when no tools are registered or the registry is unavailable.
+ * @param call - Call context of the message requesting registry tools.
  * @param bus - Bus that owns the ToolRegistry handlers.
  * @param adapterId - Adapter instance ID for registry filtering
  * @param adapterName - Adapter type name for registry filtering
@@ -164,12 +169,13 @@ export function toPiToolFormat(tools: ToolListItem[], context: PiToolHandlerCont
  * @returns Pi SDK ToolDefinition[] ready for `CreateAgentSessionOptions.customTools`
  */
 export async function fetchToolsForPi(
+  call: CallContext,
   bus: IMakaioBus,
   adapterId: string,
   adapterName: string,
   context: PiToolHandlerContext,
   options?: ToolRegistryLoadOptions,
 ): Promise<ToolDefinition[]> {
-  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName, options);
+  const tools = await loadToolsFromRegistry(call, bus, adapterId, adapterName, options);
   return toPiToolFormat(tools, { ...context, bus });
 }

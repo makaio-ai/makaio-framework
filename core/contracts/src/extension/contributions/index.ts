@@ -76,6 +76,7 @@ export type {
   MakaioWebUiAction,
   MakaioWebUiActions,
   MakaioWebUiComponentProps,
+  MakaioWebUiExecutionContext,
   PromisifiedActions,
   LoaderContext,
   ExtensionConfigComponentProps,

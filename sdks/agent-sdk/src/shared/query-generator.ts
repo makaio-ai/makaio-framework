@@ -1,6 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, type AIReasoningLevel } from '@makaio/contracts';
-import type { EventHandler } from '@makaio/core';
+import type { CallContext, EventHandler } from '@makaio/core';
 import { createAccumulatorState, mapBusEventToSdkMessage } from './messages.js';
 import type { AccumulatorState } from './messages.js';
 import type { ResolvedQueryConfig } from './options.js';
@@ -90,6 +90,7 @@ type QueryProtocol = Pick<
 >;
 
 type SetMcpServersHandler = (
+  call: CallContext,
   identity: AgentIdentity,
   servers: Record<string, McpServerConfig>,
 ) => Promise<McpSetServersResult>;
@@ -247,12 +248,16 @@ const buildCapabilityMethods = (
   sessionId: string,
   getAgentIdentity: () => AgentIdentity | null,
 ): Pick<MakaioQuery, 'supportedModels' | 'supportedCommands' | 'mcpServerStatus' | 'accountInfo'> => ({
-  /** @returns Model list from the SDK introspection seam. */
-  supportedModels: (): Promise<ModelInfo[]> => querySupportedModels(bus),
+  /**
+   * @returns Model list from the SDK introspection seam.
+   */
+  supportedModels: (): Promise<ModelInfo[]> => querySupportedModels(bus.own('root'), bus),
   /** @returns Slash commands from the SDK introspection seam. */
   supportedCommands: (): Promise<SlashCommand[]> => Promise.resolve(querySupportedCommands()),
-  /** @returns MCP server status for this query session. */
-  mcpServerStatus: (): Promise<McpServerStatus[]> => queryMcpServerStatus(bus, sessionId),
+  /**
+   * @returns MCP server status for this query session.
+   */
+  mcpServerStatus: (): Promise<McpServerStatus[]> => queryMcpServerStatus(bus.own('root'), bus, sessionId),
   /** @returns Account info object with the provider name. */
   accountInfo: (): Promise<AccountInfo> =>
     queryAccountInfo(
@@ -298,7 +303,7 @@ const buildControlMethods = (
 ): Pick<MakaioQuery, 'interrupt' | 'setModel' | 'setMaxThinkingTokens' | 'setMcpServers'> => ({
   interrupt: async (): Promise<void> => {
     const identity = requireAgentIdentity(getAgentIdentity, 'Cannot interrupt before agent has started');
-    const result = await bus.request(AgentSubjects.interrupt, {
+    const result = await bus.request(bus.own('root'), AgentSubjects.interrupt, {
       agentId: identity.agentId,
       adapterId: identity.adapterId,
       adapterName: identity.adapterName,
@@ -310,7 +315,7 @@ const buildControlMethods = (
   },
   setModel: async (model?: string): Promise<void> => {
     const identity = requireAgentIdentity(getAgentIdentity, 'Cannot change model before agent has started');
-    const result = await bus.request(AgentSubjects.model.change, {
+    const result = await bus.request(bus.own('root'), AgentSubjects.model.change, {
       agentId: identity.agentId,
       adapterId: identity.adapterId,
       adapterName: identity.adapterName,
@@ -328,7 +333,7 @@ const buildControlMethods = (
       getAgentIdentity,
       'Cannot change max thinking tokens before agent has started',
     );
-    const result = await bus.request(AgentSubjects.model.change, {
+    const result = await bus.request(bus.own('root'), AgentSubjects.model.change, {
       agentId: identity.agentId,
       adapterId: identity.adapterId,
       adapterName: identity.adapterName,
@@ -346,7 +351,7 @@ const buildControlMethods = (
     if (onSetMcpServers === undefined) {
       throw new MakaioUnsupportedFeatureError('setMcpServers()', 'no in-flight MCP reconfiguration handler is wired');
     }
-    return onSetMcpServers(identity, servers);
+    return onSetMcpServers(bus.own('root'), identity, servers);
   },
 });
 

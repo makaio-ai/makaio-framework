@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus, RequestError } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts';
 import { AuthCredentialRefSchema, type ProviderAuthMethodDefinition } from '@makaio/contracts/auth';
 import type { AdapterFile, ProviderConfigFile } from '@makaio/contracts/config';
 import {
@@ -11,6 +12,7 @@ import {
 import { ProviderStorageSubjects, type ProviderRecord } from '@makaio/services-core/settings/storage';
 import { AdapterSubsystemService, ProviderConfigAuthValidationError } from '@makaio/subsystem-adapter';
 import { ExtensionCoordinator } from '@makaio/kernel';
+import { createTestCall } from '@makaio/test-utils';
 import { resolveProviderResolution, ProviderResolutionError } from '../resolve-provider-resolution.js';
 
 const API_KEY_METHOD = {
@@ -94,7 +96,10 @@ class ProviderResolutionRepository implements IAdapterConfigRepository {
  */
 async function setupResolution(options?: {
   readonly configs?: Map<string, ProviderConfigFile>;
-  readonly resolveProvider?: (readIndex: number) => ProviderRecord | null | Promise<ProviderRecord | null>;
+  readonly resolveProvider?: (
+    call: CallContext,
+    readIndex: number,
+  ) => ProviderRecord | null | Promise<ProviderRecord | null>;
 }): Promise<void> {
   subsystemService = new AdapterSubsystemService({
     bus: MakaioBus,
@@ -112,7 +117,7 @@ async function setupResolution(options?: {
     MakaioBus.on(ProviderStorageSubjects.get, async (ctx) => {
       readIndex += 1;
       ctx.setResult({
-        provider: options?.resolveProvider ? await options.resolveProvider(readIndex) : PROVIDER_RECORD,
+        provider: options?.resolveProvider ? await options.resolveProvider(ctx.call, readIndex) : PROVIDER_RECORD,
       });
     }),
   );
@@ -136,7 +141,7 @@ describe('resolveProviderResolution', () => {
   it('returns the safe config, definition, endpoint, and refs-only normalized auth', async () => {
     await setupResolution();
 
-    const result = await resolveProviderResolution(MakaioBus, 'cfg-1', 'anthropic');
+    const result = await resolveProviderResolution(createTestCall(), MakaioBus, 'cfg-1', 'anthropic');
 
     expect(result).toEqual({
       config: {
@@ -170,7 +175,7 @@ describe('resolveProviderResolution', () => {
     delete config.endpointOverrides;
     await setupResolution({ configs: new Map([['cfg-1', config]]) });
 
-    await expect(resolveProviderResolution(MakaioBus, 'cfg-1', 'anthropic')).resolves.toMatchObject({
+    await expect(resolveProviderResolution(createTestCall(), MakaioBus, 'cfg-1', 'anthropic')).resolves.toMatchObject({
       baseUrl: 'https://default.example.com',
     });
   });
@@ -178,7 +183,9 @@ describe('resolveProviderResolution', () => {
   it('throws a typed error when the provider config cannot be found', async () => {
     await setupResolution();
 
-    const error = await resolveProviderResolution(MakaioBus, 'missing', 'anthropic').catch((value: unknown) => value);
+    const error = await resolveProviderResolution(createTestCall(), MakaioBus, 'missing', 'anthropic').catch(
+      (value: unknown) => value,
+    );
 
     expect(error).toBeInstanceOf(ProviderResolutionError);
     expect((error as ProviderResolutionError).code).toBe('provider-config-not-found');
@@ -186,13 +193,13 @@ describe('resolveProviderResolution', () => {
 
   it('keeps config metadata and credential refs on one captured snapshot during concurrent mutation', async () => {
     await setupResolution({
-      resolveProvider: async (readIndex) => {
+      resolveProvider: async (call, readIndex) => {
         if (readIndex === 1) {
-          await MakaioBus.request(AdapterSubsystemSubjects.updateProviderConfig, {
+          await MakaioBus.request(call, AdapterSubsystemSubjects.updateProviderConfig, {
             id: 'cfg-1',
             patch: { endpointOverrides: { anthropic: 'https://new.example.com' } },
           });
-          await MakaioBus.request(AdapterSubsystemSubjects.setProviderConfigAuth, {
+          await MakaioBus.request(call, AdapterSubsystemSubjects.setProviderConfigAuth, {
             id: 'cfg-1',
             auth: {
               mode: 'explicit',
@@ -205,7 +212,7 @@ describe('resolveProviderResolution', () => {
       },
     });
 
-    const captured = await resolveProviderResolution(MakaioBus, 'cfg-1', 'anthropic');
+    const captured = await resolveProviderResolution(createTestCall(), MakaioBus, 'cfg-1', 'anthropic');
     expect(captured.config.endpointOverrides).toEqual({ anthropic: 'https://override.example.com' });
     expect(captured.baseUrl).toBe('https://override.example.com');
     expect(captured.auth).toMatchObject({
@@ -224,7 +231,9 @@ describe('resolveProviderResolution', () => {
   it('preserves the typed dangling-definition failure from snapshot assembly', async () => {
     await setupResolution({ resolveProvider: () => null });
 
-    const error = await resolveProviderResolution(MakaioBus, 'cfg-1', 'anthropic').catch((value: unknown) => value);
+    const error = await resolveProviderResolution(createTestCall(), MakaioBus, 'cfg-1', 'anthropic').catch(
+      (value: unknown) => value,
+    );
 
     expect(error).toBeInstanceOf(RequestError);
     const cause = (error as RequestError).cause;

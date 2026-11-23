@@ -1,10 +1,11 @@
 import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AgentSubjects, type ConnectorTeardownResult } from '@makaio/contracts';
+import { AgentSubjects, type CallContext, type ConnectorTeardownResult } from '@makaio/contracts';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
 import type { ClientRuntimeObserveRequest } from '@makaio/contracts/client';
 import { ClientSubjects } from '@makaio/contracts/client';
+import { createTestCall } from '@makaio/test-utils';
 import { ClaudeCodeTmuxAgent } from '../agent.js';
 import { ClaudeCodeTmuxConnector } from '../connector.js';
 import { ClaudeCodeTmuxConnectorNamespace, ClaudeCodeTmuxConnectorSubjects } from '../namespace/index.js';
@@ -29,22 +30,29 @@ class TestTmuxConnector extends ClaudeCodeTmuxConnector {
     return { evidence: 'released' };
   }
 
-  public async emitToolStarted(payload: { toolName: string; toolUseId: string; toolInput: unknown }): Promise<void> {
-    await this.emit(ClaudeCodeTmuxConnectorSubjects.tool_use.started, { ...payload, messageId: 'message-tmux-test' });
+  public async emitToolStarted(
+    call: CallContext,
+    payload: { toolName: string; toolUseId: string; toolInput: unknown },
+  ): Promise<void> {
+    await this.emit(call, ClaudeCodeTmuxConnectorSubjects.tool_use.started, {
+      ...payload,
+      messageId: 'message-tmux-test',
+    });
   }
 
-  public async emitToolFinished(payload: {
-    toolName: string;
-    toolUseId: string;
-    toolResult: unknown;
-    isError: boolean;
-  }): Promise<void> {
-    await this.emit(ClaudeCodeTmuxConnectorSubjects.tool_use.finished, { ...payload, messageId: 'message-tmux-test' });
+  public async emitToolFinished(
+    call: CallContext,
+    payload: { toolName: string; toolUseId: string; toolResult: unknown; isError: boolean },
+  ): Promise<void> {
+    await this.emit(call, ClaudeCodeTmuxConnectorSubjects.tool_use.finished, {
+      ...payload,
+      messageId: 'message-tmux-test',
+    });
   }
 }
 
-async function makeAgent(): Promise<{ agent: ClaudeCodeTmuxAgent; connector: TestTmuxConnector }> {
-  const adapterBus = await ClaudeCodeTmuxConnectorNamespace.scopedBus();
+async function makeAgent(call: CallContext): Promise<{ agent: ClaudeCodeTmuxAgent; connector: TestTmuxConnector }> {
+  const adapterBus = await ClaudeCodeTmuxConnectorNamespace.scopedBus(MakaioBus);
   let connector: TestTmuxConnector | undefined;
   const agent = new ClaudeCodeTmuxAgent({
     agentId: TEST_AGENT_ID,
@@ -73,7 +81,7 @@ async function makeAgent(): Promise<{ agent: ClaudeCodeTmuxAgent; connector: Tes
     },
   });
 
-  await agent.init();
+  await agent.init(call);
   return { agent, connector: connector! };
 }
 
@@ -86,12 +94,12 @@ describe('ClaudeCodeTmuxAgent', () => {
   });
 
   afterEach(async () => {
-    await Promise.all(agents.map((agent) => agent.close()));
+    await Promise.all(agents.map((agent) => agent.close({ call: createTestCall() })));
     MakaioBus.__resetHandlers?.();
   });
 
   it('threads PreToolUse input and PostToolUse result into agent tool emissions', async () => {
-    const { agent, connector } = await makeAgent();
+    const { agent, connector } = await makeAgent(createTestCall());
     agents.push(agent);
     const toolUses: unknown[] = [];
     const toolOutputs: unknown[] = [];
@@ -107,12 +115,12 @@ describe('ClaudeCodeTmuxAgent', () => {
       stepFinishes.push(ctx.payload);
     });
 
-    await connector.emitToolStarted({
+    await connector.emitToolStarted(createTestCall(), {
       toolName: 'Bash',
       toolUseId: 'tu-1',
       toolInput: { command: 'ls' },
     });
-    await connector.emitToolFinished({
+    await connector.emitToolFinished(createTestCall(), {
       toolName: 'Bash',
       toolUseId: 'tu-1',
       toolResult: 'file.ts',
@@ -144,7 +152,7 @@ describe('ClaudeCodeTmuxAgent', () => {
   });
 
   it('marks PostToolUse errors in agent tool emissions', async () => {
-    const { agent, connector } = await makeAgent();
+    const { agent, connector } = await makeAgent(createTestCall());
     agents.push(agent);
     const toolOutputs: unknown[] = [];
     const stepFinishes: unknown[] = [];
@@ -156,12 +164,12 @@ describe('ClaudeCodeTmuxAgent', () => {
       stepFinishes.push(ctx.payload);
     });
 
-    await connector.emitToolStarted({
+    await connector.emitToolStarted(createTestCall(), {
       toolName: 'Bash',
       toolUseId: 'tu-error',
       toolInput: { command: 'exit 1' },
     });
-    await connector.emitToolFinished({
+    await connector.emitToolFinished(createTestCall(), {
       toolName: 'Bash',
       toolUseId: 'tu-error',
       toolResult: 'permission denied',
@@ -182,7 +190,7 @@ describe('ClaudeCodeTmuxAgent', () => {
   });
 
   it('emits client.runtime.observe after initialize confirms the tmux connector session', async () => {
-    const { agent, connector } = await makeAgent();
+    const { agent, connector } = await makeAgent(createTestCall());
     agents.push(agent);
     const observations: ClientRuntimeObserveRequest[] = [];
 
@@ -191,7 +199,7 @@ describe('ClaudeCodeTmuxAgent', () => {
       ctx.setResult({ clientRuntimeId: 'runtime-tmux-1', created: true, promoted: false });
     });
 
-    await agent.initialize();
+    await agent.initialize(createTestCall());
 
     await vi.waitFor(() => expect(observations).toHaveLength(1));
     expect(observations[0]).toMatchObject({
@@ -204,7 +212,7 @@ describe('ClaudeCodeTmuxAgent', () => {
   });
 
   it('emits latest-request tokens without attributing cumulative session cost to one usage event', async () => {
-    const { agent, connector } = await makeAgent();
+    const { agent, connector } = await makeAgent(createTestCall());
     agents.push(agent);
     const usageEvents: Record<string, unknown>[] = [];
 
@@ -212,7 +220,7 @@ describe('ClaudeCodeTmuxAgent', () => {
       usageEvents.push(ctx.payload);
     });
 
-    await MakaioBus.emit(ClaudeCodeClientSubjects.statusline.received, {
+    await MakaioBus.emit(createTestCall(), ClaudeCodeClientSubjects.statusline.received, {
       session_id: connector.adapterSessionId,
       cost: { total_cost_usd: 12.34 },
       context_window: {
@@ -243,7 +251,7 @@ describe('ClaudeCodeTmuxAgent', () => {
   });
 
   it('does not emit a second usage event when the statusline re-renders with a changed cumulative cost but identical per-request tokens', async () => {
-    const { agent, connector } = await makeAgent();
+    const { agent, connector } = await makeAgent(createTestCall());
     agents.push(agent);
     const usageEvents: Record<string, unknown>[] = [];
 
@@ -267,7 +275,7 @@ describe('ClaudeCodeTmuxAgent', () => {
     };
 
     // First render: cumulative cost 12.34
-    await MakaioBus.emit(ClaudeCodeClientSubjects.statusline.received, {
+    await MakaioBus.emit(createTestCall(), ClaudeCodeClientSubjects.statusline.received, {
       ...basePayload,
       cost: { total_cost_usd: 12.34 },
     });
@@ -275,7 +283,7 @@ describe('ClaudeCodeTmuxAgent', () => {
     await vi.waitFor(() => expect(usageEvents).toHaveLength(1));
 
     // Second render: same per-request tokens, updated cumulative cost — must NOT produce a second usage event.
-    await MakaioBus.emit(ClaudeCodeClientSubjects.statusline.received, {
+    await MakaioBus.emit(createTestCall(), ClaudeCodeClientSubjects.statusline.received, {
       ...basePayload,
       cost: { total_cost_usd: 15.0 },
     });
@@ -286,7 +294,7 @@ describe('ClaudeCodeTmuxAgent', () => {
   });
 
   it('emits again when a new request repeats the same per-request tokens but grows the cumulative totals', async () => {
-    const { agent, connector } = await makeAgent();
+    const { agent, connector } = await makeAgent(createTestCall());
     agents.push(agent);
     const usageEvents: Record<string, unknown>[] = [];
 
@@ -301,7 +309,7 @@ describe('ClaudeCodeTmuxAgent', () => {
       cache_creation_input_tokens: 50,
     };
 
-    await MakaioBus.emit(ClaudeCodeClientSubjects.statusline.received, {
+    await MakaioBus.emit(createTestCall(), ClaudeCodeClientSubjects.statusline.received, {
       session_id: connector.adapterSessionId,
       context_window: {
         total_input_tokens: 24_000,
@@ -315,7 +323,7 @@ describe('ClaudeCodeTmuxAgent', () => {
 
     // A second real request with identical per-request token counts advances
     // the cumulative context totals — it must be counted as a new usage event.
-    await MakaioBus.emit(ClaudeCodeClientSubjects.statusline.received, {
+    await MakaioBus.emit(createTestCall(), ClaudeCodeClientSubjects.statusline.received, {
       session_id: connector.adapterSessionId,
       context_window: {
         total_input_tokens: 25_200,

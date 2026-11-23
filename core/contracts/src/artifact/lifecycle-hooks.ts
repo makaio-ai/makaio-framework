@@ -1,4 +1,4 @@
-import type { MakaioBusLike } from '@makaio/core';
+import type { CallContext, MakaioBusLike } from '@makaio/core';
 import type {
   ArtifactActor,
   ArtifactKindRegistration,
@@ -102,6 +102,11 @@ export interface BeforeArtifactHookContext<TBus extends MakaioBusLike = MakaioBu
   readonly kindRegistration?: ArtifactKindRegistration;
   /** Runtime bus for dispatching auxiliary events during validation. */
   readonly bus: TBus;
+  /**
+   * Call context of the act that triggered this write: the user's input or the handled message.
+   * Send through {@link bus} with this call; never mint a root context for it.
+   */
+  readonly call: CallContext;
   /** Mutable metadata bag for passing data between hooks in the same pipeline run. */
   readonly meta: Map<string, unknown>;
   /**
@@ -156,6 +161,11 @@ export interface AfterArtifactHookContext<TBus extends MakaioBusLike = MakaioBus
   readonly kindRegistration?: ArtifactKindRegistration;
   /** Runtime bus for dispatching follow-up events or RPCs. */
   readonly bus: TBus;
+  /**
+   * Call context of the act that triggered this write: the user's input or the handled message.
+   * Send through {@link bus} with this call; never mint a root context for it.
+   */
+  readonly call: CallContext;
   /**
    * Immutable metadata bag propagated from the paired `before*` hook run.
    *

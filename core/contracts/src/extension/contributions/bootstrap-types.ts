@@ -1,4 +1,4 @@
-import type { MakaioBusLike } from '@makaio/core';
+import type { CallContext, MakaioBusLike } from '@makaio/core';
 
 /**
  * Context passed to bootstrap discovery and export operations.
@@ -7,6 +7,11 @@ import type { MakaioBusLike } from '@makaio/core';
 export interface BootstrapDiscoverContext<TBus extends MakaioBusLike = MakaioBusLike> {
   /** Bus instance for querying the runtime. */
   bus: TBus;
+  /**
+   * Call context of the invocation: the user's input or the handled message.
+   * Send through {@link bus} with this context; never mint a new root.
+   */
+  call: CallContext;
   /** Active project identifier. */
   projectId: string;
   /** Absolute path to the project repository. */

@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/contracts/client';
+import { createTestCall } from '@makaio/test-utils';
 import type { NormalizedMessageInput } from '@makaio/ai-adapters-core';
 import type { OptionalResult } from '@makaio/core';
 import { ClaudeCodeAgent } from '../agent.js';
@@ -173,7 +174,7 @@ function successResult(sessionId: string) {
  * @returns Agent ready for initialize/start calls.
  */
 async function makeAgent(opts: { sessionId?: string; clientId?: string } = {}): Promise<ClaudeCodeAgent> {
-  const adapterBus = await ClaudeCodeConnectorNamespace.scopedBus();
+  const adapterBus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
 
   return new ClaudeCodeAgent({
     adapterBus,
@@ -225,7 +226,7 @@ describe('ClaudeCodeAgent client.session observed-semantics', () => {
   it('emits client.session.started when the SDK confirms system.init', async () => {
     const agent = await makeAgent({ clientId: 'claude-code', sessionId: 'fw-session-1' });
     agents.push(agent);
-    await agent.initialize();
+    await agent.initialize(createTestCall());
 
     const received: unknown[] = [];
     const cleanup = MakaioBus.on(ClientSubjects.session.started, ({ payload }) => {
@@ -255,7 +256,7 @@ describe('ClaudeCodeAgent client.session observed-semantics', () => {
       received.push(payload);
     });
 
-    await agent.start(USER_MESSAGE);
+    await agent.start(createTestCall(), USER_MESSAGE);
 
     await vi.waitFor(() => expect(received).toHaveLength(1));
     cleanup();
@@ -278,7 +279,7 @@ describe('ClaudeCodeAgent client.session observed-semantics', () => {
       received.push(payload);
     });
 
-    const startResult = await agent.start(USER_MESSAGE);
+    const startResult = await agent.start(createTestCall(), USER_MESSAGE);
     pushToQuery(userReplay(startResult.adapterSessionId));
 
     await vi.waitFor(() => expect(received).toHaveLength(1));
@@ -297,7 +298,7 @@ describe('ClaudeCodeAgent client.session observed-semantics', () => {
     const agent = await makeAgent({ clientId: 'claude-code', sessionId: 'fw-session-completed' });
     agents.push(agent);
 
-    const startResult = await agent.start(USER_MESSAGE);
+    const startResult = await agent.start(createTestCall(), USER_MESSAGE);
     pushToQuery(userReplay(startResult.adapterSessionId));
 
     const received: unknown[] = [];

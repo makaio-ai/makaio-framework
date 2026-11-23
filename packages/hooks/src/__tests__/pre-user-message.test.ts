@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { createHook } from '../create-hook.js';
 import { runPreUserMessageHooks, resetPreUserMessageHooks } from '../runners/pre-user-message-runner.js';
 import type { PreUserMessageContext } from '../types/hook-context.js';
@@ -15,9 +16,9 @@ describe('PreUserMessage hook (runner-based)', () => {
   describe('basic hook registration', () => {
     it('calls handler when runPreUserMessageHooks is invoked', async () => {
       const handler = vi.fn();
-      const { unsubscribe } = createHook('PreUserMessage', { handler });
+      const { unsubscribe } = createHook('PreUserMessage', { bus: MakaioBus, handler });
 
-      await runPreUserMessageHooks(createRunnerInput(), MakaioBus);
+      await runPreUserMessageHooks(createTestCall(), createRunnerInput(), MakaioBus);
 
       expect(handler).toHaveBeenCalledTimes(1);
       const ctx = handler.mock.calls[0][0] as PreUserMessageContext;
@@ -30,9 +31,9 @@ describe('PreUserMessage hook (runner-based)', () => {
 
     it('provides minimal enriched context (session/history not available without bus handlers)', async () => {
       const handler = vi.fn();
-      const { unsubscribe } = createHook('PreUserMessage', { handler });
+      const { unsubscribe } = createHook('PreUserMessage', { bus: MakaioBus, handler });
 
-      await runPreUserMessageHooks(createRunnerInput(), MakaioBus);
+      await runPreUserMessageHooks(createTestCall(), createRunnerInput(), MakaioBus);
 
       const ctx = handler.mock.calls[0][0] as PreUserMessageContext;
       // Session enrichments not available since no bus handlers registered
@@ -55,9 +56,9 @@ describe('PreUserMessage hook (runner-based)', () => {
         expect(injected.ragResults).toEqual(['r1', 'r2']);
       });
 
-      const { unsubscribe } = createHook('PreUserMessage', { handler });
+      const { unsubscribe } = createHook('PreUserMessage', { bus: MakaioBus, handler });
 
-      await runPreUserMessageHooks(createRunnerInput(), MakaioBus);
+      await runPreUserMessageHooks(createTestCall(), createRunnerInput(), MakaioBus);
 
       expect(handler).toHaveBeenCalledTimes(1);
 
@@ -72,9 +73,9 @@ describe('PreUserMessage hook (runner-based)', () => {
         expect(ctx.getTurnContext().key).toBe('value');
       });
 
-      const { unsubscribe } = createHook('PreUserMessage', { handler });
+      const { unsubscribe } = createHook('PreUserMessage', { bus: MakaioBus, handler });
 
-      await runPreUserMessageHooks(createRunnerInput(), MakaioBus);
+      await runPreUserMessageHooks(createTestCall(), createRunnerInput(), MakaioBus);
 
       unsubscribe();
     });
@@ -83,6 +84,7 @@ describe('PreUserMessage hook (runner-based)', () => {
   describe('turnContext flows to result', () => {
     it('should return turnContext in result sessionContext', async () => {
       const { unsubscribe } = createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: (ctx) => {
           ctx.setTurnContext('guides', [{ name: 'test-guide' }]);
           ctx.setTurnContext('predictedTools', ['bash', 'edit']);
@@ -90,7 +92,7 @@ describe('PreUserMessage hook (runner-based)', () => {
         priority: 100,
       });
 
-      const result = await runPreUserMessageHooks(createRunnerInput(), MakaioBus);
+      const result = await runPreUserMessageHooks(createTestCall(), createRunnerInput(), MakaioBus);
 
       expect(result.sessionContext).toBeDefined();
       expect(result.sessionContext?.turnContext).toEqual({
@@ -104,6 +106,7 @@ describe('PreUserMessage hook (runner-based)', () => {
     it('should merge turnContext from multiple hooks', async () => {
       // First hook (higher priority, runs first)
       const { unsubscribe: unsub1 } = createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: (ctx) => {
           ctx.setTurnContext('fromHook1', 'value1');
         },
@@ -112,13 +115,14 @@ describe('PreUserMessage hook (runner-based)', () => {
 
       // Second hook (lower priority, runs second)
       const { unsubscribe: unsub2 } = createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: (ctx) => {
           ctx.setTurnContext('fromHook2', 'value2');
         },
         priority: 50,
       });
 
-      const result = await runPreUserMessageHooks(createRunnerInput(), MakaioBus);
+      const result = await runPreUserMessageHooks(createTestCall(), createRunnerInput(), MakaioBus);
 
       expect(result.sessionContext?.turnContext).toEqual({
         fromHook1: 'value1',
@@ -131,6 +135,7 @@ describe('PreUserMessage hook (runner-based)', () => {
 
     it('should preserve existing turnContext from sessionContext', async () => {
       const { unsubscribe } = createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: (ctx) => {
           ctx.setTurnContext('fromHook', 'hookValue');
         },
@@ -138,6 +143,7 @@ describe('PreUserMessage hook (runner-based)', () => {
 
       // Input with pre-existing turnContext
       const result = await runPreUserMessageHooks(
+        createTestCall(),
         createRunnerInput({
           sessionContext: {
             messageHistory: [],
@@ -157,6 +163,7 @@ describe('PreUserMessage hook (runner-based)', () => {
 
     it('should not modify sessionContext when no turnContext is set', async () => {
       const { unsubscribe } = createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: () => {
           // Handler does nothing with turnContext
         },
@@ -164,6 +171,7 @@ describe('PreUserMessage hook (runner-based)', () => {
 
       const originalSessionContext = { messageHistory: [] };
       const result = await runPreUserMessageHooks(
+        createTestCall(),
         createRunnerInput({
           sessionContext: originalSessionContext,
         }),
@@ -182,6 +190,7 @@ describe('PreUserMessage hook (runner-based)', () => {
       const order: string[] = [];
 
       const unsub1 = createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: () => {
           order.push('low');
         },
@@ -189,6 +198,7 @@ describe('PreUserMessage hook (runner-based)', () => {
       }).unsubscribe;
 
       const unsub2 = createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: () => {
           order.push('high');
         },
@@ -196,13 +206,14 @@ describe('PreUserMessage hook (runner-based)', () => {
       }).unsubscribe;
 
       const unsub3 = createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: () => {
           order.push('med');
         },
         priority: 50,
       }).unsubscribe;
 
-      await runPreUserMessageHooks(createRunnerInput(), MakaioBus);
+      await runPreUserMessageHooks(createTestCall(), createRunnerInput(), MakaioBus);
 
       // Higher priority runs first
       expect(order).toEqual(['high', 'med', 'low']);
@@ -219,9 +230,9 @@ describe('PreUserMessage hook (runner-based)', () => {
         expect(typeof ctx.replacePayload).toBe('function');
       });
 
-      const { unsubscribe } = createHook('PreUserMessage', { handler });
+      const { unsubscribe } = createHook('PreUserMessage', { bus: MakaioBus, handler });
 
-      await runPreUserMessageHooks(createRunnerInput(), MakaioBus);
+      await runPreUserMessageHooks(createTestCall(), createRunnerInput(), MakaioBus);
 
       expect(handler).toHaveBeenCalledTimes(1);
 
@@ -233,9 +244,9 @@ describe('PreUserMessage hook (runner-based)', () => {
         expect(typeof ctx.next).toBe('function');
       });
 
-      const { unsubscribe } = createHook('PreUserMessage', { handler });
+      const { unsubscribe } = createHook('PreUserMessage', { bus: MakaioBus, handler });
 
-      await runPreUserMessageHooks(createRunnerInput(), MakaioBus);
+      await runPreUserMessageHooks(createTestCall(), createRunnerInput(), MakaioBus);
 
       expect(handler).toHaveBeenCalledTimes(1);
 
@@ -244,6 +255,7 @@ describe('PreUserMessage hook (runner-based)', () => {
 
     it('allows message modification via replacePayload', async () => {
       const { unsubscribe } = createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: (ctx) => {
           ctx.replacePayload({
             ...ctx.payload,
@@ -252,7 +264,7 @@ describe('PreUserMessage hook (runner-based)', () => {
         },
       });
 
-      const result = await runPreUserMessageHooks(createRunnerInput(), MakaioBus);
+      const result = await runPreUserMessageHooks(createTestCall(), createRunnerInput(), MakaioBus);
 
       expect(result.message).toBe('modified message');
 
@@ -261,6 +273,7 @@ describe('PreUserMessage hook (runner-based)', () => {
 
     it('allows sessionContext modification via replacePayload', async () => {
       const { unsubscribe } = createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: (ctx) => {
           ctx.replacePayload({
             ...ctx.payload,
@@ -272,7 +285,7 @@ describe('PreUserMessage hook (runner-based)', () => {
         },
       });
 
-      const result = await runPreUserMessageHooks(createRunnerInput(), MakaioBus);
+      const result = await runPreUserMessageHooks(createTestCall(), createRunnerInput(), MakaioBus);
 
       expect(result.sessionContext?.hasNewTransforms).toBe(true);
 
@@ -283,12 +296,13 @@ describe('PreUserMessage hook (runner-based)', () => {
   describe('abort behavior', () => {
     it('abort throws HookAbortError with hook name and reason', async () => {
       createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: (ctx) => ctx.abort('custom reason'),
         name: 'test-abort-hook',
       });
 
       try {
-        await runPreUserMessageHooks(createRunnerInput(), MakaioBus);
+        await runPreUserMessageHooks(createTestCall(), createRunnerInput(), MakaioBus);
         expect.fail('Should have thrown HookAbortError');
       } catch (e) {
         expect(e).toBeInstanceOf(HookAbortError);
@@ -303,6 +317,7 @@ describe('PreUserMessage hook (runner-based)', () => {
       const order: string[] = [];
 
       createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: () => {
           order.push('first');
         },
@@ -310,6 +325,7 @@ describe('PreUserMessage hook (runner-based)', () => {
       });
 
       createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: (ctx) => {
           order.push('aborter');
           ctx.abort('stop');
@@ -319,13 +335,16 @@ describe('PreUserMessage hook (runner-based)', () => {
       });
 
       createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: () => {
           order.push('third');
         },
         priority: 10,
       });
 
-      await expect(runPreUserMessageHooks(createRunnerInput(), MakaioBus)).rejects.toThrow(HookAbortError);
+      await expect(runPreUserMessageHooks(createTestCall(), createRunnerInput(), MakaioBus)).rejects.toThrow(
+        HookAbortError,
+      );
 
       // Only hooks before the abort should have run
       expect(order).toEqual(['first', 'aborter']);
@@ -333,12 +352,13 @@ describe('PreUserMessage hook (runner-based)', () => {
 
     it('abort without reason still throws with hook name', async () => {
       createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: (ctx) => ctx.abort(),
         name: 'no-reason-hook',
       });
 
       try {
-        await runPreUserMessageHooks(createRunnerInput(), MakaioBus);
+        await runPreUserMessageHooks(createTestCall(), createRunnerInput(), MakaioBus);
         expect.fail('Should have thrown HookAbortError');
       } catch (e) {
         expect(e).toBeInstanceOf(HookAbortError);
@@ -353,6 +373,7 @@ describe('PreUserMessage hook (runner-based)', () => {
     it('handles structured messages with blocks', async () => {
       let captured: unknown;
       const { unsubscribe } = createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler: (ctx) => {
           captured = ctx.payload.message;
         },
@@ -363,7 +384,7 @@ describe('PreUserMessage hook (runner-based)', () => {
         blocks: [{ type: 'text' as const, content: 'Hello structured' }],
       };
 
-      await runPreUserMessageHooks(createRunnerInput({ message: structuredMessage }), MakaioBus);
+      await runPreUserMessageHooks(createTestCall(), createRunnerInput({ message: structuredMessage }), MakaioBus);
 
       expect(captured).toEqual(structuredMessage);
 

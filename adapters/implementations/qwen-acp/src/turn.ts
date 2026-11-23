@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import { BaseConnectorTurn } from '@makaio/ai-adapters-core';
 import type { PauseResult, MessageHandle } from '@makaio/ai-adapters-core';
 import { QwenAcpSubjects } from './namespaces/index.js';
@@ -74,30 +75,33 @@ export class QwenAcpTurn extends BaseConnectorTurn<QwenAcpTurnState> {
 
   /**
    * Begin the turn by transitioning from `idle` to `turn_started`.
+   * @param call - Call context of the handled message
    */
-  public async start(): Promise<void> {
-    await this.transitionTo('turn_started');
+  public async start(call: CallContext): Promise<void> {
+    await this.transitionTo(call, 'turn_started');
   }
 
   /**
    * Mark the beginning of a discrete step (text generation or tool call).
+   * @param call - Call context of the handled message
    * @param stepType - Semantic type for emitted step lifecycle events
    * Valid from `turn_started` or `step_finished`.
    */
-  public async markStepStarted(stepType: 'text' | 'tool_use' = 'text'): Promise<void> {
+  public async markStepStarted(call: CallContext, stepType: 'text' | 'tool_use' = 'text'): Promise<void> {
     const state = this.getState();
     if (state === 'turn_started' || state === 'step_finished') {
       this.currentStepType = stepType;
-      await this.transitionTo('step_started');
+      await this.transitionTo(call, 'step_started');
     }
   }
 
   /**
    * Mark a step as complete. Valid from `step_started` only.
+   * @param call - Call context of the handled message
    */
-  public async markStepFinished(): Promise<void> {
+  public async markStepFinished(call: CallContext): Promise<void> {
     if (this.getState() === 'step_started') {
-      await this.transitionTo('step_finished');
+      await this.transitionTo(call, 'step_finished');
     }
   }
 
@@ -106,13 +110,14 @@ export class QwenAcpTurn extends BaseConnectorTurn<QwenAcpTurnState> {
    *
    * If the turn is currently in `step_started`, closes the open step first.
    * MUST be called in a `finally` block to guarantee state-machine cleanup.
+   * @param call - Call context of the handled message
    */
-  public async markTurnFinished(): Promise<void> {
+  public async markTurnFinished(call: CallContext): Promise<void> {
     if (this.getState() === 'step_started') {
-      await this.transitionTo('step_finished');
+      await this.transitionTo(call, 'step_finished');
     }
     if (this.getState() !== 'turn_finished' && this.getState() !== 'idle') {
-      await this.transitionTo('turn_finished');
+      await this.transitionTo(call, 'turn_finished');
     }
   }
 
@@ -138,9 +143,10 @@ export class QwenAcpTurn extends BaseConnectorTurn<QwenAcpTurnState> {
 
   /**
    * Pause the turn at the next safe boundary.
+   * @param _call - Call context of the message requesting the pause
    * @returns Pause result indicating whether the turn had already ended
    */
-  public async pause(): Promise<PauseResult<QwenAcpTurnState>> {
+  public async pause(_call: CallContext): Promise<PauseResult<QwenAcpTurnState>> {
     if (this.getState() === 'turn_finished') {
       return { stateBeforePause: this.getState(), turnEnded: true };
     }
@@ -150,9 +156,10 @@ export class QwenAcpTurn extends BaseConnectorTurn<QwenAcpTurnState> {
 
   /**
    * Resume a paused turn.
+   * @param _call - Call context of the message requesting the resume
    * @param _message - Unused; present to satisfy the base-class contract
    */
-  public async resume(_message?: unknown): Promise<void> {
+  public async resume(_call: CallContext, _message?: unknown): Promise<void> {
     this.interrupted = false;
   }
 
@@ -171,14 +178,19 @@ export class QwenAcpTurn extends BaseConnectorTurn<QwenAcpTurnState> {
    *
    * Turn lifecycle events include `agentId` explicitly because this method calls
    * `bus.emit()` directly, bypassing `AIAgentConnector.emit()`.
+   * @param call - Call context of the handled message
    * @param oldState - State before the transition
    * @param newState - State after the transition
    */
-  protected async emitStateChange(oldState: QwenAcpTurnState, newState: QwenAcpTurnState): Promise<void> {
+  protected async emitStateChange(
+    call: CallContext,
+    oldState: QwenAcpTurnState,
+    newState: QwenAcpTurnState,
+  ): Promise<void> {
     const timestamp = Date.now();
     const { agentId } = this;
 
-    await this.typedBus.emit(QwenAcpSubjects.turn_state_changed, {
+    await this.typedBus.emit(call, QwenAcpSubjects.turn_state_changed, {
       agentId,
       previousState: oldState,
       newState,
@@ -186,21 +198,21 @@ export class QwenAcpTurn extends BaseConnectorTurn<QwenAcpTurnState> {
     });
 
     if (newState === 'turn_started') {
-      await this.typedBus.emit(QwenAcpSubjects.turn_started, { agentId, timestamp });
+      await this.typedBus.emit(call, QwenAcpSubjects.turn_started, { agentId, timestamp });
     } else if (newState === 'step_started') {
-      await this.typedBus.emit(QwenAcpSubjects.turn_step_started, {
+      await this.typedBus.emit(call, QwenAcpSubjects.turn_step_started, {
         agentId,
         stepType: this.currentStepType,
         timestamp,
       });
     } else if (newState === 'step_finished') {
-      await this.typedBus.emit(QwenAcpSubjects.turn_step_finished, {
+      await this.typedBus.emit(call, QwenAcpSubjects.turn_step_finished, {
         agentId,
         stepType: this.currentStepType,
         timestamp,
       });
     } else if (newState === 'turn_finished') {
-      await this.typedBus.emit(QwenAcpSubjects.turn_finished, { agentId, timestamp });
+      await this.typedBus.emit(call, QwenAcpSubjects.turn_finished, { agentId, timestamp });
     }
   }
 }

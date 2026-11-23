@@ -10,6 +10,7 @@ import type { Account } from '../bus/schemas.js';
 import { requireBus } from '@makaio/kernel/cli';
 import type { CommandContext } from '@makaio/kernel/cli';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { displayLabel, displayMeta } from '../utils/format-account-display.js';
 
 // ---------------------------------------------------------------------------
@@ -19,11 +20,13 @@ import { displayLabel, displayMeta } from '../utils/format-account-display.js';
 /**
  * Find the clientId that owns a given accountId by scanning all available
  * sources.
+ * @param call - Call context of the current command invocation.
  * @param bus - Connected bus instance.
  * @param accountId - Account identifier to look up.
  * @returns The owning clientId, or `undefined` if not found.
  */
 async function findClientForAccount(
+  call: CallContext,
   bus: IMakaioBus,
   accountId: string,
   // Account IDs are stable UUIDs assigned at first detection (pre-release;
@@ -32,12 +35,12 @@ async function findClientForAccount(
   // process restarts. Collision across different clients is astronomically
   // unlikely, so returning the first match is safe without ambiguity detection.
 ): Promise<string | undefined> {
-  const { sources } = await bus.request(AccountManagerSubjects.accounts.getSources, {});
+  const { sources } = await bus.request(call, AccountManagerSubjects.accounts.getSources, {});
   const results = await Promise.all(
     sources
       .filter((s) => s.available)
       .map(async (s) => {
-        const { accounts } = await bus.request(AccountManagerSubjects.accounts.list, {
+        const { accounts } = await bus.request(call, AccountManagerSubjects.accounts.list, {
           clientId: s.clientId,
         });
         return accounts.some((a) => a.id === accountId) ? s.clientId : undefined;
@@ -79,7 +82,7 @@ async function withErrorHandling(
 export async function handleList(ctx: CommandContext<{ clientId?: string; format: 'table' | 'json' }>): Promise<void> {
   await withErrorHandling(ctx, async () => {
     const bus = requireBus(ctx);
-    const { sources } = await bus.request(AccountManagerSubjects.accounts.getSources, {});
+    const { sources } = await bus.request(ctx.call, AccountManagerSubjects.accounts.getSources, {});
     const clientIds = ctx.args.clientId
       ? [ctx.args.clientId]
       : sources.filter((s) => s.available).map((s) => s.clientId);
@@ -87,7 +90,7 @@ export async function handleList(ctx: CommandContext<{ clientId?: string; format
     const allAccounts: Array<{ clientId: string; accounts: Account[] }> = [];
 
     for (const id of clientIds) {
-      const { accounts } = await bus.request(AccountManagerSubjects.accounts.list, {
+      const { accounts } = await bus.request(ctx.call, AccountManagerSubjects.accounts.list, {
         clientId: id,
       });
       if (accounts.length > 0) {
@@ -129,7 +132,7 @@ export async function handleSwitch(ctx: CommandContext<{ accountId: string; clie
     let clientId = ctx.args.clientId;
 
     if (!clientId) {
-      clientId = await findClientForAccount(bus, ctx.args.accountId);
+      clientId = await findClientForAccount(ctx.call, bus, ctx.args.accountId);
       if (!clientId) {
         ctx.output.error(`Account "${ctx.args.accountId}" not found.\n`);
         ctx.setExitCode(1);
@@ -137,7 +140,7 @@ export async function handleSwitch(ctx: CommandContext<{ accountId: string; clie
       }
     }
 
-    const result = await bus.request(AccountManagerSubjects.credentials.switch, {
+    const result = await bus.request(ctx.call, AccountManagerSubjects.credentials.switch, {
       clientId,
       accountId: ctx.args.accountId,
     });
@@ -166,7 +169,7 @@ export async function handleLabel(
     let clientId = ctx.args.clientId;
 
     if (!clientId) {
-      clientId = await findClientForAccount(bus, ctx.args.accountId);
+      clientId = await findClientForAccount(ctx.call, bus, ctx.args.accountId);
       if (!clientId) {
         ctx.output.error(`Account "${ctx.args.accountId}" not found.\n`);
         ctx.setExitCode(1);
@@ -174,7 +177,7 @@ export async function handleLabel(
       }
     }
 
-    const result = await bus.request(AccountManagerSubjects.accounts.label, {
+    const result = await bus.request(ctx.call, AccountManagerSubjects.accounts.label, {
       clientId,
       accountId: ctx.args.accountId,
       label: ctx.args.label,
@@ -202,7 +205,7 @@ export async function handleRemove(ctx: CommandContext<{ accountId: string; clie
     let clientId = ctx.args.clientId;
 
     if (!clientId) {
-      clientId = await findClientForAccount(bus, ctx.args.accountId);
+      clientId = await findClientForAccount(ctx.call, bus, ctx.args.accountId);
       if (!clientId) {
         ctx.output.error(`Account "${ctx.args.accountId}" not found.\n`);
         ctx.setExitCode(1);
@@ -210,7 +213,7 @@ export async function handleRemove(ctx: CommandContext<{ accountId: string; clie
       }
     }
 
-    const result = await bus.request(AccountManagerSubjects.accounts.remove, {
+    const result = await bus.request(ctx.call, AccountManagerSubjects.accounts.remove, {
       clientId,
       accountId: ctx.args.accountId,
     });
@@ -234,7 +237,7 @@ export async function handleRemove(ctx: CommandContext<{ accountId: string; clie
 export async function handleSources(ctx: CommandContext<Record<string, never>>): Promise<void> {
   await withErrorHandling(ctx, async () => {
     const bus = requireBus(ctx);
-    const { sources } = await bus.request(AccountManagerSubjects.accounts.getSources, {});
+    const { sources } = await bus.request(ctx.call, AccountManagerSubjects.accounts.getSources, {});
 
     for (const source of sources) {
       const status = source.available ? '✓' : '✗';

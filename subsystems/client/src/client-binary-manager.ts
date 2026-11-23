@@ -17,7 +17,8 @@
  */
 
 import * as path from 'node:path';
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { ClientSubjects } from '@makaio/contracts/client';
 import type {
   ClientBinaryListEntry,
@@ -109,7 +110,7 @@ export class ClientBinaryManager extends BaseService {
    * @throws When `config.basePath` or `config.configBasePath` is empty or relative
    */
   public constructor(
-    bus: IMakaioBus = MakaioBus,
+    bus: IMakaioBus,
     private readonly config: ClientBinaryManagerConfig,
     private readonly definitionLookup: ClientDefinitionLookup = new ClientDefinitionRegistry([]),
     strategyDeps: StrategyDependencies = createNoopStrategyDeps(),
@@ -141,32 +142,32 @@ export class ClientBinaryManager extends BaseService {
    */
   protected override async onInit(): Promise<void> {
     this.registerHandler(ClientSubjects.list, async (ctx) => {
-      const clients = await this.handleList();
+      const clients = await this.handleList(ctx.call);
       ctx.setResult({ clients });
     });
 
     this.registerHandler(ClientSubjects.install, async (ctx) => {
-      const result = await this.handleInstall(ctx.payload.clientId, ctx.payload.version);
+      const result = await this.handleInstall(ctx.call, ctx.payload.clientId, ctx.payload.version);
       ctx.setResult(result);
     });
 
     this.registerHandler(ClientSubjects.update, async (ctx) => {
-      const result = await this.handleUpdate(ctx.payload.clientId);
+      const result = await this.handleUpdate(ctx.call, ctx.payload.clientId);
       ctx.setResult(result);
     });
 
     this.registerHandler(ClientSubjects.setActive, async (ctx) => {
-      const result = await this.handleSetActive(ctx.payload.clientId, ctx.payload.version);
+      const result = await this.handleSetActive(ctx.call, ctx.payload.clientId, ctx.payload.version);
       ctx.setResult(result);
     });
 
     this.registerHandler(ClientSubjects.uninstall, async (ctx) => {
-      const result = await this.handleUninstall(ctx.payload.clientId, ctx.payload.version);
+      const result = await this.handleUninstall(ctx.call, ctx.payload.clientId, ctx.payload.version);
       ctx.setResult(result);
     });
 
     this.registerHandler(ClientSubjects.resolveBinary, async (ctx) => {
-      const result = await this.resolver.resolve(ctx.payload.clientId);
+      const result = await this.resolver.resolve(ctx.call, ctx.payload.clientId);
       ctx.setResult(result);
     });
   }
@@ -187,10 +188,11 @@ export class ClientBinaryManager extends BaseService {
    * Assemble the installation inventory for all managed clients.
    *
    * Delegates to {@link assembleBinaryList} for the read-model assembly logic.
+   * @param call - Call context of the `client.list` message
    * @returns Assembled list of client binary entries
    */
-  private async handleList(): Promise<ClientBinaryListEntry[]> {
-    return assembleBinaryList(this.bus, this.definitionLookup);
+  private async handleList(call: CallContext): Promise<ClientBinaryListEntry[]> {
+    return assembleBinaryList(call, this.bus, this.definitionLookup);
   }
 
   /**
@@ -200,12 +202,15 @@ export class ClientBinaryManager extends BaseService {
    * explicit version against it) and returns a `jobId` immediately. The job
    * runs asynchronously; callers track progress via
    * `client.installJob.progress` and `client.installJob.completed` events.
+   * @param call - Call context of the `client.install` message; the job's
+   *   progress, completion and version events are sent with it
    * @param clientId - Stable client identifier to install
    * @param requestedVersion - Explicit version to install (must match the
    *   descriptor pin), or `undefined` to use the pin directly
    * @returns Job acknowledgement with resolved version
    */
   private async handleInstall(
+    call: CallContext,
     clientId: string,
     requestedVersion: string | undefined,
   ): Promise<{ jobId: string; requestedVersion: string | null; resolvedVersion: string | null }> {
@@ -227,7 +232,7 @@ export class ClientBinaryManager extends BaseService {
         );
       }
 
-      const jobId = this.startInstallJob(clientId, resolvedVersion, descriptor, definition, false, 'install');
+      const jobId = this.startInstallJob(call, clientId, resolvedVersion, descriptor, definition, false, 'install');
 
       return {
         jobId,
@@ -242,10 +247,15 @@ export class ClientBinaryManager extends BaseService {
    *
    * Resolves the version from the descriptor pin and enqueues a job with
    * `makeActive: true`. No upstream feed fetch is performed.
+   * @param call - Call context of the `client.update` message; the job's
+   *   progress, completion and version events are sent with it
    * @param clientId - Stable client identifier to update
    * @returns Job acknowledgement with resolved version
    */
-  private async handleUpdate(clientId: string): Promise<{ jobId: string; resolvedVersion: string | null }> {
+  private async handleUpdate(
+    call: CallContext,
+    clientId: string,
+  ): Promise<{ jobId: string; resolvedVersion: string | null }> {
     const { definition, descriptor } = this.requireManagedDefinition(clientId, 'client.update');
 
     return this.withClientLock(clientId, async () => {
@@ -259,7 +269,7 @@ export class ClientBinaryManager extends BaseService {
           'resolved binary version',
         );
       }
-      const jobId = this.startInstallJob(clientId, resolvedVersion, descriptor, definition, true, 'update');
+      const jobId = this.startInstallJob(call, clientId, resolvedVersion, descriptor, definition, true, 'update');
 
       return { jobId, resolvedVersion };
     });
@@ -270,11 +280,13 @@ export class ClientBinaryManager extends BaseService {
    *
    * The requested version must be present in the installed versions list;
    * requests for uninstalled versions are rejected with an error.
+   * @param call - Call context of the `client.setActive` message
    * @param clientId - Stable client identifier
    * @param version - Exact installed version string to activate
    * @returns Updated client and active version
    */
   private async handleSetActive(
+    call: CallContext,
     clientId: string,
     version: string,
   ): Promise<{ clientId: string; activeVersion: string }> {
@@ -289,7 +301,7 @@ export class ClientBinaryManager extends BaseService {
     this.pendingClients.add(clientId);
 
     try {
-      const { versions } = await this.bus.request(ClientBinaryStorageSubjects.listVersions, { clientId });
+      const { versions } = await this.bus.request(call, ClientBinaryStorageSubjects.listVersions, { clientId });
       const versionRecord = versions.find((v) => v.version === version);
 
       if (versionRecord === undefined) {
@@ -320,7 +332,7 @@ export class ClientBinaryManager extends BaseService {
       }
       await verifyInstalledVersion(this.strategyDeps.exec, versionRecord.installPath, versionCommand, version);
 
-      await this.patchActiveVersion(clientId, version, 'set-active');
+      await this.patchActiveVersion(call, clientId, version, 'set-active');
 
       return { clientId, activeVersion: version };
     } finally {
@@ -339,11 +351,13 @@ export class ClientBinaryManager extends BaseService {
    * If the removed version was active, `client.version.changed` is emitted.
    * No automatic replacement is made — callers must explicitly call
    * `client.setActive` to promote another version.
+   * @param call - Call context of the `client.uninstall` message
    * @param clientId - Stable client identifier
    * @param version - Exact version string to remove
    * @returns Removal result with the updated active version
    */
   private async handleUninstall(
+    call: CallContext,
     clientId: string,
     version: string,
   ): Promise<{ clientId: string; removedVersion: string; activeVersion: string | null }> {
@@ -358,7 +372,7 @@ export class ClientBinaryManager extends BaseService {
 
     try {
       // Verify the version is installed before invoking the atomic storage operation.
-      const { versions } = await this.bus.request(ClientBinaryStorageSubjects.listVersions, { clientId });
+      const { versions } = await this.bus.request(call, ClientBinaryStorageSubjects.listVersions, { clientId });
       const versionRecord = versions.find((v) => v.version === version);
 
       if (versionRecord === undefined) {
@@ -370,6 +384,7 @@ export class ClientBinaryManager extends BaseService {
       // concurrent reader from observing a state where the version is absent
       // but the active pointer still references it.
       const { removedVersion, previousActiveVersion, activeVersion } = await this.bus.request(
+        call,
         ClientBinaryStorageSubjects.removeVersionAndClearActive,
         { clientId, version, updatedAt: Date.now() },
       );
@@ -403,7 +418,7 @@ export class ClientBinaryManager extends BaseService {
       // Emit version.changed when the atomic transaction cleared the active pointer.
       if (previousActiveVersion !== null && activeVersion === null) {
         try {
-          await this.bus.emit(ClientSubjects.version.changed, {
+          await this.bus.emit(call, ClientSubjects.version.changed, {
             clientId,
             previousActiveVersion,
             activeVersion: null,
@@ -430,17 +445,19 @@ export class ClientBinaryManager extends BaseService {
    *
    * Centralizes the storage-side active-version mutation used by
    * `handleSetActive` and the job completion callback.
+   * @param call - Call context of the operation that changes the active version
    * @param clientId - Stable client identifier
    * @param newActiveVersion - Version to set active, or `null` to clear
    * @param reason - Operation that triggered the change
    * @returns The previous active version before the mutation
    */
   private async patchActiveVersion(
+    call: CallContext,
     clientId: string,
     newActiveVersion: string | null,
     reason: 'install' | 'update' | 'set-active',
   ): Promise<string | null> {
-    const result = await this.bus.request(ClientBinaryStorageSubjects.setActiveVersion, {
+    const result = await this.bus.request(call, ClientBinaryStorageSubjects.setActiveVersion, {
       clientId,
       activeVersion: newActiveVersion,
       updatedAt: Date.now(),
@@ -451,7 +468,7 @@ export class ClientBinaryManager extends BaseService {
       // Best-effort: state is already persisted — emission failure must not
       // make the operation appear failed when the active version was committed.
       try {
-        await this.bus.emit(ClientSubjects.version.changed, {
+        await this.bus.emit(call, ClientSubjects.version.changed, {
           clientId,
           previousActiveVersion,
           activeVersion: newActiveVersion,
@@ -516,6 +533,8 @@ export class ClientBinaryManager extends BaseService {
 
   /**
    * Build an {@link InstallJob} and hand it to the job runner.
+   * @param call - Call context of the `client.install` / `client.update` message
+   *   that started the job; the job outlives the handler and serves only that call
    * @param clientId - Stable client identifier
    * @param resolvedVersion - Concrete version to install
    * @param descriptor - Managed install descriptor
@@ -525,6 +544,7 @@ export class ClientBinaryManager extends BaseService {
    * @returns The generated `jobId`
    */
   private startInstallJob(
+    call: CallContext,
     clientId: string,
     resolvedVersion: string,
     descriptor: ManagedInstallDescriptor,
@@ -544,7 +564,7 @@ export class ClientBinaryManager extends BaseService {
 
     // Progress: best-effort bus emission; failures must not surface to job runner.
     const onProgress = (payload: ClientInstallProgress): void => {
-      void this.bus.emit(ClientSubjects.installJob.progress, payload).catch((err: unknown) => {
+      void this.bus.emit(call, ClientSubjects.installJob.progress, payload).catch((err: unknown) => {
         console.warn('[ClientBinaryManager] Failed to emit client.installJob.progress:', err);
       });
     };
@@ -554,7 +574,7 @@ export class ClientBinaryManager extends BaseService {
     // without racing the emit's microtask chain.
     const onCompleted = async (payload: ClientInstallCompleted): Promise<void> => {
       this.pendingClients.delete(payload.clientId);
-      await this.bus.emit(ClientSubjects.installJob.completed, payload).catch((err: unknown) => {
+      await this.bus.emit(call, ClientSubjects.installJob.completed, payload).catch((err: unknown) => {
         console.warn('[ClientBinaryManager] Failed to emit client.installJob.completed:', err);
       });
     };
@@ -563,7 +583,7 @@ export class ClientBinaryManager extends BaseService {
       job,
       descriptor,
       onProgress,
-      this.makeCompletionCallback(),
+      this.makeCompletionCallback(call),
       onCompleted,
       definition.postInstall,
       toVersionCommandTuple(definition.versionCommand),
@@ -591,9 +611,10 @@ export class ClientBinaryManager extends BaseService {
    * **Consistency guarantee:** version persistence and optional activation
    * are committed through one storage transaction, so a failed activation
    * cannot leave a version row pointing at a directory the runner will remove.
+   * @param call - Call context of the message that started the job
    * @returns Bound completion callback for the job runner
    */
-  private makeCompletionCallback(): JobCompletionCallback {
+  private makeCompletionCallback(call: CallContext): JobCompletionCallback {
     return async ({ clientId, version, installPath, makeActive, reason }) => {
       const now = Date.now();
 
@@ -601,14 +622,14 @@ export class ClientBinaryManager extends BaseService {
       // storage so client-specific defaults are applied before the binary is
       // visible as installed.  The call is a no-op when the client has not
       // registered a handler.
-      await primeClientConfig(this.bus, {
+      await primeClientConfig(call, this.bus, {
         clientId,
         configDir: this.resolveManagedConfigDir(clientId),
         phase: 'managed-install',
         binaryVersion: version,
       });
 
-      const result = await this.bus.request(ClientBinaryStorageSubjects.recordInstalledVersion, {
+      const result = await this.bus.request(call, ClientBinaryStorageSubjects.recordInstalledVersion, {
         versionRecord: {
           id: crypto.randomUUID(),
           clientId,
@@ -625,7 +646,7 @@ export class ClientBinaryManager extends BaseService {
         // Best-effort: state is already persisted — emission failure must not
         // make the operation appear failed when the active version was committed.
         try {
-          await this.bus.emit(ClientSubjects.version.changed, {
+          await this.bus.emit(call, ClientSubjects.version.changed, {
             clientId,
             previousActiveVersion: result.previousActiveVersion,
             activeVersion: result.activeVersion,

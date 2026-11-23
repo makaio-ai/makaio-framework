@@ -1,5 +1,5 @@
-import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtractSubjectPayload, SubjectDefinition } from '@makaio/core';
+import type { EmitSubject, IMakaioBus } from '@makaio/bus-core';
+import type { CallContext, ExtractSubjectPayload, SubjectDefinition } from '@makaio/core';
 import type { AgentContext, AgentIdentity } from './types.js';
 
 interface AgentPayloadEventMetadata {
@@ -43,7 +43,7 @@ export interface AgentPayloadEmitterConfig {
    * provider identity, and enrichment awaits it so no event carrying the new ID
    * is published before the movement is recorded.
    */
-  setLastKnownAdapterSessionId: (adapterSessionId: string | undefined) => void | Promise<void>;
+  setLastKnownAdapterSessionId: (call: CallContext, adapterSessionId: string | undefined) => void | Promise<void>;
   /**
    * Whether the agent's provider session is this adapter's to publish yet.
    *
@@ -94,9 +94,10 @@ export class AgentPayloadEmitter {
    * announces a moved provider identity, and that movement must be recorded
    * before this event advertises the new ID. Recording an unchanged ID — the
    * case for all but the first event of a generation — resolves without I/O.
+   * @param call - Call context used to announce provider-session movement
    * @returns Confirmed adapter session ID or `undefined`
    */
-  private async resolveConfirmedAdapterSessionId(): Promise<string | undefined> {
+  private async resolveConfirmedAdapterSessionId(call: CallContext): Promise<string | undefined> {
     const sample = this.config.getConnectorAdapterSessionId();
     // The sink gets the connector sample alone — never the cached fallback the
     // returned value falls back to. The two answer different questions: stamping
@@ -111,7 +112,7 @@ export class AgentPayloadEmitter {
     // undelivered movement. Enrichment is the seam's only retry clock, and an
     // agent whose connector confirms nothing is exactly the one whose
     // unconfirmed movement is still outstanding.
-    await this.config.setLastKnownAdapterSessionId(sample);
+    await this.config.setLastKnownAdapterSessionId(call, sample);
     // Recorded either way — the cache is occupancy evidence — but reported only
     // where this adapter is the one publishing the key. See the config field.
     if (this.config.isProviderKeyPublishable?.() === false) return undefined;
@@ -139,12 +140,14 @@ export class AgentPayloadEmitter {
 
   /**
    * Enrich payload with agent context fields.
+   * @param call - Call context used to record the observed provider session
    * @param payload - Base payload to enrich
    * @param overrideMessageId - Explicit messageId override from caller payload
    * @param options - Enrichment controls for optional analytics metadata defaults
    * @returns Enriched payload with agent context
    */
   public async enrichPayload<T extends object>(
+    call: CallContext,
     payload: T,
     overrideMessageId?: string,
     options?: EmitGlobalOptions,
@@ -156,7 +159,7 @@ export class AgentPayloadEmitter {
     // turn-less (e.g. user_message.sent for a no-turn submission) and must
     // not inherit the still-executing turn's id.
     const turnId = 'turnId' in payloadEventFields ? payloadEventFields.turnId : this.config.getCurrentTurnId();
-    const adapterSessionId = await this.resolveConfirmedAdapterSessionId();
+    const adapterSessionId = await this.resolveConfirmedAdapterSessionId(call);
     const { clientId, providerConfigId, occurredAt } = this.resolveEventMetadata(
       payloadEventFields,
       options?.includeEventMetadata ?? true,
@@ -196,19 +199,18 @@ export class AgentPayloadEmitter {
 
   /**
    * Emit enriched payload to global bus.
-   * @param subject - Subject definition to emit
+   * @param call - Call context the emission is made under (the handled message's `call`, or an own context for an observation)
+   * @param subject - Subject definition to emit (a concrete event subject, not a channel, request or wildcard)
    * @param payload - Payload without AgentContext fields
    * @param options - Enrichment controls for optional analytics metadata defaults
    */
   public async emitGlobal<S extends SubjectDefinition>(
-    subject: S,
+    call: CallContext,
+    subject: EmitSubject<S>,
     payload: Omit<ExtractSubjectPayload<S>, keyof AgentContext> & { messageId?: string; turnId?: string },
     options?: EmitGlobalOptions,
   ): Promise<void> {
-    const enrichedPayload = await this.enrichPayload(payload as object, payload.messageId, options);
-    await this.config.globalBus.emit(
-      subject as Parameters<IMakaioBus['emit']>[0],
-      enrichedPayload as Parameters<IMakaioBus['emit']>[1],
-    );
+    const enrichedPayload = await this.enrichPayload(call, payload as object, payload.messageId, options);
+    await this.config.globalBus.emit<S>(call, subject, enrichedPayload as S['$meta']['payload']);
   }
 }

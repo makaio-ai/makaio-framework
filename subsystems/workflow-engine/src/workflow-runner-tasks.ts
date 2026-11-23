@@ -11,6 +11,7 @@ import {
   type WorkflowRunResult,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type { ActiveExecution, ExecutorConfig } from './types.js';
 import type { FinalizerDeps } from './workflow-execution-finalizer.js';
 import {
@@ -95,11 +96,13 @@ function runnerCancellationReason(signal: AbortSignal): string {
  * can persist terminal state, storage still contains the parent executor's initial
  * `running` record. This helper reads storage first to avoid overwriting a worker
  * that has already terminalized the execution.
+ * @param call - Call context of the message that triggered this execution.
  * @param deps - Runner task dependencies.
  * @param executionId - Workflow execution identifier.
  * @param signal - Runner AbortSignal that has already been aborted.
  */
 async function cancelRunningExecutionAfterRunnerAbort(
+  call: CallContext,
   deps: RunnerTaskDeps,
   executionId: string,
   signal: AbortSignal,
@@ -108,7 +111,7 @@ async function cancelRunningExecutionAfterRunnerAbort(
   if (!active || active.execution.status !== 'running') return;
 
   const finalizerDeps = deps.buildFinalizerDeps();
-  const { execution } = await finalizerDeps.bus.request(WorkflowStorageSubjects.getExecution, {
+  const { execution } = await finalizerDeps.bus.request(call, WorkflowStorageSubjects.getExecution, {
     executionId,
   });
   if (execution?.status !== 'running') return;
@@ -116,7 +119,7 @@ async function cancelRunningExecutionAfterRunnerAbort(
   // Refresh the in-memory execution state from the durable snapshot so the
   // finalizer sees the latest status before issuing the cancellation.
   active.execution = execution;
-  const cancelled = await cancelExecution(finalizerDeps, executionId, runnerCancellationReason(signal));
+  const cancelled = await cancelExecution(call, finalizerDeps, executionId, runnerCancellationReason(signal));
   if (!cancelled) {
     console.error(`[WorkflowExecutor] Failed to persist runner cancellation for ${executionId}: execution not active`);
   }
@@ -130,10 +133,12 @@ async function cancelRunningExecutionAfterRunnerAbort(
  * active execution through the finalizer before this fallback observes it.
  * Providers that only return a terminal result, such as externally observed
  * GitHub Actions runs, still need the host executor to persist that result.
+ * @param call - Call context of the message that triggered this execution.
  * @param deps - Runner task dependencies.
  * @param result - Terminal result returned by the workflow runner.
  */
 export async function finalizeResolvedRunnerResult(
+  call: CallContext,
   deps: Pick<RunnerTaskDeps, 'activeExecutions' | 'buildFinalizerDeps'>,
   result: WorkflowRunResult,
 ): Promise<void> {
@@ -141,22 +146,28 @@ export async function finalizeResolvedRunnerResult(
   if (!active || active.execution.status !== 'running') return;
 
   const finalizerDeps = deps.buildFinalizerDeps();
-  const { execution } = await finalizerDeps.bus.request(WorkflowStorageSubjects.getExecution, {
+  const { execution } = await finalizerDeps.bus.request(call, WorkflowStorageSubjects.getExecution, {
     executionId: result.executionId,
   });
   if (execution?.status !== 'running') return;
 
   active.execution = execution;
   if (result.status === 'completed') {
-    await completeExecutionWithSuccess(finalizerDeps, active.execution, result.executionId, active.execution.startedAt);
+    await completeExecutionWithSuccess(
+      call,
+      finalizerDeps,
+      active.execution,
+      result.executionId,
+      active.execution.startedAt,
+    );
     return;
   }
   if (result.status === 'cancelled') {
-    await cancelExecution(finalizerDeps, result.executionId, result.reason ?? WORKFLOW_CANCELLED_REASON);
+    await cancelExecution(call, finalizerDeps, result.executionId, result.reason ?? WORKFLOW_CANCELLED_REASON);
     return;
   }
   if (result.status === 'failed') {
-    await completeExecutionWithFailure(finalizerDeps, active.execution, result.executionId, result.error);
+    await completeExecutionWithFailure(call, finalizerDeps, active.execution, result.executionId, result.error);
     return;
   }
 }
@@ -250,12 +261,14 @@ export interface FileRunnerTaskParams {
  *   a paused subscriber may already have resumed the next attempt.
  * - `authority-recorded-only`: the owner accepted a technical fact without a
  *   lifecycle projection. Release local task bookkeeping only.
+ * @param call - Call context of the message that triggered this execution.
  * @param deps - Runner task dependencies.
  * @param completion - Completion envelope returned by the runner.
  * @param config - Identity bound to this runner invocation.
  * @param ownedExecution - Active entry captured before invoking the runner.
  */
 async function handleRunnerCompletion(
+  call: CallContext,
   deps: RunnerTaskDeps,
   completion: WorkflowRunnerCompletion,
   config: Pick<WorkflowWorkerConfig, 'executionId' | 'workflowId'>,
@@ -273,10 +286,10 @@ async function handleRunnerCompletion(
   // Uncommitted: host executor owns finalization.
   const { result } = completion;
   if (result.status === 'paused') {
-    await parkExecution(deps.buildFinalizerDeps(), result);
+    await parkExecution(call, deps.buildFinalizerDeps(), result);
     return;
   }
-  await finalizeResolvedRunnerResult(deps, result);
+  await finalizeResolvedRunnerResult(call, deps, result);
 }
 
 /**
@@ -331,11 +344,16 @@ function buildFileWorkerConfig(deps: RunnerTaskDeps, params: FileRunnerTaskParam
  * and managing the full execution lifecycle. If the runner returns a terminal
  * result without having already finalized durable state, the host executor
  * persists that result as a fallback.
+ * @param call - Call context of the message that triggered this execution.
  * @param deps - Runner task dependencies.
  * @param params - Identifiers and pre-computed execution data.
  * @returns Settled Promise tracked in `executionTasks`.
  */
-export function buildFileExecutionTask(deps: RunnerTaskDeps, params: FileRunnerTaskParams): Promise<void> {
+export function buildFileExecutionTask(
+  call: CallContext,
+  deps: RunnerTaskDeps,
+  params: FileRunnerTaskParams,
+): Promise<void> {
   const { executionId } = params;
   const { workflowRunner, workflowAbortControllers, activeExecutions } = deps;
   const ownedExecution = activeExecutions.get(executionId);
@@ -344,12 +362,12 @@ export function buildFileExecutionTask(deps: RunnerTaskDeps, params: FileRunnerT
   workflowAbortControllers.set(executionId, controller);
 
   const workerConfig = buildFileWorkerConfig(deps, params);
-  const runOptions = ownerAdmissionOptions(deps, executionId, controller.signal);
+  const runOptions = ownerAdmissionOptions(call, deps, executionId, controller.signal);
 
   return Promise.resolve()
-    .then(() => workflowRunner.run(workerConfig, controller.signal, undefined, runOptions))
+    .then(() => workflowRunner.run(call, workerConfig, controller.signal, undefined, runOptions))
     .then(async (completion) => {
-      await handleRunnerCompletion(deps, completion, workerConfig, ownedExecution);
+      await handleRunnerCompletion(call, deps, completion, workerConfig, ownedExecution);
     })
     .catch(async (error: unknown) => {
       if (activeExecutions.get(executionId) !== ownedExecution) {
@@ -357,7 +375,7 @@ export function buildFileExecutionTask(deps: RunnerTaskDeps, params: FileRunnerT
         return;
       }
       if (controller.signal.aborted) {
-        await cancelRunningExecutionAfterRunnerAbort(deps, executionId, controller.signal).catch(
+        await cancelRunningExecutionAfterRunnerAbort(call, deps, executionId, controller.signal).catch(
           (persistError: unknown) => {
             console.error(
               `[WorkflowExecutor] Failed to persist file runner cancellation for ${executionId}:`,
@@ -370,14 +388,18 @@ export function buildFileExecutionTask(deps: RunnerTaskDeps, params: FileRunnerT
       const active = activeExecutions.get(executionId);
       if (active) {
         const message = error instanceof Error ? error.message : String(error);
-        await completeExecutionWithFailure(deps.buildFinalizerDeps(), active.execution, executionId, message).catch(
-          (persistError: unknown) => {
-            console.error(
-              `[WorkflowExecutor] Failed to persist file runner boot failure for ${executionId}:`,
-              persistError,
-            );
-          },
-        );
+        await completeExecutionWithFailure(
+          call,
+          deps.buildFinalizerDeps(),
+          active.execution,
+          executionId,
+          message,
+        ).catch((persistError: unknown) => {
+          console.error(
+            `[WorkflowExecutor] Failed to persist file runner boot failure for ${executionId}:`,
+            persistError,
+          );
+        });
       }
     })
     .finally(() => releaseRunnerTask(deps, executionId, ownedExecution, controller));
@@ -424,11 +446,16 @@ function buildDefinitionWorkerConfig(deps: RunnerTaskDeps, params: DefinitionRun
  * durable state, the host executor persists that result as a fallback.
  * The caller is responsible for ensuring a runner is present before invoking
  * this function (i.e. use the in-process path when `workflowRunner` is absent).
+ * @param call - Call context of the message that triggered this execution.
  * @param deps - Runner task dependencies.
  * @param params - Identifiers, pre-computed execution data, and the workflow definition.
  * @returns Settled Promise tracked in `executionTasks`.
  */
-export function buildExecutionTask(deps: RunnerTaskDeps, params: DefinitionRunnerTaskParams): Promise<void> {
+export function buildExecutionTask(
+  call: CallContext,
+  deps: RunnerTaskDeps,
+  params: DefinitionRunnerTaskParams,
+): Promise<void> {
   const { executionId } = params;
   const { workflowRunner, workflowAbortControllers, activeExecutions } = deps;
   const ownedExecution = activeExecutions.get(executionId);
@@ -438,14 +465,14 @@ export function buildExecutionTask(deps: RunnerTaskDeps, params: DefinitionRunne
 
   const workerConfig = buildDefinitionWorkerConfig(deps, params);
   const runOptions: WorkflowRunnerRunOptions = {
-    ...ownerAdmissionOptions(deps, executionId, controller.signal),
+    ...ownerAdmissionOptions(call, deps, executionId, controller.signal),
     ...(params.dispatchMetadata === undefined ? {} : { dispatchMetadata: params.dispatchMetadata }),
   };
 
   return Promise.resolve()
-    .then(() => workflowRunner.run(workerConfig, controller.signal, undefined, runOptions))
+    .then(() => workflowRunner.run(call, workerConfig, controller.signal, undefined, runOptions))
     .then(async (completion) => {
-      await handleRunnerCompletion(deps, completion, workerConfig, ownedExecution);
+      await handleRunnerCompletion(call, deps, completion, workerConfig, ownedExecution);
     })
     .catch(async (error: unknown) => {
       if (activeExecutions.get(executionId) !== ownedExecution) {
@@ -453,7 +480,7 @@ export function buildExecutionTask(deps: RunnerTaskDeps, params: DefinitionRunne
         return;
       }
       if (controller.signal.aborted) {
-        await cancelRunningExecutionAfterRunnerAbort(deps, executionId, controller.signal).catch(
+        await cancelRunningExecutionAfterRunnerAbort(call, deps, executionId, controller.signal).catch(
           (persistError: unknown) => {
             console.error(`[WorkflowExecutor] Failed to persist runner cancellation for ${executionId}:`, persistError);
           },
@@ -466,11 +493,15 @@ export function buildExecutionTask(deps: RunnerTaskDeps, params: DefinitionRunne
       const active = activeExecutions.get(executionId);
       if (active) {
         const message = error instanceof Error ? error.message : String(error);
-        await completeExecutionWithFailure(deps.buildFinalizerDeps(), active.execution, executionId, message).catch(
-          (persistError: unknown) => {
-            console.error(`[WorkflowExecutor] Failed to persist runner boot failure for ${executionId}:`, persistError);
-          },
-        );
+        await completeExecutionWithFailure(
+          call,
+          deps.buildFinalizerDeps(),
+          active.execution,
+          executionId,
+          message,
+        ).catch((persistError: unknown) => {
+          console.error(`[WorkflowExecutor] Failed to persist runner boot failure for ${executionId}:`, persistError);
+        });
       }
     })
     .finally(() => releaseRunnerTask(deps, executionId, ownedExecution, controller));
@@ -480,12 +511,14 @@ export function buildExecutionTask(deps: RunnerTaskDeps, params: DefinitionRunne
  * Bind attempt creation to the current single-owner executor's lifecycle queue.
  * The durable status check also rejects work resumed from stale local state.
  * This is owner admission, not a distributed lock between arbitrary executors.
+ * @param call - Call context of the message that triggered the execution; forwarded by the status read.
  * @param deps - Current owner's shared lifecycle dependencies.
  * @param executionId - Owner whose new attempt requires admission.
  * @param signal - Local cancellation, checked after acquiring admission.
  * @returns Local-only runner controls, never serialized onto the bus.
  */
 function ownerAdmissionOptions(
+  call: CallContext,
   deps: RunnerTaskDeps,
   executionId: string,
   signal: AbortSignal,
@@ -495,7 +528,9 @@ function ownerAdmissionOptions(
       const finalizerDeps = deps.buildFinalizerDeps();
       return withExecutionDurableTransition(finalizerDeps, executionId, async () => {
         signal.throwIfAborted();
-        const { execution } = await finalizerDeps.bus.request(WorkflowStorageSubjects.getExecution, { executionId });
+        const { execution } = await finalizerDeps.bus.request(call, WorkflowStorageSubjects.getExecution, {
+          executionId,
+        });
         signal.throwIfAborted();
         if (execution?.status !== 'running')
           throw new Error(`Execution '${executionId}' no longer permits attempt creation`);

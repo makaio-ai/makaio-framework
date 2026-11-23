@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type {
   LoopGateHandler,
   StationHandler,
@@ -77,8 +78,16 @@ export interface WorkflowMaterializationSpecResolution {
  * path-backed run context is persisted.
  */
 export interface WorkflowMaterializationSpecResolver {
-  /** Resolve the portable materialization spec for one execution start. */
-  resolve(input: WorkflowMaterializationSpecResolution): Promise<WorkerMaterializationSpec | undefined>;
+  /**
+   * Resolve the portable materialization spec for one execution start.
+   * @param call - Call of the message that started the execution, never a registration-time call.
+   * @param input - Start identity and process-local source information.
+   * @returns Portable materialization spec, or undefined when this resolver does not own the source.
+   */
+  resolve(
+    call: CallContext,
+    input: WorkflowMaterializationSpecResolution,
+  ): Promise<WorkerMaterializationSpec | undefined>;
 }
 
 /**

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { HarnessSubjects, type HarnessDefinition } from '@makaio/contracts';
+import { HarnessSubjects, type CallContext, type HarnessDefinition } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { resolveDisabledNativeTools, type HarnessRequester } from '../resolveDisabledNativeTools.js';
 
 /**
@@ -34,6 +35,7 @@ function makeMockRequester(
 ): HarnessRequester {
   const requester: HarnessRequester = {
     requestOptional: async (
+      _call: CallContext,
       subject: typeof HarnessSubjects.get | typeof HarnessSubjects.getDefault,
       _payload: { id: string } | { adapterName?: string; clientId?: string },
     ) => {
@@ -49,71 +51,77 @@ function makeMockRequester(
 
 describe('resolveDisabledNativeTools', () => {
   it('returns disabled tool names via default harness lookup when no harnessId', async () => {
+    const call = createTestCall();
     const requester = makeMockRequester({
       getDefault: { handled: true, data: makeHarness() },
     });
 
-    const disabled = await resolveDisabledNativeTools(requester, 'openai-node');
+    const disabled = await resolveDisabledNativeTools(call, requester, 'openai-node');
 
     expect(disabled).toEqual(['patch', 'bash']);
-    expect(requester.requestOptional).toHaveBeenCalledWith(HarnessSubjects.getDefault, {
+    expect(requester.requestOptional).toHaveBeenCalledWith(call, HarnessSubjects.getDefault, {
       adapterName: 'openai-node',
     });
   });
 
   it('returns an empty array when harness service is not registered (no harnessId)', async () => {
+    const call = createTestCall();
     const requester = makeMockRequester({ getDefault: { handled: false } });
 
-    const disabled = await resolveDisabledNativeTools(requester, 'codex-app-server');
+    const disabled = await resolveDisabledNativeTools(call, requester, 'codex-app-server');
 
     expect(disabled).toEqual([]);
-    expect(requester.requestOptional).toHaveBeenCalledWith(HarnessSubjects.getDefault, {
+    expect(requester.requestOptional).toHaveBeenCalledWith(call, HarnessSubjects.getDefault, {
       adapterName: 'codex-app-server',
     });
   });
 
   it('uses explicit harnessId lookup when provided', async () => {
+    const call = createTestCall();
     const requester = makeMockRequester({
       get: { handled: true, data: makeHarness({ nativeTools: { enabled: [], disabled: ['shell'] } }) },
     });
 
-    const disabled = await resolveDisabledNativeTools(requester, 'openai-node', 'h-explicit');
+    const disabled = await resolveDisabledNativeTools(call, requester, 'openai-node', 'h-explicit');
 
     expect(disabled).toEqual(['shell']);
-    expect(requester.requestOptional).toHaveBeenCalledWith(HarnessSubjects.get, { id: 'h-explicit' });
-    expect(requester.requestOptional).not.toHaveBeenCalledWith(HarnessSubjects.getDefault, expect.anything());
+    expect(requester.requestOptional).toHaveBeenCalledWith(call, HarnessSubjects.get, { id: 'h-explicit' });
+    expect(requester.requestOptional).not.toHaveBeenCalledWith(call, HarnessSubjects.getDefault, expect.anything());
   });
 
   it('returns an empty array when harness service is not registered (explicit harnessId)', async () => {
+    const call = createTestCall();
     const requester = makeMockRequester({ get: { handled: false } });
 
-    const disabled = await resolveDisabledNativeTools(requester, 'openai-node', 'h-explicit');
+    const disabled = await resolveDisabledNativeTools(call, requester, 'openai-node', 'h-explicit');
 
     expect(disabled).toEqual([]);
-    expect(requester.requestOptional).toHaveBeenCalledWith(HarnessSubjects.get, { id: 'h-explicit' });
+    expect(requester.requestOptional).toHaveBeenCalledWith(call, HarnessSubjects.get, { id: 'h-explicit' });
   });
 
   it('prefers explicit harnessId lookup when both harnessId and clientId are provided', async () => {
+    const call = createTestCall();
     const requester = makeMockRequester({
       get: { handled: true, data: makeHarness({ nativeTools: { enabled: [], disabled: ['shell'] } }) },
       getDefault: { handled: true, data: makeHarness({ nativeTools: { enabled: [], disabled: ['patch'] } }) },
     });
 
-    const disabled = await resolveDisabledNativeTools(requester, 'openai-node', 'h-explicit', 'claude-code');
+    const disabled = await resolveDisabledNativeTools(call, requester, 'openai-node', 'h-explicit', 'claude-code');
 
     expect(disabled).toEqual(['shell']);
-    expect(requester.requestOptional).toHaveBeenCalledWith(HarnessSubjects.get, { id: 'h-explicit' });
-    expect(requester.requestOptional).not.toHaveBeenCalledWith(HarnessSubjects.getDefault, expect.anything());
+    expect(requester.requestOptional).toHaveBeenCalledWith(call, HarnessSubjects.get, { id: 'h-explicit' });
+    expect(requester.requestOptional).not.toHaveBeenCalledWith(call, HarnessSubjects.getDefault, expect.anything());
   });
 
   it('passes clientId through the default harness lookup when provided', async () => {
+    const call = createTestCall();
     const requester = makeMockRequester({
       getDefault: { handled: true, data: makeHarness() },
     });
 
-    await resolveDisabledNativeTools(requester, 'openai-node', undefined, 'claude-code');
+    await resolveDisabledNativeTools(call, requester, 'openai-node', undefined, 'claude-code');
 
-    expect(requester.requestOptional).toHaveBeenCalledWith(HarnessSubjects.getDefault, {
+    expect(requester.requestOptional).toHaveBeenCalledWith(call, HarnessSubjects.getDefault, {
       adapterName: 'openai-node',
       clientId: 'claude-code',
     });

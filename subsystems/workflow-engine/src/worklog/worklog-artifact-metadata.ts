@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { ArtifactSubjects, type WorkflowArtifactBinding } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { getWorklogFrameEntryRow } from './worklog-storage.js';
 
@@ -16,6 +17,7 @@ export interface ResolvedArtifactWriteMetadata {
 /**
  * Resolve the WorkLog metadata that is intentionally not duplicated on the
  * `workflow.artifact.updated` event.
+ * @param call - Call context of the handled artifact event; forwarded by the resolve request.
  * @param bus - Message bus used to resolve the artifact revision.
  * @param db - Drizzle database instance used to look up the frame row.
  * @param frameId - Frame that emitted the artifact write event.
@@ -24,6 +26,7 @@ export interface ResolvedArtifactWriteMetadata {
  * @returns Node and artifact metadata, or `null` when the lookup cannot be completed.
  */
 export async function resolveArtifactWriteMetadata(
+  call: CallContext,
   bus: IMakaioBus,
   db: MakaioDatabase,
   frameId: string,
@@ -36,7 +39,7 @@ export async function resolveArtifactWriteMetadata(
   }
 
   const resolved = await bus
-    .requestOptional(ArtifactSubjects.resolve, {
+    .requestOptional(call, ArtifactSubjects.resolve, {
       ref: {
         refClass: 'artifact',
         kind: artifactRef.kind,

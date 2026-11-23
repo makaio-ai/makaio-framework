@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
+import { createTestBusInstance, createTestCall } from '@makaio/test-utils';
 import { CodexAppServerThread } from '../thread.js';
 import { CodexAppServerNamespace } from '../namespaces/index.js';
 
@@ -13,7 +14,7 @@ describe('CodexAppServerThread', () => {
   let thread: CodexAppServerThread;
 
   beforeEach(async () => {
-    bus = await CodexAppServerNamespace.scopedBus();
+    bus = await CodexAppServerNamespace.scopedBus(createTestBusInstance());
     thread = new CodexAppServerThread({
       bus,
       adapterId,
@@ -39,7 +40,7 @@ describe('CodexAppServerThread', () => {
     it('sets threadId and keeps state active', async () => {
       const threadId = 'thread-123';
 
-      await thread.handleThreadStarted(threadId);
+      await thread.handleThreadStarted(createTestCall(), threadId);
 
       expect(thread.threadId).toBe(threadId);
       expect(thread.state).toBe('active');
@@ -49,40 +50,40 @@ describe('CodexAppServerThread', () => {
   describe('handleThreadCompleted', () => {
     it('transitions state to completed', async () => {
       const threadId = 'thread-789';
-      await thread.handleThreadStarted(threadId);
+      await thread.handleThreadStarted(createTestCall(), threadId);
 
-      await thread.handleThreadCompleted('completed');
+      await thread.handleThreadCompleted(createTestCall(), 'completed');
 
       expect(thread.state).toBe('completed');
     });
 
     it('transitions state to archived when specified', async () => {
       const threadId = 'thread-archive';
-      await thread.handleThreadStarted(threadId);
+      await thread.handleThreadStarted(createTestCall(), threadId);
 
-      await thread.handleThreadCompleted('archived');
+      await thread.handleThreadCompleted(createTestCall(), 'archived');
 
       expect(thread.state).toBe('archived');
     });
 
     it('throws error when threadId not set', async () => {
-      await expect(thread.handleThreadCompleted('completed')).rejects.toThrow(
+      await expect(thread.handleThreadCompleted(createTestCall(), 'completed')).rejects.toThrow(
         'Cannot complete thread: threadId not set',
       );
     });
 
     it('updates isCompleted after completion', async () => {
-      await thread.handleThreadStarted('thread-1');
+      await thread.handleThreadStarted(createTestCall(), 'thread-1');
       expect(thread.isCompleted()).toBe(false);
 
-      await thread.handleThreadCompleted('completed');
+      await thread.handleThreadCompleted(createTestCall(), 'completed');
       expect(thread.isCompleted()).toBe(true);
     });
   });
 
   describe('handleTokenUsageUpdated', () => {
     it('updates token usage tracking', async () => {
-      await thread.handleTokenUsageUpdated(100, 25, 50, 10, 175);
+      await thread.handleTokenUsageUpdated(createTestCall(), 100, 25, 50, 10, 175);
 
       expect(thread.tokenUsage).toEqual({
         promptTokens: 100,
@@ -94,7 +95,7 @@ describe('CodexAppServerThread', () => {
     });
 
     it('tracks zero reasoning tokens when none are used', async () => {
-      await thread.handleTokenUsageUpdated(100, 0, 50, 0, 150);
+      await thread.handleTokenUsageUpdated(createTestCall(), 100, 0, 50, 0, 150);
 
       expect(thread.tokenUsage).toEqual({
         promptTokens: 100,
@@ -106,10 +107,10 @@ describe('CodexAppServerThread', () => {
     });
 
     it('replaces usage on each update', async () => {
-      await thread.handleTokenUsageUpdated(100, 10, 50, 0, 160);
+      await thread.handleTokenUsageUpdated(createTestCall(), 100, 10, 50, 0, 160);
       expect(thread.tokenUsage?.totalTokens).toBe(160);
 
-      await thread.handleTokenUsageUpdated(50, 5, 25, 5, 80);
+      await thread.handleTokenUsageUpdated(createTestCall(), 50, 5, 25, 5, 80);
       expect(thread.tokenUsage?.totalTokens).toBe(80);
       expect(thread.tokenUsage?.inputCachedTokens).toBe(5);
       expect(thread.tokenUsage?.reasoningTokens).toBe(5);
@@ -143,15 +144,15 @@ describe('CodexAppServerThread', () => {
   describe('lifecycle flow', () => {
     it('handles complete thread lifecycle', async () => {
       // Thread starts
-      await thread.handleThreadStarted('thread-lifecycle');
+      await thread.handleThreadStarted(createTestCall(), 'thread-lifecycle');
       expect(thread.isActive()).toBe(true);
 
       // Token usage updates
-      await thread.handleTokenUsageUpdated(500, 0, 200, 0, 700);
+      await thread.handleTokenUsageUpdated(createTestCall(), 500, 0, 200, 0, 700);
       expect(thread.tokenUsage?.totalTokens).toBe(700);
 
       // Thread completes
-      await thread.handleThreadCompleted('completed');
+      await thread.handleThreadCompleted(createTestCall(), 'completed');
       expect(thread.isCompleted()).toBe(true);
     });
   });

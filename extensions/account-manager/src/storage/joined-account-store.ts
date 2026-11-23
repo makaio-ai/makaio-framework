@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { Account } from '../bus/schemas.js';
 import type {
   IAccountCredentialStore,
@@ -23,18 +24,20 @@ export function joinStoredAccount(account: Account, credential: StoredAccountCre
 
 /**
  * Lists joined accounts for one client.
+ * @param call - Call context forwarded to the metadata store
  * @param metadataStore - Public metadata store
  * @param credentialStore - Credential store
  * @param clientId - Stable client identifier
  * @returns Joined accounts that have both metadata and credential rows
  */
 export async function listStoredAccounts(
+  call: CallContext,
   metadataStore: IAccountMetadataStore,
   credentialStore: IAccountCredentialStore,
   clientId: string,
 ): Promise<StoredAccount[]> {
   const [metadataAccounts, credentialAccounts] = await Promise.all([
-    metadataStore.list(clientId),
+    metadataStore.list(call, clientId),
     credentialStore.list(clientId),
   ]);
   const credentialsById = new Map(credentialAccounts.map((account) => [account.id, account]));
@@ -46,6 +49,7 @@ export async function listStoredAccounts(
 
 /**
  * Retrieves one joined account.
+ * @param call - Call context forwarded to the metadata store
  * @param metadataStore - Public metadata store
  * @param credentialStore - Credential store
  * @param clientId - Stable client identifier
@@ -53,13 +57,14 @@ export async function listStoredAccounts(
  * @returns Joined account, or null when either side is absent
  */
 export async function getStoredAccount(
+  call: CallContext,
   metadataStore: IAccountMetadataStore,
   credentialStore: IAccountCredentialStore,
   clientId: string,
   accountId: string,
 ): Promise<StoredAccount | null> {
   const [metadata, credential] = await Promise.all([
-    metadataStore.get(clientId, accountId),
+    metadataStore.get(call, clientId, accountId),
     credentialStore.get(clientId, accountId),
   ]);
   return metadata && credential ? joinStoredAccount(metadata, credential) : null;
@@ -67,6 +72,7 @@ export async function getStoredAccount(
 
 /**
  * Retrieves one joined account together with the metadata generation captured from the same metadata row snapshot.
+ * @param call - Call context forwarded to the metadata store
  * @param metadataStore - Public metadata store
  * @param credentialStore - Credential store
  * @param clientId - Stable client identifier
@@ -74,13 +80,14 @@ export async function getStoredAccount(
  * @returns Joined account plus generation, or null when either side is absent
  */
 export async function getStoredAccountWithGeneration(
+  call: CallContext,
   metadataStore: IAccountMetadataStore,
   credentialStore: IAccountCredentialStore,
   clientId: string,
   accountId: string,
 ): Promise<{ account: StoredAccount; metadataGeneration: number } | null> {
   const [metadata, credential] = await Promise.all([
-    metadataStore.getWithMetadataGeneration(clientId, accountId),
+    metadataStore.getWithMetadataGeneration(call, clientId, accountId),
     credentialStore.get(clientId, accountId),
   ]);
   return metadata && credential
@@ -93,12 +100,14 @@ export async function getStoredAccountWithGeneration(
 
 /**
  * Upserts both sides of one joined account.
+ * @param call - Call context forwarded to the metadata store
  * @param metadataStore - Public metadata store
  * @param credentialStore - Credential store
  * @param clientId - Stable client identifier
  * @param account - Joined account aggregate to persist
  */
 export async function upsertStoredAccount(
+  call: CallContext,
   metadataStore: IAccountMetadataStore,
   credentialStore: IAccountCredentialStore,
   clientId: string,
@@ -114,17 +123,19 @@ export async function upsertStoredAccount(
     credential: account.credential,
     fingerprint: account.fingerprint,
   });
-  await metadataStore.upsert(clientId, toPublicAccount(account));
+  await metadataStore.upsert(call, clientId, toPublicAccount(account));
 }
 
 /**
  * Removes both sides of one joined account.
+ * @param call - Call context forwarded to the metadata store
  * @param metadataStore - Public metadata store
  * @param credentialStore - Credential store
  * @param clientId - Stable client identifier
  * @param accountId - Stable account identifier to remove
  */
 export async function removeStoredAccount(
+  call: CallContext,
   metadataStore: IAccountMetadataStore,
   credentialStore: IAccountCredentialStore,
   clientId: string,
@@ -134,6 +145,6 @@ export async function removeStoredAccount(
   // failures hide the account from joined reads, and callers must retry or
   // reconcile after an error rather than assuming the helper can repair both
   // backends transactionally.
-  await metadataStore.remove(clientId, accountId);
+  await metadataStore.remove(call, clientId, accountId);
   await credentialStore.remove(clientId, accountId);
 }

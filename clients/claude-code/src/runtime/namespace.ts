@@ -8,7 +8,7 @@ import { ClaudeCodeWiringSchemas } from '../schemas/wiring.js';
 /**
  * Claude Code-specific client namespace for raw client-native events.
  *
- * Uses {@link createClientNamespace} with `additionalSchemas` to register the
+ * Uses {@link createClientNamespace} with `additionalSchemas` to define the
  * following subjects:
  * - `hook.received` — raw catch-all hook ingress for all Claude Code hook
  *   events (pre-wired by the shared `createClientNamespace` factory).
@@ -43,6 +43,12 @@ const claudeCodeNamespace = createClientNamespace('claude-code', {
   ...ClaudeCodeSessionConfigSchemas,
   ...ClaudeCodeConfigPrimeSchemas,
 });
+
+/**
+ * Namespace definition for `client:claude-code`, declared in the runtime
+ * manifest's `namespaces` so the extension coordinator registers it on load.
+ */
+export const ClaudeCodeClientNamespace = claudeCodeNamespace.definition;
 
 /**
  * Typed subjects for the Claude Code client namespace.

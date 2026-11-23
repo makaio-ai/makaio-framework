@@ -13,6 +13,7 @@ import {
   type ClientRecord,
   type ProviderRecord,
 } from '@makaio/services-core/settings/storage';
+import { createTestCall } from '@makaio/test-utils';
 import { ProviderConfigAuthValidationError } from './provider-config-auth-validation.js';
 import { buildProviderRuntimeContextFromRaw, ProviderRuntimeContextError } from './provider-runtime-view.js';
 
@@ -163,7 +164,9 @@ describe('buildProviderRuntimeContextFromRaw', () => {
       credentialRefs: { apiKey: CredentialRefSchema.parse('env:ANTHROPIC_API_KEY') },
     });
 
-    await expect(buildProviderRuntimeContextFromRaw(MakaioBus, 'anthropic-work', raw)).resolves.toEqual({
+    await expect(
+      buildProviderRuntimeContextFromRaw(createTestCall(), MakaioBus, 'anthropic-work', raw),
+    ).resolves.toEqual({
       context: {
         state: 'resolved',
         providerConfigId: 'anthropic-work',
@@ -189,7 +192,7 @@ describe('buildProviderRuntimeContextFromRaw', () => {
       account: { managerId: 'claude-accounts', accountId: 'work' },
     });
 
-    const { context } = await buildProviderRuntimeContextFromRaw(MakaioBus, 'anthropic-native', raw);
+    const { context } = await buildProviderRuntimeContextFromRaw(createTestCall(), MakaioBus, 'anthropic-native', raw);
 
     expect(context.auth).toEqual({
       mode: 'inferred',
@@ -209,7 +212,7 @@ describe('buildProviderRuntimeContextFromRaw', () => {
       method: { owner: 'provider', providerDefinitionId: 'anthropic', methodId: 'api-key' },
     });
 
-    const error = await buildProviderRuntimeContextFromRaw(MakaioBus, 'anthropic-work', raw).catch(
+    const error = await buildProviderRuntimeContextFromRaw(createTestCall(), MakaioBus, 'anthropic-work', raw).catch(
       (value: unknown) => value,
     );
 
@@ -225,7 +228,7 @@ describe('buildProviderRuntimeContextFromRaw', () => {
       credentialRefs: { unexpected: CredentialRefSchema.parse('env:ANTHROPIC_API_KEY') },
     });
 
-    const error = await buildProviderRuntimeContextFromRaw(MakaioBus, 'anthropic-work', raw).catch(
+    const error = await buildProviderRuntimeContextFromRaw(createTestCall(), MakaioBus, 'anthropic-work', raw).catch(
       (value: unknown) => value,
     );
 
@@ -240,7 +243,7 @@ describe('buildProviderRuntimeContextFromRaw', () => {
       method: { owner: 'client', clientId: 'removed-client', methodId: 'native' },
     });
 
-    const error = await buildProviderRuntimeContextFromRaw(MakaioBus, 'anthropic-native', raw).catch(
+    const error = await buildProviderRuntimeContextFromRaw(createTestCall(), MakaioBus, 'anthropic-native', raw).catch(
       (value: unknown) => value,
     );
 
@@ -265,9 +268,12 @@ describe('buildProviderRuntimeContextFromRaw', () => {
       false,
     );
 
-    const error = await buildProviderRuntimeContextFromRaw(MakaioBus, 'anthropic-disabled', raw).catch(
-      (value: unknown) => value,
-    );
+    const error = await buildProviderRuntimeContextFromRaw(
+      createTestCall(),
+      MakaioBus,
+      'anthropic-disabled',
+      raw,
+    ).catch((value: unknown) => value);
 
     expect(error).toBeInstanceOf(ProviderRuntimeContextError);
     expect((error as ProviderRuntimeContextError).code).toBe('provider-config-disabled');
@@ -282,7 +288,7 @@ describe('buildProviderRuntimeContextFromRaw', () => {
       credentialRefs: { apiKey: CredentialRefSchema.parse('env:ANTHROPIC_API_KEY') },
     });
 
-    const error = await buildProviderRuntimeContextFromRaw(MakaioBus, 'anthropic-work', raw).catch(
+    const error = await buildProviderRuntimeContextFromRaw(createTestCall(), MakaioBus, 'anthropic-work', raw).catch(
       (value: unknown) => value,
     );
 
@@ -297,7 +303,7 @@ describe('buildProviderRuntimeContextFromRaw', () => {
       method: { owner: 'client', clientId: 'claude-code', methodId: 'native' },
     });
 
-    const error = await buildProviderRuntimeContextFromRaw(MakaioBus, 'anthropic-native', raw).catch(
+    const error = await buildProviderRuntimeContextFromRaw(createTestCall(), MakaioBus, 'anthropic-native', raw).catch(
       (value: unknown) => value,
     );
 

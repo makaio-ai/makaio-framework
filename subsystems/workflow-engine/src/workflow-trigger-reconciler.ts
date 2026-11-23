@@ -7,6 +7,7 @@ import type {
   WorkflowDefinition,
 } from '@makaio/contracts';
 import { AutomationTriggerSubjects, WorkflowAutomationTriggerBindingSchema, WorkflowSubjects } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type { AutomationTriggerBindingRuntime } from '@makaio/services-core/automation-trigger';
 import { SerialLane } from '@makaio/utils';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
@@ -343,8 +344,17 @@ export class WorkflowTriggerReconciler {
       // workflow it no longer finds there. The three registrations stay separate
       // because `deleted` carries a narrower payload than the other two, so one
       // handler over a subject union would lose its contextual typing.
-      const onDefinitionSignal = ({ payload }: { readonly payload: { readonly id: string } }): void => {
-        this.onSignal(`refresh of workflow "${payload.id}"`, () => this.refreshDefinition(payload.id));
+      /**
+       * @param signal - Definition event whose call is forwarded through the detached refresh.
+       */
+      const onDefinitionSignal = ({
+        call,
+        payload,
+      }: {
+        readonly call: CallContext;
+        readonly payload: { readonly id: string };
+      }): void => {
+        this.onSignal(`refresh of workflow "${payload.id}"`, () => this.refreshDefinition(call, payload.id));
       };
 
       this.cleanupFns.push(
@@ -356,7 +366,7 @@ export class WorkflowTriggerReconciler {
         }),
       );
 
-      await this.reconcileStored('keep-last-good');
+      await this.reconcileStored(this.bus.own('start'), 'keep-last-good');
       this.initialized = true;
     } catch (error) {
       await this.teardown();
@@ -430,7 +440,7 @@ export class WorkflowTriggerReconciler {
       const sources = changes.map(({ owner, revision }) => `${owner}@${revision}`).join(', ');
 
       this.onSignal(`reconciliation after trigger registry changes (${sources})`, () =>
-        this.reconcileStored('drop-unavailable', kinds),
+        this.reconcileStored(this.bus.own('shared-work'), 'drop-unavailable', kinds),
       );
     });
   }
@@ -442,6 +452,7 @@ export class WorkflowTriggerReconciler {
   /**
    * Reconciles the persisted workflow definitions and forgets consumers whose
    * workflow no longer exists.
+   * @param call - Startup or coalesced registry reconciliation context.
    * @param onFailure - Policy applied when a consumer cannot be acquired.
    * @param kinds - When given, restricts reconciliation to the exact trigger
    *   kinds whose registration may have changed; a workflow declaring none of
@@ -450,13 +461,17 @@ export class WorkflowTriggerReconciler {
    * @returns Resolves once every workflow in scope has been reconciled.
    * @throws When the persisted definitions cannot be listed.
    */
-  private async reconcileStored(onFailure: AcquisitionFailurePolicy, kinds?: ReadonlySet<string>): Promise<void> {
+  private async reconcileStored(
+    call: CallContext,
+    onFailure: AcquisitionFailurePolicy,
+    kinds?: ReadonlySet<string>,
+  ): Promise<void> {
     await this.lane.run(async () => {
       // Read inside the lane: a snapshot taken before entering it can be
       // arbitrarily old by the time the lane drains, which would let a
       // reconciliation resurrect a workflow deleted meanwhile or forget one
       // created meanwhile.
-      const { workflows } = await this.bus.request(WorkflowStorageSubjects.list, {});
+      const { workflows } = await this.bus.request(call, WorkflowStorageSubjects.list, {});
       const stored = new Set(workflows.map((workflow) => workflow.id));
 
       for (const workflow of workflows) {
@@ -480,13 +495,14 @@ export class WorkflowTriggerReconciler {
    * so what is applied is the workflow as it stands when the refresh actually
    * runs — which is also why a deletion needs no separate signal path: a workflow
    * storage no longer holds is simply forgotten.
+   * @param call - Call context of the definition event.
    * @param workflowId - Workflow named by the event.
    * @returns Resolves once the refresh has settled.
    * @throws When the definition cannot be read.
    */
-  private async refreshDefinition(workflowId: string): Promise<void> {
+  private async refreshDefinition(call: CallContext, workflowId: string): Promise<void> {
     await this.lane.run(async () => {
-      const { workflow } = await this.bus.request(WorkflowStorageSubjects.get, { id: workflowId });
+      const { workflow } = await this.bus.request(call, WorkflowStorageSubjects.get, { id: workflowId });
       if (workflow === null) {
         await this.forgetWorkflowWithinLane(workflowId);
         return;
@@ -712,10 +728,12 @@ export class WorkflowTriggerReconciler {
       if (!outcome.matched) return;
 
       try {
-        await this.bus.request(WorkflowSubjects.start, {
+        const payload = {
           workflowId,
           triggerPayload: assertWorkflowTriggerPayload(event.payload),
-        });
+        };
+        // ORIGIN: A trigger observed without a causing bus message starts work on this bus.
+        await this.bus.request(event.call ?? this.bus.own('observer'), WorkflowSubjects.start, payload);
       } catch (error) {
         console.error(`${LOG_PREFIX} failed to start workflow "${workflowId}" from ${describe}:`, error);
       }

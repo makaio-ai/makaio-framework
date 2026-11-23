@@ -49,7 +49,8 @@ async function readWorkflowContext(
   signal: AbortSignal,
 ): Promise<WorkflowRunContext> {
   const response = WorkerSchemas['runtime.inputs.get'].response.parse(
-    await bus.request(WorkerSubjects.runtime.inputs.get, { executionAttemptId }, { signal }),
+    // ORIGIN: The local workload invocation fetches its selected runtime inputs after admission.
+    await bus.request(bus.own('root'), WorkerSubjects.runtime.inputs.get, { executionAttemptId }, { signal }),
   );
   if (response.runtimeInputs === null) throw new Error('Selected Worker Runtime inputs are unavailable');
   return WorkflowRunContextSchema.parse({

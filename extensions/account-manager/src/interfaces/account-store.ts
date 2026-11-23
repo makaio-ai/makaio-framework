@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { Account } from '../bus/schemas.js';
 import type { RawCredential } from './credential-source.js';
 import type { UsageEntry } from '../bus/usage-entry.js';
@@ -101,111 +102,132 @@ export type AccountTimelineReason = 'bootstrap' | 'detected' | 'switch';
 export interface IAccountMetadataStore {
   /**
    * Lists public account rows for a client.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @returns Public account rows
    */
-  list(clientId: string): Promise<Account[]>;
+  list(call: CallContext, clientId: string): Promise<Account[]>;
   /**
    * Lists public account rows linked to a canonical clients-core account.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @param linkedClientAccountId - Canonical clients-core account identifier
    * @returns Matching public account rows
    */
-  listByLinkedClientAccountId(clientId: string, linkedClientAccountId: string): Promise<Account[]>;
+  listByLinkedClientAccountId(call: CallContext, clientId: string, linkedClientAccountId: string): Promise<Account[]>;
   /**
    * Retrieves one public account row.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @param accountId - Account to retrieve
    * @returns Public account row, or null when absent
    */
-  get(clientId: string, accountId: string): Promise<Account | null>;
+  get(call: CallContext, clientId: string, accountId: string): Promise<Account | null>;
   /**
    * Retrieves one public account row together with its current metadata generation.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @param accountId - Account to retrieve
    * @returns Public account row plus generation, or null when absent
    */
   getWithMetadataGeneration(
+    call: CallContext,
     clientId: string,
     accountId: string,
   ): Promise<{ account: Account; metadataGeneration: number } | null>;
   /**
    * Upserts a full public account row.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @param account - Public account row
    */
-  upsert(clientId: string, account: Account): Promise<void>;
+  upsert(call: CallContext, clientId: string, account: Account): Promise<void>;
   /**
    * Removes a public account row.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @param accountId - Account to remove
    */
-  remove(clientId: string, accountId: string): Promise<void>;
+  remove(call: CallContext, clientId: string, accountId: string): Promise<void>;
   /**
    * Returns the currently active account row for a client.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @returns Active account row, or null when none is active
    */
-  getActive(clientId: string): Promise<Account | null>;
+  getActive(call: CallContext, clientId: string): Promise<Account | null>;
   /**
    * Returns the active account id at a historical timestamp.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @param timestamp - Historical lookup timestamp in epoch milliseconds
    * @returns Account id, or null when no timeline row is known yet
    */
-  getActiveAtTimestamp(clientId: string, timestamp: number): Promise<string | null>;
+  getActiveAtTimestamp(call: CallContext, clientId: string, timestamp: number): Promise<string | null>;
   /**
    * Returns the latest activation timeline row for a client.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @param reason - Optional reason filter
    * @returns Most recent matching timeline row, or null when absent
    */
-  getLatestTimelineEntry(clientId: string, reason?: AccountTimelineReason): Promise<AccountTimelineEntry | null>;
+  getLatestTimelineEntry(
+    call: CallContext,
+    clientId: string,
+    reason?: AccountTimelineReason,
+  ): Promise<AccountTimelineEntry | null>;
   /**
    * Deactivates every active row for the client.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    */
-  deactivateAll(clientId: string): Promise<void>;
+  deactivateAll(call: CallContext, clientId: string): Promise<void>;
   /**
    * Updates an account label without replacing other fields.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @param accountId - Account to update
    * @param label - Human-readable label
    * @returns Updated account row, or null when absent
    */
-  setLabel(clientId: string, accountId: string, label: string): Promise<Account | null>;
+  setLabel(call: CallContext, clientId: string, accountId: string, label: string): Promise<Account | null>;
   /**
    * Updates or clears the linked clients-core account ID without replacing other fields.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @param accountId - Account to update
    * @param linkedClientAccountId - Canonical clients-core account identifier, or null to unlink
    * @returns Updated account row, or null when absent
    */
   setLinkedClientAccountId(
+    call: CallContext,
     clientId: string,
     accountId: string,
     linkedClientAccountId: string | null,
   ): Promise<Account | null>;
   /**
    * Returns the current metadata generation for an account row.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @param accountId - Account to inspect
    * @returns Current metadata generation, or null when absent
    */
-  getMetadataGeneration(clientId: string, accountId: string): Promise<number | null>;
+  getMetadataGeneration(call: CallContext, clientId: string, accountId: string): Promise<number | null>;
   /**
    * Bumps the durable metadata generation for an account row.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @param accountId - Account to invalidate
    * @returns Updated metadata generation, or null when absent
    */
-  bumpMetadataGeneration(clientId: string, accountId: string): Promise<number | null>;
+  bumpMetadataGeneration(call: CallContext, clientId: string, accountId: string): Promise<number | null>;
   /**
    * Merges provider-derived metadata patches into an account row.
    *
    * Generation is an ownership invalidation token captured before a fetch.
    * Successful patches advance it so later writes can detect that the
    * metadata row has changed since the fetch began.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @param accountId - Account to update
    * @param expectedGeneration - Durable metadata generation captured before the fetch
@@ -213,6 +235,7 @@ export interface IAccountMetadataStore {
    * @returns Updated account row, or null when absent or stale
    */
   patchMetadata(
+    call: CallContext,
     clientId: string,
     accountId: string,
     expectedGeneration: number,
@@ -220,14 +243,16 @@ export interface IAccountMetadataStore {
   ): Promise<Account | null>;
   /**
    * Appends one activation timeline row.
+   * @param call - Call context of the sending caller
    * @param entry - Timeline row to append
    */
-  appendTimeline(entry: AccountTimelineEntry): Promise<void>;
+  appendTimeline(call: CallContext, entry: AccountTimelineEntry): Promise<void>;
   /**
    * Returns whether any public account rows already exist.
+   * @param call - Call context of the sending caller
    * @returns `true` when durable account state already exists
    */
-  hasAnyAccounts(): Promise<boolean>;
+  hasAnyAccounts(call: CallContext): Promise<boolean>;
 }
 
 /**
@@ -236,27 +261,31 @@ export interface IAccountMetadataStore {
 export interface IAccountUsageSnapshotStore {
   /**
    * Appends one usage-window snapshot.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @param accountId - Stable account identifier
    * @param entry - Window snapshot to append
    * @returns `true` when the snapshot was durably recorded
    */
-  append(clientId: string, accountId: string, entry: UsageEntry): Promise<boolean>;
+  append(call: CallContext, clientId: string, accountId: string, entry: UsageEntry): Promise<boolean>;
   /**
    * Streams usage-window snapshots for one account and time range.
+   * @param call - Call context of the sending caller
    * @param clientId - Stable client identifier
    * @param accountId - Stable account identifier
    * @param opts - Inclusive time range and optional window filter
    * @returns Async stream ordered by timestamp ascending
    */
   read(
+    call: CallContext,
     clientId: string,
     accountId: string,
     opts: { from: number; to: number; windowId?: string },
   ): AsyncIterable<UsageEntry>;
   /**
    * Returns whether any snapshots already exist.
+   * @param call - Call context of the sending caller
    * @returns `true` when durable usage snapshots already exist
    */
-  hasAnySnapshots(): Promise<boolean>;
+  hasAnySnapshots(call: CallContext): Promise<boolean>;
 }

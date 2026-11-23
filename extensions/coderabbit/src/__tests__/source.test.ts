@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { VCSSubjects, type VCSReviewComment } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { CodeRabbitSource } from '../source.js';
 
 const target = { repository: 'makaio-ai/makaio', prNumber: 42 };
@@ -69,7 +70,7 @@ describe('CodeRabbitSource', () => {
       });
     });
 
-    const snapshot = await new CodeRabbitSource(bus).fetchSnapshot({ repoPath: '/repo', target });
+    const snapshot = await new CodeRabbitSource(bus).fetchSnapshot(createTestCall(), { repoPath: '/repo', target });
 
     expect(seenRequests).toEqual([
       { repoPath: '/repo', prNumber: 42 },
@@ -86,7 +87,7 @@ describe('CodeRabbitSource', () => {
     const source = new CodeRabbitSource(createBusInstance());
 
     await expect(
-      source.fetchSnapshot({
+      source.fetchSnapshot(createTestCall(), {
         repoPath: '/repo',
         target: { repository: 'makaio-ai/makaio' },
       }),
@@ -102,7 +103,7 @@ describe('CodeRabbitSource', () => {
       ctx.setResult({ pullRequest: null });
     });
 
-    const snapshot = await new CodeRabbitSource(bus).fetchSnapshot({ repoPath: '/repo', target });
+    const snapshot = await new CodeRabbitSource(bus).fetchSnapshot(createTestCall(), { repoPath: '/repo', target });
 
     expect(snapshot.comments.map((comment) => comment.id)).toEqual([1]);
     expect(snapshot.reviews).toEqual([]);

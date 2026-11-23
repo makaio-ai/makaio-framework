@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { WorkflowWorkerConfig } from '@makaio/contracts';
 import { WorkflowSubjects } from '@makaio/contracts';
 import type { ExtractSubjectPayload } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { InProcessWorkflowRunner } from '../in-process-workflow-runner.js';
 import { makeBusWithStorage } from './fixtures.js';
 
@@ -44,7 +45,7 @@ describe('InProcessWorkflowRunner integration', () => {
 
     try {
       const runner = new InProcessWorkflowRunner({ bus });
-      const result = await runner.run(makeConfig(), new AbortController().signal);
+      const result = await runner.run(createTestCall(), makeConfig(), new AbortController().signal);
 
       expect(result).toEqual({
         state: 'uncommitted',

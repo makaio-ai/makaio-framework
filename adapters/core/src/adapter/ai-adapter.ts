@@ -1,5 +1,5 @@
-/* eslint max-lines: ["error", { "max": 455 }] */
-import { MakaioBus, type ScopedBus, type IMakaioBus } from '@makaio/bus-core';
+import type { ScopedBus, IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { AIAgent } from '../agent/ai-agent.js';
 import type { AdapterNamespace } from '../factory/index.js';
 import { AIAgentConnector, type BaseAgentConnectorConfig } from '../agent/index.js';
@@ -25,6 +25,20 @@ import { createStopAgentHandler } from './ai-adapter-stop-handler.js';
 import { createGetAgentHandler } from './ai-adapter-get-agent-handler.js';
 import { createAcknowledgeCallerSettlementHandler } from './ai-adapter-caller-settlement-handler.js';
 import * as AdapterInitialization from './ai-adapter-initialization.js';
+
+/**
+ * Project a registry entry onto the shared public handle shape.
+ * @param entry - Registry entry to project
+ * @returns Handle exposing the agent and its registry-owned session metadata
+ */
+function toActiveAgentHandle<TAgent>(entry: {
+  readonly agent: TAgent;
+  readonly sessionId: string;
+  readonly adapterSessionId: string | undefined;
+}): ActiveAgentHandle<TAgent> {
+  return { agent: entry.agent, sessionId: entry.sessionId, adapterSessionId: entry.adapterSessionId };
+}
+
 /**
  * Base class for AI adapters.
  *
@@ -113,7 +127,7 @@ export abstract class AIAdapter<
     this.name = config.name;
     this.capabilities = config.capabilities;
     this.nativeTools = config.nativeTools ?? [];
-    this.globalBus = config.globalBus ?? MakaioBus;
+    this.globalBus = config.globalBus;
     this.adapterBus = config.scopedBus as TBus;
     this.namespace = config.namespace;
     this.agentFactory = config.agentFactory;
@@ -213,7 +227,10 @@ export abstract class AIAdapter<
    * Handle agent.session.closed - cleanup agent + re-emit as adapter.session.closed.
    * @param ctx - Event context with session closed payload
    */
-  private handleSessionClosed = (ctx: { payload: { agentId: string; adapterSessionId?: string; reason?: string } }) => {
+  private handleSessionClosed = (ctx: {
+    payload: { agentId: string; adapterSessionId?: string; reason?: string };
+    call: CallContext;
+  }) => {
     const { agentId, adapterSessionId, reason } = ctx.payload;
     const entry = this.registry.get(agentId);
 
@@ -227,11 +244,11 @@ export abstract class AIAdapter<
 
     // runTeardown installs its flight synchronously before AIAgent.close emits
     // this event, so the reentrant eviction joins that exact flight (case 204c).
-    void this.registry.evict(agentId).catch((error) => {
+    void this.registry.evict(ctx.call, agentId).catch((error) => {
       console.error(`[AIAdapter:${this.name}] Failed to evict agent ${agentId} after session.closed:`, error);
     });
 
-    void this.globalBus.emit(AdapterSubjects.session.closed, {
+    void this.globalBus.emit(ctx.call, AdapterSubjects.session.closed, {
       adapterId: this.adapterId,
       adapterName: this.name,
       agentId,
@@ -247,6 +264,7 @@ export abstract class AIAdapter<
    */
   private handleSessionClosedByService = async (ctx: {
     payload: { sessionId: string; reason?: string };
+    call: CallContext;
   }): Promise<void> => {
     const { sessionId } = ctx.payload;
 
@@ -255,7 +273,7 @@ export abstract class AIAdapter<
     await Promise.all(
       agentsToEvict.map((agentId) =>
         this.registry
-          .evict(agentId, { emitSessionClosed: false })
+          .evict(ctx.call, agentId, { emitSessionClosed: false })
           .catch((error) =>
             console.error(`[AIAdapter:${this.name}] Failed to evict agent ${agentId} after session.closed:`, error),
           ),
@@ -280,13 +298,14 @@ export abstract class AIAdapter<
    */
   private handleUsage = (ctx: {
     payload: { agentId: string; adapterSessionId?: string; inputTokens: number; outputTokens: number };
+    call: CallContext;
   }): void => {
     const { agentId, adapterSessionId, inputTokens, outputTokens } = ctx.payload;
 
     const entry = this.registry.accumulateUsage(agentId, { inputTokens, outputTokens }, adapterSessionId);
     if (!entry) return;
 
-    void this.globalBus.emit(AdapterSubjects.session.usage, {
+    void this.globalBus.emit(ctx.call, AdapterSubjects.session.usage, {
       adapterId: this.adapterId,
       adapterName: this.name,
       sessionId: entry.sessionId,
@@ -305,7 +324,7 @@ export abstract class AIAdapter<
 
   private async initializeGeneration(): Promise<void> {
     this.globalBus.registerNamespaces([this.namespace.definition]);
-    this.adapterBus ??= (await this.namespace.scopedBus(this.globalBus.getContext())) as TBus;
+    this.adapterBus ??= (await this.namespace.scopedBus(this.globalBus)) as TBus;
     this.setupHandlers();
     await this.onInit();
   }
@@ -413,12 +432,17 @@ export abstract class AIAdapter<
    * `found` answers the question the boolean return always answered — was there an
    * agent here — and the class answers the one it could not: whether anything of
    * ours provably stopped speaking to the provider.
+   * @param call - Call context of the request that drives the disposal
    * @param agentId - Agent identifier
    * @param options - The driving request's deadline, when there is one
    * @returns Whether an agent was found, and what its teardown observed
    */
-  public async disposeAgent(agentId: string, options: AgentTeardownOptions = {}): Promise<AgentDisposalReport> {
-    return this.registry.dispose(agentId, options);
+  public async disposeAgent(
+    call: CallContext,
+    agentId: string,
+    options: AgentTeardownOptions = {},
+  ): Promise<AgentDisposalReport> {
+    return this.registry.dispose(call, agentId, options);
   }
 
   /**
@@ -436,17 +460,4 @@ export abstract class AIAdapter<
   public isInitialized(): boolean {
     return this.lifecycle.isInitialized();
   }
-}
-
-/**
- * Project a registry entry onto the shared public handle shape.
- * @param entry - Registry entry to project
- * @returns Handle exposing the agent and its registry-owned session metadata
- */
-function toActiveAgentHandle<TAgent>(entry: {
-  readonly agent: TAgent;
-  readonly sessionId: string;
-  readonly adapterSessionId: string | undefined;
-}): ActiveAgentHandle<TAgent> {
-  return { agent: entry.agent, sessionId: entry.sessionId, adapterSessionId: entry.adapterSessionId };
 }

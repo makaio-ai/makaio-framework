@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { AdapterRegistry } from '../adapter-registry.js';
 import { resetBusHandlers } from './shared.js';
@@ -107,7 +108,7 @@ describe('AdapterRegistry', () => {
       });
 
       try {
-        await expect(registry.resolveAvailable('openai-node')).resolves.toBe('runtime-only-id');
+        await expect(registry.resolveAvailable(createTestCall(), 'openai-node')).resolves.toBe('runtime-only-id');
         expect(registry.resolve('openai-node')).toBe('runtime-only-id');
       } finally {
         cleanup();
@@ -129,7 +130,7 @@ describe('AdapterRegistry', () => {
       });
 
       try {
-        await expect(registry.resolveAvailable('openai-node')).resolves.toBe('runtime-resolved-id');
+        await expect(registry.resolveAvailable(createTestCall(), 'openai-node')).resolves.toBe('runtime-resolved-id');
         expect(registry.resolve('openai-node')).toBe('runtime-resolved-id');
       } finally {
         cleanup();
@@ -149,16 +150,26 @@ describe('AdapterRegistry', () => {
       });
 
       try {
-        await expect(registry.resolveAvailable('openai-node', 'machine-a')).resolves.toBe('instance-for-machine-a');
-        await expect(registry.resolveAvailable('openai-node', 'machine-b')).resolves.toBe('instance-for-machine-b');
+        await expect(registry.resolveAvailable(createTestCall(), 'openai-node', 'machine-a')).resolves.toBe(
+          'instance-for-machine-a',
+        );
+        await expect(registry.resolveAvailable(createTestCall(), 'openai-node', 'machine-b')).resolves.toBe(
+          'instance-for-machine-b',
+        );
 
         resolvable = false;
         // Each scope falls back to what *it* resolved, and to nothing else.
-        await expect(registry.resolveAvailable('openai-node', 'machine-a')).resolves.toBe('instance-for-machine-a');
-        await expect(registry.resolveAvailable('openai-node', 'machine-b')).resolves.toBe('instance-for-machine-b');
+        await expect(registry.resolveAvailable(createTestCall(), 'openai-node', 'machine-a')).resolves.toBe(
+          'instance-for-machine-a',
+        );
+        await expect(registry.resolveAvailable(createTestCall(), 'openai-node', 'machine-b')).resolves.toBe(
+          'instance-for-machine-b',
+        );
         // A machine neither call resolved for has no cached answer, and the
         // failure names the scope that came up empty rather than guessing.
-        await expect(registry.resolveAvailable('openai-node', 'machine-c')).rejects.toThrow('machineId="machine-c"');
+        await expect(registry.resolveAvailable(createTestCall(), 'openai-node', 'machine-c')).rejects.toThrow(
+          'machineId="machine-c"',
+        );
       } finally {
         cleanup();
       }
@@ -177,9 +188,13 @@ describe('AdapterRegistry', () => {
       });
 
       try {
-        await expect(registry.resolveAvailable('openai-node', 'machine-a')).resolves.toBe('unattributed-id');
-        await expect(registry.resolveAvailable('openai-node', 'machine-b')).rejects.toThrow('machineId="machine-b"');
-        await expect(registry.resolveAvailable('openai-node')).resolves.toBe('unattributed-id');
+        await expect(registry.resolveAvailable(createTestCall(), 'openai-node', 'machine-a')).resolves.toBe(
+          'unattributed-id',
+        );
+        await expect(registry.resolveAvailable(createTestCall(), 'openai-node', 'machine-b')).rejects.toThrow(
+          'machineId="machine-b"',
+        );
+        await expect(registry.resolveAvailable(createTestCall(), 'openai-node')).resolves.toBe('unattributed-id');
       } finally {
         cleanup();
       }

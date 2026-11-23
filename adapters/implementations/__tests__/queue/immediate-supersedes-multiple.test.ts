@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { normalizeMessageInput } from '@makaio/ai-adapters-core';
+import { createTestCall } from '@makaio/test-utils';
 import { getAdapterUnderTest, getAgentTestContext, updateMeta } from '../shared.js';
 
 const adapterName = getAdapterUnderTest();
@@ -29,6 +30,7 @@ describe('Immediate Mode: Supersedes Multiple Enqueued', async () => {
 
       const prompt = 'Peter gave me 5 apples.';
       const startResult = await agent.start(normalizeMessageInput(prompt), {
+        call: createTestCall(),
         systemPrompt: context.conformanceSystemPrompt,
       });
       updateMeta({ task }, 'adapterSessionId', startResult.adapterSessionId);
@@ -37,11 +39,13 @@ describe('Immediate Mode: Supersedes Multiple Enqueued', async () => {
 
       // Enqueue two messages while initial is processing
       const enqueued1 = await agent.sendMessage(normalizeMessageInput('Alice gave me 3 apples.'), {
+        call: createTestCall(),
         deliveryMode: 'enqueue',
       });
       updateMeta({ task }, 'adapterSessionId', enqueued1.adapterSessionId!);
 
       const enqueued2 = await agent.sendMessage(normalizeMessageInput('Bob gave me 4 apples.'), {
+        call: createTestCall(),
         deliveryMode: 'enqueue',
       });
       updateMeta({ task }, 'adapterSessionId', enqueued2.adapterSessionId!);
@@ -53,6 +57,7 @@ describe('Immediate Mode: Supersedes Multiple Enqueued', async () => {
             'Respond with ONLY the number as your answer.',
         ),
         {
+          call: createTestCall(),
           deliveryMode: 'immediate',
         },
       );

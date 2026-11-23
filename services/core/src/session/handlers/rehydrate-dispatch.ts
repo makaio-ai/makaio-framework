@@ -1,5 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { ExtractSubjectResponse } from '@makaio/core';
+import type { CallContext, ExtractSubjectResponse } from '@makaio/core';
 import { AdapterSubjects } from '@makaio/contracts';
 
 /** What `adapter.rehydrateAgent` answers, as its own discriminated union. */
@@ -44,15 +44,17 @@ export interface RehydrateDispatchRequest {
  * directory makes that a compile error rather than a convention — an ESLint
  * pair narrows the surface *inside* it, and is a review aid, not a proof,
  * because an aliased call evades it.
+ * @param call - Call context of the recovery the dispatch belongs to.
  * @param bus - Bus the dispatch is issued on.
  * @param request - Agent, live adapter instance, resume target and row ownership.
  * @returns What the adapter answered: the confirmed provider session, or a modeled refusal.
  */
 export async function dispatchAgentRehydrate(
+  call: CallContext,
   bus: IMakaioBus,
   request: RehydrateDispatchRequest,
 ): Promise<RehydrateAgentResult> {
-  return bus.request(AdapterSubjects.rehydrateAgent, {
+  return bus.request(call, AdapterSubjects.rehydrateAgent, {
     adapterId: request.adapterId,
     ownerInstanceId: request.ownerInstanceId,
     agentId: request.agentId,

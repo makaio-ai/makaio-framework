@@ -1,5 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
-import { ToolSubjects } from '@makaio/contracts';
+import { ToolSubjects, type CallContext } from '@makaio/contracts';
 import {
   ToolErrorCodes,
   errorToToolResult,
@@ -65,9 +65,10 @@ export interface McpClientBridgeHandle {
   callTool(name: string, args: Record<string, unknown>): Promise<McpCallToolResult>;
   /**
    * Close the MCP client and terminate the subprocess.
+   * @param call - Call responsible for stopping the bridge.
    * @returns Promise that resolves when the transport has been fully closed.
    */
-  close(): Promise<void>;
+  close(call: CallContext): Promise<void>;
 }
 
 /**
@@ -319,11 +320,13 @@ function createMcpBridgeClient(
 
 /**
  * Emit a registryChanged event with a bridge-local monotonic revision.
+ * @param call - Call responsible for the registry change.
  * @param bus - Optional bus to notify.
  * @param state - Mutable bridge registry state.
  * @param reason - Tool registry change reason.
  */
 function emitRegistryChanged(
+  call: CallContext,
   bus: IMakaioBus | undefined,
   state: { revision: number; readonly extensionName: string; readonly toolsetName: string },
   reason: RegistryChangeReason,
@@ -331,7 +334,7 @@ function emitRegistryChanged(
   if (!bus) return;
   state.revision += 1;
   bus
-    .emit(ToolSubjects.registryChanged, {
+    .emit(call, ToolSubjects.registryChanged, {
       revision: state.revision,
       reason,
       toolsetName: state.toolsetName,
@@ -365,6 +368,24 @@ async function connectClient(
 }
 
 /**
+ * Discover the initial tools, closing the connected client if discovery fails.
+ * @param client - Connected MCP client.
+ * @param signal - Cancels the initial tool listing.
+ * @returns Initial bridged tool list.
+ */
+async function listInitialTools(client: Client, signal: AbortSignal | undefined): Promise<McpBridgedTool[]> {
+  // The subprocess is already running, so close it on failure to avoid orphaning it.
+  try {
+    const toolsResult = await client.listTools(undefined, { signal });
+    return (toolsResult.tools ?? []).map(toBridgedTool);
+  } catch (err) {
+    await client.close();
+    signal?.throwIfAborted();
+    throw err;
+  }
+}
+
+/**
  * Spawn an MCP server subprocess via stdio, connect to it as an MCP client,
  * and discover its tool list.
  *
@@ -384,10 +405,14 @@ async function connectClient(
  * closes the client and re-throws so no subprocess is left orphaned. A start
  * cancelled through {@link McpClientBridgeOptions.signal} ends the same way,
  * whichever of the two waits it interrupts, and rejects with the signal's reason.
+ * @param call - Call responsible for starting the bridge.
  * @param options - Bridge configuration.
  * @returns Handle exposing the live tool list and proxy methods.
  */
-export async function startMcpClientBridge(options: McpClientBridgeOptions): Promise<McpClientBridgeHandle> {
+export async function startMcpClientBridge(
+  call: CallContext,
+  options: McpClientBridgeOptions,
+): Promise<McpClientBridgeHandle> {
   const {
     command,
     args = [],
@@ -416,7 +441,7 @@ export async function startMcpClientBridge(options: McpClientBridgeOptions): Pro
   const handleToolsChanged = (tools: McpBridgedTool[]): void => {
     currentTools = tools;
     onToolsChanged?.(tools);
-    emitRegistryChanged(bus, registryState, 'plugin-loaded');
+    if (bus) emitRegistryChanged(bus.own('observer'), bus, registryState, 'plugin-loaded');
   };
 
   const transport = new StdioClientTransport({
@@ -434,16 +459,7 @@ export async function startMcpClientBridge(options: McpClientBridgeOptions): Pro
 
   await connectClient(client, transport, signal);
 
-  // Guard: if listTools() throws the subprocess is already running — close it
-  // before re-throwing so no orphaned child processes are left behind.
-  try {
-    const toolsResult = await client.listTools(undefined, { signal });
-    currentTools = (toolsResult.tools ?? []).map(toBridgedTool);
-  } catch (err) {
-    await client.close();
-    signal?.throwIfAborted();
-    throw err;
-  }
+  currentTools = await listInitialTools(client, signal);
 
   if (bus) {
     busCleanups.push(
@@ -456,7 +472,7 @@ export async function startMcpClientBridge(options: McpClientBridgeOptions): Pro
         getTools: () => currentTools,
       }),
     );
-    emitRegistryChanged(bus, registryState, 'toolset-registered');
+    emitRegistryChanged(call, bus, registryState, 'toolset-registered');
   }
 
   let closed = false;
@@ -476,13 +492,13 @@ export async function startMcpClientBridge(options: McpClientBridgeOptions): Pro
       return client.callTool(params);
     },
 
-    async close(): Promise<void> {
+    async close(call: CallContext): Promise<void> {
       if (closed) return;
       closed = true;
       while (busCleanups.length > 0) {
         busCleanups.pop()?.();
       }
-      emitRegistryChanged(bus, registryState, 'toolset-unregistered');
+      emitRegistryChanged(call, bus, registryState, 'toolset-unregistered');
       await client.close();
     },
   };

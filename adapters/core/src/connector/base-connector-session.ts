@@ -1,4 +1,5 @@
 import type { ScopedBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts';
 import type { MessageHandle } from '../message-handle/message-handle.js';
 import { SESSION_CLOSED_QUEUE_ERROR } from '../session/process-queue.js';
 
@@ -22,7 +23,7 @@ export interface ConnectorSessionConfig<TBus extends ScopedBus<string> = ScopedB
  * Allows base session class to work with different turn implementations.
  */
 export interface PausableTurn {
-  pause(): Promise<unknown>;
+  pause(call: CallContext): Promise<unknown>;
 }
 
 /**
@@ -93,9 +94,10 @@ export abstract class BaseConnectorSession<TConfig extends ConnectorSessionConfi
   /**
    * Abort the session and cleanup resources.
    * Pauses the current turn if one is active.
+   * @param call - Call of the message requesting the abort
    */
-  public async abort(): Promise<void> {
-    await this.currentTurn?.pause();
+  public async abort(call: CallContext): Promise<void> {
+    await this.currentTurn?.pause(call);
   }
 
   /**

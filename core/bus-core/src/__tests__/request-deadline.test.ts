@@ -6,7 +6,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
-import { createBusContext, createBusInstance, MakaioBus } from '../index.js';
+import { createBusInstance, MakaioBus } from '../index.js';
+import { busContextOf, createBusContext } from '../kernel-api.js';
 import { createBidirectionalTransportPair } from './helpers/transport-fixtures.js';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../types/options.js';
 
@@ -33,7 +34,7 @@ describe('RequestContext.deadline', () => {
 
     const timeout = 5000;
     const before = Date.now();
-    await MakaioBus.request(DeadlineSubjects.echo, { value: 'a' }, { timeout });
+    await MakaioBus.request(MakaioBus.own('root'), DeadlineSubjects.echo, { value: 'a' }, { timeout });
     const after = Date.now();
 
     expect(observedDeadline).toBeDefined();
@@ -50,7 +51,7 @@ describe('RequestContext.deadline', () => {
       ctx.setResult({ echo: ctx.payload.value });
     });
 
-    await MakaioBus.request(DeadlineSubjects.echo, { value: 'b' }, { timeout: 0 });
+    await MakaioBus.request(MakaioBus.own('root'), DeadlineSubjects.echo, { value: 'b' }, { timeout: 0 });
 
     expect(observedDeadline).toBeUndefined();
   });
@@ -64,7 +65,7 @@ describe('RequestContext.deadline', () => {
     });
 
     const before = Date.now();
-    await MakaioBus.request(DeadlineSubjects.echo, { value: 'c' });
+    await MakaioBus.request(MakaioBus.own('root'), DeadlineSubjects.echo, { value: 'c' });
     const after = Date.now();
 
     expect(observedDeadline).toBeDefined();
@@ -103,7 +104,7 @@ describe('RequestContext.deadline', () => {
       { priority: 0 },
     );
 
-    await MakaioBus.request(DeadlineSubjects.echo, { value: 'd' }, { timeout: 3000 });
+    await MakaioBus.request(MakaioBus.own('root'), DeadlineSubjects.echo, { value: 'd' }, { timeout: 3000 });
 
     expect(deadlines).toHaveLength(3);
     // All three handlers must observe the exact same deadline value (same reference timestamp)
@@ -121,7 +122,7 @@ describe('RequestContext.deadline', () => {
       ctx.setResult({ echo: ctx.payload.value });
     });
 
-    await MakaioBus.broadcast(DeadlineSubjects.echo, { value: 'e' });
+    await MakaioBus.broadcast(MakaioBus.own('root'), DeadlineSubjects.echo, { value: 'e' });
 
     expect(observedDeadline).toBeUndefined();
   });
@@ -149,7 +150,7 @@ describe('RequestContext.deadline', () => {
       { priority: 0 },
     );
 
-    await MakaioBus.request(DeadlineSubjects.echo, { value: 'auto-advance' }, { timeout: 2000 });
+    await MakaioBus.request(MakaioBus.own('root'), DeadlineSubjects.echo, { value: 'auto-advance' }, { timeout: 2000 });
 
     expect(deadlines).toHaveLength(2);
     expect(deadlines[0]).toBeDefined();
@@ -186,10 +187,10 @@ describe('RequestContext.deadline', () => {
 
     busA.registerTransport(pair.sideA);
     busB.registerTransport(pair.sideB);
-    busA.getContext().remoteRequestHandlers.set('deadlineTest.echo', [{ transport: pair.sideA.name, priority: 0 }]);
+    busContextOf(busA).remoteRequestHandlers.set('deadlineTest.echo', [{ transport: pair.sideA.name, priority: 0 }]);
 
     try {
-      await busA.request(DeadlineSubjects.echo, { value: 'remote' }, { timeout: 5000 });
+      await busA.request(busA.own('root'), DeadlineSubjects.echo, { value: 'remote' }, { timeout: 5000 });
 
       expect(localDeadline).toBeDefined();
       // The sender still mints its own deadline and puts it on the wire.
@@ -225,10 +226,10 @@ describe('RequestContext.deadline', () => {
     });
     busA.registerTransport(pair.sideA);
     busB.registerTransport(pair.sideB);
-    busA.getContext().remoteRequestHandlers.set('deadlineTest.echo', [{ transport: pair.sideA.name, priority: 0 }]);
+    busContextOf(busA).remoteRequestHandlers.set('deadlineTest.echo', [{ transport: pair.sideA.name, priority: 0 }]);
 
     try {
-      await busA.request(DeadlineSubjects.echo, { value: 'no-timeout' }, { timeout: 0 });
+      await busA.request(busA.own('root'), DeadlineSubjects.echo, { value: 'no-timeout' }, { timeout: 0 });
       expect(remoteDeadline).toBeUndefined();
     } finally {
       remoteCleanup();

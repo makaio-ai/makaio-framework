@@ -6,7 +6,7 @@
  */
 import { DEFAULT_REQUEST_TIMEOUT_MS, createBusInstance } from '@makaio/bus-core';
 import type { BusRequestMessage, IMakaioBus, OnOptions } from '@makaio/bus-core';
-import type { EventContext, RequestContext, SubjectDefinition } from '@makaio/core';
+import type { EventContext, OutboundAttestingConnectionRole, RequestContext, SubjectDefinition } from '@makaio/core';
 import { HmacAuth, WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import type {
   TransportAuth,
@@ -34,6 +34,8 @@ export interface BusClientOptions {
    * connection is unauthenticated, such as in-process socket tests.
    */
   auth?: TransportAuth | false;
+  /** Set for a direct connection to a core host trusted to attest principals. */
+  attestingRole?: OutboundAttestingConnectionRole;
   /**
    * WebSocket factory used by the underlying transport.
    *
@@ -134,6 +136,7 @@ export class BusClient {
     const transport = new WebSocketClientTransport({
       url: this.url,
       name: SDK_CLIENT_TRANSPORT_NAME,
+      attestingRole: options?.attestingRole,
       autoReconnect: reconnect,
       auth,
       createWebSocket: options?.createWebSocket,
@@ -214,7 +217,8 @@ export class BusClient {
     }
 
     const requestOptions: Record<string, unknown> = { ...options };
-    return this.getBus().request(subject as never, payload as never, requestOptions) as Promise<TRes>;
+    const bus = this.getBus();
+    return bus.request(bus.own('root'), subject as never, payload as never, requestOptions) as Promise<TRes>;
   }
 
   /**
@@ -223,7 +227,8 @@ export class BusClient {
    * @param payload - Event payload.
    */
   public async emit<T = unknown>(subject: SubjectDefinition, payload: T): Promise<void> {
-    await this.getBus().emit(subject as never, payload as never);
+    const bus = this.getBus();
+    await bus.emit(bus.own('root'), subject as never, payload as never);
   }
 
   /**

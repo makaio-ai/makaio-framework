@@ -8,6 +8,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { expandProfileToolCapabilities, type ProfileToolCapabilitiesConfig } from '@makaio/contracts';
 
 /**
@@ -17,16 +18,18 @@ import { expandProfileToolCapabilities, type ProfileToolCapabilitiesConfig } fro
  * This is a NO-OP when the profile has no capability fields set. If the harness
  * is not found or has no `toolCapabilityMap`, expansion is skipped and the
  * explicit lists are returned unchanged.
+ * @param call - Call context the harness lookup is sent under
  * @param bus - Bus instance for harness RPC
  * @param profile - Profile capability and tool list config
  * @returns Final tool lists after capability expansion and union
  */
 export async function expandProfileCapabilities(
+  call: CallContext,
   bus: IMakaioBus,
   profile: ProfileToolCapabilitiesConfig,
 ): Promise<{ allowedTools: string[] | undefined; disallowedTools: string[] | undefined }> {
   // Intentional seam: session layer can add orchestration-specific capability
   // expansion behavior here without changing downstream callers.
-  const { allowedTools, disallowedTools } = await expandProfileToolCapabilities(bus, profile);
+  const { allowedTools, disallowedTools } = await expandProfileToolCapabilities(call, bus, profile);
   return { allowedTools, disallowedTools };
 }

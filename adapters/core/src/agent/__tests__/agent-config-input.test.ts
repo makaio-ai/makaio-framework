@@ -23,6 +23,7 @@ describe('buildConfigFactoryInput error cleanup', () => {
       globalBus,
       configFactory: async () => ({
         bus: adapterBus,
+        globalBus,
         agentId: 'agent-1',
         adapterId: 'adapter-1',
         adapterName: 'test-adapter',
@@ -73,6 +74,7 @@ describe('buildConfigFactoryInput resume override semantics', () => {
       resumeAdapterSessionId: 'start-time-resume',
       configFactory: async () => ({
         bus: adapterBus,
+        globalBus,
         agentId: 'agent-1',
         adapterId: 'adapter-1',
         adapterName: 'test-adapter',

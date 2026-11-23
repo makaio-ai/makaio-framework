@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ProviderContext } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import {
   prepareProviderContextActivation,
   ProviderContextActivationError,
@@ -27,8 +28,9 @@ export interface ProviderContextActivationFailureOptions {
    * Its resolved value is deliberately unconstrained: a teardown reports what it
    * observed, and this rollback consumes only whether the cleanup *failed* — the
    * class belongs to whoever asked for the teardown, not to an activation rollback.
+   * @param call - Call context of the message whose startup failed
    */
-  readonly cleanup?: () => Promise<unknown>;
+  readonly cleanup?: (call: CallContext) => Promise<unknown>;
   /** Credential-free operation label used in diagnostics. */
   readonly operation: string;
   /** Existing aggregate message preserved for auth modes without activation. */
@@ -37,15 +39,17 @@ export interface ProviderContextActivationFailureOptions {
 
 /**
  * Prepare the selected provider account before connector auth materialization.
+ * @param call - Call context of the message requesting activation
  * @param bus - Global bus carrying local account-manager transaction RPCs
  * @param providerContext - Canonical provider selection for the new runtime
  * @returns Activation lifecycle that must be committed or rolled back
  */
 export async function prepareAdapterProviderContextActivation(
+  call: CallContext,
   bus: IMakaioBus,
   providerContext: ProviderContext,
 ): Promise<ProviderContextActivationLifecycle> {
-  const transaction = await prepareProviderContextActivation(bus, providerContext);
+  const transaction = await prepareProviderContextActivation(call, bus, providerContext);
   return {
     ...(transaction !== undefined && { transaction }),
     terminal: transaction === undefined,
@@ -54,15 +58,17 @@ export async function prepareAdapterProviderContextActivation(
 
 /**
  * Commit a prepared account only after its connector reports readiness.
+ * @param call - Call context of the message requesting commit
  * @param activation - Prepared activation paired with the ready connector
  * @returns Promise that settles after account metadata is committed
  */
 export async function commitAdapterProviderContextActivation(
+  call: CallContext,
   activation: ProviderContextActivationLifecycle,
 ): Promise<void> {
   if (activation.transaction === undefined) return;
   try {
-    await activation.transaction.commit();
+    await activation.transaction.commit(call);
   } finally {
     // Commit is a terminal action even when the manager reports that its own
     // commit rollback failed; attempting a second terminal action is invalid.
@@ -76,15 +82,17 @@ export async function commitAdapterProviderContextActivation(
  * Cleanup intentionally precedes rollback: the connector and its auth lease
  * were created against the prepared native state and must relinquish it while
  * the account manager still owns the per-client mutation lock.
+ * @param call - Call context of the message whose startup failed
  * @param options - Activation, triggering failure, cleanup, and diagnostics
  * @returns Never; rethrows the primary failure or a rollback aggregate
  */
 export async function rollbackAdapterProviderContextActivationAfterFailure(
+  call: CallContext,
   options: ProviderContextActivationFailureOptions,
 ): Promise<never> {
   let cleanupError: unknown;
   try {
-    await options.cleanup?.();
+    await options.cleanup?.(call);
   } catch (error) {
     cleanupError = error;
   }
@@ -92,7 +100,7 @@ export async function rollbackAdapterProviderContextActivationAfterFailure(
   let rollbackError: unknown;
   if (options.activation.transaction !== undefined && !options.activation.terminal) {
     try {
-      await options.activation.transaction.rollback();
+      await options.activation.transaction.rollback(call);
     } catch (error) {
       rollbackError = error;
     } finally {

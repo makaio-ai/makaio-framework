@@ -10,6 +10,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { resolveClientBinary } from '@makaio/subsystem-client';
+import { createTestCall } from '@makaio/test-utils';
 import { closeConnectorRuntime } from '../connector-runtime.js';
 import { asAgentConnector, createTestableAgent, MockConnector } from './helpers/mock-agent.js';
 
@@ -32,7 +33,7 @@ describe('case 202: a thrown close becomes `unknown` at the layer above it', () 
     const connector = new MockConnector('test-model', '/work/project');
     connector.closeOutcome = closeError;
 
-    const report = await closeConnectorRuntime({ connector: asAgentConnector(connector) });
+    const report = await closeConnectorRuntime(createTestCall(), { connector: asAgentConnector(connector) });
 
     expect(report.evidence).toBe('unknown');
     expect(report.detail).toContain('connector close exploded');
@@ -53,7 +54,7 @@ describe('case 202: a thrown close becomes `unknown` at the layer above it', () 
         return connector;
       },
     });
-    await agent.init();
+    await agent.init(createTestCall());
 
     const report = await agent.close({ emitSessionClosed: false });
 
@@ -82,7 +83,7 @@ describe('case 203: a lease-release failure downgrades; a handler-cleanup failur
     // The connector observed its own process exit — the strongest class there is.
     connector.closeOutcome = { evidence: 'exited' };
 
-    const report = await closeConnectorRuntime({
+    const report = await closeConnectorRuntime(createTestCall(), {
       connector: asAgentConnector(connector),
       lease: {
         clientId: 'codex',
@@ -106,7 +107,7 @@ describe('case 203: a lease-release failure downgrades; a handler-cleanup failur
       agentId: 'agent-203',
       mockConnectorFactory: () => connector,
     });
-    await agent.init();
+    await agent.init(createTestCall());
     agent.addBusHandlerCleanupForTest(() => {
       throw new Error('listener refused to unsubscribe');
     });
@@ -128,7 +129,7 @@ describe('case 203: a lease-release failure downgrades; a handler-cleanup failur
     const connector = new MockConnector('test-model', '/work/project');
     connector.closeOutcome = { evidence: 'exited' };
 
-    const report = await closeConnectorRuntime({
+    const report = await closeConnectorRuntime(createTestCall(), {
       connector: asAgentConnector(connector),
       lease: {
         clientId: 'codex',

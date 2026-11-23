@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowSubjects } from '../namespace.js';
 import {
@@ -41,7 +42,7 @@ function registerGateAndArtifactProjections(bus: IMakaioBus, db: MakaioDatabase)
           resolvedAt: null,
           resumeData: null,
         });
-        await emitWorklogChanged(bus, executionId);
+        await emitWorklogChanged(ctx.call, bus, executionId);
       });
     }),
     bus.on(WorkflowSubjects.gate.resumed, async (ctx) => {
@@ -65,14 +66,14 @@ function registerGateAndArtifactProjections(bus: IMakaioBus, db: MakaioDatabase)
           resolvedAt,
           resumeData,
         });
-        await emitWorklogChanged(bus, executionId);
+        await emitWorklogChanged(ctx.call, bus, executionId);
       });
     }),
-    bus.on(WorkflowSubjects.gate.resolved, async (ctx) => projectGateResolvedEvent(ctx.payload, bus, db)),
+    bus.on(WorkflowSubjects.gate.resolved, async (ctx) => projectGateResolvedEvent(ctx.call, ctx.payload, bus, db)),
     bus.on(WorkflowSubjects.artifact.updated, async (ctx) => {
       const { executionId, frameId, artifactRef, revision } = ctx.payload;
       await safeProject(`artifact.updated[${executionId}:${frameId}]`, async () => {
-        const metadata = await resolveArtifactWriteMetadata(bus, db, frameId, artifactRef, revision);
+        const metadata = await resolveArtifactWriteMetadata(ctx.call, bus, db, frameId, artifactRef, revision);
         if (metadata === null) {
           // The workflow artifact event names the frame and artifact revision,
           // but the WorkLog row also needs nodeId, schemaVersion, and scope.
@@ -91,7 +92,7 @@ function registerGateAndArtifactProjections(bus: IMakaioBus, db: MakaioDatabase)
           revision: revision ?? null,
           writtenAt,
         });
-        await emitWorklogChanged(bus, executionId);
+        await emitWorklogChanged(ctx.call, bus, executionId);
       });
     }),
   ];
@@ -105,11 +106,13 @@ function registerGateAndArtifactProjections(bus: IMakaioBus, db: MakaioDatabase)
  * event flips the WorkLog status from `resumed` to `rejected` while preserving
  * suspension metadata and resume data. Cancellation directly marks the waiting
  * gate cancelled because there is no approval action or resume data.
+ * @param call - Call context of the `gate.resolved` event being projected.
  * @param payload - Gate resolution lifecycle payload.
  * @param bus - Message bus used for worklog change events.
  * @param db - Drizzle database instance for WorkLog tables.
  */
 async function projectGateResolvedEvent(
+  call: CallContext,
   payload: (typeof WorkflowSubjects.gate.resolved)['$meta']['payload'],
   bus: IMakaioBus,
   db: MakaioDatabase,
@@ -132,7 +135,7 @@ async function projectGateResolvedEvent(
       resolvedAt,
       resumeData: existing?.resumeData ?? null,
     });
-    await emitWorklogChanged(bus, executionId);
+    await emitWorklogChanged(call, bus, executionId);
   });
 }
 

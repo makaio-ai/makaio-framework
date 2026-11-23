@@ -34,7 +34,7 @@ export function useCompatibleAuthOptions(definitionId: string): UseCompatibleAut
 
     setIsLoading(true);
     setError(null);
-    void listCompatibleAuthOptions(bus, definitionId)
+    void listCompatibleAuthOptions(bus.own('observer'), bus, definitionId)
       .then((nextOptions) => {
         if (active) setOptions(nextOptions);
       })

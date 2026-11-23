@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { WorkflowWorkerConfig, WorkerContributionManifest } from '@makaio/contracts';
 import type {
   IWorkflowRunner,
@@ -93,12 +94,15 @@ export class ThinWorkflowPiscinaRunner implements IWorkflowRunner {
    * When `manifest` is provided it overrides the runner's construction-time
    * default, so per-request contribution sets from the Worker pool are
    * applied correctly without requiring a new runner instance.
+   * @param _call - Accepted for interface conformance. The run executes in a pooled thread under that
+   *   thread's `own('root')`; the requester's principal ends at the thread boundary (design limit).
    * @param config - Full workflow worker configuration with source, inputs, and bus info.
    * @param signal - AbortSignal for cooperative cancellation.
    * @param manifest - Optional per-call manifest override.
    * @returns Uncommitted completion; the host executor owns finalization.
    */
   public async run(
+    _call: CallContext,
     config: WorkflowWorkerConfig,
     signal: AbortSignal,
     manifest?: WorkerContributionManifest,

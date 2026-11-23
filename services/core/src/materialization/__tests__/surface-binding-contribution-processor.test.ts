@@ -1,4 +1,4 @@
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { createTestCall, makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionToken } from '@makaio/contracts';
 import { defineSurfaceBinding, MaterializationSubjects } from '@makaio/contracts/materialization';
@@ -11,10 +11,7 @@ import { SurfaceBindingRegistry } from '../surface-binding-registry.js';
 /**
  * Build a minimal extension context that shares the given bus and exposes an
  * optional registry via `getService`.
- *
- * The context must share the same bus as the registry so that RPCs emitted by
- * the contribution processor reach the handler registered by the registry.
- * @param bus - The shared bus instance used by both registry and context.
+ * @param bus - Bus instance exposed by the extension context.
  * @param registry - Registry instance to expose, or `undefined` to simulate a
  *   missing service.
  * @returns Minimal kernel extension context stub.
@@ -62,7 +59,7 @@ describe('createSurfaceBindingContributionProcessor', () => {
 
     await processor.processActivated('github-ext', pkg, makeContext(bus, registry));
 
-    const listed = await bus.request(MaterializationSubjects.surfaceBinding.list, {});
+    const listed = await bus.request(createTestCall(), MaterializationSubjects.surfaceBinding.list, {});
     expect(listed.bindings.map((b) => b.id)).toEqual(['github.status.field']);
 
     await registry.destroy();
@@ -100,7 +97,7 @@ describe('createSurfaceBindingContributionProcessor', () => {
 
     await processor.processActivated('github-ext', pkg, makeContext(bus, registry));
 
-    const listed = await bus.request(MaterializationSubjects.surfaceBinding.list, {});
+    const listed = await bus.request(createTestCall(), MaterializationSubjects.surfaceBinding.list, {});
     expect(listed.bindings.map((b) => b.id).sort()).toEqual(['github.priority.label', 'github.status.field']);
 
     await registry.destroy();
@@ -189,10 +186,12 @@ describe('createSurfaceBindingContributionProcessor', () => {
 
     await processor.processActivated('github-ext', pkg, makeContext(bus, registry));
     await processor.processStopped?.('github-ext');
-    await expect(bus.request(MaterializationSubjects.surfaceBinding.list, {})).resolves.toEqual({ bindings: [] });
+    await expect(bus.request(createTestCall(), MaterializationSubjects.surfaceBinding.list, {})).resolves.toEqual({
+      bindings: [],
+    });
 
     await processor.processActivated('github-ext', pkg, makeContext(bus, registry));
-    const listed = await bus.request(MaterializationSubjects.surfaceBinding.list, {});
+    const listed = await bus.request(createTestCall(), MaterializationSubjects.surfaceBinding.list, {});
     expect(listed.bindings.map((entry) => entry.id)).toEqual(['github.status.field']);
 
     await registry.destroy();
@@ -287,7 +286,7 @@ describe('createSurfaceBindingContributionProcessor', () => {
       "Surface binding 'github.priority.label' is already registered",
     );
 
-    const listed = await bus.request(MaterializationSubjects.surfaceBinding.list, {});
+    const listed = await bus.request(createTestCall(), MaterializationSubjects.surfaceBinding.list, {});
     expect(listed.bindings.map((entry) => entry.id).sort()).toEqual(['github.priority.label']);
     expect(registry.getBinding('github.status.field')).toBeUndefined();
     expect(registry.getBinding('github.priority.label')?.target).toEqual({ kind: 'label' });

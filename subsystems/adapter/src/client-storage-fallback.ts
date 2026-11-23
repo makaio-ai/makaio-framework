@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { ClientDefinitionSchema, type ClientDefinition } from '@makaio/contracts';
 import { ExtensionSubjects } from '@makaio/kernel';
 import { ClientStorageSubjects, type ClientRecord } from '@makaio/services-core/settings/storage';
@@ -29,7 +30,7 @@ export function registerClientStorageFallbackHandlers(
   const getCleanup = bus.on(
     ClientStorageSubjects.get,
     async (ctx) => {
-      const client = (await buildClientRecordMap(bus, getLoadedAdapters())).get(ctx.payload.id) ?? null;
+      const client = (await buildClientRecordMap(ctx.call, bus, getLoadedAdapters())).get(ctx.payload.id) ?? null;
       ctx.setResult({ client });
     },
     { priority },
@@ -37,14 +38,14 @@ export function registerClientStorageFallbackHandlers(
   const listCleanup = bus.on(
     ClientStorageSubjects.list,
     async (ctx) => {
-      ctx.setResult({ clients: [...(await buildClientRecordMap(bus, getLoadedAdapters())).values()] });
+      ctx.setResult({ clients: [...(await buildClientRecordMap(ctx.call, bus, getLoadedAdapters())).values()] });
     },
     { priority },
   );
   const listByBinaryNameCleanup = bus.on(
     ClientStorageSubjects.listByBinaryName,
     async (ctx) => {
-      const clients = [...(await buildClientRecordMap(bus, getLoadedAdapters())).values()].filter(
+      const clients = [...(await buildClientRecordMap(ctx.call, bus, getLoadedAdapters())).values()].filter(
         (client) => client.binary?.name === ctx.payload.binaryName,
       );
       ctx.setResult({ clients });
@@ -61,11 +62,13 @@ export function registerClientStorageFallbackHandlers(
 
 /**
  * Build enabled client records for client IDs referenced by loaded adapters.
+ * @param call - Call context of the handled storage message.
  * @param bus - Bus used to read the current contribution catalog.
  * @param adapters - Loaded adapter client-reference snapshot.
  * @returns Client records keyed by stable client ID.
  */
 async function buildClientRecordMap(
+  call: CallContext,
   bus: IMakaioBus,
   adapters: readonly LoadedAdapterClientRefs[],
 ): Promise<Map<string, ClientRecord>> {
@@ -74,7 +77,7 @@ async function buildClientRecordMap(
     return new Map();
   }
 
-  const catalog = await bus.request(ExtensionSubjects.contributions.catalog, {});
+  const catalog = await bus.request(call, ExtensionSubjects.contributions.catalog, {});
   const clients = new Map<string, ClientRecord>();
   for (const entry of catalog.clients) {
     if (!referencedClientIds.has(entry.definition.id)) continue;

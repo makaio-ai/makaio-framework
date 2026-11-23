@@ -158,6 +158,12 @@ function buildReceipt(delivery: ExecutionAttemptControlDelivery, now: Date): Exe
  * correlation fact recorded but not thrown. Transport failure is caught and
  * recorded. The report is not tied to the Cancel signal that stops the
  * workload, but the independent shutdown signal can stop a hanging delivery.
+ *
+ * Sent with `bus.own('observer')`: this run derives from the observer's
+ * accumulated lifecycle snapshot, not from one specific delivery, and
+ * `tryDerive` re-dispatches it from the observer's own transition callback as
+ * freely as from a redelivered `control.deliver` — forwarding one delivery's
+ * `call` here would store it and reuse it for a later, unrelated trigger.
  * @param bus - Runtime bus authenticated as the attempt peer.
  * @param receipt - Accepted receipt that correlates this report.
  * @param derived - Conclusive boundary and conclusion to send.
@@ -184,7 +190,7 @@ async function sendControlReport(
   try {
     const response = await requestAuthorityWithRetry<ExecutionAttemptControlReportResponse>(
       (timeout, requestSignal) =>
-        bus.request(ExecutionAttemptSubjects.control.report, payload, {
+        bus.request(bus.own('observer'), ExecutionAttemptSubjects.control.report, payload, {
           timeout,
           signal: requestSignal,
         }) as Promise<ExecutionAttemptControlReportResponse>,

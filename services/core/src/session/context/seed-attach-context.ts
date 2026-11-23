@@ -25,6 +25,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { SessionContext } from '@makaio/contracts';
 import { getFullConversation } from './get-full-conversation.js';
 import { convertSessionMessage } from './convert-session-message.js';
@@ -35,17 +36,19 @@ import { convertSessionMessage } from './convert-session-message.js';
  * When the session has no messages, the context is returned unchanged — omitting
  * an empty `messageHistory` field matches the convention where the field is
  * absent for genuinely empty sessions.
+ * @param call - Call context of the handled message the attach serves
  * @param bus - Bus instance for conversation retrieval
  * @param sessionId - Session whose history to project
  * @param context - Non-native session context to seed (must be defined)
  * @returns Session context enriched with messageHistory when history exists
  */
 export async function seedAttachContextWithHistory(
+  call: CallContext,
   bus: IMakaioBus,
   sessionId: string,
   context: SessionContext,
 ): Promise<SessionContext> {
-  const contextResult = await getFullConversation(bus, sessionId);
+  const contextResult = await getFullConversation(call, bus, sessionId);
   if (contextResult.messages.length === 0) {
     return context;
   }

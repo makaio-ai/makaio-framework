@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import type { SpanDraft } from '@makaio/extension-telemetry-otel/contracts';
 import { SpanEnricherPipeline, SpanEnricherRuleRegistry } from '@makaio/extension-telemetry-otel/testing';
 import { createLangfuseEnricherRules } from '../enrichers/langfuse-rules.js';
@@ -41,7 +42,7 @@ describe('Langfuse enricher rules', () => {
   });
 
   it('maps Makaio LLM attributes to GenAI semantic convention attributes', async () => {
-    const enriched = await pipeline.enrich(llmDraft);
+    const enriched = await pipeline.enrich(llmDraft, createTestCall());
 
     expect(enriched.attributes).toMatchObject({
       'gen_ai.operation.name': 'chat',
@@ -58,7 +59,7 @@ describe('Langfuse enricher rules', () => {
   });
 
   it('preserves native numeric types for token counts and cost', async () => {
-    const enriched = await pipeline.enrich(llmDraft);
+    const enriched = await pipeline.enrich(llmDraft, createTestCall());
 
     expect(typeof enriched.attributes['gen_ai.usage.input_tokens']).toBe('number');
     expect(typeof enriched.attributes['gen_ai.usage.output_tokens']).toBe('number');
@@ -67,16 +68,19 @@ describe('Langfuse enricher rules', () => {
   });
 
   it('omits optional cost attributes when they are absent from the source span', async () => {
-    const enriched = await pipeline.enrich({
-      ...llmDraft,
-      attributes: {
-        'llm.provider': 'anthropic',
-        'llm.model': 'claude-opus-4',
-        'llm.tokens.input': 5,
-        'llm.tokens.output': 3,
-        'llm.tokens.total': 8,
+    const enriched = await pipeline.enrich(
+      {
+        ...llmDraft,
+        attributes: {
+          'llm.provider': 'anthropic',
+          'llm.model': 'claude-opus-4',
+          'llm.tokens.input': 5,
+          'llm.tokens.output': 3,
+          'llm.tokens.total': 8,
+        },
       },
-    });
+      createTestCall(),
+    );
 
     expect(enriched.attributes).not.toHaveProperty('makaio.llm.cost.estimated');
     expect(enriched.attributes).not.toHaveProperty('makaio.llm.cost.currency');
@@ -84,30 +88,36 @@ describe('Langfuse enricher rules', () => {
   });
 
   it('does not stamp GenAI generation attributes on workflow frame spans', async () => {
-    const enriched = await pipeline.enrich({
-      ...llmDraft,
-      spanId: 'frame:wfx-1:frame-1',
-      sessionId: undefined,
-      namespace: 'workflow',
-      subject: 'frame',
-      name: 'Frame analyze',
-      attributes: { 'makaio.frame.id': 'frame-1' },
-    });
+    const enriched = await pipeline.enrich(
+      {
+        ...llmDraft,
+        spanId: 'frame:wfx-1:frame-1',
+        sessionId: undefined,
+        namespace: 'workflow',
+        subject: 'frame',
+        name: 'Frame analyze',
+        attributes: { 'makaio.frame.id': 'frame-1' },
+      },
+      createTestCall(),
+    );
 
     expect(enriched.attributes).not.toHaveProperty('gen_ai.operation.name');
     expect(enriched.attributes).not.toHaveProperty('langfuse.session.id');
   });
 
   it('stamps Langfuse trace name on execution root spans', async () => {
-    const enriched = await pipeline.enrich({
-      ...llmDraft,
-      spanId: 'execution:wfx-1',
-      sessionId: 'sess-1',
-      namespace: 'workflow',
-      subject: 'execution.started',
-      name: 'Analyze PR',
-      attributes: {},
-    });
+    const enriched = await pipeline.enrich(
+      {
+        ...llmDraft,
+        spanId: 'execution:wfx-1',
+        sessionId: 'sess-1',
+        namespace: 'workflow',
+        subject: 'execution.started',
+        name: 'Analyze PR',
+        attributes: {},
+      },
+      createTestCall(),
+    );
 
     expect(enriched.attributes['langfuse.trace.name']).toBe('Analyze PR');
     expect(enriched.attributes['makaio.telemetry.span_id']).toBe('execution:wfx-1');
@@ -115,15 +125,18 @@ describe('Langfuse enricher rules', () => {
   });
 
   it('stamps tool spans with execute_tool operation name', async () => {
-    const enriched = await pipeline.enrich({
-      ...llmDraft,
-      spanId: 'tool:wfx-1:sess-1:bash',
-      sessionId: 'sess-1',
-      namespace: 'agent',
-      subject: 'tool.call',
-      name: 'bash',
-      attributes: {},
-    });
+    const enriched = await pipeline.enrich(
+      {
+        ...llmDraft,
+        spanId: 'tool:wfx-1:sess-1:bash',
+        sessionId: 'sess-1',
+        namespace: 'agent',
+        subject: 'tool.call',
+        name: 'bash',
+        attributes: {},
+      },
+      createTestCall(),
+    );
 
     expect(enriched.attributes['gen_ai.operation.name']).toBe('execute_tool');
     expect(enriched.attributes['makaio.telemetry.span_id']).toBe('tool:wfx-1:sess-1:bash');

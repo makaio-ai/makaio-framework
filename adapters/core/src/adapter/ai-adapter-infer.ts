@@ -16,7 +16,7 @@ import type {
 } from '../agent/types.js';
 import type { PlatformDefaults } from '../types/ai-adapter-init-options.js';
 import { requireCompletedTurnText } from '../message-handle/index.js';
-import type { ExtractSubjectPayload, ExtractSubjectResponse, RequestContext } from '@makaio/core';
+import type { CallContext, ExtractSubjectPayload, ExtractSubjectResponse, RequestContext } from '@makaio/core';
 import {
   AdapterSubjects,
   ProviderContextSchema,
@@ -151,11 +151,11 @@ export async function handleInfer<TBus extends ScopedBus<string>, TConnector ext
       console.warn(`[handleInfer:${deps.adapterName}] Ephemeral connector failed.`);
     },
   };
-  const connectorRuntime = await createReadyInferenceRuntime(deps, configInput, selection.providerContext, {
+  const connectorRuntime = await createReadyInferenceRuntime(ctx.call, deps, configInput, selection.providerContext, {
     ...(systemPrompt !== undefined && { systemPrompt }),
     ...(responseSchema !== undefined && { responseSchema }),
   });
-  const execution = executeInitializedInference({
+  const execution = executeInitializedInference(ctx.call, {
     connector: connectorRuntime.connector,
     manager: structuredOutputManager,
     prompt,
@@ -163,12 +163,13 @@ export async function handleInfer<TBus extends ScopedBus<string>, TConnector ext
     ...(responseSchema !== undefined && { responseSchema }),
     adapterCapabilities: deps.adapterCapabilities,
   });
-  const text = await completeInferenceRuntime(execution, connectorRuntime, deps.adapterName);
+  const text = await completeInferenceRuntime(ctx.call, execution, connectorRuntime, deps.adapterName);
   ctx.setResult({ text });
 }
 
 /**
  * Prepare account state, materialize auth, and initialize one infer connector.
+ * @param call - Call context of the infer request that triggers the connector turn
  * @param deps - Adapter factories and global activation bus
  * @param configInput - Refs-only connector configuration input
  * @param providerContext - Canonical provider selection for activation
@@ -176,30 +177,32 @@ export async function handleInfer<TBus extends ScopedBus<string>, TConnector ext
  * @returns Ready connector runtime after activation commit
  */
 async function createReadyInferenceRuntime<TBus extends ScopedBus<string>, TConnector extends AIAgentConnector<TBus>>(
+  call: CallContext,
   deps: HandleInferDeps<TBus, TConnector>,
   configInput: ConfigFactoryInput<TBus>,
   providerContext: ProviderContext,
   options: { readonly systemPrompt?: string; readonly responseSchema?: ResponseSchemaDescriptor },
 ): Promise<ConnectorRuntimeHandle<TConnector>> {
-  const activation = await prepareAdapterProviderContextActivation(deps.globalBus, providerContext);
+  const activation = await prepareAdapterProviderContextActivation(call, deps.globalBus, providerContext);
   let runtime: ConnectorRuntimeHandle<TConnector> | undefined;
   try {
     const fullConfig = await deps.configFactory(configInput);
     runtime = await createConnectorRuntime({
+      call,
       config: fullConfig,
       connectorFactory: deps.connectorFactory,
       prepareAuthRuntime: deps.prepareAuthRuntime,
     });
-    await runtime.connector.initialize(options);
-    await commitAdapterProviderContextActivation(activation);
+    await runtime.connector.initialize({ ...options, call });
+    await commitAdapterProviderContextActivation(call, activation);
     return runtime;
   } catch (error) {
     const failedRuntime = runtime;
-    return await rollbackAdapterProviderContextActivationAfterFailure({
+    return await rollbackAdapterProviderContextActivationAfterFailure(call, {
       activation,
       primaryError: error,
       ...(failedRuntime !== undefined && {
-        cleanup: () => rethrowTeardownFailure(closeConnectorRuntime(failedRuntime)),
+        cleanup: (cleanupCall) => rethrowTeardownFailure(closeConnectorRuntime(cleanupCall, failedRuntime)),
       }),
       operation: `Ephemeral inference for ${deps.adapterName}`,
       cleanupFailureMessage: `Ephemeral inference setup and connector cleanup both failed for ${deps.adapterName}.`,
@@ -233,15 +236,18 @@ function resolveInferProviderSelection(
 
 /**
  * Execute one inference turn against an already-initialized ephemeral connector.
+ * @param call - Call context of the infer request that triggers the turn
  * @param input - Connector, prompt, and optional structured-output contract
  * @returns Final inference text
  */
 async function executeInitializedInference<TBus extends ScopedBus<string>, TConnector extends AIAgentConnector<TBus>>(
+  call: CallContext,
   input: ExecuteInferInput<TBus, TConnector>,
 ): Promise<string> {
   const { connector, manager, prompt, systemPrompt, responseSchema, adapterCapabilities } = input;
   const normalizedMessage = normalizeMessageInput(prompt);
   const startOptions: ConnectorStartOptions = {
+    call,
     ...(systemPrompt !== undefined && { systemPrompt }),
     turnContext: buildStructuredOutputTurnContext(undefined, responseSchema, adapterCapabilities),
     ...(responseSchema !== undefined && { responseSchema }),
@@ -256,12 +262,14 @@ async function executeInitializedInference<TBus extends ScopedBus<string>, TConn
 
 /**
  * Await inference and close its connector runtime while preserving both failures.
+ * @param call - Call context of the infer request that owns the runtime
  * @param execution - In-flight inference operation
  * @param runtime - Connector and auth lease owned by the operation
  * @param adapterName - Adapter name used in aggregate diagnostics
  * @returns Completed inference text
  */
 async function completeInferenceRuntime<TConnector extends Pick<AIAgentConnector, 'close'>>(
+  call: CallContext,
   execution: Promise<string>,
   runtime: import('../agent/connector-runtime.js').ConnectorRuntimeHandle<TConnector>,
   adapterName: string,
@@ -276,7 +284,7 @@ async function completeInferenceRuntime<TConnector extends Pick<AIAgentConnector
 
   // The runtime close reports instead of throwing, so the cleanup arm of the
   // aggregate is read out of the report.
-  const { closeError: cleanupError } = await closeConnectorRuntime(runtime);
+  const { closeError: cleanupError } = await closeConnectorRuntime(call, runtime);
   if (inferenceError !== undefined && cleanupError !== undefined) {
     throw new AggregateError(
       [inferenceError, cleanupError],
@@ -302,11 +310,12 @@ async function validateInferStructuredOutput<TBus extends ScopedBus<string>, TCo
   input: ValidateInferOutputInput<TBus, TConnector>,
 ): Promise<string> {
   const { connector, manager, responseSchema, startResult, text } = input;
-  const validated = await manager.validateTerminalResult({
+  const validated = await manager.validateTerminalResult(startResult.messageHandle.call, {
     responseSchema,
     message: text,
     retryTurn: async ({ attemptNumber, validationErrors }) => {
       const retryOptions: ConnectorSendMessageOptions = {
+        call: startResult.messageHandle.call,
         deliveryMode: 'enqueue',
         internalRetry: true,
         messageId: `${startResult.messageHandle.messageId}:structured-output-retry:${attemptNumber}`,

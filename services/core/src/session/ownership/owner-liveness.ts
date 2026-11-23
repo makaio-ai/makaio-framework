@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   AdapterSubjects,
   type AdapterSessionClaimRecord,
@@ -33,6 +34,7 @@ import { AgentStorageSubjects } from '../storage/agent-namespace.js';
  *   Admitted **only** under `machine-exclusive`: where peers may host adapters
  *   on the same machine, an unanswered probe means "not this runtime's", never
  *   "nobody's".
+ * @param call - Call of the handled ownership request.
  * @param bus - Bus used for the agent read and the adapter probe.
  * @param topology - How many runtime processes may own claims on this machine;
  *   the one input that decides whether the adapter probe is evidence at all.
@@ -40,11 +42,12 @@ import { AgentStorageSubjects } from '../storage/agent-namespace.js';
  * @returns The first reason that holds, or `null` when the owner looks alive.
  */
 export async function assessClaimOwner(
+  call: CallContext,
   bus: IMakaioBus,
   topology: OwnershipTopology,
   claim: AdapterSessionClaimRecord,
 ): Promise<SessionOwnershipReclaimReason | null> {
-  const agent = await readClaimOwner(bus, claim.agentId);
+  const agent = await readClaimOwner(call, bus, claim.agentId);
   // Inconclusive is not evidence of anything: an unreadable store cannot tell
   // "gone" from "unreadable", and a diagnostic that guessed would file
   // `abandoned` against every claim it failed to read.
@@ -52,10 +55,10 @@ export async function assessClaimOwner(
   if (agent === null) return 'agent-gone';
   if (agent.status === 'disposed') return 'agent-disposed';
 
-  if (await ownerInstanceIsRetired(bus, claim)) return 'owner-instance-retired';
+  if (await ownerInstanceIsRetired(call, bus, claim)) return 'owner-instance-retired';
 
   if (topology !== 'machine-exclusive') return null;
-  return (await adapterInstanceAnswers(bus, claim.adapterId)) ? null : 'adapter-instance-gone';
+  return (await adapterInstanceAnswers(call, bus, claim.adapterId)) ? null : 'adapter-instance-gone';
 }
 
 /**
@@ -65,14 +68,19 @@ export async function assessClaimOwner(
  * stored non-null retirement stamp is evidence, and this diagnostic read never
  * authorizes a takeover — the taking transaction evaluates that predicate
  * again against its own locked state.
+ * @param call - Call of the handled ownership request.
  * @param bus - Bus used for the optional runtime-instance read.
  * @param claim - Claim whose owner process may have retired.
  * @returns Whether storage proves that exact owner process retired.
  */
-async function ownerInstanceIsRetired(bus: IMakaioBus, claim: AdapterSessionClaimRecord): Promise<boolean> {
+async function ownerInstanceIsRetired(
+  call: CallContext,
+  bus: IMakaioBus,
+  claim: AdapterSessionClaimRecord,
+): Promise<boolean> {
   if (claim.ownerInstanceId === null) return false;
   try {
-    const result = await bus.requestOptional(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+    const result = await bus.requestOptional(call, SessionOwnershipStorageSubjects.getRuntimeInstance, {
       instanceId: claim.ownerInstanceId,
       machineId: claim.machineId,
     });
@@ -92,16 +100,18 @@ const INCONCLUSIVE = Symbol('inconclusive');
  * badly, so both collapse to {@link INCONCLUSIVE} rather than to `null`: a
  * transport failure mid-reconcile must never be reported as a vanished owner and
  * filed as `abandoned` against a claim whose agent is perfectly alive.
+ * @param call - Call of the handled ownership request.
  * @param bus - Bus the read is issued on.
  * @param agentId - Agent the claim names.
  * @returns The row, `null` when it is provably absent, or {@link INCONCLUSIVE}.
  */
 async function readClaimOwner(
+  call: CallContext,
   bus: IMakaioBus,
   agentId: string,
 ): Promise<MakaioSessionAgent | null | typeof INCONCLUSIVE> {
   try {
-    const result = await bus.requestOptional(AgentStorageSubjects.get, { agentId });
+    const result = await bus.requestOptional(call, AgentStorageSubjects.get, { agentId });
     return result.handled ? result.data.agent : INCONCLUSIVE;
   } catch {
     return INCONCLUSIVE;
@@ -114,13 +124,14 @@ async function readClaimOwner(
  * A throw and an unhandled subject are treated alike — as "no answer" — because
  * under `machine-exclusive` both mean the same thing: nothing on this machine
  * is serving that instance.
+ * @param call - Call of the handled ownership request.
  * @param bus - Bus for the probe.
  * @param adapterId - Adapter instance the claim names.
  * @returns `true` when an adapter answered.
  */
-async function adapterInstanceAnswers(bus: IMakaioBus, adapterId: string): Promise<boolean> {
+async function adapterInstanceAnswers(call: CallContext, bus: IMakaioBus, adapterId: string): Promise<boolean> {
   try {
-    const result = await bus.requestOptional(AdapterSubjects.listAgents, { adapterId });
+    const result = await bus.requestOptional(call, AdapterSubjects.listAgents, { adapterId });
     return result.handled;
   } catch {
     return false;

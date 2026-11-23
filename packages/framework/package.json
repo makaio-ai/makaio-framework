@@ -74,6 +74,10 @@
       "types": "./dist/bus/index.d.mts",
       "default": "./dist/bus/index.mjs"
     },
+    "./bus/kernel-api": {
+      "types": "./dist/bus/kernel-api.d.mts",
+      "default": "./dist/bus/kernel-api.mjs"
+    },
     "./core": {
       "types": "./dist/core/index.d.mts",
       "default": "./dist/core/index.mjs"
@@ -209,6 +213,10 @@
     "./contracts/timeout": {
       "types": "./dist/contracts/timeout/index.d.mts",
       "default": "./dist/contracts/timeout/index.mjs"
+    },
+    "./contracts/call-context": {
+      "types": "./dist/contracts/call-context/index.d.mts",
+      "default": "./dist/contracts/call-context/index.mjs"
     },
     "./contracts/host-database": {
       "types": "./dist/contracts/host-database/index.d.mts",

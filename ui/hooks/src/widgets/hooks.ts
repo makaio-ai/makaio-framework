@@ -170,7 +170,7 @@ export function useWidgetConfig<TConfig extends Record<string, unknown>>(
 
     const load = async (): Promise<void> => {
       try {
-        const { value } = await bus.request(PreferencesSubjects.get, {
+        const { value } = await bus.request(bus.own('root'), PreferencesSubjects.get, {
           category: pref.category,
           key: pref.key,
         });
@@ -205,7 +205,7 @@ export function useWidgetConfig<TConfig extends Record<string, unknown>>(
   const persistConfig = useCallback(
     async (nextConfig: TConfig) => {
       try {
-        await bus.request(PreferencesSubjects.set, {
+        await bus.request(bus.own('root'), PreferencesSubjects.set, {
           category: pref.category,
           key: pref.key,
           value: nextConfig,

@@ -211,8 +211,9 @@ export class AutomationTriggerRegistry extends BaseService {
     const kinds = Array.from(
       new Set([...(priorBatch ?? []).map(({ type }) => type.kind), ...batch.map(({ type }) => type.kind)]),
     );
+    // ORIGIN: Direct registry mutations start catalog notification work on the registry's bus.
     await this.bus
-      .emit(AutomationTriggerSubjects.changed, {
+      .emit(this.bus.own('shared-work'), AutomationTriggerSubjects.changed, {
         owner,
         revision: this.revision,
         kinds,

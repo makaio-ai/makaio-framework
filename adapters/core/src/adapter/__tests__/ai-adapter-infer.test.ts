@@ -16,7 +16,7 @@ import type {
 import { buildStoredCredentialRef } from '@makaio/contracts/config';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 import { registerPreUserMessageHook, resetPreUserMessageHooks } from '@makaio/hooks';
-import { createMockScopedBus } from '@makaio/test-utils';
+import { createMockScopedBus, createTestCall } from '@makaio/test-utils';
 import { AIAdapter } from '../ai-adapter.js';
 import { EPHEMERAL_CLEANUP_COMPLETION_TIMEOUT_MS } from '../ai-adapter-start-handler.js';
 import { createAdapterNamespace } from '../../factory/create-adapter-namespace.js';
@@ -28,6 +28,7 @@ import type {
   AgentStartResult,
   BaseAgentConnectorConfig,
   ConnectorSendMessageOptions,
+  ConnectorStartOptions,
 } from '../../agent/types.js';
 import type { ConfigFactoryInput } from '../ai-adapter-config.js';
 import type { AIAdapterConfig } from '../types.js';
@@ -79,10 +80,10 @@ class ConfigurableConnector extends AIAgentConnector {
   public initializeCalls = 0;
   private readonly behavior: ConnectorBehavior;
   public capturedStartMessage?: NormalizedMessageInput;
-  public capturedStartSystemPrompt?: string;
+  public capturedStartSystemPrompt?: ConnectorStartOptions['systemPrompt'];
   public capturedStartResponseSchema?: ResponseSchemaDescriptor;
   public capturedSendMessageOptions?: ConnectorSendMessageOptions;
-  public capturedInitializeSystemPrompt?: string;
+  public capturedInitializeSystemPrompt?: ConnectorStartOptions['systemPrompt'];
   public capturedInitializeResponseSchema?: ResponseSchemaDescriptor;
   public readonly startedHandles: MessageHandle[] = [];
   public sendMessageCalls = 0;
@@ -92,10 +93,7 @@ class ConfigurableConnector extends AIAgentConnector {
     this.behavior = behavior;
   }
 
-  public async initialize(options?: {
-    systemPrompt?: string;
-    responseSchema?: ResponseSchemaDescriptor;
-  }): Promise<void> {
+  public async initialize(options: ConnectorStartOptions): Promise<void> {
     this.initializeCalls += 1;
     this.capturedInitializeSystemPrompt = options?.systemPrompt;
     this.capturedInitializeResponseSchema = options?.responseSchema;
@@ -105,10 +103,7 @@ class ConfigurableConnector extends AIAgentConnector {
     }
   }
 
-  public async start(
-    message: NormalizedMessageInput,
-    options?: { systemPrompt?: string; responseSchema?: ResponseSchemaDescriptor },
-  ): Promise<AgentStartResult> {
+  public async start(message: NormalizedMessageInput, options: ConnectorStartOptions): Promise<AgentStartResult> {
     this.capturedStartMessage = message;
     this.capturedStartSystemPrompt = options?.systemPrompt;
     this.capturedStartResponseSchema = options?.responseSchema;
@@ -118,7 +113,7 @@ class ConfigurableConnector extends AIAgentConnector {
       throw this.behavior.throwOnStart;
     }
 
-    const handle = new MessageHandle('infer-msg', message, 'enqueue');
+    const handle = new MessageHandle(options.call, 'infer-msg', message, 'enqueue');
     this.startedHandles.push(handle);
     const asyncFailure = this.behavior.failAfterStart;
     if (asyncFailure) {
@@ -142,7 +137,7 @@ class ConfigurableConnector extends AIAgentConnector {
 
   public async sendMessage(
     message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
+    options: ConnectorSendMessageOptions,
   ): Promise<MessageHandle> {
     const retryInferredText = this.behavior.retryInferredText;
     if (retryInferredText === undefined && this.behavior.retryResult === undefined) {
@@ -152,6 +147,7 @@ class ConfigurableConnector extends AIAgentConnector {
     this.sendMessageCalls += 1;
     this.capturedSendMessageOptions = options;
     const handle = new MessageHandle(
+      options.call,
       options?.messageId ?? 'infer-retry-msg',
       message,
       options?.deliveryMode ?? 'enqueue',
@@ -248,6 +244,7 @@ function buildAdapter<T extends TestAdapter>(
       capture.configFactoryInputs.push(input);
       return {
         bus: scopedBus,
+        globalBus: input.globalBus,
         agentId: input.agentId ?? 'test-agent',
         adapterId: input.adapterId ?? 'test-adapter-id',
         adapterName: name,
@@ -373,7 +370,7 @@ function registerActivationFixture(events: string[], options: ActivationFixtureO
  * @returns Test auth runtime preparer
  */
 function createRecordingAuthPreparer(events: string[]): NonNullable<AIAdapterConfig<TestBus>['prepareAuthRuntime']> {
-  return async (config) => {
+  return async (_call, config) => {
     events.push('materialize');
     const { boundProviderAuth: _boundProviderAuth, ...runtimeConfig } = config;
     return { config: { ...runtimeConfig, contextEnv: Object.freeze({}) } };
@@ -412,7 +409,7 @@ describe('AIAdapter.handleInfer', () => {
     const cleanupActivation = registerActivationFixture(events);
 
     try {
-      const result = await MakaioBus.request(AdapterSubjects.infer, {
+      const result = await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
         adapterId: adapter.adapterId,
         prompt: 'infer with selected native account',
         providerContext: createManagedInferredProviderContext(),
@@ -435,7 +432,7 @@ describe('AIAdapter.handleInfer', () => {
     await adapter.init();
 
     await expect(
-      MakaioBus.request(AdapterSubjects.infer, {
+      MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
         adapterId: adapter.adapterId,
         prompt: 'infer with unavailable account manager',
         providerContext: createManagedInferredProviderContext(),
@@ -471,21 +468,21 @@ describe('AIAdapter.handleInfer', () => {
     };
 
     try {
-      await MakaioBus.request(AdapterSubjects.infer, {
+      await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
         adapterId: adapter.adapterId,
         prompt: 'unresolved',
       });
-      await MakaioBus.request(AdapterSubjects.infer, {
+      await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
         adapterId: adapter.adapterId,
         prompt: 'explicit',
         providerContext: createResolvedProviderContext('explicit-provider'),
       });
-      await MakaioBus.request(AdapterSubjects.infer, {
+      await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
         adapterId: adapter.adapterId,
         prompt: 'none',
         providerContext: noAuth,
       });
-      await MakaioBus.request(AdapterSubjects.infer, {
+      await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
         adapterId: adapter.adapterId,
         prompt: 'unselected inferred',
         providerContext: inferredWithoutAccount,
@@ -520,7 +517,7 @@ describe('AIAdapter.handleInfer', () => {
 
     try {
       await expect(
-        MakaioBus.request(AdapterSubjects.infer, {
+        MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
           adapterId: adapter.adapterId,
           prompt: 'do not dispatch after failed commit',
           providerContext: createManagedInferredProviderContext(),
@@ -549,7 +546,7 @@ describe('AIAdapter.handleInfer', () => {
     });
 
     try {
-      const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+      const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
         adapterId: adapter.adapterId,
         role: 'lead',
         mode: 'create',
@@ -574,7 +571,7 @@ describe('AIAdapter.handleInfer', () => {
     await adapter.init();
 
     await expect(
-      MakaioBus.request(AdapterSubjects.startAgent, {
+      MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
         adapterId: adapter.adapterId,
         role: 'lead',
         mode: 'create',
@@ -613,13 +610,13 @@ describe('AIAdapter.handleInfer', () => {
     };
 
     try {
-      await expect(MakaioBus.request(AdapterSubjects.startAgent, request)).rejects.toThrow(
+      await expect(MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, request)).rejects.toThrow(
         'selected account could not be activated',
       );
       expect(capture.connectors[0]?.closeCalls).toBe(1);
       expect(adapter.getActiveAgents()).toEqual([]);
 
-      const retry = await MakaioBus.request(AdapterSubjects.startAgent, request);
+      const retry = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, request);
       expect(retry.success).toBe(true);
       expect(capture.connectors).toHaveLength(2);
     } finally {
@@ -649,7 +646,7 @@ describe('AIAdapter.handleInfer', () => {
     const cleanupActivation = registerActivationFixture(events, { rollbackFails: true });
 
     try {
-      const error = await MakaioBus.request(AdapterSubjects.startAgent, {
+      const error = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
         adapterId: adapter.adapterId,
         role: 'lead',
         mode: 'create',
@@ -682,7 +679,7 @@ describe('AIAdapter.handleInfer', () => {
       },
       capture,
       {
-        prepareAuthRuntime: async (config) => {
+        prepareAuthRuntime: async (_call, config) => {
           events.push('materialize');
           const { boundProviderAuth: _boundProviderAuth, ...runtimeConfig } = config;
           return {
@@ -702,7 +699,7 @@ describe('AIAdapter.handleInfer', () => {
     const cleanupActivation = registerActivationFixture(events);
 
     try {
-      const error = await MakaioBus.request(AdapterSubjects.infer, {
+      const error = await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
         adapterId: adapter.adapterId,
         prompt: 'fail during connector creation',
         providerContext: createManagedInferredProviderContext(),
@@ -732,7 +729,7 @@ describe('AIAdapter.handleInfer', () => {
     await adapter.init();
 
     const providerContext = createResolvedProviderContext('test-provider', 'test-config');
-    const result = await MakaioBus.request(AdapterSubjects.infer, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
       adapterId: adapter.adapterId,
       prompt: 'infer this',
       model: 'override-model',
@@ -778,7 +775,7 @@ describe('AIAdapter.handleInfer', () => {
     });
     await adapter.init();
 
-    const result = await MakaioBus.request(AdapterSubjects.infer, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
       adapterId: adapter.adapterId,
       prompt: 'infer with selected auth',
       providerContext: createResolvedProviderContext('provider-a'),
@@ -810,11 +807,11 @@ describe('AIAdapter.handleInfer', () => {
     });
     await adapter.init();
 
-    await MakaioBus.request(AdapterSubjects.infer, {
+    await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
       adapterId: adapter.adapterId,
       prompt: 'infer without provider resolution',
     });
-    await MakaioBus.request(AdapterSubjects.infer, {
+    await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
       adapterId: adapter.adapterId,
       prompt: 'infer with mismatched provider',
       providerContext: createResolvedProviderContext('provider-b'),
@@ -837,7 +834,7 @@ describe('AIAdapter.handleInfer', () => {
     });
     await adapter.init();
 
-    const result = await hostBus.request(AdapterSubjects.infer, {
+    const result = await hostBus.request(createTestCall(), AdapterSubjects.infer, {
       adapterId: adapter.adapterId,
       prompt: 'infer this',
     });
@@ -860,7 +857,7 @@ describe('AIAdapter.handleInfer', () => {
       schema: { type: 'object', properties: { answer: { type: 'string' } } },
       name: 'answer_schema',
     };
-    const result = await MakaioBus.request(AdapterSubjects.infer, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
       adapterId: adapter.adapterId,
       prompt: 'classify this',
       responseSchema,
@@ -894,7 +891,7 @@ describe('AIAdapter.handleInfer', () => {
       },
       name: 'answer_schema',
     };
-    const result = await MakaioBus.request(AdapterSubjects.infer, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
       adapterId: adapter.adapterId,
       prompt: 'classify this',
       responseSchema,
@@ -935,7 +932,7 @@ describe('AIAdapter.handleInfer', () => {
       },
       name: 'answer_schema',
     };
-    const result = await MakaioBus.request(AdapterSubjects.infer, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
       adapterId: adapter.adapterId,
       prompt: 'classify this',
       responseSchema,
@@ -973,7 +970,7 @@ describe('AIAdapter.handleInfer', () => {
     };
 
     await expect(
-      MakaioBus.request(AdapterSubjects.infer, {
+      MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
         adapterId: adapter.adapterId,
         prompt: 'classify this',
         responseSchema,
@@ -997,7 +994,7 @@ describe('AIAdapter.handleInfer', () => {
     );
     await adapter.init();
 
-    const error = await MakaioBus.request(AdapterSubjects.infer, {
+    const error = await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
       adapterId: adapter.adapterId,
       prompt: 'infer this',
       providerContext: createResolvedProviderContext('test-provider', 'test-config'),
@@ -1024,7 +1021,7 @@ describe('AIAdapter.handleInfer', () => {
     await adapter.init();
 
     try {
-      const error = await MakaioBus.request(AdapterSubjects.infer, {
+      const error = await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
         adapterId: adapter.adapterId,
         prompt: 'infer this',
       }).catch((cause: unknown) => cause);
@@ -1072,7 +1069,7 @@ describe('AIAdapter.handleInfer', () => {
     adapter = createTestAdapter({ inferredText: '', startResult }, capture);
     await adapter.init();
 
-    const error = await MakaioBus.request(AdapterSubjects.infer, {
+    const error = await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
       adapterId: adapter.adapterId,
       prompt: 'infer this',
       ...(withSchema && {
@@ -1113,7 +1110,7 @@ describe('AIAdapter.handleInfer', () => {
     );
     await adapter.init();
 
-    const error = await MakaioBus.request(AdapterSubjects.infer, {
+    const error = await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
       adapterId: adapter.adapterId,
       prompt: 'classify this',
       responseSchema: {
@@ -1144,7 +1141,7 @@ describe('AIAdapter.handleInfer', () => {
 
     // Infer without providerContext remains explicitly configless. This supports
     // health checks and local adapters without authorizing ambient credentials.
-    const result = await MakaioBus.request(AdapterSubjects.infer, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.infer, {
       adapterId: adapter.adapterId,
       prompt: 'infer this',
     });
@@ -1163,7 +1160,7 @@ describe('AIAdapter.handleInfer', () => {
     adapter = createTestAdapter({ inferredText: '' }, capture);
     await adapter.init();
 
-    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
       role: 'lead',
       mode: 'create',
@@ -1191,7 +1188,7 @@ describe('AIAdapter.handleInfer', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     try {
-      const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+      const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
         adapterId: adapter.adapterId,
         role: 'lead',
         mode: 'create',
@@ -1202,7 +1199,9 @@ describe('AIAdapter.handleInfer', () => {
       if (!result.success) {
         throw new Error(result.message);
       }
-      const listed = await MakaioBus.request(AdapterSubjects.listAgents, { adapterId: adapter.adapterId });
+      const listed = await MakaioBus.request(createTestCall(), AdapterSubjects.listAgents, {
+        adapterId: adapter.adapterId,
+      });
       expect(listed.agents).toHaveLength(1);
       expect(adapter.getActiveAgents()).toHaveLength(1);
       expect(capture.connectors[0]?.closeCalls).toBe(0);
@@ -1232,7 +1231,7 @@ describe('AIAdapter.handleInfer', () => {
     });
 
     try {
-      const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+      const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
         adapterId: adapter.adapterId,
         role: 'lead',
         mode: 'create',
@@ -1262,7 +1261,7 @@ describe('AIAdapter.handleInfer', () => {
     await adapter.init();
 
     await expect(
-      MakaioBus.request(AdapterSubjects.startAgent, {
+      MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
         adapterId: adapter.adapterId,
         role: 'lead',
         mode: 'create',
@@ -1273,7 +1272,9 @@ describe('AIAdapter.handleInfer', () => {
     expect(capture.connectors[0]?.closeCalls).toBe(1);
     expect(adapter.getActiveAgents()).toEqual([]);
 
-    const listed = await MakaioBus.request(AdapterSubjects.listAgents, { adapterId: adapter.adapterId });
+    const listed = await MakaioBus.request(createTestCall(), AdapterSubjects.listAgents, {
+      adapterId: adapter.adapterId,
+    });
     expect(listed.agents).toEqual([]);
   });
 
@@ -1285,7 +1286,7 @@ describe('AIAdapter.handleInfer', () => {
     };
     const release = vi.fn(async () => undefined);
     adapter = createTestAdapter({ inferredText: '', throwOnStart: new Error('start failed') }, capture, {
-      prepareAuthRuntime: async (config) => {
+      prepareAuthRuntime: async (_call, config) => {
         const { boundProviderAuth: _boundProviderAuth, ...runtimeConfig } = config;
         return {
           config: { ...runtimeConfig, contextEnv: Object.freeze({}) },
@@ -1296,7 +1297,7 @@ describe('AIAdapter.handleInfer', () => {
     await adapter.init();
 
     await expect(
-      MakaioBus.request(AdapterSubjects.startAgent, {
+      MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
         adapterId: adapter.adapterId,
         role: 'lead',
         mode: 'create',
@@ -1324,7 +1325,7 @@ describe('AIAdapter.handleInfer', () => {
     });
 
     try {
-      const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+      const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
         adapterId: adapter.adapterId,
         role: 'lead',
         mode: 'create',
@@ -1349,7 +1350,7 @@ describe('AIAdapter.handleInfer', () => {
     adapter = createInitDefaultsAdapter({ inferredText: '' }, capture);
     await adapter.init();
 
-    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
       role: 'lead',
       mode: 'create',
@@ -1379,7 +1380,7 @@ describe('AIAdapter.handleInfer', () => {
     });
 
     try {
-      const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+      const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
         adapterId: adapter.adapterId,
         role: 'lead',
         mode: 'create',
@@ -1405,7 +1406,7 @@ describe('AIAdapter.handleInfer', () => {
     adapter = createTestAdapter({ inferredText: '' }, capture);
     await adapter.init();
 
-    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
       role: 'lead',
       mode: 'create',
@@ -1430,7 +1431,7 @@ describe('AIAdapter.handleInfer', () => {
       schema: { type: 'object', properties: { approved: { type: 'boolean' } } },
       name: 'approved_schema',
     };
-    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
       role: 'lead',
       mode: 'create',
@@ -1474,11 +1475,11 @@ describe('AIAdapter.handleInfer', () => {
       () => {
         preUserMessageHookCalls += 1;
       },
-      {},
+      { bus: MakaioBus },
     );
 
     try {
-      const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+      const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
         adapterId: adapter.adapterId,
         role: 'lead',
         mode: 'create',
@@ -1536,7 +1537,7 @@ describe('AIAdapter.handleInfer', () => {
     await adapter.init();
 
     await expect(
-      MakaioBus.request(AdapterSubjects.startAgent, {
+      MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
         adapterId: adapter.adapterId,
         role: 'lead',
         mode: 'create',
@@ -1556,7 +1557,7 @@ describe('AIAdapter.handleInfer', () => {
     adapter = createTestAdapter({ inferredText: '', completeOnStart: false }, capture);
     await adapter.init();
 
-    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
       role: 'lead',
       mode: 'create',
@@ -1591,7 +1592,7 @@ describe('AIAdapter.handleInfer', () => {
     await adapter.init();
 
     try {
-      const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+      const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
         adapterId: adapter.adapterId,
         role: 'lead',
         mode: 'create',
@@ -1633,7 +1634,7 @@ describe('AIAdapter.handleInfer', () => {
 
     try {
       await expect(
-        MakaioBus.request(AdapterSubjects.startAgent, {
+        MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
           adapterId: adapter.adapterId,
           role: 'lead',
           mode: 'create',
@@ -1666,7 +1667,7 @@ describe('AIAdapter.handleInfer', () => {
     });
 
     try {
-      const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+      const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
         adapterId: adapter.adapterId,
         mode: 'create',
         role: 'lead',
@@ -1690,7 +1691,7 @@ describe('AIAdapter.handleInfer', () => {
     adapter = createTestAdapter({ inferredText: '' }, capture);
     await adapter.init();
 
-    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
       mode: 'create',
       role: 'lead',
@@ -1716,7 +1717,7 @@ describe('AIAdapter.handleInfer', () => {
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+      const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
         adapterId: adapter.adapterId,
         role: 'lead',
         mode: 'create',
@@ -1772,7 +1773,7 @@ describe('AIAdapter model metadata resolution', () => {
     adapter = createTestAdapter({ inferredText: 'unused' }, capture, { definitionProviders });
     await adapter.init();
 
-    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
       role: 'lead',
       mode: 'create',
@@ -1809,13 +1810,13 @@ describe('AIAdapter model metadata resolution', () => {
     });
     await adapter.init();
 
-    const unresolvedResult = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const unresolvedResult = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
       role: 'lead',
       mode: 'create',
       initialMessage: 'hello unresolved provider',
     });
-    const mismatchedResult = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const mismatchedResult = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
       role: 'lead',
       mode: 'create',
@@ -1849,7 +1850,7 @@ describe('AIAdapter model metadata resolution', () => {
     adapter = createTestAdapter({ inferredText: 'unused' }, capture, { definitionProviders });
     await adapter.init();
 
-    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
       role: 'lead',
       mode: 'create',
@@ -1888,7 +1889,7 @@ describe('AIAdapter model metadata resolution', () => {
     adapter = createTestAdapter({ inferredText: 'unused' }, capture, { definitionProviders });
     await adapter.init();
 
-    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
       role: 'lead',
       mode: 'create',

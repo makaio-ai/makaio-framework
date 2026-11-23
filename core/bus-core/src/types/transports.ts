@@ -5,7 +5,7 @@
  * via WebSocket, NATS, Redis, HTTP, etc.
  */
 
-import type { PayloadFilter, TransportReceiveContext } from '@makaio/core';
+import type { CrossHostMetadata, Party, PayloadFilter, TransportReceiveContext } from '@makaio/core';
 
 /** Controls whether a subscription may be advertised beyond its direct peer. */
 export type SubscriptionDeliveryClass = 'relayable' | 'first-hop-only';
@@ -203,6 +203,11 @@ export interface BusRequestMessage {
    * own bookkeeping and for diagnostics.
    */
   deadline?: number;
+  /**
+   * Metadata that travels with the message between hosts: the declared principal
+   * as a kind and id, never claims. Set anew on each hop, like `timeout`.
+   */
+  metadata?: CrossHostMetadata;
 }
 
 /**
@@ -244,6 +249,11 @@ export interface BusEventMessage {
   payload: unknown;
   messageId: string;
   correlationId?: string;
+  /**
+   * Metadata that travels with the message between hosts: the declared principal
+   * as a kind and id, never claims. Set anew on each hop, like `timeout`.
+   */
+  metadata?: CrossHostMetadata;
 }
 
 /**
@@ -267,6 +277,11 @@ export interface BusBroadcastMessage {
    * A value of `0` means no automatic timeout.
    */
   timeout?: number;
+  /**
+   * Metadata that travels with the message between hosts: the declared principal
+   * as a kind and id, never claims. Set anew on each hop, like `timeout`.
+   */
+  metadata?: CrossHostMetadata;
 }
 
 /**
@@ -330,6 +345,13 @@ export interface BusTransport {
    * ```
    */
   name: string;
+  /**
+   * Optional: the party this transport declares as the caller of messages it
+   * receives, when the receive context carries none (for example a worker-thread
+   * transport without a peer). The core never accepts a declared caller of kind
+   * `makaio.extension` or `makaio.host`.
+   */
+  declaredCaller?: Party;
   /**
    * Send a message over the transport.
    *

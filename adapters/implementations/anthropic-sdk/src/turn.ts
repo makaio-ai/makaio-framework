@@ -1,5 +1,6 @@
 import { ProceduralConnectorTurn } from '@makaio/ai-adapters-core';
 import type { MessageHandle } from '@makaio/ai-adapters-core';
+import type { CallContext } from '@makaio/contracts';
 import { AnthropicSdkConnectorSubjects, type AnthropicSdkConnectorBus } from './namespaces/index.js';
 import type { StreamSessionTurnState } from '@makaio/ai-adapters-stream-session';
 
@@ -55,10 +56,11 @@ export class AnthropicSdkConnectorTurn extends ProceduralConnectorTurn<
    * Pause (abort) at next opportunity.
    * The Anthropic SDK adapter does not support true pause — caller restarts
    * with merged content when a replacement turn arrives.
+   * @param call - Call of the message requesting the pause
    * @returns Pause result indicating turn state
    */
-  public override async pause(): ReturnType<ProceduralConnectorTurn['pause']> {
-    const result = await super.pause();
+  public override async pause(call: CallContext): ReturnType<ProceduralConnectorTurn['pause']> {
+    const result = await super.pause(call);
     if (!result.turnEnded) {
       this.abortController.abort();
     }

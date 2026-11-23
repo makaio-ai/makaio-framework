@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowSubjects } from '../namespace.js';
 import {
@@ -97,6 +98,7 @@ function resolveFrameStartedMetadata(
  * the terminal fields (`status`, `completedAt`, `durationMs`), preserving
  * `nodeType`, `nodeId`, and `path`. Falls back to safe defaults when the
  * `frame.started` event was missed.
+ * @param call - Call context of the frame lifecycle event being projected.
  * @param bus - Message bus to emit changed event on.
  * @param db - Drizzle database instance.
  * @param executionId - Execution identifier.
@@ -106,6 +108,7 @@ function resolveFrameStartedMetadata(
  * @param completedAt - Runtime-recorded terminal timestamp in Unix milliseconds.
  */
 async function projectFrameCompleted(
+  call: CallContext,
   bus: IMakaioBus,
   db: MakaioDatabase,
   executionId: string,
@@ -129,7 +132,7 @@ async function projectFrameCompleted(
     error: null,
   });
   await reaggregateTokenTotals(db, executionId);
-  await emitWorklogChanged(bus, executionId);
+  await emitWorklogChanged(call, bus, executionId);
 }
 
 /**
@@ -139,6 +142,7 @@ async function projectFrameCompleted(
  * the terminal fields (`status`, `completedAt`, `durationMs`, `error`),
  * preserving `nodeType`, `nodeId`, and `path`. Falls back to safe defaults
  * when the `frame.started` event was missed.
+ * @param call - Call context of the frame lifecycle event being projected.
  * @param bus - Message bus to emit changed event on.
  * @param db - Drizzle database instance.
  * @param executionId - Execution identifier.
@@ -149,6 +153,7 @@ async function projectFrameCompleted(
  * @param completedAt - Runtime-recorded terminal timestamp in Unix milliseconds.
  */
 async function projectFrameFailed(
+  call: CallContext,
   bus: IMakaioBus,
   db: MakaioDatabase,
   executionId: string,
@@ -172,7 +177,7 @@ async function projectFrameFailed(
     durationMs: duration ?? null,
     error,
   });
-  await emitWorklogChanged(bus, executionId);
+  await emitWorklogChanged(call, bus, executionId);
 }
 
 /**
@@ -210,19 +215,19 @@ export function registerFrameProjections(bus: IMakaioBus, db: MakaioDatabase): A
           estimatedCost: null,
           error: null,
         });
-        await emitWorklogChanged(bus, executionId);
+        await emitWorklogChanged(ctx.call, bus, executionId);
       });
     }),
     bus.on(WorkflowSubjects.frame.completed, async (ctx) => {
       const { executionId, frameId, nodeId, duration, completedAt } = ctx.payload;
       await safeProject(`frame.completed[${frameId}]`, () =>
-        projectFrameCompleted(bus, db, executionId, frameId, nodeId, duration, completedAt),
+        projectFrameCompleted(ctx.call, bus, db, executionId, frameId, nodeId, duration, completedAt),
       );
     }),
     bus.on(WorkflowSubjects.frame.failed, async (ctx) => {
       const { executionId, frameId, nodeId, error, duration, completedAt } = ctx.payload;
       await safeProject(`frame.failed[${frameId}]`, () =>
-        projectFrameFailed(bus, db, executionId, frameId, nodeId, error, duration, completedAt),
+        projectFrameFailed(ctx.call, bus, db, executionId, frameId, nodeId, error, duration, completedAt),
       );
     }),
   ];

@@ -7,6 +7,7 @@ import { useScrollWindow } from './hooks/use-scroll-window.js';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { Account, SourceInfo } from '../bus/schemas.js';
 import { BusLifecycle, type IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { displayLabel } from '../utils/format-account-display.js';
 import { Header, HEADER_HEIGHT } from './components/header.js';
 import { AccountsPanel, ACCOUNTS_PANEL_VERTICAL_PADDING_HEIGHT } from './components/accounts-panel.js';
@@ -86,16 +87,19 @@ export function App({ bus }: AppProps): React.ReactElement {
   );
 
   const loadData = useCallback(
-    async (isCurrentRun: () => boolean = () => mountedRef.current): Promise<LoadDataResult | undefined> => {
+    async (
+      call: CallContext,
+      isCurrentRun: () => boolean = () => mountedRef.current,
+    ): Promise<LoadDataResult | undefined> => {
       const loadSeq = ++loadSeqRef.current;
       try {
-        const { sources: srcList } = await bus.request(AccountManagerSubjects.accounts.getSources, {});
+        const { sources: srcList } = await bus.request(call, AccountManagerSubjects.accounts.getSources, {});
         if (!canCommitLoad(loadSeq, isCurrentRun)) return undefined;
         setSources(srcList);
 
         const accountsMap: Record<string, Account[]> = {};
         for (const src of srcList) {
-          const { accounts } = await bus.request(AccountManagerSubjects.accounts.list, {
+          const { accounts } = await bus.request(call, AccountManagerSubjects.accounts.list, {
             clientId: src.clientId,
           });
           if (!canCommitLoad(loadSeq, isCurrentRun)) return undefined;
@@ -137,10 +141,11 @@ export function App({ bus }: AppProps): React.ReactElement {
     const cleanups: Array<() => void> = [];
 
     // Reload accounts then usage in sequence so stale bootstrap work cannot merge after a newer reload.
-    const reloadAll = (): void => {
-      void loadData(isCurrentRun).then((result) => {
+    const reloadAll = (call: CallContext): void => {
+      void loadData(call, isCurrentRun).then((result) => {
         if (result && isCurrentRun()) {
           void loadUsageForAccounts(
+            call,
             { bus, canCommitLoad, setUsageByAccount, setUsageAwaitingResolutionByAccount },
             result.loadSeq,
             result.accountsMap,
@@ -157,11 +162,11 @@ export function App({ bus }: AppProps): React.ReactElement {
         setConnected(false);
         setReconnecting(false);
       }),
-      bus.on(BusLifecycle.connected, () => {
+      bus.on(BusLifecycle.connected, (ctx) => {
         if (!isCurrentRun()) return;
         setConnected(true);
         setReconnecting(false);
-        reloadAll();
+        reloadAll(ctx.call);
       }),
       bus.on(AccountManagerSubjects.usage.updated, (ctx) => {
         if (!isCurrentRun()) return;
@@ -180,11 +185,11 @@ export function App({ bus }: AppProps): React.ReactElement {
         if (!isCurrentRun()) return;
         const key = usageKey(ctx.payload.clientId, ctx.payload.account.id);
         setUsageAwaitingResolutionByAccount((prev) => removeUsageResolutionKey(prev, key));
-        void loadData(isCurrentRun);
+        void loadData(ctx.call, isCurrentRun);
       }),
       bus.on(AccountManagerSubjects.credentials.detected, (ctx) => {
         if (!isCurrentRun()) return;
-        reloadAll();
+        reloadAll(ctx.call);
         if (ctx.payload.autoLabeled) {
           setNotification(`New account detected for ${ctx.payload.clientId}: ${ctx.payload.account.label}`);
         } else {
@@ -195,16 +200,16 @@ export function App({ bus }: AppProps): React.ReactElement {
       bus.on(AccountManagerSubjects.credentials.switched, (ctx) => {
         if (!isCurrentRun()) return;
         setSwitchingAccountId(null);
-        reloadAll();
+        reloadAll(ctx.call);
         setNotification(`Switched to ${displayLabel(ctx.payload.to)}`);
       }),
-      bus.on(AccountManagerSubjects.credentials.refreshed, () => {
+      bus.on(AccountManagerSubjects.credentials.refreshed, (ctx) => {
         if (!isCurrentRun()) return;
-        reloadAll();
+        reloadAll(ctx.call);
       }),
       bus.on(AccountManagerSubjects.accounts.labeled, (ctx) => {
         if (!isCurrentRun()) return;
-        void loadData(isCurrentRun);
+        void loadData(ctx.call, isCurrentRun);
         setLabelPrompt((current) =>
           current?.clientId === ctx.payload.clientId && current.accountId === ctx.payload.account.id ? null : current,
         );
@@ -217,9 +222,11 @@ export function App({ bus }: AppProps): React.ReactElement {
     );
 
     const init = async () => {
-      const result = await loadData(isCurrentRun);
+      const call = bus.own('start');
+      const result = await loadData(call, isCurrentRun);
       if (isCurrentRun() && result) {
         void loadUsageForAccounts(
+          call,
           { bus, canCommitLoad, setUsageByAccount, setUsageAwaitingResolutionByAccount },
           result.loadSeq,
           result.accountsMap,
@@ -312,8 +319,9 @@ export function App({ bus }: AppProps): React.ReactElement {
     if (input === 'f') {
       const sourceWithIssue = sources.find((s) => s.configIssue);
       if (sourceWithIssue) {
+        const call = bus.own('root');
         void bus
-          .request(AccountManagerSubjects.credentials.configureFileMode, {
+          .request(call, AccountManagerSubjects.credentials.configureFileMode, {
             clientId: sourceWithIssue.clientId,
           })
           .then((result) => {
@@ -322,7 +330,7 @@ export function App({ bus }: AppProps): React.ReactElement {
             } else {
               setNotification(`Failed to configure file mode: ${result.error ?? 'unknown error'}`);
             }
-            void loadData();
+            void loadData(call);
           })
           .catch(() => {
             setNotification('Failed to configure file mode');
@@ -336,7 +344,7 @@ export function App({ bus }: AppProps): React.ReactElement {
     if (key.return && !selected.account.active && switchingAccountId === null) {
       setSwitchingAccountId(selected.account.id);
       void bus
-        .request(AccountManagerSubjects.credentials.switch, {
+        .request(bus.own('root'), AccountManagerSubjects.credentials.switch, {
           clientId: selected.clientId,
           accountId: selected.account.id,
         })
@@ -359,8 +367,9 @@ export function App({ bus }: AppProps): React.ReactElement {
     }
 
     if (input === 'd') {
+      const call = bus.own('root');
       void bus
-        .request(AccountManagerSubjects.accounts.remove, {
+        .request(call, AccountManagerSubjects.accounts.remove, {
           clientId: selected.clientId,
           accountId: selected.account.id,
         })
@@ -373,7 +382,7 @@ export function App({ bus }: AppProps): React.ReactElement {
           setUsageAwaitingResolutionByAccount((prev) =>
             removeUsageResolutionKey(prev, usageKey(selected.clientId, selected.account.id)),
           );
-          return loadData();
+          return loadData(call);
         })
         .catch(() => {
           setNotification('Failed to remove account');
@@ -386,8 +395,9 @@ export function App({ bus }: AppProps): React.ReactElement {
   const handleLabelSubmit = useCallback(
     async (label: string) => {
       if (!labelPrompt) return;
+      const call = bus.own('root');
       try {
-        const result = await bus.request(AccountManagerSubjects.accounts.label, {
+        const result = await bus.request(call, AccountManagerSubjects.accounts.label, {
           clientId: labelPrompt.clientId,
           accountId: labelPrompt.accountId,
           label,
@@ -397,7 +407,7 @@ export function App({ bus }: AppProps): React.ReactElement {
           return;
         }
         setLabelPrompt(null);
-        await loadData();
+        await loadData(call);
       } catch {
         setNotification('Failed to update label');
       }

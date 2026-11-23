@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { createMakaioContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { FILE_ACCESS_RULES_KEY } from '../../types.js';
 import { grepFilesTool, searchFile } from '../grep-files.js';
 import { createPathValidator } from '../../utils/index.js';
@@ -27,7 +28,7 @@ describe('grep_files tool', () => {
     await fs.writeFile(path.join(dir, 'a.txt'), 'hello world\ngoodbye world\nhello again');
 
     const context = createMakaioContext({ cwd: dir });
-    const result = await grepFilesTool.execute({ pattern: 'hello', path: dir }, context);
+    const result = await grepFilesTool.execute({ pattern: 'hello', path: dir }, { ...context, call: createTestCall() });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -43,7 +44,10 @@ describe('grep_files tool', () => {
     await fs.writeFile(path.join(dir, 'code.ts'), 'const x = 1;\nlet y = 2;\nvar z = 3;');
 
     const context = createMakaioContext({ cwd: dir });
-    const result = await grepFilesTool.execute({ pattern: '^(const|let)', path: dir }, context);
+    const result = await grepFilesTool.execute(
+      { pattern: '^(const|let)', path: dir },
+      { ...context, call: createTestCall() },
+    );
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -56,7 +60,10 @@ describe('grep_files tool', () => {
     await fs.writeFile(path.join(dir, 'mixed.txt'), 'Hello\nhello\nHELLO');
 
     const context = createMakaioContext({ cwd: dir });
-    const result = await grepFilesTool.execute({ pattern: 'hello', path: dir, case_insensitive: true }, context);
+    const result = await grepFilesTool.execute(
+      { pattern: 'hello', path: dir, case_insensitive: true },
+      { ...context, call: createTestCall() },
+    );
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -70,7 +77,10 @@ describe('grep_files tool', () => {
     await fs.writeFile(path.join(dir, 'data.json'), 'target line');
 
     const context = createMakaioContext({ cwd: dir });
-    const result = await grepFilesTool.execute({ pattern: 'target', path: dir, glob: '*.ts' }, context);
+    const result = await grepFilesTool.execute(
+      { pattern: 'target', path: dir, glob: '*.ts' },
+      { ...context, call: createTestCall() },
+    );
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -85,7 +95,10 @@ describe('grep_files tool', () => {
     await fs.writeFile(path.join(dir, 'many.txt'), lines);
 
     const context = createMakaioContext({ cwd: dir });
-    const result = await grepFilesTool.execute({ pattern: 'match', path: dir, limit: 5, offset: 3 }, context);
+    const result = await grepFilesTool.execute(
+      { pattern: 'match', path: dir, limit: 5, offset: 3 },
+      { ...context, call: createTestCall() },
+    );
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -101,7 +114,7 @@ describe('grep_files tool', () => {
     await fs.writeFile(path.join(dir, 'empty.txt'), 'no matching content here');
 
     const context = createMakaioContext({ cwd: dir });
-    const result = await grepFilesTool.execute({ pattern: 'ZZZZZ', path: dir }, context);
+    const result = await grepFilesTool.execute({ pattern: 'ZZZZZ', path: dir }, { ...context, call: createTestCall() });
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -115,7 +128,10 @@ describe('grep_files tool', () => {
     await fs.writeFile(path.join(dir, 'test.txt'), 'content');
 
     const context = createMakaioContext({ cwd: dir });
-    const result = await grepFilesTool.execute({ pattern: '[invalid', path: dir }, context);
+    const result = await grepFilesTool.execute(
+      { pattern: '[invalid', path: dir },
+      { ...context, call: createTestCall() },
+    );
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -129,7 +145,10 @@ describe('grep_files tool', () => {
     await fs.writeFile(path.join(dir, 'test.txt'), 'aaaaaaaaaaaaaaaaaaaaaaaa!');
 
     const context = createMakaioContext({ cwd: dir });
-    const result = await grepFilesTool.execute({ pattern: '(a+)+$', path: dir }, context);
+    const result = await grepFilesTool.execute(
+      { pattern: '(a+)+$', path: dir },
+      { ...context, call: createTestCall() },
+    );
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -145,7 +164,7 @@ describe('grep_files tool', () => {
     const context = createMakaioContext({ cwd: dir });
     const result = await grepFilesTool.execute(
       { pattern: 'content', path: dir, glob: path.join(dir, '*.txt') },
-      context,
+      { ...context, call: createTestCall() },
     );
 
     expect(result.success).toBe(false);
@@ -159,7 +178,10 @@ describe('grep_files tool', () => {
     const dir = await createTempDir();
 
     const context = createMakaioContext({ cwd: dir });
-    const result = await grepFilesTool.execute({ pattern: 'content', path: dir, glob: '../*.txt' }, context);
+    const result = await grepFilesTool.execute(
+      { pattern: 'content', path: dir, glob: '../*.txt' },
+      { ...context, call: createTestCall() },
+    );
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -172,7 +194,10 @@ describe('grep_files tool', () => {
     const dir = await createTempDir();
 
     const context = createMakaioContext({ cwd: dir });
-    const result = await grepFilesTool.execute({ pattern: 'content', path: dir, glob: '{../*.txt,*.md}' }, context);
+    const result = await grepFilesTool.execute(
+      { pattern: 'content', path: dir, glob: '{../*.txt,*.md}' },
+      { ...context, call: createTestCall() },
+    );
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -196,7 +221,10 @@ describe('grep_files tool', () => {
       constraints: { [FILE_ACCESS_RULES_KEY]: { allowedDirectories: [allowedDir], isDenied: () => false } },
     });
 
-    const result = await grepFilesTool.execute({ pattern: 'match', path: allowedDir, glob: '*.txt' }, context);
+    const result = await grepFilesTool.execute(
+      { pattern: 'match', path: allowedDir, glob: '*.txt' },
+      { ...context, call: createTestCall() },
+    );
 
     expect(result).toMatchObject({ success: true, data: { totalMatches: 1 } });
     if (result.success) {

@@ -13,6 +13,7 @@ import os from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import {
   createSessionStorageMemoryState,
   registerMemoryAgentStorage,
@@ -101,7 +102,7 @@ async function withHeldSwap(): Promise<HeldSwap> {
       return connector;
     },
   });
-  await agent.init();
+  await agent.init(createTestCall());
   const incumbent = built[0];
   if (incumbent === undefined) throw new Error('the agent built no connector');
   registry.set(AGENT_ID, {
@@ -111,7 +112,7 @@ async function withHeldSwap(): Promise<HeldSwap> {
     usage: { totalInputTokens: 0, totalOutputTokens: 0, totalCalls: 0 },
   });
 
-  const swap = agent.swapConnector({ cwd: os.tmpdir() }).catch(() => undefined);
+  const swap = agent.swapConnector(createTestCall(), { cwd: os.tmpdir() }).catch(() => undefined);
   // The replacement is built and then parked inside `initialize()`, so the swap is
   // provably unsettled while the teardown below arbitrates against it.
   await vi.advanceTimersByTimeAsync(0);
@@ -132,7 +133,7 @@ describe('case 228 arm 1: a settlement inside the bound keeps region-two behavio
   it('closes the runtime that is current for the outcome once the swap settles in time', async () => {
     const held = await withHeldSwap();
 
-    const teardown = held.registry.evictSilently(AGENT_ID);
+    const teardown = held.registry.evictSilently(createTestCall(), AGENT_ID);
     await vi.advanceTimersByTimeAsync(SWAP_SETTLEMENT_WAIT_MS / 2);
     held.release();
     await held.swap;
@@ -150,7 +151,7 @@ describe('case 228 arms 2-4: expiry closes nothing and hands both runtimes back'
   it('arm 2: reports `unknown` naming the unsettled swap and closes nothing', async () => {
     const held = await withHeldSwap();
 
-    const teardown = held.registry.evictSilently(AGENT_ID);
+    const teardown = held.registry.evictSilently(createTestCall(), AGENT_ID);
     await vi.advanceTimersByTimeAsync(SWAP_SETTLEMENT_WAIT_MS + 1);
     const report = await teardown;
 
@@ -166,7 +167,7 @@ describe('case 228 arms 2-4: expiry closes nothing and hands both runtimes back'
   it('arm 3: a slow but healthy swap then closes both runtimes itself', async () => {
     const held = await withHeldSwap();
 
-    const teardown = held.registry.evictSilently(AGENT_ID);
+    const teardown = held.registry.evictSilently(createTestCall(), AGENT_ID);
     await vi.advanceTimersByTimeAsync(SWAP_SETTLEMENT_WAIT_MS + 1);
     await teardown;
     expect(held.incumbent.closeCount).toBe(0);
@@ -187,7 +188,7 @@ describe('case 228 arms 2-4: expiry closes nothing and hands both runtimes back'
   it('arm 4: the released swap publishes no replacement anyone can reach', async () => {
     const held = await withHeldSwap();
 
-    const teardown = held.registry.evictSilently(AGENT_ID);
+    const teardown = held.registry.evictSilently(createTestCall(), AGENT_ID);
     await vi.advanceTimersByTimeAsync(SWAP_SETTLEMENT_WAIT_MS + 1);
     await teardown;
     held.release();
@@ -208,7 +209,7 @@ describe('case 228 arm 6: a deadline already inside the margin yields a zero wai
     const deadline = Date.now() + CONNECTOR_EXIT_OBSERVATION_MS - 1;
 
     let settled = false;
-    const teardown = held.registry.evictSilently(AGENT_ID, { deadline }).then((report) => {
+    const teardown = held.registry.evictSilently(createTestCall(), AGENT_ID, { deadline }).then((report) => {
       settled = true;
       return report;
     });
@@ -266,7 +267,7 @@ describe('case 228 arm 5: end-to-end through the real stopAgent request', () => 
     const agentHandle = adapter.getAgent(started.agentId);
     if (agentHandle === undefined) throw new Error('the start registered no agent');
     gateNextGeneration = true;
-    const swap = agentHandle.agent.swapConnector({ cwd: os.tmpdir() }).catch(() => undefined);
+    const swap = agentHandle.agent.swapConnector(createTestCall(), { cwd: os.tmpdir() }).catch(() => undefined);
     await vi.advanceTimersByTimeAsync(0);
 
     // The caller's own timeout is set **below** the ceiling, so the clamp against

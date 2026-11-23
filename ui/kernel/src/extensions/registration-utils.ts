@@ -46,8 +46,8 @@ export function registerExtensionUI(
 
     if (contribution.widgets) {
       contribution.widgets.forEach((definition) => {
-        if (registerWidget(bus, definition)) {
-          cleanups.push(() => unregisterWidget(bus, definition.id));
+        if (registerWidget(bus.own('start'), bus, definition)) {
+          cleanups.push(() => unregisterWidget(bus.own('stop'), bus, definition.id));
         } else {
           console.warn(
             `[registerExtensionUI] Widget "${definition.id}" from extension "${extensionName}" was already registered.`,

@@ -6,6 +6,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { PreferencesSubjects } from '../../preferences/storage-namespace.js';
 
 /**
@@ -61,12 +62,16 @@ function isCwdChangeNotificationPreference(value: unknown): value is CwdChangeNo
 
 /**
  * Read the CWD change notification preference via bus, falling back to the default.
+ * @param call - Call context of the handled message being routed; forwarded to the preferences lookup
  * @param bus - Bus instance for preferences lookup
  * @returns Resolved preference (never throws; falls back to default on error)
  */
-export async function readCwdChangeNotificationPref(bus: IMakaioBus): Promise<CwdChangeNotificationPreference> {
+export async function readCwdChangeNotificationPref(
+  call: CallContext,
+  bus: IMakaioBus,
+): Promise<CwdChangeNotificationPreference> {
   try {
-    const result = await bus.request(PreferencesSubjects.get, {
+    const result = await bus.request(call, PreferencesSubjects.get, {
       key: { scope: 'global', surface: 'ui', context: CWD_CHANGE_PREF_KEY },
       category: CWD_CHANGE_PREF_CATEGORY,
     });

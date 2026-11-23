@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createBusContext, createBusInstance, MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, MakaioBus } from '@makaio/bus-core';
+import { busContextOf, createBusContext } from '@makaio/bus-core/kernel-api';
 import { AdapterNamespace, AdapterSubjects } from '@makaio/contracts';
 import { createBidirectionalTransportPair } from '../../../../../core/bus-core/src/__tests__/helpers/transport-fixtures.js';
 import type { TestAdapter } from './shared.js';
@@ -150,7 +151,7 @@ describe('AIAdapter owner-instance routing', () => {
       await nonOwner.init();
       await owner.init();
       for (const subject of ['adapter.getAgent', 'adapter.stopAgent']) {
-        hubBus.getContext().remoteRequestHandlers.set(subject, [
+        busContextOf(hubBus).remoteRequestHandlers.set(subject, [
           { transport: nonOwnerLink.sideA.name, priority: 0 },
           { transport: ownerLink.sideA.name, priority: 0 },
         ]);

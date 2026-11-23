@@ -1,5 +1,6 @@
 import { OnceAbortError } from '@makaio/bus-core';
 import type { ScopedBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts';
 import type { PayloadFilter, ScopedSubjectDefinition } from '@makaio/core';
 import {
   BaseConnectorSession,
@@ -207,10 +208,11 @@ export abstract class BaseStreamSession<
    * Stream connectors reuse a session after {@link abort} interrupts a turn.
    * Set the inherited queue gate before the first await only when ownership ends,
    * so a retained session reference cannot start a turn during connector close.
+   * @param call - Call requesting session closure
    */
-  public async close(): Promise<void> {
+  public async close(call: CallContext): Promise<void> {
     this.closing = true;
-    await super.abort();
+    await super.abort(call);
   }
 
   /**
@@ -271,7 +273,7 @@ export abstract class BaseStreamSession<
 
     handle.markAcknowledged();
 
-    await this.config.emitSdkEvent({
+    await this.config.emitSdkEvent(handle.call, {
       eventType: 'agent_started',
       model: this.currentModel,
     });
@@ -312,7 +314,7 @@ export abstract class BaseStreamSession<
         // next queued message). Skipped only for immediate-mode replacement
         // turns where the replacement turn owns finalisation instead.
         if (turn && (!turn.isPaused() || handle.deliveryMode !== 'immediate')) {
-          await turn.markTurnFinished();
+          await turn.markTurnFinished(handle.call);
           if (this.currentTurn === turn) this.currentTurn = undefined;
         }
       }
@@ -364,7 +366,7 @@ export abstract class BaseStreamSession<
     if (this.isTurnSuperseded(turn)) {
       return;
     }
-    await turn.start();
+    await turn.start(currentHandle.call);
     await this.runTurnIteration(turn, currentHandle);
   }
 
@@ -504,7 +506,7 @@ export abstract class BaseStreamSession<
         // calls (toolCallIteration > 0) re-throw without emitting to avoid
         // N duplicate error events propagating through the call stack.
         if (toolCallIteration === 0) {
-          await this.config.emitSdkEvent({
+          await this.config.emitSdkEvent(currentHandle.call, {
             eventType: 'error',
             message: classifiedError.message,
             code: (error as { code?: string })?.code,

@@ -7,7 +7,7 @@
  */
 
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createMockBus, createTestBusInstance, type MockBusResult } from '@makaio/test-utils';
+import { createMockBus, createTestBusInstance, createTestCall, type MockBusResult } from '@makaio/test-utils';
 import { PackageSubjects } from '@makaio/services-package-manager';
 import { installExtensionPackages } from '../bus/package-manager-ops.js';
 
@@ -19,7 +19,7 @@ describe('installExtensionPackages', () => {
   });
 
   it('returns an empty array when no packages are provided', async () => {
-    const result = await installExtensionPackages(mockBus.bus, []);
+    const result = await installExtensionPackages(createTestCall(), mockBus.bus, []);
 
     expect(result).toEqual([]);
     expect(mockBus.request).not.toHaveBeenCalled();
@@ -32,14 +32,15 @@ describe('installExtensionPackages', () => {
       restartRequired: false,
     });
 
-    await installExtensionPackages(mockBus.bus, ['pkg-a', 'pkg-b']);
+    const call = createTestCall();
+    await installExtensionPackages(call, mockBus.bus, ['pkg-a', 'pkg-b']);
 
     expect(mockBus.request).toHaveBeenCalledTimes(2);
-    expect(mockBus.request).toHaveBeenNthCalledWith(1, PackageSubjects.install, {
+    expect(mockBus.request).toHaveBeenNthCalledWith(1, call, PackageSubjects.install, {
       packageNames: ['pkg-a'],
       source: 'npm',
     });
-    expect(mockBus.request).toHaveBeenNthCalledWith(2, PackageSubjects.install, {
+    expect(mockBus.request).toHaveBeenNthCalledWith(2, call, PackageSubjects.install, {
       packageNames: ['pkg-b'],
       source: 'npm',
     });
@@ -58,7 +59,7 @@ describe('installExtensionPackages', () => {
         restartRequired: true,
       });
 
-    const result = await installExtensionPackages(mockBus.bus, ['pkg-a', 'pkg-b']);
+    const result = await installExtensionPackages(createTestCall(), mockBus.bus, ['pkg-a', 'pkg-b']);
 
     expect(result).toEqual([
       { packageName: 'pkg-a', success: true, restartRequired: false, error: undefined },
@@ -74,7 +75,7 @@ describe('installExtensionPackages', () => {
       error: 'package not found',
     });
 
-    await expect(installExtensionPackages(mockBus.bus, ['pkg-fail'])).rejects.toThrow(
+    await expect(installExtensionPackages(createTestCall(), mockBus.bus, ['pkg-fail'])).rejects.toThrow(
       'Failed to install pkg-fail: package not found',
     );
   });
@@ -86,7 +87,7 @@ describe('installExtensionPackages', () => {
       restartRequired: false,
     });
 
-    await expect(installExtensionPackages(mockBus.bus, ['pkg-fail'])).rejects.toThrow(
+    await expect(installExtensionPackages(createTestCall(), mockBus.bus, ['pkg-fail'])).rejects.toThrow(
       'Failed to install pkg-fail: unknown error',
     );
   });
@@ -105,7 +106,8 @@ describe('installExtensionPackages', () => {
         error: 'download failed',
       });
 
-    await expect(installExtensionPackages(mockBus.bus, ['pkg-a', 'pkg-b', 'pkg-c'])).rejects.toThrow(
+    const call = createTestCall();
+    await expect(installExtensionPackages(call, mockBus.bus, ['pkg-a', 'pkg-b', 'pkg-c'])).rejects.toThrow(
       'Failed to install pkg-b: download failed',
     );
 
@@ -129,7 +131,7 @@ describe('installExtensionPackages', () => {
       });
     });
 
-    const result = await installExtensionPackages(bus, ['pkg-a', 'pkg-b']);
+    const result = await installExtensionPackages(bus.own('root'), bus, ['pkg-a', 'pkg-b']);
 
     expect(installed).toEqual(['pkg-a', 'pkg-b']);
     expect(result).toEqual([

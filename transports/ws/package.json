@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@makaio/bus-core": "workspace:*",
+    "@makaio/core": "workspace:*",
     "@makaio/utils": "workspace:*",
     "zod": "4.4.3"
   },

@@ -5,7 +5,8 @@ import {
   type NormalizedMessageInput,
 } from '@makaio/ai-adapters-core';
 import { MakaioBus } from '@makaio/bus-core';
-import { McpSubjects } from '@makaio/contracts';
+import { McpSubjects, type CallContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CursorSdkNamespace } from '../namespaces/index.js';
 import type { CursorSdkProviderConfig } from '../schemas.js';
@@ -107,12 +108,13 @@ const TEST_MESSAGE: NormalizedMessageInput = {
 
 /**
  * Create a Cursor SDK session configured for unit tests.
+ * @param call - Call initializing the session.
  * @param providerConfig - Optional Cursor SDK provider configuration.
  * @returns Session instance.
  */
-async function createSession(providerConfig?: CursorSdkProviderConfig): Promise<CursorSdkSession> {
+async function createSession(call: CallContext, providerConfig?: CursorSdkProviderConfig): Promise<CursorSdkSession> {
   const session = new CursorSdkSession({
-    bus: await CursorSdkNamespace.scopedBus(),
+    bus: await CursorSdkNamespace.scopedBus(MakaioBus),
     agentId: 'agent-1',
     adapterId: 'adapter-1',
     adapterName: 'cursor-sdk',
@@ -121,7 +123,7 @@ async function createSession(providerConfig?: CursorSdkProviderConfig): Promise<
     apiKey: 'test-key',
     providerConfig,
   });
-  await session.initialize();
+  await session.initialize(call);
   return session;
 }
 
@@ -131,7 +133,7 @@ async function createSession(providerConfig?: CursorSdkProviderConfig): Promise<
  */
 function createQueuedMessage(): { queue: UserMessageQueue; handle: MessageHandle } {
   const queue = new UserMessageQueue();
-  const handle = new MessageHandle('message-1', TEST_MESSAGE, 'enqueue');
+  const handle = new MessageHandle(createTestCall(), 'message-1', TEST_MESSAGE, 'enqueue');
   queue.enqueue(handle);
   return { queue, handle };
 }
@@ -183,7 +185,7 @@ describe('CursorSdkSession', () => {
 
   it('maps Cursor run error status to an error outcome through real queue processing', async () => {
     sdkControls.runResults.set('run-1', { id: 'run-1', status: 'error', error: { message: 'tool failed' } });
-    const session = await createSession();
+    const session = await createSession(createTestCall());
 
     try {
       const result = await processOneMessage(session);
@@ -195,12 +197,12 @@ describe('CursorSdkSession', () => {
       await waitUntil(() => session.getCurrentTurn() === undefined);
       expect(session.getCurrentTurn()).toBeUndefined();
     } finally {
-      await session.close();
+      await session.close(createTestCall());
     }
   });
 
   it('applies provider mode to Cursor agent creation and sends', async () => {
-    const session = await createSession({ mode: 'plan' });
+    const session = await createSession(createTestCall(), { mode: 'plan' });
 
     try {
       const result = await processOneMessage(session);
@@ -209,14 +211,14 @@ describe('CursorSdkSession', () => {
       expect(sdkControls.createCalls[0]).toMatchObject({ mode: 'plan' });
       expect(sdkControls.sendCalls[0].options).toMatchObject({ mode: 'plan' });
     } finally {
-      await session.close();
+      await session.close(createTestCall());
     }
   });
 
   it('prefers terminal run result over replayed streaming deltas', async () => {
     sdkControls.deltaUpdates.set('run-1', [{ type: 'text-delta', text: '<user_query>old prompt</user_query>' }]);
     sdkControls.runResults.set('run-1', { id: 'run-1', status: 'completed', result: 'ok' });
-    const session = await createSession();
+    const session = await createSession(createTestCall());
 
     try {
       const result = await processOneMessage(session);
@@ -226,7 +228,7 @@ describe('CursorSdkSession', () => {
         result: { message: 'ok' },
       });
     } finally {
-      await session.close();
+      await session.close(createTestCall());
     }
   });
 
@@ -240,7 +242,7 @@ describe('CursorSdkSession', () => {
         },
       },
     ]);
-    const session = await createSession();
+    const session = await createSession(createTestCall());
 
     try {
       const result = await processOneMessage(session);
@@ -250,14 +252,14 @@ describe('CursorSdkSession', () => {
         result: { message: 'ok' },
       });
     } finally {
-      await session.close();
+      await session.close(createTestCall());
     }
   });
 
   it('does not use replayed streaming deltas as semantic completion text', async () => {
     sdkControls.deltaUpdates.set('run-1', [{ type: 'text-delta', text: '<user_query>old prompt</user_query>' }]);
     sdkControls.runResults.set('run-1', { id: 'run-1', status: 'completed' });
-    const session = await createSession();
+    const session = await createSession(createTestCall());
 
     try {
       const result = await processOneMessage(session);
@@ -265,18 +267,18 @@ describe('CursorSdkSession', () => {
       expect(result).toMatchObject({ outcome: 'completed' });
       expect(result.result?.message).toBeUndefined();
     } finally {
-      await session.close();
+      await session.close(createTestCall());
     }
   });
 
   it('rejects immediate messages that arrive during turn-finished drain', async () => {
-    const session = await createSession();
+    const session = await createSession(createTestCall());
     const queue = new UserMessageQueue();
-    const firstHandle = new MessageHandle('message-1', TEST_MESSAGE, 'enqueue');
-    const immediateHandle = new MessageHandle('message-2', TEST_MESSAGE, 'immediate');
+    const firstHandle = new MessageHandle(createTestCall(), 'message-1', TEST_MESSAGE, 'enqueue');
+    const immediateHandle = new MessageHandle(createTestCall(), 'message-2', TEST_MESSAGE, 'immediate');
     queue.enqueue(firstHandle);
 
-    const bus = await CursorSdkNamespace.scopedBus();
+    const bus = await CursorSdkNamespace.scopedBus(MakaioBus);
     const unsubscribe = bus.on(CursorSdkNamespace.subjects.turn.turn_finished, async () => {
       queue.enqueue(immediateHandle);
       await session.processQueue(queue);
@@ -290,13 +292,13 @@ describe('CursorSdkSession', () => {
       expect(sdkControls.sendCalls).toHaveLength(1);
     } finally {
       unsubscribe();
-      await session.close();
+      await session.close(createTestCall());
     }
   });
 
   it('drains aborts that arrive before agent.send resolves', async () => {
     sdkControls.deferredSendIds.add('run-1');
-    const session = await createSession();
+    const session = await createSession(createTestCall());
     const { queue, handle } = createQueuedMessage();
 
     try {
@@ -317,17 +319,17 @@ describe('CursorSdkSession', () => {
       await expect(handle.waitForCompletion(1_000)).resolves.toMatchObject({ outcome: 'completed' });
       expect(sdkControls.cancelledRunIds).toEqual(['run-1']);
     } finally {
-      await session.close();
+      await session.close(createTestCall());
     }
   });
 
   it('cancels a delayed old run without clearing the replacement run', async () => {
     sdkControls.deferredSendIds.add('run-1');
     sdkControls.deferredWaitIds.add('run-2');
-    const session = await createSession();
+    const session = await createSession(createTestCall());
     const queue = new UserMessageQueue();
-    const firstHandle = new MessageHandle('message-1', TEST_MESSAGE, 'enqueue');
-    const immediateHandle = new MessageHandle('message-2', TEST_MESSAGE, 'immediate');
+    const firstHandle = new MessageHandle(createTestCall(), 'message-1', TEST_MESSAGE, 'enqueue');
+    const immediateHandle = new MessageHandle(createTestCall(), 'message-2', TEST_MESSAGE, 'immediate');
     queue.enqueue(firstHandle);
 
     try {
@@ -357,39 +359,39 @@ describe('CursorSdkSession', () => {
         outcome: 'cancelled',
       });
     } finally {
-      await session.close();
+      await session.close(createTestCall());
     }
   });
 
   it('unregisters MCP when Cursor agent creation fails after registration', async () => {
     sdkControls.failCreate = true;
-    const requestOptionalSpy = vi.spyOn(MakaioBus, 'requestOptional').mockResolvedValue({
-      handled: true,
-      data: { port: 12_345 },
-    } as never);
-
-    const session = new CursorSdkSession({
-      bus: await CursorSdkNamespace.scopedBus(),
-      agentId: 'agent-1',
-      adapterId: 'adapter-1',
-      adapterName: 'cursor-sdk',
-      cwd: process.cwd(),
-      model: 'composer-2',
-      apiKey: 'test-key',
+    const PERSON = { kind: 'acme.person', id: 'cursor-initializer' };
+    const call = createTestCall({ principal: PERSON });
+    const registrations: Array<{ adapterSessionId: string; principal: CallContext['principal'] }> = [];
+    const unregistrations: typeof registrations = [];
+    const offRegister = MakaioBus.on(McpSubjects.session.register, (ctx) => {
+      registrations.push({ adapterSessionId: ctx.payload.adapterSessionId, principal: ctx.call.principal });
+      ctx.setResult({ port: 12_345 });
+    });
+    const offUnregister = MakaioBus.on(McpSubjects.session.unregister, (ctx) => {
+      unregistrations.push({ adapterSessionId: ctx.payload.adapterSessionId, principal: ctx.call.principal });
+      ctx.setResult({});
     });
 
-    await expect(session.initialize()).rejects.toThrow('cursor init failed');
-
-    expect(requestOptionalSpy).toHaveBeenCalledWith(
-      McpSubjects.session.unregister,
-      expect.objectContaining({ adapterSessionId: expect.stringMatching(/^cursor-/) }),
-    );
+    try {
+      await expect(createSession(call)).rejects.toThrow('cursor init failed');
+      expect(registrations).toEqual([{ adapterSessionId: expect.stringMatching(/^cursor-/), principal: PERSON }]);
+      expect(unregistrations).toEqual(registrations);
+    } finally {
+      offUnregister();
+      offRegister();
+    }
   });
 
   it('prefers async disposal when closing the real initialized Cursor agent', async () => {
-    const session = await createSession();
+    const session = await createSession(createTestCall());
 
-    await session.close();
+    await session.close(createTestCall());
 
     expect(sdkControls.asyncDisposeCalls).toBe(1);
     expect(sdkControls.closeCalls).toBe(0);
@@ -404,9 +406,9 @@ describe('CursorSdkSession teardown evidence', () => {
   });
 
   it('reports the class its own disposal supports when every stage was accounted for', async () => {
-    const session = await createSession();
+    const session = await createSession(createTestCall());
 
-    const report = await session.close();
+    const report = await session.close(createTestCall());
 
     expect(sdkControls.asyncDisposeCalls).toBe(1);
     expect(report.evidence).toBe('detached');
@@ -414,9 +416,9 @@ describe('CursorSdkSession teardown evidence', () => {
 
   it('claims no observed class when the agent disposal failed unaccounted for', async () => {
     sdkControls.disposeFailure = new Error('cursor agent disposal rejected');
-    const session = await createSession();
+    const session = await createSession(createTestCall());
 
-    const report = await session.close();
+    const report = await session.close(createTestCall());
 
     // The stages behind the disposal still ran — that is why the failure is
     // caught at all — but a session that cannot say whether its own agent was

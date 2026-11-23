@@ -10,6 +10,7 @@ import {
   type BusTransport,
   type IMakaioBus,
 } from '@makaio/bus-core';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
 import {
   CODE_EXECUTION_CAPABILITY_ID,
   CapabilitySubjects,
@@ -23,6 +24,7 @@ import {
 } from '@makaio/contracts';
 import { CapabilityService } from '@makaio/services-core/capability';
 import { CodeExecutionService } from '@makaio/services-core/code-execution';
+import { createTestCall } from '@makaio/test-utils';
 import { createBidirectionalTransportPair } from '../../../../../core/bus-core/src/__tests__/helpers/transport-fixtures.js';
 import { PiscinaCodeExecutionProvider } from '../piscina-code-execution-provider.js';
 import {
@@ -328,7 +330,7 @@ describe('code-execution.execute over the real bus', () => {
    */
   function shutdownHost(): Promise<void> {
     return runTeardown([
-      () => unregisterCodeExecutionProvider(bus, provider.id),
+      () => unregisterCodeExecutionProvider(createTestCall(), bus, provider.id),
       () => service.destroy(),
       () => provider.dispose(),
       () => capabilities.destroy(),
@@ -364,7 +366,7 @@ describe('code-execution.execute over the real bus', () => {
   });
 
   it('publishes the registered provider through the capability registry', async () => {
-    await registerCodeExecutionProvider(bus, provider);
+    await registerCodeExecutionProvider(createTestCall(), bus, provider);
 
     const listed = await bus.request(CapabilitySubjects.listProviders, {
       capabilityId: CODE_EXECUTION_CAPABILITY_ID,
@@ -388,7 +390,7 @@ describe('code-execution.execute over the real bus', () => {
     expect(relayed).toEqual(['capability.register']);
     relayed.length = 0;
 
-    await registerCodeExecutionProvider(bus, provider);
+    await registerCodeExecutionProvider(createTestCall(), bus, provider);
 
     expect(relayed).toEqual([]);
     // The registration still took effect — locally, which is the point.
@@ -396,7 +398,7 @@ describe('code-execution.execute over the real bus', () => {
       { providers: [{ id: provider.id, displayName: provider.displayName }] },
     );
 
-    await unregisterCodeExecutionProvider(bus, provider.id);
+    await unregisterCodeExecutionProvider(createTestCall(), bus, provider.id);
 
     expect(relayed).toEqual([]);
     expect(await bus.request(CapabilitySubjects.listProviders, { capabilityId: CODE_EXECUTION_CAPABILITY_ID })).toEqual(
@@ -425,14 +427,14 @@ describe('code-execution.execute over the real bus', () => {
     expect(relayed).toEqual(['capability.register']);
     relayed.length = 0;
 
-    await registerCodeExecutionProvider(filtered, provider);
+    await registerCodeExecutionProvider(createTestCall(), filtered, provider);
 
     expect(relayed).toEqual([]);
     expect(await bus.request(CapabilitySubjects.listProviders, { capabilityId: CODE_EXECUTION_CAPABILITY_ID })).toEqual(
       { providers: [{ id: provider.id, displayName: provider.displayName }] },
     );
 
-    await unregisterCodeExecutionProvider(filtered, provider.id);
+    await unregisterCodeExecutionProvider(createTestCall(), filtered, provider.id);
 
     expect(relayed).toEqual([]);
     expect(await bus.request(CapabilitySubjects.listProviders, { capabilityId: CODE_EXECUTION_CAPABILITY_ID })).toEqual(
@@ -443,7 +445,7 @@ describe('code-execution.execute over the real bus', () => {
   it(
     'executes a transferred multi-file TypeScript program on a worker thread',
     async () => {
-      await registerCodeExecutionProvider(bus, provider);
+      await registerCodeExecutionProvider(createTestCall(), bus, provider);
 
       // The bus parsed this response against `CodeExecutionOutcomeSchema` in
       // strict mode before handing it back, so reaching this line at all is
@@ -470,7 +472,7 @@ describe('code-execution.execute over the real bus', () => {
   it(
     'rejects an aborted caller, terminates the worker task, and stays usable',
     async () => {
-      await registerCodeExecutionProvider(bus, provider);
+      await registerCodeExecutionProvider(createTestCall(), bus, provider);
       const startedPath = scratch.path('started');
       const observer = observeSettlement(bus);
 
@@ -516,10 +518,10 @@ describe('code-execution.execute over the real bus', () => {
       const transport = createBidirectionalTransportPair({ label: 'code-execution-remote' });
       callerBus.registerTransport(transport.sideA);
       providerBus.registerTransport(transport.sideB);
-      callerBus
-        .getContext()
-        .remoteRequestHandlers.set('code-execution.execute', [{ transport: transport.sideA.name, priority: 0 }]);
-      await registerCodeExecutionProvider(providerBus, remoteProvider);
+      busContextOf(callerBus).remoteRequestHandlers.set('code-execution.execute', [
+        { transport: transport.sideA.name, priority: 0 },
+      ]);
+      await registerCodeExecutionProvider(createTestCall(), providerBus, remoteProvider);
 
       const executeRemotely = (files: Readonly<Record<string, string>>, input: JsonValue = null) =>
         callerBus.request(CodeExecutionSubjects.execute, createRequest(files, input), NO_BUS_DEADLINE);
@@ -561,7 +563,7 @@ describe('code-execution.execute over the real bus', () => {
         }
       } finally {
         await runTeardown([
-          () => unregisterCodeExecutionProvider(providerBus, remoteProvider.id),
+          () => unregisterCodeExecutionProvider(createTestCall(), providerBus, remoteProvider.id),
           () => providerService.destroy(),
           () => remoteProvider.dispose(),
           () => providerCapabilities.destroy(),
@@ -576,7 +578,7 @@ describe('code-execution.execute over the real bus', () => {
   it(
     'tears down in host order, leaving no handler, worker, or program root',
     async () => {
-      await registerCodeExecutionProvider(bus, provider);
+      await registerCodeExecutionProvider(createTestCall(), bus, provider);
       const startedPath = scratch.path('started');
       // An execution is deliberately in flight: teardown has to end a program
       // that would never return on its own, not wait for it.
@@ -589,7 +591,7 @@ describe('code-execution.execute over the real bus', () => {
 
       // 1. Withdraw the registration. The router still answers; the registry
       //    no longer offers the provider it was told to forget.
-      await unregisterCodeExecutionProvider(bus, provider.id);
+      await unregisterCodeExecutionProvider(createTestCall(), bus, provider.id);
       expect(capabilities.getProviders(CODE_EXECUTION_CAPABILITY_ID)).toEqual([]);
       expect(await execute(ANSWERING_PROGRAM)).toMatchObject({
         status: 'failed',

@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { createBusInstance, RequestError } from '@makaio/bus-core';
 import { SessionOwnershipStorageSubjects, SessionSubjects, type AdapterSessionClaimRecord } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { AdapterRuntimeSubjects } from '../../adapter-runtime/namespace.js';
 import { MakaioSessionService } from '../session-service.js';
 import { AgentStorageSubjects } from '../storage/agent-namespace.js';
@@ -61,12 +62,12 @@ describe('ownership authority lifecycle', () => {
     });
 
     try {
-      const operation = bus.request(SessionSubjects.ownership.release, {
+      const operation = bus.request(bus.own('root'), SessionSubjects.ownership.release, {
         agentId: 'agent-1',
         disposition: 'released',
       });
       await releaseEntered.promise;
-      await bus.emit(AdapterRuntimeSubjects.teardownCompleted, {
+      await bus.emit(bus.own('root'), AdapterRuntimeSubjects.teardownCompleted, {
         ownerInstanceId: registered.ownership.instanceId,
         evidence: 'released',
       });
@@ -123,7 +124,7 @@ describe('ownership authority lifecycle', () => {
     });
 
     try {
-      const captured = bus.request(SessionSubjects.ownership.release, {
+      const captured = bus.request(bus.own('root'), SessionSubjects.ownership.release, {
         agentId: 'agent-late',
         disposition: 'released',
       });
@@ -164,7 +165,7 @@ describe('ownership authority lifecycle', () => {
 
     try {
       if (evidence !== undefined) {
-        await bus.emit(AdapterRuntimeSubjects.teardownCompleted, {
+        await bus.emit(bus.own('root'), AdapterRuntimeSubjects.teardownCompleted, {
           ownerInstanceId: registered.ownership.instanceId,
           evidence,
         });
@@ -192,7 +193,7 @@ describe('ownership authority lifecycle', () => {
     });
 
     try {
-      await bus.emit(AdapterRuntimeSubjects.teardownCompleted, {
+      await bus.emit(bus.own('root'), AdapterRuntimeSubjects.teardownCompleted, {
         ownerInstanceId: 'instance-foreign',
         evidence: 'released',
       });
@@ -218,9 +219,9 @@ describe('ownership authority lifecycle', () => {
       const sessionId = 'session-reinit';
       const agentId = `agent-${suffix}`;
       const now = Date.now();
-      const existing = await bus.request(SessionSubjects.get, { sessionId });
-      if (existing.session === null) await bus.request(SessionSubjects.create, { sessionId });
-      await bus.request(AgentStorageSubjects.set, {
+      const existing = await bus.request(bus.own('root'), SessionSubjects.get, { sessionId });
+      if (existing.session === null) await bus.request(bus.own('root'), SessionSubjects.create, { sessionId });
+      await bus.request(bus.own('root'), AgentStorageSubjects.set, {
         agentId,
         agent: {
           agentId,
@@ -233,7 +234,7 @@ describe('ownership authority lifecycle', () => {
           lastActivityAt: now,
         },
       });
-      const result = await bus.request(SessionSubjects.ownership.reserveStart, {
+      const result = await bus.request(bus.own('root'), SessionSubjects.ownership.reserveStart, {
         sessionId,
         agentId,
         adapterId: 'adapter-reinit',
@@ -256,14 +257,14 @@ describe('ownership authority lifecycle', () => {
       const firstAccessorInstanceId = service.requireOwnershipInstanceId();
       const firstInstanceId = await allocate('first');
       expect(firstInstanceId).toBe(firstAccessorInstanceId);
-      await bus.emit(AdapterRuntimeSubjects.teardownCompleted, {
+      await bus.emit(bus.own('root'), AdapterRuntimeSubjects.teardownCompleted, {
         ownerInstanceId: firstInstanceId,
         evidence: 'released',
       });
       await service.destroy();
       expect(() => service.requireOwnershipInstanceId()).toThrow('not initialized');
 
-      const retired = await bus.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+      const retired = await bus.request(bus.own('root'), SessionOwnershipStorageSubjects.getRuntimeInstance, {
         instanceId: firstInstanceId,
         machineId: 'machine-reinit',
       });
@@ -274,13 +275,13 @@ describe('ownership authority lifecycle', () => {
       const secondInstanceId = await allocate('second');
       expect(secondInstanceId).not.toBe(firstInstanceId);
       expect(secondInstanceId).toBe(secondAccessorInstanceId);
-      const live = await bus.request(SessionOwnershipStorageSubjects.getRuntimeInstance, {
+      const live = await bus.request(bus.own('root'), SessionOwnershipStorageSubjects.getRuntimeInstance, {
         instanceId: secondInstanceId,
         machineId: 'machine-reinit',
       });
       expect(live.instance?.retiredAt).toBeNull();
 
-      await bus.emit(AdapterRuntimeSubjects.teardownCompleted, {
+      await bus.emit(bus.own('root'), AdapterRuntimeSubjects.teardownCompleted, {
         ownerInstanceId: secondInstanceId,
         evidence: 'released',
       });
@@ -338,7 +339,9 @@ describe('ownership authority lifecycle', () => {
     ];
 
     try {
-      await expect(assessClaimOwner(bus, 'shared-machine', claim)).resolves.toBe('owner-instance-retired');
+      await expect(assessClaimOwner(createTestCall(), bus, 'shared-machine', claim)).resolves.toBe(
+        'owner-instance-retired',
+      );
     } finally {
       for (const cleanup of cleanups) cleanup();
     }

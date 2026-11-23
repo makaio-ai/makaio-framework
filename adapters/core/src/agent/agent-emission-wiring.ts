@@ -97,7 +97,7 @@ export function createAgentEmissionWiring(input: {
       return connector === undefined ? undefined : providerCommittedAdapterSessionId(connector);
     },
     getLastKnownAdapterSessionId: () => adapterSessionTracker.lastKnownAdapterSessionId,
-    setLastKnownAdapterSessionId: (adapterSessionId) => adapterSessionTracker.record(adapterSessionId),
+    setLastKnownAdapterSessionId: (call, adapterSessionId) => adapterSessionTracker.record(call, adapterSessionId),
     ...(host.isProviderKeyPublishable !== undefined && {
       isProviderKeyPublishable: host.isProviderKeyPublishable,
     }),
@@ -137,7 +137,7 @@ export function createOnMessageSentEmitter(
     // acknowledged/completed. The key is set even when undefined so a
     // no-turn submission stays turn-less instead of inheriting the
     // executing turn's id via enrichment.
-    void emitGlobal(AgentSubjects.user_message.sent, {
+    void emitGlobal(handle.call, AgentSubjects.user_message.sent, {
       messageId: handle.messageId,
       content: handle.message,
       deliveryMode: handle.deliveryMode,

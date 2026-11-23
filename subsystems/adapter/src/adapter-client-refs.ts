@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { AdapterClientRef } from '@makaio/contracts';
 import { isUniversalRange, versionSatisfies } from '@makaio/contracts';
 import { ClientSubjects, type ClientDefinition } from '@makaio/contracts/client';
@@ -98,6 +99,7 @@ export function resolveDefaultClientId(
  * `version` is checked against the active client definition contract. When an
  * adapter also declares `binaryVersion`, the active runtime binary is resolved
  * through `client.resolveBinary` and checked against that binary range.
+ * @param call - Call context under which the binary-resolution lookup is sent.
  * @param adapterName - Adapter name used in invariant error messages.
  * @param clients - Client refs declared by the adapter manifest.
  * @param catalogClients - Active client definitions from the extension catalog.
@@ -105,6 +107,7 @@ export function resolveDefaultClientId(
  * @param options - Validation options controlling runtime binary checks.
  */
 export async function validateAdapterClientRefs(
+  call: CallContext,
   adapterName: string,
   clients: readonly AdapterClientRef[] | undefined,
   catalogClients: readonly AdapterClientCatalogEntry[],
@@ -138,7 +141,7 @@ export async function validateAdapterClientRefs(
     binaryChecks.map(async (ref) => {
       if (isUniversalRange(ref.binaryVersion!)) return;
 
-      const resolved = await bus.requestOptional(ClientSubjects.resolveBinary, { clientId: ref.id });
+      const resolved = await bus.requestOptional(call, ClientSubjects.resolveBinary, { clientId: ref.id });
       if (!resolved.handled) {
         if (SKIP_VERSION_CHECK) {
           console.warn(

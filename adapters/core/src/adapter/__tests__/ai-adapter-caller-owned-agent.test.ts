@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import os from 'node:os';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AdapterSubjects, AgentSubjects, SessionSubjects } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
 import {
@@ -35,8 +36,8 @@ class EmittingDuringStartConnector extends MockConnector {
     super(config);
   }
 
-  public override async start(message: Parameters<MockConnector['start']>[0]) {
-    const result = await super.start(message);
+  public override async start(...args: Parameters<MockConnector['start']>) {
+    const result = await super.start(...args);
     // The provider confirmed the session inside the start, which is what makes
     // the event below carry a key at all.
     this.adapterSessionId = result.adapterSessionId;
@@ -112,7 +113,7 @@ describe('AIAdapter - caller-owned agent row', () => {
     sessionId: string,
     agentId?: string,
   ): Promise<Awaited<ReturnType<typeof MakaioBus.request<typeof AdapterSubjects.startAgent>>>> {
-    return MakaioBus.request(AdapterSubjects.startAgent, {
+    return MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
       sessionId,
       role: 'lead' as const,
@@ -147,7 +148,7 @@ describe('AIAdapter - caller-owned agent row', () => {
     const result = await startAgent('caller-owned-session-close', 'caller-owned-close-agent');
     expect(result.success).toBe(true);
 
-    await MakaioBus.emit(SessionSubjects.closed, { sessionId: 'caller-owned-session-close' });
+    await MakaioBus.emit(createTestCall(), SessionSubjects.closed, { sessionId: 'caller-owned-session-close' });
 
     expect(statusUpdates).toEqual([]);
     expect(adapter.getAgent('caller-owned-close-agent')).toBeUndefined();
@@ -172,7 +173,7 @@ describe('AIAdapter - caller-owned agent row', () => {
         ctx.setResult({ success: true, transitioned: true });
       }),
     );
-    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: connectorOnlyAdapter.adapterId,
       sessionId: 'caller-owned-connector-only',
       role: 'lead',
@@ -184,7 +185,7 @@ describe('AIAdapter - caller-owned agent row', () => {
     expect(result.success).toBe(true);
 
     await expect(
-      MakaioBus.request(AdapterSubjects.stopAgent, {
+      MakaioBus.request(createTestCall(), AdapterSubjects.stopAgent, {
         adapterId: connectorOnlyAdapter.adapterId,
         ownerInstanceId: connectorOnlyAdapter.ownerInstanceId,
         agentId: 'caller-owned-dead-agent',
@@ -210,7 +211,7 @@ describe('AIAdapter - caller-owned agent row', () => {
     expect(result.success).toBe(true);
     if (!result.success || result.settlementAckToken === undefined) throw new Error('caller-owned start omitted ack');
 
-    const stale = await MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+    const stale = await MakaioBus.request(createTestCall(), AdapterSubjects.acknowledgeCallerSettlement, {
       adapterId: adapter.adapterId,
       ownerInstanceId: adapter.ownerInstanceId,
       agentId: result.agentId,
@@ -219,14 +220,14 @@ describe('AIAdapter - caller-owned agent row', () => {
     expect(stale).toEqual({ acknowledged: false, reason: 'stale-token' });
 
     await expect(
-      MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+      MakaioBus.request(createTestCall(), AdapterSubjects.acknowledgeCallerSettlement, {
         adapterId: adapter.adapterId,
         ownerInstanceId: adapter.ownerInstanceId,
         agentId: result.agentId,
         settlementAckToken: result.settlementAckToken,
       }),
     ).resolves.toEqual({ acknowledged: true });
-    await MakaioBus.emit(SessionSubjects.closed, { sessionId: 'caller-owned-ack' });
+    await MakaioBus.emit(createTestCall(), SessionSubjects.closed, { sessionId: 'caller-owned-ack' });
 
     expect(statusUpdates).toEqual([
       { status: 'idle', expectedStatus: ['starting', 'dead'] },
@@ -249,7 +250,7 @@ describe('AIAdapter - caller-owned agent row', () => {
     await gated.init();
     cleanupFns.push(() => void gated.closeAsync());
 
-    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: gated.adapterId,
       sessionId: 'caller-owned-teardown-wins',
       role: 'lead',
@@ -263,14 +264,14 @@ describe('AIAdapter - caller-owned agent row', () => {
     if (connector === undefined) throw new Error('connector was not created');
     connector.closeGate = closeGate;
 
-    const stop = MakaioBus.request(AdapterSubjects.stopAgent, {
+    const stop = MakaioBus.request(createTestCall(), AdapterSubjects.stopAgent, {
       adapterId: gated.adapterId,
       ownerInstanceId: gated.ownerInstanceId,
       agentId: result.agentId,
     });
     await Promise.resolve();
     await expect(
-      MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+      MakaioBus.request(createTestCall(), AdapterSubjects.acknowledgeCallerSettlement, {
         adapterId: gated.adapterId,
         ownerInstanceId: gated.ownerInstanceId,
         agentId: result.agentId,
@@ -281,7 +282,7 @@ describe('AIAdapter - caller-owned agent row', () => {
     releaseClose();
     await expect(stop).resolves.toMatchObject({ success: true });
     await expect(
-      MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+      MakaioBus.request(createTestCall(), AdapterSubjects.acknowledgeCallerSettlement, {
         adapterId: gated.adapterId,
         ownerInstanceId: gated.ownerInstanceId,
         agentId: result.agentId,
@@ -305,11 +306,15 @@ describe('AIAdapter - caller-owned agent row', () => {
       settlementAckToken: result.settlementAckToken,
     };
 
-    await expect(MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, request)).resolves.toEqual({
+    await expect(
+      MakaioBus.request(createTestCall(), AdapterSubjects.acknowledgeCallerSettlement, request),
+    ).resolves.toEqual({
       acknowledged: false,
       reason: 'status-refused',
     });
-    await expect(MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, request)).resolves.toEqual({
+    await expect(
+      MakaioBus.request(createTestCall(), AdapterSubjects.acknowledgeCallerSettlement, request),
+    ).resolves.toEqual({
       acknowledged: false,
       reason: 'stale-token',
     });
@@ -337,7 +342,7 @@ describe('AIAdapter - caller-owned agent row', () => {
     });
     await gated.init();
     cleanupFns.push(() => void gated.closeAsync());
-    const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const result = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: gated.adapterId,
       sessionId: 'caller-owned-ack-wins',
       role: 'lead',
@@ -348,13 +353,13 @@ describe('AIAdapter - caller-owned agent row', () => {
     });
     if (!result.success || result.settlementAckToken === undefined) throw new Error('caller-owned start omitted ack');
 
-    const acknowledgement = MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+    const acknowledgement = MakaioBus.request(createTestCall(), AdapterSubjects.acknowledgeCallerSettlement, {
       adapterId: gated.adapterId,
       ownerInstanceId: gated.ownerInstanceId,
       agentId: result.agentId,
       settlementAckToken: result.settlementAckToken,
     });
-    const stop = MakaioBus.request(AdapterSubjects.stopAgent, {
+    const stop = MakaioBus.request(createTestCall(), AdapterSubjects.stopAgent, {
       adapterId: gated.adapterId,
       ownerInstanceId: gated.ownerInstanceId,
       agentId: result.agentId,
@@ -380,7 +385,7 @@ describe('AIAdapter - caller-owned agent row', () => {
     sessionId: string,
     agentId?: string,
   ): Promise<Awaited<ReturnType<typeof MakaioBus.request<typeof AdapterSubjects.startAgent>>>> {
-    return MakaioBus.request(AdapterSubjects.startAgent, {
+    return MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
       sessionId,
       role: 'lead' as const,
@@ -431,7 +436,7 @@ describe('AIAdapter - caller-owned agent row', () => {
     await emitting.init();
     cleanupFns.push(() => void emitting.closeAsync());
 
-    const owned = await MakaioBus.request(AdapterSubjects.startAgent, {
+    const owned = await MakaioBus.request(createTestCall(), AdapterSubjects.startAgent, {
       adapterId: emitting.adapterId,
       sessionId: 'caller-owned-session-enriched',
       role: 'lead' as const,
@@ -474,7 +479,7 @@ describe('AIAdapter - caller-owned agent row', () => {
       }),
     );
     await expect(
-      MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+      MakaioBus.request(createTestCall(), AdapterSubjects.acknowledgeCallerSettlement, {
         adapterId: emitting.adapterId,
         ownerInstanceId: emitting.ownerInstanceId,
         agentId: owned.agentId,
@@ -496,7 +501,7 @@ describe('AIAdapter - caller-owned agent row', () => {
     expect(started.success).toBe(true);
     if (!started.success) throw new Error('adapter-owned start failed');
 
-    const rehydrated = await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+    const rehydrated = await MakaioBus.request(createTestCall(), AdapterSubjects.rehydrateAgent, {
       adapterId: adapter.adapterId,
       agentId: started.agentId,
       callerOwnsAgentRow: true,
@@ -506,7 +511,7 @@ describe('AIAdapter - caller-owned agent row', () => {
       throw new Error('caller-owned rehydrate omitted ack');
     }
     await expect(
-      MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+      MakaioBus.request(createTestCall(), AdapterSubjects.acknowledgeCallerSettlement, {
         adapterId: adapter.adapterId,
         ownerInstanceId: adapter.ownerInstanceId,
         agentId: started.agentId,
@@ -526,7 +531,7 @@ describe('AIAdapter - caller-owned agent row', () => {
     const started = await startAgent('caller-owned-recovery-finalize');
     expect(started.success).toBe(true);
     if (!started.success) throw new Error('adapter-owned start failed');
-    const rehydrated = await MakaioBus.request(AdapterSubjects.rehydrateAgent, {
+    const rehydrated = await MakaioBus.request(createTestCall(), AdapterSubjects.rehydrateAgent, {
       adapterId: adapter.adapterId,
       agentId: started.agentId,
       callerOwnsAgentRow: true,
@@ -534,7 +539,7 @@ describe('AIAdapter - caller-owned agent row', () => {
     expect(rehydrated.success).toBe(true);
     if (!rehydrated.success || rehydrated.settlementAckToken === undefined) throw new Error('rehydrate omitted ack');
     await expect(
-      MakaioBus.request(AdapterSubjects.acknowledgeCallerSettlement, {
+      MakaioBus.request(createTestCall(), AdapterSubjects.acknowledgeCallerSettlement, {
         adapterId: adapter.adapterId,
         ownerInstanceId: adapter.ownerInstanceId,
         agentId: started.agentId,

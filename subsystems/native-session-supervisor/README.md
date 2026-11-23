@@ -10,9 +10,15 @@ to a Drizzle-backed storage namespace. Adapters that launch CLI subprocesses
 ### Register the extension package
 
 ```typescript
-import { nativeSessionSupervisorPackage } from '@makaio/subsystem-native-session-supervisor/package';
+import { createNativeSessionSupervisorPackage } from '@makaio/subsystem-native-session-supervisor/package';
 
-coordinator.load([nativeSessionSupervisorPackage]);
+coordinator.load([
+  createNativeSessionSupervisorPackage({
+    // Observes the close of a transport connection so its terminal attachments are released.
+    observeConnectionClosed: (transportName, onClosed) =>
+      transportRegistry.getTransport(transportName)?.onConnectionClosed?.(onClosed),
+  }),
+]);
 ```
 
 ### Spawn and track a PTY session
@@ -57,7 +63,8 @@ const runtime = registry.get('sup-1');
 
 | Export | Description |
 |--------|-------------|
-| `nativeSessionSupervisorPackage` | `MakaioExtension` manifest (import from `./package`) |
+| `createNativeSessionSupervisorPackage` | Factory returning the `MakaioExtension` manifest; takes `{ observeConnectionClosed }` (import from `./package`) |
+| `NATIVE_SESSION_SUPERVISOR_PACKAGE_NAME` | Manifest name of the package (import from `./package`) |
 | `SupervisorService` | Service class that owns the runtime registry and responds to bus subjects |
 | `RuntimeRegistry` | In-memory + persistent registry for `SupervisorRuntime` entries |
 | `PtyRuntime` | PTY session lifecycle manager: spawn, write, resize, kill, I/O callbacks |

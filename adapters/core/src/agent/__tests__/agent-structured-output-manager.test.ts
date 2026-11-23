@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, type ResponseSchemaDescriptor } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { AgentStructuredOutputManager } from '../agent-structured-output-manager.js';
 
 const descriptor: ResponseSchemaDescriptor = {
@@ -30,7 +31,7 @@ describe('AgentStructuredOutputManager', () => {
       adapterCapabilities: ['structuredOutput'],
     });
 
-    const result = await manager.validateTerminalResult({
+    const result = await manager.validateTerminalResult(createTestCall(), {
       responseSchema: descriptor,
       message: '{"answer":"ok"}',
       sessionId: 'session-1',
@@ -58,7 +59,7 @@ describe('AgentStructuredOutputManager', () => {
       adapterCapabilities: ['structuredOutput'],
     });
 
-    const result = await manager.validateTerminalResult({
+    const result = await manager.validateTerminalResult(createTestCall(), {
       responseSchema: draft202012Descriptor,
       message: '{"answer":"ok"}',
       sessionId: 'session-1',
@@ -85,7 +86,7 @@ describe('AgentStructuredOutputManager', () => {
       adapterCapabilities: ['structuredOutput'],
     });
 
-    const result = await manager.validateTerminalResult({
+    const result = await manager.validateTerminalResult(createTestCall(), {
       responseSchema: draft201909Descriptor,
       message: '{"answer":"ok"}',
       sessionId: 'session-1',
@@ -112,7 +113,7 @@ describe('AgentStructuredOutputManager', () => {
       adapterCapabilities: ['structuredOutput'],
     });
 
-    const result = await manager.validateTerminalResult({
+    const result = await manager.validateTerminalResult(createTestCall(), {
       responseSchema: unknownDraftDescriptor,
       message: '{"answer":7}',
       sessionId: 'session-1',
@@ -139,12 +140,12 @@ describe('AgentStructuredOutputManager', () => {
       adapterCapabilities: ['structuredOutput'],
     });
 
-    const firstResult = await manager.validateTerminalResult({
+    const firstResult = await manager.validateTerminalResult(createTestCall(), {
       responseSchema: malformedDescriptor,
       message: '{"answer":"ok"}',
       sessionId: 'session-1',
     });
-    const cachedResult = await manager.validateTerminalResult({
+    const cachedResult = await manager.validateTerminalResult(createTestCall(), {
       responseSchema: malformedDescriptor,
       message: '{"answer":"ok"}',
       sessionId: 'session-1',
@@ -172,7 +173,7 @@ describe('AgentStructuredOutputManager', () => {
       adapterCapabilities: [],
     });
 
-    const result = await manager.validateTerminalResult({
+    const result = await manager.validateTerminalResult(createTestCall(), {
       responseSchema: descriptor,
       message: 'not json',
       sessionId: 'session-1',
@@ -198,7 +199,7 @@ describe('AgentStructuredOutputManager', () => {
       adapterCapabilities: [],
     });
 
-    const result = await manager.validateTerminalResult({
+    const result = await manager.validateTerminalResult(createTestCall(), {
       responseSchema: descriptor,
       message: 'not json',
       sessionId: 'session-1',
@@ -220,7 +221,7 @@ describe('AgentStructuredOutputManager', () => {
       adapterCapabilities: [],
     });
 
-    const result = await manager.validateTerminalResult({
+    const result = await manager.validateTerminalResult(createTestCall(), {
       responseSchema: descriptor,
       message: 'not json',
       sessionId: 'session-1',
@@ -242,7 +243,7 @@ describe('AgentStructuredOutputManager', () => {
       adapterCapabilities: [],
     });
 
-    const result = await manager.validateTerminalResult({
+    const result = await manager.validateTerminalResult(createTestCall(), {
       responseSchema: descriptor,
       message: undefined,
       sessionId: 'session-1',
@@ -268,7 +269,7 @@ describe('AgentStructuredOutputManager', () => {
       adapterCapabilities: [],
     });
 
-    const result = await manager.validateTerminalResult({
+    const result = await manager.validateTerminalResult(createTestCall(), {
       responseSchema: descriptor,
       message: 'not json',
       retryTurn: async () => '{"answer":"retried"}',
@@ -291,7 +292,7 @@ describe('AgentStructuredOutputManager', () => {
     try {
       const retryTurn = vi.fn(async () => '{"answer":"default-retry"}');
 
-      const result = await manager.validateTerminalResult({
+      const result = await manager.validateTerminalResult(createTestCall(), {
         responseSchema: descriptor,
         message: 'not json',
         retryTurn,
@@ -320,7 +321,7 @@ describe('AgentStructuredOutputManager', () => {
       });
       const retryTurn = vi.fn(async () => '{"answer":"host-retry"}');
 
-      const result = await manager.validateTerminalResult({
+      const result = await manager.validateTerminalResult(createTestCall(), {
         responseSchema: descriptor,
         message: 'not json',
         retryTurn,
@@ -354,7 +355,7 @@ describe('AgentStructuredOutputManager', () => {
       adapterCapabilities: [],
     });
 
-    const result = await manager.validateTerminalResult({
+    const result = await manager.validateTerminalResult(createTestCall(), {
       responseSchema: descriptor,
       message: 'not json',
       retryTurn,

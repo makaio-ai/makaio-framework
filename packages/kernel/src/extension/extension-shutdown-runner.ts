@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import { boundedWait, isNonNegativeFinite, nonNegativeOption, outerBoundMs } from '@makaio/utils';
 import { runContributionProcessors } from './contribution-processor-runner.js';
 import type { ExtensionContextHost } from './extension-context-builder.js';
@@ -230,11 +231,14 @@ async function stopEntry(host: ExtensionShutdownHost, name: string, entry: Exten
 
 /**
  * Publish an extension whose stop has settled as stopped.
+ * @param call - Call of the shutdown lifecycle step.
  * @param host - Coordinator state required to shut down extensions.
  * @param entry - Extension entry whose stop settled.
  */
-function publishStopped(host: ExtensionShutdownHost, entry: ExtensionEntry): void {
-  if (entry.state === 'active') transitionPackageEntry(host.contextHost.bus, entry, 'stopped');
+function publishStopped(call: CallContext, host: ExtensionShutdownHost, entry: ExtensionEntry): void {
+  if (entry.state === 'active') {
+    transitionPackageEntry(call, host.contextHost.bus, entry, 'stopped');
+  }
 }
 
 /**
@@ -263,6 +267,7 @@ function publishStopped(host: ExtensionShutdownHost, entry: ExtensionEntry): voi
  * @throws An AggregateError when any contribution stop, service destroy, or storage cleanup failed, or an extension did not finish stopping inside its window.
  */
 export async function shutdownExtensions(host: ExtensionShutdownHost): Promise<void> {
+  const call = host.contextHost.bus.own('stop');
   const reversed = [...host.loadOrder].reverse();
   const failures: unknown[] = [];
   const unclean: string[] = [];
@@ -280,14 +285,14 @@ export async function shutdownExtensions(host: ExtensionShutdownHost): Promise<v
       failures.push(new Error(message));
       unclean.push(`${name} (not stopped within ${windowMs} ms)`);
       // Not stopped yet, so not published as stopped: it keeps its state until its stop settles.
-      void stopping.then(() => publishStopped(host, entry));
+      void stopping.then(() => publishStopped(call, host, entry));
       continue;
     }
     if (outcome.value.length > 0) {
       failures.push(...outcome.value);
       unclean.push(name);
     }
-    publishStopped(host, entry);
+    publishStopped(call, host, entry);
   }
 
   if (failures.length > 0) {

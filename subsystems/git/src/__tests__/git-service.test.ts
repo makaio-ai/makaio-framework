@@ -10,7 +10,8 @@ import {
   type BusTransport,
   type IMakaioBus,
 } from '@makaio/bus-core';
-import type { TransportReceiveContext } from '@makaio/core';
+import { MAKAIO_JOB_RUN_PARTY_KIND, MAKAIO_WORKER_THREAD_PARTY_KIND, type TransportReceiveContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { GitSubjects } from '../namespace.js';
 import { GitService } from '../git-service.js';
 import { configureTestGit, createRepoWithTwoCommits, createTestRepoWithCommit } from './git-test-utils.js';
@@ -85,7 +86,7 @@ describe('GitService', { timeout: 30_000 }, () => {
 
   describe('getBranch', () => {
     it('should return current branch info', async () => {
-      const response = await bus.request(GitSubjects.getBranch, {});
+      const response = await bus.request(createTestCall(), GitSubjects.getBranch, {});
 
       expect(response.current).toBeDefined();
       expect(typeof response.current).toBe('string');
@@ -93,7 +94,7 @@ describe('GitService', { timeout: 30_000 }, () => {
     });
 
     it('should accept repoPath parameter', async () => {
-      const response = await bus.request(GitSubjects.getBranch, {
+      const response = await bus.request(createTestCall(), GitSubjects.getBranch, {
         repoPath: process.cwd(),
       });
 
@@ -103,7 +104,7 @@ describe('GitService', { timeout: 30_000 }, () => {
 
   describe('getCommit', () => {
     it('should return HEAD commit info by default', async () => {
-      const response = await bus.request(GitSubjects.getCommit, {});
+      const response = await bus.request(createTestCall(), GitSubjects.getCommit, {});
 
       expect(response.hash).toBeDefined();
       expect(response.hash.length).toBeGreaterThanOrEqual(7);
@@ -114,7 +115,7 @@ describe('GitService', { timeout: 30_000 }, () => {
     });
 
     it('should accept ref parameter', async () => {
-      const response = await bus.request(GitSubjects.getCommit, {
+      const response = await bus.request(createTestCall(), GitSubjects.getCommit, {
         ref: 'HEAD',
       });
 
@@ -124,7 +125,7 @@ describe('GitService', { timeout: 30_000 }, () => {
 
   describe('getStatus', () => {
     it('should return status arrays', async () => {
-      const response = await bus.request(GitSubjects.getStatus, {});
+      const response = await bus.request(createTestCall(), GitSubjects.getStatus, {});
 
       expect(Array.isArray(response.staged)).toBe(true);
       expect(Array.isArray(response.modified)).toBe(true);
@@ -135,7 +136,7 @@ describe('GitService', { timeout: 30_000 }, () => {
 
   describe('getWorktrees', () => {
     it('should return worktrees array', async () => {
-      const response = await bus.request(GitSubjects.getWorktrees, {});
+      const response = await bus.request(createTestCall(), GitSubjects.getWorktrees, {});
 
       expect(Array.isArray(response.worktrees)).toBe(true);
       expect(response.worktrees.length).toBeGreaterThan(0);
@@ -149,7 +150,7 @@ describe('GitService', { timeout: 30_000 }, () => {
 
   describe('getRemotes', () => {
     it('should return remotes array', async () => {
-      const response = await bus.request(GitSubjects.getRemotes, {});
+      const response = await bus.request(createTestCall(), GitSubjects.getRemotes, {});
 
       expect(Array.isArray(response.remotes)).toBe(true);
       if (response.remotes.length > 0) {
@@ -161,7 +162,7 @@ describe('GitService', { timeout: 30_000 }, () => {
 
   describe('getDefaultBranch', () => {
     it('should return default branch', async () => {
-      const response = await bus.request(GitSubjects.getDefaultBranch, {});
+      const response = await bus.request(createTestCall(), GitSubjects.getDefaultBranch, {});
 
       expect(response.branch).toBeDefined();
       expect(typeof response.branch).toBe('string');
@@ -171,7 +172,7 @@ describe('GitService', { timeout: 30_000 }, () => {
 
   describe('getLog', () => {
     it('should return commit history with refs', async () => {
-      const response = await bus.request(GitSubjects.getLog, {});
+      const response = await bus.request(createTestCall(), GitSubjects.getLog, {});
 
       expect(Array.isArray(response.commits)).toBe(true);
       expect(response.commits.length).toBeGreaterThan(0);
@@ -198,7 +199,7 @@ describe('GitService', { timeout: 30_000 }, () => {
     });
 
     it('should respect limit parameter', async () => {
-      const response = await bus.request(GitSubjects.getLog, {
+      const response = await bus.request(createTestCall(), GitSubjects.getLog, {
         limit: 5,
       });
 
@@ -214,7 +215,7 @@ describe('GitService', { timeout: 30_000 }, () => {
 
       try {
         // Initialize a repo with at least one commit
-        await bus.request(GitSubjects.initRepo, { path: repoPath });
+        await bus.request(createTestCall(), GitSubjects.initRepo, { path: repoPath });
         const git = simpleGit(repoPath);
         await configureTestGit(repoPath);
         await fs.writeFile(`${repoPath}/initial.txt`, 'Initial content');
@@ -250,7 +251,7 @@ describe('GitService', { timeout: 30_000 }, () => {
             baseBranch?: string;
           },
         ) => {
-          return bus.request(GitSubjects.getLog, {
+          return bus.request(createTestCall(), GitSubjects.getLog, {
             repoPath,
             limit,
             filters,
@@ -293,7 +294,7 @@ describe('GitService', { timeout: 30_000 }, () => {
 
       try {
         // Create repo with known commit messages
-        await bus.request(GitSubjects.initRepo, { path: repoPath });
+        await bus.request(createTestCall(), GitSubjects.initRepo, { path: repoPath });
         const git = simpleGit(repoPath);
         await configureTestGit(repoPath);
 
@@ -310,7 +311,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         await git.commit('feat: add feature two');
 
         // Search for 'feat' - should match 2 commits
-        const response = await bus.request(GitSubjects.getLog, {
+        const response = await bus.request(createTestCall(), GitSubjects.getLog, {
           repoPath,
           limit: 100,
           filters: {
@@ -324,7 +325,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         });
 
         // Search for 'fix' - should match 1 commit
-        const fixResponse = await bus.request(GitSubjects.getLog, {
+        const fixResponse = await bus.request(createTestCall(), GitSubjects.getLog, {
           repoPath,
           limit: 100,
           filters: {
@@ -352,7 +353,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         await git.add('beta.txt');
         await git.commit('add beta');
 
-        const response = await bus.request(GitSubjects.getLog, {
+        const response = await bus.request(createTestCall(), GitSubjects.getLog, {
           repoPath,
           limit: 50,
           filters: {
@@ -375,7 +376,7 @@ describe('GitService', { timeout: 30_000 }, () => {
       const repoPath = await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-git-log-ref-'));
 
       try {
-        await bus.request(GitSubjects.initRepo, { path: repoPath });
+        await bus.request(createTestCall(), GitSubjects.initRepo, { path: repoPath });
         const git = simpleGit(repoPath);
         await configureTestGit(repoPath);
 
@@ -389,7 +390,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         await git.add('alpha.txt');
         await git.commit('update alpha');
 
-        const response = await bus.request(GitSubjects.getLog, {
+        const response = await bus.request(createTestCall(), GitSubjects.getLog, {
           repoPath,
           limit: 50,
           ref: initialHash,
@@ -407,7 +408,7 @@ describe('GitService', { timeout: 30_000 }, () => {
     });
 
     it('should filter by author', async () => {
-      const response = await bus.request(GitSubjects.getLog, {
+      const response = await bus.request(createTestCall(), GitSubjects.getLog, {
         limit: 10,
         filters: {
           author: 'chris',
@@ -427,7 +428,7 @@ describe('GitService', { timeout: 30_000 }, () => {
 
       try {
         // Create a repo with initial commit on main
-        await bus.request(GitSubjects.initRepo, { path: tmpDir });
+        await bus.request(createTestCall(), GitSubjects.initRepo, { path: tmpDir });
         const git = simpleGit(tmpDir);
         await configureTestGit(tmpDir);
         await fs.writeFile(path.join(tmpDir, 'main.txt'), 'main content');
@@ -435,7 +436,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         await git.commit('Initial commit on main');
 
         // Create a worktree on a new branch BEFORE adding more main commits
-        await bus.request(GitSubjects.createWorktree, {
+        await bus.request(createTestCall(), GitSubjects.createWorktree, {
           repoPath: tmpDir,
           path: worktreePath,
           branch: 'feature',
@@ -454,7 +455,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         await wtGit.commit('Feature commit in worktree');
 
         // Log WITHOUT worktree filter — should see main's commits
-        const mainLog = await bus.request(GitSubjects.getLog, {
+        const mainLog = await bus.request(createTestCall(), GitSubjects.getLog, {
           repoPath: tmpDir,
           limit: 50,
         });
@@ -463,7 +464,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         expect(mainMessages).not.toContain('Feature commit in worktree');
 
         // Log WITH worktree filter — should see worktree branch commits
-        const wtLog = await bus.request(GitSubjects.getLog, {
+        const wtLog = await bus.request(createTestCall(), GitSubjects.getLog, {
           repoPath: tmpDir,
           limit: 50,
           filters: { selectedWorktree: worktreePath },
@@ -485,14 +486,14 @@ describe('GitService', { timeout: 30_000 }, () => {
       const repoBDir = await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-log-repo-b-'));
 
       try {
-        await bus.request(GitSubjects.initRepo, { path: repoADir });
+        await bus.request(createTestCall(), GitSubjects.initRepo, { path: repoADir });
         const repoAGit = simpleGit(repoADir);
         await configureTestGit(repoADir);
         await fs.writeFile(path.join(repoADir, 'a.txt'), 'a');
         await repoAGit.add('.');
         await repoAGit.commit('repo a commit');
 
-        await bus.request(GitSubjects.initRepo, { path: repoBDir });
+        await bus.request(createTestCall(), GitSubjects.initRepo, { path: repoBDir });
         const repoBGit = simpleGit(repoBDir);
         await configureTestGit(repoBDir);
         await fs.writeFile(path.join(repoBDir, 'b.txt'), 'b');
@@ -500,7 +501,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         await repoBGit.commit('repo b commit');
 
         await expect(
-          bus.request(GitSubjects.getLog, {
+          bus.request(createTestCall(), GitSubjects.getLog, {
             repoPath: repoADir,
             filters: { selectedWorktree: repoBDir },
           }),
@@ -516,12 +517,12 @@ describe('GitService', { timeout: 30_000 }, () => {
       const worktreePath = path.join(path.dirname(repoPath), `${path.basename(repoPath)}-worktree`);
 
       try {
-        const getLog = () => bus.request(GitSubjects.getLog, { repoPath });
+        const getLog = () => bus.request(createTestCall(), GitSubjects.getLog, { repoPath });
 
         const initial = await getLog();
         expect(initial.refs.branches).not.toHaveProperty('worktree-feature');
 
-        const createWorktreeResult = await bus.request(GitSubjects.createWorktree, {
+        const createWorktreeResult = await bus.request(createTestCall(), GitSubjects.createWorktree, {
           repoPath,
           path: worktreePath,
           branch: 'worktree-feature',
@@ -529,18 +530,22 @@ describe('GitService', { timeout: 30_000 }, () => {
         });
         expect(createWorktreeResult.success).toBe(true);
         expect((await getLog()).refs.branches).toHaveProperty('worktree-feature');
-        expect(await bus.request(GitSubjects.localBranchExists, { repoPath, name: 'worktree-feature' })).toEqual({
+        expect(
+          await bus.request(createTestCall(), GitSubjects.localBranchExists, { repoPath, name: 'worktree-feature' }),
+        ).toEqual({
           exists: true,
         });
 
-        const removeWorktreeResult = await bus.request(GitSubjects.removeWorktree, {
+        const removeWorktreeResult = await bus.request(createTestCall(), GitSubjects.removeWorktree, {
           repoPath,
           path: worktreePath,
           deleteBranch: true,
         });
         expect(removeWorktreeResult.success).toBe(true);
         expect((await getLog()).refs.branches).not.toHaveProperty('worktree-feature');
-        expect(await bus.request(GitSubjects.localBranchExists, { repoPath, name: 'worktree-feature' })).toEqual({
+        expect(
+          await bus.request(createTestCall(), GitSubjects.localBranchExists, { repoPath, name: 'worktree-feature' }),
+        ).toEqual({
           exists: false,
         });
       } finally {
@@ -554,11 +559,11 @@ describe('GitService', { timeout: 30_000 }, () => {
       const nonDirectoryPath = path.join(repoPath, 'not-a-directory');
 
       try {
-        await bus.request(GitSubjects.getLog, { repoPath });
+        await bus.request(createTestCall(), GitSubjects.getLog, { repoPath });
         await git.branch(['created-outside-service']);
         await fs.writeFile(nonDirectoryPath, 'not a directory');
 
-        const result = await bus.request(GitSubjects.createWorktree, {
+        const result = await bus.request(createTestCall(), GitSubjects.createWorktree, {
           repoPath,
           path: path.join(nonDirectoryPath, 'worktree'),
           branch: 'possibly-created',
@@ -566,7 +571,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         });
 
         expect(result.success).toBe(false);
-        expect((await bus.request(GitSubjects.getLog, { repoPath })).refs.branches).toHaveProperty(
+        expect((await bus.request(createTestCall(), GitSubjects.getLog, { repoPath })).refs.branches).toHaveProperty(
           'created-outside-service',
         );
       } finally {
@@ -579,12 +584,20 @@ describe('GitService', { timeout: 30_000 }, () => {
 
       try {
         await git.branch(['delete-me']);
-        expect((await bus.request(GitSubjects.getLog, { repoPath })).refs.branches).toHaveProperty('delete-me');
+        expect((await bus.request(createTestCall(), GitSubjects.getLog, { repoPath })).refs.branches).toHaveProperty(
+          'delete-me',
+        );
 
-        const result = await bus.request(GitSubjects.deleteBranch, { repoPath, name: 'delete-me', force: true });
+        const result = await bus.request(createTestCall(), GitSubjects.deleteBranch, {
+          repoPath,
+          name: 'delete-me',
+          force: true,
+        });
 
         expect(result).toMatchObject({ success: true });
-        expect((await bus.request(GitSubjects.getLog, { repoPath })).refs.branches).not.toHaveProperty('delete-me');
+        expect(
+          (await bus.request(createTestCall(), GitSubjects.getLog, { repoPath })).refs.branches,
+        ).not.toHaveProperty('delete-me');
       } finally {
         await cleanup();
       }
@@ -635,7 +648,7 @@ describe('GitService', { timeout: 30_000 }, () => {
           },
           {
             transportName: 'worker',
-            peer: { kind: 'workflow-execution', id: 'wfx-peer', authenticated: true },
+            caller: { kind: MAKAIO_JOB_RUN_PARTY_KIND, id: 'wfx-peer' },
           },
         );
 
@@ -664,7 +677,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         await git.add('base.txt');
         await git.commit('update base');
 
-        const response = await bus.request(GitSubjects.getFileAtRevision, {
+        const response = await bus.request(createTestCall(), GitSubjects.getFileAtRevision, {
           repoPath,
           path: 'base.txt',
           ref: 'HEAD',
@@ -692,7 +705,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         await git.commit('update base');
 
         // Get file at initial commit (should have old content)
-        const response = await bus.request(GitSubjects.getFileAtRevision, {
+        const response = await bus.request(createTestCall(), GitSubjects.getFileAtRevision, {
           repoPath,
           path: 'base.txt',
           ref: initialHash!,
@@ -716,7 +729,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         await git.add('.');
         await git.commit('add nested file');
 
-        const response = await bus.request(GitSubjects.getFileAtRevision, {
+        const response = await bus.request(createTestCall(), GitSubjects.getFileAtRevision, {
           repoPath,
           path: 'src/utils/helper.ts',
           ref: 'HEAD',
@@ -735,7 +748,7 @@ describe('GitService', { timeout: 30_000 }, () => {
 
       try {
         await expect(
-          bus.request(GitSubjects.getFileAtRevision, {
+          bus.request(createTestCall(), GitSubjects.getFileAtRevision, {
             repoPath,
             path: 'nonexistent-file.txt',
             ref: 'HEAD',
@@ -755,7 +768,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         const log = await git.log({ maxCount: 1 });
         const commitHash = log.latest!.hash;
 
-        const response = await bus.request(GitSubjects.getFileAtCommit, {
+        const response = await bus.request(createTestCall(), GitSubjects.getFileAtCommit, {
           repoPath,
           filePath: 'base.txt',
           commitHash,
@@ -777,7 +790,7 @@ describe('GitService', { timeout: 30_000 }, () => {
 
       try {
         // new-file.txt did not exist at the first commit.
-        const response = await bus.request(GitSubjects.getFileAtCommit, {
+        const response = await bus.request(createTestCall(), GitSubjects.getFileAtCommit, {
           repoPath,
           filePath: 'new-file.txt',
           commitHash: firstCommitHash,
@@ -794,7 +807,7 @@ describe('GitService', { timeout: 30_000 }, () => {
       const { repoPath, cleanup } = await createTestRepoWithCommit();
 
       try {
-        const response = await bus.request(GitSubjects.getFileAtCommit, {
+        const response = await bus.request(createTestCall(), GitSubjects.getFileAtCommit, {
           repoPath,
           filePath: 'does-not-exist.txt',
           commitHash: 'HEAD',
@@ -816,7 +829,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         const log = await git.log({ maxCount: 1 });
         const commitHash = log.latest!.hash;
 
-        const response = await bus.request(GitSubjects.getBlobHashAtCommit, {
+        const response = await bus.request(createTestCall(), GitSubjects.getBlobHashAtCommit, {
           repoPath,
           filePath: 'base.txt',
           commitHash,
@@ -838,7 +851,7 @@ describe('GitService', { timeout: 30_000 }, () => {
       );
 
       try {
-        const response = await bus.request(GitSubjects.getBlobHashAtCommit, {
+        const response = await bus.request(createTestCall(), GitSubjects.getBlobHashAtCommit, {
           repoPath,
           filePath: 'added-later.txt',
           commitHash: firstCommitHash,
@@ -859,12 +872,12 @@ describe('GitService', { timeout: 30_000 }, () => {
 
       try {
         const [hashAtFirst, hashAtSecond] = await Promise.all([
-          bus.request(GitSubjects.getBlobHashAtCommit, {
+          bus.request(createTestCall(), GitSubjects.getBlobHashAtCommit, {
             repoPath,
             filePath: 'base.txt',
             commitHash: firstCommitHash,
           }),
-          bus.request(GitSubjects.getBlobHashAtCommit, {
+          bus.request(createTestCall(), GitSubjects.getBlobHashAtCommit, {
             repoPath,
             filePath: 'base.txt',
             commitHash: secondCommitHash,
@@ -888,12 +901,12 @@ describe('GitService', { timeout: 30_000 }, () => {
 
       try {
         const [hashAtFirst, hashAtSecond] = await Promise.all([
-          bus.request(GitSubjects.getBlobHashAtCommit, {
+          bus.request(createTestCall(), GitSubjects.getBlobHashAtCommit, {
             repoPath,
             filePath: 'base.txt',
             commitHash: firstCommitHash,
           }),
-          bus.request(GitSubjects.getBlobHashAtCommit, {
+          bus.request(createTestCall(), GitSubjects.getBlobHashAtCommit, {
             repoPath,
             filePath: 'base.txt',
             commitHash: secondCommitHash,
@@ -915,7 +928,7 @@ describe('GitService', { timeout: 30_000 }, () => {
       const tmpDir = await import('node:fs/promises').then((fs) => fs.mkdtemp(path.join(os.tmpdir(), 'makaio-test-')));
 
       try {
-        const response = await bus.request(GitSubjects.initRepo, {
+        const response = await bus.request(createTestCall(), GitSubjects.initRepo, {
           path: tmpDir,
         });
 
@@ -939,7 +952,7 @@ describe('GitService', { timeout: 30_000 }, () => {
       const tmpDir = await import('node:fs/promises').then((fs) => fs.mkdtemp(path.join(os.tmpdir(), 'makaio-test-')));
 
       try {
-        const response = await bus.request(GitSubjects.initRepo, {
+        const response = await bus.request(createTestCall(), GitSubjects.initRepo, {
           path: tmpDir,
           defaultBranch: 'develop',
         });
@@ -961,7 +974,7 @@ describe('GitService', { timeout: 30_000 }, () => {
 
       try {
         // Initialize a repo with at least one commit
-        await bus.request(GitSubjects.initRepo, { path: tmpDir });
+        await bus.request(createTestCall(), GitSubjects.initRepo, { path: tmpDir });
         const git = (await import('simple-git')).simpleGit(tmpDir);
         await configureTestGit(tmpDir);
         await fs.writeFile(path.join(tmpDir, 'README.md'), '# Test');
@@ -969,7 +982,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         await git.commit('Initial commit');
 
         // Create worktree with new branch
-        const response = await bus.request(GitSubjects.createWorktree, {
+        const response = await bus.request(createTestCall(), GitSubjects.createWorktree, {
           repoPath: tmpDir,
           path: worktreePath,
           branch: 'feature-test',
@@ -994,7 +1007,7 @@ describe('GitService', { timeout: 30_000 }, () => {
 
       try {
         // Setup: create repo with commit
-        await bus.request(GitSubjects.initRepo, { path: tmpDir });
+        await bus.request(createTestCall(), GitSubjects.initRepo, { path: tmpDir });
         const git = (await import('simple-git')).simpleGit(tmpDir);
         await configureTestGit(tmpDir);
         await fs.writeFile(path.join(tmpDir, 'README.md'), '# Test');
@@ -1006,7 +1019,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         const nonDirectoryPath = path.join(tmpDir, 'not-a-directory');
         await fs.writeFile(nonDirectoryPath, 'content');
         const invalidPath = path.join(nonDirectoryPath, 'child');
-        const response = await bus.request(GitSubjects.createWorktree, {
+        const response = await bus.request(createTestCall(), GitSubjects.createWorktree, {
           repoPath: tmpDir,
           path: invalidPath,
           branch: 'test-branch',
@@ -1029,14 +1042,14 @@ describe('GitService', { timeout: 30_000 }, () => {
 
       try {
         // Setup: create repo with commit and worktree
-        await bus.request(GitSubjects.initRepo, { path: tmpDir });
+        await bus.request(createTestCall(), GitSubjects.initRepo, { path: tmpDir });
         const git = (await import('simple-git')).simpleGit(tmpDir);
         await configureTestGit(tmpDir);
         await fs.writeFile(path.join(tmpDir, 'README.md'), '# Test');
         await git.add('.');
         await git.commit('Initial commit');
 
-        await bus.request(GitSubjects.createWorktree, {
+        await bus.request(createTestCall(), GitSubjects.createWorktree, {
           repoPath: tmpDir,
           path: worktreePath,
           branch: 'to-remove-branch',
@@ -1044,7 +1057,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         });
 
         // Remove the worktree
-        const response = await bus.request(GitSubjects.removeWorktree, {
+        const response = await bus.request(createTestCall(), GitSubjects.removeWorktree, {
           repoPath: tmpDir,
           path: worktreePath,
         });
@@ -1066,14 +1079,14 @@ describe('GitService', { timeout: 30_000 }, () => {
 
       try {
         // Setup
-        await bus.request(GitSubjects.initRepo, { path: tmpDir });
+        await bus.request(createTestCall(), GitSubjects.initRepo, { path: tmpDir });
         const git = (await import('simple-git')).simpleGit(tmpDir);
         await configureTestGit(tmpDir);
         await fs.writeFile(path.join(tmpDir, 'README.md'), '# Test');
         await git.add('.');
         await git.commit('Initial commit');
 
-        await bus.request(GitSubjects.createWorktree, {
+        await bus.request(createTestCall(), GitSubjects.createWorktree, {
           repoPath: tmpDir,
           path: worktreePath,
           branch: 'branch-to-delete',
@@ -1081,7 +1094,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         });
 
         // Remove with deleteBranch
-        const response = await bus.request(GitSubjects.removeWorktree, {
+        const response = await bus.request(createTestCall(), GitSubjects.removeWorktree, {
           repoPath: tmpDir,
           path: worktreePath,
           deleteBranch: true,
@@ -1105,14 +1118,14 @@ describe('GitService', { timeout: 30_000 }, () => {
       try {
         await import('node:fs/promises').then((fs) => fs.writeFile(path.join(repoPath, 'new-file.txt'), 'content'));
 
-        const result = await bus.request(GitSubjects.stage, {
+        const result = await bus.request(createTestCall(), GitSubjects.stage, {
           repoPath,
           paths: ['new-file.txt'],
         });
 
         expect(result.success).toBe(true);
 
-        const status = await bus.request(GitSubjects.getStatus, { repoPath });
+        const status = await bus.request(createTestCall(), GitSubjects.getStatus, { repoPath });
         expect(status.staged).toContain('new-file.txt');
       } finally {
         await import('node:fs/promises').then((fs) => fs.rm(repoPath, { recursive: true, force: true }));
@@ -1123,7 +1136,7 @@ describe('GitService', { timeout: 30_000 }, () => {
       const { repoPath } = await createRepoWithInitialCommit();
 
       try {
-        const result = await bus.request(GitSubjects.stage, {
+        const result = await bus.request(createTestCall(), GitSubjects.stage, {
           repoPath,
           paths: ['does-not-exist.txt'],
         });
@@ -1139,7 +1152,7 @@ describe('GitService', { timeout: 30_000 }, () => {
       const { repoPath } = await createRepoWithInitialCommit();
 
       try {
-        const result = await bus.request(GitSubjects.stage, {
+        const result = await bus.request(createTestCall(), GitSubjects.stage, {
           repoPath,
           paths: [''],
         });
@@ -1159,14 +1172,17 @@ describe('GitService', { timeout: 30_000 }, () => {
       try {
         await import('node:fs/promises').then((fs) => fs.writeFile(path.join(repoPath, 'ui-file.txt'), 'content'));
 
-        await inbound.simulateReceive({
-          type: 'request',
-          namespace: 'git',
-          subject: 'stage',
-          payload: { repoPath, paths: ['ui-file.txt'] },
-          correlationId: 'corr-worker-stage',
-          messageId: 'msg-worker-stage',
-        });
+        await inbound.simulateReceive(
+          {
+            type: 'request',
+            namespace: 'git',
+            subject: 'stage',
+            payload: { repoPath, paths: ['ui-file.txt'] },
+            correlationId: 'corr-worker-stage',
+            messageId: 'msg-worker-stage',
+          },
+          { transportName: 'worker', caller: { kind: MAKAIO_WORKER_THREAD_PARTY_KIND, id: 'host-ui' } },
+        );
 
         const response = inbound.responses.find((message) => message.type === 'response');
         expect(response).toMatchObject({
@@ -1175,7 +1191,7 @@ describe('GitService', { timeout: 30_000 }, () => {
           result: { success: true },
         });
 
-        const status = await bus.request(GitSubjects.getStatus, { repoPath });
+        const status = await bus.request(createTestCall(), GitSubjects.getStatus, { repoPath });
         expect(status.staged).toContain('ui-file.txt');
       } finally {
         bus.unregisterTransport('worker');
@@ -1227,7 +1243,7 @@ describe('GitService', { timeout: 30_000 }, () => {
           },
           {
             transportName: 'worker',
-            peer: { kind: 'workflow-execution', id: 'wfx-peer', authenticated: true },
+            caller: { kind: MAKAIO_JOB_RUN_PARTY_KIND, id: 'wfx-peer' },
           },
         );
 
@@ -1253,14 +1269,14 @@ describe('GitService', { timeout: 30_000 }, () => {
 
         await git.add('new-file.txt');
 
-        const result = await bus.request(GitSubjects.unstage, {
+        const result = await bus.request(createTestCall(), GitSubjects.unstage, {
           repoPath,
           paths: ['new-file.txt'],
         });
 
         expect(result.success).toBe(true);
 
-        const status = await bus.request(GitSubjects.getStatus, { repoPath });
+        const status = await bus.request(createTestCall(), GitSubjects.getStatus, { repoPath });
         expect(status.staged).not.toContain('new-file.txt');
       } finally {
         await import('node:fs/promises').then((fs) => fs.rm(repoPath, { recursive: true, force: true }));
@@ -1274,7 +1290,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         await import('node:fs/promises').then((fs) => fs.writeFile(path.join(repoPath, 'new-file.txt'), 'content'));
         await git.add('new-file.txt');
 
-        const result = await bus.request(GitSubjects.unstage, {
+        const result = await bus.request(createTestCall(), GitSubjects.unstage, {
           repoPath,
           paths: [''],
         });
@@ -1282,7 +1298,7 @@ describe('GitService', { timeout: 30_000 }, () => {
         expect(result.success).toBe(false);
         expect(result.error).toBeDefined();
 
-        const status = await bus.request(GitSubjects.getStatus, { repoPath });
+        const status = await bus.request(createTestCall(), GitSubjects.getStatus, { repoPath });
         expect(status.staged).toContain('new-file.txt');
       } finally {
         await import('node:fs/promises').then((fs) => fs.rm(repoPath, { recursive: true, force: true }));
@@ -1301,9 +1317,9 @@ describe('GitService', { timeout: 30_000 }, () => {
         await git.commit('second commit');
 
         // Get current branch name
-        const branchResult = await bus.request(GitSubjects.getBranch, { repoPath });
+        const branchResult = await bus.request(createTestCall(), GitSubjects.getBranch, { repoPath });
 
-        const result = await bus.request(GitSubjects.getBranchCommits, {
+        const result = await bus.request(createTestCall(), GitSubjects.getBranchCommits, {
           repoPath,
           branchName: branchResult.current,
         });
@@ -1322,7 +1338,7 @@ describe('GitService', { timeout: 30_000 }, () => {
       const { repoPath } = await createRepoWithInitialCommit();
 
       try {
-        const result = await bus.request(GitSubjects.getBranchCommits, {
+        const result = await bus.request(createTestCall(), GitSubjects.getBranchCommits, {
           repoPath,
           branchName: 'non-existent-branch',
         });
@@ -1339,7 +1355,7 @@ describe('GitService', { timeout: 30_000 }, () => {
 async function createRepoWithInitialCommit(): Promise<{ repoPath: string; git: import('simple-git').SimpleGit }> {
   const fs = await import('node:fs/promises');
   const repoPath = await fs.mkdtemp(path.join(os.tmpdir(), 'makaio-git-test-'));
-  await bus.request(GitSubjects.initRepo, { path: repoPath });
+  await bus.request(createTestCall(), GitSubjects.initRepo, { path: repoPath });
   const git = (await import('simple-git')).simpleGit(repoPath);
   await configureTestGit(repoPath);
   await fs.writeFile(path.join(repoPath, 'base.txt'), 'base\n');

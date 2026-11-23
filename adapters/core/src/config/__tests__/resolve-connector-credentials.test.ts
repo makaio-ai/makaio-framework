@@ -3,6 +3,7 @@ import { MakaioBus, createChannelEndpoint } from '@makaio/bus-core';
 import type { ChannelEndpoint } from '@makaio/bus-core';
 import { CredentialSubjects } from '@makaio/contracts';
 import { CredentialRefSchema } from '@makaio/contracts/config';
+import { createTestCall } from '@makaio/test-utils';
 import type { CredentialRef } from '@makaio/contracts/config';
 import { ConnectorCredentialResolutionError, resolveConnectorCredentials } from '../resolve-connector-credentials.js';
 
@@ -43,7 +44,7 @@ function setupCredentialBus(): void {
   );
 
   channelEndpoint = createChannelEndpoint(
-    MakaioBus.getContext(),
+    MakaioBus,
     'credentials',
     (channel) => {
       channel.on(CredentialSubjects.resolve, (ctx) => {
@@ -89,7 +90,7 @@ function ref(ref: string): CredentialRef {
 describe('resolveConnectorCredentials', () => {
   it('returns an empty object immediately when credentialRefs is empty (no channel opened)', async () => {
     // No channel endpoint registered — confirms no channel is opened on the empty path.
-    const result = await resolveConnectorCredentials(MakaioBus, {});
+    const result = await resolveConnectorCredentials(createTestCall(), MakaioBus, {});
     expect(result).toEqual({});
   });
 
@@ -97,7 +98,7 @@ describe('resolveConnectorCredentials', () => {
     setupCredentialBus();
     resolveStore.set('env:MY_API_KEY', 'sk-123');
 
-    const result = await resolveConnectorCredentials(MakaioBus, {
+    const result = await resolveConnectorCredentials(createTestCall(), MakaioBus, {
       apiKey: ref('env:MY_API_KEY'),
     });
 
@@ -109,7 +110,7 @@ describe('resolveConnectorCredentials', () => {
     resolveStore.set('env:API_KEY', 'sk-abc');
     resolveStore.set('env:BASE_URL', 'https://api.example.com');
 
-    const result = await resolveConnectorCredentials(MakaioBus, {
+    const result = await resolveConnectorCredentials(createTestCall(), MakaioBus, {
       apiKey: ref('env:API_KEY'),
       baseUrl: ref('env:BASE_URL'),
     });
@@ -123,7 +124,7 @@ describe('resolveConnectorCredentials', () => {
     // 'env:BAD_KEY' is deliberately absent from resolveStore → triggers error path
 
     await expect(
-      resolveConnectorCredentials(MakaioBus, {
+      resolveConnectorCredentials(createTestCall(), MakaioBus, {
         goodField: ref('env:GOOD_KEY'),
         badField: ref('env:BAD_KEY'),
       }),
@@ -138,7 +139,7 @@ describe('resolveConnectorCredentials', () => {
     resolveStore.set('env:NULL_KEY', null);
 
     await expect(
-      resolveConnectorCredentials(MakaioBus, {
+      resolveConnectorCredentials(createTestCall(), MakaioBus, {
         apiKey: ref('env:NULL_KEY'),
       }),
     ).rejects.toMatchObject({ code: 'credential-unavailable' });
@@ -150,6 +151,7 @@ describe('resolveConnectorCredentials', () => {
 
     await expect(
       resolveConnectorCredentials(
+        createTestCall(),
         MakaioBus,
         {
           requiredField: ref('env:REQUIRED_KEY'),
@@ -171,7 +173,7 @@ describe('resolveConnectorCredentials', () => {
     );
 
     const throwingEndpoint = createChannelEndpoint(
-      MakaioBus.getContext(),
+      MakaioBus,
       'credentials',
       (channel) => {
         channel.on(CredentialSubjects.resolve, () => {
@@ -185,7 +187,7 @@ describe('resolveConnectorCredentials', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     await expect(
-      resolveConnectorCredentials(MakaioBus, {
+      resolveConnectorCredentials(createTestCall(), MakaioBus, {
         field: ref('env:ANY_KEY'),
       }),
     ).rejects.toMatchObject({ code: 'credential-request-failed', message: 'Credential resolution failed.' });

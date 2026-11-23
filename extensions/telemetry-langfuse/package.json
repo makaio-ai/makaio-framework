@@ -18,6 +18,9 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
+  "peerDependencies": {
+    "@makaio/framework": "workspace:*"
+  },
   "dependencies": {
     "@langfuse/otel": "^5.9.1",
     "@makaio/bus-core": "workspace:*",

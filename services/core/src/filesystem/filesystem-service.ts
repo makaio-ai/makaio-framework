@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { IMakaioBus } from '@makaio/bus-core';
+import { isInProcessCaller, MAKAIO_WORKER_THREAD_PARTY_KIND, type CallContext } from '@makaio/core';
 import { BaseService } from '@makaio/service-base';
 import { FileSystemSubjects, FsSubjects } from './namespace.js';
 import type { GlobEntry } from './schemas.js';
@@ -88,7 +89,7 @@ export class FileSystemService extends BaseService {
     this.registerHandler(FsSubjects.glob, async (ctx) => {
       const { pattern, cwd, limit = 100, offset = 0, ignore = [], machineId } = ctx.payload;
 
-      this.requireMachineIdForRemote(ctx, machineId);
+      this.requireMachineIdForRemote(ctx.call, machineId);
 
       // If machineId specified, check if this service should handle
       if (machineId !== undefined && !this.shouldHandle(machineId)) {
@@ -134,7 +135,7 @@ export class FileSystemService extends BaseService {
     this.registerHandler(FsSubjects.readFile, async (ctx) => {
       const { path: filePath, machineId, encoding = 'utf-8' } = ctx.payload;
 
-      this.requireMachineIdForRemote(ctx, machineId);
+      this.requireMachineIdForRemote(ctx.call, machineId);
 
       // If machineId specified, check if this service should handle
       if (machineId !== undefined && !this.shouldHandle(machineId)) {
@@ -149,7 +150,7 @@ export class FileSystemService extends BaseService {
     this.registerHandler(FsSubjects.writeFile, async (ctx) => {
       const { path: filePath, content, machineId, encoding = 'utf-8' } = ctx.payload;
 
-      this.requireMachineIdForRemote(ctx, machineId);
+      this.requireMachineIdForRemote(ctx.call, machineId);
 
       // If machineId specified, check if this service should handle
       if (machineId !== undefined && !this.shouldHandle(machineId)) {
@@ -167,29 +168,23 @@ export class FileSystemService extends BaseService {
    * Remote callers must include `machineId` so ownership is explicit and the
    * correct service instance can be selected. Host-owned callers may omit it:
    * direct in-process requests are local, and the browser SharedWorker bridge
-   * arrives through the `worker` transport without a remote peer.
-   * @param ctx - Bus context for the current request
+   * arrives through the worker-thread transport.
+   * @param call - `ctx.call` of the handled message; its caller decides whether the request is host-owned.
    * @param machineId - The `machineId` from the request payload
    */
-  private requireMachineIdForRemote(
-    ctx: { origin: { local: boolean }; transport?: { transportName: string; peer?: unknown } },
-    machineId: string | undefined,
-  ): void {
-    if (!this.isHostOwnedOrigin(ctx) && machineId === undefined) {
+  private requireMachineIdForRemote(call: CallContext, machineId: string | undefined): void {
+    if (!this.isHostOwnedCaller(call) && machineId === undefined) {
       throw new Error('machineId is required for remote filesystem access');
     }
   }
 
   /**
    * Check whether a request originated from host-owned code.
-   * @param ctx - Bus context for the current request.
-   * @returns True for local requests and host UI bridge requests.
+   * @param call - `ctx.call` of the handled message.
+   * @returns True for in-process callers and host UI bridge (worker-thread) callers.
    */
-  private isHostOwnedOrigin(ctx: {
-    origin: { local: boolean };
-    transport?: { transportName: string; peer?: unknown };
-  }): boolean {
-    return ctx.origin.local || (ctx.transport?.transportName === 'worker' && ctx.transport.peer === undefined);
+  private isHostOwnedCaller(call: CallContext): boolean {
+    return isInProcessCaller(call) || call.caller.kind === MAKAIO_WORKER_THREAD_PARTY_KIND;
   }
 
   /**

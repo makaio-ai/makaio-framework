@@ -208,10 +208,8 @@ export async function createAttemptAuthorityHarness(
   const serverAuth = new HmacAuth({
     secret: ATTEMPT_TRANSPORT_SECRET,
     resolveSecret: (claimedId) => (claimedId === executionAttemptId ? ATTEMPT_TRANSPORT_SECRET : null),
-    resolvePeer: (claimedId) =>
-      claimedId === executionAttemptId
-        ? { kind: 'workflow-execution-attempt', id: claimedId, authenticated: true, claims: { executionId } }
-        : null,
+    resolveParty: (claimedId) =>
+      claimedId === executionAttemptId ? { kind: 'makaio.job-run', id: claimedId, claims: { executionId } } : null,
   });
 
   return {

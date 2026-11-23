@@ -2,6 +2,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import { createMakaioContext } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { editFileTool } from '../edit-file.js';
 import { useTempDir } from './test-helpers.js';
 
@@ -13,7 +14,7 @@ describe('edit_file tool', () => {
     const filePath = path.join(dir, 'test.txt');
     await fs.writeFile(filePath, 'Hello World');
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await editFileTool.execute({ path: filePath, old_string: 'Hello', new_string: 'Goodbye' }, context);
 
     expect(result.success).toBe(true);
@@ -30,7 +31,7 @@ describe('edit_file tool', () => {
     const filePath = path.join(dir, 'test.txt');
     await fs.writeFile(filePath, 'foo bar foo baz foo');
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await editFileTool.execute(
       { path: filePath, old_string: 'foo', new_string: 'qux', replace_all: true },
       context,
@@ -50,7 +51,7 @@ describe('edit_file tool', () => {
     const filePath = path.join(dir, 'test.txt');
     await fs.writeFile(filePath, 'Hello World');
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await editFileTool.execute({ path: filePath, old_string: 'NotFound', new_string: 'X' }, context);
 
     expect(result.success).toBe(false);
@@ -65,7 +66,7 @@ describe('edit_file tool', () => {
     const filePath = path.join(dir, 'test.txt');
     await fs.writeFile(filePath, 'aaa bbb aaa');
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await editFileTool.execute({ path: filePath, old_string: 'aaa', new_string: 'ccc' }, context);
 
     expect(result.success).toBe(false);
@@ -80,7 +81,7 @@ describe('edit_file tool', () => {
 
   it('returns RESOURCE_NOT_FOUND for missing files', async () => {
     const dir = await createTempDir();
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await editFileTool.execute(
       { path: path.join(dir, 'missing.txt'), old_string: 'x', new_string: 'y' },
       context,
@@ -97,7 +98,7 @@ describe('edit_file tool', () => {
     const filePath = path.join(dir, 'multi.txt');
     await fs.writeFile(filePath, 'line 1\nTARGET\nline 3\n');
 
-    const context = createMakaioContext({ cwd: dir });
+    const context = { ...createMakaioContext({ cwd: dir }), call: createTestCall() };
     const result = await editFileTool.execute(
       { path: filePath, old_string: 'TARGET', new_string: 'REPLACED' },
       context,

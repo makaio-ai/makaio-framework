@@ -460,6 +460,7 @@ async function runOnce(
     }
     const filePath = resolveWorkflowFilePath(args.file);
     const { executionId } = await bus.request(
+      ctx.call,
       WorkflowSubjects.runFile,
       {
         filePath,

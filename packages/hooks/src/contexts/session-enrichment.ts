@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { IMakaioSession, Turn } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import { SessionSubjects } from '@makaio/contracts';
 import { TurnStorageSubjects } from '@makaio/services-core/turn';
 
@@ -37,14 +38,19 @@ export const EMPTY_ENRICHMENT: SessionEnrichment = {
  * Host code registers a handler for `SessionSubjects.enrichContext` to
  * contribute additional context fields (e.g., `project`, `worktree`). When no
  * handler is registered, `contextExtensions` is `{}` (OSS-safe).
- * @param bus - Bus instance for making requests
+ * @param bus - Bus the lookups are sent on (the carrier of the sends)
+ * @param call - Call context the lookups are sent with
  * @param sessionId - Session ID to look up
  * @returns Enriched session data (session, recentHistory, contextExtensions)
  */
-export async function fetchSessionEnrichment(bus: IMakaioBus, sessionId: string): Promise<SessionEnrichment> {
+export async function fetchSessionEnrichment(
+  bus: IMakaioBus,
+  call: CallContext,
+  sessionId: string,
+): Promise<SessionEnrichment> {
   try {
     // Query session via public API
-    const { session } = await bus.request(SessionSubjects.get, { sessionId });
+    const { session } = await bus.request(call, SessionSubjects.get, { sessionId });
 
     if (!session) {
       return EMPTY_ENRICHMENT;
@@ -53,12 +59,14 @@ export async function fetchSessionEnrichment(bus: IMakaioBus, sessionId: string)
     // Query turn history and host context extensions in parallel (independent)
     const [turnsResult, enrichResult] = await Promise.all([
       bus
-        .request(TurnStorageSubjects.getBySession, {
+        .request(call, TurnStorageSubjects.getBySession, {
           sessionId,
           limit: RECENT_HISTORY_LIMIT,
         })
         .catch(() => ({ turns: [] as Turn[] })),
-      bus.requestOptional(SessionSubjects.enrichContext, { sessionId }).catch(() => ({ handled: false as const })),
+      bus
+        .requestOptional(call, SessionSubjects.enrichContext, { sessionId })
+        .catch(() => ({ handled: false as const })),
     ]);
 
     const contextExtensions: Record<string, unknown> = enrichResult.handled ? enrichResult.data : {};

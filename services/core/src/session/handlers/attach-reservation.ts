@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { SessionSubjects, type AgentRole, type SessionOwnershipReservation } from '@makaio/contracts';
 import { mintClaimToken } from '../ownership/claim-token.js';
 import { reserveStartFor } from '../utils/start-reservation.js';
@@ -102,15 +103,17 @@ export interface AttachReservationRequest {
  * hidden, because two RPCs are two transactions: between them the designation
  * may move, and the keyless compare-and-swap is what refuses a stale one — a
  * `lead-conflict`, not an overwrite.
+ * @param call - Call context of the handled attach message, forwarded to the reservation request.
  * @param bus - Bus the reservation is issued on.
  * @param request - The attach being reserved for.
  * @returns The final verdict this attach dispatches under.
  */
 export async function reserveAttachStart(
+  call: CallContext,
   bus: IMakaioBus,
   request: AttachReservationRequest,
 ): Promise<AttachReservationResult> {
-  const reserved = await requestReservation(bus, request, request.resumeProviderSessionId);
+  const reserved = await requestReservation(call, bus, request, request.resumeProviderSessionId);
   switch (reserved.outcome) {
     case 'reserved':
       return { kind: 'reserved', reservation: reserved.reservation };
@@ -123,7 +126,7 @@ export async function reserveAttachStart(
       return { kind: 'refused', outcome: reserved.outcome, status: reserved.status };
     case 'occupied':
     case 'machine-identity-unavailable':
-      return degradeAttachStart(bus, request);
+      return degradeAttachStart(call, bus, request);
     case 'currency-changed':
     case 'recovery-conflict':
       // Unreachable: attach reservations never carry a recovery guard.
@@ -137,16 +140,18 @@ export async function reserveAttachStart(
  * A member has no key or designation left to reserve, but still needs the
  * authority's current incarnation to target its fresh dispatch exactly. A lead
  * additionally takes its designation through the same keyless reservation.
+ * @param call - Call context of the handled attach message, forwarded to the reservation request.
  * @param bus - Bus the reservation is issued on.
  * @param request - The attach being reserved for.
  * @returns The degrade carrying the authority-selected runtime incarnation.
  */
 async function degradeAttachStart(
+  call: CallContext,
   bus: IMakaioBus,
   request: AttachReservationRequest,
 ): Promise<AttachReservationResult> {
   const degraded = { kind: 'degrade', reason: 'agent-already-started' } as const;
-  const reserved = await requestReservation(bus, request, null);
+  const reserved = await requestReservation(call, bus, request, null);
   switch (reserved.outcome) {
     case 'reserved':
       return { ...degraded, reservation: reserved.reservation };
@@ -173,19 +178,21 @@ async function degradeAttachStart(
 
 /**
  * Issue one reservation for this attach.
+ * @param call - Call context of the handled attach message, forwarded to the reservation request.
  * @param bus - Bus the reservation is issued on.
  * @param request - The attach being reserved for.
  * @param resumeProviderSessionId - Key to take, or `null` for a keyless reservation.
  * @returns What the authority answered.
  */
 async function requestReservation(
+  call: CallContext,
   bus: IMakaioBus,
   request: AttachReservationRequest,
   resumeProviderSessionId: string | null,
 ) {
   const claimToken = mintClaimToken();
   try {
-    return await reserveStartFor(bus, {
+    return await reserveStartFor(call, bus, {
       sessionId: request.sessionId,
       agentId: request.agentId,
       adapterName: request.adapterName,
@@ -198,7 +205,7 @@ async function requestReservation(
     });
   } catch (error) {
     await bus
-      .requestOptional(SessionSubjects.ownership.release, {
+      .requestOptional(call, SessionSubjects.ownership.release, {
         agentId: request.agentId,
         claimToken,
         disposition: 'released',

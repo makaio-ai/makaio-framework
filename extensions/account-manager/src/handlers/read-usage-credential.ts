@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { RawCredential } from '../interfaces/credential-source.js';
 import type { UsagePreparedCredential } from './usage-tracker-types.js';
 
@@ -9,6 +10,7 @@ import type { UsagePreparedCredential } from './usage-tracker-types.js';
  * keeps transient native-store failures on the same path as a simple
  * unavailable read, so usage fetches still proceed and null usage results can
  * apply the normal cooldown behavior instead of aborting the whole fetch.
+ * @param call - Call context forwarded to the credential callback.
  * @param readCredential - Optional callback that reads a fresh native credential.
  * @param clientId - Credential-source identifier.
  * @param accountId - Stable account identifier.
@@ -17,7 +19,10 @@ import type { UsagePreparedCredential } from './usage-tracker-types.js';
  * @returns The freshest available credential outcome for this fetch.
  */
 export async function readUsageCredential(
-  readCredential: ((clientId: string, accountId: string) => Promise<UsagePreparedCredential | null>) | undefined,
+  call: CallContext,
+  readCredential:
+    | ((call: CallContext, clientId: string, accountId: string) => Promise<UsagePreparedCredential | null>)
+    | undefined,
   clientId: string,
   accountId: string,
   key: string,
@@ -27,7 +32,7 @@ export async function readUsageCredential(
 
   try {
     return (
-      (await readCredential(clientId, accountId)) ?? {
+      (await readCredential(call, clientId, accountId)) ?? {
         status: 'ready',
         credential: storedCredential,
         changed: false,

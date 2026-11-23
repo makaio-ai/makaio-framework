@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { z } from 'zod';
 import { createHook } from '../create-hook.js';
 import { resetPreUserMessageHooks } from '../runners/pre-user-message-runner.js';
@@ -21,6 +22,7 @@ describe('createHook()', () => {
     it('should create a hook registration', () => {
       const handler = vi.fn();
       const registration = createHook('BusMessage', {
+        bus: MakaioBus,
         subject: TestSubjects.action,
         handler,
       });
@@ -33,11 +35,12 @@ describe('createHook()', () => {
     it('should intercept events on the specified subject', async () => {
       const handler = vi.fn();
       createHook('BusMessage', {
+        bus: MakaioBus,
         subject: TestSubjects.action,
         handler,
       });
 
-      await MakaioBus.emit(TestSubjects.action, { value: 'test' });
+      await MakaioBus.emit(createTestCall(), TestSubjects.action, { value: 'test' });
 
       expect(handler).toHaveBeenCalledTimes(1);
       expect(handler.mock.calls[0][0].payload).toEqual({ value: 'test' });
@@ -46,13 +49,14 @@ describe('createHook()', () => {
     it('should allow unsubscribing', async () => {
       const handler = vi.fn();
       const registration = createHook('BusMessage', {
+        bus: MakaioBus,
         subject: TestSubjects.action,
         handler,
       });
 
       registration.unsubscribe();
 
-      await MakaioBus.emit(TestSubjects.action, { value: 'test' });
+      await MakaioBus.emit(createTestCall(), TestSubjects.action, { value: 'test' });
 
       expect(handler).not.toHaveBeenCalled();
     });
@@ -61,6 +65,7 @@ describe('createHook()', () => {
       const order: string[] = [];
 
       createHook('BusMessage', {
+        bus: MakaioBus,
         subject: TestSubjects.action,
         handler: () => {
           order.push('low');
@@ -69,6 +74,7 @@ describe('createHook()', () => {
       });
 
       createHook('BusMessage', {
+        bus: MakaioBus,
         subject: TestSubjects.action,
         handler: () => {
           order.push('high');
@@ -77,6 +83,7 @@ describe('createHook()', () => {
       });
 
       createHook('BusMessage', {
+        bus: MakaioBus,
         subject: TestSubjects.action,
         handler: () => {
           order.push('medium');
@@ -84,7 +91,7 @@ describe('createHook()', () => {
         priority: 50,
       });
 
-      await MakaioBus.emit(TestSubjects.action, { value: 'test' });
+      await MakaioBus.emit(createTestCall(), TestSubjects.action, { value: 'test' });
 
       // Higher priority runs first
       expect(order).toEqual(['high', 'medium', 'low']);
@@ -94,6 +101,7 @@ describe('createHook()', () => {
       const order: string[] = [];
 
       createHook('BusMessage', {
+        bus: MakaioBus,
         subject: TestSubjects.action,
         handler: () => {
           order.push('default');
@@ -101,6 +109,7 @@ describe('createHook()', () => {
       });
 
       createHook('BusMessage', {
+        bus: MakaioBus,
         subject: TestSubjects.action,
         handler: () => {
           order.push('positive');
@@ -109,6 +118,7 @@ describe('createHook()', () => {
       });
 
       createHook('BusMessage', {
+        bus: MakaioBus,
         subject: TestSubjects.action,
         handler: () => {
           order.push('negative');
@@ -116,13 +126,14 @@ describe('createHook()', () => {
         priority: -10,
       });
 
-      await MakaioBus.emit(TestSubjects.action, { value: 'test' });
+      await MakaioBus.emit(createTestCall(), TestSubjects.action, { value: 'test' });
 
       expect(order).toEqual(['positive', 'default', 'negative']);
     });
 
     it('should allow payload transformation via replacePayload', async () => {
       createHook('BusMessage', {
+        bus: MakaioBus,
         subject: TestSubjects.action,
         handler: (ctx) => {
           ctx.replacePayload({ value: 'transformed' });
@@ -134,7 +145,7 @@ describe('createHook()', () => {
         receivedPayload = ctx.payload;
       });
 
-      await MakaioBus.emit(TestSubjects.action, { value: 'original' });
+      await MakaioBus.emit(createTestCall(), TestSubjects.action, { value: 'original' });
 
       expect(receivedPayload).toEqual({ value: 'transformed' });
     });
@@ -143,6 +154,7 @@ describe('createHook()', () => {
       const handlerCalled = vi.fn();
 
       createHook('BusMessage', {
+        bus: MakaioBus,
         subject: TestSubjects.action,
         handler: (ctx) => {
           ctx.stopPropagation();
@@ -151,7 +163,7 @@ describe('createHook()', () => {
 
       MakaioBus.on(TestSubjects.action, handlerCalled);
 
-      await MakaioBus.emit(TestSubjects.action, { value: 'test' });
+      await MakaioBus.emit(createTestCall(), TestSubjects.action, { value: 'test' });
 
       expect(handlerCalled).not.toHaveBeenCalled();
     });
@@ -160,6 +172,7 @@ describe('createHook()', () => {
       const order: string[] = [];
 
       createHook('BusMessage', {
+        bus: MakaioBus,
         subject: TestSubjects.action,
         handler: async () => {
           await new Promise((r) => setTimeout(r, 10));
@@ -171,7 +184,7 @@ describe('createHook()', () => {
         order.push('handler');
       });
 
-      await MakaioBus.emit(TestSubjects.action, { value: 'test' });
+      await MakaioBus.emit(createTestCall(), TestSubjects.action, { value: 'test' });
 
       expect(order).toEqual(['async-hook', 'handler']);
     });
@@ -181,6 +194,7 @@ describe('createHook()', () => {
     it('should create a hook registration', () => {
       const handler = vi.fn();
       const registration = createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler,
       });
 
@@ -192,6 +206,7 @@ describe('createHook()', () => {
     it('should allow unsubscribing', () => {
       const handler = vi.fn();
       const registration = createHook('PreUserMessage', {
+        bus: MakaioBus,
         handler,
       });
 
@@ -204,6 +219,7 @@ describe('createHook()', () => {
     it('should create a hook registration', () => {
       const handler = vi.fn();
       const registration = createHook('PostTurn', {
+        bus: MakaioBus,
         handler,
       });
 
@@ -215,6 +231,7 @@ describe('createHook()', () => {
     it('should allow unsubscribing', () => {
       const handler = vi.fn();
       const registration = createHook('PostTurn', {
+        bus: MakaioBus,
         handler,
       });
 
@@ -228,6 +245,7 @@ describe('createHook()', () => {
       // PreTurn is still unimplemented
       expect(() =>
         createHook('PreTurn', {
+          bus: MakaioBus,
           handler: vi.fn(),
         }),
       ).toThrow('Named hook "PreTurn" not yet implemented');
@@ -240,6 +258,7 @@ describe('createHook()', () => {
       for (const hookName of unimplementedHooks) {
         expect(() =>
           createHook(hookName, {
+            bus: MakaioBus,
             handler: vi.fn(),
           }),
         ).toThrow(`Named hook "${hookName}" not yet implemented`);

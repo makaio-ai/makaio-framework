@@ -8,6 +8,7 @@ import {
   type ResolvedArtifactContextWire,
 } from '@makaio/contracts';
 import { ArtifactRelationQueryTargetSchema } from '@makaio/contracts/artifact';
+import { createTestCall } from '@makaio/test-utils';
 import { resolveArtifactContext } from '../context-resolver.js';
 
 /**
@@ -146,7 +147,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
@@ -184,7 +185,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { contains: { hint: 'link' } },
@@ -222,7 +223,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { contains: { hint: 'link' } },
@@ -258,7 +259,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const mismatchContext = await resolveArtifactContext({
+    const mismatchContext = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { evidenced_by: { kinds: ['commit'], hint: 'inline' } },
@@ -271,7 +272,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const selectedContext = await resolveArtifactContext({
+    const selectedContext = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { evidenced_by: { hint: 'inline' } },
@@ -305,7 +306,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
     });
@@ -339,7 +340,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    await resolveArtifactContext({
+    await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { contains: { hint: 'inline' } },
@@ -373,7 +374,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
@@ -417,7 +418,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
@@ -456,7 +457,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
@@ -501,7 +502,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
@@ -543,7 +544,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { contains: { hint: 'omit' } },
@@ -580,7 +581,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
@@ -613,7 +614,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: systemRef,
       selectors: { contains: { kinds: ['system'], hint: 'inline' } },
@@ -638,7 +639,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: systemRef,
       maxDepth: 0,
@@ -696,7 +697,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
@@ -774,7 +775,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
@@ -825,7 +826,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { contains: { hint: 'inline' } },
@@ -850,14 +851,14 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const selected = await resolveArtifactContext({
+    const selected = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', system.id, system.revision),
       selectors: { contains: { hint: 'inline' } },
     });
     expect(selected.refs[0]).toMatchObject({ target, status: 'unresolved', reason: 'unsupported-ref-class' });
 
-    const filtered = await resolveArtifactContext({
+    const filtered = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', system.id, system.revision),
       selectors: { contains: { kinds: ['repo'], hint: 'inline' } },
@@ -886,7 +887,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { contains: { hint: 'inline', depth: 2 } },
@@ -919,7 +920,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       maxDepth: 2,
@@ -971,7 +972,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       maxDepth: 2,
@@ -1010,7 +1011,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       maxDepth: 2,
@@ -1048,7 +1049,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       maxDepth: 2,
@@ -1102,7 +1103,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: {
@@ -1175,7 +1176,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       maxDepth: 2,
@@ -1235,7 +1236,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { contains: { hint: 'inline' } },
@@ -1257,7 +1258,7 @@ describe('resolveArtifactContext', () => {
     );
 
     await expect(
-      resolveArtifactContext({
+      resolveArtifactContext(createTestCall(), {
         bus,
         ref: ref('system', 'missing', 'rev-missing'),
       }),
@@ -1290,7 +1291,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('knowledge-document', 'parent-1', 'rev-2'),
       selectors: { part_of: { direction: 'inbound', kinds: ['knowledge-document'], hint: 'section' } },
@@ -1355,7 +1356,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { contains: { direction: 'inbound' } },
@@ -1378,7 +1379,7 @@ describe('resolveArtifactContext', () => {
     const store = serveStore(bus, [parent, partSource]);
     cleanups.push(...store.cleanups);
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('knowledge-document', 'parent-1', 'rev-1'),
       selectors: { part_of: { direction: 'inbound' } },
@@ -1401,7 +1402,7 @@ describe('resolveArtifactContext', () => {
     const store = serveStore(bus, [root, left, right, shared, detail]);
     cleanups.push(...store.cleanups);
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('doc', 'root', 'rev-root'),
       selectors: { contains: { nested: { contains: { nested: { part_of: { direction: 'inbound' } } } } } },
@@ -1428,7 +1429,7 @@ describe('resolveArtifactContext', () => {
     const store = serveStore(bus, [root, child, grandchild]);
     cleanups.push(...store.cleanups);
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('doc', 'root', 'rev-root'),
       selectors: { part_of: { direction: 'inbound', depth: 2 } },
@@ -1464,7 +1465,7 @@ describe('resolveArtifactContext', () => {
     const store = serveStore(bus, [root, child, tool]);
     cleanups.push(...store.cleanups);
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('doc', 'root', 'rev-root'),
       selectors: { part_of: { direction: 'inbound', nested: { uses: { hint: 'inline' } } } },
@@ -1485,7 +1486,7 @@ describe('resolveArtifactContext', () => {
     const store = serveStore(bus, [root, child]);
     cleanups.push(...store.cleanups);
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('doc', 'root', 'rev-root'),
       selectors: { part_of: { direction: 'inbound', depth: 5 } },
@@ -1507,7 +1508,7 @@ describe('resolveArtifactContext', () => {
     const store = serveStore(bus, [parent, child]);
     cleanups.push(...store.cleanups);
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('doc', 'p', 'rev-p'),
       selectors: { contains: { direction: 'inbound' } },
@@ -1535,7 +1536,7 @@ describe('resolveArtifactContext', () => {
     const store = serveStore(bus, [root, child, grandchild]);
     cleanups.push(...store.cleanups);
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('doc', 'root', 'rev-root'),
       selectors: { part_of: { direction: 'inbound', depth: 2 } },
@@ -1568,7 +1569,7 @@ describe('resolveArtifactContext', () => {
       }),
     );
 
-    const context = await resolveArtifactContext({
+    const context = await resolveArtifactContext(createTestCall(), {
       bus,
       ref: ref('system', 'system-1', 'rev-system'),
       selectors: { contains: { direction: 'inbound', hint: 'omit' } },

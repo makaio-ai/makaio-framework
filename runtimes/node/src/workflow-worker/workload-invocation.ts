@@ -129,7 +129,13 @@ async function getInstruction(
   signal: AbortSignal | undefined,
 ): Promise<ExecutionAttemptInstruction> {
   const response = ExecutionAttemptSchemas['instruction.get'].response.parse(
-    await bus.request(ExecutionAttemptSubjects.instruction.get, { executionAttemptId, runtimeGeneration }, { signal }),
+    // ORIGIN: The registered Runtime reads its instruction to start the local workload sequence.
+    await bus.request(
+      bus.own('start'),
+      ExecutionAttemptSubjects.instruction.get,
+      { executionAttemptId, runtimeGeneration },
+      { signal },
+    ),
   );
   if (response.decision === 'found') return response.instruction;
   throw new Error(`Attempt instruction read refused: ${response.refusalReason}`);
@@ -158,7 +164,9 @@ async function admitOperation(
   const response = ExecutionAttemptSchemas['operation.admit'].response.parse(
     await requestAuthorityWithRetry(
       async (timeout) =>
+        // ORIGIN: The Runtime requests admission before starting a local operation.
         await bus.request(
+          bus.own('root'),
           ExecutionAttemptSubjects.operation.admit,
           { executionAttemptId, runtimeGeneration, operationKind, admissionKey },
           { timeout },
@@ -330,7 +338,9 @@ async function reportPreparedWorkspace(
   const response = ExecutionAttemptSchemas['operation.report'].response.parse(
     await requestAuthorityWithRetry(
       async (timeout) =>
+        // ORIGIN: The Runtime reports the result of its local Workspace setup.
         await bus.request(
+          bus.own('root'),
           ExecutionAttemptSubjects.operation.report,
           {
             executionAttemptId: options.executionAttemptId,

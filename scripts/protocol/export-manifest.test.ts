@@ -1,15 +1,11 @@
 import { MakaioBus } from '@makaio/bus-core';
 import { createBusNamespace, localSubject, PartySchema } from '@makaio/core';
+import { listRegisteredSubjects } from '@makaio/test-utils';
 import type { JournalSubjectSchema, LocalSubjectSchema, RequestSchema } from '@makaio/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { FrameworkContractNamespaces, FrameworkStorageNamespaces } from '../../core/contracts/src/namespace-catalog.js';
-import {
-  defaultRustModelChecker,
-  auditProtocolExport,
-  discoverRegisteredProtocolSubjects,
-  exportProtocolManifest,
-} from './export-manifest.js';
+import { defaultRustModelChecker, auditProtocolExport, exportProtocolManifest } from './export-manifest.js';
 
 MakaioBus.registerNamespaces(FrameworkContractNamespaces);
 MakaioBus.registerNamespaces(FrameworkStorageNamespaces);
@@ -49,7 +45,7 @@ function getEmbeddedSchemas(subject: MakaioProtocolSubject): JsonObject[] {
  */
 function crossProcessJsonSchemaFailures(audit: ProtocolExportAuditReport): ProtocolExportSubjectAudit[] {
   const localSubjects = new Set(
-    discoverRegisteredProtocolSubjects()
+    listRegisteredSubjects(MakaioBus)
       .filter((subject) => subject.local)
       .map((subject) => subject.fullSubject),
   );
@@ -60,7 +56,7 @@ function crossProcessJsonSchemaFailures(audit: ProtocolExportAuditReport): Proto
 
 describe('protocol manifest export', () => {
   it('discovers registered subject metadata from the runtime namespace registry', () => {
-    const subjects = discoverRegisteredProtocolSubjects();
+    const subjects = listRegisteredSubjects(MakaioBus);
 
     expect(subjects.find((subject) => subject.fullSubject === 'credential.getChannelToken')).toMatchObject({
       namespace: 'credential',
@@ -77,7 +73,7 @@ describe('protocol manifest export', () => {
   });
 
   it('exports all clean registered subjects in auto-discovery mode', () => {
-    const manifest = exportProtocolManifest();
+    const manifest = exportProtocolManifest({ registeredSubjects: listRegisteredSubjects(MakaioBus) });
 
     expect(manifest.version).toBe(2);
 
@@ -153,7 +149,7 @@ describe('protocol manifest export', () => {
   });
 
   it('strips embedded JSON Schema dialect markers while preserving bus metadata', () => {
-    const manifest = exportProtocolManifest();
+    const manifest = exportProtocolManifest({ registeredSubjects: listRegisteredSubjects(MakaioBus) });
     const toolExecute = getSubject(manifest, 'tool.execute');
 
     expect(toolExecute.local).toBe(false);
@@ -165,7 +161,7 @@ describe('protocol manifest export', () => {
   });
 
   it('audits all registered subjects in auto-discovery mode with no blocking issues', () => {
-    const audit = auditProtocolExport();
+    const audit = auditProtocolExport({ registeredSubjects: listRegisteredSubjects(MakaioBus) });
 
     // Auto-discovery is non-blocking — issues array must always be empty.
     expect(audit.issues).toEqual([]);
@@ -193,7 +189,9 @@ describe('protocol manifest export', () => {
       }),
     );
 
-    const failures = crossProcessJsonSchemaFailures(auditProtocolExport());
+    const failures = crossProcessJsonSchemaFailures(
+      auditProtocolExport({ registeredSubjects: listRegisteredSubjects(MakaioBus) }),
+    );
 
     expect(failures.map((subject) => subject.fullSubject)).toContain(`${namespace}.crossProcess`);
     expect(failures.map((subject) => subject.fullSubject)).not.toContain(`${namespace}.inProcess`);
@@ -224,7 +222,7 @@ describe('protocol manifest export', () => {
         ? { status: 'failed', message: 'unsupported generated Rust shape' }
         : { status: 'passed' };
 
-    const audit = auditProtocolExport({ catalog: PublicProtocolNamespaces, rustModelChecker });
+    const audit = auditProtocolExport({ catalog: PublicProtocolNamespaces }, { rustModelChecker });
 
     expect(audit.issues).toContainEqual({
       namespace: 'tool',
@@ -233,7 +231,7 @@ describe('protocol manifest export', () => {
       check: 'rustModel',
       message: 'unsupported generated Rust shape',
     });
-    expect(() => exportProtocolManifest({ catalog: PublicProtocolNamespaces, rustModelChecker })).toThrow(
+    expect(() => exportProtocolManifest({ catalog: PublicProtocolNamespaces }, { rustModelChecker })).toThrow(
       /tool\.execute \[rustModel\]: unsupported generated Rust shape/,
     );
   });

@@ -26,6 +26,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/contracts/call-context';
 import { ExtensionSubjects, type TransitionOutcome } from '@makaio/kernel';
 
 export interface PersistPluginEnabledResult {
@@ -43,15 +44,48 @@ export interface PersistPluginEnabledResult {
  * callback. This never applies the change to the running process — see the
  * module doc for why. Enabled state is the single source of truth in the
  * kernel; no local cache is mutated.
+ * @param call - Call context of the operation requesting the change.
  * @param pluginName - Registry name of the plugin.
  * @param enabled - Desired enabled state.
  * @param bus - Bus instance used to dispatch the set request.
  * @returns Result from the kernel enablement RPC.
  */
 export function persistPluginEnabled(
+  call: CallContext,
   pluginName: string,
   enabled: boolean,
   bus: IMakaioBus,
 ): Promise<PersistPluginEnabledResult> {
-  return bus.request(ExtensionSubjects.setEnabled, { name: pluginName, enabled });
+  return bus.request(call, ExtensionSubjects.setEnabled, { name: pluginName, enabled });
+}
+
+/**
+ * Persist one plugin's enabled state, isolating both a transport failure and
+ * a `'rejected'` outcome so a caller iterating many plugins never lets one
+ * failure abandon the rest of its batch.
+ * @param call - Call context of the operation persisting the plugin state.
+ * @param pluginName - Registry name of the plugin.
+ * @param enabled - Desired enabled state.
+ * @param bus - Bus instance used to dispatch the request.
+ * @param context - Short label distinguishing an explicit choice from a derived default in logs.
+ */
+export async function persistPluginEnabledIsolated(
+  call: CallContext,
+  pluginName: string,
+  enabled: boolean,
+  bus: IMakaioBus,
+  context: string,
+): Promise<void> {
+  try {
+    const result = await persistPluginEnabled(call, pluginName, enabled, bus);
+    // 'rejected' is the only outcome where nothing was persisted; the durable
+    // 'restart-required' still honoured the operator's (or default's) choice.
+    if (result.outcome === 'rejected') {
+      console.error(
+        `[useOnboardingFlow] ${context} for ${pluginName} was rejected; the extension keeps its previous preference.`,
+      );
+    }
+  } catch (err) {
+    console.error(`[useOnboardingFlow] Failed to persist ${context.toLowerCase()} for ${pluginName}:`, err);
+  }
 }

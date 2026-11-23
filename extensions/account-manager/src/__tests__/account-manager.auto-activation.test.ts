@@ -9,6 +9,7 @@ import {
   type ProviderRuntimeSnapshot,
 } from '@makaio/services-core/adapter-subsystem';
 import { ProviderStorageSubjects } from '@makaio/services-core/settings/storage';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManager } from '../account-manager.js';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { RawCredential } from '../interfaces/credential-source.js';
@@ -173,7 +174,7 @@ describe('AccountManager auto-activation wiring', () => {
     await service.init();
 
     try {
-      await bus.emit(AccountManagerSubjects.usage.windowResetAvailable, {
+      await bus.emit(createTestCall(), AccountManagerSubjects.usage.windowResetAvailable, {
         clientId: CLIENT_ID,
         accountId: ACCOUNT_ID,
         windowId: '5h',

@@ -3,9 +3,7 @@
 // agents: collaborator wiring plus thin delegates for subclasses. That facade
 // role justifies exceeding the repo-wide max-lines default; substantial logic
 // belongs in the agent-* collaborator modules, not here.
-import type { IMakaioBus, OnOptions, ScopedBus } from '@makaio/bus-core';
-import { MakaioBus } from '@makaio/bus-core';
-import type { SetRequired } from 'type-fest';
+import type { EmitSubject, IMakaioBus, OnOptions, ScopedBus } from '@makaio/bus-core';
 import type {
   AgentContext,
   AgentIdentity,
@@ -29,6 +27,7 @@ import {
   type ConnectorEventHandlers,
 } from '../utils/createConnectorEventMapping.js';
 import type {
+  CallContext,
   ExtractSubjectPayload,
   HandlerForSubjectDefinition,
   RequestContext,
@@ -52,11 +51,7 @@ import { AIAgentConnector } from '../connector/index.js';
 import { MessageLifecycleTracker } from './message-lifecycle-tracker.js';
 import { ToolCallTracker, type ResolveHints } from './tool-call-tracker.js';
 import type { ToolOutputResult } from './agent-event-bridge.js';
-import {
-  buildConfigFactoryInput,
-  extractErrorCategory,
-  resolveSupportedReasoningLevels,
-} from './agent-config-input.js';
+import { buildConfigFactoryInput, resolveSupportedReasoningLevels } from './agent-config-input.js';
 import type { AgentConnectorConfigOverrides } from './types.js';
 import { createStructuredOutputTerminalTransform } from './agent-structured-output-retry.js';
 import type { AIModel } from '../types/ai-model.js';
@@ -67,7 +62,7 @@ import { AgentRuntimeMutationManager } from './agent-runtime-mutation-manager.js
 import { AgentConnectorLifecycleManager, type ConnectorSwapCommitGuard } from './agent-connector-lifecycle-manager.js';
 import { registerAgentBusHandlers } from './agent-bus-handler-registrar.js';
 import { AgentPayloadEmitter } from './agent-payload-emitter.js';
-import { AgentLifecycleEmitter } from './agent-lifecycle-emitter.js';
+import { AgentLifecycleEmitter, buildCompletionPayload } from './agent-lifecycle-emitter.js';
 import {
   createAgentConnectorLifecycleManager,
   createAgentConnectorSwapCoordinator,
@@ -151,8 +146,8 @@ export abstract class AIAgent<
    * every first-start path sets the mode before the connector fires.
    */
   private pendingStartMode: StartMode | undefined;
-  /** Normalized config with defaults applied */
-  protected readonly config: SetRequired<AIAgentConfig<TBus, TConnector>, 'globalBus'>;
+  /** Agent configuration, as supplied by the host. */
+  protected readonly config: AIAgentConfig<TBus, TConnector>;
   /** Available models for context window lookup */
   protected readonly availableModels?: AIModel[];
   /**
@@ -162,7 +157,7 @@ export abstract class AIAgent<
    * @param config - Agent configuration
    */
   public constructor(config: AIAgentConfig<TBus, TConnector>) {
-    this.config = { ...config, globalBus: config.globalBus ?? MakaioBus };
+    this.config = config;
     this.availableModels = config.availableModels;
     this.adapterSessionTracker = new ConfirmedAdapterSessionTracker(this.globalBus, this.config);
     this.payloadEmitter = createAgentEmissionWiring({
@@ -204,9 +199,9 @@ export abstract class AIAgent<
       shouldUseNativeResume: this.shouldUseNativeResume.bind(this),
       hasResumeTarget: () => this.config.resumeAdapterSessionId !== undefined,
       setPendingStartMode: this.setPendingStartMode.bind(this),
-      onNativeResumeSuppressed: () => this.adapterSessionTracker.recordUnconfirmedMove(),
+      onNativeResumeSuppressed: (call) => this.adapterSessionTracker.recordUnconfirmedMove(call),
       onMessageHandle: this.onMessageHandle.bind(this),
-      runDispatch: (dispatch) => this.runtimeMutationManager.runTurnDispatch(dispatch),
+      runDispatch: (call, dispatch) => this.runtimeMutationManager.runTurnDispatch(call, dispatch),
       ephemeral: this.config.ephemeral,
     });
     this.runtimeMutationManager = createAgentRuntimeMutationManager({
@@ -248,6 +243,7 @@ export abstract class AIAgent<
   ): AgentConnectorLifecycleManager<TBus, TConnector> {
     return createAgentConnectorLifecycleManager<TBus, TConnector>({
       agentId: this.agentId,
+      globalBus: this.globalBus,
       buildConfigInput: this.buildConfigInput.bind(this),
       configFactory: this.config.configFactory,
       connectorFactory: this.config.connectorFactory,
@@ -266,12 +262,8 @@ export abstract class AIAgent<
         this.connector = runtime.connector;
       },
       getRuntimeSystemPrompt: () => this.runtimeSystemPrompt,
-      // Bound, never re-wrapped: an inline wrapper is checked against
-      // `AdapterSessionPublicationSink`, which a one-parameter arrow still
-      // satisfies — and it would drop `settledByCaller` silently, putting the
-      // movement observer back on a caller-settled swap.
       setLastKnownAdapterSessionId: this.adapterSessionTracker.record.bind(this.adapterSessionTracker),
-      announceAdapterSessionMoved: () => this.adapterSessionTracker.recordUnconfirmedMove(),
+      announceAdapterSessionMoved: (call) => this.adapterSessionTracker.recordUnconfirmedMove(call),
     });
   }
 
@@ -304,7 +296,7 @@ export abstract class AIAgent<
   protected get adapterSessionId(): string | undefined {
     return this.config.adapterSessionId;
   }
-  /** @returns Global bus for cross-namespace communication (defaulted in constructor) */
+  /** @returns Global bus for cross-namespace communication (required by the agent config) */
   protected get globalBus(): IMakaioBus {
     return this.config.globalBus;
   }
@@ -314,9 +306,10 @@ export abstract class AIAgent<
    *
    * Creates the connector via the abstract createConnector() method
    * and sets up handlers for agent.* subjects with agentId filtering.
+   * @param call - Call context of the request that starts or initializes the agent
    * @throws Error if already initialized
    */
-  public async init(): Promise<void> {
+  public async init(call: CallContext): Promise<void> {
     if (this.initialized) {
       throw new Error(`AIAgent ${this.agentId} already initialized. init() can only be called once.`);
     }
@@ -329,10 +322,11 @@ export abstract class AIAgent<
 
     // Step 3: Materialize auth and create connector with explicit lease ownership.
     const connectorRuntime = await createConnectorRuntime({
+      call,
       config: fullConfig,
       connectorFactory: this.config.connectorFactory,
       onMessageSent: this.onMessageSent,
-      onAdapterSessionMoved: () => this.adapterSessionTracker.recordUnconfirmedMove(),
+      onAdapterSessionMoved: (movementCall) => this.adapterSessionTracker.recordUnconfirmedMove(movementCall),
       prepareAuthRuntime: this.config.prepareAuthRuntime,
     });
     this.connectorRuntime = connectorRuntime;
@@ -361,10 +355,10 @@ export abstract class AIAgent<
             nativeTools: this.nativeTools,
             model: this.connector?.model ?? this.confirmedModel ?? this.initialModel,
           }),
-          onCwdChange: (payload) => this.runtimeMutationManager.handleCwdChange(payload),
-          onModelChange: (payload) => this.runtimeMutationManager.handleModelChange(payload),
-          onMcpServersSet: (payload) => this.runtimeMutationManager.handleMcpServersSet(payload),
-          onCredentialChange: (payload) => this.runtimeMutationManager.handleCredentialChanged(payload),
+          onCwdChange: (call, payload) => this.runtimeMutationManager.handleCwdChange(call, payload),
+          onModelChange: (call, payload) => this.runtimeMutationManager.handleModelChange(call, payload),
+          onMcpServersSet: (call, payload) => this.runtimeMutationManager.handleMcpServersSet(call, payload),
+          onCredentialChange: (call, payload) => this.runtimeMutationManager.handleCredentialChanged(call, payload),
           onTurnStarted: (turnNumber) => this.connector.setCanonicalTurnNumber(turnNumber),
           onMcpToolsChanged: () => this.connector.markToolRefreshPending(),
         }),
@@ -377,7 +371,7 @@ export abstract class AIAgent<
     } catch (error) {
       const handlerCleanups = this.connectorLifecycleManager.detachWiring();
       this.connectorRuntime = undefined;
-      await rollbackAgentInitialization({
+      await rollbackAgentInitialization(call, {
         runtime: connectorRuntime,
         handlerCleanups,
         primaryError: error,
@@ -391,9 +385,11 @@ export abstract class AIAgent<
    *
    * Reads and clears {@link pendingStartMode}; subsequent calls within
    * the same dispatch fall back to `'rotation'`.
+   * @param call - Call context of the message that starts the agent
    * @param event - Optional additional fields to merge into the payload
    */
   protected async emitStart(
+    call: CallContext,
     event?: Omit<
       AgentStarted,
       'agentId' | 'adapterId' | 'adapterName' | 'adapterSessionId' | 'model' | 'cwd' | 'startMode'
@@ -402,7 +398,7 @@ export abstract class AIAgent<
     const startMode = this.pendingStartMode ?? 'rotation';
     this.pendingStartMode = undefined;
     this.currentBlockIndex = 0;
-    await this.lifecycleEmitter.emitStart({
+    await this.lifecycleEmitter.emitStart(call, {
       model: this.connector.model,
       cwd: this.connector.cwd,
       startMode,
@@ -422,47 +418,63 @@ export abstract class AIAgent<
     this.pendingStartMode = mode;
   }
 
-  protected async emitCompletion(result: Omit<z.infer<typeof AgentSchemas.complete>, keyof AgentContext>) {
-    await this.lifecycleEmitter.emitCompletion(result);
+  /**
+   * Emit the terminal completion event for one message.
+   * @param call - Call context of the message that completed
+   * @param result - Completion payload without AgentContext fields
+   */
+  protected async emitCompletion(
+    call: CallContext,
+    result: Omit<z.infer<typeof AgentSchemas.complete>, keyof AgentContext>,
+  ) {
+    await this.lifecycleEmitter.emitCompletion(call, result);
   }
 
   /**
    * Emit agent session closed event. Emits only once per session.
    * AIAdapter listens to cleanup agent and re-emit as AdapterSubjects.session.closed.
+   * @param call - Call context of the close or abort that ends the session
    * @param reason - Reason for session closure (e.g., 'aborted', 'closed')
    */
-  protected emitSessionClosed(reason?: string): void {
-    this.lifecycleEmitter.emitSessionClosed(reason);
+  protected emitSessionClosed(call: CallContext, reason?: string): void {
+    this.lifecycleEmitter.emitSessionClosed(call, reason);
   }
 
   /**
    * Enrich a payload with agent context fields.
+   * @param call - Call context used to record the observed provider session
    * @param payload - The base payload to enrich
    * @returns Payload with AgentContext fields and optional messageId added
    */
-  protected async enrichPayload<T extends object>(payload: T): Promise<T & AgentIdentity & { messageId?: string }> {
-    return this.payloadEmitter.enrichPayload(payload);
+  protected async enrichPayload<T extends object>(
+    call: CallContext,
+    payload: T,
+  ): Promise<T & AgentIdentity & { messageId?: string }> {
+    return this.payloadEmitter.enrichPayload(call, payload);
   }
 
   /**
    * Emit to a global subject with automatic payload enrichment.
+   * @param call - Call context the emission is made under
    * @param subject - The subject to emit to
    * @param payload - The payload (without AgentContext fields - they're added automatically)
    */
   protected async emitGlobal<S extends SubjectDefinition>(
-    subject: S,
+    call: CallContext,
+    subject: EmitSubject<S>,
     payload: Omit<ExtractSubjectPayload<S>, keyof AgentContext> & { messageId?: string },
   ): Promise<void> {
-    await this.payloadEmitter.emitGlobal(subject, payload);
+    await this.payloadEmitter.emitGlobal<S>(call, subject, payload);
   }
 
   /**
    * Track usage and emit to global bus.
    * AIAdapter aggregates session totals from per-call usage events.
+   * @param call - Call context of the message whose provider activity reports the usage
    * @param normalized - Normalized usage metrics from adapter-specific normalizer
    */
-  protected async trackUsage(normalized: NormalizedCallUsage): Promise<void> {
-    await this.eventBridge.trackUsage(normalized);
+  protected async trackUsage(call: CallContext, normalized: NormalizedCallUsage): Promise<void> {
+    await this.eventBridge.trackUsage(call, normalized);
   }
 
   /**
@@ -485,14 +497,16 @@ export abstract class AIAgent<
    *
    * Calculates fill percentage and warning level from raw metrics.
    * Called by subclasses after usage tracking with provider-specific metrics.
+   * @param call - Call context of the message whose provider activity reports the metrics
    * @param input - Raw metrics: currentTokens, maxTokens, optional cachedTokens
    */
-  protected async emitContextWindowUpdate(input: ContextWindowInput): Promise<void> {
-    await this.eventBridge.emitContextWindowUpdate(input);
+  protected async emitContextWindowUpdate(call: CallContext, input: ContextWindowInput): Promise<void> {
+    await this.eventBridge.emitContextWindowUpdate(call, input);
   }
 
   /**
    * Emit a tool.use event for an explicitly identified originating message.
+   * @param call - Call context of the message whose provider activity reports the tool call
    * @param messageId - Message that owns the tool call
    * @param toolName - Name of the tool being invoked
    * @param args - Tool arguments
@@ -500,47 +514,57 @@ export abstract class AIAgent<
    * @returns Correlation identifier used for the call
    */
   protected async emitToolUse(
+    call: CallContext,
     messageId: string,
     toolName: string,
     args?: Record<string, unknown>,
     nativeId?: string,
   ): Promise<string> {
-    return this.eventBridge.emitToolUse(messageId, toolName, args, nativeId);
+    return this.eventBridge.emitToolUse(call, messageId, toolName, args, nativeId);
   }
   /**
    * Emit a tool.output event for an explicitly identified originating message.
+   * @param call - Call context of the message whose provider activity reports the tool output
    * @param messageId - Message that owns the tool call
    * @param output - Tool output content
    * @param hints - Provider correlation hints
    * @returns Resolved tool-call metadata
    */
-  protected async emitToolOutput(messageId: string, output: string, hints: ResolveHints): Promise<ToolOutputResult> {
-    return this.eventBridge.emitToolOutput(messageId, output, hints);
+  protected async emitToolOutput(
+    call: CallContext,
+    messageId: string,
+    output: string,
+    hints: ResolveHints,
+  ): Promise<ToolOutputResult> {
+    return this.eventBridge.emitToolOutput(call, messageId, output, hints);
   }
 
   /**
    * Emit step.started event with automatic block index management.
    * Call this when a content block begins processing.
+   * @param call - Call context of the message whose provider activity starts the step
    * @param stepType - The type of step (text, reasoning, tool_use)
    * @param blockData - Optional metadata for the block (e.g., toolName for tool_use)
    * @param content - Optional content for the step (e.g., tool_call block for tool_use)
    */
   protected async emitStepStarted(
+    call: CallContext,
     stepType: StepType,
     blockData?: BlockData,
     content?: SessionMessageBlock,
   ): Promise<void> {
-    await this.eventBridge.emitStepStarted(stepType, blockData, content);
+    await this.eventBridge.emitStepStarted(call, stepType, blockData, content);
   }
 
   /**
    * Emit step.finished event with content and increment block index.
    * Call this when a content block completes processing.
+   * @param call - Call context of the message whose provider activity finishes the step
    * @param stepType - The type of step that finished
    * @param content - The complete content of the step (text, reasoning, tool_call, or tool_output)
    */
-  protected async emitStepFinished(stepType: StepType, content: SessionMessageBlock): Promise<void> {
-    await this.eventBridge.emitStepFinished(stepType, content);
+  protected async emitStepFinished(call: CallContext, stepType: StepType, content: SessionMessageBlock): Promise<void> {
+    await this.eventBridge.emitStepFinished(call, stepType, content);
   }
 
   /**
@@ -574,11 +598,11 @@ export abstract class AIAgent<
   ): Promise<void> {
     // Fire-and-forget status update: storage handlers may not be registered (optional enrichment).
     // Failures are intentionally ignored to avoid blocking message processing.
-    updateAgentActivityStatusBestEffort(this.globalBus, this.agentId, 'active');
+    updateAgentActivityStatusBestEffort(ctx.call, this.globalBus, this.agentId, 'active');
 
     this.lifecycleTracker.setCurrentTurnId(ctx.payload.turnId);
     try {
-      const result = await this.turnExecutor.executeSendMessage(ctx.payload);
+      const result = await this.turnExecutor.executeSendMessage(ctx.call, ctx.payload);
       ctx.setResult(result);
     } catch (error) {
       // On success, lifecycleTracker.complete() clears turnId when the handle finishes. This
@@ -597,7 +621,7 @@ export abstract class AIAgent<
     ctx: RequestContext<AgentInterruptRequestPayload, AgentInterruptResponsePayload>,
   ): Promise<void> {
     try {
-      await this.ensureConnector().interrupt();
+      await this.ensureConnector().interrupt(ctx.call);
       ctx.setResult({ success: true });
     } catch (error) {
       ctx.setResult({ success: false, reason: error instanceof Error ? error.message : String(error) });
@@ -636,6 +660,7 @@ export abstract class AIAgent<
    *
    * Preserves runtime overrides across sequential swaps by using current connector values
    * as baseline for non-overridden fields.
+   * @param call - Call context of the operation that triggers the swap
    * @param configOverrides - Optional config overrides (e.g., new cwd, model)
    * @param beforeCommit - Optional guard executed before replacing the active connector
    * @param settledByCaller - Whether the caller writes the replacement's durable
@@ -644,13 +669,14 @@ export abstract class AIAgent<
    * @throws Error if connector is currently processing a turn
    */
   public async swapConnector(
+    call: CallContext,
     configOverrides?: AgentConnectorConfigOverrides,
     beforeCommit?: ConnectorSwapCommitGuard,
     settledByCaller = false,
   ): Promise<void> {
     // Resume-decision publication happens inside the coordinator's serialized
     // swap transaction so queued swaps can never observe the stale target.
-    await this.connectorSwapCoordinator.swapConnector(configOverrides, beforeCommit, settledByCaller);
+    await this.connectorSwapCoordinator.swapConnector(call, configOverrides, beforeCommit, settledByCaller);
   }
 
   /**
@@ -718,18 +744,21 @@ export abstract class AIAgent<
    * runtime that was superseded unobserved cannot be answered for as if it had
    * never existed.
    * @param options - Cleanup options; ephemeral agents suppress session-close lifecycle events because they never join a session.
+   *   `call` is the call of the request that drives the teardown; without one, the close is an independent
+   *   lifecycle boundary and emits under the carrier's `stop` context.
    * @returns What this agent observed about the end of its resources
    */
-  public async close(options: { emitSessionClosed?: boolean } = {}): Promise<TeardownReport> {
+  public async close(options: { emitSessionClosed?: boolean; call?: CallContext } = {}): Promise<TeardownReport> {
+    const call = options.call ?? this.globalBus.own('stop');
     if (options.emitSessionClosed ?? true) {
-      this.emitSessionClosed('closed');
+      this.emitSessionClosed(call, 'closed');
     }
 
     this.connectorLifecycleManager.releaseWiring();
 
     const runtime = this.detachConnectorRuntime();
     const report: TeardownReport =
-      runtime === undefined ? { evidence: 'released' } : await closeConnectorRuntime(runtime);
+      runtime === undefined ? { evidence: 'released' } : await closeConnectorRuntime(call, runtime);
     return this.closeReportLedger.capReport(report);
   }
 
@@ -820,39 +849,42 @@ export abstract class AIAgent<
    * Ensures the agent is initialized (idempotent), runs PreUserMessage hooks,
    * and uses sessionContext signals to decide between native resume and fresh
    * with history. HookAbortError propagates to caller.
+   * @param call - Call context of the request that starts the agent
    * @param message - User message (normalized or unnormalized)
    * @param options - Optional start options (e.g., delivery mode, sessionContext)
    * @returns Session ID, agent ID, and message handle for tracking
    */
   public async start(
+    call: CallContext,
     message: NormalizedMessageInput | MessageInput,
     options?: StartAgentOptions,
   ): Promise<AgentStartResult> {
     if (!this.initialized) {
-      await this.init();
+      await this.init(call);
     }
 
     // Capture systemPrompt for reuse across connector swaps
     if (options?.systemPrompt !== undefined && this.runtimeSystemPrompt === undefined) {
       this.runtimeSystemPrompt = options.systemPrompt;
     }
-    return this.turnExecutor.executeStart(message, options, this.runtimeSystemPrompt, options?.responseSchema);
+    return this.turnExecutor.executeStart(call, message, options, this.runtimeSystemPrompt, options?.responseSchema);
   }
 
   /**
    * Initialize idle (no message). Returns confirmed adapter session ID or `undefined`
    * when the provider has not yet confirmed (idle fork sessions).
+   * @param call - Call context of the request that initializes the agent
    * @param options - Optional initialization options (system prompt, sessionContext)
    * @returns Confirmed adapter session ID, or `undefined` for unconfirmed fork sessions.
    */
-  public async initialize(options?: StartAgentOptions): Promise<string | undefined> {
+  public async initialize(call: CallContext, options?: StartAgentOptions): Promise<string | undefined> {
     if (options?.systemPrompt !== undefined && this.runtimeSystemPrompt === undefined) {
       this.runtimeSystemPrompt = options.systemPrompt;
     }
     // Capture fork directive before init() consumes it (one-shot invariant).
     const preInitNativeFork = this.config.nativeFork;
     if (!this.initialized) {
-      await this.init();
+      await this.init(call);
     }
     // Derive start mode so emitStart() carries the correct mode.
     const sessionContext = options?.sessionContext;
@@ -869,7 +901,7 @@ export abstract class AIAgent<
     this.setPendingStartMode(initMode);
 
     const connector = this.ensureConnector();
-    await connector.initialize(options);
+    await connector.initialize({ ...options, call });
     return connector.getConfirmedAdapterSessionId();
   }
 
@@ -891,20 +923,7 @@ export abstract class AIAgent<
     this.lifecycleTracker.track(
       messageHandle,
       (messageId, result, turnId) => {
-        const error = result.error;
-        const errorStr = error instanceof Error ? error.message : error;
-        const errorCategory = error instanceof Error ? extractErrorCategory(error) : undefined;
-        void this.emitCompletion({
-          message: result.result?.message,
-          messageId,
-          ...(turnId !== undefined && { turnId }),
-          outcome: result.outcome,
-          ...(errorStr && { error: errorStr }),
-          ...(errorCategory && { errorCategory }),
-          ...(result.structuredOutputValidation !== undefined
-            ? { structuredOutputValidation: result.structuredOutputValidation }
-            : {}),
-        });
+        void this.emitCompletion(messageHandle.call, buildCompletionPayload(messageId, result, turnId));
       },
       transformTerminal,
       { turnId },
@@ -921,19 +940,21 @@ export abstract class AIAgent<
    * @throws Error if connector is not initialized
    */
   public abort(): void {
-    this.emitSessionClosed('aborted');
-    this.ensureConnector().abort();
+    const call = this.globalBus.own('stop');
+    this.emitSessionClosed(call, 'aborted');
+    this.ensureConnector().abort(call);
   }
 
   /**
    * Get session ID, waiting for provider to generate it if not yet available.
    *
-   * Delegates to the underlying connector's getSessionId method.
+   * Delegates to the underlying connector's getAdapterSessionId method.
+   * @param call - Call of the operation that needs the session ID
    * @returns Session ID from provider
    * @throws Error if connector is not initialized
    */
-  public async getAdapterSessionId(): Promise<string> {
-    return this.ensureConnector().getAdapterSessionId();
+  public async getAdapterSessionId(call: CallContext): Promise<string> {
+    return this.ensureConnector().getAdapterSessionId(call);
   }
 
   /**
@@ -956,12 +977,13 @@ export abstract class AIAgent<
    * choice explicit at every call site rather than letting a future producer
    * pick the announcing variant by not knowing there is another — see
    * {@link ConfirmedAdapterSessionTracker.recordCallerSettled}.
+   * @param call - Call of the start or rehydrate message that confirmed the session; the announcement is sent with it
    * @param adapterSessionId - Provider session ID this generation is current on
    * @param settledByCaller - Whether the caller writes this movement's currency itself
    * @returns Promise resolving once the announcement attempt completed
    */
-  public async recordConfirmedAdapterSession(adapterSessionId: string, settledByCaller = false): Promise<void> {
-    await this.adapterSessionTracker.record(adapterSessionId, settledByCaller);
+  public async recordConfirmedAdapterSession(call: CallContext, adapterSessionId: string, settledByCaller = false) {
+    await this.adapterSessionTracker.record(call, adapterSessionId, settledByCaller);
   }
 
   /**

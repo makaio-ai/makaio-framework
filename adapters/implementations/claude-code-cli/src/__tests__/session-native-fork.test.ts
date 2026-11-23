@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { MessageHandle, UserMessageQueue } from '@makaio/ai-adapters-core';
 import { McpSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import type { SDKMessage } from '@makaio/client-claude-code';
 import type { CliStdioTransport } from '../utils/createStdioTransport.js';
 
@@ -76,6 +77,7 @@ import { ClaudeCliSession } from '../session.js';
  */
 function makeHandle(): MessageHandle {
   return new MessageHandle(
+    createTestCall(),
     'message-native-fork',
     {
       role: 'user',
@@ -104,7 +106,7 @@ describe('ClaudeCliSession native fork validation', () => {
     MakaioBus.on(McpSubjects.session.register, registerHandler);
 
     const session = new ClaudeCliSession({
-      bus: await ClaudeCodeCliConnectorNamespace.scopedBus(),
+      bus: await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus),
       adapterId: 'adapter-test',
       adapterName: 'claude-code-cli',
       agentId: 'agent-test',
@@ -133,7 +135,7 @@ describe('ClaudeCliSession native fork validation', () => {
     const sourceAdapterSessionId = 'provider-source';
 
     const session = new ClaudeCliSession({
-      bus: await ClaudeCodeCliConnectorNamespace.scopedBus(),
+      bus: await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus),
       adapterId: 'adapter-test',
       adapterName: 'claude-code-cli',
       agentId: 'agent-test',
@@ -203,6 +205,7 @@ describe('ClaudeCliSession native fork validation', () => {
       // resumeId === undefined would re-fork the source instead of
       // resuming the confirmed child.
       const handle2 = new MessageHandle(
+        createTestCall(),
         'message-follow-up',
         {
           role: 'user',

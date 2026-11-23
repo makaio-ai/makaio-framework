@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import os from 'node:os';
 import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
 import { createMockScopedBus } from '@makaio/test-utils';
 import { createAdapterNamespace } from '../../factory/create-adapter-namespace.js';
 import {
@@ -17,7 +18,7 @@ import {
 const OWNER_INSTANCE_ID = 'scoped-bus-test-owner';
 
 describe('AIAdapter scoped bus context', () => {
-  it('creates adapterBus from injected globalBus context when no scopedBus is provided', async () => {
+  it('creates adapterBus from injected globalBus when no scopedBus is provided', async () => {
     const hostBus = createBusInstance();
     const namespace = createAdapterNamespace('scoped-bus-ctx-test', {});
     const { bus: mockScopedBus } = createMockScopedBus();
@@ -39,6 +40,7 @@ describe('AIAdapter scoped bus context', () => {
       agentFactory: (config: AIAgentConfig<TestBus, MockConnector>) => new TestAgent(config),
       configFactory: async (input: ConfigFactoryInput<TestBus>) => ({
         bus: mockScopedBus,
+        globalBus: input.globalBus,
         agentId: input.agentId ?? 'test-agent',
         adapterId: input.adapterId ?? 'test-adapter-id',
         adapterName: 'scoped-bus-ctx-test',
@@ -51,7 +53,7 @@ describe('AIAdapter scoped bus context', () => {
 
     await adapter.init();
 
-    expect(scopedBusSpy).toHaveBeenCalledWith(hostBus.getContext());
+    expect(scopedBusSpy).toHaveBeenCalledWith(hostBus);
   });
 
   it('registers adapter namespace schemas on the injected globalBus before creating the scoped bus', async () => {
@@ -72,7 +74,8 @@ describe('AIAdapter scoped bus context', () => {
       globalBus: hostBus,
       agentFactory: (config: AIAgentConfig<TestBus, MockConnector>) => new TestAgent(config),
       configFactory: async (input: ConfigFactoryInput<TestBus>) => ({
-        bus: await namespace.scopedBus(hostBus.getContext()),
+        bus: await namespace.scopedBus(hostBus),
+        globalBus: input.globalBus,
         agentId: input.agentId ?? 'test-agent',
         adapterId: input.adapterId ?? 'test-adapter-id',
         adapterName: 'scoped-bus-host-registration-test',
@@ -87,7 +90,7 @@ describe('AIAdapter scoped bus context', () => {
 
     expect(hostBus.getSchema(namespace.subjects.chunk)).toBeDefined();
     expect(
-      hostBus.getContext().namespaceRegistry.getValidationConfig('scoped-bus-host-registration-test.chunk').mode,
+      busContextOf(hostBus).namespaceRegistry.getValidationConfig('scoped-bus-host-registration-test.chunk').mode,
     ).toBe('skip');
   });
 
@@ -118,6 +121,7 @@ describe('AIAdapter scoped bus context', () => {
       },
       configFactory: async (input: ConfigFactoryInput<TestBus>) => ({
         bus: mockScopedBus,
+        globalBus: input.globalBus,
         agentId: input.agentId ?? 'test-agent',
         adapterId: input.adapterId ?? 'test-adapter-id',
         adapterName: 'agent-bus-ctx-test',

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import {
   createTestableAgent,
   createAgentTestLifecycle,
@@ -28,7 +29,7 @@ describe('AIAgent CWD change handler', () => {
       initialModel: 'test-model',
       initialCwd: '/test/cwd1',
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
 
     const initialConnector = ctx.createdConnectors[0];
     expect(initialConnector.cwd).toBe('/test/cwd1');
@@ -65,7 +66,7 @@ describe('AIAgent CWD change handler', () => {
       initialModel: 'test-model',
       initialCwd: '/test/cwd1',
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     persistenceCleanup();
     persistenceCleanup = () => undefined;
 
@@ -89,7 +90,7 @@ describe('AIAgent CWD change handler', () => {
       initialModel: 'test-model',
       initialCwd: '/test/cwd1',
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
 
     // Set connector to processing state
     ctx.agent.currentConnector.setProcessingState('processing_started');
@@ -115,7 +116,7 @@ describe('AIAgent CWD change handler', () => {
       initialModel: 'test-model',
       initialCwd: '/test/cwd1',
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
 
     const initialConnector = ctx.createdConnectors[0];
 

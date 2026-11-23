@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   type IWorkflowRunner,
   type StationHandler,
@@ -72,10 +73,12 @@ describe('workflow public state subjects', () => {
         initial: { count: 0 },
       },
     };
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow });
 
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
-    await expect(MakaioBus.request(WorkflowSubjects.state.get, { executionId })).resolves.toEqual({
+    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
+      workflowId: workflow.id,
+    });
+    await expect(MakaioBus.request(createTestCall(), WorkflowSubjects.state.get, { executionId })).resolves.toEqual({
       executionId,
       sequence: 0,
       value: { count: 0 },
@@ -88,7 +91,7 @@ describe('workflow public state subjects', () => {
 
     try {
       await expect(
-        MakaioBus.request(WorkflowSubjects.state.patch, {
+        MakaioBus.request(createTestCall(), WorkflowSubjects.state.patch, {
           executionId,
           expectedSequence: 0,
           patch: [],
@@ -130,10 +133,10 @@ describe('workflow public state subjects', () => {
         initial: { count: 'invalid' },
       },
     };
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow: invalidInitialWorkflow });
-    await expect(MakaioBus.request(WorkflowSubjects.start, { workflowId: invalidInitialWorkflow.id })).rejects.toThrow(
-      'initial state does not match workflow state schema',
-    );
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow: invalidInitialWorkflow });
+    await expect(
+      MakaioBus.request(createTestCall(), WorkflowSubjects.start, { workflowId: invalidInitialWorkflow.id }),
+    ).rejects.toThrow('initial state does not match workflow state schema');
 
     const workflow = {
       ...createWorkflowDefinition({
@@ -151,11 +154,13 @@ describe('workflow public state subjects', () => {
         initial: { count: 0 },
       },
     };
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow });
+    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
+      workflowId: workflow.id,
+    });
 
     await expect(
-      MakaioBus.request(WorkflowSubjects.state.patch, {
+      MakaioBus.request(createTestCall(), WorkflowSubjects.state.patch, {
         executionId,
         expectedSequence: 0,
         patch: [{ op: 'replace', path: '/count', value: 'invalid' }],
@@ -180,14 +185,16 @@ describe('workflow public state subjects', () => {
         initial: null,
       },
     };
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow });
 
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
-    const { state } = await MakaioBus.request(WorkflowStorageSubjects.getState, { executionId });
+    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
+      workflowId: workflow.id,
+    });
+    const { state } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getState, { executionId });
 
     expect(state).toEqual({ executionId, sequence: 0, value: null });
     await expect(
-      MakaioBus.request(WorkflowSubjects.state.patch, {
+      MakaioBus.request(createTestCall(), WorkflowSubjects.state.patch, {
         executionId,
         expectedSequence: 0,
         patch: [],
@@ -218,12 +225,14 @@ describe('workflow public state subjects', () => {
         initial: { count: 0 },
       },
     };
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow });
 
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: workflow.id });
+    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
+      workflowId: workflow.id,
+    });
 
     await expect(
-      MakaioBus.request(WorkflowSubjects.state.patch, {
+      MakaioBus.request(createTestCall(), WorkflowSubjects.state.patch, {
         executionId,
         expectedSequence: 0,
         patch: [{ op: 'replace', path: '/count', value: 1 }],
@@ -272,14 +281,16 @@ describe('workflow public state subjects', () => {
         initial: { count: 0 },
       },
     };
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow: firstWorkflow });
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow: secondWorkflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow: firstWorkflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow: secondWorkflow });
 
-    await MakaioBus.request(WorkflowSubjects.start, { workflowId: firstWorkflow.id });
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: secondWorkflow.id });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.start, { workflowId: firstWorkflow.id });
+    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
+      workflowId: secondWorkflow.id,
+    });
 
     await expect(
-      MakaioBus.request(WorkflowSubjects.state.patch, {
+      MakaioBus.request(createTestCall(), WorkflowSubjects.state.patch, {
         executionId,
         expectedSequence: 0,
         patch: [{ op: 'replace', path: '/count', value: 1 }],
@@ -321,8 +332,9 @@ describe('workflow public state subjects', () => {
       return { ok: true };
     };
     const workflowRunner: IWorkflowRunner = {
-      async run(config, signal): Promise<WorkflowRunnerCompletion> {
+      async run(call, config, signal): Promise<WorkflowRunnerCompletion> {
         const result = await runWorkflowOrchestrator({
+          call,
           config,
           loaded: {
             definition: workflow,
@@ -343,13 +355,15 @@ describe('workflow public state subjects', () => {
         resolve(ctx.payload.executionId);
       });
     });
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.runFile, {
+    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.runFile, {
       filePath: '/workspace/workflows/file-state.ts',
     });
     await expect(completedPromise).resolves.toBe(executionId);
 
-    const { state } = await MakaioBus.request(WorkflowStorageSubjects.getState, { executionId });
-    const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    const { state } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getState, { executionId });
+    const { runContext } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getRunContext, {
+      executionId,
+    });
 
     expect(observedState).toEqual({ count: 0 });
     expect(state).toEqual({ executionId, sequence: 0, value: { count: 0 } });
@@ -408,8 +422,9 @@ describe('workflow public state subjects', () => {
       return { ok: true };
     };
     const workflowRunner: IWorkflowRunner = {
-      async run(config, signal): Promise<WorkflowRunnerCompletion> {
+      async run(call, config, signal): Promise<WorkflowRunnerCompletion> {
         const result = await runWorkflowOrchestrator({
+          call,
           config,
           loaded: {
             definition: loadedWorkflow,
@@ -423,7 +438,7 @@ describe('workflow public state subjects', () => {
     };
     setup = await setupWorkflowExecutorTest({ workflowRunner });
     registerWorkspaceSnapshotResolver(setup, 'path-state-workspace', '.makaio/workflows/path-state.ts');
-    await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow: storedWorkflow });
+    await MakaioBus.request(createTestCall(), WorkflowSubjects.setDefinition, { workflow: storedWorkflow });
 
     const completedPromise = new Promise<string>((resolve) => {
       const unsubscribe = MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
@@ -431,11 +446,15 @@ describe('workflow public state subjects', () => {
         resolve(ctx.payload.executionId);
       });
     });
-    const { executionId } = await MakaioBus.request(WorkflowSubjects.start, { workflowId: storedWorkflow.id });
+    const { executionId } = await MakaioBus.request(createTestCall(), WorkflowSubjects.start, {
+      workflowId: storedWorkflow.id,
+    });
     await expect(completedPromise).resolves.toBe(executionId);
 
-    const { state } = await MakaioBus.request(WorkflowStorageSubjects.getState, { executionId });
-    const { runContext } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
+    const { state } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getState, { executionId });
+    const { runContext } = await MakaioBus.request(createTestCall(), WorkflowStorageSubjects.getRunContext, {
+      executionId,
+    });
 
     expect(observedState).toEqual({ count: 7 });
     expect(state).toEqual({ executionId, sequence: 0, value: { count: 7 } });

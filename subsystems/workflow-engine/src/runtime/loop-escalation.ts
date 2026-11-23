@@ -1,8 +1,8 @@
 import { NoHandlerError } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { resolveTemplate } from '@makaio/expression';
 import type { JsonValue, LoopGateOutcome, WorkflowGateInstance, WorkflowLoopNode } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
-import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import type { NodeOutcome } from './node-execution.js';
 import {
   buildRuntimeExpressionScope,
@@ -15,122 +15,17 @@ import {
   validateGateResumeDataForSchema,
 } from './gate-resume-validation.js';
 import { buildLoopOutput } from './loop-node.js';
-import { buildDeferred, type Deferred } from './deferred.js';
+import { buildDeferred } from './deferred.js';
+import {
+  emitGateResolved,
+  emitGateSuspended,
+  loadPersistedEscalationGate,
+  upsertGateInstance,
+  type EscalationGateResponse,
+  type EscalationResponderOptions,
+} from './escalation-gate.js';
 import { raceDeferredResponse } from './deferred-race.js';
-
-// -----------------------------------------------------------------
-// Internal types
-// -----------------------------------------------------------------
-
-/** User response payload shape for escalation gate responses. */
-interface EscalationGateResponse {
-  readonly action: 'approve' | 'reject';
-  readonly resumeData: JsonValue;
-  readonly reason?: string;
-}
-
-/** Parameters for registering the in-process escalation response handler. */
-interface EscalationResponderOptions {
-  readonly node: WorkflowLoopNode;
-  readonly ctx: RuntimeContext;
-  readonly parentFrameId: string;
-  readonly validator: Parameters<typeof validateGateResumeData>[0];
-  readonly pending: { value: boolean };
-  readonly deferred: Deferred<EscalationGateResponse>;
-}
-
-/** Resume payload produced when a loop escalation timeout auto-approves. */
-const AUTO_APPROVE_TIMEOUT_RESUME_DATA = { action: 'approve', source: 'timeout' } as const satisfies JsonValue;
-
-// -----------------------------------------------------------------
-// Shared helpers
-// -----------------------------------------------------------------
-
-/**
- * Upsert a gate instance record via the storage bus.
- *
- * Mirrors the gate-node pattern: exit-based parking requires durable
- * persistence; in-process tests downgrade errors to warnings.
- * @param ctx - Runtime context providing the bus.
- * @param gate - Gate instance to upsert.
- * @param required - Whether storage failure should throw.
- */
-async function upsertGateInstance(ctx: RuntimeContext, gate: WorkflowGateInstance, required: boolean): Promise<void> {
-  try {
-    if (required) {
-      await ctx.bus.request(WorkflowStorageSubjects.setGateInstance, { gate });
-    } else {
-      await ctx.bus.requestOptional(WorkflowStorageSubjects.setGateInstance, { gate });
-    }
-  } catch (error) {
-    if (required) throw error;
-    console.warn(`[LoopNode] Failed to upsert escalation gate for '${gate.nodeId}':`, error);
-  }
-}
-
-/**
- * Emit the gate-suspended event for a loop escalation gate.
- * @param ctx - Runtime context.
- * @param node - Loop node whose escalation gate is being opened.
- * @param frameId - Frame ID used as the gate frame identity.
- * @param schema - JSON Schema for the resume data payload.
- * @param prompt - Rendered escalation prompt.
- * @param openedAt - Epoch milliseconds when the gate opened.
- */
-async function emitGateSuspended(
-  ctx: RuntimeContext,
-  node: WorkflowLoopNode,
-  frameId: string,
-  schema: WorkflowGateInstance['schema'],
-  prompt: string,
-  openedAt: number,
-): Promise<void> {
-  try {
-    await ctx.bus.emit(WorkflowSubjects.gate.suspended, {
-      executionId: ctx.executionId,
-      ...(ctx.executionAttemptId !== undefined ? { executionAttemptId: ctx.executionAttemptId } : {}),
-      frameId,
-      nodeId: node.id,
-      schema,
-      prompt,
-      ...(node.gate.escalation?.title !== undefined && { title: node.gate.escalation.title }),
-      autoAction: node.gate.escalation?.autoAction ?? 'reject',
-      timeoutMs: node.gate.escalation?.timeoutMs ?? null,
-      openedAt,
-    });
-  } catch (emitError) {
-    console.error(`[LoopNode] gate.suspended emit failed for '${node.id}':`, emitError);
-  }
-}
-
-/**
- * Emit the gate-resolved lifecycle event for a loop escalation gate.
- * @param ctx - Runtime context.
- * @param nodeId - Loop node identifier.
- * @param frameId - Frame identifier.
- * @param resolution - Resolution metadata.
- */
-async function emitGateResolved(
-  ctx: RuntimeContext,
-  nodeId: string,
-  frameId: string,
-  resolution:
-    | { readonly action: 'approve' | 'reject'; readonly source: 'user'; readonly reason?: string }
-    | { readonly action: 'approve' | 'reject'; readonly source: 'timeout' }
-    | { readonly source: 'cancelled' },
-): Promise<void> {
-  try {
-    await ctx.bus.emit(WorkflowSubjects.gate.resolved, {
-      executionId: ctx.executionId,
-      stepId: nodeId,
-      stepType: 'gate',
-      frameId,
-      ...resolution,
-    });
-  } catch (error) {
-    console.error(`[LoopNode] gate.resolved emit failed for '${nodeId}':`, error);
-  }
-}
+import { AUTO_APPROVE_TIMEOUT_RESUME_DATA } from './gate-suspension.js';
 
 // -----------------------------------------------------------------
 // In-process gate suspension
@@ -178,7 +73,7 @@ function registerInProcessEscalationResponder(options: EscalationResponderOption
     }
     pending.value = false;
     respondCtx.setResult({ accepted: true });
-    deferred.resolve({ action, resumeData: resumeData as JsonValue, reason });
+    deferred.resolve({ action, resumeData: resumeData as JsonValue, reason, call: respondCtx.call });
   });
 }
 
@@ -187,6 +82,9 @@ function registerInProcessEscalationResponder(options: EscalationResponderOption
  *
  * Registers a one-shot respond handler, races the deferred response
  * against timeout and abort signals, and returns the terminal loop outcome.
+ * A user response settles with the call context of its `gate.respond` message;
+ * timeout and cancellation settle with the run's call.
+ * @param call - Call context of the message that drives this execution run.
  * @param node - Loop node with escalation config.
  * @param ctx - Runtime context.
  * @param parentFrameId - Loop container frame ID.
@@ -197,6 +95,7 @@ function registerInProcessEscalationResponder(options: EscalationResponderOption
  * @returns Terminal node outcome.
  */
 async function waitForInProcessResponse(
+  call: CallContext,
   node: WorkflowLoopNode,
   ctx: RuntimeContext,
   parentFrameId: string,
@@ -222,6 +121,7 @@ async function waitForInProcessResponse(
   });
 
   await emitGateSuspended(
+    call,
     ctx,
     node,
     parentFrameId,
@@ -234,6 +134,7 @@ async function waitForInProcessResponse(
     const waitResult = await raceDeferredResponse(deferred, pending, ctx.signal, gateInstance.timeoutMs);
     if (waitResult.status === 'timed-out') {
       return resolveExpiredEscalationGate(
+        call,
         ctx,
         node,
         parentFrameId,
@@ -246,6 +147,7 @@ async function waitForInProcessResponse(
     }
     if (waitResult.status === 'resolved') {
       return settleInProcessResponse(
+        waitResult.value.call,
         ctx,
         node.id,
         parentFrameId,
@@ -257,8 +159,8 @@ async function waitForInProcessResponse(
       );
     }
 
-    await upsertGateInstance(ctx, { ...gateInstance, status: 'cancelled', resolvedAt: Date.now() }, false);
-    await emitGateResolved(ctx, node.id, parentFrameId, { source: 'cancelled' });
+    await upsertGateInstance(call, ctx, { ...gateInstance, status: 'cancelled', resolvedAt: Date.now() }, false);
+    await emitGateResolved(call, ctx, node.id, parentFrameId, { source: 'cancelled' });
     return { status: 'cancelled' };
   } finally {
     unsubRespond();
@@ -268,6 +170,7 @@ async function waitForInProcessResponse(
 /**
  * Persist the resolved gate state and emit lifecycle events after an
  * in-process escalation gate response.
+ * @param call - Call context of the `gate.respond` message that carried the response.
  * @param ctx - Runtime context.
  * @param nodeId - Loop node identifier.
  * @param frameId - Gate frame identifier.
@@ -279,6 +182,7 @@ async function waitForInProcessResponse(
  * @returns Terminal node outcome.
  */
 async function settleInProcessResponse(
+  call: CallContext,
   ctx: RuntimeContext,
   nodeId: string,
   frameId: string,
@@ -291,6 +195,7 @@ async function settleInProcessResponse(
   const resolvedAt = Date.now();
   const resolvedStatus = response.action === 'reject' ? 'rejected' : 'resumed';
   await upsertGateInstance(
+    call,
     ctx,
     {
       ...gateInstance,
@@ -303,13 +208,13 @@ async function settleInProcessResponse(
   );
 
   try {
-    await ctx.bus.emit(WorkflowSubjects.gate.resumed, {
+    await ctx.bus.emit(call, WorkflowSubjects.gate.resumed, {
       executionId: ctx.executionId,
       frameId,
       nodeId,
       resumeData: response.resumeData,
     });
-    await emitGateResolved(ctx, nodeId, frameId, {
+    await emitGateResolved(call, ctx, nodeId, frameId, {
       action: response.action,
       source: 'user',
       ...(response.reason !== undefined ? { reason: response.reason } : {}),
@@ -337,6 +242,7 @@ async function settleInProcessResponse(
  * - Exit-based: emits `gate.suspended` and returns `paused`
  * - In-process: registers a `gate.respond` handler, emits `gate.suspended`,
  *   and waits for the response, timeout, or cancellation
+ * @param call - Call context of the message that drives this execution run.
  * @param node - Loop node with escalation config.
  * @param ctx - Runtime context.
  * @param expressionCtx - Expression context for prompt rendering.
@@ -347,6 +253,7 @@ async function settleInProcessResponse(
  * @returns Terminal node outcome for the loop.
  */
 export async function openEscalationGate(
+  call: CallContext,
   node: WorkflowLoopNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
@@ -380,19 +287,20 @@ export async function openEscalationGate(
   };
 
   const requiresDurable = ctx.suspensionStrategy !== 'wait-in-process';
-  await upsertGateInstance(ctx, gateInstance, requiresDurable);
-  await ctx.updateFrame(parentFrameId, { status: 'waiting' }, { requireFrameStorage: requiresDurable });
+  await upsertGateInstance(call, ctx, gateInstance, requiresDurable);
+  await ctx.updateFrame(call, parentFrameId, { status: 'waiting' }, { requireFrameStorage: requiresDurable });
 
   if (requiresDurable) {
-    await emitGateSuspended(ctx, node, parentFrameId, schema, prompt, gateInstance.createdAt);
+    await emitGateSuspended(call, ctx, node, parentFrameId, schema, prompt, gateInstance.createdAt);
     return { status: 'paused', pausedAtGateId: node.id, pausedAtFrameId: parentFrameId };
   }
 
-  return waitForInProcessResponse(node, ctx, parentFrameId, gateInstance, gateOutcome, rounds, bodyOutputs);
+  return waitForInProcessResponse(call, node, ctx, parentFrameId, gateInstance, gateOutcome, rounds, bodyOutputs);
 }
 
 /**
  * Resolve an expired persisted loop escalation gate.
+ * @param call - Call context of the message that drives this execution run.
  * @param ctx - Runtime context.
  * @param node - Loop node with escalation config.
  * @param parentFrameId - Loop container frame ID used as the gate frame.
@@ -404,6 +312,7 @@ export async function openEscalationGate(
  * @returns Terminal outcome for the expired gate.
  */
 async function resolveExpiredEscalationGate(
+  call: CallContext,
   ctx: RuntimeContext,
   node: WorkflowLoopNode,
   parentFrameId: string,
@@ -417,59 +326,31 @@ async function resolveExpiredEscalationGate(
   if (persistedGate.autoAction === 'approve') {
     const validation = validateGateResumeDataForSchema(node.id, persistedGate.schema, AUTO_APPROVE_TIMEOUT_RESUME_DATA);
     if (!validation.valid) {
-      await upsertGateInstance(ctx, { ...persistedGate, status: 'timed-out', resolvedAt }, storageRequired);
-      await emitGateResolved(ctx, node.id, parentFrameId, { action: 'reject', source: 'timeout' });
+      await upsertGateInstance(call, ctx, { ...persistedGate, status: 'timed-out', resolvedAt }, storageRequired);
+      await emitGateResolved(call, ctx, node.id, parentFrameId, { action: 'reject', source: 'timeout' });
       return {
         status: 'failed',
         error: `Loop '${node.id}' escalation gate auto-approve timeout resume data does not match resumeSchema: ${validation.error}`,
       };
     }
     await upsertGateInstance(
+      call,
       ctx,
       { ...persistedGate, status: 'resumed', resumeData: AUTO_APPROVE_TIMEOUT_RESUME_DATA, resolvedAt },
       storageRequired,
     );
-    await emitGateResolved(ctx, node.id, parentFrameId, { action: 'approve', source: 'timeout' });
+    await emitGateResolved(call, ctx, node.id, parentFrameId, { action: 'approve', source: 'timeout' });
     return {
       status: 'completed',
       output: buildLoopOutput('escalate', rounds, gateOutcome, bodyOutputs, AUTO_APPROVE_TIMEOUT_RESUME_DATA),
     };
   }
-  await upsertGateInstance(ctx, { ...persistedGate, status: 'timed-out', resolvedAt }, storageRequired);
-  await emitGateResolved(ctx, node.id, parentFrameId, { action: 'reject', source: 'timeout' });
+  await upsertGateInstance(call, ctx, { ...persistedGate, status: 'timed-out', resolvedAt }, storageRequired);
+  await emitGateResolved(call, ctx, node.id, parentFrameId, { action: 'reject', source: 'timeout' });
   return {
     status: 'failed',
     error: `Loop '${node.id}' escalation gate timed out after ${String(persistedGate.timeoutMs)}ms and auto-rejected`,
   };
-}
-
-/**
- * Load a persisted escalation gate instance for exit-strategy resume paths.
- * @param ctx - Runtime context.
- * @param nodeId - Loop node identifier.
- * @param frameId - Frame ID for the gate instance.
- * @returns The persisted gate instance, or `null` when absent.
- */
-async function loadPersistedEscalationGate(
-  ctx: RuntimeContext,
-  nodeId: string,
-  frameId: string,
-): Promise<WorkflowGateInstance | null> {
-  if (ctx.suspensionStrategy !== 'wait-in-process') {
-    const result = await ctx.bus.request(WorkflowStorageSubjects.getGateInstance, {
-      executionId: ctx.executionId,
-      nodeId,
-      frameId,
-    });
-    return result.gate;
-  }
-
-  const result = await ctx.bus.requestOptional(WorkflowStorageSubjects.getGateInstance, {
-    executionId: ctx.executionId,
-    nodeId,
-    frameId,
-  });
-  return result.handled ? result.data.gate : null;
 }
 
 /**
@@ -479,6 +360,7 @@ async function loadPersistedEscalationGate(
  * - Resolved gate (`resumed`/`rejected`) with valid `resumeData`: complete.
  * - Still-waiting gate: return `paused` so the runner exits.
  * - Unresumable status: fail.
+ * @param call - Call context of the message that drives this execution run.
  * @param ctx - Runtime context.
  * @param node - Loop node with escalation config.
  * @param parentFrameId - Loop container frame ID used as the gate frame.
@@ -488,6 +370,7 @@ async function loadPersistedEscalationGate(
  * @returns Terminal outcome, or `undefined` when no persisted gate exists.
  */
 export async function resolvePersistedEscalationGate(
+  call: CallContext,
   ctx: RuntimeContext,
   node: WorkflowLoopNode,
   parentFrameId: string,
@@ -495,7 +378,7 @@ export async function resolvePersistedEscalationGate(
   rounds: number,
   bodyOutputs: readonly JsonValue[],
 ): Promise<NodeOutcome | undefined> {
-  const persistedGate = await loadPersistedEscalationGate(ctx, node.id, parentFrameId);
+  const persistedGate = await loadPersistedEscalationGate(call, ctx, node.id, parentFrameId);
   if (persistedGate === null) {
     return undefined;
   }
@@ -512,7 +395,7 @@ export async function resolvePersistedEscalationGate(
       };
     }
     try {
-      await ctx.bus.emit(WorkflowSubjects.gate.resumed, {
+      await ctx.bus.emit(call, WorkflowSubjects.gate.resumed, {
         executionId: ctx.executionId,
         frameId: parentFrameId,
         nodeId: node.id,
@@ -521,7 +404,7 @@ export async function resolvePersistedEscalationGate(
     } catch (emitError) {
       console.error(`[LoopNode] gate.resumed emit failed for '${node.id}':`, emitError);
     }
-    await emitGateResolved(ctx, node.id, parentFrameId, {
+    await emitGateResolved(call, ctx, node.id, parentFrameId, {
       action: persistedGate.status === 'rejected' ? 'reject' : 'approve',
       source: 'user',
       ...(persistedGate.reason !== undefined ? { reason: persistedGate.reason } : {}),
@@ -534,7 +417,16 @@ export async function resolvePersistedEscalationGate(
 
   if (persistedGate.status === 'waiting') {
     if (persistedGate.timeoutMs !== null && Date.now() >= persistedGate.createdAt + persistedGate.timeoutMs) {
-      return resolveExpiredEscalationGate(ctx, node, parentFrameId, persistedGate, gateOutcome, rounds, bodyOutputs);
+      return resolveExpiredEscalationGate(
+        call,
+        ctx,
+        node,
+        parentFrameId,
+        persistedGate,
+        gateOutcome,
+        rounds,
+        bodyOutputs,
+      );
     }
     return { status: 'paused', pausedAtGateId: node.id, pausedAtFrameId: parentFrameId };
   }

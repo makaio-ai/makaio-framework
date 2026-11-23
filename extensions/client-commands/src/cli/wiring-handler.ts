@@ -18,6 +18,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { ClientSubjects } from '@makaio/contracts/client';
 import { requireBus, type CommandContext } from '@makaio/kernel/cli';
 
@@ -57,6 +58,8 @@ export interface ClientWiringArgs {
 export interface ClientWiringCommandContext {
   /** Parsed CLI arguments. */
   readonly args: ClientWiringArgs;
+  /** Call context of the command invocation, forwarded to its bus requests. */
+  readonly call: CallContext;
   /** Bus façade used to dispatch the global wiring list request. */
   readonly bus: Pick<IMakaioBus, 'request'>;
   /** Output channel for writing results or errors. */
@@ -112,7 +115,7 @@ export async function handleClientWiring(ctx: CommandContext<ClientWiringArgs>):
  * Requests the global wiring list and formats the response as a grouped
  * table. When no client responds, prints a short "no wiring entries" message.
  * On bus failure, writes a diagnostic message and sets exit code 1.
- * @param ctx - Narrow command context (args + bus + output + setExitCode).
+ * @param ctx - Narrow command context (args + call + bus + output + setExitCode).
  * @param deps - Injectable side-effects; defaults to process-level resolution.
  */
 export async function runClientWiringCommand(
@@ -123,7 +126,7 @@ export async function runClientWiringCommand(
   const makaioCommand = deps.resolveMakaioCommand();
 
   try {
-    const result = await ctx.bus.request(ClientSubjects.wiring.list, {
+    const result = await ctx.bus.request(ctx.call, ClientSubjects.wiring.list, {
       clientId,
       projectDir,
       makaioCommand,

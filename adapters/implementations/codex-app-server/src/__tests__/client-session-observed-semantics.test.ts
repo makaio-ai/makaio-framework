@@ -14,6 +14,7 @@ import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, ClientSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { CodexAppServerAgent } from '../agent.js';
 import { CodexAppServerConfig } from '../config.js';
 import { CodexAppServerSubjects } from '../namespaces/index.js';
@@ -56,7 +57,7 @@ async function createAgentForContext(ctx: ConnectorTestContext, clientId = 'code
     // Return the already-created connector so the agent wires against it directly.
     connectorFactory: () => ctx.connector,
   });
-  await agent.init();
+  await agent.init(createTestCall());
   return agent;
 }
 
@@ -172,7 +173,7 @@ describe('CodexAppServerAgent — client.session.* observed-semantics', () => {
       const events = await collectClientSessionEvents(
         (onPayload) => MakaioBus.on(ClientSubjects.session.turn.started, (busCtx) => onPayload(busCtx.payload)),
         async () => {
-          await MakaioBus.emit(AgentSubjects.turn.started, {
+          await MakaioBus.emit(createTestCall(), AgentSubjects.turn.started, {
             agentId: 'test-agent',
             adapterId: 'test-adapter',
             adapterName: 'codex-app-server',
@@ -202,7 +203,7 @@ describe('CodexAppServerAgent — client.session.* observed-semantics', () => {
       // connector.start() blocks on thread/started; inject it after yielding so the
       // deferred promise and notification handlers are wired before injection.
       void agent
-        .start({ role: 'user', message: 'Hello', blocks: [{ type: 'text', content: 'Hello' }] }, {})
+        .start(createTestCall(), { role: 'user', message: 'Hello', blocks: [{ type: 'text', content: 'Hello' }] }, {})
         .catch(() => undefined);
 
       // Yield past initializeConnection() and startThread() setup
@@ -251,7 +252,7 @@ describe('CodexAppServerAgent — client.session.* observed-semantics', () => {
       });
 
       try {
-        const response = await MakaioBus.request(AgentSubjects.sendMessage, {
+        const response = await MakaioBus.request(createTestCall(), AgentSubjects.sendMessage, {
           agentId: 'test-agent',
           adapterId: 'test-adapter',
           message: 'Hello',
@@ -267,7 +268,7 @@ describe('CodexAppServerAgent — client.session.* observed-semantics', () => {
 
         // Thread lifecycle is internal state only. It must not race the tracked
         // message handle to emit an agent-level completion with synthetic identity.
-        await requireCtx().mockBus.emit(CodexAppServerSubjects.thread_completed, {
+        await requireCtx().mockBus.emit(createTestCall(), CodexAppServerSubjects.thread_completed, {
           agentId: 'test-agent',
           threadId: 'thread-123',
           timestamp: Date.now(),
@@ -304,7 +305,7 @@ describe('CodexAppServerAgent — client.session.* observed-semantics', () => {
         async () => {
           // Emit agent.user_message.sent with the agentId filter that
           // wireClientSessionTurnObservations subscribes to.
-          await MakaioBus.emit(AgentSubjects.user_message.sent, {
+          await MakaioBus.emit(createTestCall(), AgentSubjects.user_message.sent, {
             agentId: 'test-agent',
             adapterId: 'test-adapter',
             adapterName: 'codex-app-server',
@@ -335,7 +336,7 @@ describe('CodexAppServerAgent — client.session.* observed-semantics', () => {
       const events = await collectClientSessionEvents(
         (onPayload) => MakaioBus.on(ClientSubjects.session.userPrompt.submitted, (busCtx) => onPayload(busCtx.payload)),
         async () => {
-          await MakaioBus.emit(AgentSubjects.user_message.sent, {
+          await MakaioBus.emit(createTestCall(), AgentSubjects.user_message.sent, {
             agentId: 'test-agent',
             adapterId: 'test-adapter',
             adapterName: 'codex-app-server',

@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import { AdapterRuntimeSubjects } from '../adapter-runtime/namespace.js';
 
 /**
@@ -113,13 +114,14 @@ export class AdapterRegistry {
    * claims in come from two different identities and the key protects nothing.
    * Omitted, the resolver derives the runtime's own, which is what a caller with
    * no machine of its own to act for wants.
+   * @param call - Call context of the message requesting adapter resolution.
    * @param adapterName - Adapter type name (e.g., `'openai-node'`)
    * @param machineId - Machine to resolve the instance for; omit for the runtime's own.
    * @returns Adapter runtime identifier for bus routing.
    */
-  public async resolveAvailable(adapterName: string, machineId?: string): Promise<string> {
+  public async resolveAvailable(call: CallContext, adapterName: string, machineId?: string): Promise<string> {
     try {
-      const { adapterId } = await this.bus.request(AdapterRuntimeSubjects.resolveId, {
+      const { adapterId } = await this.bus.request(call, AdapterRuntimeSubjects.resolveId, {
         adapterName,
         ...(machineId !== undefined && { machineId }),
       });

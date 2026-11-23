@@ -18,7 +18,7 @@ export function useSwitchAccount(
     (clientId: string, accountId: string): void => {
       if (!bus) return;
       void bus
-        .request(AccountManagerSubjects.credentials.switch, { clientId, accountId })
+        .request(bus.own('root'), AccountManagerSubjects.credentials.switch, { clientId, accountId })
         .then((result) => {
           if (!result.success) {
             console.error(`${logPrefix} Failed to switch account:`, result.error ?? 'unknown error');

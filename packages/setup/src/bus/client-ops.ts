@@ -8,6 +8,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { ClientSubjects } from '@makaio/contracts/client';
 import type { SetupClientBinaryInventory } from '../types.js';
 
@@ -26,22 +27,24 @@ export interface ClientInventoryResult {
  *
  * Combines a `client.scan` for global PATH detection with a `client.list`
  * for managed inventory in a single logical operation.
+ * @param call - Call context for this operation.
  * @param bus - The bus instance.
  * @param targets - Client targets to scan (clientId + binaryName pairs).
  * @returns Combined global scan and managed inventory result.
  */
 export async function loadClientInventory(
+  call: CallContext,
   bus: IMakaioBus,
   targets: readonly { clientId: string; binaryName: string }[],
 ): Promise<ClientInventoryResult> {
   const [scanResponse, listResponse] = await Promise.all([
-    bus.request(ClientSubjects.scan, {
+    bus.request(call, ClientSubjects.scan, {
       targets: targets.map(({ clientId, binaryName }) => ({
         clientId,
         binaryName,
       })),
     }),
-    bus.request(ClientSubjects.list, {}),
+    bus.request(call, ClientSubjects.list, {}),
   ]);
 
   const globalResults = new Map<string, string | null>();
@@ -71,11 +74,13 @@ export async function loadClientInventory(
  *   `client.setActive` to promote the installed version.
  * - Otherwise: calls `client.update` and waits for the install job to complete
  *   via the `client.installJob.completed` event.
+ * @param call - Call context for this operation.
  * @param bus - The bus instance.
  * @param managedClients - Map of clientId to managed inventory.
  * @throws If a binary install job completes with status `'error'`.
  */
 export async function activateManagedPins(
+  call: CallContext,
   bus: IMakaioBus,
   managedClients: ReadonlyMap<string, SetupClientBinaryInventory>,
 ): Promise<void> {
@@ -87,7 +92,7 @@ export async function activateManagedPins(
 
     if (client.installedVersions.includes(client.pinnedVersion)) {
       // Pin is installed but not active — promote without reinstalling.
-      await bus.request(ClientSubjects.setActive, {
+      await bus.request(call, ClientSubjects.setActive, {
         clientId: client.clientId,
         version: client.pinnedVersion,
       });
@@ -95,7 +100,7 @@ export async function activateManagedPins(
     }
 
     // Pin is not installed — trigger an update job and wait for completion.
-    const updateResponse = await bus.request(ClientSubjects.update, {
+    const updateResponse = await bus.request(call, ClientSubjects.update, {
       clientId: client.clientId,
     });
 

@@ -37,7 +37,7 @@ export const createTestConfig = async (
   options?: CreateConformanceTestConfigOptions,
 ): Promise<ConformanceTestConfig<ClaudeCodeCliConnectorBus, ClaudeCliConnector, ClaudeCodeCliAgent>> => {
   const { scopedBus } = ClaudeCodeCliConnectorNamespace;
-  const bus = await scopedBus();
+  const bus = await scopedBus(MakaioBus);
   const testPreset = resolveConformanceTestPreset({
     adapterName: ClaudeCodeCliAdapterName,
     testProviderDefinitionId: testPresetId,

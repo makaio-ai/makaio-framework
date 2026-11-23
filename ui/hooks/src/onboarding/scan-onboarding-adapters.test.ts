@@ -15,6 +15,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { ClientSubjects } from '@makaio/contracts/client';
 import { ClientStorageSubjects } from '@makaio/services-core/settings/storage';
 import { SettingsSubjects } from '@makaio/services-core/settings/namespace';
+import { createTestCall } from '@makaio/test-utils';
 import {
   buildScanContext,
   scanOnboarding,
@@ -110,7 +111,7 @@ describe('buildScanContext()', () => {
       }),
     );
 
-    const ctx = await buildScanContext();
+    const ctx = await buildScanContext(createTestCall());
 
     expect(ctx).toEqual({
       scannedClients: [
@@ -167,7 +168,7 @@ describe('buildScanContext()', () => {
       }),
     );
 
-    await expect(buildScanContext()).resolves.toBeNull();
+    await expect(buildScanContext(createTestCall())).resolves.toBeNull();
 
     cleanups.forEach((fn) => fn());
   });
@@ -217,7 +218,7 @@ describe('scanOnboardingAdapters()', () => {
       }),
     );
 
-    const adapters = await scanOnboardingAdapters();
+    const adapters = await scanOnboardingAdapters(createTestCall());
 
     // Both adapters inherit the client's scan result.
     // buildAdapterResults preserves insertion order (no sort — adapter order
@@ -259,7 +260,7 @@ describe('scanOnboardingAdapters()', () => {
       }),
     );
 
-    await expect(scanOnboardingAdapters()).resolves.toEqual([]);
+    await expect(scanOnboardingAdapters(createTestCall())).resolves.toEqual([]);
 
     cleanups.forEach((fn) => fn());
   });
@@ -303,7 +304,7 @@ describe('scanOnboardingAdapters()', () => {
       }),
     );
 
-    await expect(scanOnboardingAdapters()).resolves.toEqual([]);
+    await expect(scanOnboardingAdapters(createTestCall())).resolves.toEqual([]);
 
     cleanups.forEach((fn) => fn());
   });
@@ -354,7 +355,7 @@ describe('scanOnboardingClients()', () => {
       }),
     );
 
-    const clients = await scanOnboardingClients();
+    const clients = await scanOnboardingClients(createTestCall());
 
     expect(clients).toEqual([
       {
@@ -410,7 +411,7 @@ describe('scanOnboardingClients()', () => {
       }),
     );
 
-    const clients = await scanOnboardingClients();
+    const clients = await scanOnboardingClients(createTestCall());
 
     expect(clients).toEqual([
       {
@@ -442,7 +443,7 @@ describe('scanOnboardingClients()', () => {
       }),
     );
 
-    await expect(scanOnboardingClients()).resolves.toEqual([]);
+    await expect(scanOnboardingClients(createTestCall())).resolves.toEqual([]);
 
     cleanups.forEach((fn) => fn());
   });
@@ -492,7 +493,7 @@ describe('scanOnboarding()', () => {
       }),
     );
 
-    const { adapters, clients } = await scanOnboarding();
+    const { adapters, clients } = await scanOnboarding(createTestCall());
 
     expect(adapters).toHaveLength(2);
     expect(clients).toHaveLength(1);
@@ -516,7 +517,7 @@ describe('scanOnboarding()', () => {
       }),
     );
 
-    await expect(scanOnboarding()).resolves.toEqual({ adapters: [], clients: [] });
+    await expect(scanOnboarding(createTestCall())).resolves.toEqual({ adapters: [], clients: [] });
 
     cleanups.forEach((fn) => fn());
   });

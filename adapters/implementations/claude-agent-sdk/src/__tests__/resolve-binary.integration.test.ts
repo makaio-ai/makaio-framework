@@ -7,6 +7,7 @@ import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import { MakaioBus } from '@makaio/bus-core';
 import { ClientSubjects, type ClientExecutionContext } from '@makaio/contracts/client';
 import type { OptionalResult } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 import { ClaudeCodeConnectorNamespace } from '../namespace/index.js';
 import { ClaudeSdkConnector } from '../connector.js';
 import type { ClaudeAgentConfig } from '../types/index.js';
@@ -40,9 +41,10 @@ async function makeConnector(
     providerConfig?: TestProviderConfig;
   } = {},
 ): Promise<ClaudeSdkConnector> {
-  const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+  const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
   return new ClaudeSdkConnector({
     bus,
+    globalBus: MakaioBus,
     adapterId: 'adapter-test',
     adapterName: 'claude-agent-sdk',
     agentId: 'agent-test',
@@ -85,7 +87,7 @@ describe('ClaudeSdkConnector — central runtime config', () => {
   });
 
   afterEach(async () => {
-    await Promise.all(connectors.splice(0).map((connector) => connector.close()));
+    await Promise.all(connectors.splice(0).map((connector) => connector.close(createTestCall())));
     MakaioBus.__resetHandlers?.();
   });
 
@@ -96,7 +98,7 @@ describe('ClaudeSdkConnector — central runtime config', () => {
     });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(capturedOptions[0]?.pathToClaudeCodeExecutable).toBe('/managed/bin/claude');
     expect(capturedOptions[0]?.env).toEqual({ CLAUDE_CONFIG_DIR: '/isolated/claude' });
@@ -109,7 +111,7 @@ describe('ClaudeSdkConnector — central runtime config', () => {
     });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(capturedOptions[0]?.pathToClaudeCodeExecutable).toBe(hostBinaryPath);
   });
@@ -120,7 +122,7 @@ describe('ClaudeSdkConnector — central runtime config', () => {
     });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(capturedOptions[0]?.pathToClaudeCodeExecutable).toBe('/opt/makaio/bin/claude');
   });
@@ -132,7 +134,7 @@ describe('ClaudeSdkConnector — central runtime config', () => {
     });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(capturedOptions[0]?.pathToClaudeCodeExecutable).toBeUndefined();
   });
@@ -144,7 +146,7 @@ describe('ClaudeSdkConnector — central runtime config', () => {
     });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(capturedOptions[0]?.pathToClaudeCodeExecutable).toBe('/managed/bin/claude');
   });
@@ -156,7 +158,7 @@ describe('ClaudeSdkConnector — central runtime config', () => {
     });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(capturedOptions[0]?.env).toMatchObject({
       ANTHROPIC_API_KEY: 'api-secret',
@@ -169,7 +171,7 @@ describe('ClaudeSdkConnector — central runtime config', () => {
     const connector = await makeConnector({ env: { CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret' } });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(capturedOptions[0]?.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: 'oauth-secret' });
     expect(capturedOptions[0]?.env).not.toHaveProperty('ANTHROPIC_API_KEY');
@@ -179,7 +181,7 @@ describe('ClaudeSdkConnector — central runtime config', () => {
     const connector = await makeConnector({ env: { CLAUDE_CONFIG_DIR: '/native/claude' } });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
 
     expect(capturedOptions[0]?.env).toEqual({ CLAUDE_CONFIG_DIR: '/native/claude' });
     expect(capturedOptions[0]?.env).not.toHaveProperty('ANTHROPIC_API_KEY');
@@ -195,7 +197,7 @@ describe('ClaudeSdkConnector — central runtime config', () => {
     const connector = await makeConnector({ clientExecution: execution('/selected/bin/claude') });
     connectors.push(connector);
 
-    await connector.initialize();
+    await connector.initialize({ call: createTestCall() });
     cleanup();
 
     expect(resolveBinary).not.toHaveBeenCalled();

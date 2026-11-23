@@ -85,8 +85,8 @@ export class TelemetryLangfuseService extends BaseService {
     this.addCleanup(unregisterProcessor);
 
     for (const rule of createLangfuseEnricherRules()) {
-      const cleanup = await registerSpanEnricherRule(this.bus, rule);
-      this.addCleanup(cleanup);
+      const cleanup = await registerSpanEnricherRule(this.bus.own('start'), this.bus, rule);
+      this.addCleanup(() => cleanup(this.bus.own('stop')));
     }
   }
 }

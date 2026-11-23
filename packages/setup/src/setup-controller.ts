@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   compareProjectManifestExtensions,
   extractNpmPackageName,
@@ -101,11 +102,13 @@ function buildInitialState(consentAccepted: boolean, doc: { text: string; versio
  * Walks upward from `repoPath` looking for a Makaio manifest. Returns an empty
  * array when `repoPath` is undefined, no `.git` root is found, the manifest is
  * malformed, or the manifest has no extensions declared.
+ * @param call - Call context for manifest discovery.
  * @param repoPath - Absolute path to the repository root to search from.
  * @param bus - Bus used to read the singleton installed extension state.
  * @returns Manifest specs that are not already satisfied by installed state.
  */
 async function loadManifestState(
+  call: CallContext,
   repoPath: string | undefined,
   bus: IMakaioBus,
 ): Promise<
@@ -119,7 +122,7 @@ async function loadManifestState(
     return null;
   });
   if (manifest === null) return buildManifestState([]);
-  const installed = await listInstalledExtensionPackages(bus);
+  const installed = await listInstalledExtensionPackages(call, bus);
   const diff = compareProjectManifestExtensions(manifest.extensions, installed);
   const pending = [
     ...diff.missing.map((entry) => entry.spec),
@@ -130,12 +133,14 @@ async function loadManifestState(
 
 /**
  * Loads consent state and pre-detects clients when consent is already valid.
+ * @param call - Call context for controller initialization.
  * @param makaioHome - Absolute path to the makaio home directory.
  * @param repoPath - Optional absolute path to the project repository root for manifest discovery.
  * @param bus - Bus used to read installed singleton extension state.
  * @returns Initial setup state for a controller session.
  */
 async function initializeSetupState(
+  call: CallContext,
   makaioHome: string,
   repoPath: string | undefined,
   bus: IMakaioBus,
@@ -148,7 +153,7 @@ async function initializeSetupState(
   if (consentAccepted) {
     const [detected, manifestState] = await Promise.all([
       detectClients(CLIENT_CATALOG),
-      loadManifestState(repoPath, bus),
+      loadManifestState(call, repoPath, bus),
     ]);
     const selectedIds = detected.filter((d) => d.detected).map((d) => d.entry.clientId);
     state = {
@@ -167,6 +172,7 @@ async function initializeSetupState(
  *
  * Separated from the factory function to keep each function within the
  * project's line-count limit while preserving a single, linear flow narrative.
+ * @param call - Call context of the installation, minted on `bus`; after a restart the flow continues under a root context of the reconnected bus.
  * @param bus - The bus instance for all RPC calls.
  * @param selectedClientIds - Client IDs the user has selected.
  * @param additionalPackageSpecs - Extra package specs (e.g. from the project manifest) to install alongside client packages.
@@ -174,6 +180,7 @@ async function initializeSetupState(
  * @param setState - Callback to replace the current state slice.
  */
 async function runInstallFlow(
+  call: CallContext,
   bus: IMakaioBus,
   selectedClientIds: readonly string[],
   additionalPackageSpecs: readonly string[],
@@ -194,14 +201,17 @@ async function runInstallFlow(
     return;
   }
 
-  const extensionSummary = await installExtensionPackages(bus, packages);
+  const extensionSummary = await installExtensionPackages(call, bus, packages);
   setState({ extensionInstallProgress: extensionSummary });
 
   const needsRestart = extensionSummary.some((progress) => progress.restartRequired);
   let opsBus = bus;
+  let opsCall = call;
   if (needsRestart) {
     setState({ restartRequested: true });
     opsBus = await restartAndReconnect(bus, 'setup');
+    // ORIGIN: an own context is bound to the bus that minted it; the operation continues on the fresh carrier.
+    opsCall = opsBus.own('root');
   }
   setState({ restartRequested: needsRestart, step: 'managed' });
 
@@ -209,7 +219,7 @@ async function runInstallFlow(
     clientId,
     binaryName,
   }));
-  const inventory = await loadClientInventory(opsBus, targets);
+  const inventory = await loadClientInventory(opsCall, opsBus, targets);
   const selectedManagedClients = new Map(
     [...inventory.managedClients].filter(([clientId]) => selectedIds.has(clientId)),
   );
@@ -221,7 +231,7 @@ async function runInstallFlow(
   });
   setState({ managedBinaryStates: managedStates });
 
-  await activateManagedPins(opsBus, selectedManagedClients);
+  await activateManagedPins(opsCall, opsBus, selectedManagedClients);
 
   const result: SetupResult = {
     success: true,
@@ -280,7 +290,7 @@ function createSetupActions(deps: SetupActionDeps): SetupActions {
 
         const [detected, manifestState] = await Promise.all([
           detectClients(CLIENT_CATALOG),
-          loadManifestState(repoPath, bus),
+          loadManifestState(bus.own('root'), repoPath, bus),
         ]);
         const selectedIds = detected.filter((d) => d.detected).map((d) => d.entry.clientId);
 
@@ -311,7 +321,8 @@ function createSetupActions(deps: SetupActionDeps): SetupActions {
       if (current.step !== 'detect') return;
       runtime.setState({ step: 'install', error: null });
       try {
-        await runInstallFlow(bus, current.selectedClientIds, [], restartAndReconnect, runtime.setState);
+        const call = bus.own('root');
+        await runInstallFlow(call, bus, current.selectedClientIds, [], restartAndReconnect, runtime.setState);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         runtime.setState({ step: 'detect', error: message });
@@ -335,6 +346,7 @@ function createSetupActions(deps: SetupActionDeps): SetupActions {
       runtime.setState({ step: 'install', error: null });
       try {
         await runInstallFlow(
+          bus.own('root'),
           bus,
           current.selectedClientIds,
           current.selectedManifestExtensionSpecs,
@@ -370,7 +382,7 @@ function createSetupActions(deps: SetupActionDeps): SetupActions {
 export async function createSetupController(config: SetupConfig): Promise<SetupController> {
   const { bus, makaioHome, repoPath, restartAndReconnect } = config;
   const listeners = new Set<(state: SetupState) => void>();
-  let state = await initializeSetupState(makaioHome, repoPath, bus);
+  let state = await initializeSetupState(bus.own('start'), makaioHome, repoPath, bus);
 
   const runtime: SetupControllerRuntime = {
     getState: () => state,

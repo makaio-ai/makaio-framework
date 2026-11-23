@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
-import { ReviewSubjects, type FindingTarget, type ReviewFinding } from '@makaio/contracts';
+import { ReviewSubjects, type CallContext, type FindingTarget, type ReviewFinding } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import {
   CODERABBIT_REVIEW_POSTED_TRIGGER_KIND,
   CodeRabbitReviewPostedEventSchema,
@@ -58,22 +59,16 @@ function serveOpenFindings(bus: IMakaioBus, findings: readonly ReviewFinding[]):
 }
 
 /**
- * Activates the trigger and collects every emitted, schema-validated payload.
+ * Activates the trigger and collects each validated payload with its emission metadata.
  * @param bus - Bus the trigger observes.
  * @param repository - Repository parameter for the binding.
  * @returns Collected events and a detach function.
  */
-async function activate(
-  bus: IMakaioBus,
-  repository: string,
-): Promise<{
-  readonly events: Array<{ payload: unknown; correlationId?: string }>;
-  readonly detach: () => Promise<void>;
-}> {
+async function activate(bus: IMakaioBus, repository: string) {
   const trigger = createCodeRabbitReviewPostedTrigger(bus);
   expect(trigger.kind).toBe(CODERABBIT_REVIEW_POSTED_TRIGGER_KIND);
 
-  const events: Array<{ payload: unknown; correlationId?: string }> = [];
+  const events: Array<{ payload: unknown; call?: CallContext; correlationId?: string }> = [];
   const controller = new AbortController();
   const cleanup = await trigger.activate(
     {
@@ -117,7 +112,8 @@ describe('coderabbit.review-posted automation trigger', () => {
     ]);
     const { events, detach } = await activate(bus, TARGET.repository);
 
-    await bus.emit(ReviewSubjects.findings.arrived, {
+    const call = createTestCall();
+    await bus.emit(call, ReviewSubjects.findings.arrived, {
       target: TARGET,
       sourceId: 'coderabbit',
       reviewer: 'coderabbit',
@@ -128,6 +124,7 @@ describe('coderabbit.review-posted automation trigger', () => {
 
     expect(events).toEqual([
       {
+        call: expect.objectContaining({ principal: call.principal }),
         payload: {
           target: TARGET,
           sourceId: 'coderabbit',
@@ -148,7 +145,7 @@ describe('coderabbit.review-posted automation trigger', () => {
     const stopServing = serveOpenFindings(bus, []);
     const { events, detach } = await activate(bus, TARGET.repository);
 
-    await bus.emit(ReviewSubjects.findings.arrived, {
+    await bus.emit(createTestCall(), ReviewSubjects.findings.arrived, {
       target: TARGET,
       sourceId: 'coderabbit',
       reviewer: 'coderabbit',
@@ -172,14 +169,14 @@ describe('coderabbit.review-posted automation trigger', () => {
     const stopServing = serveOpenFindings(bus, [makeFinding('coderabbit:1', 'critical')]);
     const { events, detach } = await activate(bus, TARGET.repository);
 
-    await bus.emit(ReviewSubjects.findings.arrived, {
+    await bus.emit(createTestCall(), ReviewSubjects.findings.arrived, {
       target: TARGET,
       sourceId: 'copilot',
       reviewer: 'copilot',
       created: 1,
       updated: 0,
     });
-    await bus.emit(ReviewSubjects.findings.arrived, {
+    await bus.emit(createTestCall(), ReviewSubjects.findings.arrived, {
       target: OTHER_TARGET,
       sourceId: 'coderabbit',
       reviewer: 'coderabbit',
@@ -200,7 +197,7 @@ describe('coderabbit.review-posted automation trigger', () => {
     const { events, detach } = await activate(bus, TARGET.repository);
 
     await detach();
-    await bus.emit(ReviewSubjects.findings.arrived, {
+    await bus.emit(createTestCall(), ReviewSubjects.findings.arrived, {
       target: TARGET,
       sourceId: 'coderabbit',
       reviewer: 'coderabbit',
@@ -224,7 +221,7 @@ describe('coderabbit.review-posted automation trigger', () => {
     // the time it resolves. A handler that only fired the lookup off would still
     // be mid-request at this point and leave `events` empty — which is how an
     // activation disposed right afterwards used to lose the event entirely.
-    await bus.emit(ReviewSubjects.findings.arrived, {
+    await bus.emit(createTestCall(), ReviewSubjects.findings.arrived, {
       target: TARGET,
       sourceId: 'coderabbit',
       reviewer: 'coderabbit',
@@ -252,7 +249,7 @@ describe('coderabbit.review-posted automation trigger', () => {
 
     const { events, detach } = await activate(bus, TARGET.repository);
 
-    const arriving = bus.emit(ReviewSubjects.findings.arrived, {
+    const arriving = bus.emit(createTestCall(), ReviewSubjects.findings.arrived, {
       target: TARGET,
       sourceId: 'coderabbit',
       reviewer: 'coderabbit',
@@ -283,7 +280,7 @@ describe('coderabbit.review-posted automation trigger', () => {
     const { events, detach } = await activate(bus, TARGET.repository);
 
     await expect(
-      bus.emit(ReviewSubjects.findings.arrived, {
+      bus.emit(createTestCall(), ReviewSubjects.findings.arrived, {
         target: TARGET,
         sourceId: 'coderabbit',
         reviewer: 'coderabbit',

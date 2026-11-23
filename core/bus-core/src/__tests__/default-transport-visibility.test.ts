@@ -16,8 +16,9 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
-import { createBusNamespace, defaultTransports } from '@makaio/core';
+import { createBusNamespace, defaultTransports, type CallContext } from '@makaio/core';
 import { createBusInstance, type BusMessage, type BusTransportRegistry, type EmitOptions } from '../index.js';
+import { busContextOf } from '../kernel-api.js';
 import { MockTransport } from './helpers/transport-fixtures.js';
 
 // ---------------------------------------------------------------------------
@@ -42,7 +43,7 @@ function createTestSetup<Domain extends string, Schemas extends Record<string, i
   const bus = createBusInstance();
   const { subjects } = bus.registerNamespace(definition);
   const transport = new MockTransport('test-transport');
-  bus.getContext().transportRegistry.registerTransport(transportKey, transport);
+  busContextOf(bus).transportRegistry.registerTransport(transportKey, transport);
   return { bus, transport, subjects };
 }
 
@@ -108,7 +109,7 @@ describe('defaultTransports — namespace-level local-only', () => {
   });
 
   it('does NOT dispatch to transport when caller omits transports option', async () => {
-    await bus.emit(LocalOnlyNs.subjects.updated, { value: 'silent' });
+    await bus.emit(bus.own('root'), LocalOnlyNs.subjects.updated, { value: 'silent' });
 
     expect(transport.messages.filter((m) => m.type === 'event')).toHaveLength(0);
   });
@@ -119,14 +120,19 @@ describe('defaultTransports — namespace-level local-only', () => {
       received.push(payload.value);
     });
 
-    await bus.emit(LocalOnlyNs.subjects.updated, { value: 'local-handler' });
+    await bus.emit(bus.own('root'), LocalOnlyNs.subjects.updated, { value: 'local-handler' });
 
     expect(received).toEqual(['local-handler']);
     expect(transport.messages.filter((m) => m.type === 'event')).toHaveLength(0);
   });
 
   it('dispatches to transport when caller explicitly passes all transports (undefined override not applicable — opt-in via named transport)', async () => {
-    await bus.emit(LocalOnlyNs.subjects.updated, { value: 'explicit' }, { transports: ['dtv-transport-a'] });
+    await bus.emit(
+      bus.own('root'),
+      LocalOnlyNs.subjects.updated,
+      { value: 'explicit' },
+      { transports: ['dtv-transport-a'] },
+    );
 
     const eventMessages = transport.messages.filter((m) => m.type === 'event');
     expect(eventMessages).toHaveLength(1);
@@ -139,7 +145,7 @@ describe('defaultTransports — namespace-level local-only', () => {
   });
 
   it('does not dispatch to transport when caller passes empty array (explicit local-only still local-only)', async () => {
-    await bus.emit(LocalOnlyNs.subjects.updated, { value: 'force-local' }, { transports: [] });
+    await bus.emit(bus.own('root'), LocalOnlyNs.subjects.updated, { value: 'force-local' }, { transports: [] });
 
     expect(transport.messages.filter((m) => m.type === 'event')).toHaveLength(0);
   });
@@ -158,7 +164,7 @@ describe('defaultTransports — namespace-level all (explicit)', () => {
   });
 
   it('dispatches to transport when caller omits transports option', async () => {
-    await bus.emit(AllNs.subjects.updated, { value: 'normal' });
+    await bus.emit(bus.own('root'), AllNs.subjects.updated, { value: 'normal' });
 
     const eventMessages = transport.messages.filter((m) => m.type === 'event');
     expect(eventMessages).toHaveLength(1);
@@ -178,7 +184,7 @@ describe('defaultTransports — no namespace-level default (implicit all)', () =
   });
 
   it('dispatches to transport by default — same behaviour as before this feature', async () => {
-    await bus.emit(DefaultNs.subjects.updated, { value: 'default' });
+    await bus.emit(bus.own('root'), DefaultNs.subjects.updated, { value: 'default' });
 
     const eventMessages = transport.messages.filter((m) => m.type === 'event');
     expect(eventMessages).toHaveLength(1);
@@ -198,7 +204,7 @@ describe('defaultTransports — mixed namespace (all default, subject-level meta
   });
 
   it('publicEvent dispatches to transport (namespace all default)', async () => {
-    await bus.emit(MixedNs.subjects.publicEvent, { value: 'public' });
+    await bus.emit(bus.own('root'), MixedNs.subjects.publicEvent, { value: 'public' });
 
     const eventMessages = transport.messages.filter(
       (m) => m.type === 'event' && (m as BusMessage & { subject: string }).subject === 'publicEvent',
@@ -207,7 +213,7 @@ describe('defaultTransports — mixed namespace (all default, subject-level meta
   });
 
   it('internalEvent does NOT dispatch to transport (subject-level local-only overrides namespace all)', async () => {
-    await bus.emit(MixedNs.subjects.internalEvent, { value: 'internal' });
+    await bus.emit(bus.own('root'), MixedNs.subjects.internalEvent, { value: 'internal' });
 
     const eventMessages = transport.messages.filter(
       (m) => m.type === 'event' && (m as BusMessage & { subject: string }).subject === 'internalEvent',
@@ -229,13 +235,13 @@ describe('defaultTransports — subject-level all overrides namespace local-only
   });
 
   it('keeps namespace local-only for subjects without an override', async () => {
-    await bus.emit(SubjectOverrideAllNs.subjects.internalEvent, { value: 'internal' });
+    await bus.emit(bus.own('root'), SubjectOverrideAllNs.subjects.internalEvent, { value: 'internal' });
 
     expect(transport.messages.filter((m) => m.type === 'event')).toHaveLength(0);
   });
 
   it('dispatches when subject-level all overrides namespace local-only', async () => {
-    await bus.emit(SubjectOverrideAllNs.subjects.publicEvent, { value: 'public' });
+    await bus.emit(bus.own('root'), SubjectOverrideAllNs.subjects.publicEvent, { value: 'public' });
 
     const eventMessages = transport.messages.filter((m) => m.type === 'event');
     expect(eventMessages).toHaveLength(1);
@@ -253,11 +259,16 @@ describe('defaultTransports — relay path unaffected', () => {
     const bus = createBusInstance();
     bus.registerNamespace(LocalOnlyNs);
     const transport = new MockTransport('relay-transport');
-    bus.getContext().transportRegistry.registerTransport('dtv-transport-relay', transport);
+    busContextOf(bus).transportRegistry.registerTransport('dtv-transport-relay', transport);
 
     // Relay path: the transport-registry calls emit with explicit transports:[transportName].
     // This simulates what transport-registry.ts does when forwarding an inbound message.
-    await bus.emit(LocalOnlyNs.subjects.updated, { value: 'relayed' }, { transports: ['dtv-transport-relay'] });
+    await bus.emit(
+      bus.own('root'),
+      LocalOnlyNs.subjects.updated,
+      { value: 'relayed' },
+      { transports: ['dtv-transport-relay'] },
+    );
 
     const eventMessages = transport.messages.filter((m) => m.type === 'event');
     expect(eventMessages).toHaveLength(1);
@@ -280,12 +291,18 @@ describe('defaultTransports — relay path unaffected', () => {
 type WrapperBus = {
   /**
    * Emit the wrapper-test subject.
+   * @param call - Call context the emission is sent under.
    * @param subject - Subject to emit on.
    * @param payload - Event payload.
    * @param options - Emit options whose routing must reach the bus intact.
    * @returns Promise resolving once the emission has been dispatched.
    */
-  emit(subject: typeof DefaultNs.subjects.updated, payload: { value: string }, options?: EmitOptions): Promise<void>;
+  emit(
+    call: CallContext,
+    subject: typeof DefaultNs.subjects.updated,
+    payload: { value: string },
+    options?: EmitOptions,
+  ): Promise<void>;
 };
 
 describe('emit options survive the namespace-scoped bus wrappers', () => {
@@ -323,10 +340,10 @@ describe('emit options survive the namespace-scoped bus wrappers', () => {
       received.push(payload.value);
     });
 
-    await wrapper.emit(DefaultNs.subjects.updated, { value: 'relayed' });
+    await wrapper.emit(bus.own('root'), DefaultNs.subjects.updated, { value: 'relayed' });
     expect(relayedEvents()).toBe(1);
 
-    await wrapper.emit(DefaultNs.subjects.updated, { value: 'local-only' }, { transports: [] });
+    await wrapper.emit(bus.own('root'), DefaultNs.subjects.updated, { value: 'local-only' }, { transports: [] });
 
     // The option is the only difference between the two emissions, so the
     // second one leaving no trace on the transport is what proves the wrapper
@@ -371,27 +388,27 @@ describe('namespace-registry getDefaultTransports', () => {
   it('returns local-only for a registered namespace with local-only default', () => {
     const bus = createBusInstance();
     bus.registerNamespace(LocalOnlyNs);
-    const registry = bus.getContext().namespaceRegistry;
+    const registry = busContextOf(bus).namespaceRegistry;
     expect(registry.getDefaultTransports('dtv-local-only.updated')).toBe('local-only');
   });
 
   it('returns all for a registered namespace with all default', () => {
     const bus = createBusInstance();
     bus.registerNamespace(AllNs);
-    const registry = bus.getContext().namespaceRegistry;
+    const registry = busContextOf(bus).namespaceRegistry;
     expect(registry.getDefaultTransports('dtv-all.updated')).toBe('all');
   });
 
   it('returns all (implicit default) for a namespace with no defaultTransports', () => {
     const bus = createBusInstance();
     bus.registerNamespace(DefaultNs);
-    const registry = bus.getContext().namespaceRegistry;
+    const registry = busContextOf(bus).namespaceRegistry;
     expect(registry.getDefaultTransports('dtv-default.updated')).toBe('all');
   });
 
   it('returns all for an unregistered subject', () => {
     const bus = createBusInstance();
-    const registry = bus.getContext().namespaceRegistry;
+    const registry = busContextOf(bus).namespaceRegistry;
     expect(registry.getDefaultTransports('dtv-nonexistent.subject')).toBe('all');
   });
 });

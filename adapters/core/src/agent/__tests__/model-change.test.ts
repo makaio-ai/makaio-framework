@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects, CredentialSubjects, SessionSubjects } from '@makaio/contracts';
-import type { AIModel, AIReasoningLevel, ProviderContext } from '@makaio/contracts';
+import type { AIModel, AIReasoningLevel, CallContext, ProviderContext } from '@makaio/contracts';
 import { buildStoredCredentialRef } from '@makaio/contracts/config';
-import { createMockScopedBus } from '@makaio/test-utils';
+import { createMockScopedBus, createTestCall } from '@makaio/test-utils';
 import {
   asAgentConnector,
   createTestableAgent,
@@ -158,10 +158,15 @@ interface ReasoningAgentOptions {
 /**
  * Create and initialise a standard reasoning-capable agent for model-change tests.
  * Assigns `ctx.agent` and calls `init()`.
+ * @param call - Call context for agent initialization
  * @param ctx - Shared test lifecycle context
  * @param options - Reasoning-specific agent options
  */
-async function createReasoningAgent(ctx: AgentTestLifecycle, options: ReasoningAgentOptions = {}): Promise<void> {
+async function createReasoningAgent(
+  call: CallContext,
+  ctx: AgentTestLifecycle,
+  options: ReasoningAgentOptions = {},
+): Promise<void> {
   ctx.agent = createTestableAgent({
     agentId: TEST_AGENT_ID,
     mockConnectorFactory: ctx.mockFactory,
@@ -171,7 +176,7 @@ async function createReasoningAgent(ctx: AgentTestLifecycle, options: ReasoningA
     availableModels: options.availableModels,
     providerContext: TEST_PROVIDER_CONTEXT,
   });
-  await ctx.agent.init();
+  await ctx.agent.init(call);
 }
 
 /**
@@ -213,7 +218,7 @@ describe('AIAgent Model change handler', () => {
       initialCwd: '/test/cwd',
       providerContext: TEST_PROVIDER_CONTEXT,
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     const initialConnector = ctx.createdConnectors[0];
 
     const changedEvents: Array<{ previousModel: string; newModel: string }> = [];
@@ -247,7 +252,7 @@ describe('AIAgent Model change handler', () => {
       initialCwd: '/test/cwd1',
       providerContext: TEST_PROVIDER_CONTEXT,
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     const firstInitializeStarted = createDeferred();
     const releaseFirstInitialize = createDeferred();
     const originalFactory = ctx.mockFactory.getMockImplementation();
@@ -290,7 +295,7 @@ describe('AIAgent Model change handler', () => {
   });
 
   it('prepares and commits a selected provider account around replacement initialization', async () => {
-    await createReasoningAgent(ctx);
+    await createReasoningAgent(createTestCall(), ctx);
     const order: string[] = [];
     registerActivationTransaction(ctx.cleanupFns, {
       prepare: (providerContext) => {
@@ -322,7 +327,7 @@ describe('AIAgent Model change handler', () => {
   });
 
   it('rolls back a prepared provider account when replacement initialization fails', async () => {
-    await createReasoningAgent(ctx);
+    await createReasoningAgent(createTestCall(), ctx);
     const rollback = vi.fn();
     registerActivationTransaction(ctx.cleanupFns, { rollback });
     const originalConnector = ctx.createdConnectors[0];
@@ -347,7 +352,7 @@ describe('AIAgent Model change handler', () => {
   });
 
   it('reports response-declared persistence failure as committed runtime state', async () => {
-    await createReasoningAgent(ctx);
+    await createReasoningAgent(createTestCall(), ctx);
     persistenceCleanup();
     persistenceCleanup = () => undefined;
     ctx.cleanupFns.push(
@@ -371,7 +376,7 @@ describe('AIAgent Model change handler', () => {
       initialCwd: '/test/cwd',
       providerContext: TEST_PROVIDER_CONTEXT,
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     ctx.agent.currentConnector.setProcessingState('processing_started');
 
     const response = await MakaioBus.request(AgentSubjects.model.change, {
@@ -396,7 +401,7 @@ describe('AIAgent Model change handler', () => {
       initialCwd: '/test/cwd',
       providerContext: TEST_PROVIDER_CONTEXT,
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     const initialConnector = ctx.createdConnectors[0]!;
     initialConnector.setProcessingState('processing_started');
 
@@ -445,7 +450,7 @@ describe('AIAgent Model change handler', () => {
       initialCwd: '/test/cwd',
       providerContext: TEST_PROVIDER_CONTEXT,
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     const initialConnector = ctx.createdConnectors[0];
 
     const changedEvents: Array<{ previousModel: string; newModel: string }> = [];
@@ -472,7 +477,7 @@ describe('AIAgent Model change handler', () => {
   });
 
   it('applies reasoningEffort when newModel matches the current model', async () => {
-    await createReasoningAgent(ctx, {
+    await createReasoningAgent(createTestCall(), ctx, {
       initialReasoningEffort: 'low',
       availableModels: [
         {
@@ -498,7 +503,7 @@ describe('AIAgent Model change handler', () => {
   });
 
   it('forces a connector swap when providerContext changes without a model change', async () => {
-    await createReasoningAgent(ctx, {
+    await createReasoningAgent(createTestCall(), ctx, {
       initialReasoningEffort: 'low',
       availableModels: [
         {
@@ -531,7 +536,7 @@ describe('AIAgent Model change handler', () => {
       initialModel: 'test-model-1',
       providerContext: NORMALIZED_PROVIDER_CONTEXT,
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
     const runtimeUpdates: unknown[] = [];
     ctx.cleanupFns.push(
       MakaioBus.on(AgentStorageSubjects.updateRuntime, (storageCtx) => {
@@ -550,7 +555,7 @@ describe('AIAgent Model change handler', () => {
   });
 
   it('forces a connector swap when providerContext changes during a reasoning-only request', async () => {
-    await createReasoningAgent(ctx, {
+    await createReasoningAgent(createTestCall(), ctx, {
       initialReasoningEffort: 'low',
       availableModels: [
         {
@@ -600,6 +605,7 @@ describe('AIAgent Model change handler', () => {
         capturedContexts.push(input.providerContext);
         return {
           bus: mockBus,
+          globalBus: MakaioBus,
           agentId: TEST_AGENT_ID,
           adapterId: 'test-adapter',
           adapterName: 'test',
@@ -617,7 +623,7 @@ describe('AIAgent Model change handler', () => {
     };
 
     ctx.agent = new TestableAgent(config, ctx.mockFactory);
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
 
     // Model swap with same provider — skipWarning bypasses the dialog handler.
     // The providerContext matches the initial config, so no provider change is detected.
@@ -635,7 +641,7 @@ describe('AIAgent Model change handler', () => {
   });
 
   it('preserves runtime reasoningEffort across a later connector swap', async () => {
-    await createReasoningAgent(ctx, {
+    await createReasoningAgent(createTestCall(), ctx, {
       initialReasoningEffort: 'low',
       availableModels: [
         {
@@ -671,7 +677,7 @@ describe('AIAgent Model change handler', () => {
       initialCwd: '/test/cwd',
       providerContext: TEST_PROVIDER_CONTEXT,
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
 
     ctx.cleanupFns.push(
       MakaioBus.on(AgentSubjects.validateModelChange, (ctx) => {
@@ -702,7 +708,7 @@ describe('AIAgent Model change handler', () => {
       initialCwd: '/test/cwd',
       providerContext: TEST_PROVIDER_CONTEXT,
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
 
     const editEvents: Array<{ sessionId: string; agentId: string; previousModel?: string; newModel?: string }> = [];
     ctx.cleanupFns.push(
@@ -745,7 +751,7 @@ describe('AIAgent Model change handler', () => {
       initialCwd: '/test/cwd',
       providerContext: TEST_PROVIDER_CONTEXT,
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
 
     const editEvents: Array<{ sessionId: string; agentId: string; previousModel?: string; newModel?: string }> = [];
     ctx.cleanupFns.push(
@@ -779,7 +785,7 @@ describe('AIAgent Model change handler', () => {
       initialCwd: '/test/cwd',
       providerContext: TEST_PROVIDER_CONTEXT,
     });
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
 
     // No AgentSubjects.validateModelChange handler registered — framework must
     // auto-approve the change (OSS / headless behaviour).
@@ -798,7 +804,7 @@ describe('AIAgent Model change handler', () => {
   });
 
   it('model.change uses native path when changeModelInPlace returns true (no swap, no validation RPC)', async () => {
-    await createReasoningAgent(ctx);
+    await createReasoningAgent(createTestCall(), ctx);
     ctx.agent!.currentConnector.changeModelInPlaceResult = true;
     const initialConnector = ctx.createdConnectors[0];
 
@@ -825,7 +831,7 @@ describe('AIAgent Model change handler', () => {
   });
 
   it('model.change falls back to swap when changeModelInPlace returns false', async () => {
-    await createReasoningAgent(ctx);
+    await createReasoningAgent(createTestCall(), ctx);
     const initialConnector = ctx.createdConnectors[0];
 
     const response = await sendModelChange({ newModel: 'test-model-2' });
@@ -837,7 +843,7 @@ describe('AIAgent Model change handler', () => {
   });
 
   it('model.change response includes swapped: false for no-op (same model)', async () => {
-    await createReasoningAgent(ctx);
+    await createReasoningAgent(createTestCall(), ctx);
 
     const response = await sendModelChange({ newModel: 'test-model-1' });
 
@@ -845,7 +851,7 @@ describe('AIAgent Model change handler', () => {
   });
 
   it('reasoning-only change triggers swap when changeReasoningInPlace returns false', async () => {
-    await createReasoningAgent(ctx, {
+    await createReasoningAgent(createTestCall(), ctx, {
       initialReasoningEffort: 'low',
       availableModels: [
         {
@@ -870,7 +876,7 @@ describe('AIAgent Model change handler', () => {
   });
 
   it('model swap constructs the replacement with the requested reasoning effort', async () => {
-    await createReasoningAgent(ctx, {
+    await createReasoningAgent(createTestCall(), ctx, {
       initialReasoningEffort: 'low',
       availableModels: [
         {
@@ -896,7 +902,7 @@ describe('AIAgent Model change handler', () => {
   });
 
   it('resolveReasoningEffort falls back to medium when prior effort is unsupported by new model', async () => {
-    await createReasoningAgent(ctx, {
+    await createReasoningAgent(createTestCall(), ctx, {
       initialReasoningEffort: 'high',
       availableModels: [
         {
@@ -921,7 +927,7 @@ describe('AIAgent Model change handler', () => {
   });
 
   it('resolveReasoningEffort falls back to first supported key when medium is also unsupported', async () => {
-    await createReasoningAgent(ctx, {
+    await createReasoningAgent(createTestCall(), ctx, {
       initialReasoningEffort: 'high',
       availableModels: [
         {
@@ -946,7 +952,7 @@ describe('AIAgent Model change handler', () => {
   });
 
   it('no-op when neither newModel nor reasoningEffort is provided', async () => {
-    await createReasoningAgent(ctx);
+    await createReasoningAgent(createTestCall(), ctx);
     const initialConnector = ctx.createdConnectors[0];
 
     const response = await sendModelChange();

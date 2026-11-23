@@ -150,6 +150,8 @@ describe('shared renderer bootstrap', { timeout: RENDERER_BOOTSTRAP_TEST_TIMEOUT
     });
     expect(setWindowId).toHaveBeenCalledWith('test.surface:main');
     expect(transportConstructor).toHaveBeenCalledWith({
+      // The renderer's connection to the shell host is a core uplink: it attests principals.
+      attestingRole: 'core-uplink',
       createWebSocket: expect.any(Function),
       url: 'ws://localhost:6200/bus',
     });

@@ -10,6 +10,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AgentSubjects } from '@makaio/contracts';
 import type { IMakaioSession, MessageInput, ResponseSchemaDescriptor, SessionContext } from '@makaio/contracts';
 import { getHookAbortError } from './hook-abort-error.js';
@@ -36,6 +37,7 @@ export type AgentDispatchOutcome =
  * consumes the directive — fork directives are consumed only on the
  * `startAgent` path. Callers assembling fork contexts must degrade them to
  * fresh-with-history first (see `routeToAgents`).
+ * @param call - Call context of the handled message being routed; forwarded to every send
  * @param bus - Bus instance for communication
  * @param session - Session metadata (for session ID)
  * @param agents - Target agents to route to
@@ -51,6 +53,7 @@ export type AgentDispatchOutcome =
  * @returns Durable dispatch outcomes after direct routing failures terminalize.
  */
 export async function routeToAgentsCore(
+  call: CallContext,
   bus: IMakaioBus,
   session: IMakaioSession,
   agents: ReadonlyArray<{ agentId: string; adapterId: string }>,
@@ -72,7 +75,7 @@ export async function routeToAgentsCore(
   const routingPromises: Array<Promise<AgentDispatchOutcome>> = agents.map(async (agent) => {
     try {
       assertDispatch?.();
-      await bus.request(AgentSubjects.sendMessage, {
+      await bus.request(call, AgentSubjects.sendMessage, {
         agentId: agent.agentId,
         adapterId: agent.adapterId,
         message,
@@ -84,7 +87,7 @@ export async function routeToAgentsCore(
         ...(responseSchema !== undefined && { responseSchema }),
       });
 
-      await emitRoutingAcknowledged(bus, {
+      await emitRoutingAcknowledged(call, bus, {
         sessionId: turn.sessionId,
         turnId: turn.turnId,
         turnNumber: turn.turnNumber,
@@ -94,7 +97,7 @@ export async function routeToAgentsCore(
       return { agentId: agent.agentId, kind: 'dispatched' } satisfies AgentDispatchOutcome;
     } catch (error) {
       if (getHookAbortError(error) !== undefined) {
-        await terminalizeRoutingAgent({
+        await terminalizeRoutingAgent(call, {
           bus,
           turn,
           messageId,
@@ -108,7 +111,7 @@ export async function routeToAgentsCore(
 
       const errorMessage = error instanceof Error ? error.message : String(error);
 
-      await terminalizeRoutingAgent({
+      await terminalizeRoutingAgent(call, {
         bus,
         turn,
         messageId,

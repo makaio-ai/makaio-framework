@@ -17,7 +17,7 @@ describe('once - Promise overload', () => {
 
       // Emit after 50ms
       setTimeout(() => {
-        void MakaioBus.emit(EventSubjects.message, {
+        void MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
           content: 'fast',
           sessionId: 'session-1',
         });
@@ -33,11 +33,11 @@ describe('once - Promise overload', () => {
       const promise2 = MakaioBus.once(EventSubjects.status);
 
       await Promise.all([
-        MakaioBus.emit(EventSubjects.message, {
+        MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
           content: 'msg',
           sessionId: 'session-1',
         }),
-        MakaioBus.emit(EventSubjects.status, { status: 'ready' }),
+        MakaioBus.emit(MakaioBus.own('root'), EventSubjects.status, { status: 'ready' }),
       ]);
 
       const [ctx1, ctx2] = await Promise.all([promise1, promise2]);

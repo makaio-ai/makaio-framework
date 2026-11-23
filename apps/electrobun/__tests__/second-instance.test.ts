@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HmacAuth } from '@makaio/bus-transport-websocket';
 import { HostSubjects } from '@makaio/contracts';
+import type { CallContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { connectAndFocus } from '../src/second-instance.js';
 
 /**
@@ -11,11 +13,13 @@ import { connectAndFocus } from '../src/second-instance.js';
  * transport over a loopback server for end-to-end coverage.
  */
 type FocusRequest = (
+  call: CallContext,
   subject: typeof HostSubjects.app.focus,
   payload: Record<string, never>,
 ) => Promise<{ focused: boolean; windowId: number | null }>;
 
 interface MockBus {
+  own: ReturnType<typeof vi.fn<(purpose: string) => CallContext>>;
   connect: ReturnType<typeof vi.fn<() => Promise<void>>>;
   disconnect: ReturnType<typeof vi.fn<() => void>>;
   request: ReturnType<typeof vi.fn<FocusRequest>>;
@@ -49,6 +53,7 @@ vi.mock('@makaio/bus-transport-websocket', async () => {
 
 function createMockBus(overrides?: Partial<MockBus>): MockBus {
   return {
+    own: vi.fn<(purpose: string) => CallContext>().mockReturnValue(createTestCall()),
     connect: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     disconnect: vi.fn<() => void>(),
     request: vi.fn<FocusRequest>().mockResolvedValue({ focused: true, windowId: 1 }),
@@ -88,7 +93,8 @@ describe('connectAndFocus', () => {
       autoReconnect: false,
       auth: undefined,
     });
-    expect(bus.request).toHaveBeenCalledWith(HostSubjects.app.focus, {});
+    expect(bus.own).toHaveBeenCalledWith('root');
+    expect(bus.request).toHaveBeenCalledWith(bus.own.mock.results[0]?.value, HostSubjects.app.focus, {});
     expect(bus.disconnect).toHaveBeenCalledOnce();
     expect(focused).toBe(true);
   });

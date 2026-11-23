@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import type { ExtractSubjectPayload, SubjectDefinition } from '@makaio/core';
 import { AgentSubjects, type StructuredOutputValidation } from '@makaio/contracts';
 import { MessageHandle, type MessageResult } from '../../message-handle/index.js';
@@ -23,6 +24,7 @@ function makeHandle(
   deliveryMode?: import('@makaio/contracts').MessageDeliveryMode,
 ): MessageHandle {
   return new MessageHandle(
+    createTestCall(),
     id,
     { role: 'user', blocks: [{ type: 'text', content: content ?? id }] },
     deliveryMode ?? 'enqueue',
@@ -84,7 +86,7 @@ describe('MessageLifecycleTracker', () => {
     const validationReady = createDeferred<MessageResult>();
     const terminalObserved = createDeferred<void>();
     const tracker = new MessageLifecycleTracker({
-      emitGlobal: async (subject, payload) => {
+      emitGlobal: async (_call, subject, payload) => {
         emissions.push({ subject, payload });
       },
     });
@@ -348,7 +350,7 @@ describe('MessageLifecycleTracker', () => {
     const emissions: CapturedEmission[] = [];
     const terminalObserved: Array<{ messageId: string; turnId: string | undefined }> = [];
     const tracker = new MessageLifecycleTracker({
-      emitGlobal: async (subject, payload) => {
+      emitGlobal: async (_call, subject, payload) => {
         emissions.push({ subject, payload });
       },
     });
@@ -542,7 +544,7 @@ describe('MessageLifecycleTracker', () => {
     const emissions: CapturedEmission[] = [];
     const terminalObserved: Array<{ messageId: string; outcome: string }> = [];
     const tracker = new MessageLifecycleTracker({
-      emitGlobal: async (subject, payload) => {
+      emitGlobal: async (_call, subject, payload) => {
         emissions.push({ subject, payload });
       },
     });
@@ -601,7 +603,7 @@ describe('MessageLifecycleTracker', () => {
     // correlation slot from A's still-running turn.
     const emissions: CapturedEmission[] = [];
     const tracker = new MessageLifecycleTracker({
-      emitGlobal: async (subject, payload) => {
+      emitGlobal: async (_call, subject, payload) => {
         emissions.push({ subject, payload });
       },
     });
@@ -658,7 +660,7 @@ describe('MessageLifecycleTracker', () => {
   it('emits paired turn.started and turn.completed for a delivered handle', async () => {
     const emissions: CapturedEmission[] = [];
     const tracker = new MessageLifecycleTracker({
-      emitGlobal: async (subject, payload) => {
+      emitGlobal: async (_call, subject, payload) => {
         emissions.push({ subject, payload });
       },
     });
@@ -683,7 +685,7 @@ describe('MessageLifecycleTracker', () => {
     // acknowledgment resolves with false, no turn.started, so no turn.completed.
     const emissions: CapturedEmission[] = [];
     const tracker = new MessageLifecycleTracker({
-      emitGlobal: async (subject, payload) => {
+      emitGlobal: async (_call, subject, payload) => {
         emissions.push({ subject, payload });
       },
     });
@@ -708,7 +710,7 @@ describe('MessageLifecycleTracker', () => {
     // NOT emit turn.completed; only user_message.completed fires.
     const emissions: CapturedEmission[] = [];
     const tracker = new MessageLifecycleTracker({
-      emitGlobal: async (subject, payload) => {
+      emitGlobal: async (_call, subject, payload) => {
         emissions.push({ subject, payload });
       },
     });

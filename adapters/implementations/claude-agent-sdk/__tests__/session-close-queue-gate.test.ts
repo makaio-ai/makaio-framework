@@ -1,6 +1,7 @@
 import os from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { MessageHandle, UserMessageQueue } from '@makaio/ai-adapters-core';
 
 const queryHarness = vi.hoisted(() => {
@@ -35,20 +36,23 @@ describe('ClaudeConnectorSession shutdown vs queue processing', () => {
   });
 
   it('rejects queued handles after close() begins instead of starting new turns', async () => {
-    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
-    const session = new ClaudeConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'claude-agent-sdk',
-      agentId: 'agent-test',
-      cwd: os.tmpdir(),
-      model: 'claude-sonnet-4-20250514',
-      env: {},
-      emitSdkEvent: vi.fn(async () => undefined),
-    });
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
+    const session = new ClaudeConnectorSession(
+      {
+        bus,
+        adapterId: 'adapter-test',
+        adapterName: 'claude-agent-sdk',
+        agentId: 'agent-test',
+        cwd: os.tmpdir(),
+        model: 'claude-sonnet-4-20250514',
+        env: {},
+        emitSdkEvent: vi.fn(async () => undefined),
+      },
+      MakaioBus,
+    );
 
     try {
-      await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+      await session.initialize(createTestCall(), () => vi.fn(async () => ({ behavior: 'allow' as const })));
 
       // Complete a first turn so the session is in a valid state
       const firstQueue = new UserMessageQueue();
@@ -60,7 +64,7 @@ describe('ClaudeConnectorSession shutdown vs queue processing', () => {
       const initialQueryCount = queryHarness.query.mock.calls.length;
 
       // Close the session — this sets the closing flag
-      await session.close();
+      await session.close(createTestCall());
 
       // Now try to process a queued message — it should be rejected, not start a new query
       const queue = new UserMessageQueue();
@@ -77,12 +81,12 @@ describe('ClaudeConnectorSession shutdown vs queue processing', () => {
       expect(queryHarness.query.mock.calls.length).toBe(initialQueryCount);
     } finally {
       // close() already called above; safe to call again (idempotent drain)
-      await session.close();
+      await session.close(createTestCall());
     }
   });
 
   it('completes dequeued handle when close() begins during startNewTurn setup', async () => {
-    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
 
     // We simulate close() interleaving by hooking into the query mock:
     // the mock's ensureQueryForResponseSchema path calls createQuery which
@@ -115,20 +119,23 @@ describe('ClaudeConnectorSession shutdown vs queue processing', () => {
       },
     );
 
-    const session = new ClaudeConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'claude-agent-sdk',
-      agentId: 'agent-test',
-      cwd: os.tmpdir(),
-      model: 'claude-sonnet-4-20250514',
-      env: {},
-      emitSdkEvent: vi.fn(async () => undefined),
-    });
+    const session = new ClaudeConnectorSession(
+      {
+        bus,
+        adapterId: 'adapter-test',
+        adapterName: 'claude-agent-sdk',
+        agentId: 'agent-test',
+        cwd: os.tmpdir(),
+        model: 'claude-sonnet-4-20250514',
+        env: {},
+        emitSdkEvent: vi.fn(async () => undefined),
+      },
+      MakaioBus,
+    );
     sessionRef = session;
 
     try {
-      await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+      await session.initialize(createTestCall(), () => vi.fn(async () => ({ behavior: 'allow' as const })));
 
       // Complete a first turn so the session is idle
       const firstQueue = new UserMessageQueue();
@@ -142,6 +149,7 @@ describe('ClaudeConnectorSession shutdown vs queue processing', () => {
       // our mock sets this.closing = true to simulate close() interleaving).
       const queue = new UserMessageQueue();
       const racingHandle = new MessageHandle(
+        createTestCall(),
         'message-racing',
         {
           role: 'user',
@@ -165,25 +173,28 @@ describe('ClaudeConnectorSession shutdown vs queue processing', () => {
     } finally {
       // Ensure close completes (already closing via mock)
       Reflect.set(session, 'closing', true);
-      await session.close();
+      await session.close(createTestCall());
     }
   });
 
   it('rejects queued follow-ups during close() drain window', async () => {
-    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
-    const session = new ClaudeConnectorSession({
-      bus,
-      adapterId: 'adapter-test',
-      adapterName: 'claude-agent-sdk',
-      agentId: 'agent-test',
-      cwd: os.tmpdir(),
-      model: 'claude-sonnet-4-20250514',
-      env: {},
-      emitSdkEvent: vi.fn(async () => undefined),
-    });
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
+    const session = new ClaudeConnectorSession(
+      {
+        bus,
+        adapterId: 'adapter-test',
+        adapterName: 'claude-agent-sdk',
+        agentId: 'agent-test',
+        cwd: os.tmpdir(),
+        model: 'claude-sonnet-4-20250514',
+        env: {},
+        emitSdkEvent: vi.fn(async () => undefined),
+      },
+      MakaioBus,
+    );
 
     try {
-      await session.initialize(() => vi.fn(async () => ({ behavior: 'allow' as const })));
+      await session.initialize(createTestCall(), () => vi.fn(async () => ({ behavior: 'allow' as const })));
 
       // Start a first turn
       const firstQueue = new UserMessageQueue();
@@ -198,7 +209,7 @@ describe('ClaudeConnectorSession shutdown vs queue processing', () => {
       followUpQueue.enqueue(followUpHandle);
 
       // Close the session — sets closing flag before drain
-      await session.close();
+      await session.close(createTestCall());
 
       // processQueue should reject the follow-up
       await session.processQueue(followUpQueue);
@@ -207,7 +218,7 @@ describe('ClaudeConnectorSession shutdown vs queue processing', () => {
       expect(result.outcome).toBe('error');
       expect((result as { error: Error }).error.message).toContain('Session closed');
     } finally {
-      await session.close();
+      await session.close(createTestCall());
     }
   });
 });

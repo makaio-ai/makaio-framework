@@ -1,4 +1,5 @@
-import type { ContributionProcessor } from '@makaio/kernel';
+import type { MakaioExtension } from '@makaio/contracts';
+import type { ContributionProcessor, KernelExtensionContext } from '@makaio/kernel';
 import { WorkflowBlockRegistryToken } from '../framework-packages.js';
 
 /**
@@ -15,7 +16,7 @@ export function createWorkflowBlockContributionProcessor(): ContributionProcesso
   return {
     filter: (pkg) => !!pkg.workflowBlocks?.blocks,
 
-    async processActivated(name, pkg, ctx) {
+    async processActivated(name: string, pkg: MakaioExtension<KernelExtensionContext>, ctx: KernelExtensionContext) {
       const registry = ctx.getService(WorkflowBlockRegistryToken);
       if (!registry) {
         throw new Error(
@@ -26,7 +27,7 @@ export function createWorkflowBlockContributionProcessor(): ContributionProcesso
       cleanups.set(name, () => registry.deregister(name));
     },
 
-    async processStopped(name) {
+    async processStopped(name: string) {
       const cleanup = cleanups.get(name);
       if (!cleanup) return;
       try {

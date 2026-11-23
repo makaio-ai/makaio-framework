@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { Message } from '../../shared/index.js';
 
 /**
@@ -50,8 +51,9 @@ export interface SessionExtensionContext {
   /**
    * Send a message to an agent.
    * Routes through SessionOrchestrator, not directly to agent.
+   * @param call - Call context of the message being handled; the caller passes it through.
    */
-  sendToAgent(agentId: string, message: Message): Promise<void>;
+  sendToAgent(call: CallContext, agentId: string, message: Message): Promise<void>;
 
   // --- Context Contribution ---
 
@@ -65,38 +67,44 @@ export interface SessionExtensionContext {
 
   /**
    * Fork the current session into a child session.
+   * @param call - Call context of the message being handled; the caller passes it through.
    * @returns Child session ID
    */
-  fork(options: ForkOptions): Promise<string>;
+  fork(call: CallContext, options: ForkOptions): Promise<string>;
 
   /**
    * Merge a child session back into this session.
+   * @param call - Call context of the message being handled; the caller passes it through.
    */
-  merge(childSessionId: string, summary?: string): Promise<void>;
+  merge(call: CallContext, childSessionId: string, summary?: string): Promise<void>;
 
   /**
    * Abandon a child session without merging.
+   * @param call - Call context of the message being handled; the caller passes it through.
    */
-  abandon(childSessionId: string): Promise<void>;
+  abandon(call: CallContext, childSessionId: string): Promise<void>;
 
   // --- Compression ---
 
   /**
    * Request compression of the current session.
+   * @param call - Call context of the message being handled; the caller passes it through.
    */
-  requestCompression(reason: string): Promise<void>;
+  requestCompression(call: CallContext, reason: string): Promise<void>;
 
   // --- Query ---
 
   /**
    * Get current context window state.
+   * @param call - Call context of the message being handled; the caller passes it through.
    */
-  getContextWindowState(): Promise<ContextWindowState>;
+  getContextWindowState(call: CallContext): Promise<ContextWindowState>;
 
   /**
    * Get child sessions of current session.
+   * @param call - Call context of the message being handled; the caller passes it through.
    */
-  getChildSessions(): Promise<string[]>;
+  getChildSessions(call: CallContext): Promise<string[]>;
 }
 
 /**

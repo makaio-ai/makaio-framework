@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
 import { MakaioBus, __resetWarnedSubjects } from '../index.js';
+import { busContextOf } from '../kernel-api.js';
 
 const WarningNamespace = createBusNamespace('warning-test', {
   event: z.object({ value: z.string() }),
@@ -22,7 +23,7 @@ describe('unregistered namespace warning', () => {
   beforeEach(() => {
     process.env['MAKAIO_DEBUG'] = 'true';
     MakaioBus.__resetHandlers?.();
-    MakaioBus.getContext()?.namespaceRegistry.__resetNamespaces?.();
+    busContextOf(MakaioBus)?.namespaceRegistry.__resetNamespaces?.();
     __resetWarnedSubjects?.();
   });
 
@@ -39,8 +40,8 @@ describe('unregistered namespace warning', () => {
   it('warns once for an unregistered event subject', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    await MakaioBus.emit(WarningNamespace.subjects.event, { value: 'one' });
-    await MakaioBus.emit(WarningNamespace.subjects.event, { value: 'two' });
+    await MakaioBus.emit(MakaioBus.own('root'), WarningNamespace.subjects.event, { value: 'one' });
+    await MakaioBus.emit(MakaioBus.own('root'), WarningNamespace.subjects.event, { value: 'two' });
 
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("Subject 'warning-test.event' used"));
@@ -60,7 +61,7 @@ describe('unregistered namespace warning', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     MakaioBus.registerNamespace(WarningNamespace);
 
-    await MakaioBus.emit(WarningNamespace.subjects.event, { value: 'registered' });
+    await MakaioBus.emit(MakaioBus.own('root'), WarningNamespace.subjects.event, { value: 'registered' });
 
     expect(warn).not.toHaveBeenCalled();
   });
@@ -69,7 +70,7 @@ describe('unregistered namespace warning', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     process.env.NODE_ENV = 'production';
 
-    await MakaioBus.emit(WarningNamespace.subjects.event, { value: 'prod' });
+    await MakaioBus.emit(MakaioBus.own('root'), WarningNamespace.subjects.event, { value: 'prod' });
 
     expect(warn).not.toHaveBeenCalled();
   });
@@ -78,7 +79,7 @@ describe('unregistered namespace warning', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     delete process.env['MAKAIO_DEBUG'];
 
-    await MakaioBus.emit(WarningNamespace.subjects.event, { value: 'quiet' });
+    await MakaioBus.emit(MakaioBus.own('root'), WarningNamespace.subjects.event, { value: 'quiet' });
 
     expect(warn).not.toHaveBeenCalled();
   });
@@ -86,7 +87,7 @@ describe('unregistered namespace warning', () => {
   it('does not warn for direct-channel namespaces', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    await MakaioBus.emit(ChannelLikeNamespace.subjects.message, { value: 'encrypted' });
+    await MakaioBus.emit(MakaioBus.own('root'), ChannelLikeNamespace.subjects.message, { value: 'encrypted' });
 
     expect(warn).not.toHaveBeenCalled();
   });

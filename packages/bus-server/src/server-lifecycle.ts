@@ -51,11 +51,11 @@ export interface StartBusServerOptions {
   debug?: boolean;
 
   /**
-   * Optional bus instance (defaults to global singleton).
+   * Bus instance the server attaches its transports to.
    *
-   * Use this when you have a runtime-specific bus instance.
+   * Required: there is no process-wide default. Pass the carrier's own bus.
    */
-  bus?: IMakaioBus;
+  bus: IMakaioBus;
 
   /**
    * Registry name for the loopback relay transport.
@@ -92,6 +92,7 @@ export interface StartBusServerOptions {
  * const busServer = await startBusServer({
  *   websocket: wss,
  *   secret: process.env.BUS_SECRET,
+ *   bus,
  *   debug: true,
  * });
  *

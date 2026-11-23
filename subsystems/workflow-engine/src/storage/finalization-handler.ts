@@ -6,13 +6,14 @@ import {
   type MakaioDatabase,
 } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { WorkflowFinalizationClaim, WorkflowFinalizationIntent } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from './namespace.js';
 import { workflowEngineSchema } from './schema.variants.js';
 
 type FinalizationRow = (typeof workflowEngineSchema.sqlite.workflowFinalizations)['$inferSelect'];
-type PublishFinalization = (claim: WorkflowFinalizationClaim) => Promise<void>;
+type PublishFinalization = (call: CallContext, claim: WorkflowFinalizationClaim) => Promise<void>;
 
 /**
  * Map one durable row to its public claim contract.
@@ -211,11 +212,13 @@ async function failFinalization(
 
 /**
  * Emit and durably mark one settled terminal lifecycle transition.
+ * @param call - Handled finalization request context.
  * @param bus - Bus used to publish the terminal lifecycle event.
  * @param db - Durable workflow database.
  * @param claim - Settled transition to publish.
  */
 async function publishFinalization(
+  call: CallContext,
   bus: IMakaioBus,
   db: MakaioDatabase,
   claim: WorkflowFinalizationClaim,
@@ -244,7 +247,7 @@ async function publishFinalization(
   const execution = executionRows[0];
   if (!execution || execution.completedAt == null) return;
   if (execution.status === 'completed') {
-    await bus.emit(WorkflowSubjects.execution.completed, {
+    await bus.emit(call, WorkflowSubjects.execution.completed, {
       executionId: row.executionId,
       workflowId: row.workflowId,
       totalDuration: execution.completedAt - execution.startedAt,
@@ -252,7 +255,7 @@ async function publishFinalization(
       transitionKey: row.transitionKey,
     });
   } else if (execution.status === 'failed') {
-    await bus.emit(WorkflowSubjects.execution.failed, {
+    await bus.emit(call, WorkflowSubjects.execution.failed, {
       executionId: row.executionId,
       workflowId: row.workflowId,
       error: execution.error ?? 'Workflow finalization failed',
@@ -260,7 +263,7 @@ async function publishFinalization(
       transitionKey: row.transitionKey,
     });
   } else if (execution.status === 'cancelled') {
-    await bus.emit(WorkflowSubjects.execution.cancelled, {
+    await bus.emit(call, WorkflowSubjects.execution.cancelled, {
       executionId: row.executionId,
       workflowId: row.workflowId,
       reason: execution.reason ?? undefined,
@@ -284,9 +287,9 @@ async function publishFinalization(
  */
 function createFinalizationPublisher(bus: IMakaioBus, db: MakaioDatabase): PublishFinalization {
   const tails = new Map<string, Promise<void>>();
-  return async (claim) => {
+  return async (call, claim) => {
     const previous = tails.get(claim.executionId) ?? Promise.resolve();
-    const current = previous.catch(() => undefined).then(() => publishFinalization(bus, db, claim));
+    const current = previous.catch(() => undefined).then(() => publishFinalization(call, bus, db, claim));
     tails.set(claim.executionId, current);
     try {
       await current;
@@ -332,7 +335,7 @@ export function registerFinalizationHandlers(bus: IMakaioBus, db: MakaioDatabase
     ctx.setResult({ claims: rows.map(mapClaim) });
   });
   const unsubPublish = bus.on(WorkflowStorageSubjects.publishFinalization, async (ctx) => {
-    await publish(ctx.payload.claim);
+    await publish(ctx.call, ctx.payload.claim);
     ctx.setResult({});
   });
   const unsubAcknowledge = bus.on(WorkflowStorageSubjects.acknowledgeFinalization, async (ctx) => {
@@ -346,7 +349,7 @@ export function registerFinalizationHandlers(bus: IMakaioBus, db: MakaioDatabase
       .from(workflowFinalizations)
       .where(eq(workflowFinalizations.executionId, executionId))
       .limit(1);
-    if (rows[0]) await publish(mapClaim(rows[0]));
+    if (rows[0]) await publish(ctx.call, mapClaim(rows[0]));
   });
   const unsubFail = bus.on(WorkflowStorageSubjects.failFinalization, async (ctx) => {
     const { executionId, claimToken, error, settledAt } = ctx.payload;
@@ -359,7 +362,7 @@ export function registerFinalizationHandlers(bus: IMakaioBus, db: MakaioDatabase
       .from(workflowFinalizations)
       .where(eq(workflowFinalizations.executionId, executionId))
       .limit(1);
-    if (rows[0]) await publish(mapClaim(rows[0]));
+    if (rows[0]) await publish(ctx.call, mapClaim(rows[0]));
   });
   return () => {
     unsubClaim();

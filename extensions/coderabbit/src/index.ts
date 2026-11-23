@@ -12,6 +12,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 
 import type { MakaioNodeExtension } from '@makaio/contracts/extension';
 import { dep } from '@makaio/contracts/extension';
+import type { CallContext } from '@makaio/contracts';
 import {
   CapabilitySubjects,
   REVIEWER_PROCESSOR_CAPABILITY_ID,
@@ -62,27 +63,30 @@ export const coderabbitPackage: MakaioNodeExtension<IMakaioBus> = {
     const source = new CodeRabbitSource(ctx.bus);
     return {
       async init() {
-        const hadSource = await hasRegisteredCapabilityProvider(ctx.bus, REVIEW_SOURCE_CAPABILITY_ID, source.id);
+        const call = ctx.bus.own('start');
+        const hadSource = await hasRegisteredCapabilityProvider(call, ctx.bus, REVIEW_SOURCE_CAPABILITY_ID, source.id);
         const hadProcessor = await hasRegisteredCapabilityProvider(
+          call,
           ctx.bus,
           REVIEWER_PROCESSOR_CAPABILITY_ID,
           codeRabbitProcessor.id,
         );
-        await registerReviewSource(ctx.bus, source);
+        await registerReviewSource(call, ctx.bus, source);
         try {
-          await registerReviewerProcessor(ctx.bus, codeRabbitProcessor);
+          await registerReviewerProcessor(call, ctx.bus, codeRabbitProcessor);
         } catch (error) {
           const rollbacks: Array<Promise<void>> = [];
-          if (!hadProcessor) rollbacks.push(unregisterReviewerProcessor(ctx.bus, codeRabbitProcessor.id));
-          if (!hadSource) rollbacks.push(unregisterReviewSource(ctx.bus, source.id));
+          if (!hadProcessor) rollbacks.push(unregisterReviewerProcessor(call, ctx.bus, codeRabbitProcessor.id));
+          if (!hadSource) rollbacks.push(unregisterReviewSource(call, ctx.bus, source.id));
           await Promise.allSettled(rollbacks);
           throw error;
         }
       },
       async destroy() {
+        const call = ctx.bus.own('stop');
         const results = await Promise.allSettled([
-          unregisterReviewerProcessor(ctx.bus, codeRabbitProcessor.id),
-          unregisterReviewSource(ctx.bus, source.id),
+          unregisterReviewerProcessor(call, ctx.bus, codeRabbitProcessor.id),
+          unregisterReviewSource(call, ctx.bus, source.id),
         ]);
         const failures = results
           .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
@@ -107,17 +111,19 @@ export default coderabbitPackage;
 /**
  * Checks whether a capability provider ID already exists before this extension
  * lifecycle attempts to register it.
+ * @param call - The call context the query is sent under.
  * @param bus - Bus used to query the capability registry.
  * @param capabilityId - Capability bucket to inspect.
  * @param providerId - Provider ID to look for.
  * @returns Whether the capability registry currently lists the provider.
  */
 async function hasRegisteredCapabilityProvider(
+  call: CallContext,
   bus: IMakaioBus,
   capabilityId: string,
   providerId: string,
 ): Promise<boolean> {
-  const result = await bus.requestOptional(CapabilitySubjects.listProviders, { capabilityId });
+  const result = await bus.requestOptional(call, CapabilitySubjects.listProviders, { capabilityId });
   if (!result.handled) return false;
   return result.data.providers.some((provider) => provider.id === providerId);
 }

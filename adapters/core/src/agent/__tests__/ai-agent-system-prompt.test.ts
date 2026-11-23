@@ -1,3 +1,4 @@
+import { createTestCall } from '@makaio/test-utils';
 import { describe, expect, it } from 'vitest';
 import { createTestableAgent, MockConnector } from './helpers/mock-agent.js';
 
@@ -32,7 +33,7 @@ describe('AIAgent systemPrompt capture', () => {
     );
 
     try {
-      await agent.initialize({ systemPrompt: '' });
+      await agent.initialize(createTestCall(), { systemPrompt: '' });
       expect(Reflect.get(agent, 'runtimeSystemPrompt')).toBe('');
     } finally {
       await agent.close();
@@ -45,7 +46,7 @@ describe('AIAgent systemPrompt capture', () => {
     );
 
     try {
-      await agent.start('hello', { systemPrompt: '' }).catch(() => {});
+      await agent.start(createTestCall(), 'hello', { systemPrompt: '' }).catch(() => {});
       expect(Reflect.get(agent, 'runtimeSystemPrompt')).toBe('');
     } finally {
       await agent.close();

@@ -1,20 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type Anthropic from '@anthropic-ai/sdk';
+import Anthropic from '@anthropic-ai/sdk';
+import { Stream } from '@anthropic-ai/sdk/core/streaming';
 import type { RawMessageStreamEvent } from '@anthropic-ai/sdk/resources/messages/messages.js';
 import { FactoryUsageCorrelationHeaders, MessageHandle } from '@makaio/ai-adapters-core';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
+import type { CallContext, RequestCorrelationContext } from '@makaio/contracts';
 import { AnthropicSdkSession } from '../session.js';
 import type { AnthropicSdkSessionConfig } from '../types/index.js';
-import type { AnthropicSdkConnectorTurn } from '../turn.js';
 import { AnthropicSdkConnectorNamespace, AnthropicSdkConnectorSubjects, type UsageEvent } from '../namespaces/index.js';
 
 class ExposedAnthropicSession extends AnthropicSdkSession {
   public async invokeProvider(handle: MessageHandle): Promise<void> {
-    const turn = {
-      getMessageHandle: () => handle,
-      markStepStarted: async () => {},
-      markStepFinished: async () => {},
-    } as AnthropicSdkConnectorTurn;
+    const turn = this.createTurn(handle);
     await super.executeApiCall(turn, new AbortController().signal, 'adapter-session-1');
   }
 }
@@ -30,15 +28,55 @@ async function* messageStream(): AsyncGenerator<RawMessageStreamEvent> {
       model: 'claude-test',
       stop_reason: null,
       stop_sequence: null,
-      usage: { input_tokens: 10, output_tokens: 0, cache_creation_input_tokens: null, cache_read_input_tokens: null },
+      stop_details: null,
+      container: null,
+      usage: {
+        input_tokens: 10,
+        output_tokens: 0,
+        cache_creation_input_tokens: null,
+        cache_read_input_tokens: null,
+        cache_creation: null,
+        inference_geo: null,
+        server_tool_use: null,
+        service_tier: null,
+      },
     },
-  } as unknown as RawMessageStreamEvent;
+  };
   yield {
     type: 'message_delta',
-    delta: { stop_reason: 'end_turn', stop_sequence: null },
-    usage: { output_tokens: 5 },
-  } as unknown as RawMessageStreamEvent;
+    delta: { stop_reason: 'end_turn', stop_sequence: null, container: null, stop_details: null },
+    usage: {
+      output_tokens: 5,
+      input_tokens: null,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: null,
+      server_tool_use: null,
+    },
+  };
   yield { type: 'message_stop' };
+}
+
+function createProvider() {
+  const client = new Anthropic({ apiKey: 'test-key' });
+  const create = vi
+    .spyOn(client.messages, 'create')
+    .mockResolvedValue(new Stream(messageStream, new AbortController()));
+  return { client, create };
+}
+
+function createHandle(call: CallContext, messageId: string, text: string, correlation: RequestCorrelationContext) {
+  return new MessageHandle(
+    call,
+    messageId,
+    { role: 'user', message: text, blocks: [{ type: 'text', content: text }] },
+    'enqueue',
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    correlation,
+  );
 }
 
 afterEach(() => {
@@ -47,14 +85,15 @@ afterEach(() => {
 
 describe('Anthropic Factory Gateway request correlation', () => {
   it('sends allowlisted headers with a distinct matching LLM call ID for every request', async () => {
-    const bus = await AnthropicSdkConnectorNamespace.scopedBus();
-    const create = vi.fn(async (_body: unknown, _options?: unknown) => messageStream());
+    const bus = await AnthropicSdkConnectorNamespace.scopedBus(MakaioBus);
+    const { client, create } = createProvider();
     const usages: UsageEvent[] = [];
     bus.on(AnthropicSdkConnectorSubjects.sdk.event, ({ payload }) => {
       if (payload.event.eventType === 'usage') usages.push(payload.event);
     });
-    const config: AnthropicSdkSessionConfig = {
+    const config: AnthropicSdkSessionConfig & { globalBus: typeof MakaioBus } = {
       bus,
+      globalBus: MakaioBus,
       adapterId: 'adapter-1',
       adapterName: 'anthropic-sdk',
       agentId: 'agent-1',
@@ -62,7 +101,7 @@ describe('Anthropic Factory Gateway request correlation', () => {
       cwd: '/tmp',
       model: 'claude-test',
       env: {},
-      client: { messages: { create } } as unknown as Anthropic,
+      client,
       anthropicTools: [],
       requestCorrelationHeaders: 'factory-v1',
       emitSdkEvent: async () => {},
@@ -70,38 +109,18 @@ describe('Anthropic Factory Gateway request correlation', () => {
       requestToolApproval: async () => ({ action: 'allow' }),
     };
     const session = new ExposedAnthropicSession(config);
-    const firstHandle = new MessageHandle(
-      'message-runtime',
-      { role: 'user', message: 'hello', blocks: [{ type: 'text', content: 'hello' }] },
-      'enqueue',
-      undefined,
-      undefined,
-      undefined,
-      false,
-      undefined,
-      {
-        sessionId: 'stale-session',
-        turnId: 'turn-1',
-        executionId: 'execution-1',
-        frameId: 'frame-1',
-      },
-    );
-    const secondHandle = new MessageHandle(
-      'message-runtime-2',
-      { role: 'user', message: 'again', blocks: [{ type: 'text', content: 'again' }] },
-      'enqueue',
-      undefined,
-      undefined,
-      undefined,
-      false,
-      undefined,
-      {
-        sessionId: 'stale-session',
-        turnId: 'turn-2',
-        executionId: 'execution-1',
-        frameId: 'frame-1',
-      },
-    );
+    const firstHandle = createHandle(createTestCall(), 'message-runtime', 'hello', {
+      sessionId: 'stale-session',
+      turnId: 'turn-1',
+      executionId: 'execution-1',
+      frameId: 'frame-1',
+    });
+    const secondHandle = createHandle(createTestCall(), 'message-runtime-2', 'again', {
+      sessionId: 'stale-session',
+      turnId: 'turn-2',
+      executionId: 'execution-1',
+      frameId: 'frame-1',
+    });
 
     await session.invokeProvider(firstHandle);
     await session.invokeProvider(secondHandle);
@@ -134,10 +153,11 @@ describe('Anthropic Factory Gateway request correlation', () => {
   });
 
   it('does not send internal identifiers without explicit Factory Gateway opt-in', async () => {
-    const bus = await AnthropicSdkConnectorNamespace.scopedBus();
-    const create = vi.fn(async (_body: unknown, _options?: unknown) => messageStream());
+    const bus = await AnthropicSdkConnectorNamespace.scopedBus(MakaioBus);
+    const { client, create } = createProvider();
     const session = new ExposedAnthropicSession({
       bus,
+      globalBus: MakaioBus,
       adapterId: 'adapter-1',
       adapterName: 'anthropic-sdk',
       agentId: 'agent-1',
@@ -145,23 +165,16 @@ describe('Anthropic Factory Gateway request correlation', () => {
       cwd: '/tmp',
       model: 'claude-test',
       env: {},
-      client: { messages: { create } } as unknown as Anthropic,
+      client,
       anthropicTools: [],
       emitSdkEvent: async () => {},
       handleError: () => {},
       requestToolApproval: async () => ({ action: 'allow' }),
     });
-    const handle = new MessageHandle(
-      'message-1',
-      { role: 'user', message: 'hello', blocks: [{ type: 'text', content: 'hello' }] },
-      'enqueue',
-      undefined,
-      undefined,
-      undefined,
-      false,
-      undefined,
-      { executionId: 'execution-private', frameId: 'frame-private' },
-    );
+    const handle = createHandle(createTestCall(), 'message-1', 'hello', {
+      executionId: 'execution-private',
+      frameId: 'frame-private',
+    });
 
     await session.invokeProvider(handle);
 

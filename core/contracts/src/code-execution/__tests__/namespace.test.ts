@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import type { MakaioBusLike } from '@makaio/core';
+import type { CallContext, MakaioBusLike } from '@makaio/core';
 import { FrameworkContractNamespaces } from '../../namespace-catalog.js';
 import {
   CODE_EXECUTION_CAPABILITY_ID,
@@ -763,10 +763,13 @@ describe('CodeExecution provider interface', () => {
   });
 
   it('exposes the typed registration helper surface', () => {
-    expectTypeOf(registerCodeExecutionProvider).parameter(0).toEqualTypeOf<MakaioBusLike>();
-    expectTypeOf(registerCodeExecutionProvider).parameter(1).toEqualTypeOf<ICodeExecutionProvider>();
+    expectTypeOf(registerCodeExecutionProvider).parameter(0).toEqualTypeOf<CallContext>();
+    expectTypeOf(registerCodeExecutionProvider).parameter(1).toEqualTypeOf<Pick<MakaioBusLike, 'emit'>>();
+    expectTypeOf(registerCodeExecutionProvider).parameter(2).toEqualTypeOf<ICodeExecutionProvider>();
     expectTypeOf(registerCodeExecutionProvider).returns.toEqualTypeOf<Promise<void>>();
-    expectTypeOf(unregisterCodeExecutionProvider).parameter(1).toEqualTypeOf<string>();
+    expectTypeOf(unregisterCodeExecutionProvider).parameter(0).toEqualTypeOf<CallContext>();
+    expectTypeOf(unregisterCodeExecutionProvider).parameter(1).toEqualTypeOf<Pick<MakaioBusLike, 'emit'>>();
+    expectTypeOf(unregisterCodeExecutionProvider).parameter(2).toEqualTypeOf<string>();
     expectTypeOf(unregisterCodeExecutionProvider).returns.toEqualTypeOf<Promise<void>>();
   });
 

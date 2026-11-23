@@ -12,6 +12,7 @@
 
 import { eq, and, isNull } from 'drizzle-orm';
 import { resolveSchema, type MakaioDatabase } from '@makaio/storage-drizzle';
+import type { CallContext } from '@makaio/core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
 import { SessionStorageSubjects } from '../storage/namespace.js';
@@ -49,12 +50,14 @@ export function registerParentResolver(bus: IMakaioBus, db: MakaioDatabase): () 
    * populated at import time, so the full tree is traversable regardless of
    * import order. For each descendant that already has a `parentSessionId`
    * set (i.e., is resolved), updates `rootSessionId` via the bus.
+   * @param call - Call context of the import-completed event being resolved
    * @param adapterSessionId - The adapter session whose children to update
    * @param source - Source tool identity for the imported lineage
    * @param rootSessionId - The root session ID to propagate down the tree
    * @param depth - Current recursion depth for cycle detection
    */
   async function cascadeRootSessionId(
+    call: CallContext,
     adapterSessionId: string,
     source: string,
     rootSessionId: string,
@@ -77,7 +80,7 @@ export function registerParentResolver(bus: IMakaioBus, db: MakaioDatabase): () 
     for (const child of children) {
       // Update rootSessionId only for children that are already parent-resolved
       if (child.parentSessionId !== null) {
-        await bus.request(SessionStorageSubjects.update, {
+        await bus.request(call, SessionStorageSubjects.update, {
           sessionId: child.sessionId,
           rootSessionId,
         });
@@ -85,7 +88,7 @@ export function registerParentResolver(bus: IMakaioBus, db: MakaioDatabase): () 
       // Always recurse if this child has an adapterSessionId —
       // grandchildren may be resolved even if this child is not
       if (child.adapterSessionId !== null) {
-        await cascadeRootSessionId(child.adapterSessionId, source, rootSessionId, depth + 1);
+        await cascadeRootSessionId(call, child.adapterSessionId, source, rootSessionId, depth + 1);
       }
     }
   }
@@ -113,14 +116,14 @@ export function registerParentResolver(bus: IMakaioBus, db: MakaioDatabase): () 
     if (children.length === 0) return;
 
     // Get parent session to determine rootSessionId
-    const { session: parentSession } = await bus.request(SessionStorageSubjects.get, {
+    const { session: parentSession } = await bus.request(ctx.call, SessionStorageSubjects.get, {
       sessionId: parentMakaioSessionId,
     });
     const rootSessionId = parentSession?.rootSessionId ?? parentMakaioSessionId;
 
     // Update each unresolved child's session with parent and root relationships
     for (const child of children) {
-      await bus.request(SessionStorageSubjects.update, {
+      await bus.request(ctx.call, SessionStorageSubjects.update, {
         sessionId: child.sessionId,
         parentSessionId: parentMakaioSessionId,
         rootSessionId,
@@ -130,7 +133,7 @@ export function registerParentResolver(bus: IMakaioBus, db: MakaioDatabase): () 
       // Always cascade via external session space — descendants may already be
       // resolved even when this direct child was waiting on its parent.
       if (child.adapterSessionId !== null) {
-        await cascadeRootSessionId(child.adapterSessionId, source, rootSessionId);
+        await cascadeRootSessionId(ctx.call, child.adapterSessionId, source, rootSessionId);
       }
     }
   });

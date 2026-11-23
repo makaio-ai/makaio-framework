@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AgentSubjects, SessionSubjects, type StepFinished } from '@makaio/contracts';
 import { TurnStorageSubjects } from '@makaio/services-core/turn';
 import { createHook } from '../create-hook.js';
@@ -29,18 +30,20 @@ function createStepFinishedPayload(overrides: Partial<StepFinished> = {}): StepF
  * @param payload - StepFinished payload
  */
 async function emitStepFinished(payload: StepFinished): Promise<void> {
-  await MakaioBus.emit(AgentSubjects.step.finished, payload);
+  await bus.emit(createTestCall(), AgentSubjects.step.finished, payload);
 }
+
+let bus: IMakaioBus = createBusInstance();
 
 describe('PostStep hook', () => {
   beforeEach(() => {
-    MakaioBus.__resetHandlers?.();
+    bus = createBusInstance();
   });
 
   describe('hook registration and unsubscription', () => {
     it('calls handler with correct context when step.finished is emitted', async () => {
       const handler = vi.fn();
-      const { unsubscribe } = createHook('PostStep', { handler });
+      const { unsubscribe } = createHook('PostStep', { bus, handler });
 
       await emitStepFinished(createStepFinishedPayload());
 
@@ -58,7 +61,7 @@ describe('PostStep hook', () => {
 
     it('handles optional fields and unsubscribe', async () => {
       const handler = vi.fn();
-      const { unsubscribe } = createHook('PostStep', { handler });
+      const { unsubscribe } = createHook('PostStep', { bus, handler });
 
       // With optional fields undefined
       await emitStepFinished(createStepFinishedPayload({ sessionId: undefined, messageId: undefined }));
@@ -75,7 +78,7 @@ describe('PostStep hook', () => {
   describe('step type filtering', () => {
     it('defaults to reasoning-only when stepTypes not specified', async () => {
       const handler = vi.fn();
-      const { unsubscribe } = createHook('PostStep', { handler });
+      const { unsubscribe } = createHook('PostStep', { bus, handler });
 
       // Emit reasoning step - should fire
       await emitStepFinished(createStepFinishedPayload({ stepType: 'reasoning' }));
@@ -95,6 +98,7 @@ describe('PostStep hook', () => {
     it('only fires for configured stepTypes', async () => {
       const handler = vi.fn();
       const { unsubscribe } = createHook('PostStep', {
+        bus,
         handler,
         stepTypes: ['tool_use', 'text'],
       });
@@ -117,6 +121,7 @@ describe('PostStep hook', () => {
     it('supports all stepTypes when explicitly configured', async () => {
       const handler = vi.fn();
       const { unsubscribe } = createHook('PostStep', {
+        bus,
         handler,
         stepTypes: ['reasoning', 'tool_use', 'text'],
       });
@@ -154,19 +159,19 @@ describe('PostStep hook', () => {
       };
 
       // Register mock handlers for enrichment queries
-      MakaioBus.on(SessionSubjects.get, (ctx) => {
+      bus.on(SessionSubjects.get, (ctx) => {
         ctx.setResult({ session: mockSession });
       });
-      MakaioBus.on(TurnStorageSubjects.getBySession, (ctx) => {
+      bus.on(TurnStorageSubjects.getBySession, (ctx) => {
         ctx.setResult({ turns: mockTurns });
       });
       // Host-side enrichContext seam provides project/worktree
-      MakaioBus.on(SessionSubjects.enrichContext, (ctx) => {
+      bus.on(SessionSubjects.enrichContext, (ctx) => {
         ctx.setResult({ project: mockProject });
       });
 
       const handler = vi.fn();
-      const { unsubscribe } = createHook('PostStep', { handler });
+      const { unsubscribe } = createHook('PostStep', { bus, handler });
 
       await emitStepFinished(createStepFinishedPayload({ sessionId: 'session-1' }));
 
@@ -180,7 +185,7 @@ describe('PostStep hook', () => {
 
     it('provides empty enrichment when sessionId is undefined', async () => {
       const handler = vi.fn();
-      const { unsubscribe } = createHook('PostStep', { handler });
+      const { unsubscribe } = createHook('PostStep', { bus, handler });
 
       await emitStepFinished(createStepFinishedPayload({ sessionId: undefined }));
 
@@ -194,12 +199,12 @@ describe('PostStep hook', () => {
 
     it('gracefully degrades when session enrichment fails', async () => {
       // Mock session enrichment to fail
-      MakaioBus.on(SessionSubjects.get, () => {
+      bus.on(SessionSubjects.get, () => {
         throw new Error('Session not found');
       });
 
       const handler = vi.fn();
-      const { unsubscribe } = createHook('PostStep', { handler });
+      const { unsubscribe } = createHook('PostStep', { bus, handler });
 
       await emitStepFinished(createStepFinishedPayload({ sessionId: 'session-1' }));
 
@@ -219,6 +224,7 @@ describe('PostStep hook', () => {
       const order: string[] = [];
 
       const unsub1 = createHook('PostStep', {
+        bus,
         handler: () => {
           order.push('low');
         },
@@ -226,6 +232,7 @@ describe('PostStep hook', () => {
       }).unsubscribe;
 
       const unsub2 = createHook('PostStep', {
+        bus,
         handler: () => {
           order.push('high');
         },
@@ -233,6 +240,7 @@ describe('PostStep hook', () => {
       }).unsubscribe;
 
       const unsub3 = createHook('PostStep', {
+        bus,
         handler: () => {
           order.push('med');
         },
@@ -255,6 +263,7 @@ describe('PostStep hook', () => {
       const order: string[] = [];
 
       createHook('PostStep', {
+        bus,
         handler: () => {
           order.push('first');
         },
@@ -262,6 +271,7 @@ describe('PostStep hook', () => {
       });
 
       createHook('PostStep', {
+        bus,
         handler: () => {
           order.push('throws');
           throw new Error('test error');
@@ -271,6 +281,7 @@ describe('PostStep hook', () => {
       });
 
       createHook('PostStep', {
+        bus,
         handler: () => {
           order.push('third');
         },
@@ -288,6 +299,7 @@ describe('PostStep hook', () => {
       const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       createHook('PostStep', {
+        bus,
         handler: () => {
           throw new Error('intentional error');
         },
@@ -307,7 +319,7 @@ describe('PostStep hook', () => {
     it('includes stepContent from payload.content for text blocks', async () => {
       const mockBlock = { type: 'text' as const, content: 'This is text content' };
       const handler = vi.fn();
-      createHook('PostStep', { handler, stepTypes: ['text'] });
+      createHook('PostStep', { bus, handler, stepTypes: ['text'] });
       await emitStepFinished(createStepFinishedPayload({ content: mockBlock, stepType: 'text' }));
       expect(handler.mock.calls[0][0].stepContent).toEqual(mockBlock);
     });
@@ -315,7 +327,7 @@ describe('PostStep hook', () => {
     it('includes stepContent from payload.content for reasoning blocks', async () => {
       const mockBlock = { type: 'reasoning' as const, content: 'This is reasoning content' };
       const handler = vi.fn();
-      createHook('PostStep', { handler });
+      createHook('PostStep', { bus, handler });
       await emitStepFinished(createStepFinishedPayload({ content: mockBlock, stepType: 'reasoning' }));
       expect(handler.mock.calls[0][0].stepContent).toEqual(mockBlock);
     });
@@ -328,7 +340,7 @@ describe('PostStep hook', () => {
         isError: false,
       };
       const handler = vi.fn();
-      createHook('PostStep', { handler, stepTypes: ['tool_use'] });
+      createHook('PostStep', { bus, handler, stepTypes: ['tool_use'] });
       await emitStepFinished(createStepFinishedPayload({ content: mockBlock, stepType: 'tool_use' }));
       expect(handler).toHaveBeenCalled();
       expect(handler.mock.calls[0][0].stepContent).toEqual(mockBlock);
@@ -336,7 +348,7 @@ describe('PostStep hook', () => {
 
     it('stepContent comes directly from payload.content', async () => {
       const handler = vi.fn();
-      createHook('PostStep', { handler, stepTypes: ['text'] });
+      createHook('PostStep', { bus, handler, stepTypes: ['text'] });
 
       const content = { type: 'text' as const, content: 'Direct content from payload' };
       await emitStepFinished(createStepFinishedPayload({ content, stepType: 'text' }));
@@ -345,7 +357,7 @@ describe('PostStep hook', () => {
 
     it('stepContent is always available since content is required in schema', async () => {
       const handler = vi.fn();
-      createHook('PostStep', { handler });
+      createHook('PostStep', { bus, handler });
 
       // Content is now required - no need for messageId or fetch fallback
       const content = { type: 'reasoning' as const, content: 'Required content' };
@@ -357,7 +369,7 @@ describe('PostStep hook', () => {
   describe('context properties', () => {
     it('provides bus, payload, and interceptor controls', async () => {
       const handler = vi.fn();
-      createHook('PostStep', { handler, stepTypes: ['tool_use'] });
+      createHook('PostStep', { bus, handler, stepTypes: ['tool_use'] });
 
       const payload = createStepFinishedPayload({ stepType: 'tool_use', blockIndex: 2 });
       await emitStepFinished(payload);

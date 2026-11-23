@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
-import { createBusContext, createBusInstance } from '@makaio/bus-core';
+import { createBusInstance } from '@makaio/bus-core';
 import { WorkflowNamespace, WorkflowSubjects } from '@makaio/contracts';
 import {
   registerDrizzleWorkflowStorage,
@@ -27,7 +27,7 @@ const completedAt = 1_250;
  * @param db - Database handle used by the storage handlers.
  */
 function createWorkflowStorageBus(db: MakaioDatabase) {
-  const bus = createBusInstance({ context: createBusContext() });
+  const bus = createBusInstance();
   bus.registerNamespace(WorkflowNamespace);
   bus.registerNamespace(WorkflowStorageNamespace);
   const cleanup = registerDrizzleWorkflowStorage(bus, db);

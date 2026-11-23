@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { resolveClientBinary } from '@makaio/subsystem-client';
+import { createTestCall } from '@makaio/test-utils';
 import { resolveSessionEnvironment } from '../resolve-session-environment.js';
 
 vi.mock('@makaio/subsystem-client', () => ({
@@ -15,6 +16,7 @@ describe('resolveSessionEnvironment', () => {
   });
 
   it('scrubs auth variables after every non-auth environment source is merged', async () => {
+    const call = createTestCall();
     const globalBus = createBusInstance();
     resolveClientBinaryMock.mockResolvedValue({
       binaryPath: '/managed/bin/client',
@@ -28,7 +30,7 @@ describe('resolveSessionEnvironment', () => {
       version: '1.0.0',
     });
 
-    const result = await resolveSessionEnvironment({
+    const result = await resolveSessionEnvironment(call, {
       globalBus,
       clientId: 'test-client',
       baseEnv: {
@@ -58,13 +60,13 @@ describe('resolveSessionEnvironment', () => {
     expect(result.contextEnv).toEqual({ PATH: '/managed/bin' });
     expect(Object.isFrozen(result.connectorEnv)).toBe(true);
     expect(Object.isFrozen(result.contextEnv)).toBe(true);
-    expect(resolveClientBinaryMock).toHaveBeenCalledWith(globalBus, 'test-client');
+    expect(resolveClientBinaryMock).toHaveBeenCalledWith(call, globalBus, 'test-client');
   });
 
   it('applies selected auth after scrub even when a lease supplied the same target', async () => {
     resolveClientBinaryMock.mockResolvedValue(undefined);
 
-    const result = await resolveSessionEnvironment({
+    const result = await resolveSessionEnvironment(createTestCall(), {
       baseEnv: { CODEX_ACCESS_TOKEN: 'ambient-token' },
       leaseEnv: { CODEX_ACCESS_TOKEN: 'lease-token', CODEX_HOME: '/isolated/codex' },
       scrubEnvVars: ['CODEX_ACCESS_TOKEN'],
@@ -82,7 +84,7 @@ describe('resolveSessionEnvironment', () => {
     const previous = process.env['AMBIENT_AUTH'];
     process.env['AMBIENT_AUTH'] = 'ambient-secret';
     try {
-      const result = await resolveSessionEnvironment({
+      const result = await resolveSessionEnvironment(createTestCall(), {
         baseEnv: { PATH: '/explicit/bin', NODE_OPTIONS: '--inspect' },
         scrubEnvVars: ['AMBIENT_AUTH'],
       });
@@ -100,7 +102,7 @@ describe('resolveSessionEnvironment', () => {
   });
 
   it('rejects client resolution without the runtime-owned bus', async () => {
-    await expect(resolveSessionEnvironment({ clientId: 'test-client' })).rejects.toThrow(
+    await expect(resolveSessionEnvironment(createTestCall(), { clientId: 'test-client' })).rejects.toThrow(
       'Client binary resolution requires the adapter runtime global bus',
     );
     expect(resolveClientBinaryMock).not.toHaveBeenCalled();

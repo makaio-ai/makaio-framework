@@ -1,5 +1,6 @@
 import { createBusInstance } from '@makaio/bus-core';
 import { ClientNamespace, ClientSubjects } from '@makaio/contracts/client';
+import { createTestCall } from '@makaio/test-utils';
 import { describe, expect, it } from 'vitest';
 import { resolveClientBinary } from '../resolve-client-binary.js';
 
@@ -19,7 +20,7 @@ describe('resolveClientBinary', () => {
     });
 
     try {
-      await expect(resolveClientBinary(runtimeBus, 'test-client')).resolves.toEqual({
+      await expect(resolveClientBinary(createTestCall(), runtimeBus, 'test-client')).resolves.toEqual({
         binaryPath: '/runtime/bin/client',
         env: { PATH: '/runtime/bin' },
         configDir: null,
@@ -35,6 +36,6 @@ describe('resolveClientBinary', () => {
     const frameworkOnlyBus = createBusInstance();
     frameworkOnlyBus.registerNamespaces([ClientNamespace]);
 
-    await expect(resolveClientBinary(frameworkOnlyBus, 'test-client')).resolves.toBeUndefined();
+    await expect(resolveClientBinary(createTestCall(), frameworkOnlyBus, 'test-client')).resolves.toBeUndefined();
   });
 });

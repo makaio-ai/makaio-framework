@@ -4,6 +4,7 @@ import { createBusNamespace } from '@makaio/core';
 import { SubjectTelemetryNamespace, SubjectTelemetrySubjects, type SubjectTelemetryFact } from '@makaio/contracts';
 import { collectorOnlySubject, createBusInstance, type BusMessage, type BusTransportRegistry } from '../index.js';
 import { createBidirectionalTransportPair } from './helpers/transport-fixtures.js';
+import { busContextOf } from '../kernel-api.js';
 
 function makeFact(overrides: Partial<SubjectTelemetryFact> = {}): SubjectTelemetryFact {
   return {
@@ -36,15 +37,18 @@ describe('collectorOnlySubject()', () => {
     collectorBus.registerNamespace(SubjectTelemetryNamespace);
     peerBus.registerNamespace(SubjectTelemetryNamespace);
 
-    collectorBus
-      .getContext()
-      .transportRegistry.registerTransport('from-source' as keyof BusTransportRegistry, sourceToCollector.sideB);
-    collectorBus
-      .getContext()
-      .transportRegistry.registerTransport('to-peer' as keyof BusTransportRegistry, collectorToPeer.sideA);
-    peerBus
-      .getContext()
-      .transportRegistry.registerTransport('from-collector' as keyof BusTransportRegistry, collectorToPeer.sideB);
+    busContextOf(collectorBus).transportRegistry.registerTransport(
+      'from-source' as keyof BusTransportRegistry,
+      sourceToCollector.sideB,
+    );
+    busContextOf(collectorBus).transportRegistry.registerTransport(
+      'to-peer' as keyof BusTransportRegistry,
+      collectorToPeer.sideA,
+    );
+    busContextOf(peerBus).transportRegistry.registerTransport(
+      'from-collector' as keyof BusTransportRegistry,
+      collectorToPeer.sideB,
+    );
 
     const received: SubjectTelemetryFact[] = [];
     const peerReceived: SubjectTelemetryFact[] = [];
@@ -89,14 +93,14 @@ describe('collectorOnlySubject()', () => {
         event: collectorOnlySubject(z.object({ value: z.string() })),
       }),
     );
-    bus.getContext().transportRegistry.registerTransport('local-out' as keyof BusTransportRegistry, pair.sideA);
-    peerBus.getContext().transportRegistry.registerTransport('local-in' as keyof BusTransportRegistry, pair.sideB);
+    busContextOf(bus).transportRegistry.registerTransport('local-out' as keyof BusTransportRegistry, pair.sideA);
+    busContextOf(peerBus).transportRegistry.registerTransport('local-in' as keyof BusTransportRegistry, pair.sideB);
     const peerReceived: Array<{ value: string }> = [];
     peerBus.on(subjects.event, ({ payload }) => {
       peerReceived.push(payload);
     });
 
-    await bus.emit(subjects.event, { value: 'local' });
+    await bus.emit(bus.own('root'), subjects.event, { value: 'local' });
 
     expect(sentMessages).toHaveLength(0);
     expect(peerReceived).toHaveLength(0);

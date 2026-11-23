@@ -6,6 +6,7 @@ import {
   type ExecutionAttemptControlDeliveryResponse,
   type ExecutionAttemptControlReceipt,
 } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type {
   AttemptControlEvidenceDecision,
   AttemptControlEvidenceRepository,
@@ -72,11 +73,13 @@ function matchesDeliveredReceipt(
  * A stored receipt without a final report remains eligible for redelivery: the runtime
  * replays its response/report, never starts the workload again. Unknown transport outcomes
  * remain unknown. This does not acquire an operation slot or touch outcome/provider state.
+ * @param call - Call for this reconciliation pass.
  * @param deps - Live bus and durable Authority ports.
  * @param input - Exact Attempt and explicit bounded transport-delivery budget.
  * @returns This pass's transport and receipt-persistence result, not a stop conclusion.
  */
 export async function reconcileAttemptCancellation(
+  call: CallContext,
   deps: AttemptControlDeliveryDeps,
   input: ReconcileAttemptCancellationInput,
 ): Promise<AttemptControlDeliveryResult> {
@@ -105,7 +108,7 @@ export async function reconcileAttemptCancellation(
   let response: ExecutionAttemptControlDeliveryResponse;
   try {
     response = ExecutionAttemptControlDeliveryResponseSchema.parse(
-      await deps.bus.request(ExecutionAttemptSubjects.control.deliver, delivery, { timeout: timeoutMs, signal }),
+      await deps.bus.request(call, ExecutionAttemptSubjects.control.deliver, delivery, { timeout: timeoutMs, signal }),
     );
   } catch {
     // A timeout or disconnected runtime is absence of evidence, never unconfirmed/achieved evidence.

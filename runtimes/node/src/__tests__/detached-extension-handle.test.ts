@@ -243,11 +243,13 @@ describe('createDetachedExtensionPackage', () => {
       expect(stop).toHaveBeenCalledOnce();
       expect(registerNamespace).toHaveBeenCalledOnce();
       expect(request).toHaveBeenCalledWith(
+        bus.own('start'),
         expect.anything(),
         expect.objectContaining({ config: { enabled: true } }),
         expect.objectContaining({ timeout: undefined }),
       );
       expect(request).toHaveBeenCalledWith(
+        bus.own('stop'),
         expect.anything(),
         { reason: 'runtime-shutdown' },
         expect.objectContaining({ timeout: DEFAULT_REQUEST_TIMEOUT_MS }),

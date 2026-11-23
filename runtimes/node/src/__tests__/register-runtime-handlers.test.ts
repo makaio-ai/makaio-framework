@@ -323,7 +323,7 @@ describe('registerRuntimeHandlers', () => {
       setResult({ token });
     });
     const credentialEndpoint: ChannelEndpoint = createChannelEndpoint(
-      MakaioBus.getContext(),
+      MakaioBus,
       'credentials',
       (channel) => {
         channel.on(CredentialSubjects.resolve, ({ payload, setResult }) => {

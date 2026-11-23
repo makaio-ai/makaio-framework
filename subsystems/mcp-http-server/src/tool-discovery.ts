@@ -1,6 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { ensureMcpObjectSchema, type ToolInfo, type McpToolDefinition } from '@makaio/tools-core';
-import { ToolSubjects } from '@makaio/contracts';
+import { ToolSubjects, type CallContext } from '@makaio/contracts';
 
 /**
  * Maps a runtime toolset name to the plugin that owns it.
@@ -107,12 +107,14 @@ function tentativeMcpName(tool: ToolInfo, pluginToolsets: PluginToolsetMap): str
  * 4. Detect collisions: any tentative name claimed by two or more tools is resolved to
  *    `{toolsetName}.{toolName}` for every tool sharing that name.
  * 5. Return `McpResolvedTools` with the final tool list and a `byMcpName` lookup map.
+ * @param call - Call context of the message being served; the registry query forwards its principal
  * @param bus - Bus instance used to query the live tool registry
  * @param options - Discovery options (plugin map, filter hook, static fallback)
  * @param identity - Optional adapter identity for per-adapter policy filtering
  * @returns Resolved MCP tools with bidirectional name mapping
  */
 export async function resolveMcpTools(
+  call: CallContext,
   bus: IMakaioBus,
   options?: McpToolDiscoveryOptions,
   identity?: McpToolDiscoveryIdentity,
@@ -122,7 +124,7 @@ export async function resolveMcpTools(
 
   // Query live registry; fall back to static list if no handler is registered.
   // Pass adapter identity so the registry can apply per-adapter policy filtering.
-  const listResult = await bus.requestOptional(ToolSubjects.list, {
+  const listResult = await bus.requestOptional(call, ToolSubjects.list, {
     adapterId: identity?.adapterId,
     adapterName: identity?.adapterName,
   });

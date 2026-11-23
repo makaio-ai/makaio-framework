@@ -273,7 +273,7 @@ function registerRemoteSubcommand(
     const merged = { ...rawOpts, ...rawArgs };
 
     try {
-      const result = await bus.request(CliRpcSubjects.execute, {
+      const result = await bus.request(bus.own('root'), CliRpcSubjects.execute, {
         command: commandName,
         subcommand: sub.name,
         args: Object.keys(merged).length > 0 ? merged : undefined,
@@ -612,7 +612,7 @@ export async function main(
 
   if (bus) {
     try {
-      const { contributions: manifests } = await bus.request(CliRpcSubjects.listContributions, {});
+      const { contributions: manifests } = await bus.request(bus.own('root'), CliRpcSubjects.listContributions, {});
       for (const manifest of manifests) {
         registerRemoteCommand(program, manifest, bus);
       }

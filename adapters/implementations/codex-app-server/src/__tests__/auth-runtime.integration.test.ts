@@ -3,6 +3,7 @@ import { createChannelEndpoint, MakaioBus, type ChannelEndpoint } from '@makaio/
 import { ConformanceConnectorRuntimeRegistry } from '@makaio/ai-adapters-core';
 import { prepareAdapterAuthRuntime, type BoundAdapterRuntimeConfig } from '@makaio/ai-adapters-core/config';
 import { AuthCredentialRefSchema, ClientSubjects, CredentialSubjects, type ProviderContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { CodexAppServerConfig } from '../config.js';
 import { CodexAppServerConnector } from '../connector.js';
 import type { CodexAppServerConfig as CodexConnectorConfig } from '../connector/types.js';
@@ -30,7 +31,7 @@ function setupCredentialChannel(values: Readonly<Record<string, string | null>>)
     }),
   );
   const endpoint: ChannelEndpoint = createChannelEndpoint(
-    MakaioBus.getContext(),
+    MakaioBus,
     'credentials',
     (channel) => {
       channel.on(CredentialSubjects.resolve, (ctx) => {
@@ -134,7 +135,7 @@ function providerContext(mode: 'native' | 'access-token' | 'api-key'): ProviderC
  * @returns Bound Codex runtime config
  */
 async function runtimeConfig(mode: 'native' | 'access-token' | 'api-key'): Promise<CodexBoundRuntimeConfig> {
-  const bus = await CodexAppServerNamespace.scopedBus();
+  const bus = await CodexAppServerNamespace.scopedBus(MakaioBus);
   return CodexAppServerConfig.getConfig({
     bus,
     globalBus: MakaioBus,
@@ -160,7 +161,8 @@ async function runtimeConfig(mode: 'native' | 'access-token' | 'api-key'): Promi
 describe('Codex central auth runtime integration', () => {
   it('materializes native auth-only state and scrubs every competing process input', async () => {
     const leases = setupLease(true);
-    const prepared = await prepareAdapterAuthRuntime(await runtimeConfig('native'));
+    const call = createTestCall();
+    const prepared = await prepareAdapterAuthRuntime(call, await runtimeConfig('native'));
 
     expect(leases.createPayloads[0]?.configInheritance).toBe('auth-only');
     expect(prepared.config.env).toEqual({ PATH: '/base/bin', CODEX_HOME: '/tmp/codex-auth-runtime' });
@@ -170,14 +172,15 @@ describe('Codex central auth runtime integration', () => {
       configInheritance: 'auth-only',
     });
 
-    await prepared.lease?.release();
+    await prepared.lease?.release(call);
     expect(leases.destroyPayloads).toHaveLength(1);
   });
 
   it('injects only the selected access token into an empty config lease', async () => {
     setupCredentialChannel({ 'env:CODEX_ACCESS_TOKEN': 'selected-access-token' });
     const leases = setupLease(false);
-    const prepared = await prepareAdapterAuthRuntime(await runtimeConfig('access-token'));
+    const call = createTestCall();
+    const prepared = await prepareAdapterAuthRuntime(call, await runtimeConfig('access-token'));
 
     expect(leases.createPayloads[0]?.configInheritance).toBe('empty');
     expect(prepared.config.env).toEqual({
@@ -189,13 +192,14 @@ describe('Codex central auth runtime integration', () => {
     expect(prepared.config.env).not.toHaveProperty('CODEX_API_KEY');
     expect(prepared.config.adapterAuth?.connectorDeliveries).toEqual([]);
 
-    await prepared.lease?.release();
+    await prepared.lease?.release(call);
   });
 
   it('keeps OPENAI_API_KEY as a source and delivers it only through account/login/start', async () => {
     setupCredentialChannel({ 'env:OPENAI_API_KEY': 'selected-api-key' });
     const leases = setupLease(false);
-    const prepared = await prepareAdapterAuthRuntime(await runtimeConfig('api-key'));
+    const call = createTestCall();
+    const prepared = await prepareAdapterAuthRuntime(call, await runtimeConfig('api-key'));
 
     expect(leases.createPayloads[0]?.configInheritance).toBe('empty');
     expect(prepared.config.env).toEqual({ PATH: '/base/bin', CODEX_HOME: '/tmp/codex-auth-runtime' });
@@ -210,7 +214,7 @@ describe('Codex central auth runtime integration', () => {
       configInheritance: 'empty',
     });
 
-    await prepared.lease?.release();
+    await prepared.lease?.release(call);
   });
 
   it('releases the Codex lease through the central connector runtime close path', async () => {

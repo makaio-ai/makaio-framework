@@ -122,6 +122,7 @@ async function createHarness(
 
   const deliver = (signal?: AbortSignal): Promise<unknown> =>
     reconcileAttemptCancellation(
+      authorityBus.own('root'),
       { bus: authorityBus, authority: harness.authority },
       { executionId, executionAttemptId, timeoutMs: 3_000, signal },
     );

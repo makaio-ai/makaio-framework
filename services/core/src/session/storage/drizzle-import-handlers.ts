@@ -296,7 +296,16 @@ function registerImportUpsertHandler(deps: SessionHandlerDeps): () => void {
 
     const created = row.sessionId === sessionId;
 
-    await emitImportUpsertLifecycleEvent(bus, db, row, created, initial.branchKind, initial.createdAt, payload.source);
+    await emitImportUpsertLifecycleEvent(
+      ctx.call,
+      bus,
+      db,
+      row,
+      created,
+      initial.branchKind,
+      initial.createdAt,
+      payload.source,
+    );
     ctx.setResult({ sessionId: row.sessionId, created });
   });
 }
@@ -469,7 +478,7 @@ function registerUpdateImportStatusHandler(deps: SessionHandlerDeps): () => void
     if (success) {
       // Fire-and-forget: entity cache reactivity is best-effort.
       void bus
-        .emit(SessionSubjects.importStatusChanged, { sessionId, importStatus })
+        .emit(ctx.call, SessionSubjects.importStatusChanged, { sessionId, importStatus })
         .catch((err) => console.error('[SessionStorage] Failed to emit session.importStatusChanged:', err));
 
       // Emit session.import.completed when a session transitions to 'imported' so that
@@ -479,7 +488,7 @@ function registerUpdateImportStatusHandler(deps: SessionHandlerDeps): () => void
       const importSource = updated.source ?? updated.adapterName;
       if (importStatus === 'imported' && updated.adapterSessionId && importSource) {
         void bus
-          .emit(SessionSubjects.import.completed, {
+          .emit(ctx.call, SessionSubjects.import.completed, {
             sessionId,
             adapterSessionId: updated.adapterSessionId,
             source: importSource,

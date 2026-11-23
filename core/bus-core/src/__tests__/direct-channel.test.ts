@@ -11,9 +11,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
-import { createBusContext, createBusInstance, channelSubject } from '../index.js';
+import { createBusInstance, channelSubject } from '../index.js';
+import { createBusContext } from '../kernel-api.js';
 import { createChannelEndpoint, openChannel } from '../channel/channel-endpoint.js';
-import type { MakaioBusContext } from '../types/bus.js';
+import type { IMakaioBus, MakaioBusContext } from '../types/bus.js';
 import type { IDirectChannel } from '../channel/types.js';
 import { ChannelClosedError } from '../errors/channel-closed-error.js';
 import { ChannelAuthError } from '../errors/channel-auth-error.js';
@@ -61,9 +62,11 @@ async function flushTransportSubscriptions(): Promise<void> {
 
 describe('DirectChannel', () => {
   let context: MakaioBusContext;
+  let bus: IMakaioBus;
 
   beforeEach(() => {
     context = createBusContext();
+    bus = createBusInstance({ context });
   });
 
   // -------------------------------------------------------------------------
@@ -77,8 +80,8 @@ describe('DirectChannel', () => {
     it('establishes a channel with a valid token', async () => {
       const token = 'test-token-123';
 
-      const endpoint = createChannelEndpoint(context, 'testService', (_channel) => {}, { token });
-      const channel = await openChannel(context, 'testService', { token });
+      const endpoint = createChannelEndpoint(bus, 'testService', (_channel) => {}, { token });
+      const channel = await openChannel(bus, 'testService', { token });
 
       expect(channel.channelId).toBeDefined();
       expect(typeof channel.channelId).toBe('string');
@@ -88,9 +91,9 @@ describe('DirectChannel', () => {
     });
 
     it('rejects a wrong token — the bus wraps it in RequestError', async () => {
-      const endpoint = createChannelEndpoint(context, 'testService', () => {}, { token: 'correct' });
+      const endpoint = createChannelEndpoint(bus, 'testService', () => {}, { token: 'correct' });
 
-      const rejection = await openChannel(context, 'testService', { token: 'wrong' }).catch((e) => e);
+      const rejection = await openChannel(bus, 'testService', { token: 'wrong' }).catch((e) => e);
       expect(rejection).toBeInstanceOf(RequestError);
       expect((rejection as RequestError).cause).toBeInstanceOf(ChannelAuthError);
 
@@ -98,12 +101,12 @@ describe('DirectChannel', () => {
     });
 
     it('throws for a non-existent endpoint (NoHandlerError via RequestError)', async () => {
-      await expect(openChannel(context, 'nonExistent', { token: 'x' })).rejects.toThrow(NoHandlerError);
+      await expect(openChannel(bus, 'nonExistent', { token: 'x' })).rejects.toThrow(NoHandlerError);
     });
 
     it('rolls back the channel when the endpoint callback throws', async () => {
       const endpoint = createChannelEndpoint(
-        context,
+        bus,
         'callback-throw',
         () => {
           throw new Error('callback exploded');
@@ -112,7 +115,7 @@ describe('DirectChannel', () => {
       );
 
       // The handshake fails because the callback threw — the error is wrapped in RequestError
-      const rejection = await openChannel(context, 'callback-throw', { token: 'test-token' }).catch((e) => e);
+      const rejection = await openChannel(bus, 'callback-throw', { token: 'test-token' }).catch((e) => e);
       expect(rejection).toBeInstanceOf(RequestError);
       expect((rejection as RequestError).cause).toBeInstanceOf(Error);
       expect(((rejection as RequestError).cause as Error).message).toBe('callback exploded');
@@ -132,7 +135,7 @@ describe('DirectChannel', () => {
       const store = new Map<string, string>();
 
       const endpoint = createChannelEndpoint(
-        context,
+        bus,
         'kv',
         (channel) => {
           channel.on(TestSubjects.store, (ctx) => {
@@ -146,15 +149,15 @@ describe('DirectChannel', () => {
         { token },
       );
 
-      const ch = await openChannel(context, 'kv', { token });
+      const ch = await openChannel(bus, 'kv', { token });
 
-      const storeResult = await ch.request(TestSubjects.store, { key: 'foo', value: 'bar' });
+      const storeResult = await ch.request(bus.own('root'), TestSubjects.store, { key: 'foo', value: 'bar' });
       expect(storeResult.stored).toBe(true);
 
-      const getResult = await ch.request(TestSubjects.get, { key: 'foo' });
+      const getResult = await ch.request(bus.own('root'), TestSubjects.get, { key: 'foo' });
       expect(getResult.value).toBe('bar');
 
-      const missingResult = await ch.request(TestSubjects.get, { key: 'missing' });
+      const missingResult = await ch.request(bus.own('root'), TestSubjects.get, { key: 'missing' });
       expect(missingResult.value).toBeNull();
 
       ch.close();
@@ -175,7 +178,7 @@ describe('DirectChannel', () => {
       const store = new Map<string, string>();
 
       const endpoint = createChannelEndpoint(
-        serverContext,
+        serverBus,
         'transported-kv',
         (channel) => {
           channel.on(TestSubjects.store, (ctx) => {
@@ -195,15 +198,18 @@ describe('DirectChannel', () => {
       // constrained to the pair transport. Callers that want cross-transport
       // channel opens must specify transports — the new openChannel default (no
       // transports option) uses advertised-handler routing only.
-      const channel = await openChannel(clientContext, 'transported-kv', {
+      const channel = await openChannel(clientBus, 'transported-kv', {
         token,
         transports: [sideA.name as BusTransportKeys],
       });
 
-      const storeResult = await channel.request(TestSubjects.store, { key: 'alpha', value: 'beta' });
+      const storeResult = await channel.request(clientBus.own('root'), TestSubjects.store, {
+        key: 'alpha',
+        value: 'beta',
+      });
       expect(storeResult.stored).toBe(true);
 
-      const getResult = await channel.request(TestSubjects.get, { key: 'alpha' });
+      const getResult = await channel.request(clientBus.own('root'), TestSubjects.get, { key: 'alpha' });
       expect(getResult.value).toBe('beta');
 
       channel.close();
@@ -224,7 +230,7 @@ describe('DirectChannel', () => {
       const received: string[] = [];
 
       const endpoint = createChannelEndpoint(
-        context,
+        bus,
         'events',
         (channel) => {
           channel.on(TestSubjects.notify, (ctx) => {
@@ -234,9 +240,9 @@ describe('DirectChannel', () => {
         { token },
       );
 
-      const ch = await openChannel(context, 'events', { token });
-      await ch.emit(TestSubjects.notify, { message: 'hello' });
-      await ch.emit(TestSubjects.notify, { message: 'world' });
+      const ch = await openChannel(bus, 'events', { token });
+      await ch.emit(bus.own('root'), TestSubjects.notify, { message: 'hello' });
+      await ch.emit(bus.own('root'), TestSubjects.notify, { message: 'world' });
 
       expect(received).toEqual(['hello', 'world']);
 
@@ -254,10 +260,10 @@ describe('DirectChannel', () => {
       const { subjects: TestSubjects } = registerTestNamespace(context);
       const token = 'test-token';
 
-      const endpoint = createChannelEndpoint(context, 'optional', () => {}, { token });
-      const ch = await openChannel(context, 'optional', { token });
+      const endpoint = createChannelEndpoint(bus, 'optional', () => {}, { token });
+      const ch = await openChannel(bus, 'optional', { token });
 
-      const result = await ch.requestOptional(TestSubjects.get, { key: 'missing' });
+      const result = await ch.requestOptional(bus.own('root'), TestSubjects.get, { key: 'missing' });
       expect(result.handled).toBe(false);
 
       ch.close();
@@ -269,7 +275,7 @@ describe('DirectChannel', () => {
       const token = 'test-token';
 
       const endpoint = createChannelEndpoint(
-        context,
+        bus,
         'optional-present',
         (channel) => {
           channel.on(TestSubjects.get, (ctx) => {
@@ -279,8 +285,8 @@ describe('DirectChannel', () => {
         { token },
       );
 
-      const ch = await openChannel(context, 'optional-present', { token });
-      const result = await ch.requestOptional(TestSubjects.get, { key: 'any' });
+      const ch = await openChannel(bus, 'optional-present', { token });
+      const result = await ch.requestOptional(bus.own('root'), TestSubjects.get, { key: 'any' });
 
       expect(result.handled).toBe(true);
       if (result.handled) {
@@ -301,14 +307,16 @@ describe('DirectChannel', () => {
       const { subjects: TestSubjects } = registerTestNamespace(context);
       const token = 'test-token';
 
-      const endpoint = createChannelEndpoint(context, 'close-test', () => {}, { token });
-      const ch = await openChannel(context, 'close-test', { token });
+      const endpoint = createChannelEndpoint(bus, 'close-test', () => {}, { token });
+      const ch = await openChannel(bus, 'close-test', { token });
 
       ch.close();
 
       // emit() is async — assertOpen() throws synchronously but the async wrapper
       // converts it to a rejected promise, so we must use rejects.toThrow.
-      await expect(ch.emit(TestSubjects.notify, { message: 'test' })).rejects.toThrow(ChannelClosedError);
+      await expect(ch.emit(bus.own('root'), TestSubjects.notify, { message: 'test' })).rejects.toThrow(
+        ChannelClosedError,
+      );
 
       // on() and once() are synchronous — they throw directly.
       expect(() => ch.on(TestSubjects.notify, () => {})).toThrow(ChannelClosedError);
@@ -319,8 +327,8 @@ describe('DirectChannel', () => {
     it('close() is idempotent — second call is a no-op', async () => {
       const token = 'test-token';
 
-      const endpoint = createChannelEndpoint(context, 'idempotent-close', () => {}, { token });
-      const ch = await openChannel(context, 'idempotent-close', { token });
+      const endpoint = createChannelEndpoint(bus, 'idempotent-close', () => {}, { token });
+      const ch = await openChannel(bus, 'idempotent-close', { token });
 
       ch.close();
       expect(() => ch.close()).not.toThrow();
@@ -334,7 +342,7 @@ describe('DirectChannel', () => {
       let serverChannel: IDirectChannel | null = null;
 
       const endpoint = createChannelEndpoint(
-        context,
+        bus,
         'peer-close',
         (channel) => {
           serverChannel = channel;
@@ -342,7 +350,7 @@ describe('DirectChannel', () => {
         { token },
       );
 
-      const clientChannel = await openChannel(context, 'peer-close', { token });
+      const clientChannel = await openChannel(bus, 'peer-close', { token });
 
       // Server closes — the $close event propagates to the client side
       serverChannel!.close();
@@ -353,7 +361,7 @@ describe('DirectChannel', () => {
       // throws ChannelClosedError, giving a deterministic signal without a fixed sleep.
       await vi.waitFor(
         async () => {
-          await expect(clientChannel.emit(TestSubjects.notify, { message: 'test' })).rejects.toThrow(
+          await expect(clientChannel.emit(bus.own('root'), TestSubjects.notify, { message: 'test' })).rejects.toThrow(
             ChannelClosedError,
           );
         },
@@ -368,7 +376,7 @@ describe('DirectChannel', () => {
       const token = 'test-token';
 
       const endpoint = createChannelEndpoint(
-        context,
+        bus,
         'endpoint-close',
         (channel) => {
           channel.on(TestSubjects.get, (ctx) => {
@@ -379,17 +387,17 @@ describe('DirectChannel', () => {
       );
 
       // Open a channel before closing the endpoint
-      const existingChannel = await openChannel(context, 'endpoint-close', { token });
+      const existingChannel = await openChannel(bus, 'endpoint-close', { token });
 
       // Close the endpoint — no more new connections
       endpoint.close();
 
       // Existing channel still works
-      const result = await existingChannel.request(TestSubjects.get, { key: 'test' });
+      const result = await existingChannel.request(bus.own('root'), TestSubjects.get, { key: 'test' });
       expect(result.value).toBe('still-alive');
 
       // New connections fail (NoHandlerError because the handshake handler was removed)
-      await expect(openChannel(context, 'endpoint-close', { token })).rejects.toThrow(NoHandlerError);
+      await expect(openChannel(bus, 'endpoint-close', { token })).rejects.toThrow(NoHandlerError);
 
       existingChannel.close();
     });
@@ -404,7 +412,7 @@ describe('DirectChannel', () => {
       });
 
       const endpoint = createChannelEndpoint(
-        context,
+        bus,
         'pending-close',
         (channel) => {
           serverChannel = channel;
@@ -416,8 +424,13 @@ describe('DirectChannel', () => {
         { token },
       );
 
-      const clientChannel = await openChannel(context, 'pending-close', { token });
-      const pendingRequest = clientChannel.request(TestSubjects.get, { key: 'blocked' }, { timeout: 0 });
+      const clientChannel = await openChannel(bus, 'pending-close', { token });
+      const pendingRequest = clientChannel.request(
+        bus.own('root'),
+        TestSubjects.get,
+        { key: 'blocked' },
+        { timeout: 0 },
+      );
 
       await handlerStarted;
       serverChannel!.close();
@@ -440,7 +453,7 @@ describe('DirectChannel', () => {
       let count = 0;
 
       const endpoint = createChannelEndpoint(
-        context,
+        bus,
         'once-test',
         (channel) => {
           channel.once(TestSubjects.notify, () => {
@@ -450,9 +463,9 @@ describe('DirectChannel', () => {
         { token },
       );
 
-      const ch = await openChannel(context, 'once-test', { token });
-      await ch.emit(TestSubjects.notify, { message: 'first' });
-      await ch.emit(TestSubjects.notify, { message: 'second' });
+      const ch = await openChannel(bus, 'once-test', { token });
+      await ch.emit(bus.own('root'), TestSubjects.notify, { message: 'first' });
+      await ch.emit(bus.own('root'), TestSubjects.notify, { message: 'second' });
 
       expect(count).toBe(1);
 
@@ -466,7 +479,7 @@ describe('DirectChannel', () => {
       let count = 0;
 
       const endpoint = createChannelEndpoint(
-        context,
+        bus,
         'once-unsub',
         (channel) => {
           const unsub = channel.once(TestSubjects.notify, () => {
@@ -478,8 +491,8 @@ describe('DirectChannel', () => {
         { token },
       );
 
-      const ch = await openChannel(context, 'once-unsub', { token });
-      await ch.emit(TestSubjects.notify, { message: 'hello' });
+      const ch = await openChannel(bus, 'once-unsub', { token });
+      await ch.emit(bus.own('root'), TestSubjects.notify, { message: 'hello' });
 
       expect(count).toBe(0);
 
@@ -498,7 +511,7 @@ describe('DirectChannel', () => {
       const token = 'test-token';
 
       const endpoint = createChannelEndpoint(
-        context,
+        bus,
         'multi',
         (channel) => {
           const store = new Map<string, string>();
@@ -513,14 +526,14 @@ describe('DirectChannel', () => {
         { token },
       );
 
-      const ch1 = await openChannel(context, 'multi', { token });
-      const ch2 = await openChannel(context, 'multi', { token });
+      const ch1 = await openChannel(bus, 'multi', { token });
+      const ch2 = await openChannel(bus, 'multi', { token });
 
-      await ch1.request(TestSubjects.store, { key: 'a', value: '1' });
-      await ch2.request(TestSubjects.store, { key: 'a', value: '2' });
+      await ch1.request(bus.own('root'), TestSubjects.store, { key: 'a', value: '1' });
+      await ch2.request(bus.own('root'), TestSubjects.store, { key: 'a', value: '2' });
 
-      const r1 = await ch1.request(TestSubjects.get, { key: 'a' });
-      const r2 = await ch2.request(TestSubjects.get, { key: 'a' });
+      const r1 = await ch1.request(bus.own('root'), TestSubjects.get, { key: 'a' });
+      const r2 = await ch2.request(bus.own('root'), TestSubjects.get, { key: 'a' });
 
       // Each channel has its own store instance
       expect(r1.value).toBe('1');
@@ -553,7 +566,7 @@ describe('DirectChannel', () => {
 
       const token = 'test-token';
       const endpoint = createChannelEndpoint(
-        context,
+        bus,
         'opacity',
         (channel) => {
           channel.on(TestSubjects.store, (ctx) => {
@@ -563,8 +576,8 @@ describe('DirectChannel', () => {
         { token },
       );
 
-      const ch = await openChannel(context, 'opacity', { token });
-      await ch.request(TestSubjects.store, { key: 'secret', value: 'password123' });
+      const ch = await openChannel(bus, 'opacity', { token });
+      await ch.request(bus.own('root'), TestSubjects.store, { key: 'secret', value: 'password123' });
 
       // Cleanup observer before assertions
       context.anyHandlers.delete(handler);
@@ -597,9 +610,9 @@ describe('DirectChannel', () => {
     it('two channels opened to the same endpoint receive distinct IDs', async () => {
       const token = 'test-token';
 
-      const endpoint = createChannelEndpoint(context, 'id-test', () => {}, { token });
-      const ch1 = await openChannel(context, 'id-test', { token });
-      const ch2 = await openChannel(context, 'id-test', { token });
+      const endpoint = createChannelEndpoint(bus, 'id-test', () => {}, { token });
+      const ch1 = await openChannel(bus, 'id-test', { token });
+      const ch2 = await openChannel(bus, 'id-test', { token });
 
       expect(ch1.channelId).not.toBe(ch2.channelId);
 

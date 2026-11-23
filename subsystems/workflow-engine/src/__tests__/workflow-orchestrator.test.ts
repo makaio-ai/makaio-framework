@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   ArtifactNamespace,
   ArtifactSubjects,
@@ -119,6 +120,7 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
 
     try {
       const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: {
           source: { kind: 'path', path: '/workflows/report.ts' },
           materializationSpec: {
@@ -242,7 +244,13 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
       suspensionStrategy: 'wait-in-process',
     } satisfies WorkflowRunContext;
 
-    const binding = await resolveWorkflowArtifactBinding({ definition, execution, runContext, bus });
+    const binding = await resolveWorkflowArtifactBinding({
+      call: createTestCall(),
+      definition,
+      execution,
+      runContext,
+      bus,
+    });
 
     expect(binding?.current.id).toBe('artifact-from-start');
     expect(queriedRefs).toEqual([{ kind: 'workflow-report', ids: ['artifact-from-start'] }]);
@@ -263,6 +271,7 @@ describe('runWorkflowOrchestrator cancellation finalization', () => {
 
     try {
       const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: {
           source: { kind: 'path', path: '/workflows/fail.ts' },
           materializationSpec: {
@@ -324,6 +333,7 @@ describe('runWorkflowOrchestrator cancellation finalization', () => {
 
     try {
       const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: {
           source: { kind: 'path', path: '/workflows/subagent-cancel.ts' },
           materializationSpec: {
@@ -391,6 +401,7 @@ describe('runWorkflowOrchestrator cancellation finalization', () => {
 
     try {
       const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: {
           source: { kind: 'path', path: '/workflows/cancel.ts' },
           materializationSpec: {
@@ -467,6 +478,7 @@ describe('runWorkflowOrchestrator cancellation finalization', () => {
 
     try {
       const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: makeWorkerConfig({
           executionId: 'exec-empty-start-checkpoint-abort',
           workflowId: workflow.id,
@@ -524,6 +536,7 @@ describe('runWorkflowOrchestrator gate parking (exit-and-redispatch)', () => {
 
     try {
       const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: makeWorkerConfig({
           executionId: 'wfx-orchestrator-loop',
           workflowId: workflow.id,
@@ -557,6 +570,7 @@ describe('runWorkflowOrchestrator gate parking (exit-and-redispatch)', () => {
 
     try {
       const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: makeWorkerConfig({
           executionId: 'wfx-orchestrator-loop-missing-gate',
           workflowId: workflow.id,
@@ -589,6 +603,7 @@ describe('runWorkflowOrchestrator gate parking (exit-and-redispatch)', () => {
 
     try {
       const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: makeWorkerConfig({
           executionId: 'wfx-park-orchestrator',
           workflowId: workflow.id,
@@ -699,6 +714,7 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
       });
 
       const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: makeWorkerConfig({
           executionId: 'wfx-resume-skip',
           workflowId: workflow.id,
@@ -737,6 +753,7 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
     const workflow = defineWorkflow('resume-frame-storage-unavailable').station('analyze', analyze);
 
     const result = await runWorkflowOrchestrator({
+      call: createTestCall(),
       config: makeWorkerConfig({
         executionId: 'wfx-resume-frame-storage-unavailable',
         workflowId: workflow.id,
@@ -776,6 +793,7 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
     });
 
     const result = await runWorkflowOrchestrator({
+      call: createTestCall(),
       config: makeWorkerConfig({
         executionId: 'wfx-completed-frame-storage-fails',
         workflowId: workflow.id,
@@ -804,6 +822,7 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
     const workflow = defineWorkflow('resume-frame-load-fails').station('analyze', analyze);
 
     const result = await runWorkflowOrchestrator({
+      call: createTestCall(),
       config: makeWorkerConfig({
         executionId: 'wfx-resume-frame-load-fails',
         workflowId: workflow.id,
@@ -847,6 +866,7 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
       await bus.request(WorkflowStorageSubjects.setExecution, { execution });
 
       const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: makeWorkerConfig({
           executionId,
           workflowId: workflow.id,
@@ -896,6 +916,7 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
       await bus.request(WorkflowStorageSubjects.setExecution, { execution });
 
       const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: makeWorkerConfig({
           executionId,
           workflowId: workflow.id,
@@ -1037,6 +1058,7 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
       });
 
       const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: makeWorkerConfig({
           executionId: 'wfx-resume-iterate',
           workflowId: workflow.id,
@@ -1125,6 +1147,7 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
 
     try {
       const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: makeWorkerConfig({
           executionId: 'wfx-parallel-pause',
           workflowId: workflow.id,
@@ -1240,6 +1263,7 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
 
     try {
       const firstResult = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: makeWorkerConfig({
           executionId: 'wfx-parallel-resume-sibling',
           workflowId: workflow.id,
@@ -1287,6 +1311,7 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
       });
 
       const secondResult = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: makeWorkerConfig({
           executionId: 'wfx-parallel-resume-sibling',
           workflowId: workflow.id,
@@ -1413,6 +1438,7 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
 
     try {
       const firstResult = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: makeWorkerConfig({
           executionId: 'wfx-iterate-resume-sibling',
           workflowId: workflow.id,
@@ -1458,6 +1484,7 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
       });
 
       const secondResult = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: makeWorkerConfig({
           executionId: 'wfx-iterate-resume-sibling',
           workflowId: workflow.id,
@@ -1521,6 +1548,7 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
 
     try {
       const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
         config: makeWorkerConfig({
           executionId: 'wfx-iterate-pause-batch',
           workflowId: workflow.id,

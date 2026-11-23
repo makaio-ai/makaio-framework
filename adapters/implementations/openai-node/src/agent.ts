@@ -8,7 +8,7 @@ import {
   UsageEvent,
 } from './namespaces/index.js';
 import { registerToolApprovalHandler } from './tool-handling.js';
-import type { SessionMessageBlock } from '@makaio/contracts';
+import type { CallContext, SessionMessageBlock } from '@makaio/contracts';
 
 /**
  * Subject spec for the OpenAI Node adapter, satisfying `StreamAdapterSubjectSpec`.
@@ -138,12 +138,13 @@ export class OpenAIAgent extends BaseStreamAgent<OpenAINodeConnectorBus, OpenAIN
    *
    * Uses `prompt_tokens_details.cached_tokens` for the cached token count and
    * defaults to 128,000 tokens (standard GPT-4o context window).
+   * @param call - Call context of the usage event being translated
    * @param payload - OpenAI usage event payload
    */
-  protected async emitUsageContextWindowUpdate(payload: Record<string, unknown>): Promise<void> {
+  protected async emitUsageContextWindowUpdate(call: CallContext, payload: Record<string, unknown>): Promise<void> {
     const usage = payload as UsageEvent;
     // Formula: prompt_tokens + completion_tokens
-    await this.emitContextWindowUpdate({
+    await this.emitContextWindowUpdate(call, {
       currentTokens: usage.prompt_tokens + usage.completion_tokens,
       maxTokens: this.getContextWindowSize() ?? 128000,
       cachedTokens: usage.prompt_tokens_details?.cached_tokens,
@@ -219,7 +220,7 @@ export class OpenAIAgent extends BaseStreamAgent<OpenAINodeConnectorBus, OpenAIN
     this.addConnectorWiringCleanup(
       registerToolApprovalHandler(
         connector,
-        async () => {
+        async (call: CallContext) => {
           if (this.sessionId == null) {
             throw new Error('Agent sessionId is required for tool approval');
           }
@@ -227,7 +228,7 @@ export class OpenAIAgent extends BaseStreamAgent<OpenAINodeConnectorBus, OpenAIN
             adapterId: this.adapterId,
             adapterName: this.adapterName,
             agentId: this.agentId,
-            adapterSessionId: await this.getAdapterSessionId(),
+            adapterSessionId: await this.getAdapterSessionId(call),
             sessionId: this.sessionId,
           };
         },

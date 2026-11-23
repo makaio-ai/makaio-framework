@@ -42,7 +42,7 @@ export function killSubagentTool() {
       }
 
       try {
-        const result = await context.bus.requestOptional(SubagentSubjects.kill, {
+        const result = await context.bus.requestOptional(context.call, SubagentSubjects.kill, {
           subagentId: input.subagentId,
           reason: input.reason,
         });

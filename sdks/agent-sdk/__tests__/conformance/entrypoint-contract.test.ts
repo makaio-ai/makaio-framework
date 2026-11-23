@@ -98,11 +98,11 @@ describe('agent-sdk public entrypoint contract', () => {
 
   it('/core exports createSdkMcpServer', () => {
     expect(core).toHaveProperty('createSdkMcpServer');
-    expect(typeof (core as unknown as Record<string, unknown>)['createSdkMcpServer']).toBe('function');
+    expect(typeof core.createSdkMcpServer).toBe('function');
   });
 
   it('/runtime exports createSdkMcpServer', () => {
     expect(runtime).toHaveProperty('createSdkMcpServer');
-    expect(typeof (runtime as unknown as Record<string, unknown>)['createSdkMcpServer']).toBe('function');
+    expect(typeof runtime.createSdkMcpServer).toBe('function');
   });
 });

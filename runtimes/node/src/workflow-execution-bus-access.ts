@@ -2,11 +2,11 @@ import { randomBytes } from 'node:crypto';
 import {
   captureHmacIdentitySecretCleanup,
   registerHmacIdentitySecret,
-  resolveHmacIdentityPeer,
+  resolveHmacIdentityParty,
   resolveHmacIdentitySecret,
   rotateHmacIdentitySecret,
 } from '@makaio/bus-transport-websocket';
-import { getFullSubjectForSubjectDefinition } from '@makaio/core';
+import { getFullSubjectForSubjectDefinition, MAKAIO_JOB_RUN_PARTY_KIND } from '@makaio/core';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { WorkflowStorageSubjects } from '@makaio/subsystem-workflow-engine';
 import {
@@ -36,9 +36,9 @@ export interface MintWorkflowExecutionBusSecretParams {
   readonly executionAttemptId: string;
   /**
    * Parent workflow execution identifier attached as a claim on the
-   * authenticated peer context.
+   * authenticated party context.
    *
-   * Bus handlers read `peer.claims.executionId` to verify execution-bound
+   * Bus handlers read `party.claims.executionId` to verify execution-bound
    * access without parsing the identity ID.
    */
   readonly executionId: string;
@@ -183,7 +183,7 @@ function assertNoRetiredAllowedSubjects(params: object): void {
  * Register caller-provided bus access for one workflow execution attempt.
  *
  * Use this when a provider already owns secret delivery. The identity still
- * receives the canonical execution peer kind, claim, and directional subject
+ * receives the canonical job run party kind, claim, and directional subject
  * restrictions.
  * @param params - Attempt identity, execution claim, secret, and optional directional restrictions.
  * @returns Registered secret plus cleanup handle.
@@ -197,7 +197,8 @@ export function registerWorkflowExecutionBusSecret(
   return {
     secret,
     cleanup: registerHmacIdentitySecret(executionAttemptId, secret, {
-      peerKind: 'workflow-execution-attempt',
+      partyKind: MAKAIO_JOB_RUN_PARTY_KIND,
+      attestingRole: 'job-run',
       claims: { executionId },
       allowedMessageSubjects: params.allowedMessageSubjects ?? defaultAccess.allowedMessageSubjects,
       allowedSubscriptionSubjects: params.allowedSubscriptionSubjects ?? defaultAccess.allowedSubscriptionSubjects,
@@ -213,10 +214,10 @@ export function registerWorkflowExecutionBusSecret(
 /**
  * Mint and register an identity-bound HMAC secret for one workflow execution attempt.
  *
- * The identity is keyed by `executionAttemptId` with peer kind
- * `workflow-execution-attempt`. The parent `executionId` is attached as a
+ * The identity is keyed by `executionAttemptId` with the job run party kind
+ * `MAKAIO_JOB_RUN_PARTY_KIND`. The parent `executionId` is attached as a
  * claim so bus handlers can verify execution-bound access via
- * `peer.claims.executionId`.
+ * `party.claims.executionId`.
  *
  * When directional restrictions are not provided, the default matrix from
  * {@link buildExecutionAttemptSubjectAccess} restricts the identity to the
@@ -239,8 +240,8 @@ export function mintWorkflowExecutionBusSecret(
  * already has a registered secret from the first claim, so the new claim
  * rotates the secret and fences any socket authenticated with the old one.
  *
- * Rotation preserves the existing peer metadata, so the registered identity
- * must already be a workflow execution attempt bound to the same execution.
+ * Rotation preserves the existing party metadata, so the registered identity
+ * must already be a job run bound to the same execution.
  * @param params - Attempt and execution identifiers.
  * @returns Secret plus cleanup handle.
  * @throws When no matching execution-attempt registration exists.
@@ -249,8 +250,8 @@ export function rotateWorkflowExecutionBusSecret(
   params: RotateWorkflowExecutionBusSecretParams,
 ): WorkflowExecutionBusSecret {
   const { executionAttemptId, executionId } = params;
-  const peer = resolveHmacIdentityPeer(executionAttemptId);
-  if (peer?.kind !== 'workflow-execution-attempt' || peer.claims?.executionId !== executionId) {
+  const party = resolveHmacIdentityParty(executionAttemptId);
+  if (party?.kind !== MAKAIO_JOB_RUN_PARTY_KIND || party.claims?.executionId !== executionId) {
     throw new Error(
       `Cannot rotate workflow execution bus secret: attempt "${executionAttemptId}" is not registered for execution "${executionId}"`,
     );
@@ -291,7 +292,7 @@ export function mintOrRotateWorkflowExecutionBusSecret(
  * intact if the captured cleanup is invoked afterwards.
  *
  * An unknown attempt has nothing to clean up. A registered identity for a
- * different peer kind or execution is refused rather than being revoked.
+ * different party kind or execution is refused rather than being revoked.
  * @param params - Attempt and execution identifiers that must match the registration.
  * @returns A generation-fenced cleanup handle, or undefined when unregistered.
  * @throws When the registered identity is not this workflow execution attempt.
@@ -300,11 +301,11 @@ export function captureWorkflowExecutionBusSecretCleanup(
   params: RotateWorkflowExecutionBusSecretParams,
 ): (() => void) | undefined {
   const { executionAttemptId, executionId } = params;
-  const peer = resolveHmacIdentityPeer(executionAttemptId);
-  if (peer === null) {
+  const party = resolveHmacIdentityParty(executionAttemptId);
+  if (party === null) {
     return undefined;
   }
-  if (peer.kind !== 'workflow-execution-attempt' || peer.claims?.executionId !== executionId) {
+  if (party.kind !== MAKAIO_JOB_RUN_PARTY_KIND || party.claims?.executionId !== executionId) {
     throw new Error(
       `Cannot capture workflow execution bus secret cleanup: attempt "${executionAttemptId}" is not registered for execution "${executionId}"`,
     );

@@ -35,6 +35,7 @@ const { query, startup, registerCoreHooks, createSdkMcpServer } = await import('
 const SESSION_ID = 'core-test-session-1';
 const AGENT_ID = 'core-agent-1';
 const MSG_ID = 'msg-core-1';
+const SESSION_QUERY_OPTIONS = { model: 'sonnet', sessionId: SESSION_ID } as const;
 
 const BASE_AGENT_FIELDS = {
   agentId: AGENT_ID,
@@ -119,7 +120,7 @@ describe('query()', () => {
   });
 
   it('returns a MakaioQuery with AsyncGenerator protocol synchronously', () => {
-    const gen: unknown = query({ prompt: 'Hello', options: { model: 'sonnet', sessionId: SESSION_ID } });
+    const gen: unknown = query({ prompt: 'Hello', options: SESSION_QUERY_OPTIONS });
     closeWhenReady(gen, cleanups);
 
     expect(gen).not.toBeInstanceOf(Promise);
@@ -282,7 +283,10 @@ describe('query()', () => {
       yield { type: 'user', message: { role: 'user', content: 'Second' }, parent_tool_use_id: null };
     }
 
-    const gen = query({ prompt: prompt(), options: { model: 'sonnet', sessionId: SESSION_ID, maxTurns: 1 } });
+    const gen = query({
+      prompt: prompt(),
+      options: { model: 'sonnet', sessionId: SESSION_ID, maxTurns: 1 },
+    });
     cleanups.push(() => gen.close());
 
     await vi.waitFor(() => expect(sendMessagePayloads).toHaveLength(1));
@@ -305,7 +309,10 @@ describe('query()', () => {
       }),
     );
 
-    const gen = query({ prompt: 'Hello', options: { model: 'sonnet', sessionId: SESSION_ID, abortController } });
+    const gen = query({
+      prompt: 'Hello',
+      options: { model: 'sonnet', sessionId: SESSION_ID, abortController },
+    });
     cleanups.push(() => gen.close());
 
     await vi.waitFor(() => expect(sendMessagePayloads).toHaveLength(1));
@@ -317,7 +324,7 @@ describe('query()', () => {
   });
 
   it('yields SDKSystemMessage when agent.started fires for the session', async () => {
-    const gen = await query({ prompt: 'Ping', options: { model: 'sonnet', sessionId: SESSION_ID } });
+    const gen = await query({ prompt: 'Ping', options: SESSION_QUERY_OPTIONS });
     cleanups.push(() => gen.close());
 
     await vi.waitFor(() => expect(sendMessagePayloads).toHaveLength(1));
@@ -335,7 +342,7 @@ describe('query()', () => {
   });
 
   it('completes the generator after agent.complete fires', async () => {
-    const gen = await query({ prompt: 'Ping', options: { model: 'sonnet', sessionId: SESSION_ID } });
+    const gen = await query({ prompt: 'Ping', options: SESSION_QUERY_OPTIONS });
     cleanups.push(() => gen.close());
 
     await vi.waitFor(() => expect(sendMessagePayloads).toHaveLength(1));
@@ -354,7 +361,7 @@ describe('query()', () => {
   });
 
   it('close() terminates the generator', async () => {
-    const gen = await query({ prompt: 'Ping', options: { model: 'sonnet', sessionId: SESSION_ID } });
+    const gen = await query({ prompt: 'Ping', options: SESSION_QUERY_OPTIONS });
 
     gen.close();
 
@@ -363,7 +370,7 @@ describe('query()', () => {
   });
 
   it('setMcpServers() prepares SDK MCP servers and requests staged replacement', async () => {
-    const gen = await query({ prompt: 'Ping', options: { model: 'sonnet', sessionId: SESSION_ID } });
+    const gen = await query({ prompt: 'Ping', options: SESSION_QUERY_OPTIONS });
     cleanups.push(() => gen.close());
 
     const payloads: unknown[] = [];
@@ -407,14 +414,14 @@ describe('query()', () => {
   });
 
   it('interrupt() rejects before agent.started identifies the agent', async () => {
-    const gen = await query({ prompt: 'Ping', options: { model: 'sonnet', sessionId: SESSION_ID } });
+    const gen = await query({ prompt: 'Ping', options: SESSION_QUERY_OPTIONS });
     cleanups.push(() => gen.close());
 
     await expect(gen.interrupt()).rejects.toThrow('Cannot interrupt before agent has started');
   });
 
   it('ignores agent events for a different session', async () => {
-    const gen = await query({ prompt: 'Ping', options: { model: 'sonnet', sessionId: SESSION_ID } });
+    const gen = await query({ prompt: 'Ping', options: SESSION_QUERY_OPTIONS });
     cleanups.push(() => gen.close());
 
     await vi.waitFor(() => expect(sendMessagePayloads).toHaveLength(1));

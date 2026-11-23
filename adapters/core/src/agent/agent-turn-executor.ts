@@ -12,6 +12,7 @@ import type { MessageHandle } from '../message-handle/index.js';
 import type { AIAgentConnector } from '../connector/index.js';
 import type { AgentStartResult, ConnectorStartOptions, SendMessageRequestPayload, StartAgentOptions } from './types.js';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { buildStructuredOutputTurnContext } from './structured-output-turn-context.js';
 import { providerCommittedAdapterSessionId } from './agent-adapter-session-movement.js';
 
@@ -67,14 +68,18 @@ export interface AgentTurnExecutorConfig {
    * Awaited before the dispatch it describes, so the session row stops
    * advertising the abandoned provider session before the provider is asked to
    * start a new one.
+   * @param call - Call of the message that triggers the dispatch
    */
-  onNativeResumeSuppressed?: () => void | Promise<void>;
+  onNativeResumeSuppressed?: (call: CallContext) => void | Promise<void>;
   /** Completion/lifecycle tracker hook. */
   onMessageHandle: AgentMessageHandleCallback;
   /** Side-effect callback to mark agent status active before dispatch. */
   onBeforeDispatch?: () => void | Promise<void>;
-  /** Serialize the complete pre-hook-to-send boundary with credential mutations. */
-  runDispatch?: <T>(dispatch: () => Promise<T>) => Promise<T>;
+  /**
+   * Serialize the complete pre-hook-to-send boundary with credential mutations.
+   * Receives the call of the message that triggers the dispatch.
+   */
+  runDispatch?: <T>(call: CallContext, dispatch: () => Promise<T>) => Promise<T>;
   /** When true, PreUserMessage hooks are skipped. */
   ephemeral?: boolean;
 }
@@ -125,10 +130,10 @@ export class AgentTurnExecutor {
   private readonly shouldUseNativeResume: ShouldUseNativeResumeFn;
   private readonly hasResumeTarget: () => boolean;
   private readonly setPendingStartMode: (mode: StartMode) => void;
-  private readonly onNativeResumeSuppressed?: () => void | Promise<void>;
+  private readonly onNativeResumeSuppressed?: (call: CallContext) => void | Promise<void>;
   private readonly onMessageHandle: AgentMessageHandleCallback;
   private readonly onBeforeDispatch?: () => void | Promise<void>;
-  private readonly runDispatch: <T>(dispatch: () => Promise<T>) => Promise<T>;
+  private readonly runDispatch: <T>(call: CallContext, dispatch: () => Promise<T>) => Promise<T>;
   private readonly ephemeral: boolean;
 
   public constructor(config: AgentTurnExecutorConfig) {
@@ -144,7 +149,7 @@ export class AgentTurnExecutor {
     this.onNativeResumeSuppressed = config.onNativeResumeSuppressed;
     this.onMessageHandle = config.onMessageHandle;
     this.onBeforeDispatch = config.onBeforeDispatch;
-    this.runDispatch = config.runDispatch ?? (async (dispatch) => dispatch());
+    this.runDispatch = config.runDispatch ?? (async (_call, dispatch) => dispatch());
     this.ephemeral = config.ephemeral ?? false;
   }
 
@@ -198,15 +203,19 @@ export class AgentTurnExecutor {
    * Async because a suppressed resume target moves the provider session: the
    * movement is recorded before this returns, so the dispatch that abandons the
    * old provider session cannot be preceded by a resume that still targets it.
+   * @param call - Call of the message that triggers the dispatch
    * @param sessionContext - Session context after pre-user-message hooks
    * @returns Whether the connector should rely on native resume
    */
-  private async deriveAndSetPendingStartMode(sessionContext: SessionContext | undefined): Promise<boolean> {
+  private async deriveAndSetPendingStartMode(
+    call: CallContext,
+    sessionContext: SessionContext | undefined,
+  ): Promise<boolean> {
     const useNativeResume = this.shouldUseNativeResume(sessionContext);
     const startMode = AgentTurnExecutor.deriveStartMode(sessionContext, useNativeResume, this.hasResumeTarget());
     this.setPendingStartMode(startMode);
     if (this.movesProviderSession(useNativeResume)) {
-      await this.onNativeResumeSuppressed?.();
+      await this.onNativeResumeSuppressed?.(call);
     }
     return useNativeResume;
   }
@@ -243,27 +252,32 @@ export class AgentTurnExecutor {
 
   /**
    * Execute the turn pipeline for agent.sendMessage.
+   * @param call - Call of the agent.sendMessage message that triggers the turn
    * @param payload - agent.sendMessage request payload
    * @returns Resolved messageId from connector handle
    */
-  public async executeSendMessage(payload: SendMessageRequestPayload): Promise<{ messageId: string }> {
-    return this.runDispatch(async () => {
+  public async executeSendMessage(
+    call: CallContext,
+    payload: SendMessageRequestPayload,
+  ): Promise<{ messageId: string }> {
+    return this.runDispatch(call, async () => {
       await this.onBeforeDispatch?.();
 
       const connector = this.getConnector();
       const parsedSessionContext = payload.sessionContext
         ? SessionContextSchema.parse(payload.sessionContext)
         : undefined;
-      const hookResult = await this.resolvePreUserMessageTurn({
+      const hookResult = await this.resolvePreUserMessageTurn(call, {
         message: payload.message,
         sessionContext: parsedSessionContext,
         cwd: connector.cwd,
         messageId: payload.messageId,
       });
 
-      const useNativeResume = await this.deriveAndSetPendingStartMode(hookResult.sessionContext);
+      const useNativeResume = await this.deriveAndSetPendingStartMode(call, hookResult.sessionContext);
       const normalizedMessage = normalizeMessageInput(hookResult.message);
       const handle = await connector.sendMessage(normalizedMessage, {
+        call,
         deliveryMode: payload.deliveryMode,
         messageId: payload.messageId,
         turnId: payload.turnId,
@@ -284,7 +298,7 @@ export class AgentTurnExecutor {
       });
 
       this.assertCanonicalMessageId(payload.messageId, handle, connector, 'sendMessage');
-      this.firePostUserMessageHooks(handle.messageId);
+      this.firePostUserMessageHooks(call, handle.messageId);
       await this.onMessageHandle(handle, payload.turnId);
       return { messageId: handle.messageId };
     });
@@ -292,6 +306,7 @@ export class AgentTurnExecutor {
 
   /**
    * Execute the turn pipeline for agent.start.
+   * @param call - Call of the message that triggers the start
    * @param message - Initial message payload
    * @param options - Start options from caller
    * @param systemPrompt - Runtime system prompt chosen by AIAgent
@@ -299,28 +314,30 @@ export class AgentTurnExecutor {
    * @returns Agent start result from connector
    */
   public async executeStart(
+    call: CallContext,
     message: NormalizedMessageInput | MessageInput,
     options: StartAgentOptions | undefined,
     systemPrompt: StartAgentOptions['systemPrompt'],
     responseSchema?: ResponseSchemaDescriptor,
   ): Promise<AgentStartResult> {
-    return this.runDispatch(async () => {
+    return this.runDispatch(call, async () => {
       await this.onBeforeDispatch?.();
 
       const connector = this.getConnector();
       const parsedSessionContext = options?.sessionContext
         ? SessionContextSchema.parse(options.sessionContext)
         : undefined;
-      const hookResult = await this.resolvePreUserMessageTurn({
+      const hookResult = await this.resolvePreUserMessageTurn(call, {
         message,
         sessionContext: parsedSessionContext,
         cwd: connector.cwd,
         messageId: options?.messageId,
       });
 
-      const useNativeResume = await this.deriveAndSetPendingStartMode(hookResult.sessionContext);
+      const useNativeResume = await this.deriveAndSetPendingStartMode(call, hookResult.sessionContext);
       const normalizedMessage = normalizeMessageInput(hookResult.message);
       const connectorOptions: ConnectorStartOptions = {
+        call,
         systemPrompt,
         messageId: options?.messageId,
         messageHistory: useNativeResume ? undefined : hookResult.sessionContext?.messageHistory,
@@ -339,7 +356,7 @@ export class AgentTurnExecutor {
 
       const startResult = await connector.start(normalizedMessage, connectorOptions);
       this.assertCanonicalMessageId(options?.messageId, startResult.messageHandle, connector, 'start');
-      this.firePostUserMessageHooks(startResult.messageHandle.messageId);
+      this.firePostUserMessageHooks(call, startResult.messageHandle.messageId);
       await this.onMessageHandle(startResult.messageHandle, undefined);
       return startResult;
     });
@@ -347,10 +364,14 @@ export class AgentTurnExecutor {
 
   /**
    * Resolve the pre-user hook result or preserve the caller payload for ephemeral turns.
+   * @param call - Call of the message that triggers the turn
    * @param input - Message and context for the outgoing user turn
    * @returns Message and session context to dispatch to the connector
    */
-  private async resolvePreUserMessageTurn(input: PreUserMessageTurnInput): Promise<PreUserMessageTurnResult> {
+  private async resolvePreUserMessageTurn(
+    call: CallContext,
+    input: PreUserMessageTurnInput,
+  ): Promise<PreUserMessageTurnResult> {
     if (this.ephemeral) {
       return {
         message: input.message,
@@ -359,6 +380,7 @@ export class AgentTurnExecutor {
     }
 
     return runPreUserMessageHooks(
+      call,
       {
         agentId: this.agentId,
         adapterId: this.adapterId,
@@ -374,18 +396,16 @@ export class AgentTurnExecutor {
 
   /**
    * Fire PostUserMessage hooks without blocking the turn.
+   * @param call - Call of the message that triggers the turn
    * @param messageId - Message ID for correlation
    */
-  private firePostUserMessageHooks(messageId: string): void {
-    void runPostUserMessageHooks(
-      {
-        agentId: this.agentId,
-        adapterId: this.adapterId,
-        sessionId: this.sessionId,
-        messageId,
-      },
-      this.globalBus,
-    ).catch((err) => {
+  private firePostUserMessageHooks(call: CallContext, messageId: string): void {
+    void runPostUserMessageHooks(call, {
+      agentId: this.agentId,
+      adapterId: this.adapterId,
+      sessionId: this.sessionId,
+      messageId,
+    }).catch((err) => {
       console.error('[AIAgent] PostUserMessage hook error:', err);
     });
   }

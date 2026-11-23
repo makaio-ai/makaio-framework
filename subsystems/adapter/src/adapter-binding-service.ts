@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { BindingRecord } from '@makaio/services-core/adapter-subsystem';
 import { toBindingRecords } from './adapter-config-derived-state.js';
 import { hasEnabledBinding, isProviderConfigEnabled, promoteEnabledBindingDefault } from './binding-defaults.js';
@@ -39,11 +40,12 @@ export class AdapterBindingService {
    * If the binding already exists, returns the existing record without
    * emitting an event. If the provider config is enabled and no enabled
    * binding exists yet, the new binding becomes the default.
+   * @param call - Call context of the handled message.
    * @param adapterName - Adapter name.
    * @param providerConfigId - Provider config ID.
    * @returns The resulting binding record.
    */
-  public async bind(adapterName: string, providerConfigId: string): Promise<BindingRecord> {
+  public async bind(call: CallContext, adapterName: string, providerConfigId: string): Promise<BindingRecord> {
     let binding: BindingRecord | undefined;
     let created = false;
 
@@ -80,7 +82,7 @@ export class AdapterBindingService {
       throw new Error(`Binding could not be loaded after bind: ${adapterName}/${providerConfigId}`);
     }
     if (created) {
-      await this.bus.emit(AdapterSubsystemSubjects.binding.created, binding);
+      await this.bus.emit(call, AdapterSubsystemSubjects.binding.created, binding);
     }
     return binding;
   }
@@ -91,10 +93,11 @@ export class AdapterBindingService {
    * If the removed binding was the default, the first remaining enabled
    * binding is promoted to default and a `defaultChanged` event is emitted.
    * No-ops silently when the adapter or binding does not exist.
+   * @param call - Call context of the handled message.
    * @param adapterName - Adapter name.
    * @param providerConfigId - Provider config ID.
    */
-  public async unbind(adapterName: string, providerConfigId: string): Promise<void> {
+  public async unbind(call: CallContext, adapterName: string, providerConfigId: string): Promise<void> {
     let promoted: BindingRecord | undefined;
     let removed = false;
 
@@ -122,9 +125,9 @@ export class AdapterBindingService {
     });
 
     if (!removed) return;
-    await this.bus.emit(AdapterSubsystemSubjects.binding.deleted, { adapterName, providerConfigId });
+    await this.bus.emit(call, AdapterSubsystemSubjects.binding.deleted, { adapterName, providerConfigId });
     if (promoted) {
-      await this.bus.emit(AdapterSubsystemSubjects.binding.defaultChanged, {
+      await this.bus.emit(call, AdapterSubsystemSubjects.binding.defaultChanged, {
         adapterName,
         providerConfigId: promoted.providerConfigId,
       });
@@ -137,10 +140,11 @@ export class AdapterBindingService {
    * Throws when the adapter, the binding, or the provider config does not
    * exist, or when the provider config is disabled. No-ops when the binding
    * is already the default.
+   * @param call - Call context of the handled message.
    * @param adapterName - Adapter name.
    * @param providerConfigId - Provider config ID to promote.
    */
-  public async setDefaultBinding(adapterName: string, providerConfigId: string): Promise<void> {
+  public async setDefaultBinding(call: CallContext, adapterName: string, providerConfigId: string): Promise<void> {
     let changed = false;
 
     await this.configStore.commitSnapshotMutation((nextSnapshot) => {
@@ -170,7 +174,7 @@ export class AdapterBindingService {
     });
 
     if (!changed) return;
-    await this.bus.emit(AdapterSubsystemSubjects.binding.defaultChanged, {
+    await this.bus.emit(call, AdapterSubsystemSubjects.binding.defaultChanged, {
       adapterName,
       providerConfigId,
     });

@@ -4,7 +4,7 @@
  *
  * Driven against the real rebuild the connector performs when a system prompt
  * arrives after an idle initialization: `initialize()` followed by
- * `initialize({ systemPrompt })` produces two ACP connections and one kill. Only
+ * `initialize({ call, systemPrompt })` produces two ACP connections and one kill. Only
  * the ACP spawn is substituted, because the seam under test is what the connector
  * does with the exit observation the shared client hands it — not how that client
  * produces one.
@@ -15,6 +15,8 @@ import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONNECTOR_EXIT_OBSERVATION_MS } from '@makaio/ai-adapters-core';
 import type { AcpConnectionHandle } from '@makaio/ai-adapters-acp-client';
+import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import type { CreateTerminalRequest as TerminalRequest } from '@agentclientprotocol/sdk';
 
 /** Terminal children are the only thing spawned here; the ACP process is stubbed. */
@@ -134,7 +136,8 @@ function deferredExit(): { promise: Promise<number | null>; settle: () => void }
  */
 async function makeConnector(): Promise<QwenAcpConnector> {
   return new QwenAcpConnector({
-    bus: await QwenAcpNamespace.scopedBus(),
+    bus: await QwenAcpNamespace.scopedBus(MakaioBus),
+    globalBus: MakaioBus,
     adapterId: 'adapter-1',
     adapterName: 'qwen-acp',
     agentId: 'agent-1',
@@ -236,7 +239,7 @@ describe('QwenAcpConnector generation retirement (I33, case 226)', () => {
     const connector = await makeConnector();
     await connector.initialize();
 
-    const rebuild = connector.initialize({ systemPrompt: SYSTEM_PROMPT });
+    const rebuild = connector.initialize({ call: createTestCall(), systemPrompt: SYSTEM_PROMPT });
     // Ordering, not a call count: the existing suite already satisfies "two
     // connections and one kill", so what has to be asserted is that the second
     // connection had *not* been created while the first end was unobserved.
@@ -265,7 +268,7 @@ describe('QwenAcpConnector generation retirement (I33, case 226)', () => {
     vi.useFakeTimers();
     let rebuilt = false;
     try {
-      const rebuild = connector.initialize({ systemPrompt: SYSTEM_PROMPT }).then(() => {
+      const rebuild = connector.initialize({ call: createTestCall(), systemPrompt: SYSTEM_PROMPT }).then(() => {
         rebuilt = true;
       });
       await vi.advanceTimersByTimeAsync(CONNECTOR_EXIT_OBSERVATION_MS);
@@ -294,7 +297,7 @@ describe('QwenAcpConnector generation retirement (I33, case 226)', () => {
     const connector = await makeConnector();
     await connector.initialize();
 
-    const rebuild = connector.initialize({ systemPrompt: SYSTEM_PROMPT });
+    const rebuild = connector.initialize({ call: createTestCall(), systemPrompt: SYSTEM_PROMPT });
     await vi.waitFor(() => {
       expect(firstHandle.kill).toHaveBeenCalledTimes(1);
     });
@@ -397,7 +400,7 @@ describe('QwenAcpConnector generation-aware exit handling (case 226, G5)', () =>
 
     const connector = await makeConnector();
     await connector.initialize();
-    const rebuild = connector.initialize({ systemPrompt: SYSTEM_PROMPT });
+    const rebuild = connector.initialize({ call: createTestCall(), systemPrompt: SYSTEM_PROMPT });
     await vi.waitFor(() => {
       expect(firstHandle.kill).toHaveBeenCalledTimes(1);
     });

@@ -12,6 +12,7 @@ import {
   ExecutionAttemptSchemas,
   ExecutionAttemptSubjects,
   FrameworkContractNamespaces,
+  MAKAIO_JOB_RUN_PARTY_KIND,
   type ExecutionAttemptInstruction,
   type ExecutionAttemptOutcome,
 } from '@makaio/contracts';
@@ -225,10 +226,8 @@ async function createHarness(
     auth: new HmacAuth({
       secret: TRANSPORT_SECRET,
       resolveSecret: (id) => (id === executionAttemptId ? TRANSPORT_SECRET : null),
-      resolvePeer: (id) =>
-        id === executionAttemptId
-          ? { kind: 'workflow-execution-attempt', id, authenticated: true, claims: { executionId: OWNER } }
-          : null,
+      resolveParty: (id) =>
+        id === executionAttemptId ? { kind: MAKAIO_JOB_RUN_PARTY_KIND, id, claims: { executionId: OWNER } } : null,
     }),
   });
   await serverTransport.connect(authorityBus, 'workload-invocation-authority');

@@ -48,6 +48,7 @@ export function registerDrizzleOwnedImportHandlers(bus: IMakaioBus, deps: Sessio
         // Only the insert winner resolves initial parent lineage; its fresh ID is
         // published after that resolution, while conflicts take the read-only path below.
         await emitImportUpsertLifecycleEvent(
+          ctx.call,
           bus,
           db,
           {

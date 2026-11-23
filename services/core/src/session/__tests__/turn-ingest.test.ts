@@ -18,6 +18,7 @@ import { sql } from 'drizzle-orm';
 import { MakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
 import type { SessionMessage } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { createTempDb, createDbCleanup } from '@makaio/test-utils/drizzle-harness';
 import { TurnStorageSubjects } from '../turns/index.js';
 import { MessageStorageSubjects } from '../messages/namespace.js';
@@ -111,7 +112,7 @@ describe('ingestCompletedTurn (memory storage)', () => {
       detachMessageStorage,
     ];
 
-    await MakaioBus.request(SessionStorageSubjects.set, {
+    await MakaioBus.request(createTestCall(), SessionStorageSubjects.set, {
       sessionId: SESSION_ID,
       session: createTestSession(SESSION_ID),
     });
@@ -141,18 +142,20 @@ describe('ingestCompletedTurn (memory storage)', () => {
   });
 
   it('first ingest creates the turn, links messages, and emits both events exactly once', async () => {
-    const result = await ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
+    const result = await ingestCompletedTurn(createTestCall(), MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
 
     expect(result.created).toBe(true);
     expect(result.turnNumber).toBe(1);
 
     // Four-point contract point 2: turn row exists in completed state.
-    const { turn } = await MakaioBus.request(TurnStorageSubjects.get, { turnId: result.turnId });
+    const { turn } = await MakaioBus.request(createTestCall(), TurnStorageSubjects.get, { turnId: result.turnId });
     expect(turn?.status).toBe('completed');
     expect(turn?.turnNumber).toBe(1);
 
     // Point 3: messages queryable via getByTurn with the real turnId.
-    const { messages } = await MakaioBus.request(MessageStorageSubjects.getByTurn, { turnId: result.turnId });
+    const { messages } = await MakaioBus.request(createTestCall(), MessageStorageSubjects.getByTurn, {
+      turnId: result.turnId,
+    });
     expect(messages).toHaveLength(2);
     expect(messages.every((m: SessionMessage) => m.turnId === result.turnId)).toBe(true);
 
@@ -170,14 +173,16 @@ describe('ingestCompletedTurn (memory storage)', () => {
   });
 
   it('re-ingesting the same anchor is a storage no-op and emits nothing', async () => {
-    const first = await ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
-    const second = await ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
+    const first = await ingestCompletedTurn(createTestCall(), MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
+    const second = await ingestCompletedTurn(createTestCall(), MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
 
     expect(second.created).toBe(false);
     expect(second.turnId).toBe(first.turnId);
     expect(second.turnNumber).toBe(first.turnNumber);
 
-    const { messages } = await MakaioBus.request(MessageStorageSubjects.getByTurn, { turnId: first.turnId });
+    const { messages } = await MakaioBus.request(createTestCall(), MessageStorageSubjects.getByTurn, {
+      turnId: first.turnId,
+    });
     expect(messages).toHaveLength(2);
 
     // ZERO additional events beyond the first ingestion.
@@ -186,14 +191,14 @@ describe('ingestCompletedTurn (memory storage)', () => {
   });
 
   it('assigns monotonic turn numbers and never renumbers on re-ingestion', async () => {
-    const turn1 = await ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
-    const turn2 = await ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-2'));
+    const turn1 = await ingestCompletedTurn(createTestCall(), MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
+    const turn2 = await ingestCompletedTurn(createTestCall(), MakaioBus, buildParams(SESSION_ID, 'anchor-2'));
 
     expect(turn1.turnNumber).toBe(1);
     expect(turn2.turnNumber).toBe(2);
 
     // Re-ingesting turn 1 after turn 2 exists must not renumber it.
-    const replay = await ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
+    const replay = await ingestCompletedTurn(createTestCall(), MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
     expect(replay.created).toBe(false);
     expect(replay.turnId).toBe(turn1.turnId);
     expect(replay.turnNumber).toBe(1);
@@ -202,10 +207,14 @@ describe('ingestCompletedTurn (memory storage)', () => {
   it('persists the turn but skips events and warns when messages are empty', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      const result = await ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-empty', { messages: [] }));
+      const result = await ingestCompletedTurn(
+        createTestCall(),
+        MakaioBus,
+        buildParams(SESSION_ID, 'anchor-empty', { messages: [] }),
+      );
 
       expect(result.created).toBe(true);
-      const { turn } = await MakaioBus.request(TurnStorageSubjects.get, { turnId: result.turnId });
+      const { turn } = await MakaioBus.request(createTestCall(), TurnStorageSubjects.get, { turnId: result.turnId });
       expect(turn?.status).toBe('completed');
 
       expect(startedEvents).toHaveLength(0);
@@ -221,7 +230,9 @@ describe('ingestCompletedTurn (memory storage)', () => {
     // persistence fails (message storage unavailable) before any lifecycle
     // side effect ran.
     detachMessageStorage();
-    await expect(ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-1'))).rejects.toThrow();
+    await expect(
+      ingestCompletedTurn(createTestCall(), MakaioBus, buildParams(SESSION_ID, 'anchor-1')),
+    ).rejects.toThrow();
     expect(startedEvents).toHaveLength(0);
     expect(completedEvents).toHaveLength(0);
 
@@ -229,17 +240,19 @@ describe('ingestCompletedTurn (memory storage)', () => {
     // (created=false), but the missing turn.completed lifecycle row marks the
     // side effects as incomplete — the retry must persist messages AND emit.
     unsubs.push(registerMemoryMessageStorage(MakaioBus));
-    const retry = await ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
+    const retry = await ingestCompletedTurn(createTestCall(), MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
 
     expect(retry.created).toBe(false);
-    const { messages } = await MakaioBus.request(MessageStorageSubjects.getByTurn, { turnId: retry.turnId });
+    const { messages } = await MakaioBus.request(createTestCall(), MessageStorageSubjects.getByTurn, {
+      turnId: retry.turnId,
+    });
     expect(messages).toHaveLength(2);
     expect(eventOrder).toEqual(['started', 'completed']);
     expect(startedEvents).toHaveLength(1);
     expect(completedEvents).toHaveLength(1);
 
     // A further re-ingestion emits nothing (side effects durably recorded).
-    await ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
+    await ingestCompletedTurn(createTestCall(), MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
     expect(startedEvents).toHaveLength(1);
     expect(completedEvents).toHaveLength(1);
   });
@@ -247,11 +260,19 @@ describe('ingestCompletedTurn (memory storage)', () => {
   it('emits via the resume path when an anchor first ingested without messages gains them', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
-      const empty = await ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-late', { messages: [] }));
+      const empty = await ingestCompletedTurn(
+        createTestCall(),
+        MakaioBus,
+        buildParams(SESSION_ID, 'anchor-late', { messages: [] }),
+      );
       expect(empty.created).toBe(true);
       expect(completedEvents).toHaveLength(0);
 
-      const withMessages = await ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-late'));
+      const withMessages = await ingestCompletedTurn(
+        createTestCall(),
+        MakaioBus,
+        buildParams(SESSION_ID, 'anchor-late'),
+      );
       expect(withMessages.created).toBe(false);
       expect(withMessages.turnId).toBe(empty.turnId);
       expect(startedEvents).toHaveLength(1);
@@ -263,15 +284,17 @@ describe('ingestCompletedTurn (memory storage)', () => {
 
   it('concurrent ingestion of the same anchor emits exactly once (per-anchor serialization)', async () => {
     const [a, b] = await Promise.all([
-      ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-race')),
-      ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-race')),
+      ingestCompletedTurn(createTestCall(), MakaioBus, buildParams(SESSION_ID, 'anchor-race')),
+      ingestCompletedTurn(createTestCall(), MakaioBus, buildParams(SESSION_ID, 'anchor-race')),
     ]);
 
     expect(a.turnId).toBe(b.turnId);
     expect(a.turnNumber).toBe(b.turnNumber);
     expect([a.created, b.created].filter(Boolean)).toHaveLength(1);
 
-    const { messages } = await MakaioBus.request(MessageStorageSubjects.getByTurn, { turnId: a.turnId });
+    const { messages } = await MakaioBus.request(createTestCall(), MessageStorageSubjects.getByTurn, {
+      turnId: a.turnId,
+    });
     expect(messages).toHaveLength(2);
     expect(startedEvents).toHaveLength(1);
     expect(completedEvents).toHaveLength(1);
@@ -279,6 +302,7 @@ describe('ingestCompletedTurn (memory storage)', () => {
 
   it('propagates error status as success=false with the error string', async () => {
     await ingestCompletedTurn(
+      createTestCall(),
       MakaioBus,
       buildParams(SESSION_ID, 'anchor-err', { status: 'error', error: 'agent exploded' }),
     );
@@ -289,7 +313,7 @@ describe('ingestCompletedTurn (memory storage)', () => {
   });
 
   it('appends turn.started and turn.completed lifecycle rows to session_events', async () => {
-    const result = await ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
+    const result = await ingestCompletedTurn(createTestCall(), MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
 
     const events = await getStoredEvents(SESSION_ID);
     const started = events.filter((e) => e.type === 'turn.started');
@@ -300,7 +324,7 @@ describe('ingestCompletedTurn (memory storage)', () => {
     expect(completed[0].payload).toMatchObject({ turnId: result.turnId, success: true });
 
     // Re-ingestion appends no further lifecycle rows.
-    await ingestCompletedTurn(MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
+    await ingestCompletedTurn(createTestCall(), MakaioBus, buildParams(SESSION_ID, 'anchor-1'));
     const eventsAfter = await getStoredEvents(SESSION_ID);
     expect(eventsAfter.filter((e) => e.type === 'turn.started')).toHaveLength(1);
     expect(eventsAfter.filter((e) => e.type === 'turn.completed')).toHaveLength(1);
@@ -361,13 +385,13 @@ describe('storage:turn.ingestCompleted (Drizzle, temp SQLite)', () => {
    */
   async function createSessionRow(sessionId: string): Promise<void> {
     const session = createSession({ sessionId });
-    await MakaioBus.request(SessionStorageSubjects.set, { sessionId, session });
+    await MakaioBus.request(createTestCall(), SessionStorageSubjects.set, { sessionId, session });
   }
 
   it('anchor conflict preserves turnId, turnNumber, and startedAt but updates completion fields', async () => {
     await createSessionRow('drizzle-session');
 
-    const first = await MakaioBus.request(TurnStorageSubjects.ingestCompleted, {
+    const first = await MakaioBus.request(createTestCall(), TurnStorageSubjects.ingestCompleted, {
       sessionId: 'drizzle-session',
       turnAnchorId: 'anchor-A',
       startedAt: 1_000,
@@ -378,7 +402,7 @@ describe('storage:turn.ingestCompleted (Drizzle, temp SQLite)', () => {
     expect(first.turn.turnNumber).toBe(1);
 
     // Add a second turn so a renumbering bug would be observable.
-    const second = await MakaioBus.request(TurnStorageSubjects.ingestCompleted, {
+    const second = await MakaioBus.request(createTestCall(), TurnStorageSubjects.ingestCompleted, {
       sessionId: 'drizzle-session',
       turnAnchorId: 'anchor-B',
       startedAt: 3_000,
@@ -388,7 +412,7 @@ describe('storage:turn.ingestCompleted (Drizzle, temp SQLite)', () => {
     expect(second.turn.turnNumber).toBe(2);
 
     // Re-ingest anchor-A with different completion data and startedAt.
-    const replay = await MakaioBus.request(TurnStorageSubjects.ingestCompleted, {
+    const replay = await MakaioBus.request(createTestCall(), TurnStorageSubjects.ingestCompleted, {
       sessionId: 'drizzle-session',
       turnAnchorId: 'anchor-A',
       startedAt: 9_999,
@@ -413,14 +437,14 @@ describe('storage:turn.ingestCompleted (Drizzle, temp SQLite)', () => {
     await createSessionRow('session-one');
     await createSessionRow('session-two');
 
-    const one = await MakaioBus.request(TurnStorageSubjects.ingestCompleted, {
+    const one = await MakaioBus.request(createTestCall(), TurnStorageSubjects.ingestCompleted, {
       sessionId: 'session-one',
       turnAnchorId: 'shared-anchor',
       startedAt: 1_000,
       completedAt: 2_000,
       status: 'completed',
     });
-    const two = await MakaioBus.request(TurnStorageSubjects.ingestCompleted, {
+    const two = await MakaioBus.request(createTestCall(), TurnStorageSubjects.ingestCompleted, {
       sessionId: 'session-two',
       turnAnchorId: 'shared-anchor',
       startedAt: 1_500,

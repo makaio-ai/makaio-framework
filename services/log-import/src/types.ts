@@ -105,9 +105,9 @@ export interface LogImporterRegistration {
  */
 export interface LogImportRegistryOptions {
   /**
-   * Message bus instance (defaults to MakaioBus).
+   * Message bus instance the registry subscribes its handlers on.
    */
-  bus?: import('@makaio/bus-core').IMakaioBus;
+  bus: import('@makaio/bus-core').IMakaioBus;
   /**
    * Capability service used to backfill providers registered before init().
    */

@@ -14,7 +14,7 @@
  *   │
  *   ├─► stream-bridge ──► message_complete (with tool_calls)
  *   │
- *   └─► handleToolCalls(toolCalls, callbacks, context)
+ *   └─► handleToolCalls(call, toolCalls, callbacks, context)
  *         │
  *         ├─► requestToolApproval() ──► scoped bus ──► global bus
  *         │
@@ -44,7 +44,7 @@ import type { ChatCompletionMessageParam, ChatCompletionTool } from 'openai/reso
 
 import type { IMakaioBus } from '@makaio/bus-core';
 import { OpenAINodeConnectorSubjects, type SdkEventMessage } from './namespaces/index.js';
-import type { ExtractSubjectPayload, ExtractSubjectResponse } from '@makaio/core';
+import type { CallContext, ExtractSubjectPayload, ExtractSubjectResponse } from '@makaio/core';
 import { type AgentToolApproveRequest, type AgentToolApproveResponse, type ToolListItem } from '@makaio/contracts';
 import {
   createToolApprovalHandler,
@@ -120,6 +120,7 @@ export function toOpenAIToolFormat(tools: ToolListItem[]): ChatCompletionTool[] 
 
 /**
  * Convenience: Load tools and convert to OpenAI format in one call.
+ * @param call - Call of the message requesting registry tools
  * @param bus - Bus that owns the ToolRegistry handlers
  * @param adapterId - Adapter instance ID
  * @param adapterName - Adapter type name
@@ -127,19 +128,21 @@ export function toOpenAIToolFormat(tools: ToolListItem[]): ChatCompletionTool[] 
  * @returns OpenAI-formatted tools ready for chat completions
  */
 export async function fetchToolsForOpenAI(
+  call: CallContext,
   bus: IMakaioBus,
   adapterId: string,
   adapterName: string,
   options?: ToolRegistryLoadOptions,
 ): Promise<ChatCompletionTool[]> {
-  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName, options);
+  const tools = await loadToolsFromRegistry(call, bus, adapterId, adapterName, options);
   return toOpenAIToolFormat(tools);
 }
 
 type OpenAIToolCallsCallbacks = {
   bus: IMakaioBus;
-  emitSdkEvent: (event: SdkEventMessage) => Promise<void>;
+  emitSdkEvent: (call: CallContext, event: SdkEventMessage) => Promise<void>;
   requestToolApproval: (
+    call: CallContext,
     payload: Omit<
       ExtractSubjectPayload<typeof OpenAINodeConnectorSubjects.tool_approval>,
       'adapterName' | 'adapterId' | 'agentId' | 'adapterSessionId' | 'sessionId'
@@ -154,17 +157,20 @@ type OpenAIToolCallsCallbacks = {
  *
  * Tool call arguments are already normalized by stream-bridge
  * (GLM \{\} fix, DeepSeek XML extraction).
+ * @param call - Call context of the turn's message handle; forwarded to approval, lifecycle events and tool execution
  * @param toolCalls - Array of tool calls from the model response (normalized)
  * @param callbacks - Injected callbacks for event emission, approval requests, and optional ledger recording
  * @param contextOverrides - Execution context (cwd, env, sessionId, agentId, turnId)
  * @returns Tool result messages to append to conversation history
  */
 export async function handleToolCalls(
+  call: CallContext,
   toolCalls: ToolCall[],
   callbacks: OpenAIToolCallsCallbacks,
   contextOverrides: ToolExecutionContextOverrides,
 ): Promise<ChatCompletionMessageParam[]> {
   return handleToolCallsGeneric<ChatCompletionMessageParam>(
+    call,
     toolCalls,
     callbacks,
     contextOverrides,

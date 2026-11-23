@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance, type BusMessage, type BusTransport } from '@makaio/bus-core';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
 import { SubjectTelemetryFactSchema } from '@makaio/contracts';
 import {
   collectorOnlySubject,
@@ -51,12 +52,12 @@ describe('attachUpstreamTelemetry', () => {
     const inner = createTransport();
 
     const attached = await attachUpstreamTelemetry(bus, 'machine-1', { transport: inner.transport });
-    expect(bus.getContext().transportRegistry.names()).not.toContain('upstream-telemetry');
+    expect(busContextOf(bus).transportRegistry.names()).not.toContain('upstream-telemetry');
     expect(inner.transport.connect).toHaveBeenCalledTimes(1);
 
     await attached.shutdown();
 
-    expect(bus.getContext().transportRegistry.names()).not.toContain('upstream-telemetry');
+    expect(busContextOf(bus).transportRegistry.names()).not.toContain('upstream-telemetry');
     expect(inner.transport.disconnect).toHaveBeenCalledTimes(1);
   });
 
@@ -68,11 +69,11 @@ describe('attachUpstreamTelemetry', () => {
       transport: inner.transport,
       name: 'my-telemetry',
     });
-    expect(bus.getContext().transportRegistry.names()).not.toContain('my-telemetry');
+    expect(busContextOf(bus).transportRegistry.names()).not.toContain('my-telemetry');
 
     await attached.shutdown();
 
-    expect(bus.getContext().transportRegistry.names()).not.toContain('my-telemetry');
+    expect(busContextOf(bus).transportRegistry.names()).not.toContain('my-telemetry');
   });
 
   it('exports local requests through the message observer path', async () => {
@@ -198,7 +199,7 @@ describe('attachUpstreamTelemetry', () => {
       'connection refused',
     );
 
-    expect(bus.getContext().transportRegistry.names()).not.toContain('upstream-telemetry');
+    expect(busContextOf(bus).transportRegistry.names()).not.toContain('upstream-telemetry');
   });
 
   it('disconnects the projected transport when observer registration throws after connect succeeds', async () => {

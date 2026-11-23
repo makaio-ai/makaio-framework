@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { type IMakaioSession, type SessionContext } from '@makaio/contracts';
 import { getFullConversation } from '../context/get-full-conversation.js';
 import { convertSessionMessage } from '../context/convert-session-message.js';
@@ -10,12 +11,17 @@ import { recoveryPlanRequiresHistory, type RecoveryPlan } from '../recovery-plan
  *
  * This function is framework-safe: it has no host-layer dependencies
  * (no PersonaSubjects, ProfileSubjects, VirtualModelSubjects, etc.).
+ * @param call - Call context of the handled message the recovery serves
  * @param bus - Bus instance
  * @param session - Session to build context for
  * @returns SessionContext with messageHistory and isFirstTurn signal
  */
-export async function buildRecoveryContext(bus: IMakaioBus, session: IMakaioSession): Promise<SessionContext> {
-  const contextResult = await getFullConversation(bus, session.sessionId);
+export async function buildRecoveryContext(
+  call: CallContext,
+  bus: IMakaioBus,
+  session: IMakaioSession,
+): Promise<SessionContext> {
+  const contextResult = await getFullConversation(call, bus, session.sessionId);
   const messageHistory = contextResult.messages.map(convertSessionMessage);
 
   return {
@@ -31,16 +37,18 @@ export async function buildRecoveryContext(bus: IMakaioBus, session: IMakaioSess
  * {@link RecoveryPlan} the rehydrate call consumes, so a natively resumed agent
  * can never also be handed the conversation the provider already holds, and a
  * fresh-with-history agent can never start blank.
+ * @param call - Call context of the handled message the recovery serves
  * @param bus - Bus instance
  * @param session - Session whose conversation is projected
  * @param plan - Recovery plan decided for the agents being recovered
  * @returns Full-history context for a fresh-with-history plan, `undefined` for native resume
  */
 export async function buildPlannedRecoveryContext(
+  call: CallContext,
   bus: IMakaioBus,
   session: IMakaioSession,
   plan: RecoveryPlan,
 ): Promise<SessionContext | undefined> {
   if (!recoveryPlanRequiresHistory(plan)) return undefined;
-  return buildRecoveryContext(bus, session);
+  return buildRecoveryContext(call, bus, session);
 }

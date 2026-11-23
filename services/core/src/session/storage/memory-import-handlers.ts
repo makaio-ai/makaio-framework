@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { SessionSubjects, type IMakaioSession, type MakaioSessionAgent } from '@makaio/contracts';
 import type { ImportStatus, ImportUpsertRequest, SessionStorageRebindObservedRequest } from '@makaio/contracts/session';
 import { SessionStorageSubjects } from './namespace.js';
@@ -6,7 +7,7 @@ import { kindToBranchKind } from '../import/lineage-utils.js';
 import { createMonotonicClock } from './monotonic-clock.js';
 import { resolveImportCreateStatus } from './import-lifecycle.js';
 
-type PopulateAgents = (bus: IMakaioBus, sessionId: string) => Promise<MakaioSessionAgent[]>;
+type PopulateAgents = (call: CallContext, bus: IMakaioBus, sessionId: string) => Promise<MakaioSessionAgent[]>;
 type CloneSession = (session: IMakaioSession) => IMakaioSession;
 
 interface MemoryImportHandlerDeps {
@@ -274,14 +275,20 @@ function resolveMemoryImportParent(store: Map<string, IMakaioSession>, session: 
 
 /**
  * Emit the storage lifecycle event for a memory import upsert.
+ * @param call - Call context of the handled storage request
  * @param bus - Bus instance
  * @param session - Imported session
  * @param created - Whether the row was inserted
  */
-function emitMemoryImportUpsertLifecycle(bus: IMakaioBus, session: IMakaioSession, created: boolean): void {
+function emitMemoryImportUpsertLifecycle(
+  call: CallContext,
+  bus: IMakaioBus,
+  session: IMakaioSession,
+  created: boolean,
+): void {
   if (created) {
     void bus
-      .emit(SessionSubjects.created, {
+      .emit(call, SessionSubjects.created, {
         sessionId: session.sessionId,
         parentSessionId: session.parentSessionId ?? null,
         branchKind: session.branchKind ?? null,
@@ -292,7 +299,7 @@ function emitMemoryImportUpsertLifecycle(bus: IMakaioBus, session: IMakaioSessio
   }
 
   void bus
-    .emit(SessionSubjects.updated, {
+    .emit(call, SessionSubjects.updated, {
       sessionId: session.sessionId,
       changedProperties: ['source', 'targetWorkingDirectory', 'title'],
     })
@@ -377,13 +384,19 @@ function applyRebindObservedLocality(session: IMakaioSession, payload: SessionSt
 
 /**
  * Emit import status lifecycle events for memory storage.
+ * @param call - Call context of the handled storage request
  * @param bus - Bus instance
  * @param session - Updated imported session
  * @param importStatus - New import status
  */
-function emitMemoryImportStatusChanged(bus: IMakaioBus, session: IMakaioSession, importStatus: ImportStatus): void {
+function emitMemoryImportStatusChanged(
+  call: CallContext,
+  bus: IMakaioBus,
+  session: IMakaioSession,
+  importStatus: ImportStatus,
+): void {
   void bus
-    .emit(SessionSubjects.importStatusChanged, { sessionId: session.sessionId, importStatus })
+    .emit(call, SessionSubjects.importStatusChanged, { sessionId: session.sessionId, importStatus })
     .catch((err) => console.error('[SessionStorage] Failed to emit session.importStatusChanged:', err));
 
   const source = session.source ?? session.adapterName;
@@ -392,7 +405,7 @@ function emitMemoryImportStatusChanged(bus: IMakaioBus, session: IMakaioSession,
   }
 
   void bus
-    .emit(SessionSubjects.import.completed, {
+    .emit(call, SessionSubjects.import.completed, {
       sessionId: session.sessionId,
       adapterSessionId: session.adapterSessionId,
       source,
@@ -423,7 +436,7 @@ function registerMemoryRebindObservedHandler(bus: IMakaioBus, store: Map<string,
     ctx.setResult({ outcome: 'rebound', sessionId: session.sessionId });
     if (changedProperties.length > 0) {
       void bus
-        .emit(SessionSubjects.updated, { sessionId: session.sessionId, changedProperties })
+        .emit(ctx.call, SessionSubjects.updated, { sessionId: session.sessionId, changedProperties })
         .catch((err) => console.error('[SessionStorage] Failed to emit session.updated:', err));
     }
   });
@@ -463,7 +476,7 @@ function registerMemoryOwnedImportHandler(
     store.set(session.sessionId, session);
     sessionOwnerPrincipalIds.set(session.sessionId, payload.ownerPrincipalId);
     resolveMemoryImportParent(store, session);
-    emitMemoryImportUpsertLifecycle(bus, session, true);
+    emitMemoryImportUpsertLifecycle(ctx.call, bus, session, true);
     ctx.setResult({ outcome: 'created', sessionId: session.sessionId });
   });
 }
@@ -525,7 +538,7 @@ export function registerMemorySessionImportHandlers(deps: MemoryImportHandlerDep
         resolveMemoryImportParent(store, session);
       }
 
-      emitMemoryImportUpsertLifecycle(bus, session, created);
+      emitMemoryImportUpsertLifecycle(ctx.call, bus, session, created);
       ctx.setResult({ sessionId: session.sessionId, created });
     }),
     registerMemoryOwnedImportHandler(bus, store, sessionOwnerPrincipalIds),
@@ -537,7 +550,7 @@ export function registerMemorySessionImportHandlers(deps: MemoryImportHandlerDep
         ctx.setResult({ session: null });
         return;
       }
-      const agents = await populateAgents(bus, session.sessionId);
+      const agents = await populateAgents(ctx.call, bus, session.sessionId);
       ctx.setResult({ session: { ...cloneSession(session), agents } });
     }),
     bus.on(SessionStorageSubjects.listImported, async (ctx) => {
@@ -550,7 +563,7 @@ export function registerMemorySessionImportHandlers(deps: MemoryImportHandlerDep
       const sessionsWithAgents = await Promise.all(
         sessions.map(async (session) => ({
           ...cloneSession(session),
-          agents: await populateAgents(bus, session.sessionId),
+          agents: await populateAgents(ctx.call, bus, session.sessionId),
         })),
       );
       ctx.setResult({ sessions: sessionsWithAgents });
@@ -574,7 +587,7 @@ export function registerMemorySessionImportHandlers(deps: MemoryImportHandlerDep
         session.status = 'active';
       }
       ctx.setResult({ success: true });
-      emitMemoryImportStatusChanged(bus, session, importStatus);
+      emitMemoryImportStatusChanged(ctx.call, bus, session, importStatus);
     }),
   ];
 }

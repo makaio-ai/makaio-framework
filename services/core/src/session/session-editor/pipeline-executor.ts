@@ -1,4 +1,5 @@
 import type { SessionMessage } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import type { PipelineStep } from '../../session-editor/types.js';
 import { actionRegistry } from './action-registry.js';
 
@@ -21,12 +22,14 @@ export interface PipelineResult {
  * The `context` object is merged into each step's `options` before the action
  * executes, allowing callers to inject session-level data (e.g. `sessionId`)
  * without requiring every pipeline step config to repeat it.
+ * @param call - Call context of the operation the pipeline runs for; forwarded to every action
  * @param messages - Source messages
  * @param steps - Pipeline steps to execute
  * @param context - Optional session-level context merged into each step's options
  * @returns Final result after all steps
  */
 export async function executePipeline(
+  call: CallContext,
   messages: SessionMessage[],
   steps: PipelineStep[],
   context?: Record<string, unknown>,
@@ -42,7 +45,7 @@ export async function executePipeline(
     }
 
     const stepOptions: Record<string, unknown> = { ...context, ...step.options };
-    const result = await action.execute(currentMessages, stepOptions);
+    const result = await action.execute(call, currentMessages, stepOptions);
 
     if (result.kind === 'messages') {
       currentMessages = result.messages;

@@ -2,6 +2,7 @@
 /* eslint max-lines: ["error", { "max": 450 }] */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import type { SessionMessage, ForkTransforms } from '@makaio/contracts';
 import { getFullConversation } from '../get-full-conversation.js';
 import {
@@ -39,7 +40,7 @@ describe('getFullConversation', () => {
       mockGetMessage(cleanup, 'msg-1', msg1);
       mockGetMessage(cleanup, 'msg-2', msg2);
 
-      const result = await getFullConversation(MakaioBus, 'session-1');
+      const result = await getFullConversation(createTestCall(), MakaioBus, 'session-1');
 
       expect(result.messages).toHaveLength(2);
       expect(result.sessionChain).toEqual(['session-1']);
@@ -73,7 +74,7 @@ describe('getFullConversation', () => {
 
       // getFullConversation walks parentSessionId upward from the requested session
       // and never traverses children, so the aside child must stay excluded.
-      const result = await getFullConversation(MakaioBus, 'session-1');
+      const result = await getFullConversation(createTestCall(), MakaioBus, 'session-1');
 
       expect(result.messages.map((message) => message.messageId)).toEqual(['parent-msg-1']);
       expect(result.sessionChain).toEqual(['session-1']);
@@ -129,7 +130,7 @@ describe('getFullConversation', () => {
       mockGetMessage(cleanup, 'child-msg-1', childMsg1);
       mockGetMessage(cleanup, 'child-msg-2', childMsg2);
 
-      const result = await getFullConversation(MakaioBus, 'child');
+      const result = await getFullConversation(createTestCall(), MakaioBus, 'child');
 
       // Should have: parent-msg-1, parent-msg-2 (up to fork point), child-msg-1, child-msg-2
       // Should NOT have: parent-msg-3 (after fork point)
@@ -170,7 +171,7 @@ describe('getFullConversation', () => {
       mockGetEvents(cleanup, 'child', [messageEvent('child-msg', 3000, { sessionId: 'child', role: 'user' })]);
       mockGetMessage(cleanup, 'child-msg', childMsg);
 
-      const result = await getFullConversation(MakaioBus, 'child');
+      const result = await getFullConversation(createTestCall(), MakaioBus, 'child');
 
       expect(result.messages.map((m) => m.messageId)).toEqual(['root-msg', 'parent-msg', 'child-msg']);
       expect(result.sessionChain).toEqual(['root', 'parent', 'child']);
@@ -210,7 +211,7 @@ describe('getFullConversation', () => {
       mockGetEvents(cleanup, 'fork', [messageEvent('msg-4', 4000, { sessionId: 'fork', role: 'assistant' })]);
       mockGetMessage(cleanup, 'msg-4', forkMsg);
 
-      const result = await getFullConversation(MakaioBus, 'fork');
+      const result = await getFullConversation(createTestCall(), MakaioBus, 'fork');
 
       // msg-2 filtered from ancestors, msg-4 kept (fork's own)
       expect(result.messages.map((m) => m.messageId)).toEqual(['msg-1', 'msg-3', 'msg-4']);
@@ -246,7 +247,7 @@ describe('getFullConversation', () => {
       mockGetEvents(cleanup, 'fork', [messageEvent('msg-3', 3000, { sessionId: 'fork', role: 'user' })]);
       mockGetMessage(cleanup, 'msg-3', forkMsg);
 
-      const result = await getFullConversation(MakaioBus, 'fork');
+      const result = await getFullConversation(createTestCall(), MakaioBus, 'fork');
 
       // msg-3 should NOT be filtered because it belongs to the fork session
       expect(result.messages.map((m) => m.messageId)).toEqual(['msg-1', 'msg-2', 'msg-3']);
@@ -305,7 +306,7 @@ describe('getFullConversation', () => {
       mockGetEvents(cleanup, 'fork', [messageEvent('msg-3', 3000, { sessionId: 'fork', role: 'assistant' })]);
       mockGetMessage(cleanup, 'msg-3', forkMsgWithTool);
 
-      const result = await getFullConversation(MakaioBus, 'fork');
+      const result = await getFullConversation(createTestCall(), MakaioBus, 'fork');
 
       expect(result.messages).toHaveLength(3);
 
@@ -367,7 +368,7 @@ describe('getFullConversation', () => {
       mockGetEvents(cleanup, 'fork', [messageEvent('msg-5', 5000, { sessionId: 'fork', role: 'user' })]);
       mockGetMessage(cleanup, 'msg-5', forkMsg);
 
-      const result = await getFullConversation(MakaioBus, 'fork');
+      const result = await getFullConversation(createTestCall(), MakaioBus, 'fork');
 
       // msg-3 should be removed, tool outputs stripped from ancestors
       expect(result.messages.map((m) => m.messageId)).toEqual(['msg-1', 'msg-2', 'msg-4', 'msg-5']);
@@ -419,7 +420,7 @@ describe('getFullConversation', () => {
       mockGetEvents(cleanup, 'fork', [messageEvent('fork-msg-1', 4000, { sessionId: 'fork', role: 'assistant' })]);
       mockGetMessage(cleanup, 'fork-msg-1', forkMsg);
 
-      const result = await getFullConversation(MakaioBus, 'fork');
+      const result = await getFullConversation(createTestCall(), MakaioBus, 'fork');
 
       // root-msg-1 must remain, segment exclusion applies only to parent scope.
       expect(result.messages.map((m) => m.messageId)).toEqual(['root-msg-1', 'fork-msg-1']);

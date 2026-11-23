@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createBusInstance, type BusMessage, type BusTransport } from '@makaio/bus-core';
 import type { WorkflowDefinition, WorkflowWorkerConfig } from '@makaio/contracts';
 import { ExecutionAttemptNamespace, ExecutionAttemptSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { createWorkflowWorkerReadyMessage } from '../worker-ready-message.js';
 
 // ---------------------------------------------------------------------------
@@ -101,6 +102,7 @@ function makeBusHandle() {
   const unsubscribe = vi.fn();
   return {
     bus: {
+      own: vi.fn(() => createTestCall()),
       on: vi.fn().mockReturnValue(unsubscribe),
       off: vi.fn(),
       emit: vi.fn(),
@@ -303,6 +305,7 @@ describe('runWorkflowInWorker', () => {
     expect(endpointOrder).toBeLessThan(startOrder);
     expect(startOrder).toBeLessThan(registerOrder);
     expect(busHandle.bus.request).toHaveBeenCalledWith(
+      expect.anything(),
       ExecutionAttemptSubjects.bootstrap.awaitStart,
       { executionAttemptId: TEST_ATTEMPT_ID },
       expect.objectContaining({ signal: expect.any(AbortSignal), timeout: expect.any(Number) }),

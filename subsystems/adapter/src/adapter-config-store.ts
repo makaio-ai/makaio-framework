@@ -1,4 +1,5 @@
 import { type IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { CapabilitySubjects } from '@makaio/contracts';
 import {
   ADAPTER_FILE_SCHEMA_VERSION,
@@ -486,8 +487,10 @@ export class AdapterConfigStore {
 
   private async getLogImportProviderKeys(): Promise<Set<string>> {
     if (!this.logImportProviderKeysPromise) {
+      // The cached query is shared by concurrent readers rather than owned by one handled message.
+      const call = this.bus.own('shared-work');
       const requestPromise: Promise<Set<string>> = this.bus
-        .requestOptional(CapabilitySubjects.listProviders, {
+        .requestOptional(call, CapabilitySubjects.listProviders, {
           capabilityId: 'log-import',
         })
         .then((capabilityResult) => {
@@ -521,15 +524,19 @@ export class AdapterConfigStore {
    * lookup. Snapshot mutations replace config values rather than mutating them,
    * so the safe read and refs-only context below always derive from that same
    * captured value without adding a second lock or read.
+   * @param call - Call context of the handled message this resolution serves.
    * @param providerConfigId - Provider config ID.
    * @returns Safe config, runtime context, and definition, or `null` when missing.
    */
-  public async resolveProviderRuntimeSnapshot(providerConfigId: string): Promise<ProviderRuntimeSnapshot | null> {
+  public async resolveProviderRuntimeSnapshot(
+    call: CallContext,
+    providerConfigId: string,
+  ): Promise<ProviderRuntimeSnapshot | null> {
     const raw = this.snapshot.providerConfigs.get(providerConfigId);
     if (!raw) {
       return null;
     }
-    const { context, definition } = await buildProviderRuntimeContextFromRaw(this.bus, providerConfigId, raw);
+    const { context, definition } = await buildProviderRuntimeContextFromRaw(call, this.bus, providerConfigId, raw);
     return {
       config: toProviderConfigRecord(providerConfigId, raw),
       context,
@@ -545,11 +552,13 @@ export class AdapterConfigStore {
    * before the asynchronous definition lookup therefore keeps the binding
    * proof and returned provider runtime snapshot coherent without a second
    * authorization read.
+   * @param call - Call context of the handled message this resolution serves.
    * @param adapterName - Adapter whose binding is required.
    * @param providerConfigId - Provider config selected for runtime use.
    * @returns Coherent binding proof and refs-only runtime snapshot.
    */
   public async resolveBoundProviderRuntimeSnapshot(
+    call: CallContext,
     adapterName: string,
     providerConfigId: string,
   ): Promise<BoundProviderRuntimeSnapshot> {
@@ -563,7 +572,7 @@ export class AdapterConfigStore {
       return { snapshot: null, isBound: false };
     }
 
-    const { context, definition } = await buildProviderRuntimeContextFromRaw(this.bus, providerConfigId, raw);
+    const { context, definition } = await buildProviderRuntimeContextFromRaw(call, this.bus, providerConfigId, raw);
     return {
       isBound,
       snapshot: {

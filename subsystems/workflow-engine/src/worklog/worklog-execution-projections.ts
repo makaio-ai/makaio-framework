@@ -124,14 +124,14 @@ export function registerExecutionProjections(bus: IMakaioBus, db: MakaioDatabase
       const { executionId } = ctx.payload;
       await safeProject(`execution.started[${executionId}]`, async () => {
         const changed = await serializeDatabaseOperation(db, () => projectExecutionStarted(db, ctx.payload));
-        if (changed) await emitWorklogChanged(bus, executionId);
+        if (changed) await emitWorklogChanged(ctx.call, bus, executionId);
       });
     }),
     bus.on(WorkflowSubjects.execution.completed, async (ctx) => {
       const { executionId } = ctx.payload;
       await safeProject(`execution.completed[${executionId}]`, async () => {
         const changed = await serializeDatabaseOperation(db, () => projectExecutionCompleted(db, ctx.payload));
-        if (changed) await emitWorklogChanged(bus, executionId);
+        if (changed) await emitWorklogChanged(ctx.call, bus, executionId);
       });
     }),
     bus.on(WorkflowSubjects.execution.failed, async (ctx) => {
@@ -141,7 +141,7 @@ export function registerExecutionProjections(bus: IMakaioBus, db: MakaioDatabase
         const changed = await serializeDatabaseOperation(db, () =>
           projectExecutionTerminated(db, executionId, 'failed', error, failedStepId ?? null, completedAt),
         );
-        if (changed) await emitWorklogChanged(bus, executionId);
+        if (changed) await emitWorklogChanged(ctx.call, bus, executionId);
       });
     }),
     bus.on(WorkflowSubjects.execution.cancelled, async (ctx) => {
@@ -151,7 +151,7 @@ export function registerExecutionProjections(bus: IMakaioBus, db: MakaioDatabase
         const changed = await serializeDatabaseOperation(db, () =>
           projectExecutionTerminated(db, executionId, 'cancelled', null, null, completedAt),
         );
-        if (changed) await emitWorklogChanged(bus, executionId);
+        if (changed) await emitWorklogChanged(ctx.call, bus, executionId);
       });
     }),
   ];

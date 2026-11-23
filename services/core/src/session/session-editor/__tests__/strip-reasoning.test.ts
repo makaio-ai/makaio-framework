@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionMessage } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { stripReasoningAction } from '../actions/strip-reasoning.js';
 
 describe('stripReasoningAction', () => {
@@ -20,7 +21,7 @@ describe('stripReasoningAction', () => {
       },
     ];
 
-    const result = await stripReasoningAction.execute(input);
+    const result = await stripReasoningAction.execute(createTestCall(), input);
 
     expect(result.kind).toBe('messages');
     if (result.kind !== 'messages') {

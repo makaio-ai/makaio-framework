@@ -1,13 +1,14 @@
 import type { AIAgentConnector } from '../connector/agent-connector.js';
 import type { AgentContext, AgentIdentity } from '../agent/types.js';
 import type {
+  CallContext,
   ExtractSubjectPayload,
   HandlerForSubjectDefinition,
   RequestContext,
   ScopedSubjectDefinition,
   SubjectDefinition,
 } from '@makaio/core';
-import type { IMakaioBus, ScopedBus } from '@makaio/bus-core';
+import type { EmitSubject, IMakaioBus, ScopedBus } from '@makaio/bus-core';
 
 // ============================================================================
 // Exported Utility Types
@@ -71,6 +72,30 @@ export type ConnectorEventHandlers<TMessage, TDiscriminator extends string> = {
 // ============================================================================
 
 /**
+ * Forward an emit for a handled connector message on behalf of its triggering call.
+ *
+ * Module-private helper shared by the per-message emit binder and the passthrough
+ * branch of {@link createConnectorEventMapping}: both emissions belong to the single
+ * connector message handled by one subscription invocation, so both forward that
+ * message's {@link CallContext}. `EmitSubject` rejects request, wildcard and channel
+ * subjects at compile time, so this helper is only reachable for concrete event
+ * subjects.
+ * @typeParam S - Event subject definition being emitted
+ * @param globalBus - Global bus used for the enriched emission
+ * @param call - Call context of the handled connector message
+ * @param subject - Concrete event subject to emit to
+ * @param payload - Event payload already enriched with agent identity
+ */
+async function forwardEmit<S extends SubjectDefinition>(
+  globalBus: IMakaioBus,
+  call: CallContext,
+  subject: EmitSubject<S>,
+  payload: object,
+): Promise<void> {
+  await globalBus.emit<S>(call, subject, payload as S['$meta']['payload']);
+}
+
+/**
  * Creates a type-safe event mapping from connector events to scoped subjects or handler functions.
  *
  * This function routes events from the connector's scoped bus to either:
@@ -101,12 +126,15 @@ export function createConnectorEventMapping<
   nestedMessageProp: TNestedMessageProp,
   discriminator: TDiscriminator,
   handlers: ConnectorEventHandlers<TMessage, TDiscriminator>,
-  enrich: <TIn extends object>(payload: TIn) => Promise<TIn & AgentIdentity>,
+  enrich: <TIn extends object>(call: CallContext, payload: TIn) => Promise<TIn & AgentIdentity>,
 ): () => void {
-  // Create the emit helper that handlers can use
+  // Create the emit helper that handlers can use, bound to the handled message's call
   const createEmitFn =
-    (enrichedPayload: object): ConnectorEmitFn =>
-    async (subject, payload) => {
+    (call: CallContext, enrichedPayload: object): ConnectorEmitFn =>
+    async <S extends SubjectDefinition>(
+      subject: S,
+      payload: Omit<ExtractSubjectPayload<S>, keyof AgentContext>,
+    ): Promise<void> => {
       // Merge the base enrichment (agentId, messageId, etc) with the provided payload
       const baseContext = enrichedPayload as AgentIdentity & { messageId?: string };
       const enrichedEmitPayload = {
@@ -117,10 +145,7 @@ export function createConnectorEventMapping<
         adapterSessionId: baseContext.adapterSessionId,
         messageId: baseContext.messageId,
       };
-      await globalBus.emit(
-        subject as Parameters<IMakaioBus['emit']>[0],
-        enrichedEmitPayload as Parameters<IMakaioBus['emit']>[1],
-      );
+      await forwardEmit<S>(globalBus, call, subject as EmitSubject<S>, enrichedEmitPayload);
     };
 
   const handler = (async (context: RequestContext<unknown, unknown>) => {
@@ -136,20 +161,24 @@ export function createConnectorEventMapping<
 
     if (!handlerOrSubject) return;
 
-    // Enrich the message with AgentContext
-    const enrichedMessage = await enrich(message as object);
-    const emitFn = createEmitFn(enrichedMessage);
+    // Enrich the message with AgentContext. Cast to `TMessage` (not just `object`) so the
+    // enriched result stays type-related to `TMessage` for the discriminator narrowing below.
+    const enrichedMessage = await enrich(context.call, message as TMessage & object);
+    const emitFn = createEmitFn(context.call, enrichedMessage);
 
     if (typeof handlerOrSubject === 'function') {
-      await handlerOrSubject(enrichedMessage as never, emitFn);
+      // `handlerOrSubject` is still correlated to the union of every discriminator
+      // branch (TypeScript cannot narrow an indexed-access union by a runtime key
+      // value), so the enriched message is asserted to the single branch the
+      // runtime discriminator actually selected in one explicit, non-`never` cast.
+      const narrowed: NarrowedMessage<TMessage, TDiscriminator, typeof discriminatorValue & string> =
+        enrichedMessage as NarrowedMessage<TMessage, TDiscriminator, typeof discriminatorValue & string>;
+      await handlerOrSubject(narrowed, emitFn);
     } else {
       // Subject definition passthrough - emit to scoped bus
       // Strip sessionId: connector events use adapterSessionId only (sessionId is Makaio orchestration-level)
       const { sessionId: _, ...connectorPayload } = enrichedMessage as AgentIdentity & { sessionId?: string };
-      await globalBus.emit(
-        handlerOrSubject as Parameters<IMakaioBus['emit']>[0],
-        connectorPayload as Parameters<IMakaioBus['emit']>[1],
-      );
+      await forwardEmit(globalBus, context.call, handlerOrSubject, connectorPayload);
     }
   }) as HandlerForSubjectDefinition<TSourceSubject>;
 

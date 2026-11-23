@@ -26,7 +26,7 @@ import {
   type SystemPrompt,
 } from '@makaio/contracts';
 import { type ClaudeCodeConnectorBus, ClaudeCodeConnectorSubjects } from './namespace/index.js';
-import { InvalidModelError } from '@makaio/core';
+import { InvalidModelError, type CallContext } from '@makaio/core';
 import type { ClaudeAgentConfig, ClaudeSessionConfig } from './types/index.js';
 import { ClaudeCodeAdapterName } from './adapter.js';
 import { UserMessageQueue } from '@makaio/ai-adapters-core';
@@ -110,19 +110,23 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
   /**
    * Initialize Session and UserMessageQueue for SDK lifecycle management.
    * Called on first start() to setup Session/Turn abstractions.
+   * @param call - Call of the operation initializing the session.
    * @param responseSchema - Optional schema used to create the initial SDK query with outputFormat.
    */
-  private async initializeSession(responseSchema?: ConnectorStartOptions['responseSchema']): Promise<void> {
+  private async initializeSession(
+    call: CallContext,
+    responseSchema?: ConnectorStartOptions['responseSchema'],
+  ): Promise<void> {
     // Validate model early to fail fast with clear error
     if (!this.model || this.model.trim() === '') {
       throw new InvalidModelError('Model is required but was not provided');
     }
 
-    this.session = new ClaudeConnectorSession(this.buildSessionConfig());
+    this.session = new ClaudeConnectorSession(this.buildSessionConfig(), this.globalBus);
     this.userMessageQueue = new UserMessageQueue();
 
     // Initialize session with tool approval handler
-    await this.session.initialize((toolPolicy) => this.createToolApprovalHandler(toolPolicy), responseSchema);
+    await this.session.initialize(call, (toolPolicy) => this.createToolApprovalHandler(toolPolicy), responseSchema);
 
     // Wire turn events for state updates
     this.wireSessionEvents();
@@ -180,7 +184,9 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
       disallowedTools: agentConfig.disallowedTools,
       ephemeral: agentConfig.ephemeral,
       // Emit SDK events through connector for proper metadata injection
-      emitSdkEvent: async (msg) => {
+      emitSdkEvent: async (call, msg) => {
+        // Capture message correlation at ingress; the session supplies the call.
+        const pending = this.pendingMessageHandle;
         this.logLowLevelEvent(msg);
         // Sync adapterSessionId from Session before emitting to ensure correct metadata.
         // This handles the case where system.init arrives before start() returns.
@@ -202,24 +208,29 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
           console.warn('[ClaudeSdkConnector] Dropping non-object SDK event payload', { payloadType: typeof msg });
           return;
         }
-        const originatingMessageId = this.pendingMessageHandle?.messageId;
-        await this.emit(ClaudeCodeConnectorSubjects.sdk.event, {
+        const originatingMessageId = pending?.messageId;
+        const eventPayload: ConnectorSdkEventPayload & { originatingMessageId?: string } = {
           ...sdkEventPayload,
           ...(originatingMessageId !== undefined && { originatingMessageId }),
-        } as never);
+        };
+        await this.emit<typeof ClaudeCodeConnectorSubjects.sdk.event>(
+          call,
+          ClaudeCodeConnectorSubjects.sdk.event,
+          eventPayload,
+        );
       },
       // Track pending message for error handling (handleError needs this)
       onTurnStart: (handle) => {
         this.pendingMessageHandle = handle;
       },
       // Track completion result for agent.complete() return value
-      onTurnComplete: (_handle, result) => {
+      onTurnComplete: (handle, result) => {
         this.lastResult = result;
         this.pendingMessageHandle = undefined;
         // Account observation is a post-completion side effect. The session
         // awaits this callback as the final-result lifecycle barrier, so keep
         // observation best-effort and non-blocking.
-        void this.emitCompletedTurnAccountObservation(result).catch(() => undefined);
+        void this.emitCompletedTurnAccountObservation(handle.call, result).catch(() => undefined);
       },
     };
   }
@@ -254,13 +265,13 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
     });
 
     // Subscribe to turn_finished for state update and next message processing
-    this.on(ClaudeCodeConnectorSubjects.turn.turn_finished, async () => {
+    this.on(ClaudeCodeConnectorSubjects.turn.turn_finished, async (ctx) => {
       await this.updateProcessingState('turn_finished');
       // Note: message_completed is NOT a processing state - it's signaled via MessageHandle.markCompleted()
       await this.updateProcessingState('processing_finished');
 
       if (this.hasPendingToolRefresh) {
-        await this.refreshMcpServers();
+        await this.refreshMcpServers(ctx.call);
         this.hasPendingToolRefresh = false;
       }
 
@@ -293,15 +304,16 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
    * Fails gracefully: if the bus request cannot be fulfilled (no handler, network
    * error, etc.) the error is logged and the existing server configuration is
    * left unchanged rather than breaking the connector.
+   * @param call - Call of the completed turn that triggers the refresh.
    */
-  private async refreshMcpServers(): Promise<void> {
+  private async refreshMcpServers(call: CallContext): Promise<void> {
     const mcpSessionContext = this.config.mcpSessionContext;
     if (!this.session || !hasMcpResolutionScope(mcpSessionContext)) {
       return;
     }
 
     try {
-      const resolved = await MakaioBus.request(McpSubjects.session.resolve, {
+      const resolved = await MakaioBus.request(call, McpSubjects.session.resolve, {
         sessionId: mcpSessionContext.sessionId,
         projectId: mcpSessionContext.projectId,
         profileId: mcpSessionContext.profileId,
@@ -314,14 +326,15 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
 
   /**
    * Emit the current Claude account snapshot after a successfully completed turn.
+   * @param call - Call context of the turn that completed
    * @param result - Turn result produced by the session lifecycle
    */
-  private async emitCompletedTurnAccountObservation(result: MessageResult): Promise<void> {
+  private async emitCompletedTurnAccountObservation(call: CallContext, result: MessageResult): Promise<void> {
     if (result.outcome !== 'completed') {
       return;
     }
 
-    await this.accountObservationEmitter.emitIfChanged({
+    await this.accountObservationEmitter.emitIfChanged(call, {
       sessionId: this.sessionId,
       adapterSessionId: this.adapterSessionId,
       getQueryInstance: () => this.session?.getQueryInstance(),
@@ -336,6 +349,10 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
    */
   private createToolApprovalHandler(toolPolicy: ResolvedToolPolicy): Options['canUseTool'] {
     return async (toolName, input, options) => {
+      // Attribution is decided at ingress, before the policy gate and any await: the most
+      // recent started, not yet completed turn.
+      const handle = this.pendingMessageHandle;
+
       // Caller tool policy gate (Makaio-named allow/deny lists), second layer behind the
       // adapter-owned PreToolUse hook: it covers hook-disabled setups and must hold for the
       // approver-rewritten input below. Denied calls never reach central approval; `[]`
@@ -349,13 +366,26 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
         } satisfies PermissionResult;
       }
 
+      // An approval request no operation can be attributed to is declined without an approval RPC.
+      if (handle === undefined) {
+        return {
+          behavior: 'deny',
+          message: 'Tool use denied: no operation attributable to this approval request',
+          interrupt: false,
+        } satisfies PermissionResult;
+      }
+
       // Request approval via scoped bus (agent.ts wires to global AgentSubjects.toolApprove)
-      const response = await this.requestToolApproval(ClaudeCodeConnectorSubjects.can_use_tool, {
-        toolName,
-        args: input,
-        toolCallId: options.toolUseID,
-        reasoning: this.session?.getAccumulatedThinking(),
-      }).catch((error) => {
+      const response = await this.requestToolApproval<typeof ClaudeCodeConnectorSubjects.can_use_tool>(
+        handle.call,
+        ClaudeCodeConnectorSubjects.can_use_tool,
+        {
+          toolName,
+          args: input,
+          toolCallId: options.toolUseID,
+          reasoning: this.session?.getAccumulatedThinking(),
+        },
+      ).catch((error) => {
         let errorToHandle = error;
         if (error instanceof RequestError || error instanceof NoHandlerError) {
           errorToHandle = new Error(
@@ -437,9 +467,9 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
    * @param options - Message options including delivery mode and message history
    * @returns Object containing the message handle
    */
-  private async createInitialMessage(message: NormalizedMessageInput, options?: ConnectorSendMessageOptions) {
+  private async createInitialMessage(message: NormalizedMessageInput, options: ConnectorSendMessageOptions) {
     if (!this.session) {
-      await this.initializeSession(options?.responseSchema);
+      await this.initializeSession(options.call, options.responseSchema);
     }
 
     // Create message handle and enqueue
@@ -461,14 +491,14 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
    * Must set adapterSessionId before returning.
    * Called by createAgent for idle agent setup.
    * Implementations MUST be idempotent (no-op if already initialized).
-   * @param options - Optional start options (e.g., systemPrompt for Claude)
+   * @param options - Start options carrying the initialization call and optional system prompt.
    */
-  public async initialize(options?: ConnectorStartOptions): Promise<void> {
+  public async initialize(options: ConnectorStartOptions): Promise<void> {
     if (this.session) return; // Idempotent
-    if (options?.systemPrompt && !this.runtimeSystemPrompt) {
+    if (options.systemPrompt && !this.runtimeSystemPrompt) {
       this.runtimeSystemPrompt = options.systemPrompt;
     }
-    await this.initializeSession(options?.responseSchema);
+    await this.initializeSession(options.call, options.responseSchema);
     this.adapterSessionId = await this.session!.getAdapterSessionId();
   }
 
@@ -507,12 +537,9 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
    * @param options - Message options including delivery mode
    * @returns The agent ID, session ID and message handle
    */
-  public async start(
-    message: NormalizedMessageInput,
-    options?: ConnectorStartOptions | undefined,
-  ): Promise<AgentStartResult> {
+  public async start(message: NormalizedMessageInput, options: ConnectorStartOptions): Promise<AgentStartResult> {
     // Capture systemPrompt from options (session-level, set once on first call)
-    if (options?.systemPrompt && !this.runtimeSystemPrompt) {
+    if (options.systemPrompt && !this.runtimeSystemPrompt) {
       this.runtimeSystemPrompt = options.systemPrompt;
     }
 
@@ -538,10 +565,11 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
    *
    * NOTE: Session closed events are emitted by the AIAgent layer (ClaudeCodeAgent),
    * not here in the connector.
+   * @param call - Call context of the operation aborting the connector
    */
-  public abort(): void {
+  public abort(call: CallContext): void {
     if (this.session) {
-      this.session.abort().catch((error) => {
+      this.session.abort(call).catch((error) => {
         console.error('Session abort failed:', error);
       });
     }
@@ -561,11 +589,12 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
    * here would be an inference about a third party's internals, which is exactly
    * what this taxonomy refuses. What is proven is that this runtime released its
    * query; whether the SDK's process outlives it is not ours to say.
+   * @param call - Call context of the operation closing the connector
    * @returns `detached`, naming the end this runtime is not entitled to observe.
    */
-  public async close(): Promise<ConnectorTeardownResult> {
+  public async close(call: CallContext): Promise<ConnectorTeardownResult> {
     if (this.session) {
-      await this.session.close();
+      await this.session.close(call);
     }
     return {
       evidence: 'detached',
@@ -654,7 +683,7 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
    */
   public async sendMessage(
     message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
+    options: ConnectorSendMessageOptions,
   ): Promise<MessageHandle> {
     const { handle } = await this.createInitialMessage(message, options);
 

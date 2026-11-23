@@ -284,7 +284,7 @@ function registerSetHandler(deps: SessionHandlerDeps): () => void {
       const inserted = didAffectRows(insertResult);
       ctx.setResult({ success: inserted, clientAccountChanged: inserted && session.clientAccountId !== undefined });
       if (inserted) {
-        emitSessionClientAccountChangedIfNeeded(bus, null, session);
+        emitSessionClientAccountChangedIfNeeded(ctx.call, bus, null, session);
       }
       return;
     }
@@ -310,7 +310,7 @@ function registerSetHandler(deps: SessionHandlerDeps): () => void {
         success: true,
         clientAccountChanged: (previousSession?.clientAccountId ?? null) !== (session.clientAccountId ?? null),
       });
-      emitSessionClientAccountChangedIfNeeded(bus, previousSession, session);
+      emitSessionClientAccountChangedIfNeeded(ctx.call, bus, previousSession, session);
       return;
     }
     throw new Error(`Failed to write session "${sessionId}" with a stable client-account baseline`);
@@ -394,7 +394,7 @@ function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
         .where(and(eq(sessions.sessionId, sessionId), statusGuard, identityGuard, reconciliationGuard));
       const applied = didAffectRows(result);
       ctx.setResult({ success: applied, clientAccountChanged: false });
-      if (applied && payload.advanceGeneration === true) emitSessionGenerationAdvanced(bus, sessionId);
+      if (applied && payload.advanceGeneration === true) emitSessionGenerationAdvanced(ctx.call, bus, sessionId);
       return;
     }
     for (let attempt = 0; attempt < CLIENT_ACCOUNT_WRITE_RETRY_LIMIT; attempt++) {
@@ -445,8 +445,8 @@ function registerUpdateHandler(deps: SessionHandlerDeps): () => void {
         success: true,
         clientAccountChanged: (previousSession.clientAccountId ?? null) !== (nextSession.clientAccountId ?? null),
       });
-      emitSessionClientAccountChangedIfNeeded(bus, previousSession, nextSession);
-      if (payload.advanceGeneration === true) emitSessionGenerationAdvanced(bus, sessionId);
+      emitSessionClientAccountChangedIfNeeded(ctx.call, bus, previousSession, nextSession);
+      if (payload.advanceGeneration === true) emitSessionGenerationAdvanced(ctx.call, bus, sessionId);
       return;
     }
     throw new Error(`Failed to update session "${sessionId}" with a stable client-account baseline`);

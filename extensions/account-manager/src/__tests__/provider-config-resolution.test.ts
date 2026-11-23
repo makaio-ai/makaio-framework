@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AdapterSubsystemSubjects, type ProviderConfigFileRecord } from '@makaio/services-core/adapter-subsystem';
 
 import { resolveProviderConfigsForAccount } from '../provider-config-resolution.js';
@@ -54,7 +55,9 @@ describe('resolveProviderConfigsForAccount', () => {
   });
 
   it('returns an empty result when provider-config reads are unavailable', async () => {
-    await expect(resolveProviderConfigsForAccount(createBusInstance(), CLIENT_ID, ACCOUNT_ID)).resolves.toEqual([]);
+    await expect(
+      resolveProviderConfigsForAccount(createTestCall(), createBusInstance(), CLIENT_ID, ACCOUNT_ID),
+    ).resolves.toEqual([]);
   });
 
   it('matches an account-pinned inferred config by exact manager, client, and account identity', async () => {
@@ -69,7 +72,7 @@ describe('resolveProviderConfigsForAccount', () => {
       }),
     );
 
-    await expect(resolveProviderConfigsForAccount(bus, CLIENT_ID, ACCOUNT_ID)).resolves.toEqual([
+    await expect(resolveProviderConfigsForAccount(createTestCall(), bus, CLIENT_ID, ACCOUNT_ID)).resolves.toEqual([
       { providerConfigId: 'cfg-pinned', definitionId: 'anthropic' },
     ]);
   });
@@ -82,7 +85,7 @@ describe('resolveProviderConfigsForAccount', () => {
       }),
     );
 
-    await expect(resolveProviderConfigsForAccount(bus, CLIENT_ID, ACCOUNT_ID)).resolves.toEqual([
+    await expect(resolveProviderConfigsForAccount(createTestCall(), bus, CLIENT_ID, ACCOUNT_ID)).resolves.toEqual([
       { providerConfigId: 'cfg-native-current', definitionId: 'anthropic' },
     ]);
   });
@@ -110,7 +113,7 @@ describe('resolveProviderConfigsForAccount', () => {
       }),
     );
 
-    await expect(resolveProviderConfigsForAccount(bus, CLIENT_ID, ACCOUNT_ID)).resolves.toEqual([]);
+    await expect(resolveProviderConfigsForAccount(createTestCall(), bus, CLIENT_ID, ACCOUNT_ID)).resolves.toEqual([]);
   });
 
   it('keeps lifecycle ownership independent from account selection', async () => {
@@ -126,7 +129,7 @@ describe('resolveProviderConfigsForAccount', () => {
       }),
     );
 
-    const result = await resolveProviderConfigsForAccount(bus, CLIENT_ID, ACCOUNT_ID);
+    const result = await resolveProviderConfigsForAccount(createTestCall(), bus, CLIENT_ID, ACCOUNT_ID);
     expect(result.map(({ providerConfigId }) => providerConfigId)).toEqual(['cfg-user-owned', 'cfg-client-managed']);
   });
 });

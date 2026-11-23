@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { DEFAULT_CONSTRAINTS, SubagentSubjects, SessionSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { SubagentManager } from '../manager/index.js';
 import { handleSpawnRpc, handleAwaitRpc, handleListBySessionRpc, type RpcHandlerContext } from '../rpc-handlers.js';
 
@@ -34,7 +35,7 @@ describe('rpc-handlers spawn/await', () => {
         const customCtx = { manager: customManager, bus: MakaioBus };
 
         await expect(
-          handleSpawnRpc(customCtx, {
+          handleSpawnRpc(createTestCall(), customCtx, {
             parentSessionId: 'parent-1',
             config: config('Test task'),
             depth: 3,
@@ -50,7 +51,11 @@ describe('rpc-handlers spawn/await', () => {
         customManager.track({ subagentId: 'sub-2', parentSessionId: 'parent-1', config: config('Task 2'), depth: 1 });
 
         await expect(
-          handleSpawnRpc(customCtx, { parentSessionId: 'parent-1', config: config('Task 3'), depth: 1 }),
+          handleSpawnRpc(createTestCall(), customCtx, {
+            parentSessionId: 'parent-1',
+            config: config('Task 3'),
+            depth: 1,
+          }),
         ).rejects.toThrow('Maximum concurrent subagents per session (2) reached');
       });
 
@@ -62,7 +67,11 @@ describe('rpc-handlers spawn/await', () => {
         customManager.track({ subagentId: 'sub-2', parentSessionId: 'parent-2', config: config('Task 2'), depth: 1 });
 
         await expect(
-          handleSpawnRpc(customCtx, { parentSessionId: 'parent-3', config: config('Task 3'), depth: 1 }),
+          handleSpawnRpc(createTestCall(), customCtx, {
+            parentSessionId: 'parent-3',
+            config: config('Task 3'),
+            depth: 1,
+          }),
         ).rejects.toThrow('Maximum total active subagents (2) reached');
       });
 
@@ -71,7 +80,7 @@ describe('rpc-handlers spawn/await', () => {
         const customCtx = { manager: customManager, bus: MakaioBus };
 
         await expect(
-          handleSpawnRpc(customCtx, {
+          handleSpawnRpc(createTestCall(), customCtx, {
             parentSessionId: 'parent-1',
             config: { ...config('Task'), adapterName: 'other-adapter' },
             depth: 1,
@@ -104,7 +113,7 @@ describe('rpc-handlers spawn/await', () => {
           });
         });
 
-        const result = await handleSpawnRpc(ctx, {
+        const result = await handleSpawnRpc(createTestCall(), ctx, {
           parentSessionId: 'parent-1',
           config: { task: 'Task', contextMode: 'fork' },
           depth: 1,
@@ -127,7 +136,7 @@ describe('rpc-handlers spawn/await', () => {
         });
 
         await expect(
-          handleSpawnRpc(ctx, {
+          handleSpawnRpc(createTestCall(), ctx, {
             parentSessionId: 'parent-1',
             config: { task: 'Task', contextMode: 'fork' },
             depth: 1,
@@ -140,7 +149,7 @@ describe('rpc-handlers spawn/await', () => {
         const customCtx = { manager: customManager, bus: MakaioBus };
 
         await expect(
-          handleSpawnRpc(customCtx, {
+          handleSpawnRpc(createTestCall(), customCtx, {
             parentSessionId: 'parent-1',
             config: { ...config('Task'), model: 'other-model' },
             depth: 1,
@@ -154,7 +163,7 @@ describe('rpc-handlers spawn/await', () => {
           emitSpy(busCtx.payload);
         });
 
-        const result = await handleSpawnRpc(ctx, {
+        const result = await handleSpawnRpc(createTestCall(), ctx, {
           parentSessionId: 'parent-1',
           config: config('Test task'),
           depth: 1,
@@ -177,6 +186,7 @@ describe('rpc-handlers spawn/await', () => {
         MakaioBus.on(SubagentSubjects.spawned, (busCtx) => emitSpy(busCtx.payload));
 
         await handleSpawnRpc(
+          createTestCall(),
           { ...ctx, executionOwnerId: 'isolated-runtime-service' },
           {
             parentSessionId: 'parent-1',

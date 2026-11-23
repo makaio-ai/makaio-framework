@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   ProviderContextSchema,
   SessionSubjects,
@@ -52,7 +53,10 @@ export interface AgentModelMutationManagerConfig {
   /** Resolve model-supported reasoning levels. */
   readonly resolveSupportedReasoningLevels: (model: string) => ReasoningLevelMap | undefined;
   /** Durably persist committed model/provider fields. */
-  readonly persistRuntimeMutation: (changes: { model?: string; providerConfigId?: string | null }) => Promise<void>;
+  readonly persistRuntimeMutation: (
+    call: CallContext,
+    changes: { model?: string; providerConfigId?: string | null },
+  ) => Promise<void>;
 }
 
 /** Own model, provider, and reasoning mutations inside the agent-wide runtime barrier. */
@@ -65,15 +69,18 @@ export class AgentModelMutationManager {
    */
   public constructor(private readonly config: AgentModelMutationManagerConfig) {}
 
-  /** Apply the latest staged model mutation while the enclosing turn lock is held. */
-  public async applyStagedMutation(): Promise<void> {
+  /**
+   * Apply the latest staged model mutation while the enclosing turn lock is held.
+   * @param call - Call context of the turn that is about to dispatch
+   */
+  public async applyStagedMutation(call: CallContext): Promise<void> {
     const connector = this.config.getConnector();
     if (connector.getProcessingState() !== 'idle') return;
 
     const staged = this.stagedModelChange;
     if (staged === undefined) return;
     this.stagedModelChange = undefined;
-    const result = await this.handle(staged);
+    const result = await this.handle(call, staged);
     if (!result.success) {
       throw new Error(`Failed to apply staged model change: ${result.reason ?? 'unknown error'}`);
     }
@@ -81,10 +88,14 @@ export class AgentModelMutationManager {
 
   /**
    * Apply a model/provider/reasoning request while the caller owns the runtime barrier.
+   * @param call - Call context of the model change request
    * @param payload - Model change request payload
    * @returns Model mutation response payload
    */
-  public async handle(payload: AgentModelChangeRequestPayload): Promise<AgentModelChangeResponsePayload> {
+  public async handle(
+    call: CallContext,
+    payload: AgentModelChangeRequestPayload,
+  ): Promise<AgentModelChangeResponsePayload> {
     const connector = this.config.getConnector();
     const { newModel: rawNewModel, reasoningEffort, skipWarning } = payload;
     const providerContext =
@@ -112,18 +123,18 @@ export class AgentModelMutationManager {
 
     if (rawNewModel === undefined && !isProviderChange) {
       if (reasoningEffort === undefined) return { success: true, swapped: false };
-      return this.handleReasoningOnlyChange(connector, currentModel, previousReasoningEffort, reasoningEffort);
+      return this.handleReasoningOnlyChange(call, connector, currentModel, previousReasoningEffort, reasoningEffort);
     }
 
     const newModel = rawNewModel ?? currentModel;
     if (currentModel === newModel && !isProviderChange) {
       if (reasoningEffort !== undefined) {
-        return this.handleReasoningOnlyChange(connector, currentModel, previousReasoningEffort, reasoningEffort);
+        return this.handleReasoningOnlyChange(call, connector, currentModel, previousReasoningEffort, reasoningEffort);
       }
       return { success: true, swapped: false };
     }
 
-    return this.handleModelSwap({
+    return this.handleModelSwap(call, {
       connector,
       currentModel,
       newModel,
@@ -137,6 +148,7 @@ export class AgentModelMutationManager {
 
   /**
    * Apply an in-place reasoning-effort change or replace the connector.
+   * @param call - Call context of the model change request
    * @param connector - Connector generation observed at mutation ingress
    * @param currentModel - Model that remains active during this reasoning-only change
    * @param previousReasoningEffort - Effort active before the mutation
@@ -144,6 +156,7 @@ export class AgentModelMutationManager {
    * @returns Reasoning mutation response
    */
   private async handleReasoningOnlyChange(
+    call: CallContext,
     connector: AIAgentConnector,
     currentModel: string,
     previousReasoningEffort: AIReasoningLevel | undefined,
@@ -163,7 +176,7 @@ export class AgentModelMutationManager {
     try {
       changedInPlace = await connector.changeReasoningInPlace(reasoningEffort).catch(() => false);
       if (!changedInPlace) {
-        await this.config.swapConnectorUnlocked({ model: connector.model, reasoningEffort: resolvedEffort });
+        await this.config.swapConnectorUnlocked(call, { model: connector.model, reasoningEffort: resolvedEffort });
       }
     } catch {
       return { success: false, reason: 'reasoning_change_failed: connector_mutation_failed' };
@@ -178,7 +191,7 @@ export class AgentModelMutationManager {
     }
 
     try {
-      await this.config.emitModelChanged({
+      await this.config.emitModelChanged(call, {
         previousModel: currentModel,
         newModel: currentModel,
         previousReasoningEffort,
@@ -198,10 +211,14 @@ export class AgentModelMutationManager {
 
   /**
    * Replace a model/provider connector and then finalize its committed state.
+   * @param call - Call context of the model change request
    * @param options - Complete model/provider swap inputs
    * @returns Model mutation response
    */
-  private async handleModelSwap(options: ModelSwapOptions): Promise<AgentModelChangeResponsePayload> {
+  private async handleModelSwap(
+    call: CallContext,
+    options: ModelSwapOptions,
+  ): Promise<AgentModelChangeResponsePayload> {
     const { connector, currentModel, newModel, providerContext, isProviderChange, skipWarning } = options;
     const changedInPlace = !isProviderChange && (await connector.changeModelInPlace(newModel).catch(() => false));
     let requestEditHistory = false;
@@ -210,7 +227,7 @@ export class AgentModelMutationManager {
       connector.model = newModel;
     } else {
       try {
-        const warningResponse = await this.confirmConnectorSwap(currentModel, newModel, skipWarning);
+        const warningResponse = await this.confirmConnectorSwap(call, currentModel, newModel, skipWarning);
         if (!warningResponse.proceed) return warningResponse.result;
         requestEditHistory = warningResponse.requestEditHistory;
       } catch (error) {
@@ -220,9 +237,10 @@ export class AgentModelMutationManager {
       let activation: AgentProviderContextActivation | undefined;
       try {
         if (isProviderChange && providerContext !== undefined) {
-          activation = await AgentProviderContextActivation.prepare(this.config.globalBus, providerContext);
+          activation = await AgentProviderContextActivation.prepare(call, this.config.globalBus, providerContext);
         }
         await this.config.swapConnectorUnlocked(
+          call,
           {
             model: newModel,
             // Construct the replacement with the effort finalizeModelSwap will
@@ -234,12 +252,12 @@ export class AgentModelMutationManager {
             ),
             ...(providerContext && { providerContext }),
           },
-          async () => activation?.commit(),
+          async (commitCall: CallContext) => activation?.commit(commitCall),
         );
       } catch (error) {
         if (activation !== undefined) {
           try {
-            await activation.rollbackPending();
+            await activation.rollbackPending(call);
           } catch (rollbackError) {
             const sanitizedPrimary = new Error('Model/provider connector replacement failed.');
             throw new AggregateError(
@@ -260,7 +278,7 @@ export class AgentModelMutationManager {
     }
 
     try {
-      return await this.finalizeModelSwap(options, changedInPlace, requestEditHistory);
+      return await this.finalizeModelSwap(call, options, changedInPlace, requestEditHistory);
     } catch (error) {
       return {
         success: false,
@@ -274,12 +292,14 @@ export class AgentModelMutationManager {
 
   /**
    * Apply reasoning, durable persistence, and public events after connector commit.
+   * @param call - Call context of the model change request
    * @param options - Original model/provider swap inputs
    * @param changedInPlace - Whether the current connector changed its model directly
    * @param requestEditHistory - Whether post-commit history editing was requested
    * @returns Successful committed model mutation response
    */
   private async finalizeModelSwap(
+    call: CallContext,
     options: ModelSwapOptions,
     changedInPlace: boolean,
     requestEditHistory: boolean,
@@ -310,13 +330,13 @@ export class AgentModelMutationManager {
           : null
         : undefined;
     if (currentModel !== newModel || persistedProviderConfigId !== undefined) {
-      await this.config.persistRuntimeMutation({
+      await this.config.persistRuntimeMutation(call, {
         ...(currentModel !== newModel && { model: newModel }),
         ...(persistedProviderConfigId !== undefined && { providerConfigId: persistedProviderConfigId }),
       });
     }
     if (currentModel !== newModel || resolvedEffort !== previousReasoningEffort) {
-      await this.config.emitModelChanged({
+      await this.config.emitModelChanged(call, {
         previousModel: currentModel,
         newModel,
         previousReasoningEffort,
@@ -324,7 +344,7 @@ export class AgentModelMutationManager {
       });
     }
     if (requestEditHistory && this.config.sessionId) {
-      await this.config.globalBus.emit(SessionSubjects.connectorSwap.editRequested, {
+      await this.config.globalBus.emit(call, SessionSubjects.connectorSwap.editRequested, {
         sessionId: this.config.sessionId,
         agentId: this.config.agentId,
         previousModel: currentModel,
@@ -362,12 +382,14 @@ export class AgentModelMutationManager {
 
   /**
    * Confirm a connector replacement when the model identifier changes.
+   * @param call - Call context of the model change request
    * @param currentModel - Model active before replacement
    * @param newModel - Requested model
    * @param skipWarning - Whether a trusted caller bypassed confirmation
    * @returns Confirmation decision and optional edit-history request
    */
   private async confirmConnectorSwap(
+    call: CallContext,
     currentModel: string,
     newModel: string,
     skipWarning: boolean | undefined,
@@ -375,7 +397,7 @@ export class AgentModelMutationManager {
     { proceed: true; requestEditHistory: boolean } | { proceed: false; result: AgentModelChangeResponsePayload }
   > {
     if (currentModel === newModel) return { proceed: true, requestEditHistory: false };
-    const warningResult = await confirmModelChange({
+    const warningResult = await confirmModelChange(call, {
       bus: this.config.globalBus,
       agentId: this.config.agentId,
       currentModel,

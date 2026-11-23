@@ -8,7 +8,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
-import { type ToolListItem, ToolSubjects } from '@makaio/contracts';
+import { type CallContext, type ToolListItem, ToolSubjects } from '@makaio/contracts';
 import {
   loadToolsFromRegistry,
   filterToolsWithSchema,
@@ -114,6 +114,7 @@ export function toCodexDynamicToolFormat(tools: ToolListItem[]): CodexDynamicToo
  *
  * `loadToolsFromRegistry` catches fetch failures internally and returns `[]`,
  * so this function never throws. Callers always receive a (possibly empty) array.
+ * @param call - Call requesting the registry tools
  * @param bus - Bus that owns the ToolRegistry handlers.
  * @param adapterId - Adapter instance ID for policy filtering
  * @param adapterName - Adapter type name for policy filtering
@@ -121,12 +122,13 @@ export function toCodexDynamicToolFormat(tools: ToolListItem[]): CodexDynamicToo
  * @returns Codex-formatted dynamic tool declarations
  */
 export async function fetchToolsForCodex(
+  call: CallContext,
   bus: IMakaioBus,
   adapterId: string,
   adapterName: string,
   options?: ToolRegistryLoadOptions,
 ): Promise<CodexDynamicTool[]> {
-  const tools = await loadToolsFromRegistry(bus, adapterId, adapterName, options);
+  const tools = await loadToolsFromRegistry(call, bus, adapterId, adapterName, options);
   return toCodexDynamicToolFormat(tools);
 }
 
@@ -205,16 +207,18 @@ export function isDynamicToolCallSuccess(outputText: string): boolean {
  * Both success and failure paths return a valid response — bus errors are
  * serialised as error content rather than rejecting the promise, so codex
  * always receives a well-formed reply.
+ * @param call - Call context of the handled message the tool call belongs to; its principal is forwarded
  * @param params - Tool call parameters from the server request
  * @param context - Execution context for bus routing and attribution
  * @returns Content items to send back to codex
  */
 export async function handleDynamicToolCall(
+  call: CallContext,
   params: DynamicToolCallServerRequest['params'],
   context: DynamicToolCallContext,
 ): Promise<DynamicToolCallResponse> {
   try {
-    const result = await context.bus.request(ToolSubjects.execute, {
+    const result = await context.bus.request(call, ToolSubjects.execute, {
       toolName: params.name,
       input: params.arguments,
       adapterId: context.adapterId,

@@ -1,9 +1,9 @@
 import OpenAI from 'openai';
 import type { ChatCompletionTool } from 'openai/resources/index.js';
-import { MakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { WireSessionSubjects } from '@makaio/ai-adapters-core';
 import { BaseStreamConnector } from '@makaio/ai-adapters-stream-session';
-import { OpenAINodeConnectorNamespace, OpenAINodeConnectorSubjects, type SdkEventMessage } from './namespaces/index.js';
+import { OpenAINodeConnectorSubjects, type SdkEventMessage } from './namespaces/index.js';
 import type { OpenAINodeAgentConfig, OpenAIBus } from './types/index.js';
 import { fetchToolsForOpenAI } from './tool-handling.js';
 import { OpenAIConnectorSession } from './session.js';
@@ -42,9 +42,6 @@ function getOpenAIProviderCapabilities(
 /** Default adapter identifier for standalone OpenAINodeAgent instances (without adapter layer) */
 const defaultAdapterId = crypto.randomUUID();
 
-/** Default scoped bus for OpenAI Node adapter */
-const defaultBus = await OpenAINodeConnectorNamespace.scopedBus();
-
 /**
  * OpenAI Node Agent - Wraps the OpenAI SDK for agentic chat completions.
  *
@@ -70,10 +67,13 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
   /**
    * Emit an SDK event wrapped in envelope for type-safe discriminated union handling.
    * Pattern matches codex-mcp's \{ id, msg \} envelope.
+   * @param call - Call context of the turn the event belongs to
    * @param event - The typed SDK event message to emit
    */
-  private async emitSdkEvent(event: SdkEventMessage): Promise<void> {
-    await this.emit(OpenAINodeConnectorSubjects.sdk.event, { event });
+  private async emitSdkEvent(call: CallContext, event: SdkEventMessage): Promise<void> {
+    await this.emit<typeof OpenAINodeConnectorSubjects.sdk.event>(call, OpenAINodeConnectorSubjects.sdk.event, {
+      event,
+    });
   }
 
   public constructor(config: OpenAINodeAgentConfig & { adapterId?: string }) {
@@ -81,7 +81,6 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
     super({
       ...baseConfig,
       env: baseConfig.env ?? {},
-      bus: config?.bus ?? defaultBus,
       adapterId: config?.adapterId ?? defaultAdapterId,
       adapterName: config?.adapterName ?? 'openai-node',
     });
@@ -104,15 +103,16 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
    *
    * Also converts fetched tools to OpenAI format and caches them in
    * `this.openAITools` for use in `createSession`.
+   * @param call - Call of the message initializing the session
    */
-  protected async fetchTools(): Promise<void> {
+  protected async fetchTools(call: CallContext): Promise<void> {
     const baseUrl = this.config.providerConfig?.baseUrl;
     this.client = new OpenAI({
       ...this.constructorAuth,
       baseURL: baseUrl,
     });
 
-    this.openAITools = await fetchToolsForOpenAI(this.config.globalBus ?? MakaioBus, this.adapterId, this.adapterName, {
+    this.openAITools = await fetchToolsForOpenAI(call, this.config.globalBus, this.adapterId, this.adapterName, {
       allowedTools: this.config.allowedTools,
       disallowedTools: this.config.disallowedTools,
     });
@@ -123,17 +123,18 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
    *
    * Called at turn boundary when `hasPendingToolRefresh` is true.
    * Re-fetches OpenAI-format tools from the registry, re-prepares MCP
-   * direct tools (and arms the ledger injection flag via `super.refreshTools()`),
+   * direct tools (and arms the ledger injection flag via `super.refreshTools(call)`),
    * then notifies the active session so the next API call uses the updated
    * merged tool list. The ledger `recordInjection` is deferred to
    * `onTurnStarted` so it uses the canonical turn number.
+   * @param call - Call of the turn event triggering the refresh
    */
-  protected override async refreshTools(): Promise<void> {
-    this.openAITools = await fetchToolsForOpenAI(this.config.globalBus ?? MakaioBus, this.adapterId, this.adapterName, {
+  protected override async refreshTools(call: CallContext): Promise<void> {
+    this.openAITools = await fetchToolsForOpenAI(call, this.config.globalBus, this.adapterId, this.adapterName, {
       allowedTools: this.config.allowedTools,
       disallowedTools: this.config.disallowedTools,
     });
-    await super.refreshTools(); // re-prepares mcpDirectTools, sets hasPendingLedgerInjection
+    await super.refreshTools(call); // re-prepares mcpDirectTools, sets hasPendingLedgerInjection
     const session = this.getSession();
     session?.replaceNativeTools(this.openAITools);
     session?.updateTools?.(this.mcpDirectTools);
@@ -178,10 +179,14 @@ export class OpenAINodeConnector extends BaseStreamConnector<OpenAIBus, OpenAICo
       allowedDirectories: this.config.allowedDirectories,
       supportedReasoningLevels: this.config.supportedReasoningLevels,
       emitSdkEvent: this.emitSdkEvent.bind(this),
-      globalBus: this.config.globalBus ?? MakaioBus,
+      globalBus: this.config.globalBus,
       handleError: this.handleError.bind(this),
-      requestToolApproval: (payload) =>
-        this.requestToolApprovalWithHandling(OpenAINodeConnectorSubjects.tool_approval, payload),
+      requestToolApproval: (call, payload) =>
+        this.requestToolApprovalWithHandling<typeof OpenAINodeConnectorSubjects.tool_approval>(
+          call,
+          OpenAINodeConnectorSubjects.tool_approval,
+          payload,
+        ),
       logLowLevelEvent: this.logLowLevelEvent,
       onTurnStart: (handle) => {
         this.pendingMessageHandle = handle;

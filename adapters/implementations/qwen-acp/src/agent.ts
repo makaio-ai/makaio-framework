@@ -22,7 +22,7 @@
 
 import { AIAgent } from '@makaio/ai-adapters-core';
 import type { NormalizedCallUsage } from '@makaio/ai-adapters-core';
-import { AgentSubjects } from '@makaio/contracts';
+import { type CallContext, AgentSubjects } from '@makaio/contracts';
 import { QwenAcpConnector } from './connector.js';
 import { QwenAcpSubjects } from './namespaces/index.js';
 import type { QwenAcpBus } from './namespaces/index.js';
@@ -74,8 +74,8 @@ export class QwenAcpAgent extends AIAgent<QwenAcpBus, QwenAcpConnector> {
    * @param connector - The QwenAcpConnector to wire events from
    */
   private wireTurnLifecycleEvents(connector: QwenAcpConnector): void {
-    this.subscribeConnector(connector, QwenAcpSubjects.turn_started, async () => {
-      await this.emitStart();
+    this.subscribeConnector(connector, QwenAcpSubjects.turn_started, async (ctx) => {
+      await this.emitStart(ctx.call);
     });
   }
 
@@ -88,18 +88,18 @@ export class QwenAcpAgent extends AIAgent<QwenAcpBus, QwenAcpConnector> {
    */
   private wireMessageEvents(connector: QwenAcpConnector): void {
     this.subscribeConnector(connector, QwenAcpSubjects.session_update_message_chunk, async (ctx) => {
-      await this.emitGlobal(AgentSubjects.message_delta, { text: ctx.payload.delta });
+      await this.emitGlobal(ctx.call, AgentSubjects.message_delta, { text: ctx.payload.delta });
     });
 
     this.subscribeConnector(connector, QwenAcpSubjects.session_update_thought_chunk, async (ctx) => {
-      await this.emitGlobal(AgentSubjects.reasoning_delta, { content: ctx.payload.delta });
+      await this.emitGlobal(ctx.call, AgentSubjects.reasoning_delta, { content: ctx.payload.delta });
     });
 
     // `turn_text_completed` is emitted directly on the bus by the connector (not via
     // connector.emit()), so the payload carries `agentId` explicitly — no Forbid conflict.
     // Subscribe via the connector's scoped bus so cleanup is handled by the wiring lifecycle.
     this.subscribeConnector(connector, QwenAcpSubjects.turn_text_completed, async (ctx) => {
-      await this.emitGlobal(AgentSubjects.message, { content: ctx.payload.text });
+      await this.emitGlobal(ctx.call, AgentSubjects.message, { content: ctx.payload.text });
     });
   }
 
@@ -115,8 +115,8 @@ export class QwenAcpAgent extends AIAgent<QwenAcpBus, QwenAcpConnector> {
       const { messageId, toolCallId, title, rawInput } = ctx.payload;
       const args =
         typeof rawInput === 'object' && rawInput !== null ? (rawInput as Record<string, unknown>) : undefined;
-      await this.emitToolUse(messageId, title, args, toolCallId);
-      await this.eventBridge.emitStepStartedForMessage(messageId, 'tool_use', {
+      await this.emitToolUse(ctx.call, messageId, title, args, toolCallId);
+      await this.eventBridge.emitStepStartedForMessage(ctx.call, messageId, 'tool_use', {
         type: 'tool_use',
         toolName: title,
         toolCallId,
@@ -129,7 +129,7 @@ export class QwenAcpAgent extends AIAgent<QwenAcpBus, QwenAcpConnector> {
 
       const isError = status === 'failed';
       const output = normalizeToolOutput(rawOutput);
-      await this.eventBridge.emitStepFinishedForMessage(messageId, 'tool_use', {
+      await this.eventBridge.emitStepFinishedForMessage(ctx.call, messageId, 'tool_use', {
         type: 'tool_output',
         toolCallId,
         output,
@@ -162,14 +162,18 @@ export class QwenAcpAgent extends AIAgent<QwenAcpBus, QwenAcpConnector> {
         costUnits: (inputTokens ?? 0) + (outputTokens ?? 0),
         costUnitType: 'tokens',
       };
-      await this.trackUsage(normalized);
+      await this.trackUsage(ctx.call, normalized);
 
       // Emit context window update alongside usage — conformance tests expect this
       // after every turn. Use token counts from the usage payload as current occupancy
       // and the model registry's context window size as the max.
       const currentTokens = normalized.totalTokens;
       const maxTokens = this.getContextWindowSize() ?? 1_000_000;
-      await this.emitContextWindowUpdate({ currentTokens, maxTokens, cachedTokens: normalized.inputCachedTokens });
+      await this.emitContextWindowUpdate(ctx.call, {
+        currentTokens,
+        maxTokens,
+        cachedTokens: normalized.inputCachedTokens,
+      });
     });
 
     // Context-window capacity is also reported via the ACP `usage_update` notification
@@ -177,7 +181,7 @@ export class QwenAcpAgent extends AIAgent<QwenAcpBus, QwenAcpConnector> {
     // with more accurate size/used values when available.
     this.subscribeConnector(connector, QwenAcpSubjects.session_update_context_window, async (ctx) => {
       const { size, used } = ctx.payload;
-      await this.emitContextWindowUpdate({ currentTokens: used, maxTokens: size, cachedTokens: 0 });
+      await this.emitContextWindowUpdate(ctx.call, { currentTokens: used, maxTokens: size, cachedTokens: 0 });
     });
   }
 
@@ -186,7 +190,7 @@ export class QwenAcpAgent extends AIAgent<QwenAcpBus, QwenAcpConnector> {
    *
    * Uses `registerToolApprovalHandler` from tool-handling.ts for consistent approval flow.
    * Note: adapterSessionId may be undefined at wire time — the lazy callback resolves it
-   * at request time via connector.getAdapterSessionId() to avoid the race condition.
+   * at request time via connector.getAdapterSessionId(call) to avoid the race condition.
    * sessionId is always set for agents running within a session; asserted here as the
    * Zod schema on AgentSubjects.toolApprove enforces it at runtime.
    * @param connector - The QwenAcpConnector to wire RPC from
@@ -195,7 +199,7 @@ export class QwenAcpAgent extends AIAgent<QwenAcpBus, QwenAcpConnector> {
     this.addConnectorWiringCleanup(
       registerToolApprovalHandler(
         connector,
-        async () => {
+        async (call: CallContext) => {
           if (this.sessionId == null) {
             throw new Error('Agent sessionId is required for tool approval');
           }
@@ -203,7 +207,7 @@ export class QwenAcpAgent extends AIAgent<QwenAcpBus, QwenAcpConnector> {
             adapterId: this.adapterId,
             adapterName: this.adapterName,
             agentId: this.agentId,
-            adapterSessionId: await this.getAdapterSessionId(),
+            adapterSessionId: await this.getAdapterSessionId(call),
             sessionId: this.sessionId,
           };
         },

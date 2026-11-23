@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { AccountUsage } from '../bus/schemas.js';
 import type { UsageEntry } from '../bus/usage-entry.js';
@@ -67,7 +68,7 @@ class _PendingSnapshotStore implements IAccountUsageSnapshotStore {
     });
   }
 
-  public async append(clientId: string, accountId: string, entry: UsageEntry): Promise<boolean> {
+  public async append(_call: CallContext, clientId: string, accountId: string, entry: UsageEntry): Promise<boolean> {
     const key = `${clientId}:${accountId}`;
     const rows = this.entries.get(key) ?? [];
     rows.push(structuredClone(entry));
@@ -81,6 +82,7 @@ class _PendingSnapshotStore implements IAccountUsageSnapshotStore {
   }
 
   public async *read(
+    _call: CallContext,
     clientId: string,
     accountId: string,
     _opts: { from: number; to: number; windowId?: string },

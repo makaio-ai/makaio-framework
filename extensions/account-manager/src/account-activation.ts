@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { IAccountCredentialStore, IAccountMetadataStore, StoredAccount } from './interfaces/account-store.js';
 import type { PreparedNativeCredentialMutation } from './interfaces/credential-source.js';
 import type { CredentialSourceWithOptionalLabel } from './handlers/credential-tracker-types.js';
@@ -28,12 +29,13 @@ export interface AccountActivationDeps {
   setLastSeen(clientId: string, fingerprint: string): void;
   /**
    * Clears derived-state caches for a removed or zombie account.
+   * @param call - Call context of the request that triggers the cleanup
    * @param clientId - Client whose caches should be cleared
    * @param accountId - Account being removed
    * @param fingerprint - Fingerprint of the removed account
    * @returns Promise that settles once account-owned tracker work has drained
    */
-  clearDerivedState(clientId: string, accountId: string, fingerprint: string): Promise<void>;
+  clearDerivedState(call: CallContext, clientId: string, accountId: string, fingerprint: string): Promise<void>;
   /** Bus instance for emitting switch and credential-changed events. */
   bus: IMakaioBus;
 }
@@ -42,10 +44,16 @@ export interface AccountActivationDeps {
 export interface PreparedAccountActivation {
   /** Account materialized into the client's native store. */
   readonly account: StoredAccount;
-  /** Commit timeline/tracker state, rolling back account state if finalization fails. */
-  commit(): Promise<void>;
-  /** Restore the exact previous manager-owned native and durable state. */
-  rollback(): Promise<void>;
+  /**
+   * Commit timeline/tracker state, rolling back account state if finalization fails.
+   * @param call - Call context of the request that finalizes the activation
+   */
+  commit(call: CallContext): Promise<void>;
+  /**
+   * Restore the exact previous manager-owned native and durable state.
+   * @param call - Call context of the request that finalizes the activation
+   */
+  rollback(call: CallContext): Promise<void>;
 }
 
 /** Commit policy for auxiliary activation metadata. */
@@ -88,30 +96,32 @@ export class AccountActivationFinalizationError extends Error {
  * updates the store, and emits the accountSwitched event. Credential fanout
  * is deferred to the caller outside the mutation lock — see CredentialTracker
  * poll() comment on deadlock avoidance.
+ * @param call - Call context of the handled message
  * @param clientId - The client identifier
  * @param accountId - The account to switch to
  * @param deps - Injected dependencies
  * @returns The activated account ID, or undefined if already active
  */
 export async function switchAccount(
+  call: CallContext,
   clientId: string,
   accountId: string,
   deps: AccountActivationDeps,
 ): Promise<string | undefined> {
   const { metadataStore, credentialStore, bus } = deps;
-  const target = await getStoredAccount(metadataStore, credentialStore, clientId, accountId);
+  const target = await getStoredAccount(call, metadataStore, credentialStore, clientId, accountId);
   if (!target) throw new Error(`Account ${accountId} not found for ${clientId}`);
 
-  const accounts = await listStoredAccounts(metadataStore, credentialStore, clientId);
+  const accounts = await listStoredAccounts(call, metadataStore, credentialStore, clientId);
   const prev = accounts.find((a) => a.active) ?? null;
 
   if (prev?.id === accountId) return undefined; // already active
 
   // Snapshot before activateAccount → deactivateAll mutates stored objects.
   const fromPayload = prev ? toPublicAccount(prev) : null;
-  const activatedAccount = await activateAccount(clientId, accountId, deps, accounts, target);
+  const activatedAccount = await activateAccount(call, clientId, accountId, deps, accounts, target);
 
-  await bus.emit(AccountManagerSubjects.credentials.switched, {
+  await bus.emit(call, AccountManagerSubjects.credentials.switched, {
     clientId,
     from: fromPayload,
     to: toPublicAccount(activatedAccount),
@@ -127,6 +137,7 @@ export async function switchAccount(
  * state first, then rolls that durable state back if the later native write
  * fails. This prevents stale or mismatched tokens from reaching
  * {@link emitCredentialChangedForClient}.
+ * @param call - Call context of the handled message
  * @param clientId - Client whose native store should be prepared
  * @param accountId - Account that should become active in native storage
  * @param deps - Injected dependencies
@@ -135,16 +146,17 @@ export async function switchAccount(
  * @returns The activated stored account with the freshest safe credential
  */
 export async function activateAccount(
+  call: CallContext,
   clientId: string,
   accountId: string,
   deps: AccountActivationDeps,
   existingAccounts?: StoredAccount[],
   preloadedTarget?: StoredAccount,
 ): Promise<StoredAccount> {
-  const prepared = await prepareAccountActivation(clientId, accountId, deps, existingAccounts, preloadedTarget, {
+  const prepared = await prepareAccountActivation(call, clientId, accountId, deps, existingAccounts, preloadedTarget, {
     timelineFailure: 'ignore',
   });
-  await prepared.commit();
+  await prepared.commit(call);
   return prepared.account;
 }
 
@@ -156,6 +168,7 @@ export async function activateAccount(
  * materialize it. Timeline and tracker state are committed only after the
  * replacement is ready. Rollback restores the previous account selected by
  * manager state; it never guesses from a provider context.
+ * @param call - Call context of the request that prepares the activation; the returned handle does not retain it
  * @param clientId - Client whose native store should be prepared
  * @param accountId - Account that should become active in native storage
  * @param deps - Injected dependencies
@@ -165,6 +178,7 @@ export async function activateAccount(
  * @returns Reversible activation handle awaiting exactly one terminal action
  */
 export async function prepareAccountActivation(
+  call: CallContext,
   clientId: string,
   accountId: string,
   deps: AccountActivationDeps,
@@ -172,12 +186,13 @@ export async function prepareAccountActivation(
   preloadedTarget?: StoredAccount,
   options: PrepareAccountActivationOptions = {},
 ): Promise<PreparedAccountActivation> {
-  const state = await prepareActivationState(clientId, accountId, deps, existingAccounts, preloadedTarget);
+  const state = await prepareActivationState(call, clientId, accountId, deps, existingAccounts, preloadedTarget);
   return createPreparedActivation(clientId, deps, state, options);
 }
 
 /**
  * Prepare durable and native account state while the caller owns the client lock.
+ * @param call - Call context of the preparing request.
  * @param clientId - Client whose native account is selected.
  * @param accountId - Exact account to materialize.
  * @param deps - Account activation dependencies.
@@ -186,6 +201,7 @@ export async function prepareAccountActivation(
  * @returns State required for commit or rollback finalization.
  */
 async function prepareActivationState(
+  call: CallContext,
   clientId: string,
   accountId: string,
   deps: AccountActivationDeps,
@@ -193,16 +209,19 @@ async function prepareActivationState(
   preloadedTarget?: StoredAccount,
 ): Promise<PreparedActivationState> {
   const { metadataStore, credentialStore, source, clearDerivedState } = deps;
-  const target = preloadedTarget ?? (await getStoredAccount(metadataStore, credentialStore, clientId, accountId));
+  const target = preloadedTarget ?? (await getStoredAccount(call, metadataStore, credentialStore, clientId, accountId));
   if (!target) throw new Error(`Account ${accountId} not found for ${clientId}`);
-  const accounts = existingAccounts ?? (await listStoredAccounts(metadataStore, credentialStore, clientId));
+  const accounts = existingAccounts ?? (await listStoredAccounts(call, metadataStore, credentialStore, clientId));
   const previousActive = accounts.find((account) => account.active) ?? null;
   const previousTargetSnapshot = structuredClone(target);
   const previousActiveSnapshot = previousActive ? structuredClone(previousActive) : null;
   const prepared = await prepareStoredAccountCredential(source, target, clientId, accountId);
   if (prepared.status === 'failed') {
-    await removeStoredAccount(metadataStore, credentialStore, clientId, accountId);
-    throw new AccountManagerQuiesceError(prepared.reason, clearDerivedState(clientId, accountId, target.fingerprint));
+    await removeStoredAccount(call, metadataStore, credentialStore, clientId, accountId);
+    throw new AccountManagerQuiesceError(
+      prepared.reason,
+      clearDerivedState(call, clientId, accountId, target.fingerprint),
+    );
   }
   if (prepared.refreshStatus === 'transient') {
     console.warn(
@@ -215,14 +234,14 @@ async function prepareActivationState(
   target.metadata = mergeSourceAccountMetadata(target.metadata, prepared.credential.metadata);
   const activatedAt = Date.now();
   const rollbackTarget = buildPreparedAccountRollbackSnapshot(previousTargetSnapshot, prepared.credential);
-  await commitActivatedAccountState({ metadataStore, credentialStore, clientId, accounts, target, activatedAt });
+  await commitActivatedAccountState(call, { metadataStore, credentialStore, clientId, accounts, target, activatedAt });
 
   let nativeMutation: PreparedNativeCredentialMutation;
   try {
     nativeMutation = await source.prepareNativeCredentialMutation(target.credential);
   } catch (error) {
     try {
-      await rollbackActivatedAccountState({
+      await rollbackActivatedAccountState(call, {
         metadataStore,
         credentialStore,
         clientId,
@@ -249,7 +268,7 @@ async function prepareActivationState(
   };
   if (nativeMutation.coordination === 'uncertain') {
     try {
-      await restoreActivationState(clientId, deps, state);
+      await restoreActivationState(call, clientId, deps, state);
     } catch (error) {
       if (error instanceof AccountActivationFinalizationError) throw error;
       throw new AccountActivationFinalizationError('rollback-failed');
@@ -261,12 +280,14 @@ async function prepareActivationState(
 
 /**
  * Restore the exact manager-owned native and durable state captured before preparation.
+ * @param call - Call context of the request that restores the state.
  * @param clientId - Client whose state is restored.
  * @param deps - Account activation dependencies.
  * @param state - Prepared state carrying rollback snapshots.
  * @returns Promise that resolves after both restore paths succeed.
  */
 async function restoreActivationState(
+  call: CallContext,
   clientId: string,
   deps: AccountActivationDeps,
   state: PreparedActivationState,
@@ -286,7 +307,7 @@ async function restoreActivationState(
   }
   if (restoreDurableState) {
     try {
-      await rollbackActivatedAccountState({
+      await rollbackActivatedAccountState(call, {
         metadataStore: deps.metadataStore,
         credentialStore: deps.credentialStore,
         clientId,
@@ -305,6 +326,7 @@ async function restoreActivationState(
 
 /**
  * Commit timeline and tracker metadata after a replacement connector is ready.
+ * @param call - Call context of the request that commits the activation.
  * @param clientId - Client whose activation is committed.
  * @param deps - Account activation dependencies.
  * @param state - Prepared state being committed.
@@ -312,6 +334,7 @@ async function restoreActivationState(
  * @returns Promise that resolves after commit metadata is recorded.
  */
 async function commitActivationMetadata(
+  call: CallContext,
   clientId: string,
   deps: AccountActivationDeps,
   state: PreparedActivationState,
@@ -327,12 +350,12 @@ async function commitActivationMetadata(
     };
     if (options.timelineFailure === 'ignore') {
       try {
-        await deps.metadataStore.appendTimeline(entry);
+        await deps.metadataStore.appendTimeline(call, entry);
       } catch (error) {
         console.warn('[AccountManager] timeline append failed after successful activation:', error);
       }
     } else {
-      await deps.metadataStore.appendTimeline(entry);
+      await deps.metadataStore.appendTimeline(call, entry);
     }
   }
   deps.setLastSeen(clientId, state.target.fingerprint);
@@ -367,23 +390,23 @@ function createPreparedActivation(
 
   return {
     account: state.target,
-    commit: () =>
+    commit: (call) =>
       finalize('commit', async () => {
         try {
-          await commitActivationMetadata(clientId, deps, state, options);
+          await commitActivationMetadata(call, clientId, deps, state, options);
         } catch {
           try {
-            await restoreActivationState(clientId, deps, state);
+            await restoreActivationState(call, clientId, deps, state);
           } catch {
             throw new AccountActivationFinalizationError('commit-rollback-failed');
           }
           throw new AccountActivationFinalizationError('commit-failed');
         }
       }),
-    rollback: () =>
+    rollback: (call) =>
       finalize('rollback', async () => {
         try {
-          await restoreActivationState(clientId, deps, state);
+          await restoreActivationState(call, clientId, deps, state);
         } catch (error) {
           if (error instanceof AccountActivationFinalizationError) throw error;
           throw new AccountActivationFinalizationError('rollback-failed');

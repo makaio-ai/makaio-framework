@@ -7,7 +7,8 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { BusMessage, BusTransport } from '../index.js';
-import { createBusInstance, createBusContext } from '../bus.js';
+import { createBusInstance } from '../bus.js';
+import { busContextOf, createBusContext, createCarrierBus } from '../kernel-api.js';
 
 // ---------------------------------------------------------------------------
 // Minimal connect-capable transport stub
@@ -238,7 +239,7 @@ describe('bus.connect()', () => {
 
     // After rollback the bus must have unregistered both transports.
     // Verify via the context's transport registry (names() returns remaining transports).
-    const remaining = bus.getContext().transportRegistry.names();
+    const remaining = busContextOf(bus).transportRegistry.names();
     expect(remaining).toHaveLength(0);
   });
 
@@ -278,7 +279,7 @@ describe('bus.connect()', () => {
     expect(c.disconnectSpy).toHaveBeenCalled();
 
     // Registry must be empty after rollback.
-    const remaining = bus.getContext().transportRegistry.names();
+    const remaining = busContextOf(bus).transportRegistry.names();
     expect(remaining).toHaveLength(0);
   });
 
@@ -359,6 +360,40 @@ describe('bus.connect()', () => {
     // Now the transport signals readiness — bus.ready must resolve.
     resolveReady();
     await expect(bus.ready).resolves.toBeUndefined();
+  });
+
+  it('a carrier instance of the host reports the same ready state after connect() on either of them', async () => {
+    const carrierBus = createCarrierBus(bus, { kind: 'makaio.extension', id: 'connect-test-carrier' });
+    let resolveReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve;
+    });
+    const { transport, connectSpy } = createConnectableTransport({ name: 'a', ready });
+    bus.registerTransport(transport);
+
+    // connect() through the carrier connects the host's transports, ready still pending on both.
+    await carrierBus.connect({ awaitReady: false });
+    expect(connectSpy).toHaveBeenCalledOnce();
+
+    const SENTINEL = 'sentinel' as const;
+    const hostRace = await Promise.race([
+      bus.ready.then(() => 'ready' as const),
+      new Promise<typeof SENTINEL>((r) => setTimeout(r, 10, SENTINEL)),
+    ]);
+    const carrierRace = await Promise.race([
+      carrierBus.ready.then(() => 'ready' as const),
+      new Promise<typeof SENTINEL>((r) => setTimeout(r, 10, SENTINEL)),
+    ]);
+    expect(hostRace).toBe(SENTINEL);
+    expect(carrierRace).toBe(SENTINEL);
+
+    resolveReady();
+    await expect(bus.ready).resolves.toBeUndefined();
+    await expect(carrierBus.ready).resolves.toBeUndefined();
+
+    // connect() through the host is a no-op for the already connected shared state.
+    await bus.connect();
+    expect(connectSpy).toHaveBeenCalledOnce();
   });
 
   it('later default connect() waits for an in-flight ready handshake started with awaitReady:false', async () => {
@@ -507,7 +542,7 @@ describe('bus.connect()', () => {
 
       // A failed ready handshake must leave no live registration behind.
       expect(disconnectSpy).toHaveBeenCalled();
-      expect(bus.getContext().transportRegistry.names()).toHaveLength(0);
+      expect(busContextOf(bus).transportRegistry.names()).toHaveLength(0);
     } finally {
       errorSpy.mockRestore();
     }
@@ -561,7 +596,7 @@ describe('bus.connect()', () => {
 
       // Transport must have been disconnected and unregistered during rollback.
       expect(disconnectSpy).toHaveBeenCalled();
-      expect(bus.getContext().transportRegistry.names()).toHaveLength(0);
+      expect(busContextOf(bus).transportRegistry.names()).toHaveLength(0);
 
       // bus.ready must have been reset to the resolved fallback.
       await expect(bus.ready).resolves.toBeUndefined();

@@ -1,3 +1,4 @@
+import type { EmitSubject } from '@makaio/bus-core';
 import type { SubjectDefinition, ExtractSubjectPayload } from '@makaio/core';
 import type { AgentContext } from '../agent/types.js';
 
@@ -14,7 +15,7 @@ import type { AgentContext } from '../agent/types.js';
  * or log import context.
  */
 export type TypedEmitFn = <S extends SubjectDefinition>(
-  subject: S,
+  subject: EmitSubject<S>,
   payload: Omit<ExtractSubjectPayload<S>, keyof AgentContext>,
 ) => void | Promise<void>;
 

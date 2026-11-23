@@ -12,6 +12,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { SupervisorRuntime, SupervisorRuntimeInit, SupervisorRuntimeUpdate } from './types.js';
 import { SupervisorRuntimeStorageSubjects } from './storage/namespace.js';
 
@@ -29,8 +30,8 @@ import { SupervisorRuntimeStorageSubjects } from './storage/namespace.js';
  * const registry = new RuntimeRegistry(bus);
  * await registry.loadFromStorage();
  *
- * // Register a new runtime after spawning
- * await registry.register({
+ * // Register a new runtime after spawning (`call` is the handled message's call context)
+ * await registry.register(call, {
  *   supervisorSessionId: 'sup_abc',
  *   clientId: 'claude-code',
  *   pid: 12345,
@@ -67,11 +68,12 @@ export class RuntimeRegistry {
    * Load all persisted runtimes from storage into the in-memory cache.
    *
    * Should be called once during service initialization before any lookups
-   * are performed.
+   * are performed. No message triggers it, so the storage request uses
+   * the registry's startup call context.
    * @returns Promise that resolves when the cache has been populated.
    */
   public async loadFromStorage(): Promise<void> {
-    const { runtimes } = await this.bus.request(SupervisorRuntimeStorageSubjects.list, {});
+    const { runtimes } = await this.bus.request(this.bus.own('start'), SupervisorRuntimeStorageSubjects.list, {});
 
     for (const runtime of runtimes) {
       this._indexRuntime(runtime);
@@ -84,16 +86,17 @@ export class RuntimeRegistry {
 
   /**
    * Register a new supervised runtime in the registry and persist it.
+   * @param call - Call context of the handled message that triggers the registration.
    * @param init - Full runtime initialization data including `supervisorSessionId`.
    * @returns Promise that resolves when the runtime has been persisted.
    */
-  public async register(init: SupervisorRuntimeInit): Promise<void> {
+  public async register(call: CallContext, init: SupervisorRuntimeInit): Promise<void> {
     const runtime: SupervisorRuntime = {
       ...init,
       status: 'running',
     };
 
-    const { success } = await this.bus.request(SupervisorRuntimeStorageSubjects.set, runtime);
+    const { success } = await this.bus.request(call, SupervisorRuntimeStorageSubjects.set, runtime);
     if (!success) {
       throw new Error(`Failed to persist runtime ${init.supervisorSessionId} to storage`);
     }
@@ -112,13 +115,14 @@ export class RuntimeRegistry {
    * `sessionId: undefined` is indistinguishable from omitting the field
    * entirely — the update is treated as a no-op for that field rather than a
    * clear. Clearing a correlation field is not currently supported.
+   * @param call - Call context of the message or lifecycle step that triggers the update.
    * @param update - Partial update payload containing `supervisorSessionId` and changed fields.
    * @returns Promise that resolves after the update has been persisted.
    *   Returns `false` when no runtime was found for the given ID or when
    *   storage returns `success: false` (in which case in-memory indices are
    *   left untouched).
    */
-  public async update(update: SupervisorRuntimeUpdate): Promise<boolean> {
+  public async update(call: CallContext, update: SupervisorRuntimeUpdate): Promise<boolean> {
     const existing = this._byId.get(update.supervisorSessionId);
     if (existing === undefined) return false;
 
@@ -134,7 +138,7 @@ export class RuntimeRegistry {
 
     const updated: SupervisorRuntime = { ...existing, ...diff };
 
-    const { success } = await this.bus.request(SupervisorRuntimeStorageSubjects.update, {
+    const { success } = await this.bus.request(call, SupervisorRuntimeStorageSubjects.update, {
       supervisorSessionId: update.supervisorSessionId,
       ...diff,
     });
@@ -159,16 +163,17 @@ export class RuntimeRegistry {
 
   /**
    * Remove a runtime from the registry and delete it from storage.
+   * @param call - Call context of the message that triggers the removal.
    * @param supervisorSessionId - Canonical ID of the runtime to remove.
    * @returns Promise that resolves after deletion.
    *   Returns `false` when no runtime was found or when storage returns
    *   `success: false` (in which case in-memory indices are left untouched).
    */
-  public async remove(supervisorSessionId: string): Promise<boolean> {
+  public async remove(call: CallContext, supervisorSessionId: string): Promise<boolean> {
     const existing = this._byId.get(supervisorSessionId);
     if (existing === undefined) return false;
 
-    const { success } = await this.bus.request(SupervisorRuntimeStorageSubjects.delete, { supervisorSessionId });
+    const { success } = await this.bus.request(call, SupervisorRuntimeStorageSubjects.delete, { supervisorSessionId });
 
     if (!success) return false;
 

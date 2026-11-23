@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { GitSubjects } from '../namespace.js';
 import { registerWriteHandlers } from '../write-handlers.js';
 import { createTestRepoWithCommit, type TestRepo } from './git-test-utils.js';
@@ -30,7 +31,7 @@ describe('registerWriteHandlers', { timeout: 20_000 }, () => {
     const sourceHead = (await repo.git.revparse(['HEAD'])).trim();
     await repo.git.checkout('main');
 
-    const result = await bus.request(GitSubjects.checkoutRef, {
+    const result = await bus.request(createTestCall(), GitSubjects.checkoutRef, {
       repoPath: repo.repoPath,
       ref: 'from-source',
       createBranch: true,
@@ -45,7 +46,7 @@ describe('registerWriteHandlers', { timeout: 20_000 }, () => {
   });
 
   it('should always return a result for schema-valid stash operations', async () => {
-    const result = await bus.request(GitSubjects.stash, {
+    const result = await bus.request(createTestCall(), GitSubjects.stash, {
       repoPath: repo.repoPath,
       operation: 'list',
     });
@@ -61,7 +62,7 @@ describe('registerWriteHandlers', { timeout: 20_000 }, () => {
     await repo.git.commit('feature commit');
     await repo.git.checkout('main');
 
-    const result = await bus.request(GitSubjects.mergeBranch, {
+    const result = await bus.request(createTestCall(), GitSubjects.mergeBranch, {
       repoPath: repo.repoPath,
       source: 'feature',
     });
@@ -81,14 +82,14 @@ describe('registerWriteHandlers', { timeout: 20_000 }, () => {
     await repo.git.add('shared.txt');
     await repo.git.commit('main change');
 
-    const mergeResult = await bus.request(GitSubjects.mergeBranch, {
+    const mergeResult = await bus.request(createTestCall(), GitSubjects.mergeBranch, {
       repoPath: repo.repoPath,
       source: 'feature-conflict',
     });
     expect(mergeResult.success).toBe(false);
     expect(mergeResult.conflicts?.length).toBeGreaterThan(0);
 
-    const abortResult = await bus.request(GitSubjects.mergeAbort, {
+    const abortResult = await bus.request(createTestCall(), GitSubjects.mergeAbort, {
       repoPath: repo.repoPath,
     });
     expect(abortResult.success).toBe(true);

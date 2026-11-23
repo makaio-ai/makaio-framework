@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { CredentialSubjects, type ProviderContext, type ResolvedProviderContext } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 
 /** Stable account-selection activation failure categories. */
 export type ProviderContextActivationErrorCode = 'manager-unavailable' | 'account-not-found' | 'activation-failed';
@@ -32,10 +33,16 @@ export class ProviderContextActivationRollbackError extends Error {
 
 /** Opaque prepared account activation awaiting one terminal decision. */
 export interface ProviderContextActivationTransaction {
-  /** Commit the prepared account selection exactly once. */
-  commit(): Promise<void>;
-  /** Roll back the prepared account selection exactly once. */
-  rollback(): Promise<void>;
+  /**
+   * Commit the prepared account selection exactly once.
+   * @param call - Call context of the message requesting commit.
+   */
+  commit(call: CallContext): Promise<void>;
+  /**
+   * Roll back the prepared account selection exactly once.
+   * @param call - Call context of the message requesting rollback.
+   */
+  rollback(call: CallContext): Promise<void>;
 }
 
 /** Bus-backed terminal handle for one prepared account activation. */
@@ -49,46 +56,50 @@ class BusProviderContextActivationTransaction implements ProviderContextActivati
 
   /**
    * {@inheritDoc ProviderContextActivationTransaction.commit}
+   * @param call - Call context of the message requesting commit.
    * @returns Shared commit promise.
    */
-  public commit(): Promise<void> {
-    return this.finalize('commit');
+  public commit(call: CallContext): Promise<void> {
+    return this.finalize(call, 'commit');
   }
 
   /**
    * {@inheritDoc ProviderContextActivationTransaction.rollback}
+   * @param call - Call context of the message requesting rollback.
    * @returns Shared rollback promise.
    */
-  public rollback(): Promise<void> {
-    return this.finalize('rollback');
+  public rollback(call: CallContext): Promise<void> {
+    return this.finalize(call, 'rollback');
   }
 
   /**
    * Consume the opaque transaction with one stable terminal action.
+   * @param call - Call context of the message requesting finalization.
    * @param action - Terminal decision for this transaction.
    * @returns Shared terminal-action promise.
    */
-  private finalize(action: 'commit' | 'rollback'): Promise<void> {
+  private finalize(call: CallContext, action: 'commit' | 'rollback'): Promise<void> {
     if (this.finalization !== undefined) {
       if (this.finalization.action !== action) {
         return Promise.reject(new ProviderContextActivationError('activation-failed'));
       }
       return this.finalization.promise;
     }
-    const promise = this.requestFinalization(action);
+    const promise = this.requestFinalization(call, action);
     this.finalization = { action, promise };
     return promise;
   }
 
   /**
    * Dispatch one local terminal request without retaining manager diagnostics.
+   * @param call - Call context of the message requesting finalization.
    * @param action - Terminal decision dispatched to the manager.
    * @returns Promise that resolves after successful finalization.
    */
-  private async requestFinalization(action: 'commit' | 'rollback'): Promise<void> {
+  private async requestFinalization(call: CallContext, action: 'commit' | 'rollback'): Promise<void> {
     try {
       if (action === 'commit') {
-        const result = await this.bus.requestOptional(CredentialSubjects.activation.commit, {
+        const result = await this.bus.requestOptional(call, CredentialSubjects.activation.commit, {
           transactionId: this.transactionId,
         });
         if (!result.handled) {
@@ -103,7 +114,7 @@ class BusProviderContextActivationTransaction implements ProviderContextActivati
         return;
       }
 
-      const result = await this.bus.requestOptional(CredentialSubjects.activation.rollback, {
+      const result = await this.bus.requestOptional(call, CredentialSubjects.activation.rollback, {
         transactionId: this.transactionId,
       });
       if (!result.handled) {
@@ -147,18 +158,23 @@ function getManagedAccountContext(providerContext: ProviderContext): ResolvedPro
  * no account-manager side effect. A selected account is mandatory, however:
  * missing managers and handler-declared activation failures stop startup rather
  * than falling back to ambient or currently active native state.
+ * @param call - Call context of the message requesting activation.
  * @param bus - Bus used to invoke the manager-routed activation hook.
  * @param providerContext - Refs-only provider context selected for startup.
  * @throws ProviderContextActivationError when a selected account cannot be activated.
  */
-export async function activateProviderContext(bus: IMakaioBus, providerContext: ProviderContext): Promise<void> {
+export async function activateProviderContext(
+  call: CallContext,
+  bus: IMakaioBus,
+  providerContext: ProviderContext,
+): Promise<void> {
   const managedContext = getManagedAccountContext(providerContext);
   if (!managedContext) {
     return;
   }
 
   try {
-    const result = await bus.requestOptional(CredentialSubjects.activate, { providerContext: managedContext });
+    const result = await bus.requestOptional(call, CredentialSubjects.activate, { providerContext: managedContext });
     if (!result.handled) {
       throw new ProviderContextActivationError('manager-unavailable');
     }
@@ -180,11 +196,13 @@ export async function activateProviderContext(bus: IMakaioBus, providerContext: 
  * Managed selections require the in-process account manager; the returned
  * handle must be committed or rolled back so its per-client mutation lock is
  * released.
+ * @param call - Call context of the message requesting activation.
  * @param bus - Bus used to invoke the manager-owned local transaction hook.
  * @param providerContext - Refs-only provider context selected for replacement.
  * @returns Opaque activation transaction, or undefined when no activation is required.
  */
 export async function prepareProviderContextActivation(
+  call: CallContext,
   bus: IMakaioBus,
   providerContext: ProviderContext,
 ): Promise<ProviderContextActivationTransaction | undefined> {
@@ -194,7 +212,7 @@ export async function prepareProviderContextActivation(
   }
 
   try {
-    const result = await bus.requestOptional(CredentialSubjects.activation.prepare, {
+    const result = await bus.requestOptional(call, CredentialSubjects.activation.prepare, {
       providerContext: managedContext,
     });
     if (!result.handled) {

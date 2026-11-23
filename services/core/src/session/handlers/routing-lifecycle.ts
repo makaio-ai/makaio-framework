@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { SessionSubjects } from '@makaio/contracts';
 import type { Turn } from '../entities/turn.js';
 import type { TurnCompleteCallback } from '../turn-completion.js';
@@ -7,6 +8,7 @@ import type { MessageOutcome } from '@makaio/contracts';
 /** Narrow ledger transition owned by SessionTurnManager and injected into routing. */
 export interface TurnCompletionRecorder {
   recordAgentCompletion(
+    call: CallContext,
     agentId: string,
     messageId: string,
     outcome: MessageOutcome,
@@ -31,12 +33,17 @@ interface RoutingMessageIdentity {
  * Once `agent.sendMessage` succeeded, the agent may produce assistant output.
  * An acknowledgement observer cannot roll that delivery back, so its failure
  * is reported but must not terminalize the agent or settle persistence early.
+ * @param call - Call context of the handled message being routed; forwarded to the emission
  * @param bus - Bus instance for lifecycle delivery.
  * @param identity - Correlated message and agent identity.
  */
-export async function emitRoutingAcknowledged(bus: IMakaioBus, identity: RoutingMessageIdentity): Promise<void> {
+export async function emitRoutingAcknowledged(
+  call: CallContext,
+  bus: IMakaioBus,
+  identity: RoutingMessageIdentity,
+): Promise<void> {
   try {
-    await bus.emit(SessionSubjects.user_message.acknowledged, identity);
+    await bus.emit(call, SessionSubjects.user_message.acknowledged, identity);
   } catch (error) {
     console.error('[SessionRouting] Failed to emit user-message acknowledgement:', error);
   }
@@ -44,18 +51,20 @@ export async function emitRoutingAcknowledged(bus: IMakaioBus, identity: Routing
 
 /**
  * Settle assistant persistence when routing itself terminalizes an agent.
+ * @param call - Call context of the handled message being routed; forwarded to the emission
  * @param bus - Bus instance for local coordination.
  * @param turn - Turn containing the terminalized agent.
  * @param messageId - Exact user-message identity whose persistence cannot occur.
  * @param agentId - Agent whose assistant persistence cannot occur.
  */
 export async function emitRoutingPersistenceSettlement(
+  call: CallContext,
   bus: IMakaioBus,
   turn: Pick<Turn, 'sessionId' | 'turnId'>,
   messageId: string,
   agentId: string,
 ): Promise<void> {
-  await bus.emit(SessionSubjects.turn.assistantPersistenceSettled, {
+  await bus.emit(call, SessionSubjects.turn.assistantPersistenceSettled, {
     sessionId: turn.sessionId,
     turnId: turn.turnId,
     messageId,
@@ -93,17 +102,18 @@ interface TerminalizeRoutingAgentInput {
  * observer is notified, and the resulting completion callback must run even
  * when persistence or user-message observers reject.  The observers still run
  * so their independent persistence work has its normal chance to complete.
+ * @param call - Call context of the handled message being routed; forwarded to the settlement emission
  * @param input - Turn mutation, observer, and completion dependencies.
  */
-export async function terminalizeRoutingAgent(input: TerminalizeRoutingAgentInput): Promise<void> {
+export async function terminalizeRoutingAgent(call: CallContext, input: TerminalizeRoutingAgentInput): Promise<void> {
   const { bus, turn, messageId, agentId, outcome, error, onTurnComplete, turnManager } = input;
   // Routing cannot produce an assistant message. Settle this exact pair
   // before the ledger's synchronous terminal transition can start its
   // persist-before-emit barrier.
   try {
-    await emitRoutingPersistenceSettlement(bus, turn, messageId, agentId);
+    await emitRoutingPersistenceSettlement(call, bus, turn, messageId, agentId);
   } catch (settlementError) {
     console.error('[SessionRouting] Failed to emit terminal routing settlement:', settlementError);
   }
-  await turnManager.recordAgentCompletion(agentId, messageId, outcome, error, onTurnComplete, turn.turnId);
+  await turnManager.recordAgentCompletion(call, agentId, messageId, outcome, error, onTurnComplete, turn.turnId);
 }

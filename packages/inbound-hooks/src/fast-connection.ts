@@ -54,6 +54,7 @@ export async function connectFastHookBus(options: ConnectFastHookBusOptions): Pr
     };
     const transport = new WebSocketClientTransport({
       url,
+      attestingRole: 'core-uplink',
       name: options.name,
       autoReconnect: false,
       auth,

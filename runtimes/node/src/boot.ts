@@ -81,7 +81,12 @@ import {
 } from '@makaio/services-core/materialization';
 import { createLogImportContributionProcessor, logImportRegistryPackage } from '@makaio/services-log-import';
 import { createWorkflowEnginePackage, WorkflowEngineToken } from '@makaio/subsystem-workflow-engine/package';
-import { nativeSessionSupervisorPackage } from '@makaio/subsystem-native-session-supervisor/package';
+import type { WorkflowWorkspaceRootResolver } from '@makaio/subsystem-workflow-engine';
+import {
+  createNativeSessionSupervisorPackage,
+  NATIVE_SESSION_SUPERVISOR_PACKAGE_NAME,
+} from '@makaio/subsystem-native-session-supervisor/package';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
 import { createPackageManagerPackage } from '@makaio/services-package-manager/package';
 import { createInstalledExtensionCatalogSource } from './installed-extension-catalog-source.js';
 import { createHttpContributionProcessor } from './http-contribution-processor.js';
@@ -126,7 +131,7 @@ import { readFrameworkVersion } from './read-framework-version.js';
 import { runBootExtensionMigrations } from './boot-extension-migrations.js';
 import { createBootE2EAuth } from './boot-e2e-auth.js';
 import { attachUpstreamTelemetry } from './upstream-telemetry.js';
-import { StoredCredentialProvider } from './credential-provider.js';
+import { createCredentialBinder } from './credential-provider.js';
 import {
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
@@ -172,9 +177,9 @@ export type {
  * @returns Resolver that prefers dynamic registrations and falls back to the host resolver.
  */
 export function createCompositeWorkspaceRootResolver(
-  resolveDynamicWorkspaceRoot: (workspaceId: string) => Promise<string | undefined>,
-  ...fallbackResolvers: ReadonlyArray<CoreBootOptions['piscinaWorkspaceRootResolver']>
-): NonNullable<CoreBootOptions['piscinaWorkspaceRootResolver']> {
+  resolveDynamicWorkspaceRoot: WorkflowWorkspaceRootResolver,
+  ...fallbackResolvers: ReadonlyArray<WorkflowWorkspaceRootResolver | undefined>
+): WorkflowWorkspaceRootResolver {
   return async (workspaceId) => {
     const dynamicRoot = await resolveDynamicWorkspaceRoot(workspaceId);
     if (dynamicRoot !== undefined) return dynamicRoot;
@@ -326,7 +331,8 @@ export async function bootMakaioRuntimeCore(
       shutdownSteps.push(resourceStep('upstream telemetry', attachedTelemetry.shutdown));
     }
 
-    await bus.emit(KernelSubjects.phase.busCreated, { machineId });
+    // ORIGIN: Startup announces that the bus namespaces are registered.
+    await bus.emit(bus.own('start'), KernelSubjects.phase.busCreated, { machineId });
 
     // The transport is the first thing that accepts connections: a cancelled boot must not open it.
     checkpoint();
@@ -398,7 +404,8 @@ export async function bootMakaioRuntimeCore(
       }),
     );
 
-    await bus.emit(KernelSubjects.phase.coreReady, { machineId });
+    // ORIGIN: Startup announces that the core is ready.
+    await bus.emit(bus.own('start'), KernelSubjects.phase.coreReady, { machineId });
     console.info('[boot] Core ready (machineId=%s)', machineId);
 
     // -----------------------------------------------------------------------
@@ -494,13 +501,17 @@ export async function bootMakaioRuntimeCore(
     if (process.platform === 'darwin') {
       ({ platformMacOSPackage } = await import('@makaio/platform-macos'));
     }
+    const nativeSessionSupervisorPackage = createNativeSessionSupervisorPackage({
+      observeConnectionClosed: (transportName, onClosed) =>
+        busContextOf(bus).transportRegistry.getTransport(transportName)?.onConnectionClosed?.(onClosed),
+    });
     const frameworkPackageNames = new Set<string>([
       preferencesStoragePackage.name,
       cliDetectionPackage.name,
       ClientsCoreToken.name,
       ...(options.enablePackageManager !== false ? [createPackageManagerPackage().name] : []),
       AdapterSubsystemToken.name,
-      nativeSessionSupervisorPackage.name,
+      NATIVE_SESSION_SUPERVISOR_PACKAGE_NAME,
       ...frameworkCorePackages.map((pkg) => pkg.name),
       WorkflowEngineToken.name,
       ModelRegistryToken.name,
@@ -526,7 +537,7 @@ export async function bootMakaioRuntimeCore(
 
     const busUrl = buildLocalBusUrl(boundHost, boundPort);
 
-    const credentialsProvider = new StoredCredentialProvider(bus);
+    const credentialBinder = createCredentialBinder();
 
     const coordinator = new ExtensionCoordinator(bus, {
       surface: options.surface ?? 'headless',
@@ -543,7 +554,7 @@ export async function bootMakaioRuntimeCore(
         machineId: machineIdentity.machineId,
         busUrl,
         tryImport,
-        credentials: credentialsProvider,
+        credentialsFor: credentialBinder.credentialsFor,
       },
       runtimeEnvironment,
       launcherCommand: options.launcherCommand,
@@ -619,7 +630,7 @@ export async function bootMakaioRuntimeCore(
     }
 
     const platformDefaults = { cwd: process.cwd() };
-    const resolveDynamicPiscinaWorkspaceRoot = async (workspaceId: string): Promise<string | undefined> => {
+    const resolveDynamicPiscinaWorkspaceRoot: WorkflowWorkspaceRootResolver = async (workspaceId) => {
       const workflowEngine = coordinator.getExtensionService(WorkflowEngineToken);
       return workflowEngine?.resolveWorkspaceRoot(workspaceId);
     };
@@ -803,7 +814,7 @@ export async function bootMakaioRuntimeCore(
     // Close the credential channel before the bus/transport tears down. In
     // reverse shutdown order this runs after coordinator.shutdown() (which
     // stops all extension activity) and before transport.disconnect().
-    shutdownSteps.push(resourceStep('credentials channel', () => credentialsProvider.close()));
+    shutdownSteps.push(resourceStep('credentials channel', () => credentialBinder.close()));
     shutdownSteps.push(extensionsStep(coordinator));
     collectHostCleanups(
       shutdownSteps,
@@ -827,7 +838,8 @@ export async function bootMakaioRuntimeCore(
     // is needed here.
     await coordinator.startAll({ signal: options.signal });
     checkpoint();
-    await bus.emit(KernelSubjects.phase.servicesReady, { machineId });
+    // ORIGIN: Startup announces that the extension start phase is complete.
+    await bus.emit(bus.own('start'), KernelSubjects.phase.servicesReady, { machineId });
     const allExtensions = coordinator.list();
     const activeExtensions = allExtensions.filter((e) => e.state === 'active');
     console.info('[boot] Extensions started: %d active', activeExtensions.length);
@@ -877,7 +889,7 @@ export async function bootMakaioRuntimeCore(
         launchResolver: createWorkflowLaunchResolver((input) => workflowAttemptAuthority.getInstruction(input)),
       });
       try {
-        await registerWorkerProvider(bus, piscinaProvider);
+        await registerWorkerProvider(bus.own('start'), bus, piscinaProvider);
       } catch (error) {
         await piscinaRunner.dispose().catch(() => undefined);
         throw error;
@@ -885,7 +897,7 @@ export async function bootMakaioRuntimeCore(
       shutdownSteps.push(
         resourceStep('worker pool', async () => {
           try {
-            await unregisterWorkerProvider(bus, piscinaProvider.id);
+            await unregisterWorkerProvider(bus.own('stop'), bus, piscinaProvider.id);
           } finally {
             await piscinaRunner.dispose().catch(() => undefined);
           }
@@ -927,7 +939,8 @@ export async function bootMakaioRuntimeCore(
     // runtime seams (extension contribution catalog, runtime resources, etc.)
     // through dedicated bus requests instead of receiving opaque objects here.
     // -----------------------------------------------------------------------
-    await bus.broadcast(KernelSubjects.phase.coordinatorReady, {
+    // ORIGIN: Startup announces that the host coordinator is ready.
+    await bus.broadcast(bus.own('start'), KernelSubjects.phase.coordinatorReady, {
       machineId,
     });
 
@@ -945,7 +958,8 @@ export async function bootMakaioRuntimeCore(
     // -----------------------------------------------------------------------
     checkpoint();
     runtimeReady = true;
-    await bus.emit(KernelSubjects.ready, { machineId });
+    // ORIGIN: Startup announces that the runtime is ready.
+    await bus.emit(bus.own('start'), KernelSubjects.ready, { machineId });
     console.info('[boot] Runtime ready (machineId=%s)', machineId);
 
     const shutdownSequence = createShutdownSequence([...shutdownSteps].reverse());

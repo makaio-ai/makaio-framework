@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { CallContext } from '@makaio/core';
 import { ArtifactRefSchema, ArtifactRevisionSchema, type ArtifactRevision } from '../artifact/schemas.js';
 import { ConditionSchema } from '../shared/condition.js';
 import { JsonValueSchema } from '../shared/json-value.js';
@@ -143,18 +144,25 @@ export interface ExtensionTransitionRulesContribution {
 /**
  * Callable transition action handler.
  *
- * Invoked by the pipeline when a matching rule fires. Receives the resolved
- * invocation and the artifact event context so it can read artifact data when
- * building downstream bus requests.
+ * Invoked by the pipeline when a matching rule fires. Receives the call context of
+ * the triggering artifact event, the resolved invocation and the artifact event
+ * context so it can read artifact data when building downstream bus requests.
  */
 export interface TransitionActionHandler {
   /**
    * Execute the action.
+   * @param call - Call context of the triggering artifact event. Downstream bus
+   *   requests are sent with this call over the carrier bus of the registering
+   *   extension; an action never mints a context of its own for the dispatch.
    * @param invocation - Resolved action invocation descriptor.
    * @param context - Evaluation context built from the triggering artifact event.
    * @returns Promise that resolves when the action dispatch completes.
    */
-  readonly execute: (invocation: TransitionActionInvocation, context: TransitionEvaluationContext) => Promise<void>;
+  readonly execute: (
+    call: CallContext,
+    invocation: TransitionActionInvocation,
+    context: TransitionEvaluationContext,
+  ) => Promise<void>;
 }
 
 /**

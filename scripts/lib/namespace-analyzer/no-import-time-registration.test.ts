@@ -27,7 +27,8 @@ function listSourceFiles(dir: string): string[] {
 
     const fullPath = join(dir, entry.name);
     if (entry.isDirectory()) return listSourceFiles(fullPath);
-    if (!entry.name.endsWith('.ts') || entry.name.endsWith('.test.ts')) return [];
+    // Test files and fixtures are test input (fixtures may hold program text as string literals), not module code.
+    if (!entry.name.endsWith('.ts') || entry.name.endsWith('.test.ts') || entry.name.endsWith('.fixture.ts')) return [];
     return [fullPath];
   });
 }

@@ -1,4 +1,5 @@
 import type { AccountInfo } from '@anthropic-ai/claude-agent-sdk';
+import type { CallContext } from '@makaio/core';
 // This adapter intentionally depends on the framework-owned Claude client package.
 // `@makaio/client-claude-code` is a framework seam, not host wiring.
 import { buildClaudeAccountOrgUuidIdentifier } from '@makaio/client-claude-code';
@@ -100,9 +101,10 @@ export class ClaudeAccountObservationEmitter {
 
   /**
    * Fetch the current account snapshot and emit it when the normalized payload changed.
+   * @param call - Call context of the completed turn that triggered the observation
    * @param context - Connector session context used to resolve account info and locators
    */
-  public async emitIfChanged(context: ClaudeAccountObservationContext): Promise<void> {
+  public async emitIfChanged(call: CallContext, context: ClaudeAccountObservationContext): Promise<void> {
     const queryInstance = context.getQueryInstance();
     if (!queryInstance || typeof queryInstance.accountInfo !== 'function') {
       return;
@@ -152,10 +154,18 @@ export class ClaudeAccountObservationEmitter {
       return;
     }
 
-    await this.requestObservationWithRetry(observationKey, observationBase);
+    await this.requestObservationWithRetry(call, observationKey, observationBase);
   }
 
+  /**
+   * Request the observation and retry while an overlapping identical turn asked for it.
+   * Every retry runs under the call of the invocation that owns this loop.
+   * @param call - Call context of the invocation that owns the loop
+   * @param observationKey - Dedupe key of the normalized payload
+   * @param observationBase - Observation request without its timestamp
+   */
   private async requestObservationWithRetry(
+    call: CallContext,
     observationKey: string,
     observationBase: Omit<ClientSessionAccountObserveRequest, 'observedAt'>,
   ): Promise<void> {
@@ -163,7 +173,7 @@ export class ClaudeAccountObservationEmitter {
       this.inFlightObservationKeys.add(observationKey);
       let handled = false;
       try {
-        const result = await this.requestObservation({
+        const result = await this.requestObservation(call, {
           ...observationBase,
           observedAt: Date.now(),
         });

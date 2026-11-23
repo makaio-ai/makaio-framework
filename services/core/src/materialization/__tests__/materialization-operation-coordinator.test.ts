@@ -1,3 +1,4 @@
+import { createTestCall } from '@makaio/test-utils';
 import { describe, expect, it } from 'vitest';
 import { MaterializationOperationCoordinator } from '../materialization-operation-coordinator.js';
 
@@ -148,14 +149,15 @@ describe('MaterializationOperationCoordinator', () => {
   it('consumes authorized requests exactly once and fails closed for wrong scopes and replays', async () => {
     const coordinator = new MaterializationOperationCoordinator();
     const lease = await coordinator.acquire(providerScope);
+    const call = createTestCall();
     let authorizedMessageId = '';
     let replayError: unknown;
 
     await coordinator.runAuthorizedRequest(lease, providerScope, async (messageId) => {
       authorizedMessageId = messageId;
-      await coordinator.runExclusive(providerScope, async () => undefined, messageId, { local: true });
+      await coordinator.runExclusive(providerScope, async () => undefined, messageId, call);
       try {
-        await coordinator.runExclusive(providerScope, async () => undefined, messageId, { local: true });
+        await coordinator.runExclusive(providerScope, async () => undefined, messageId, call);
       } catch (error) {
         replayError = error;
       }
@@ -167,7 +169,7 @@ describe('MaterializationOperationCoordinator', () => {
 
     await expect(
       coordinator.runAuthorizedRequest(lease, providerScope, async (messageId) =>
-        coordinator.runExclusive({ artifactId: 'artifact-2' }, async () => undefined, messageId, { local: true }),
+        coordinator.runExclusive({ artifactId: 'artifact-2' }, async () => undefined, messageId, call),
       ),
     ).rejects.toThrow('does not match this scope');
 
@@ -176,11 +178,12 @@ describe('MaterializationOperationCoordinator', () => {
 
   it('rejects an authorized request received from a remote origin', async () => {
     const coordinator = new MaterializationOperationCoordinator();
+    const call = createTestCall({ caller: { kind: 'acme.remote', id: 'remote-1' } });
     const lease = await coordinator.acquire(providerScope);
 
     await expect(
       coordinator.runAuthorizedRequest(lease, providerScope, (messageId) =>
-        coordinator.runExclusive(providerScope, async () => undefined, messageId, { local: false }),
+        coordinator.runExclusive(providerScope, async () => undefined, messageId, call),
       ),
     ).rejects.toThrow('does not match this scope');
 

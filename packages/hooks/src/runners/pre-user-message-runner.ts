@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { SessionContext, MessageInput, JsonValue } from '@makaio/contracts';
 import { fetchSessionEnrichment, EMPTY_ENRICHMENT } from '../contexts/session-enrichment.js';
 import type { PreUserMessageHookOptions } from '../types/hook-options.js';
@@ -50,21 +51,23 @@ export interface PreUserMessageResult {
 
 /**
  * Run all registered PreUserMessage hooks.
+ * @param call - Call context of the message that triggered the turn; carried on every hook context
  * @param input - Input containing message and context
- * @param bus - Bus instance for session enrichment
+ * @param bus - Bus of the caller of the runner; used only for the session enrichment, never given to a hook
  * @returns Result with potentially modified message and sessionContext
  * @throws HookAbortError if a hook calls abort()
  */
 export async function runPreUserMessageHooks(
+  call: CallContext,
   input: PreUserMessageInput,
   bus: IMakaioBus,
 ): Promise<PreUserMessageResult> {
   let currentMessage = input.message;
   let currentSessionContext = input.sessionContext;
 
-  const enriched = input.sessionId ? await fetchSessionEnrichment(bus, input.sessionId) : EMPTY_ENRICHMENT;
+  const enriched = input.sessionId ? await fetchSessionEnrichment(bus, call, input.sessionId) : EMPTY_ENRICHMENT;
 
-  for (const { name, handler } of registry) {
+  for (const { name, handler, options } of registry) {
     const hookTurnContext: Record<string, JsonValue> = {};
 
     const ctx: PreUserMessageContext = {
@@ -97,7 +100,8 @@ export async function runPreUserMessageHooks(
       session: enriched.session,
       recentHistory: enriched.recentHistory,
       contextExtensions: enriched.contextExtensions,
-      bus,
+      bus: options.bus,
+      call,
 
       setTurnContext(key: string, value: JsonValue) {
         hookTurnContext[key] = value;

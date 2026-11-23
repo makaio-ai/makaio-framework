@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MakaioBus } from '../bus.js';
+import { busContextOf } from '../kernel-api.js';
 import { OnceTimeoutError } from '../methods/once.js';
 import { oncePromiseTestSetup } from './once.promise.setup.js';
 
@@ -27,7 +28,7 @@ describe('once - Promise overload', () => {
 
       // Emit after 50ms (before timeout)
       setTimeout(() => {
-        void MakaioBus.emit(EventSubjects.message, {
+        void MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
           content: 'in-time',
           sessionId: 'session-1',
         });
@@ -41,10 +42,10 @@ describe('once - Promise overload', () => {
     });
 
     it('should resolve without arming a deferred timeout when event arrives synchronously', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const promise = MakaioBus.once(EventSubjects.message, { timeoutMs: 5000 });
 
-      await MakaioBus.emit(EventSubjects.message, {
+      await MakaioBus.emit(MakaioBus.own('root'), EventSubjects.message, {
         content: 'test',
         sessionId: 'session-1',
       });
@@ -55,7 +56,7 @@ describe('once - Promise overload', () => {
     });
 
     it('should cleanup handler when timeout occurs', async () => {
-      const context = MakaioBus.getContext();
+      const context = busContextOf(MakaioBus);
       const promise = MakaioBus.once(EventSubjects.message, { timeoutMs: 100 });
 
       // Handler should be registered initially

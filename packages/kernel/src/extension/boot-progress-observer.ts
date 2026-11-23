@@ -90,7 +90,7 @@ export class BootProgressObserver {
     const identity = toBootServiceIdentity(pkg);
     this.state.currentService = identity.displayName;
     this.state.currentServiceStartedAt = Date.now();
-    void this.bus.emit(BootSubjects.service.starting, identity).catch((err: unknown) => {
+    void this.bus.emit(this.bus.own('observer'), BootSubjects.service.starting, identity).catch((err: unknown) => {
       console.warn(`[ExtensionCoordinator] boot.service.starting emit failed for "${identity.name}":`, err);
     });
   }
@@ -106,9 +106,11 @@ export class BootProgressObserver {
       this.state.currentServiceStartedAt !== undefined
         ? Math.max(0, Date.now() - this.state.currentServiceStartedAt)
         : 0;
-    void this.bus.emit(BootSubjects.service.ready, { ...identity, durationMs }).catch((err: unknown) => {
-      console.warn(`[ExtensionCoordinator] boot.service.ready emit failed for "${identity.name}":`, err);
-    });
+    void this.bus
+      .emit(this.bus.own('observer'), BootSubjects.service.ready, { ...identity, durationMs })
+      .catch((err: unknown) => {
+        console.warn(`[ExtensionCoordinator] boot.service.ready emit failed for "${identity.name}":`, err);
+      });
     this.emitProgress();
   }
 
@@ -121,9 +123,11 @@ export class BootProgressObserver {
     const identity = toBootServiceIdentity(pkg);
     this.state.completedCount += 1;
     this.state.failedServices.push(identity.name);
-    void this.bus.emit(BootSubjects.service.failed, { ...identity, errorMessage }).catch((err: unknown) => {
-      console.warn(`[ExtensionCoordinator] boot.service.failed emit failed for "${identity.name}":`, err);
-    });
+    void this.bus
+      .emit(this.bus.own('observer'), BootSubjects.service.failed, { ...identity, errorMessage })
+      .catch((err: unknown) => {
+        console.warn(`[ExtensionCoordinator] boot.service.failed emit failed for "${identity.name}":`, err);
+      });
     this.emitProgress();
   }
 
@@ -136,9 +140,11 @@ export class BootProgressObserver {
     const identity = toBootServiceIdentity(pkg);
     this.state.completedCount += 1;
     this.state.skippedServices.push(identity.name);
-    void this.bus.emit(BootSubjects.service.skipped, { ...identity, reason }).catch((err: unknown) => {
-      console.warn(`[ExtensionCoordinator] boot.service.skipped emit failed for "${identity.name}":`, err);
-    });
+    void this.bus
+      .emit(this.bus.own('observer'), BootSubjects.service.skipped, { ...identity, reason })
+      .catch((err: unknown) => {
+        console.warn(`[ExtensionCoordinator] boot.service.skipped emit failed for "${identity.name}":`, err);
+      });
     this.emitProgress();
   }
 
@@ -149,7 +155,7 @@ export class BootProgressObserver {
     delete this.state.currentServiceStartedAt;
     this.state.totalDurationMs = Date.now() - this.state.startedAt;
     void this.bus
-      .emit(BootSubjects.complete, {
+      .emit(this.bus.own('observer'), BootSubjects.complete, {
         totalDurationMs: this.state.totalDurationMs,
         failedServices: [...this.state.failedServices],
       })
@@ -161,7 +167,7 @@ export class BootProgressObserver {
   /** Emit current aggregate boot progress. */
   private emitProgress(): void {
     void this.bus
-      .emit(BootSubjects.progress, {
+      .emit(this.bus.own('observer'), BootSubjects.progress, {
         completedCount: this.state.completedCount,
         totalCount: this.state.totalCount,
         ...(this.state.currentService !== undefined ? { currentService: this.state.currentService } : {}),

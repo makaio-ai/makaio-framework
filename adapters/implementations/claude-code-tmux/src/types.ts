@@ -4,7 +4,7 @@ import type {
   MessageHandle,
   MessageResult,
 } from '@makaio/ai-adapters-core';
-import type { McpResolvedServer, McpSessionContext, SystemPrompt } from '@makaio/contracts';
+import type { CallContext, McpResolvedServer, McpSessionContext, SystemPrompt } from '@makaio/contracts';
 import type { IPtyProcess } from '@makaio/contracts/native-session-supervisor';
 import type { ClaudeCodeTmuxConnectorBus } from './namespace/index.js';
 import type { ClaudeCodeTmuxProviderConfig } from './schemas.js';
@@ -114,23 +114,29 @@ export interface TmuxConnectorSessionConfig {
   onTurnStart: (handle: MessageHandle) => void;
   /** Called when the turn finishes. */
   onTurnComplete: (handle: MessageHandle, result: MessageResult) => void;
-  /** Emits assistant completion text. */
-  emitTurnCompleted: (payload: { message: string }) => Promise<void>;
-  /** Emits tool-start metadata. */
-  emitToolUseStarted: (payload: {
-    messageId: string;
-    toolName: string;
-    toolUseId: string;
-    toolInput: unknown;
-  }) => Promise<void>;
-  /** Emits tool-finish metadata. */
-  emitToolUseFinished: (payload: {
-    messageId: string;
-    toolName: string;
-    toolUseId: string;
-    toolResult: unknown;
-    isError?: boolean;
-  }) => Promise<void>;
+  /** Emits assistant completion text under the call of the turn that completed. */
+  emitTurnCompleted: (call: CallContext, payload: { message: string }) => Promise<void>;
+  /** Emits tool-start metadata under the call of the turn that owns the tool use. */
+  emitToolUseStarted: (
+    call: CallContext,
+    payload: {
+      messageId: string;
+      toolName: string;
+      toolUseId: string;
+      toolInput: unknown;
+    },
+  ) => Promise<void>;
+  /** Emits tool-finish metadata under the call of the turn that originated the tool use. */
+  emitToolUseFinished: (
+    call: CallContext,
+    payload: {
+      messageId: string;
+      toolName: string;
+      toolUseId: string;
+      toolResult: unknown;
+      isError?: boolean;
+    },
+  ) => Promise<void>;
   /** Time in milliseconds to let Claude Code settle after sending ESC. */
   interruptSettleMs: number;
 }

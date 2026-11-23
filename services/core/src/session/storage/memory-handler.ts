@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   type IMakaioSession,
   type MakaioSessionAgent,
@@ -22,12 +23,13 @@ import { isAdapterSessionReconciliationRefused, isIdentityBackfillRefused } from
 
 /**
  * Populate a session's agents array from agent storage.
+ * @param call - Call context of the handled storage request
  * @param bus - The bus instance to query agent storage
  * @param sessionId - Session ID to fetch agents for
  * @returns Array of agents for the session
  */
-async function populateAgents(bus: IMakaioBus, sessionId: string): Promise<MakaioSessionAgent[]> {
-  const agentsResult = await bus.requestOptional(AgentStorageSubjects.listBySession, { sessionId });
+async function populateAgents(call: CallContext, bus: IMakaioBus, sessionId: string): Promise<MakaioSessionAgent[]> {
+  const agentsResult = await bus.requestOptional(call, AgentStorageSubjects.listBySession, { sessionId });
   return agentsResult.handled ? agentsResult.data.agents : [];
 }
 
@@ -210,7 +212,7 @@ function registerListHandler(bus: IMakaioBus, store: Map<string, IMakaioSession>
     const sessionsWithAgents = await Promise.all(
       sessions.map(async (session) => ({
         ...cloneSession(session),
-        agents: await populateAgents(bus, session.sessionId),
+        agents: await populateAgents(ctx.call, bus, session.sessionId),
       })),
     );
 
@@ -267,8 +269,8 @@ function registerUpdateHandler(bus: IMakaioBus, store: Map<string, IMakaioSessio
       success: true,
       clientAccountChanged: (previous.clientAccountId ?? null) !== (session.clientAccountId ?? null),
     });
-    emitSessionClientAccountChangedIfNeeded(bus, previous, cloneSession(session));
-    if (payload.advanceGeneration === true) emitSessionGenerationAdvanced(bus, payload.sessionId);
+    emitSessionClientAccountChangedIfNeeded(ctx.call, bus, previous, cloneSession(session));
+    if (payload.advanceGeneration === true) emitSessionGenerationAdvanced(ctx.call, bus, payload.sessionId);
   });
 }
 /**
@@ -311,7 +313,7 @@ export function registerMemorySessionStorage(
       }
 
       // Populate agents[] from agent storage (simulates JOIN in drizzle handler)
-      const agents = await populateAgents(bus, ctx.payload.sessionId);
+      const agents = await populateAgents(ctx.call, bus, ctx.payload.sessionId);
       ctx.setResult({ session: { ...cloneSession(session), agents } });
     }),
   );
@@ -333,7 +335,7 @@ export function registerMemorySessionStorage(
         success: true,
         clientAccountChanged: (previousSession?.clientAccountId ?? null) !== (detachedSession.clientAccountId ?? null),
       });
-      emitSessionClientAccountChangedIfNeeded(bus, previousSession, cloneSession(detachedSession));
+      emitSessionClientAccountChangedIfNeeded(ctx.call, bus, previousSession, cloneSession(detachedSession));
     }),
   );
   // storage:session.delete
@@ -438,7 +440,7 @@ function registerGetByAdapterSessionIdHandler(bus: IMakaioBus, store: Map<string
     }
 
     // Populate agents[] from agent storage (simulates JOIN in drizzle handler)
-    const agentsResult = await bus.requestOptional(AgentStorageSubjects.listBySession, {
+    const agentsResult = await bus.requestOptional(ctx.call, AgentStorageSubjects.listBySession, {
       sessionId: session.sessionId,
     });
     const agents = agentsResult.handled ? agentsResult.data.agents : [];

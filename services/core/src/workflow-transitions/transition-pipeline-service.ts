@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type {
   ArtifactRef,
   ArtifactRevision,
@@ -74,12 +75,12 @@ export class TransitionPipelineService extends BaseService {
    */
   protected onInit(): void {
     this.registerHandler(ArtifactSubjects.created, async (ctx) => {
-      await this.handleArtifactEvent('artifact.created', { artifact: ctx.payload.artifact });
+      await this.handleArtifactEvent(ctx.call, 'artifact.created', { artifact: ctx.payload.artifact });
     });
 
     this.registerHandler(ArtifactSubjects.revised, async (ctx) => {
-      const previousArtifact = await this.resolvePreviousRevisedArtifact(ctx.payload.previous);
-      await this.handleArtifactEvent('artifact.revised', {
+      const previousArtifact = await this.resolvePreviousRevisedArtifact(ctx.call, ctx.payload.previous);
+      await this.handleArtifactEvent(ctx.call, 'artifact.revised', {
         artifact: ctx.payload.artifact,
         previous: ctx.payload.previous,
         ...(previousArtifact !== undefined ? { previousArtifact } : {}),
@@ -87,10 +88,10 @@ export class TransitionPipelineService extends BaseService {
     });
 
     this.registerHandler(ArtifactSubjects.status.changed, async (ctx) => {
-      const artifact = await this.resolveStatusChangedArtifact(ctx.payload.artifact);
+      const artifact = await this.resolveStatusChangedArtifact(ctx.call, ctx.payload.artifact);
       if (artifact === undefined) return;
 
-      await this.handleArtifactEvent('artifact.status.changed', {
+      await this.handleArtifactEvent(ctx.call, 'artifact.status.changed', {
         artifact,
         path: ctx.payload.path,
         previous: ctx.payload.previous,
@@ -105,10 +106,12 @@ export class TransitionPipelineService extends BaseService {
 
   /**
    * Evaluate all enabled rules for the event type, then dispatch matching actions.
+   * @param call - Call context of the artifact event being handled.
    * @param eventType - The artifact event type that fired.
    * @param contextBase - Partial evaluation context built from the event payload.
    */
   private async handleArtifactEvent(
+    call: CallContext,
     eventType: TransitionEventType,
     contextBase: Omit<TransitionEvaluationContext, '_transition'>,
   ): Promise<void> {
@@ -127,18 +130,22 @@ export class TransitionPipelineService extends BaseService {
     if (prepared.length === 0) return;
 
     for (const entry of prepared) {
-      await this.evaluateAndDispatch(entry, eventType, contextBase, artifactKey, incomingDepth);
+      await this.evaluateAndDispatch(call, entry, eventType, contextBase, artifactKey, incomingDepth);
     }
   }
 
   /**
    * Resolve a status-change artifact ref into the exact revision that emitted
    * the event before rule evaluation.
+   * @param call - Call context of the status.changed event.
    * @param ref - Revisioned artifact reference from the status.changed event.
    * @returns Full artifact revision, or `undefined` when the artifact store cannot provide it.
    */
-  private async resolveStatusChangedArtifact(ref: ArtifactRef): Promise<ArtifactRevision | undefined> {
-    const result = await this.bus.requestOptional(ArtifactSubjects.resolve, { ref });
+  private async resolveStatusChangedArtifact(
+    call: CallContext,
+    ref: ArtifactRef,
+  ): Promise<ArtifactRevision | undefined> {
+    const result = await this.bus.requestOptional(call, ArtifactSubjects.resolve, { ref });
     if (!result.handled) {
       console.warn(
         `[TransitionPipelineService] No artifact resolver is registered for status transition ` +
@@ -164,11 +171,15 @@ export class TransitionPipelineService extends BaseService {
    * The original `previous` context value remains the event's artifact ref for
    * compatibility; this helper adds a full `previousArtifact` snapshot when the
    * artifact store can provide it so rules can compare before/after state.
+   * @param call - Call context of the revised event.
    * @param ref - Revisioned artifact reference from the revised event.
    * @returns Full previous artifact revision, or `undefined` when unavailable.
    */
-  private async resolvePreviousRevisedArtifact(ref: ArtifactRef): Promise<ArtifactRevision | undefined> {
-    const result = await this.bus.requestOptional(ArtifactSubjects.resolve, { ref });
+  private async resolvePreviousRevisedArtifact(
+    call: CallContext,
+    ref: ArtifactRef,
+  ): Promise<ArtifactRevision | undefined> {
+    const result = await this.bus.requestOptional(call, ArtifactSubjects.resolve, { ref });
     if (!result.handled || result.data.artifact === null) {
       return undefined;
     }
@@ -185,6 +196,7 @@ export class TransitionPipelineService extends BaseService {
    * When dispatch succeeds and the action type is `workflow.start`, the in-memory
    * depth counter for the artifact is incremented so subsequent events in the same
    * execution chain are correctly depth-checked.
+   * @param call - Call context of the artifact event that triggered the rule.
    * @param entry - The prepared rule (definition + registration-time findings) to evaluate.
    * @param eventType - The artifact event type.
    * @param contextBase - Partial evaluation context from the event payload.
@@ -192,6 +204,7 @@ export class TransitionPipelineService extends BaseService {
    * @param incomingDepth - Current loop-protection depth for this artifact.
    */
   private async evaluateAndDispatch(
+    call: CallContext,
     entry: PreparedTransitionRule,
     eventType: TransitionEventType,
     contextBase: Omit<TransitionEvaluationContext, '_transition'>,
@@ -222,7 +235,7 @@ export class TransitionPipelineService extends BaseService {
     }
 
     try {
-      await this.actionRegistry.dispatch(rule.action, context);
+      await this.actionRegistry.dispatch(call, rule.action, context);
       // Increment the depth counter after a successful workflow.start dispatch so
       // later events on the same artifact are aware of the nesting level.
       if (rule.action.type === WORKFLOW_START_ACTION_TYPE) {

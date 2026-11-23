@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { registerMemoryTurnStorage, TurnStorageSubjects } from '@makaio/services-core/session';
 import type { TurnUsage } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { restoreAgentUsageFromTurns } from '../restore-agent-usage.js';
 
 describe('restoreAgentUsageFromTurns', () => {
@@ -23,8 +24,8 @@ describe('restoreAgentUsageFromTurns', () => {
     sessionId: string,
     usage?: TurnUsage,
   ): Promise<Awaited<ReturnType<typeof MakaioBus.request<typeof TurnStorageSubjects.create>>>['turn']> {
-    const { turn } = await MakaioBus.request(TurnStorageSubjects.create, { sessionId });
-    await MakaioBus.request(TurnStorageSubjects.complete, {
+    const { turn } = await MakaioBus.request(MakaioBus.own('root'), TurnStorageSubjects.create, { sessionId });
+    await MakaioBus.request(MakaioBus.own('root'), TurnStorageSubjects.complete, {
       turnId: turn.turnId,
       status: 'completed',
       ...(usage !== undefined && { usage }),
@@ -42,7 +43,7 @@ describe('restoreAgentUsageFromTurns', () => {
   });
 
   it('returns zero totals when session has no completed turns', async () => {
-    const result = await restoreAgentUsageFromTurns(MakaioBus, 'session-empty', 'agent-1');
+    const result = await restoreAgentUsageFromTurns(createTestCall(), MakaioBus, 'session-empty', 'agent-1');
 
     expect(result.totalInputTokens).toBe(0);
     expect(result.totalOutputTokens).toBe(0);
@@ -53,7 +54,7 @@ describe('restoreAgentUsageFromTurns', () => {
     // Unregister the real handler so requestOptional returns not-handled
     cleanup();
     try {
-      const result = await restoreAgentUsageFromTurns(MakaioBus, 'session-no-handler', 'agent-1');
+      const result = await restoreAgentUsageFromTurns(createTestCall(), MakaioBus, 'session-no-handler', 'agent-1');
 
       expect(result.totalInputTokens).toBe(0);
       expect(result.totalOutputTokens).toBe(0);
@@ -73,7 +74,7 @@ describe('restoreAgentUsageFromTurns', () => {
       },
     });
 
-    const result = await restoreAgentUsageFromTurns(MakaioBus, 'session-1', 'agent-1');
+    const result = await restoreAgentUsageFromTurns(createTestCall(), MakaioBus, 'session-1', 'agent-1');
 
     expect(result.totalInputTokens).toBe(100);
     expect(result.totalOutputTokens).toBe(50);
@@ -93,7 +94,7 @@ describe('restoreAgentUsageFromTurns', () => {
       byAgent: { 'agent-1': { inputTokens: 200, outputTokens: 80 } },
     });
 
-    const result = await restoreAgentUsageFromTurns(MakaioBus, 'session-2', 'agent-1');
+    const result = await restoreAgentUsageFromTurns(createTestCall(), MakaioBus, 'session-2', 'agent-1');
 
     expect(result.totalInputTokens).toBe(300);
     expect(result.totalOutputTokens).toBe(120);
@@ -114,7 +115,7 @@ describe('restoreAgentUsageFromTurns', () => {
       byAgent: { 'agent-2': { inputTokens: 999, outputTokens: 500 } },
     });
 
-    const result = await restoreAgentUsageFromTurns(MakaioBus, 'session-3', 'agent-1');
+    const result = await restoreAgentUsageFromTurns(createTestCall(), MakaioBus, 'session-3', 'agent-1');
 
     // Only turn1 contributed to token totals
     expect(result.totalInputTokens).toBe(100);
@@ -126,7 +127,7 @@ describe('restoreAgentUsageFromTurns', () => {
   it('ignores turns with no usage data', async () => {
     await createCompletedTurn('session-4');
 
-    const result = await restoreAgentUsageFromTurns(MakaioBus, 'session-4', 'agent-1');
+    const result = await restoreAgentUsageFromTurns(createTestCall(), MakaioBus, 'session-4', 'agent-1');
 
     expect(result.totalInputTokens).toBe(0);
     expect(result.totalOutputTokens).toBe(0);

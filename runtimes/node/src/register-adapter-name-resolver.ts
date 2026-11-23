@@ -24,7 +24,7 @@ export function registerAdapterNameResolver(bus: IMakaioBus): () => void {
       }
 
       if (adapterName) {
-        const resolution = await bus.requestOptional(AdapterRuntimeSubjects.resolveId, { adapterName });
+        const resolution = await bus.requestOptional(ctx.call, AdapterRuntimeSubjects.resolveId, { adapterName });
         const resolvedAdapterId = resolution.handled ? resolution.data.adapterId : undefined;
         if (resolvedAdapterId) {
           ctx.payload.adapterId = resolvedAdapterId;

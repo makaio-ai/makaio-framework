@@ -11,11 +11,11 @@ next: false
 
 | Metric | Count |
 |--------|-------|
-| Namespaces | 108 |
-| Subjects | 992 (369 events, 623 RPCs) |
-| framework | 103 |
+| Namespaces | 109 |
+| Subjects | 993 (369 events, 624 RPCs) |
+| framework | 104 |
 | extension | 5 |
-| kind: bus | 78 |
+| kind: bus | 79 |
 | kind: adapter | 7 |
 | kind: client | 2 |
 | kind: extension | 3 |
@@ -101,6 +101,7 @@ next: false
 | [`worker`](./worker.md) | bus | 13 | 9E / 4R |
 | [`workflow`](./workflow.md) | bus | 58 | 26E / 32R |
 | [`workflow-blocks`](./workflow-blocks.md) | bus | 2 | 1E / 1R |
+| [`workflow-gate-timeout`](./workflow-gate-timeout.md) | bus | 1 | 0E / 1R |
 
 ---
 

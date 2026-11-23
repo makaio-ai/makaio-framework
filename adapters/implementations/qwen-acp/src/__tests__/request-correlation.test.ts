@@ -1,8 +1,10 @@
+import { ClientSideConnection } from '@agentclientprotocol/sdk';
 import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AgentSubjects } from '@makaio/contracts';
+import { AgentSubjects, type CallContext } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import type { AcpConnectionHandle } from '@makaio/ai-adapters-acp-client';
 import type { AgentStartResult, NormalizedCallUsage, NormalizedMessageInput } from '@makaio/ai-adapters-core';
 import { QwenAcpAgent } from '../agent.js';
@@ -56,14 +58,19 @@ function createDeferred<T>(): Deferred<T> {
  * @returns ACP handle used by connector initialization
  */
 function makeAcpHandle(sessionId: string, promptReleased: Deferred<void>): AcpConnectionHandle {
+  const connection = new ClientSideConnection(
+    () => ({ sessionUpdate: async () => {}, requestPermission: async () => ({ outcome: { outcome: 'cancelled' } }) }),
+    { readable: new ReadableStream({ start: (controller) => controller.close() }), writable: new WritableStream() },
+  );
+  vi.spyOn(connection, 'initialize').mockResolvedValue({ protocolVersion: 1 });
+  vi.spyOn(connection, 'newSession').mockResolvedValue({ sessionId });
+  vi.spyOn(connection, 'cancel').mockResolvedValue(undefined);
+  vi.spyOn(connection, 'prompt').mockImplementation(async () => {
+    await promptReleased.promise;
+    return { stopReason: 'end_turn' };
+  });
   return {
-    // @ts-expect-error -- partial platform shim; ClientSideConnection has private fields and many more members not needed here
-    connection: {
-      initialize: vi.fn().mockResolvedValue(undefined),
-      newSession: vi.fn().mockResolvedValue({ sessionId }),
-      cancel: vi.fn().mockResolvedValue(undefined),
-      prompt: vi.fn().mockReturnValue(promptReleased.promise),
-    },
+    connection,
     kill: vi.fn(),
     exited: Promise.resolve(0),
   };
@@ -75,9 +82,10 @@ function makeAcpHandle(sessionId: string, promptReleased: Deferred<void>): AcpCo
  * Only the ACP client layer is mocked (via `createAcpConnection`); the agent,
  * connector, AgentEventBridge, and MessageLifecycleTracker are the real
  * shared-core implementations, so usage attribution flows the production path.
+ * @param call - Call context that initializes the agent
  * @returns Agent, its connector, and the deferred releasing the first prompt
  */
-async function makeAgent(): Promise<{
+async function makeAgent(call: CallContext): Promise<{
   agent: QwenAcpAgent;
   connector: QwenAcpConnector;
   acpHandle: AcpConnectionHandle;
@@ -87,7 +95,7 @@ async function makeAgent(): Promise<{
   const acpHandle = makeAcpHandle('acp-session-1', promptReleased);
   mockCreateAcpConnection.mockResolvedValueOnce(acpHandle);
 
-  const adapterBus = await QwenAcpNamespace.scopedBus();
+  const adapterBus = await QwenAcpNamespace.scopedBus(MakaioBus);
   let connector: QwenAcpConnector | undefined;
   const agent = new QwenAcpAgent({
     agentId: TEST_AGENT_ID,
@@ -118,7 +126,7 @@ async function makeAgent(): Promise<{
     },
   });
 
-  await agent.init();
+  await agent.init(call);
   if (!connector) throw new Error('connectorFactory was not invoked during init()');
   return { agent, connector, acpHandle, promptReleased };
 }
@@ -126,17 +134,19 @@ async function makeAgent(): Promise<{
 /**
  * Start a real turn through the public agent API with the given correlation
  * context and wait until the connector has dispatched the ACP prompt.
+ * @param call - Call context of the turn
  * @param agent - Agent under test
  * @param acpHandle - Mock ACP handle used to detect prompt dispatch
  * @param requestCorrelation - Orchestrator-supplied correlation for the turn
  * @returns Start result containing the live message handle
  */
 async function startTurnWithCorrelation(
+  call: CallContext,
   agent: QwenAcpAgent,
   acpHandle: AcpConnectionHandle,
   requestCorrelation: { executionId: string; frameId: string },
 ): Promise<AgentStartResult> {
-  const startResult = await agent.start(TEST_MESSAGE, {
+  const startResult = await agent.start(call, TEST_MESSAGE, {
     sessionContext: { isFirstTurn: true, requestCorrelation },
   });
   await vi.waitFor(() => {
@@ -166,10 +176,11 @@ describe('QwenAcpAgent shared-core usage attribution', () => {
   });
 
   it('enriches flushed turn usage with executionId/frameId from the active message handle', async () => {
-    const { agent, connector, acpHandle, promptReleased } = await makeAgent();
+    const call = createTestCall();
+    const { agent, connector, acpHandle, promptReleased } = await makeAgent(call);
     closeAgent = () => agent.close();
 
-    const startResult = await startTurnWithCorrelation(agent, acpHandle, {
+    const startResult = await startTurnWithCorrelation(call, agent, acpHandle, {
       executionId: 'execution-1',
       frameId: 'frame-1',
     });
@@ -201,10 +212,11 @@ describe('QwenAcpAgent shared-core usage attribution', () => {
   });
 
   it('does not overwrite provider-supplied executionId/frameId with handle correlation', async () => {
-    const { agent, acpHandle, promptReleased } = await makeAgent();
+    const call = createTestCall();
+    const { agent, acpHandle, promptReleased } = await makeAgent(call);
     closeAgent = () => agent.close();
 
-    const startResult = await startTurnWithCorrelation(agent, acpHandle, {
+    const startResult = await startTurnWithCorrelation(call, agent, acpHandle, {
       executionId: 'handle-execution',
       frameId: 'handle-frame',
     });
@@ -225,7 +237,7 @@ describe('QwenAcpAgent shared-core usage attribution', () => {
       executionId: 'provider-execution',
       frameId: 'provider-frame',
     };
-    await agent['trackUsage'](providerNormalized);
+    await agent['trackUsage'](startResult.messageHandle.call, providerNormalized);
 
     await vi.waitFor(() => expect(usageEvents).toHaveLength(1));
     expect(usageEvents[0]).toMatchObject({
@@ -238,10 +250,11 @@ describe('QwenAcpAgent shared-core usage attribution', () => {
   });
 
   it('emits usage without executionId/frameId when no turn handle is active', async () => {
-    const { agent, connector, acpHandle, promptReleased } = await makeAgent();
+    const call = createTestCall();
+    const { agent, connector, acpHandle, promptReleased } = await makeAgent(call);
     closeAgent = () => agent.close();
 
-    const startResult = await startTurnWithCorrelation(agent, acpHandle, {
+    const startResult = await startTurnWithCorrelation(call, agent, acpHandle, {
       executionId: 'execution-late',
       frameId: 'frame-late',
     });
@@ -261,7 +274,7 @@ describe('QwenAcpAgent shared-core usage attribution', () => {
         _meta: { usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 } },
       },
     });
-    await connector['flushAccumulatedUsage'](Date.now());
+    await connector['flushAccumulatedUsage'](createTestCall(), Date.now());
 
     await vi.waitFor(() =>
       expect(usageEvents.some((event) => event['inputTokens'] === 7 && event['outputTokens'] === 3)).toBe(true),

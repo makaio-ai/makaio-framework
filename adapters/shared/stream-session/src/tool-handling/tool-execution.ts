@@ -8,6 +8,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { type ToolExecuteResult, ToolSubjects } from '@makaio/contracts';
 import type { ToolStartedEvent, ToolCompletedEvent } from '@makaio/ai-adapters-core';
 
@@ -21,7 +22,7 @@ import type { ToolExecutionContextOverrides } from './tool-result.js';
  * and ToolCompletedEvent. Using a structural union here avoids the shared
  * package depending on adapter-specific namespaces.
  */
-export type ToolLifecycleEmitter = (event: ToolStartedEvent | ToolCompletedEvent) => Promise<void>;
+export type ToolLifecycleEmitter = (call: CallContext, event: ToolStartedEvent | ToolCompletedEvent) => Promise<void>;
 
 /**
  * Execute a tool via Bus RPC.
@@ -30,6 +31,7 @@ export type ToolLifecycleEmitter = (event: ToolStartedEvent | ToolCompletedEvent
  * Emits tool_started before execution and tool_completed after (on both
  * success and failure paths). On bus error the error is re-thrown after
  * the tool_completed failure event is emitted.
+ * @param call - Call context of the turn that executes the tool; forwarded to the registry request and lifecycle events
  * @param bus - Bus that owns the ToolRegistry handlers
  * @param toolCall - The normalized tool call to execute
  * @param emitSdkEvent - Callback to emit SDK lifecycle events
@@ -37,12 +39,13 @@ export type ToolLifecycleEmitter = (event: ToolStartedEvent | ToolCompletedEvent
  * @returns Tool execution result
  */
 export async function executeTool(
+  call: CallContext,
   bus: IMakaioBus,
   toolCall: ToolCall,
   emitSdkEvent: ToolLifecycleEmitter,
   contextOverrides: ToolExecutionContextOverrides,
 ): Promise<ToolExecuteResult> {
-  await emitSdkEvent({
+  await emitSdkEvent(call, {
     eventType: 'tool_started',
     toolName: toolCall.function.name,
     toolCallId: toolCall.id,
@@ -54,7 +57,7 @@ export async function executeTool(
 
     // Execute tool via bus RPC (cross-namespace request via global MakaioBus).
     // Inject toolCallId so tools can access the originating tool call ID.
-    const result = await bus.request(ToolSubjects.execute, {
+    const result = await bus.request(call, ToolSubjects.execute, {
       toolName: toolCall.function.name,
       input,
       adapterId: contextOverrides.adapterId,
@@ -62,7 +65,7 @@ export async function executeTool(
       contextOverrides: { ...contextOverrides, toolCallId: toolCall.id },
     });
 
-    return emitSdkEvent({
+    return emitSdkEvent(call, {
       eventType: 'tool_completed',
       toolName: toolCall.function.name,
       toolCallId: toolCall.id,
@@ -75,7 +78,7 @@ export async function executeTool(
         ? { message: error.message, name: error.name }
         : { message: String(error), name: 'UnknownError' };
 
-    await emitSdkEvent({
+    await emitSdkEvent(call, {
       eventType: 'tool_completed',
       toolName: toolCall.function.name,
       toolCallId: toolCall.id,

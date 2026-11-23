@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { McpSubjects, type McpResolvedServer } from '@makaio/contracts';
 import { ModelRegistryPublicSubjects } from '@makaio/contracts/model-registry';
 import type { AccountInfo, McpServerStatus, ModelInfo, SlashCommand } from './types.js';
@@ -9,11 +10,12 @@ import type { AccountInfo, McpServerStatus, ModelInfo, SlashCommand } from './ty
 
 /**
  * Return all models available across all providers.
+ * @param call - Call context for the invoking operation.
  * @param bus - Bus instance used for the contracts-level model registry RPC.
  * @returns SDK-safe model descriptors from the runtime model registry.
  */
-export async function supportedModels(bus: IMakaioBus): Promise<ModelInfo[]> {
-  const result = await bus.requestOptional(ModelRegistryPublicSubjects.supportedModels, {});
+export async function supportedModels(call: CallContext, bus: IMakaioBus): Promise<ModelInfo[]> {
+  const result = await bus.requestOptional(call, ModelRegistryPublicSubjects.supportedModels, {});
   return result.handled ? result.data.models : [];
 }
 
@@ -28,16 +30,21 @@ export async function supportedModels(bus: IMakaioBus): Promise<ModelInfo[]> {
  *
  * When no `sessionId` is provided the function returns an empty array because
  * there is no global server-status RPC in the MCP contract.
+ * @param call - Call context for the invoking operation.
  * @param bus - Bus instance used to resolve session MCP context.
  * @param sessionId - Makaio session ID to scope the lookup.
  * @returns Array of server status objects, or empty array when `sessionId` is omitted.
  */
-export async function mcpServerStatus(bus: IMakaioBus, sessionId?: string): Promise<McpServerStatus[]> {
+export async function mcpServerStatus(
+  call: CallContext,
+  bus: IMakaioBus,
+  sessionId?: string,
+): Promise<McpServerStatus[]> {
   if (sessionId === undefined) {
     return [];
   }
 
-  const ctx = await bus.request(McpSubjects.session.resolve, {
+  const ctx = await bus.request(call, McpSubjects.session.resolve, {
     sessionId,
     profileId: null,
     projectId: null,

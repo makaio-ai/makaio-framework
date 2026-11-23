@@ -16,6 +16,7 @@
  * Immediate mode: active → interrupted → idle (cancelled, new turn with merged content)
  */
 
+import type { CallContext } from '@makaio/contracts';
 import { BaseConnectorTurn, type PauseResult, type MessageHandle } from '@makaio/ai-adapters-core';
 import { CodexAppServerSubjects } from './namespaces/index.js';
 import type { CodexAppServerBus, CodexAppServerTurnState } from './namespaces/index.js';
@@ -110,10 +111,15 @@ export class CodexAppServerTurn extends BaseConnectorTurn<CodexAppServerTurnStat
 
   /**
    * Emit state change using typed namespace subjects.
+   * @param call - Call of the message causing the transition
    * @param oldState - The previous turn state
    * @param newState - The new turn state
    */
-  protected async emitStateChange(oldState: CodexAppServerTurnState, newState: CodexAppServerTurnState): Promise<void> {
+  protected async emitStateChange(
+    call: CallContext,
+    oldState: CodexAppServerTurnState,
+    newState: CodexAppServerTurnState,
+  ): Promise<void> {
     const payload = {
       adapterId: this.adapterId,
       agentId: this.agentId,
@@ -122,11 +128,11 @@ export class CodexAppServerTurn extends BaseConnectorTurn<CodexAppServerTurnStat
       timestamp: Date.now(),
     };
 
-    await this.connectorBus.emit(CodexAppServerSubjects.turn_state_changed, payload);
+    await this.connectorBus.emit(call, CodexAppServerSubjects.turn_state_changed, payload);
 
     switch (newState) {
       case 'turn_started':
-        await this.connectorBus.emit(CodexAppServerSubjects.turn_started, {
+        await this.connectorBus.emit(call, CodexAppServerSubjects.turn_started, {
           agentId: this.agentId,
           threadId: this.threadId,
           turnId: this.turnId ?? '',
@@ -134,7 +140,7 @@ export class CodexAppServerTurn extends BaseConnectorTurn<CodexAppServerTurnStat
         });
         break;
       case 'step_started':
-        await this.connectorBus.emit(CodexAppServerSubjects.turn_step_started, {
+        await this.connectorBus.emit(call, CodexAppServerSubjects.turn_step_started, {
           agentId: this.agentId,
           threadId: this.threadId,
           turnId: this.turnId ?? '',
@@ -143,7 +149,7 @@ export class CodexAppServerTurn extends BaseConnectorTurn<CodexAppServerTurnStat
         });
         break;
       case 'step_finished':
-        await this.connectorBus.emit(CodexAppServerSubjects.turn_step_finished, {
+        await this.connectorBus.emit(call, CodexAppServerSubjects.turn_step_finished, {
           agentId: this.agentId,
           threadId: this.threadId,
           turnId: this.turnId ?? '',
@@ -152,7 +158,7 @@ export class CodexAppServerTurn extends BaseConnectorTurn<CodexAppServerTurnStat
         });
         break;
       case 'turn_finished':
-        await this.connectorBus.emit(CodexAppServerSubjects.turn_completed, {
+        await this.connectorBus.emit(call, CodexAppServerSubjects.turn_completed, {
           agentId: this.agentId,
           threadId: this.threadId,
           turnId: this.turnId ?? '',
@@ -165,83 +171,90 @@ export class CodexAppServerTurn extends BaseConnectorTurn<CodexAppServerTurnStat
   /**
    * Start the turn - transition to active state.
    * Called when turn/start request is sent.
+   * @param call - Call of the message causing the transition
    */
-  public async start(): Promise<void> {
-    await this.transitionTo('active');
+  public async start(call: CallContext): Promise<void> {
+    await this.transitionTo(call, 'active');
   }
 
   /**
    * Handle turn/started notification.
    * Transitions from active to processing_started.
+   * @param call - Call of the message causing the transition
    * @param turnId - Turn ID from the notification
    */
-  public async handleTurnStarted(turnId: string): Promise<void> {
+  public async handleTurnStarted(call: CallContext, turnId: string): Promise<void> {
     this.turnId = turnId;
-    await this.transitionTo('processing_started');
+    await this.transitionTo(call, 'processing_started');
   }
 
   /**
    * Handle item/started notification.
    * Transitions from processing_started to turn_started (first item)
    * or from step_finished to step_started (subsequent items).
+   * @param call - Call of the message causing the transition
    * @param itemId - Item ID from the notification
    * @param itemType - Type of item (agentMessage, commandExecution, etc.)
    */
-  public async handleItemStarted(itemId: string, itemType: ItemType): Promise<void> {
+  public async handleItemStarted(call: CallContext, itemId: string, itemType: ItemType): Promise<void> {
     this.currentItemId = itemId;
     this.currentItemType = itemType;
 
     if (this.state === 'processing_started') {
       // First item - transition to turn_started
-      await this.transitionTo('turn_started');
+      await this.transitionTo(call, 'turn_started');
       // Then immediately to step_started
-      await this.transitionTo('step_started');
+      await this.transitionTo(call, 'step_started');
     } else if (this.state === 'step_finished') {
       // Next item in sequence
-      await this.transitionTo('step_started');
+      await this.transitionTo(call, 'step_started');
     }
   }
 
   /**
    * Handle item/completed notification.
    * Transitions from step_started to step_finished.
+   * @param call - Call of the message causing the transition
    * @param itemId - Item ID from the notification
    */
-  public async handleItemCompleted(itemId: string): Promise<void> {
+  public async handleItemCompleted(call: CallContext, itemId: string): Promise<void> {
     if (this.currentItemId !== itemId) {
       // Mismatch - ignore or log warning
       return;
     }
 
     if (this.state === 'step_started') {
-      await this.transitionTo('step_finished');
+      await this.transitionTo(call, 'step_finished');
     }
   }
 
   /**
    * Handle turn/completed notification.
    * Transitions from step_finished to turn_finished.
+   * @param call - Call of the message causing the transition
    */
-  public async handleTurnCompleted(): Promise<void> {
+  public async handleTurnCompleted(call: CallContext): Promise<void> {
     if (this.state === 'step_finished' || this.state === 'turn_started') {
-      await this.transitionTo('turn_finished');
+      await this.transitionTo(call, 'turn_finished');
     }
   }
 
   /**
    * Mark turn as finished.
    * Called by connector when turn completes.
+   * @param call - Call of the message causing the transition
    */
-  public async markTurnFinished(): Promise<void> {
-    await this.transitionTo('turn_finished');
+  public async markTurnFinished(call: CallContext): Promise<void> {
+    await this.transitionTo(call, 'turn_finished');
   }
 
   /**
    * Interrupt (pause) the turn.
    * Used for immediate mode - sends turn/interrupt and restarts with merged content.
+   * @param _call - Call of the message requesting the pause
    * @returns Pause result indicating whether turn had already ended
    */
-  public async pause(): Promise<PauseResult<CodexAppServerTurnState>> {
+  public async pause(_call: CallContext): Promise<PauseResult<CodexAppServerTurnState>> {
     if (this.state === 'turn_finished') {
       return { stateBeforePause: this.state, turnEnded: true };
     }
@@ -255,10 +268,11 @@ export class CodexAppServerTurn extends BaseConnectorTurn<CodexAppServerTurnStat
   /**
    * Resume is a no-op for app-server - caller creates new turn instead.
    * App-server doesn't support true resume - use interrupt + restart with merged content.
+   * @param _call - Call of the message requesting the resume
    * @param _message - Optional message (unused - app-server doesn't support resume)
    * @throws Error always - app-server requires creating a new turn with merged content
    */
-  public async resume(_message?: unknown): Promise<void> {
+  public async resume(_call: CallContext, _message?: unknown): Promise<void> {
     throw new Error('Codex app-server does not support resume - create new turn with merged content');
   }
 

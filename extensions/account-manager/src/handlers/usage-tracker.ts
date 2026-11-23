@@ -1,5 +1,6 @@
 /* eslint max-lines: ["error", { "max": 560 }], max-lines-per-function: ["error", { "max": 100 }] */
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { ClientSubjects } from '@makaio/contracts/client';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { AccountUsage } from '../bus/schemas.js';
@@ -9,19 +10,24 @@ import type {
   IAccountCredentialStore,
   IAccountMetadataStore,
   IAccountUsageSnapshotStore,
+  StoredAccount,
 } from '../interfaces/account-store.js';
 import { logAccountManagerDiagnostic, logAccountManagerError } from '../utils/diagnostics.js';
-import { OverdueScheduler, type SchedulableTarget } from '../utils/overdue-scheduler.js';
+import type { SchedulableTarget } from '../utils/overdue-scheduler.js';
+import { OverdueScheduler } from '../utils/overdue-scheduler.js';
 import {
   awaitAccountQuiescence,
   awaitTrackerQuiescence,
   checkAndEmitPendingResets,
   collectPendingResetsFromCache,
+  createSourceErrorLogger,
   emitStaleSnapshotIfCurrent,
+  hasFreshLinkedClientSnapshot,
   invalidateTrackerAccountState,
+  logQuiescenceTimeout,
   scheduleTrackedMetadataInvalidations,
+  sleepUnref,
   startUsageRefreshes,
-  USAGE_TRACKER_QUIESCENCE_TIMEOUT_MS,
   type InFlightSourcePoll,
 } from './usage-tracker-lifecycle.js';
 import { ingestLinkedClientSnapshot } from './client-usage-snapshot.js';
@@ -76,7 +82,7 @@ export class UsageTracker {
   /** Reverse lookup from cache key to `{ clientId, accountId }` for the `getPendingResets` RPC. */
   private readonly cacheKeyIndex = new Map<string, { clientId: string; accountId: string }>();
   private readonly readCredential:
-    | ((clientId: string, accountId: string) => Promise<UsagePreparedCredential | null>)
+    | ((call: CallContext, clientId: string, accountId: string) => Promise<UsagePreparedCredential | null>)
     | undefined;
 
   public constructor(deps: UsageTrackerDeps) {
@@ -92,10 +98,11 @@ export class UsageTracker {
   public start(): void {
     this.cleanups.push(
       this.bus.on(AccountManagerSubjects.credentials.detected, async (ctx) => {
-        await this.fetchAndEmit(ctx.payload.clientId, ctx.payload.account.id);
+        await this.fetchAndEmit(ctx.call, ctx.payload.clientId, ctx.payload.account.id);
       }),
       this.bus.on(AccountManagerSubjects.credentials.refreshed, async (ctx) => {
         await this.fetchAndEmit(
+          ctx.call,
           ctx.payload.clientId,
           ctx.payload.account.id,
           ctx.payload.reason === 'label-retry' ? {} : { forceRefresh: true },
@@ -103,9 +110,9 @@ export class UsageTracker {
       }),
       this.bus.on(AccountManagerSubjects.credentials.switched, async (ctx) => {
         if (ctx.payload.from) {
-          void this.fetchAndEmit(ctx.payload.clientId, ctx.payload.from.id, { forceRefresh: true });
+          void this.fetchAndEmit(ctx.call, ctx.payload.clientId, ctx.payload.from.id, { forceRefresh: true });
         }
-        await this.fetchAndEmit(ctx.payload.clientId, ctx.payload.to.id, { forceRefresh: true });
+        await this.fetchAndEmit(ctx.call, ctx.payload.clientId, ctx.payload.to.id, { forceRefresh: true });
       }),
       this.bus.on(AccountManagerSubjects.usage.get, async (ctx) => {
         const { clientId, accountId } = ctx.payload;
@@ -114,18 +121,19 @@ export class UsageTracker {
           ctx.setResult({ usage: cached });
           return;
         }
-        void this.fetchAndEmit(clientId, accountId, { forceRefresh: true });
+        void this.fetchAndEmit(ctx.call, clientId, accountId, { forceRefresh: true });
         ctx.setResult({ usage: null });
       }),
       this.bus.on(AccountManagerSubjects.usage.refresh, async (ctx) => {
         const scheduled = await startUsageRefreshes({
+          call: ctx.call,
           sources: this.sources,
           metadataStore: this.metadataStore,
           credentialStore: this.credentialStore,
           clientId: ctx.payload.clientId,
           accountId: ctx.payload.accountId,
           startFetch: (clientId, accountId) =>
-            this.startFetchAndEmit(clientId, accountId, { forceRefresh: true }) !== null,
+            this.startFetchAndEmit(ctx.call, clientId, accountId, { forceRefresh: true }) !== null,
         });
         ctx.setResult({ refreshed: scheduled });
       }),
@@ -141,6 +149,7 @@ export class UsageTracker {
       }),
       this.bus.on(ClientSubjects.usage.snapshot, async (ctx) => {
         await ingestLinkedClientSnapshot({
+          call: ctx.call,
           bus: this.bus,
           metadataStore: this.metadataStore,
           usageSnapshotStore: this.usageSnapshotStore,
@@ -159,7 +168,7 @@ export class UsageTracker {
             (this.accountGenerations.get(cacheKey) ?? 0) === currentGeneration,
           isStopped: () => this.stopped,
           emitPendingResetsIfFresh: (sourceClientId, sourceAccountId, cacheKey, currentGeneration) =>
-            this.emitPendingResetsIfFresh(sourceClientId, sourceAccountId, cacheKey, currentGeneration),
+            this.emitPendingResetsIfFresh(ctx.call, sourceClientId, sourceAccountId, cacheKey, currentGeneration),
         });
       }),
     );
@@ -173,24 +182,22 @@ export class UsageTracker {
       );
     }
   }
-
   public bootstrap(): void {
     for (const clientId of this.sources.keys())
       if (resolveMinFetchInterval(this.sourceConfigs.get(clientId), this.pollIntervalMs) > 0)
         this.runScheduledTick(clientId, 'bootstrap');
   }
-
   /** Stops new work and waits for already-started work to quiesce. */
   public async stop(): Promise<void> {
     const trackedKeys = [...this.accountGenerations.keys()];
     this.requestStop();
+    const call = this.bus.own('stop');
     scheduleTrackedMetadataInvalidations({
+      call,
       trackedKeys,
       metadataStore: this.metadataStore,
       metadataInvalidations: this.metadataInvalidations,
-      onInvalidationError: (sourceClientId, error) => {
-        logAccountManagerError(`[UsageTracker] bumpMetadataGeneration failed for source ${sourceClientId}:`, error);
-      },
+      onInvalidationError: createSourceErrorLogger('bumpMetadataGeneration'),
     });
     const drained = await awaitTrackerQuiescence({
       inFlightSourcePolls: this.inFlightSourcePolls,
@@ -199,10 +206,7 @@ export class UsageTracker {
       metadataInvalidations: this.metadataInvalidations,
     });
     if (!drained) {
-      logAccountManagerError(
-        `[UsageTracker] stop timed out waiting for tracker quiescence after ${USAGE_TRACKER_QUIESCENCE_TIMEOUT_MS}ms:`,
-        new Error('Tracker quiescence timeout'),
-      );
+      logQuiescenceTimeout('stop timed out waiting for tracker quiescence', 'Tracker quiescence timeout');
     }
     this.usageCache.clear();
     this.linkedClientSnapshotFreshUntil.clear();
@@ -220,7 +224,6 @@ export class UsageTracker {
     this.pendingResets.clear();
     this.cacheKeyIndex.clear();
   }
-
   /** Synchronously prevents new tracker work from starting. */
   public requestStop(): void {
     if (this.stopped) return;
@@ -237,7 +240,8 @@ export class UsageTracker {
       promise: Promise.resolve(),
       accountKey: null,
     };
-    const pollPromise = this.pickAndFetchOne(clientId, label, pollState)
+    const call = this.bus.own('schedule');
+    const pollPromise = this.pickAndFetchOne(call, clientId, label, pollState)
       .catch((err: unknown) => {
         logAccountManagerError(`[UsageTracker] ${label} tick failed for ${clientId}:`, err);
       })
@@ -251,27 +255,17 @@ export class UsageTracker {
     this.inFlightSourcePolls.set(clientId, pollState);
     void pollPromise;
   }
-
   private async pickAndFetchOne(
+    call: CallContext,
     clientId: string,
     label: 'bootstrap' | 'periodic',
     pollState: { accountKey: string | null },
   ): Promise<void> {
     if (!this.sources.has(clientId)) return;
     if (Date.now() < (this.sourceCooldownUntil.get(clientId) ?? 0)) return;
-    const accounts = await listStoredAccounts(this.metadataStore, this.credentialStore, clientId);
+    const accounts = await listStoredAccounts(call, this.metadataStore, this.credentialStore, clientId);
     if (this.stopped) return;
-
-    const targets: Array<SchedulableTarget<string>> = accounts.map((account) => {
-      const key = createUsageCacheKey(clientId, account.id);
-      return {
-        key: account.id,
-        lastFetchAt: this.lastFetchAt.get(key) ?? 0,
-        targetIntervalMs: resolveTargetInterval(this.sourceConfigs.get(clientId), account.active),
-        priority: account.active ? 2 : 1,
-      };
-    });
-
+    const targets = buildSchedulableTargets(clientId, accounts, this.lastFetchAt, this.sourceConfigs.get(clientId));
     const chosen = this.scheduler.pick(targets, Date.now());
     if (!chosen) {
       logAccountManagerDiagnostic(
@@ -284,22 +278,31 @@ export class UsageTracker {
     pollState.accountKey = createUsageCacheKey(clientId, chosen.key);
     const jitter = this.sourceConfigs.get(clientId)?.jitterMs ?? 0;
     if (label === 'periodic' && jitter > 0) {
-      await new Promise<void>((resolve) => {
-        const timeout = setTimeout(resolve, Math.random() * jitter);
-        timeout.unref();
-      });
+      await sleepUnref(Math.random() * jitter);
       if (this.stopped) return;
     }
-    await this.fetchAndEmit(clientId, chosen.key, { forceRefresh: true });
+    await this.fetchAndEmit(call, clientId, chosen.key, { forceRefresh: true });
   }
-
-  public clearAccountState(clientId: string, accountId: string): void {
-    void this.invalidateAccountState(clientId, accountId);
+  /**
+   * Clears cached usage state for one account without waiting for in-flight work to drain.
+   * @param call - Call context of the request that clears the account state.
+   * @param clientId - Source identifier the account belongs to.
+   * @param accountId - Account identifier whose cached usage state is cleared.
+   */
+  public clearAccountState(call: CallContext, clientId: string, accountId: string): void {
+    void this.invalidateAccountState(call, clientId, accountId);
   }
-
-  public async clearAccountStateAndWait(clientId: string, accountId: string): Promise<void> {
+  /**
+   * Clears cached usage state for one account and waits until the account's in-flight fetches,
+   * polls and persistence have quiesced.
+   * @param call - Call context of the request that clears the account state.
+   * @param clientId - Source identifier the account belongs to.
+   * @param accountId - Account identifier whose cached usage state is cleared.
+   * @returns Resolves once the account's state is cleared and in-flight work has quiesced.
+   */
+  public async clearAccountStateAndWait(call: CallContext, clientId: string, accountId: string): Promise<void> {
     const key = createUsageCacheKey(clientId, accountId);
-    await this.invalidateAccountState(clientId, accountId);
+    await this.invalidateAccountState(call, clientId, accountId);
     const drained = await awaitAccountQuiescence({
       clientId,
       key,
@@ -308,13 +311,12 @@ export class UsageTracker {
       persistenceChains: this.persistenceChains,
     });
     if (!drained) {
-      logAccountManagerError(
-        `[UsageTracker] clearAccountStateAndWait timed out for ${clientId}/${accountId} after ${USAGE_TRACKER_QUIESCENCE_TIMEOUT_MS}ms:`,
-        new Error('Account quiescence timeout'),
+      logQuiescenceTimeout(
+        `clearAccountStateAndWait timed out for ${clientId}/${accountId}`,
+        'Account quiescence timeout',
       );
     }
   }
-
   public async waitForAccountQuiescence(clientId: string, accountId: string): Promise<void> {
     await this.metadataInvalidations.get(createUsageCacheKey(clientId, accountId));
     const drained = await awaitAccountQuiescence({
@@ -325,18 +327,18 @@ export class UsageTracker {
       persistenceChains: this.persistenceChains,
     });
     if (!drained) {
-      logAccountManagerError(
-        `[UsageTracker] waitForAccountQuiescence timed out for ${clientId}/${accountId} after ${USAGE_TRACKER_QUIESCENCE_TIMEOUT_MS}ms:`,
-        new Error('Account quiescence timeout'),
+      logQuiescenceTimeout(
+        `waitForAccountQuiescence timed out for ${clientId}/${accountId}`,
+        'Account quiescence timeout',
       );
     }
   }
-
-  private invalidateAccountState(clientId: string, accountId: string): Promise<void> {
+  private invalidateAccountState(call: CallContext, clientId: string, accountId: string): Promise<void> {
     const key = createUsageCacheKey(clientId, accountId);
     this.linkedClientSnapshotFreshUntil.delete(key);
     this.transientFailureCounts.delete(key);
     return invalidateTrackerAccountState({
+      call,
       clientId,
       accountId,
       accountGenerations: this.accountGenerations,
@@ -348,13 +350,11 @@ export class UsageTracker {
       cacheKeyIndex: this.cacheKeyIndex,
       metadataStore: this.metadataStore,
       metadataInvalidations: this.metadataInvalidations,
-      onInvalidationError: (sourceClientId, error) => {
-        logAccountManagerError(`[UsageTracker] bumpMetadataGeneration failed for source ${sourceClientId}:`, error);
-      },
+      onInvalidationError: createSourceErrorLogger('bumpMetadataGeneration'),
     });
   }
-
   private async fetchAndEmit(
+    call: CallContext,
     clientId: string,
     accountId: string,
     options: { forceRefresh?: boolean } = {},
@@ -366,14 +366,13 @@ export class UsageTracker {
       if (options.forceRefresh) await existingFetch;
       return false;
     }
-
-    const fetchPromise = this.startFetchAndEmit(clientId, accountId, options);
+    const fetchPromise = this.startFetchAndEmit(call, clientId, accountId, options);
     if (!fetchPromise) return false;
     await fetchPromise;
     return true;
   }
-
   private startFetchAndEmit(
+    call: CallContext,
     clientId: string,
     accountId: string,
     options: { forceRefresh?: boolean } = {},
@@ -384,11 +383,10 @@ export class UsageTracker {
       this.stopped ||
       this.inFlightFetches.has(key) ||
       !source ||
-      (!options.forceRefresh && this.hasFreshLinkedClientSnapshot(key)) ||
+      (!options.forceRefresh && hasFreshLinkedClientSnapshot(this.linkedClientSnapshotFreshUntil, key)) ||
       Date.now() < (this.sourceCooldownUntil.get(clientId) ?? 0)
     )
       return null;
-
     const now = Date.now();
     const errorCooldownRemaining = (this.errorCooldownUntil.get(key) ?? 0) - now;
     if (errorCooldownRemaining > 0) {
@@ -398,31 +396,17 @@ export class UsageTracker {
       return null;
     }
     if (!options.forceRefresh && now - (this.lastFetchAt.get(key) ?? 0) < USAGE_THROTTLE_MS) return null;
-
     const generation = this.accountGenerations.get(key) ?? 0;
     if (!this.accountGenerations.has(key)) this.accountGenerations.set(key, 0);
     this.lastFetchAt.set(key, Date.now());
-
-    const fetchPromise = this.runFetchAndEmit(clientId, accountId, key, generation, source).finally(() => {
+    const fetchPromise = this.runFetchAndEmit(call, clientId, accountId, key, generation, source).finally(() => {
       if (this.inFlightFetches.get(key) === fetchPromise) this.inFlightFetches.delete(key);
     });
     this.inFlightFetches.set(key, fetchPromise);
     return fetchPromise;
   }
-
-  private hasFreshLinkedClientSnapshot(key: string): boolean {
-    const freshUntil = this.linkedClientSnapshotFreshUntil.get(key);
-    if (freshUntil === undefined) {
-      return false;
-    }
-    if (Date.now() < freshUntil) {
-      return true;
-    }
-    this.linkedClientSnapshotFreshUntil.delete(key);
-    return false;
-  }
-
   private async runFetchAndEmit(
+    call: CallContext,
     clientId: string,
     accountId: string,
     key: string,
@@ -431,9 +415,9 @@ export class UsageTracker {
   ): Promise<void> {
     if (this.stopped) return;
     let credential: RawCredential | null = null;
-
     try {
       const account = await loadUsageFetchAccount({
+        call,
         metadataStore: this.metadataStore,
         credentialStore: this.credentialStore,
         clientId,
@@ -442,10 +426,11 @@ export class UsageTracker {
         generation,
         isAccountGone: (cacheKey, currentGeneration) => this.isAccountGone(cacheKey, currentGeneration),
         invalidateAccountState: (sourceClientId, sourceAccountId) =>
-          this.invalidateAccountState(sourceClientId, sourceAccountId),
+          this.invalidateAccountState(call, sourceClientId, sourceAccountId),
       });
       if (!account) return;
       const preparedCredential = await resolveUsageFetchCredential({
+        call,
         readCredential: this.readCredential,
         clientId,
         accountId,
@@ -455,6 +440,7 @@ export class UsageTracker {
       credential = preparedCredential.credential;
       this.cacheKeyIndex.set(key, { clientId, accountId });
       credential = await executeUsageFetch({
+        call,
         source,
         account,
         preparedCredential,
@@ -478,20 +464,15 @@ export class UsageTracker {
           (this.accountGenerations.get(cacheKey) ?? 0) === currentGeneration,
         isStopped: () => this.stopped,
         emitStaleSnapshot: (sourceClientId, sourceAccountId, cacheKey, currentGeneration) =>
-          this.emitStaleSnapshot(sourceClientId, sourceAccountId, cacheKey, currentGeneration),
-        onResolveError: (sourceClientId, error) => {
-          logAccountManagerError(`[UsageTracker] resolveUsage failed for source ${sourceClientId}:`, error);
-        },
-        onMetadataPatchError: (sourceClientId, error) => {
-          logAccountManagerError(`[UsageTracker] applyMetadataPatches failed for source ${sourceClientId}:`, error);
-        },
-        onPersistenceError: (sourceClientId, error) => {
-          logAccountManagerError(`[UsageTracker] persistChangedWindows failed for source ${sourceClientId}:`, error);
-        },
+          this.emitStaleSnapshot(call, sourceClientId, sourceAccountId, cacheKey, currentGeneration),
+        onResolveError: createSourceErrorLogger('resolveUsage'),
+        onMetadataPatchError: createSourceErrorLogger('applyMetadataPatches'),
+        onPersistenceError: createSourceErrorLogger('persistChangedWindows'),
       });
-      await this.emitPendingResetsIfFresh(clientId, accountId, key, generation);
+      await this.emitPendingResetsIfFresh(call, clientId, accountId, key, generation);
     } catch (err) {
       await handleUsageFetchError({
+        call,
         bus: this.bus,
         clientId,
         accountId,
@@ -507,15 +488,13 @@ export class UsageTracker {
         defaultErrorCooldownMs: ERROR_COOLDOWN_MS,
         isAccountGone: (cacheKey, currentGeneration) => this.isAccountGone(cacheKey, currentGeneration),
         emitStaleSnapshot: (sourceClientId, sourceAccountId, cacheKey, currentGeneration) =>
-          this.emitStaleSnapshot(sourceClientId, sourceAccountId, cacheKey, currentGeneration),
-        onUnexpectedError: (sourceClientId, error) => {
-          logAccountManagerError(`[UsageTracker] fetchAndEmit failed for source ${sourceClientId}:`, error);
-        },
+          this.emitStaleSnapshot(call, sourceClientId, sourceAccountId, cacheKey, currentGeneration),
+        onUnexpectedError: createSourceErrorLogger('fetchAndEmit'),
       });
     }
   }
-
   private async emitPendingResetsIfFresh(
+    call: CallContext,
     clientId: string,
     accountId: string,
     key: string,
@@ -525,6 +504,7 @@ export class UsageTracker {
     const fresh = this.usageCache.get(key);
     if (!fresh || fresh.stale) return;
     await checkAndEmitPendingResets({
+      call,
       bus: this.bus,
       clientId,
       accountId,
@@ -535,9 +515,15 @@ export class UsageTracker {
       isAccountGone: (cacheKey, currentGeneration) => this.isAccountGone(cacheKey, currentGeneration),
     });
   }
-
-  private async emitStaleSnapshot(clientId: string, accountId: string, key: string, generation: number): Promise<void> {
+  private async emitStaleSnapshot(
+    call: CallContext,
+    clientId: string,
+    accountId: string,
+    key: string,
+    generation: number,
+  ): Promise<void> {
     await emitStaleSnapshotIfCurrent({
+      call,
       bus: this.bus,
       clientId,
       accountId,
@@ -547,8 +533,28 @@ export class UsageTracker {
       isAccountGone: (cacheKey, currentGeneration) => this.isAccountGone(cacheKey, currentGeneration),
     });
   }
-
   private isAccountGone(key: string, generation: number): boolean {
     return this.stopped || (this.accountGenerations.get(key) ?? 0) !== generation;
   }
+}
+/**
+ * Maps the stored accounts of one source to scheduler targets.
+ * @param clientId - Source identifier the accounts belong to.
+ * @param accounts - Stored accounts of the source.
+ * @param lastFetchAt - Last fetch timestamps keyed by usage cache key.
+ * @param config - Optional per-source scheduling overrides.
+ * @returns One target per account; active accounts get the higher priority.
+ */
+function buildSchedulableTargets(
+  clientId: string,
+  accounts: readonly StoredAccount[],
+  lastFetchAt: ReadonlyMap<string, number>,
+  config: UsageSourceConfig | undefined,
+): Array<SchedulableTarget<string>> {
+  return accounts.map((account) => ({
+    key: account.id,
+    lastFetchAt: lastFetchAt.get(createUsageCacheKey(clientId, account.id)) ?? 0,
+    targetIntervalMs: resolveTargetInterval(config, account.active),
+    priority: account.active ? 2 : 1,
+  }));
 }

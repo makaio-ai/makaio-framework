@@ -1,18 +1,29 @@
-import type { MakaioBusContext, InterceptorContext, InterceptorResult, InterceptorHandler } from '../../types/index.js';
+import type { CallContext } from '@makaio/core';
+import { trackOpenHandlerCall } from '../../call-context/own-work.js';
+import type {
+  MakaioBusContext,
+  InterceptorContext,
+  InterceptorEntry,
+  InterceptorResult,
+  InterceptorHandler,
+} from '../../types/index.js';
 
 /**
  * Get interceptors registered for the exact subject.
  * Returns interceptors sorted by priority (highest first).
  * @param context - Makaio bus context containing interceptor registry
  * @param subject - Subject key to look up interceptors for
- * @returns Array of interceptor handlers in priority order
+ * @returns Array of interceptor entries (handler and owner) in priority order
  */
-function getMatchingInterceptors(context: MakaioBusContext, subject: string): Array<InterceptorHandler<unknown>> {
+function getMatchingInterceptors(
+  context: MakaioBusContext,
+  subject: string,
+): Array<InterceptorEntry<InterceptorHandler<unknown>>> {
   const entries = context.interceptorHandlers.get(subject);
   if (!entries || entries.length === 0) {
     return [];
   }
-  return entries.map((entry) => entry.handler);
+  return [...entries];
 }
 
 /**
@@ -29,6 +40,7 @@ function getMatchingInterceptors(context: MakaioBusContext, subject: string): Ar
  * synchronously, preserving immediate local-handler admission in `emit()`. The
  * first interceptor that returns a promise defers the remaining chain and local
  * handlers until it settles. A stopped chain never admits handlers.
+ * @param call - Call context of the sent message; interceptors see it as `ctx.call`
  * @param context - Makaio bus context containing interceptor registry
  * @param subject - Subject key to look up interceptors for
  * @param initialPayload - Original payload to pass through interceptor chain
@@ -37,6 +49,7 @@ function getMatchingInterceptors(context: MakaioBusContext, subject: string): Ar
  * @returns Result containing stopped flag and final payload after transformations
  */
 export function executeInterceptors<P>(
+  call: CallContext,
   context: MakaioBusContext,
   subject: string,
   initialPayload: P,
@@ -48,12 +61,13 @@ export function executeInterceptors<P>(
   // A synchronous chain must remain synchronous so emit() can admit local
   // handlers before returning. executeInterceptorChain switches to a promise
   // only after an interceptor actually returns one.
-  return executeInterceptorChain(interceptors, subject, initialPayload, messageId, correlationId);
+  return executeInterceptorChain(call, interceptors, subject, initialPayload, messageId, correlationId);
 }
 
 /**
  * Execute the interceptor chain sequentially.
- * @param interceptors - Array of interceptor handlers to execute
+ * @param call - Call context of the sent message
+ * @param interceptors - Array of interceptor entries to execute; each call is counted for the entry's owner
  * @param subject - Subject key for context
  * @param initialPayload - Original payload
  * @param messageId - Message identifier
@@ -61,7 +75,8 @@ export function executeInterceptors<P>(
  * @returns Result after running all interceptors
  */
 function executeInterceptorChain<P>(
-  interceptors: Array<InterceptorHandler<unknown>>,
+  call: CallContext,
+  interceptors: Array<InterceptorEntry<InterceptorHandler<unknown>>>,
   subject: string,
   initialPayload: P,
   messageId: string,
@@ -82,6 +97,7 @@ function executeInterceptorChain<P>(
         },
         messageId,
         correlationId,
+        call,
         stopPropagation() {
           stopped = true;
         },
@@ -93,7 +109,8 @@ function executeInterceptorChain<P>(
         },
       };
 
-      const result = interceptors[index]!(ctx as InterceptorContext<unknown>);
+      const entry = interceptors[index]!;
+      const result = trackOpenHandlerCall(entry.owner, () => entry.handler(ctx as InterceptorContext<unknown>));
       if (result instanceof Promise) {
         return result.then(() => continueFrom(index + 1));
       }

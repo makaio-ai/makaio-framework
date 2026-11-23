@@ -3,6 +3,7 @@ import { AgentNamespace } from '@makaio/contracts';
 import { ClientNamespace } from '@makaio/contracts/client';
 import { WorkflowNamespace } from '@makaio/contracts/workflow';
 import { createBusInstance } from '../bus.js';
+import { busContextOf } from '../kernel-api.js';
 import { projectSubjectTelemetryFacts } from '../observability/index.js';
 
 describe('domain subject telemetry projection', () => {
@@ -49,7 +50,7 @@ describe('domain subject telemetry projection', () => {
       },
       direction: 'outbound',
       observedAt: 2000,
-      namespaceRegistry: bus.getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(bus).namespaceRegistry,
     });
 
     expect(fact.attributes).toMatchObject({
@@ -97,7 +98,7 @@ describe('domain subject telemetry projection', () => {
       },
       direction: 'outbound',
       observedAt: 2000,
-      namespaceRegistry: bus.getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(bus).namespaceRegistry,
     });
 
     expect(fact.attributes).toEqual({
@@ -129,7 +130,7 @@ describe('domain subject telemetry projection', () => {
       },
       direction: 'outbound',
       observedAt: 2001,
-      namespaceRegistry: bus.getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(bus).namespaceRegistry,
     });
 
     expect(fact.attributes).toEqual({
@@ -168,7 +169,7 @@ describe('domain subject telemetry projection', () => {
       },
       direction: 'outbound',
       observedAt: 2001,
-      namespaceRegistry: bus.getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(bus).namespaceRegistry,
     });
 
     expect(fact.attributes).toMatchObject({

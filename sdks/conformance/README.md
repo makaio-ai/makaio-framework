@@ -38,6 +38,11 @@ The cases cover the current Makaio bus protocol shapes and SDK behavioral contra
 **Authentication:**
 - `auth-challenge-response` — HMAC-SHA256 challenge-response handshake sequence
 
+**Caller and principal:**
+- `request-with-principal-metadata` — `metadata.principal` (kind and id only) becomes the principal, the connection is the caller
+- `request-unknown-envelope-field-ignored` — an unknown envelope field is ignored
+- `request-without-metadata-is-connector-call` — a message without `metadata` is the call of the connector itself (principal equals caller)
+
 The cases cover both wire-level protocol shapes and SDK-level behavioral contracts (local
 dispatch, middleware chaining). They are meant to be consumed by SDK tests, not by the
 framework runtime.
@@ -55,6 +60,10 @@ framework runtime.
   subscription acknowledgement reply with `subscription-ack` for the same `ackId`.
 - Request messages include `timeout`, `deadline`, and optional `priority` when the scenario exercises
   request propagation.
+- `request`, `event`, and `broadcast` messages may carry an optional `metadata` object. Its only
+  defined field is `principal`, a `{ kind, id }` pair; `claims` never travel on the wire. A message
+  without `metadata` is the call of the connector itself.
+- Receivers ignore envelope fields they do not know.
 - Timestamp-like numbers are fixture-relative millisecond values, not wall-clock epoch values.
 - No-handler responses use the structured bus error shape with `message`, `code: 'NO_HANDLER'`, and
   `subject`.
@@ -77,6 +86,9 @@ The case set includes:
 - local event parallel dispatch
 - local wildcard event matching
 - HMAC auth challenge-response handshake
+- request with `metadata.principal`
+- unknown envelope field ignored
+- request without `metadata` as the connector's own call
 
 ## How To Use
 

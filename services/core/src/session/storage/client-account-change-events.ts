@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { SessionSubjects } from '@makaio/contracts';
 import type { IMakaioSession } from '@makaio/contracts';
 
@@ -64,11 +65,13 @@ export function assertSessionClientAccountStateIsConsistent(
  *
  * Storage is authoritative. Listener failures are logged but must not roll back
  * the committed session write.
+ * @param call - Call of the handled storage message
  * @param bus - Bus instance used for event emission
  * @param previous - Persisted session state before the write, when available
  * @param next - Persisted session state after the write
  */
 export function emitSessionClientAccountChangedIfNeeded(
+  call: CallContext,
   bus: IMakaioBus,
   previous: SessionClientAccountState | null,
   next: SessionClientAccountState,
@@ -95,7 +98,7 @@ export function emitSessionClientAccountChangedIfNeeded(
 
   queueMicrotask(() => {
     void Promise.resolve()
-      .then(() => bus.emit(SessionSubjects.clientAccount.changed, payload))
+      .then(() => bus.emit(call, SessionSubjects.clientAccount.changed, payload))
       .catch((error: unknown) => {
         console.error('[SessionStorage] Failed to emit session.clientAccount.changed:', error);
       });

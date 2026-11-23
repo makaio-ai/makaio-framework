@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   AdapterSubjects,
   SessionSubjects,
@@ -68,12 +69,14 @@ type ReservationAttempt =
  * `machine-identity-unavailable` cannot arise on this path either: a keyless
  * reservation never reads the machine-scoped key triple and falls back to the
  * designation sentinel, so a host with no machine identity still reserves.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus the reservation is issued on.
  * @param request - The start being reserved for.
  * @param agentId - Caller-minted agent identity the reservation is taken for.
  * @returns What the authority answered, as the start path branches on it.
  */
 async function reserveLeadStart(
+  call: CallContext,
   bus: IMakaioBus,
   request: LeadStartRequest,
   agentId: string,
@@ -81,7 +84,7 @@ async function reserveLeadStart(
   const claimToken = mintClaimToken();
   let reserved;
   try {
-    reserved = await reserveStartFor(bus, {
+    reserved = await reserveStartFor(call, bus, {
       sessionId: request.sessionId,
       agentId,
       adapterName: request.adapterName,
@@ -93,7 +96,7 @@ async function reserveLeadStart(
     });
   } catch (error) {
     await bus
-      .requestOptional(SessionSubjects.ownership.release, { agentId, claimToken, disposition: 'released' })
+      .requestOptional(call, SessionSubjects.ownership.release, { agentId, claimToken, disposition: 'released' })
       .catch(() => undefined);
     throw error;
   }
@@ -114,6 +117,7 @@ async function reserveLeadStart(
 
 /**
  * Require every response coordinate to name this exact reserved start.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus used to retire the uncertain attempt on omission.
  * @param request - Reserved start and its selected adapter/session identity.
  * @param agentId - Agent whose dispatched attempt is being checked.
@@ -124,6 +128,7 @@ async function reserveLeadStart(
  * @returns The response narrowed to a proved exact runtime owner.
  */
 async function requireStartResponseIdentity(
+  call: CallContext,
   bus: IMakaioBus,
   request: LeadStartRequest,
   agentId: string,
@@ -140,8 +145,8 @@ async function requireStartResponseIdentity(
   ) {
     return { ...result, ownerInstanceId: result.ownerInstanceId };
   }
-  await abandonDispatchedStart(bus, agentId, policy, claimTokens);
-  await stopStartedConnector(bus, request.instance.adapterId, agentId, targetOwnerInstanceId, true);
+  await abandonDispatchedStart(call, bus, agentId, policy, claimTokens);
+  await stopStartedConnector(call, bus, request.instance.adapterId, agentId, targetOwnerInstanceId, true);
   const mismatch =
     result.ownerInstanceId === undefined
       ? 'adapter omitted its owner instance'
@@ -153,6 +158,7 @@ async function requireStartResponseIdentity(
 
 /**
  * Dispatch one authority-targeted lead start and validate the answering runtime.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus carrying the adapter RPC and cleanup.
  * @param request - Resolved lead-start request.
  * @param agentId - Caller-owned agent identity.
@@ -162,6 +168,7 @@ async function requireStartResponseIdentity(
  * @returns Successful response from the exact selected runtime.
  */
 async function dispatchReservedLeadStart(
+  call: CallContext,
   bus: IMakaioBus,
   request: LeadStartRequest,
   agentId: string,
@@ -181,10 +188,10 @@ async function dispatchReservedLeadStart(
   try {
     startResult = request.dispatch
       ? await request.dispatch(payload)
-      : await bus.request(AdapterSubjects.startAgent, payload);
+      : await bus.request(call, AdapterSubjects.startAgent, payload);
   } catch (error) {
-    await abandonDispatchedStart(bus, agentId, policy, claimTokens);
-    await stopStartedConnector(bus, request.instance.adapterId, agentId, reservation.ownerInstanceId, true);
+    await abandonDispatchedStart(call, bus, agentId, policy, claimTokens);
+    await stopStartedConnector(call, bus, request.instance.adapterId, agentId, reservation.ownerInstanceId, true);
     throw error;
   }
   if (!startResult.success) {
@@ -192,14 +199,15 @@ async function dispatchReservedLeadStart(
       'start-failed',
       `[session.start] Failed to start agent (sessionId=${request.sessionId}, adapterName=${request.adapterName}): ${startResult.message}`,
     );
-    if (startResult.dispatch === 'not-dispatched') await rollbackReservedStart(bus, agentId, reservation);
+    if (startResult.dispatch === 'not-dispatched') await rollbackReservedStart(call, bus, agentId, reservation);
     else {
-      await abandonDispatchedStart(bus, agentId, policy, claimTokens);
-      await stopStartedConnector(bus, request.instance.adapterId, agentId, reservation.ownerInstanceId, true);
+      await abandonDispatchedStart(call, bus, agentId, policy, claimTokens);
+      await stopStartedConnector(call, bus, request.instance.adapterId, agentId, reservation.ownerInstanceId, true);
     }
     throw failure;
   }
   return requireStartResponseIdentity(
+    call,
     bus,
     request,
     agentId,
@@ -212,21 +220,60 @@ async function dispatchReservedLeadStart(
 
 /**
  * Undo a pre-dispatch attempt whose keyless reservation may have committed before throwing.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus the row and guarded designation are cleaned up on.
  * @param request - Lead transition whose request guard was validated by the reservation.
  * @param agentId - Caller-minted agent identity to remove.
  */
 async function rollbackUncertainLeadReservation(
+  call: CallContext,
   bus: IMakaioBus,
   request: LeadStartRequest,
   agentId: string,
 ): Promise<void> {
-  await rollbackReservedStart(bus, agentId, undefined, {
+  await rollbackReservedStart(call, bus, agentId, undefined, {
     sessionId: request.sessionId,
     agentId,
     expectedLeadAgentId: request.expectedLeadAgentId,
     transition: request.leadTransition.kind,
   });
+}
+
+/**
+ * Give back a pre-dispatch attempt whose reservation did not take.
+ * @param call - Call context of the handled message this start serves.
+ * @param bus - Bus the rollback is issued on.
+ * @param agentId - Caller-minted agent identity whose row is removed.
+ * @param attempt - The reservation answer that stopped the start.
+ * @returns The designation race this start lost.
+ * @throws A {@link SessionStartError} when the reservation was refused or the rollback is unconfirmed.
+ */
+async function resolveUnreservedAttempt(
+  call: CallContext,
+  bus: IMakaioBus,
+  agentId: string,
+  attempt: Exclude<ReservationAttempt, { kind: 'reserved' }>,
+): Promise<LeadStartResult> {
+  if (attempt.kind === 'lead-conflict') {
+    // The reserving transaction rolled back, so the row this attempt created is
+    // the only thing left to take back.
+    const rollback = await rollbackReservedStart(call, bus, agentId, undefined);
+    if (!rollback.rowDeleted) {
+      throw new SessionStartError(
+        'start-unresolved',
+        `[session.start] lost lead designation for agent ${agentId}, but its rollback could not be confirmed`,
+      );
+    }
+    return { outcome: 'lead-conflict', currentLeadAgentId: attempt.currentLeadAgentId };
+  }
+  await rollbackReservedStart(call, bus, agentId, undefined);
+  throw new SessionStartError(
+    attempt.outcome === 'session-not-active' ? 'session-not-active' : 'start-failed',
+    `[session.start] reservation for agent ${agentId} was refused: ${attempt.outcome}`,
+    undefined,
+    undefined,
+    attempt.status,
+  );
 }
 
 /**
@@ -237,12 +284,14 @@ async function rollbackUncertainLeadReservation(
  * be created under it and a movement announced during the start has a
  * legitimate writer. Everything after the dispatch is about giving back what the
  * start took when it does not end with an agent this runtime may own.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus every step is issued on.
  * @param request - The start to run.
  * @param agentId - Caller-minted agent identity, already registered with the seam.
  * @returns The started agent, or the designation race it lost.
  */
 async function runLeadStartAttempt(
+  call: CallContext,
   bus: IMakaioBus,
   request: LeadStartRequest,
   agentId: string,
@@ -265,8 +314,8 @@ async function runLeadStartAttempt(
     // and a region that started after it would leave that row behind — the same
     // reason the adapter records its own row acquisition at the write's *issue*
     // rather than at its return (I20).
-    await bus.requestOptional(AgentStorageSubjects.set, { agentId, agent });
-    attempt = await reserveLeadStart(bus, request, agentId);
+    await bus.requestOptional(call, AgentStorageSubjects.set, { agentId, agent });
+    attempt = await reserveLeadStart(call, bus, request, agentId);
   } catch (error) {
     // Nothing reached the provider, so this is the pre-dispatch cleanup: the row
     // this attempt may have stored is the only thing to take back, and leaving it
@@ -285,31 +334,10 @@ async function runLeadStartAttempt(
     // that manages either cannot enforce single ownership at all, so starting
     // anyway would make a misconfiguration indistinguishable from a supported
     // topology.
-    await rollbackUncertainLeadReservation(bus, request, agentId);
+    await rollbackUncertainLeadReservation(call, bus, request, agentId);
     throw error;
   }
-  if (attempt.kind === 'lead-conflict') {
-    // The reserving transaction rolled back, so the row this attempt created is
-    // the only thing left to take back.
-    const rollback = await rollbackReservedStart(bus, agentId, undefined);
-    if (!rollback.rowDeleted) {
-      throw new SessionStartError(
-        'start-unresolved',
-        `[session.start] lost lead designation for agent ${agentId}, but its rollback could not be confirmed`,
-      );
-    }
-    return { outcome: 'lead-conflict', currentLeadAgentId: attempt.currentLeadAgentId };
-  }
-  if (attempt.kind === 'refused') {
-    await rollbackReservedStart(bus, agentId, undefined);
-    throw new SessionStartError(
-      attempt.outcome === 'session-not-active' ? 'session-not-active' : 'start-failed',
-      `[session.start] reservation for agent ${agentId} was refused: ${attempt.outcome}`,
-      undefined,
-      undefined,
-      attempt.status,
-    );
-  }
+  if (attempt.kind !== 'reserved') return resolveUnreservedAttempt(call, bus, agentId, attempt);
 
   const { reservation } = attempt;
   const cleanupPolicy = cleanupPolicyFor(request, reservation);
@@ -329,7 +357,15 @@ async function runLeadStartAttempt(
   // reservation a fresh start takes. The settlement adds whatever generation it
   // actually wrote through.
   const claimTokens = new StartClaimTokens([reservation.claim?.claimToken]);
-  const startResult = await dispatchReservedLeadStart(bus, request, agentId, reservation, claimTokens, cleanupPolicy);
+  const startResult = await dispatchReservedLeadStart(
+    call,
+    bus,
+    request,
+    agentId,
+    reservation,
+    claimTokens,
+    cleanupPolicy,
+  );
 
   // Minted before the settle and releasable from the moment it exists: a
   // settlement whose transaction commits and whose response is then lost leaves
@@ -354,6 +390,7 @@ async function runLeadStartAttempt(
     ownerInstanceId: request.instance.ownerInstanceId,
   };
   await completeCallerOwnedStart(
+    call,
     bus,
     dispatched,
     startResult.adapterSessionId,
@@ -378,11 +415,16 @@ async function runLeadStartAttempt(
  * row is visible without an entry a concurrent consumer can join, which is what
  * lets that consumer wait for this attempt instead of opening a second
  * lifecycle for the same identity.
+ * @param call - Call context of the handled message this start serves.
  * @param bus - Bus every step is issued on.
  * @param request - The start to run.
  * @returns The started agent, or the designation race this start lost.
  */
-export async function startLeadAgent(bus: IMakaioBus, request: LeadStartRequest): Promise<LeadStartResult> {
+export async function startLeadAgent(
+  call: CallContext,
+  bus: IMakaioBus,
+  request: LeadStartRequest,
+): Promise<LeadStartResult> {
   if (toMachineScopedAdapterInstance(request.instance) === undefined) {
     throw new SessionStartError(
       'start-failed',
@@ -392,7 +434,7 @@ export async function startLeadAgent(bus: IMakaioBus, request: LeadStartRequest)
   const agentId = crypto.randomUUID();
   let result: LeadStartResult | undefined;
   await runExclusiveStart(agentId, async () => {
-    result = await runLeadStartAttempt(bus, request, agentId);
+    result = await runLeadStartAttempt(call, bus, request, agentId);
     // A lost designation race built nothing for *this* identity: the winner's
     // agent is a different one, and a joiner waiting on this attempt must not
     // read the row it never wrote as a connector of its own.

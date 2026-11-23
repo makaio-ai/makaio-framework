@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import {
   createTestableAgent,
   createAgentTestLifecycle,
@@ -36,7 +37,7 @@ describe('AIAgent idle event emission', () => {
     });
     ctx.cleanupFns.push(unsubIdle);
 
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
 
     // Initially no idle events (connector starts in idle state)
     expect(idleEvents).toHaveLength(0);
@@ -74,7 +75,7 @@ describe('AIAgent idle event emission', () => {
     });
     ctx.cleanupFns.push(unsubIdle);
 
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
 
     // Trigger various state transitions (not idle)
     ctx.agent.currentConnector.setProcessingState('processing_started');
@@ -103,7 +104,7 @@ describe('AIAgent idle event emission', () => {
     });
     ctx.cleanupFns.push(unsubIdle);
 
-    await ctx.agent.init();
+    await ctx.agent.init(createTestCall());
 
     // Swap connector (cwd change)
     const response = await MakaioBus.request(AgentSubjects.cwd.change, {

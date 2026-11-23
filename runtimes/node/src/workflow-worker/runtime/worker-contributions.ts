@@ -1,6 +1,7 @@
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { IMakaioBus } from '@makaio/bus-core';
+import { createCarrierBus } from '@makaio/bus-core/kernel-api';
 import type { NodeExtensionContext } from '@makaio/contracts';
 import type { Toolset } from '@makaio/tools-core';
 
@@ -97,6 +98,8 @@ function resolveExtensionExport(
  * - `identity` is a branded value minted by the kernel coordinator; the worker
  *   cannot mint one without a cast, so the plain `{ extensionName }` object
  *   stays outside the check.
+ * The context carries no call context: a carrier's own context comes from
+ * `bus.own(purpose)`.
  * A new required key on the contract makes {@link createWorkerToolsetContext}
  * fail to compile until it is supplied here.
  */
@@ -111,13 +114,18 @@ type WorkerToolsetContext = Omit<NodeExtensionContext, 'bus' | 'config' | 'ident
  * Workers expose their local bus and cancellation signal, but not the host
  * lifecycle/service registry. Extensions whose toolset factories depend on
  * host-only services should not be listed in the worker contribution manifest.
+ * The bus, when present, is bound to the loaded extension as its carrier.
+ * @param name - Name of the loaded extension (`ext.name`).
  * @param options - Worker-local runtime surfaces exposed during extraction.
  * @returns Context object passed to extension toolset factories.
  */
-function createWorkerToolsetContext(options?: WorkerRuntimeContributionLoadOptions): WorkerToolsetContext {
+function createWorkerToolsetContext(
+  name: string,
+  options?: WorkerRuntimeContributionLoadOptions,
+): WorkerToolsetContext {
   return Object.freeze({
-    bus: options?.bus,
-    identity: Object.freeze({ extensionName: '__worker__' }),
+    bus: options?.bus === undefined ? undefined : createCarrierBus(options.bus, { kind: 'makaio.extension', id: name }),
+    identity: Object.freeze({ extensionName: name }),
     dataDir: '',
     machineId: '',
     platform: process.platform,
@@ -203,7 +211,7 @@ async function loadSinglePackage(
   const packageToolsets: Toolset[] = [];
 
   if (ext.tools?.createToolsets) {
-    const created = ext.tools.createToolsets(createWorkerToolsetContext(options));
+    const created = ext.tools.createToolsets(createWorkerToolsetContext(ext.name, options));
     packageToolsets.push(...created);
   }
 

@@ -1,3 +1,5 @@
+import type { CallContext } from '@makaio/core';
+
 import type { ICapabilityProvider } from '../../capability/types.js';
 import type {
   VCSRepository,
@@ -59,16 +61,16 @@ export interface MergeOptions {
  *   readonly displayName = 'GitHub';
  *   readonly capabilityId = 'vcs';
  *
- *   async getRepository(repoPath: string) {
+ *   async getRepository(call: CallContext, repoPath: string) {
  *     // Detect GitHub repo and return metadata
  *   }
  *
- *   async getPullRequests(repoPath: string, branch: string) {
+ *   async getPullRequests(call: CallContext, repoPath: string, branch: string) {
  *     // Fetch PRs via GitHub API
  *   }
  *
  *   // Phase 2: Optional write operations
- *   async createPullRequest?(repoPath: string, options: CreatePROptions) {
+ *   async createPullRequest?(call: CallContext, repoPath: string, options: CreatePROptions) {
  *     // Create PR via GitHub API
  *   }
  * }
@@ -85,10 +87,11 @@ export interface IVCSProvider extends ICapabilityProvider {
    *
    * Detects if the given path is a VCS repository and returns
    * metadata about the remote repository (provider, owner, repo name, etc.).
+   * @param call - Call context of the handled VCS request
    * @param repoPath - Local filesystem path to the repository
    * @returns Repository metadata, or null if not a VCS repository
    */
-  getRepository(repoPath: string): Promise<VCSRepository | null>;
+  getRepository(call: CallContext, repoPath: string): Promise<VCSRepository | null>;
 
   // === Pull Requests ===
 
@@ -96,29 +99,32 @@ export interface IVCSProvider extends ICapabilityProvider {
    * List pull requests for a repository branch.
    *
    * Returns summary information for PRs, suitable for list views.
+   * @param call - Call context of the handled VCS request
    * @param repoPath - Local filesystem path to the repository
    * @param branch - Branch name to filter by (empty for all branches)
    * @returns Array of pull request summaries
    */
-  getPullRequests(repoPath: string, branch: string): Promise<VCSPullRequest[]>;
+  getPullRequests(call: CallContext, repoPath: string, branch: string): Promise<VCSPullRequest[]>;
 
   /**
    * Get detailed information about a specific pull request.
    *
    * Returns full PR details including reviews, labels, and assignees.
+   * @param call - Call context of the handled VCS request
    * @param repoPath - Local filesystem path to the repository
    * @param prNumber - Pull request number
    * @returns Detailed pull request information
    */
-  getPullRequest(repoPath: string, prNumber: number): Promise<VCSPullRequestDetail>;
+  getPullRequest(call: CallContext, repoPath: string, prNumber: number): Promise<VCSPullRequestDetail>;
 
   /**
    * Get open PRs that have changes affecting a specific file.
+   * @param call - Call context of the handled VCS request
    * @param repoPath - Local filesystem path to the repository
    * @param filePath - Path to file relative to repo root
    * @returns Array of pull requests affecting the file
    */
-  getPRsForFile(repoPath: string, filePath: string): Promise<VCSPullRequest[]>;
+  getPRsForFile(call: CallContext, repoPath: string, filePath: string): Promise<VCSPullRequest[]>;
 
   // === Checks ===
 
@@ -126,22 +132,24 @@ export interface IVCSProvider extends ICapabilityProvider {
    * Get CI/CD check runs for a commit.
    *
    * Returns the status of CI/CD workflows and checks for a given commit.
+   * @param call - Call context of the handled VCS request
    * @param repoPath - Local filesystem path to the repository
    * @param commitSha - Commit SHA to get checks for
    * @returns Array of check runs
    */
-  getChecks(repoPath: string, commitSha: string): Promise<VCSCheckRun[]>;
+  getChecks(call: CallContext, repoPath: string, commitSha: string): Promise<VCSCheckRun[]>;
 
   /**
    * Get commit statuses for a commit (legacy status API).
    *
    * Returns statuses reported via the commit status API (e.g., CodeRabbit).
    * Distinct from check runs which come from GitHub Actions / Apps.
+   * @param call - Call context of the handled VCS request
    * @param repoPath - Local filesystem path to the repository
    * @param commitSha - Commit SHA to get statuses for
    * @returns Array of commit statuses
    */
-  getStatuses(repoPath: string, commitSha: string): Promise<VCSCommitStatus[]>;
+  getStatuses(call: CallContext, repoPath: string, commitSha: string): Promise<VCSCommitStatus[]>;
 
   // === Review Comments ===
 
@@ -149,11 +157,12 @@ export interface IVCSProvider extends ICapabilityProvider {
    * Get review comments for a pull request.
    *
    * Returns both inline code comments and general PR comments.
+   * @param call - Call context of the handled VCS request
    * @param repoPath - Local filesystem path to the repository
    * @param prNumber - Pull request number
    * @returns Array of review comments
    */
-  getReviewComments(repoPath: string, prNumber: number): Promise<VCSReviewComment[]>;
+  getReviewComments(call: CallContext, repoPath: string, prNumber: number): Promise<VCSReviewComment[]>;
 
   // === Phase 2 Seams (Optional Write Operations) ===
 
@@ -161,42 +170,46 @@ export interface IVCSProvider extends ICapabilityProvider {
    * Create a new pull request (Phase 2).
    *
    * Optional method for providers that support PR creation.
+   * @param call - Call context of the handled VCS request
    * @param repoPath - Local filesystem path to the repository
    * @param options - PR creation options
    * @returns Created pull request information
    */
-  createPullRequest?(repoPath: string, options: CreatePROptions): Promise<VCSPullRequest>;
+  createPullRequest?(call: CallContext, repoPath: string, options: CreatePROptions): Promise<VCSPullRequest>;
 
   /**
    * Post a comment on a pull request (Phase 2).
    *
    * Optional method for providers that support posting comments.
+   * @param call - Call context of the handled VCS request
    * @param repoPath - Local filesystem path to the repository
    * @param prNumber - Pull request number
    * @param body - Comment body text
    * @returns Created comment information
    */
-  postComment?(repoPath: string, prNumber: number, body: string): Promise<VCSReviewComment>;
+  postComment?(call: CallContext, repoPath: string, prNumber: number, body: string): Promise<VCSReviewComment>;
 
   /**
    * Request reviews from users for a pull request (Phase 2).
    *
    * Optional method for providers that support review requests.
+   * @param call - Call context of the handled VCS request
    * @param repoPath - Local filesystem path to the repository
    * @param prNumber - Pull request number
    * @param reviewers - Usernames to request reviews from
    */
-  requestReview?(repoPath: string, prNumber: number, reviewers: string[]): Promise<void>;
+  requestReview?(call: CallContext, repoPath: string, prNumber: number, reviewers: string[]): Promise<void>;
 
   /**
    * Merge a pull request (Phase 2).
    *
    * Optional method for providers that support PR merging.
+   * @param call - Call context of the handled VCS request
    * @param repoPath - Local filesystem path to the repository
    * @param prNumber - Pull request number
    * @param options - Merge options
    */
-  mergePullRequest?(repoPath: string, prNumber: number, options?: MergeOptions): Promise<void>;
+  mergePullRequest?(call: CallContext, repoPath: string, prNumber: number, options?: MergeOptions): Promise<void>;
 
   // === Phase 2: Comment Write Operations ===
 
@@ -204,18 +217,26 @@ export interface IVCSProvider extends ICapabilityProvider {
    * Reply to an existing review comment (Phase 2).
    *
    * Optional method for providers that support comment replies.
+   * @param call - Call context of the handled VCS request
    * @param repoPath - Local filesystem path to the repository
    * @param prNumber - Pull request number
    * @param commentId - ID of the comment to reply to
    * @param body - Reply body text
    * @returns Created reply comment
    */
-  replyToComment?(repoPath: string, prNumber: number, commentId: number, body: string): Promise<VCSReviewComment>;
+  replyToComment?(
+    call: CallContext,
+    repoPath: string,
+    prNumber: number,
+    commentId: number,
+    body: string,
+  ): Promise<VCSReviewComment>;
 
   /**
    * Post a new inline comment on a file:line (Phase 2).
    *
    * Optional method for providers that support inline code comments.
+   * @param call - Call context of the handled VCS request
    * @param repoPath - Local filesystem path to the repository
    * @param prNumber - Pull request number
    * @param path - File path relative to repo root
@@ -226,6 +247,7 @@ export interface IVCSProvider extends ICapabilityProvider {
    * @returns Created comment
    */
   createReviewComment?(
+    call: CallContext,
     repoPath: string,
     prNumber: number,
     path: string,
@@ -240,20 +262,23 @@ export interface IVCSProvider extends ICapabilityProvider {
    *
    * Optional method for providers that support thread resolution.
    * Uses GraphQL for GitHub (resolveReviewThread mutation).
+   * @param call - Call context of the handled VCS request
    * @param repoPath - Local filesystem path to the repository
    * @param prNumber - Pull request number
    * @param threadId - Thread ID (GraphQL node ID)
    */
-  resolveThread?(repoPath: string, prNumber: number, threadId: string): Promise<void>;
+  resolveThread?(call: CallContext, repoPath: string, prNumber: number, threadId: string): Promise<void>;
 
   /**
    * Get write capability level for current user (Phase 2).
    *
    * Optional method for checking user's write permissions.
+   * @param call - Call context of the handled VCS request
    * @param repoPath - Local filesystem path to the repository
    * @returns Permission capability
    */
   getWriteCapability?(
+    call: CallContext,
     repoPath: string,
   ): Promise<{ canWrite: boolean; level: 'none' | 'read' | 'triage' | 'write' | 'maintain' | 'admin' }>;
 }

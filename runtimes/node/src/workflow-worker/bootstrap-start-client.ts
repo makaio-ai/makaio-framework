@@ -71,8 +71,11 @@ export async function bootstrapWorkerRuntime(options: BootstrapWorkerRuntimeOpti
       session.endpoint = await installOperationDeliveryEndpoint(session.connection.bus, options, {}, signal);
     },
     exchange: async (session, { signal, timeoutMs }) => {
+      const { bus } = session.connection;
       const response = ExecutionAttemptBootstrapAwaitStartResponseSchema.parse(
-        await session.connection.bus.request(
+        // ORIGIN: Worker startup requests permission on the current bootstrap connection.
+        await bus.request(
+          bus.own('start'),
           ExecutionAttemptSubjects.bootstrap.awaitStart,
           { executionAttemptId: options.executionAttemptId },
           { signal, timeout: timeoutMs },

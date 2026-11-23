@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MessageHandle } from '@makaio/ai-adapters-core';
+import { createTestCall } from '@makaio/test-utils';
 import { buildTextPrompt, extractMessageText } from '../text-prompt.js';
 
 // ---------------------------------------------------------------------------
@@ -33,6 +34,7 @@ function makeHandle(
   } = {},
 ): MessageHandle {
   return new MessageHandle(
+    createTestCall(),
     'test-message-id',
     makeMessage(text),
     'enqueue',

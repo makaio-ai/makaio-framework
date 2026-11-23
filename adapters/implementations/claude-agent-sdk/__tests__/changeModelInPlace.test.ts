@@ -9,9 +9,10 @@ import { createSessionAccountObservationRequester } from '../src/account-observa
 
 describe('ClaudeSdkConnector.changeModelInPlace()', () => {
   async function makeConnector(model = 'claude-sonnet-4-20250514'): Promise<ClaudeSdkConnector> {
-    const bus = await ClaudeCodeConnectorNamespace.scopedBus();
+    const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
     return new ClaudeSdkConnector({
       bus,
+      globalBus: MakaioBus,
       adapterId: 'adapter-test',
       adapterName: ClaudeCodeAdapterName,
       agentId: 'agent-test',

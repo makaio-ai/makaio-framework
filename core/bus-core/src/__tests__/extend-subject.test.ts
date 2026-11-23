@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '../bus.js';
+import { busContextOf } from '../kernel-api.js';
 import { z } from 'zod';
 import { createBusNamespace, observability } from '@makaio/core';
 import { projectSubjectTelemetryFacts } from '../observability/index.js';
@@ -7,7 +8,7 @@ import { projectSubjectTelemetryFacts } from '../observability/index.js';
 describe('MakaioBus.extendSubject()', () => {
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
-    MakaioBus.getContext().namespaceRegistry.__resetNamespaces?.();
+    busContextOf(MakaioBus).namespaceRegistry.__resetNamespaces?.();
   });
 
   describe('request subjects', () => {
@@ -29,12 +30,12 @@ describe('MakaioBus.extendSubject()', () => {
         ctx.setResult({ items: [String(ctx.payload.projectId ?? 'none')], total: 1 });
       });
 
-      const result = await MakaioBus.request(extended, { limit: 10, projectId: 'proj-1' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), extended, { limit: 10, projectId: 'proj-1' });
       expect(result).toEqual({ items: ['proj-1'], total: 1 });
 
       // Type safety: original subject does NOT accept extended fields
       // @ts-expect-error — projectId is not on the original subject's request type
-      await MakaioBus.request(subjects.list, { limit: 10, projectId: 'proj-1' });
+      await MakaioBus.request(MakaioBus.own('root'), subjects.list, { limit: 10, projectId: 'proj-1' });
     });
 
     it('passes validation with extended fields in dev mode', async () => {
@@ -56,7 +57,7 @@ describe('MakaioBus.extendSubject()', () => {
       });
 
       // Should not throw validation error
-      const result = await MakaioBus.request(extended, { id: '1', includeArchived: true });
+      const result = await MakaioBus.request(MakaioBus.own('root'), extended, { id: '1', includeArchived: true });
       expect(result).toEqual({ name: 'test' });
     });
 
@@ -91,7 +92,7 @@ describe('MakaioBus.extendSubject()', () => {
         },
         direction: 'local',
         observedAt: 1000,
-        namespaceRegistry: MakaioBus.getContext().namespaceRegistry,
+        namespaceRegistry: busContextOf(MakaioBus).namespaceRegistry,
       });
 
       expect(fact.attributes).toEqual({ status: 'active', projectId: 'proj-1' });
@@ -124,10 +125,13 @@ describe('MakaioBus.extendSubject()', () => {
       });
 
       await expect(
-        MakaioBus.request(extended, { title: 'factory session', workflowMetadata: { workflowId: 'wf-1' } }),
+        MakaioBus.request(MakaioBus.own('root'), extended, {
+          title: 'factory session',
+          workflowMetadata: { workflowId: 'wf-1' },
+        }),
       ).resolves.toEqual({ id: 'wf-1' });
       await expect(
-        MakaioBus.request(extended, { title: '   ', workflowMetadata: { workflowId: 'wf-1' } }),
+        MakaioBus.request(MakaioBus.own('root'), extended, { title: '   ', workflowMetadata: { workflowId: 'wf-1' } }),
       ).rejects.toThrow(/title must not be blank/);
     });
 
@@ -157,10 +161,12 @@ describe('MakaioBus.extendSubject()', () => {
         ctx.setResult({ acceptedTitle: ctx.payload.title });
       });
 
-      await expect(MakaioBus.request(extended, { title: 'factory' })).resolves.toEqual({ acceptedTitle: 'factory' });
-      await expect(MakaioBus.request(extended, { title: 'factory', mode: 'blocked' })).rejects.toThrow(
-        /mode is blocked/,
-      );
+      await expect(MakaioBus.request(MakaioBus.own('root'), extended, { title: 'factory' })).resolves.toEqual({
+        acceptedTitle: 'factory',
+      });
+      await expect(
+        MakaioBus.request(MakaioBus.own('root'), extended, { title: 'factory', mode: 'blocked' }),
+      ).rejects.toThrow(/mode is blocked/);
     });
 
     it('rejects incompatible field overrides on refined request schemas', () => {
@@ -390,7 +396,7 @@ describe('MakaioBus.extendSubject()', () => {
       });
 
       // Call with original subject (no extended fields) — still valid
-      const result = await MakaioBus.request(subjects.get, { id: '1' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), subjects.get, { id: '1' });
       expect(result).toEqual({ name: 'works' });
     });
 
@@ -412,7 +418,7 @@ describe('MakaioBus.extendSubject()', () => {
         ctx.setResult({ hits: 42, debugInfo: 'cache-miss' });
       });
 
-      const result = await MakaioBus.request(extended, { q: 'test' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), extended, { q: 'test' });
       expect(result).toEqual({ hits: 42, debugInfo: 'cache-miss' });
     });
   });
@@ -434,12 +440,12 @@ describe('MakaioBus.extendSubject()', () => {
         received = ctx.payload;
       });
 
-      await MakaioBus.emit(extended, { source: 'test', projectId: 'proj-1' });
+      await MakaioBus.emit(MakaioBus.own('root'), extended, { source: 'test', projectId: 'proj-1' });
       expect(received).toEqual({ source: 'test', projectId: 'proj-1' });
 
       // Type safety: original event subject does NOT accept extended fields
       // @ts-expect-error — projectId is not on the original subject's event type
-      await MakaioBus.emit(subjects.happened, { source: 'test', projectId: 'proj-1' });
+      await MakaioBus.emit(MakaioBus.own('root'), subjects.happened, { source: 'test', projectId: 'proj-1' });
     });
   });
 
@@ -469,7 +475,7 @@ describe('MakaioBus.extendSubject()', () => {
         ctx.setResult({ items: parts });
       });
 
-      const result = await MakaioBus.request(fullyExtended, {
+      const result = await MakaioBus.request(MakaioBus.own('root'), fullyExtended, {
         limit: 5,
         projectId: 'p1',
         workspaceId: 'w1',
@@ -514,11 +520,11 @@ describe('MakaioBus.extendSubject()', () => {
       );
 
       // With projectId → higher-priority handler responds
-      const r1 = await MakaioBus.request(extended, { limit: 5, projectId: 'p1' });
+      const r1 = await MakaioBus.request(MakaioBus.own('root'), extended, { limit: 5, projectId: 'p1' });
       expect(r1).toEqual({ count: 99 });
 
       // Without projectId → falls through to default handler
-      const r2 = await MakaioBus.request(subjects.list, { limit: 5 });
+      const r2 = await MakaioBus.request(MakaioBus.own('root'), subjects.list, { limit: 5 });
       expect(r2).toEqual({ count: 5 });
     });
   });
@@ -540,7 +546,7 @@ describe('MakaioBus.extendSubject()', () => {
         ctx.setResult({ name: 'test' });
       });
 
-      await MakaioBus.request(subjects.get, { id: '1' });
+      await MakaioBus.request(MakaioBus.own('root'), subjects.get, { id: '1' });
       expect(receivedPayload).toEqual({ id: '1' });
       expect('extraField' in receivedPayload).toBe(false);
     });
@@ -565,7 +571,7 @@ describe('MakaioBus.extendSubject()', () => {
         ctx.setResult({ name: 'test' });
       });
 
-      await MakaioBus.request(extended, { id: '1', projectId: 'proj-1' });
+      await MakaioBus.request(MakaioBus.own('root'), extended, { id: '1', projectId: 'proj-1' });
       expect(receivedPayload).toEqual({ id: '1', projectId: 'proj-1' });
     });
   });
@@ -582,7 +588,7 @@ describe('MakaioBus.extendSubject()', () => {
       );
 
       // Reset namespaces so the subject is no longer registered
-      MakaioBus.getContext().namespaceRegistry.__resetNamespaces?.();
+      busContextOf(MakaioBus).namespaceRegistry.__resetNamespaces?.();
 
       expect(() => {
         MakaioBus.extendSubject(subjects.real, { request: { x: z.string() } });
@@ -611,7 +617,7 @@ describe('MakaioBus.extendSubject()', () => {
       });
 
       // Request via extended — same subject string, routes to original handler
-      const result = await MakaioBus.request(extended, { msg: 'hello', tag: 'test' });
+      const result = await MakaioBus.request(MakaioBus.own('root'), extended, { msg: 'hello', tag: 'test' });
       expect(result).toEqual({ pong: 'hello' });
     });
   });

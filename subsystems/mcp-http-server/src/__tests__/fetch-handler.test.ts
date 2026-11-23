@@ -25,7 +25,8 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { createBusInstance } from '@makaio/bus-core';
 import { ToolSubjects } from '@makaio/contracts';
-import type { ToolExecutionContextOverrides } from '@makaio/contracts';
+import type { CallContext, ToolExecutionContextOverrides } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { createFetchMcpHandler } from '../fetch-handler.js';
 import { McpTransportRegistry } from '../mcp-transport-registry.js';
 import { createClient, mountFetchHandler, registerEmptyToolList } from './helpers.js';
@@ -131,6 +132,7 @@ describe('createFetchMcpHandler', () => {
   it('forwards a configured tool execution timeout to tool execution', async () => {
     const bus = createBusInstance();
     const requestOptional = vi.spyOn(bus, 'requestOptional');
+    let executionCall: CallContext | undefined;
     const cleanupList = bus.on(ToolSubjects.list, (ctx) => {
       ctx.setResult({
         tools: [{ name: 'echo', description: 'Echo', toolsetName: 'test', inputSchema: { type: 'object' } }],
@@ -138,6 +140,7 @@ describe('createFetchMcpHandler', () => {
       });
     });
     const cleanupExecute = bus.on(ToolSubjects.execute, (ctx) => {
+      executionCall = ctx.call;
       ctx.setResult({ success: true, data: ctx.payload.input });
     });
     const handle = await createFetchMcpHandler(bus, { toolExecutionTimeoutMs: 180_000 });
@@ -158,9 +161,13 @@ describe('createFetchMcpHandler', () => {
       await transport.close();
     }
 
-    expect(requestOptional).toHaveBeenCalledWith(ToolSubjects.execute, expect.objectContaining({ toolName: 'echo' }), {
-      timeout: 180_000,
-    });
+    expect(executionCall).toBeDefined();
+    expect(requestOptional).toHaveBeenCalledWith(
+      executionCall,
+      ToolSubjects.execute,
+      expect.objectContaining({ toolName: 'echo' }),
+      { timeout: 180_000 },
+    );
   });
 
   it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER])('rejects invalid tool execution timeout %s', async (timeout) => {
@@ -234,7 +241,7 @@ describe('createFetchMcpHandler', () => {
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toMatchObject({ error: { code: -32603 } });
 
-    await bus.emit(ToolSubjects.registryChanged, {
+    await bus.emit(createTestCall(), ToolSubjects.registryChanged, {
       revision: 1,
       reason: 'toolset-registered',
       toolsetName: 'after-failed-fetch-start',

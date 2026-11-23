@@ -4,7 +4,7 @@ import {
   registerHmacIdentitySecret,
   resolveHmacIdentityAllowedMessageSubjects,
   resolveHmacIdentityAllowedSubscriptionSubjects,
-  resolveHmacIdentityPeer,
+  resolveHmacIdentityParty,
 } from '@makaio/bus-transport-websocket';
 import {
   buildExecutionAttemptSubjectAccess,
@@ -40,37 +40,35 @@ describe('workflow execution bus access', () => {
 
     expect(registration.secret).toBe('provider-delivered-secret');
     expect(resolveWorkflowExecutionBusSecret('attempt-provisioned')).toBe('provider-delivered-secret');
-    expect(resolveHmacIdentityPeer('attempt-provisioned')).toEqual({
-      kind: 'workflow-execution-attempt',
+    expect(resolveHmacIdentityParty('attempt-provisioned')).toEqual({
+      kind: 'makaio.job-run',
       id: 'attempt-provisioned',
-      authenticated: true,
       claims: { executionId: 'exec-provisioned' },
     });
   });
 
-  it('registers with peer kind workflow-execution-attempt', () => {
+  it('registers with party kind makaio.job-run', () => {
     mintWorkflowExecutionBusSecret({
       executionAttemptId: 'attempt-1',
       executionId: 'exec-1',
     });
 
-    const peer = resolveHmacIdentityPeer('attempt-1');
-    expect(peer).toEqual({
-      kind: 'workflow-execution-attempt',
+    const party = resolveHmacIdentityParty('attempt-1');
+    expect(party).toEqual({
+      kind: 'makaio.job-run',
       id: 'attempt-1',
-      authenticated: true,
       claims: { executionId: 'exec-1' },
     });
   });
 
-  it('attaches executionId as a claim on the peer context', () => {
+  it('attaches executionId as a claim on the party', () => {
     mintWorkflowExecutionBusSecret({
       executionAttemptId: 'attempt-1',
       executionId: 'exec-1',
     });
 
-    const peer = resolveHmacIdentityPeer('attempt-1');
-    expect(peer?.claims).toEqual({ executionId: 'exec-1' });
+    const party = resolveHmacIdentityParty('attempt-1');
+    expect(party?.claims).toEqual({ executionId: 'exec-1' });
   });
 
   it('cleans up a secret by attempt id', () => {
@@ -82,7 +80,7 @@ describe('workflow execution bus access', () => {
     registration.cleanup();
 
     expect(resolveWorkflowExecutionBusSecret('attempt-1')).toBeUndefined();
-    expect(resolveHmacIdentityPeer('attempt-1')).toBeNull();
+    expect(resolveHmacIdentityParty('attempt-1')).toBeNull();
   });
 
   it('does not let an older cleanup remove a replacement secret for the same attempt', () => {
@@ -118,15 +116,14 @@ describe('workflow execution bus access', () => {
 
     // attempt-1 is gone
     expect(resolveWorkflowExecutionBusSecret('attempt-1')).toBeUndefined();
-    expect(resolveHmacIdentityPeer('attempt-1')).toBeNull();
+    expect(resolveHmacIdentityParty('attempt-1')).toBeNull();
 
     // attempt-2 is still live
     expect(resolveWorkflowExecutionBusSecret('attempt-2')).toBe(attempt2.secret);
-    const peer2 = resolveHmacIdentityPeer('attempt-2');
-    expect(peer2).toEqual({
-      kind: 'workflow-execution-attempt',
+    const party2 = resolveHmacIdentityParty('attempt-2');
+    expect(party2).toEqual({
+      kind: 'makaio.job-run',
       id: 'attempt-2',
-      authenticated: true,
       claims: { executionId: 'exec-1' },
     });
   });
@@ -157,7 +154,7 @@ describe('workflow execution bus access', () => {
       expect(resolveWorkflowExecutionBusSecret('attempt-rot')).toBe(rotated.secret);
     });
 
-    it('preserves peer kind and claims after rotation', () => {
+    it('preserves party kind and claims after rotation', () => {
       mintWorkflowExecutionBusSecret({
         executionAttemptId: 'attempt-rot',
         executionId: 'exec-1',
@@ -167,11 +164,10 @@ describe('workflow execution bus access', () => {
         executionId: 'exec-1',
       });
 
-      const peer = resolveHmacIdentityPeer('attempt-rot');
-      expect(peer).toEqual({
-        kind: 'workflow-execution-attempt',
+      const party = resolveHmacIdentityParty('attempt-rot');
+      expect(party).toEqual({
+        kind: 'makaio.job-run',
         id: 'attempt-rot',
-        authenticated: true,
         claims: { executionId: 'exec-1' },
       });
     });
@@ -198,7 +194,7 @@ describe('workflow execution bus access', () => {
         }),
       ).toThrow(/not registered for execution "exec-other"/);
       expect(resolveWorkflowExecutionBusSecret('attempt-rot')).toBe(original.secret);
-      expect(resolveHmacIdentityPeer('attempt-rot')?.claims).toEqual({
+      expect(resolveHmacIdentityParty('attempt-rot')?.claims).toEqual({
         executionId: 'exec-original',
       });
     });
@@ -272,9 +268,9 @@ describe('workflow execution bus access', () => {
       expect(resolveWorkflowExecutionBusSecret(executionAttemptId)).toBeUndefined();
     });
 
-    it('refuses an identity registered for another peer kind', () => {
+    it('refuses an identity registered for another party kind', () => {
       registerHmacIdentitySecret('attempt-wrong-kind', 'test-secret', {
-        peerKind: 'worker-bootstrap',
+        partyKind: 'test.worker-bootstrap',
         claims: { executionId: 'exec-wrong-kind' },
       });
 
@@ -392,7 +388,7 @@ describe('workflow execution bus access', () => {
       const afterMint = resolveHmacIdentityAllowedMessageSubjects(executionAttemptId);
       expect(afterMint).toEqual(new Set(['agent.started', 'execution-attempt.runtime.register']));
 
-      // Second call: rotate — peer metadata (including allowedMessageSubjects) is preserved exactly.
+      // Second call: rotate — party metadata (including allowedMessageSubjects) is preserved exactly.
       mintOrRotateWorkflowExecutionBusSecret({ executionAttemptId, executionId });
       const afterRotate = resolveHmacIdentityAllowedMessageSubjects(executionAttemptId);
       expect(afterRotate).toEqual(new Set(['agent.started', 'execution-attempt.runtime.register']));

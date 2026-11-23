@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { evaluateSync, type ExpressionContext } from '@makaio/expression';
 import type {
   JsonValue,
@@ -37,7 +38,11 @@ export const WORKFLOW_START_ACTION_TYPE = 'workflow.start';
  */
 function createWorkflowStartFactory(bus: IMakaioBus): TransitionActionFactory {
   return (): TransitionActionHandler => ({
-    async execute(invocation: TransitionActionInvocation, context: TransitionEvaluationContext): Promise<void> {
+    async execute(
+      call: CallContext,
+      invocation: TransitionActionInvocation,
+      context: TransitionEvaluationContext,
+    ): Promise<void> {
       const { input = {} } = invocation;
       const { workflowId } = input;
 
@@ -47,7 +52,7 @@ function createWorkflowStartFactory(bus: IMakaioBus): TransitionActionFactory {
         );
       }
 
-      await bus.request(WorkflowSubjects.start, {
+      await bus.request(call, WorkflowSubjects.start, {
         workflowId,
         input: resolveWorkflowStartInput(input, context),
         config: input['config'] as Record<string, unknown> | undefined,
@@ -188,11 +193,16 @@ export class TransitionActionRegistry {
    *
    * Creates a fresh handler via the registered factory, then delegates
    * execution to the handler's `execute` method.
+   * @param call - Call context of the triggering artifact event, passed to the handler.
    * @param invocation - Action invocation descriptor from the matched rule.
    * @param context - Evaluation context from the triggering artifact event.
    * @throws If no factory is registered for `invocation.type`.
    */
-  public async dispatch(invocation: TransitionActionInvocation, context: TransitionEvaluationContext): Promise<void> {
+  public async dispatch(
+    call: CallContext,
+    invocation: TransitionActionInvocation,
+    context: TransitionEvaluationContext,
+  ): Promise<void> {
     const factory = this.factories.get(invocation.type);
     if (!factory) {
       throw new Error(
@@ -201,7 +211,7 @@ export class TransitionActionRegistry {
       );
     }
     const handler = factory();
-    await handler.execute(invocation, context);
+    await handler.execute(call, invocation, context);
   }
 
   /**

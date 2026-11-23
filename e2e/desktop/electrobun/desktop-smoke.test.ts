@@ -4,7 +4,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBusContext, createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { busContextOf, createBusContext } from '@makaio/bus-core/kernel-api';
+import { createTestCall } from '@makaio/test-utils';
 import { startBusServer, type BusServer } from '@makaio/bus-server';
 import { HostSubjects, type WindowState } from '@makaio/host-shared';
 import { UiSubjects } from '@makaio/ui-kernel';
@@ -149,13 +151,13 @@ describe('waitForUiReady host lifecycle', { timeout: 10_000 }, () => {
     const exit = host.waitForExit();
     expect(host.waitForExit()).toBe(exit);
     const wait = waitForUiReady(bus, 'electrobun', host, 60_000);
-    expect(bus.getContext().eventHandlers.size).toBe(1);
+    expect(busContextOf(bus).eventHandlers.size).toBe(1);
     await host.sendSignal('SIGTERM');
     // Crossing an event-loop turn exercises the early rejection without a caller observer.
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(await exit).toEqual({ code: null, signal: 'SIGTERM' });
-    expect(bus.getContext().eventHandlers.size).toBe(0);
+    expect(busContextOf(bus).eventHandlers.size).toBe(0);
     await expect(wait).rejects.toThrow(
       '[waitForUiReady] Host exited before ui.ready for electrobun (code=null, signal=SIGTERM)',
     );
@@ -166,17 +168,17 @@ describe('waitForUiReady host lifecycle', { timeout: 10_000 }, () => {
     expect(await host.waitForExit()).toEqual({ code: 23, signal: null });
 
     await expect(waitForUiReady(bus, 'electrobun', host, 60_000)).rejects.toThrow('code=23, signal=null');
-    expect(bus.getContext().eventHandlers.size).toBe(0);
+    expect(busContextOf(bus).eventHandlers.size).toBe(0);
   });
 
   it('returns the requested surface and preserves success when the host exits later', async () => {
     const wait = waitForUiReady(bus, 'electrobun', host, 60_000);
-    await bus.emit(UiSubjects.ready, { surface: 'electron', timestamp: 1 });
-    expect(bus.getContext().eventHandlers.size).toBe(1);
+    await bus.emit(createTestCall(), UiSubjects.ready, { surface: 'electron', timestamp: 1 });
+    expect(busContextOf(bus).eventHandlers.size).toBe(1);
     const ready = { surface: 'electrobun' as const, timestamp: 2 };
-    await bus.emit(UiSubjects.ready, ready);
+    await bus.emit(createTestCall(), UiSubjects.ready, ready);
     await expect(wait).resolves.toEqual(ready);
-    expect(bus.getContext().eventHandlers.size).toBe(0);
+    expect(busContextOf(bus).eventHandlers.size).toBe(0);
 
     await host.sendSignal('SIGTERM');
     await expect(wait).resolves.toEqual(ready);
@@ -186,7 +188,7 @@ describe('waitForUiReady host lifecycle', { timeout: 10_000 }, () => {
     const wait = waitForUiReady(bus, 'electrobun', host, 10);
     await new Promise<void>((resolve) => setTimeout(resolve, 25));
 
-    expect(bus.getContext().eventHandlers.size).toBe(0);
+    expect(busContextOf(bus).eventHandlers.size).toBe(0);
     await expect(wait).rejects.toThrow('once() timed out after 10ms');
   });
 });

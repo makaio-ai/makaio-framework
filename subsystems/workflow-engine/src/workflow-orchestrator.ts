@@ -1,9 +1,9 @@
 /* eslint max-lines: ["error", { "max": 445, "skipBlankLines": true, "skipComments": true }], max-lines-per-function: ["error", { "max": 100, "skipBlankLines": true, "skipComments": true }] */
 import * as os from 'node:os';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   WORKFLOW_CANCELLED_REASON,
-  type ArtifactRevision,
   LoopGateHandler,
   StationHandler,
   WorkflowZodSchemas,
@@ -25,6 +25,7 @@ import { buildResumeFrameIndex } from './runtime/resume-frames.js';
 import { assertLoopGateHandlersPresent } from './runtime/loop-gate-handlers.js';
 import { persistLoadedExecutionStart } from './workflow-execution-start.js';
 import { persistAuthorityLoadedState } from './authority-state-bootstrap.js';
+import { buildWorkflowRunResult, type RuntimeSequenceResult } from './workflow-run-result.js';
 
 // ─────────────────────────────────────────────────────────────
 // Public types
@@ -54,6 +55,8 @@ export interface LoadedWorkflow {
  * Input parameters for {@link runWorkflowOrchestrator}.
  */
 interface WorkflowOrchestratorParams {
+  /** Call context of the run; set by the run entry and forwarded by every send of the run. */
+  readonly call: CallContext;
   /** Parsed and validated worker configuration. */
   readonly config: WorkflowWorkerConfig;
   /** Loaded workflow with definition and runtime handler map. */
@@ -73,6 +76,7 @@ interface WorkflowOrchestratorParams {
  *
  * Used for the fast-path cases (pre-scheduler abort, zero-node workflow)
  * so an immediately terminal execution still appears in storage.
+ * @param call - Call context of the run.
  * @param bus - Worker-local bus.
  * @param config - Worker configuration for execution identifiers.
  * @param status - Terminal status to write.
@@ -80,24 +84,25 @@ interface WorkflowOrchestratorParams {
  * @returns Terminal workflow run result.
  */
 async function persistPreRuntimeTerminalExecution(
+  call: CallContext,
   bus: IMakaioBus,
   config: WorkflowWorkerConfig,
   status: 'completed' | 'cancelled',
   reason?: string,
 ): Promise<WorkflowRunResult> {
-  const execution = await buildPreRuntimeTerminalExecution(bus, config, status);
+  const execution = await buildPreRuntimeTerminalExecution(call, bus, config, status);
 
-  await bus.request(WorkflowStorageSubjects.setExecution, { execution });
+  await bus.request(call, WorkflowStorageSubjects.setExecution, { execution });
 
   if (status === 'completed') {
-    await bus.emit(WorkflowSubjects.execution.completed, {
+    await bus.emit(call, WorkflowSubjects.execution.completed, {
       executionId: config.executionId,
       workflowId: config.workflowId,
       totalDuration: 0,
       completedAt: execution.completedAt,
     });
   } else {
-    await bus.emit(WorkflowSubjects.execution.cancelled, {
+    await bus.emit(call, WorkflowSubjects.execution.cancelled, {
       executionId: config.executionId,
       workflowId: config.workflowId,
       reason,
@@ -116,51 +121,12 @@ async function persistPreRuntimeTerminalExecution(
   return { executionId: config.executionId, workflowId: config.workflowId, status: 'completed' };
 }
 
-/**
- * Convert the settled execution state into the worker runner result.
- * @param config - Worker configuration carrying stable execution identifiers.
- * @param result - Settled runtime sequence result.
- * @returns Serializable workflow runner result.
- */
-function buildWorkflowRunResult(config: WorkflowWorkerConfig, result: RuntimeSequenceResult): WorkflowRunResult {
-  if (result.status === 'completed') {
-    return {
-      executionId: config.executionId,
-      workflowId: config.workflowId,
-      status: 'completed',
-      ...(result.artifact !== undefined ? { artifact: result.artifact } : {}),
-    };
-  }
-  if (result.status === 'cancelled') {
-    return {
-      executionId: config.executionId,
-      workflowId: config.workflowId,
-      status: 'cancelled',
-      ...(result.reason !== undefined ? { reason: result.reason } : {}),
-    };
-  }
-  if (result.status === 'paused') {
-    return {
-      executionId: config.executionId,
-      workflowId: config.workflowId,
-      status: 'paused',
-      pausedAtGateId: result.pausedAtGateId,
-      pausedAtFrameId: result.pausedAtFrameId,
-    };
-  }
-  return {
-    executionId: config.executionId,
-    workflowId: config.workflowId,
-    status: 'failed',
-    error: result.error,
-  };
-}
-
 // ─────────────────────────────────────────────────────────────
 // Signal cancellation binding
 // ─────────────────────────────────────────────────────────────
 
 interface SignalCancellationBindingParams {
+  readonly call: CallContext;
   readonly signal: AbortSignal;
   readonly executionId: string;
   readonly bus: IMakaioBus;
@@ -185,6 +151,7 @@ function bindSignalCancellation(params: SignalCancellationBindingParams): () => 
 
   const cancelFromSignal = (): void => {
     cancellationTask = cancelExecution(
+      params.call,
       {
         bus: params.bus,
         activeExecutions: params.activeExecutions,
@@ -219,42 +186,34 @@ function bindSignalCancellation(params: SignalCancellationBindingParams): () => 
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Result type from {@link runRuntimeSequence}.
- *
- * Discriminated on `status` so callers can access gate identity fields without
- * runtime guards after narrowing to `'paused'`.
- */
-type RuntimeSequenceResult =
-  | { readonly status: 'completed'; readonly artifact?: ArtifactRevision }
-  | { readonly status: 'failed'; readonly error: string }
-  | { readonly status: 'cancelled'; readonly reason?: string }
-  | {
-      readonly status: 'paused';
-      /** Node ID of the gate at which execution was suspended. */
-      readonly pausedAtGateId: string;
-      /** Frame ID of the suspended gate instance. */
-      readonly pausedAtFrameId: string;
-    };
-
-/**
  * Resolve the durable execution start timestamp when a worker is re-dispatched.
+ * @param call - Call context of the run.
  * @param bus - Worker-local bus that may expose workflow storage.
  * @param executionId - Execution identifier to inspect.
  * @returns Persisted start timestamp, or `undefined` when no row/handler exists.
  */
-async function loadPersistedExecutionStartedAt(bus: IMakaioBus, executionId: string): Promise<number | undefined> {
-  const result = await bus.requestOptional(WorkflowStorageSubjects.getExecution, { executionId });
+async function loadPersistedExecutionStartedAt(
+  call: CallContext,
+  bus: IMakaioBus,
+  executionId: string,
+): Promise<number | undefined> {
+  const result = await bus.requestOptional(call, WorkflowStorageSubjects.getExecution, { executionId });
   return result.handled ? (result.data.execution?.startedAt ?? undefined) : undefined;
 }
 
 /**
  * Build the live execution row for worker startup while preserving durable
  * execution metadata across exit-based re-dispatches.
+ * @param call - Call context of the run.
  * @param bus - Worker-local bus that may expose workflow storage.
  * @param config - Worker configuration for execution identifiers and inputs.
  * @returns Running execution row ready for persistence.
  */
-async function buildRunningExecution(bus: IMakaioBus, config: WorkflowWorkerConfig): Promise<WorkflowExecution> {
+async function buildRunningExecution(
+  call: CallContext,
+  bus: IMakaioBus,
+  config: WorkflowWorkerConfig,
+): Promise<WorkflowExecution> {
   return {
     id: config.executionId,
     workflowId: config.workflowId,
@@ -262,7 +221,7 @@ async function buildRunningExecution(bus: IMakaioBus, config: WorkflowWorkerConf
     status: 'running',
     inputs: config.inputs,
     config: config.config ?? {},
-    startedAt: (await loadPersistedExecutionStartedAt(bus, config.executionId)) ?? Date.now(),
+    startedAt: (await loadPersistedExecutionStartedAt(call, bus, config.executionId)) ?? Date.now(),
     triggerPayload: config.triggerPayload,
     ...(config.artifactRef !== undefined ? { artifactRef: config.artifactRef } : {}),
     scope: config.scope,
@@ -272,12 +231,14 @@ async function buildRunningExecution(bus: IMakaioBus, config: WorkflowWorkerConf
 /**
  * Build an immediate terminal execution row while preserving the original start
  * timestamp when this worker is re-dispatched for a paused execution.
+ * @param call - Call context of the run.
  * @param bus - Worker-local bus that may expose workflow storage.
  * @param config - Worker configuration for execution identifiers and inputs.
  * @param status - Terminal status to persist.
  * @returns Terminal execution row ready for persistence.
  */
 async function buildPreRuntimeTerminalExecution(
+  call: CallContext,
   bus: IMakaioBus,
   config: WorkflowWorkerConfig,
   status: 'completed' | 'cancelled',
@@ -290,7 +251,7 @@ async function buildPreRuntimeTerminalExecution(
     status,
     inputs: config.inputs,
     config: config.config ?? {},
-    startedAt: (await loadPersistedExecutionStartedAt(bus, config.executionId)) ?? completedAt,
+    startedAt: (await loadPersistedExecutionStartedAt(call, bus, config.executionId)) ?? completedAt,
     completedAt,
     triggerPayload: config.triggerPayload,
     ...(config.artifactRef !== undefined ? { artifactRef: config.artifactRef } : {}),
@@ -309,6 +270,7 @@ async function buildPreRuntimeTerminalExecution(
  * exit-based value), persisted frames are loaded from storage and indexed into
  * a {@link ResumeFrameIndex} so the sequence executor can skip already-completed
  * nodes and reuse waiting gate frames without re-opening them.
+ * @param call - Call context of the run.
  * @param config - Worker configuration carrying execution identifiers.
  * @param definition - Workflow definition to execute.
  * @param liveExecution - The live execution record.
@@ -321,6 +283,7 @@ async function buildPreRuntimeTerminalExecution(
  * @returns Terminal status and optional error message.
  */
 async function runRuntimeSequence(
+  call: CallContext,
   config: WorkflowWorkerConfig,
   definition: WorkflowDefinition,
   liveExecution: WorkflowExecution,
@@ -336,10 +299,11 @@ async function runRuntimeSequence(
   // sequence executor can skip completed nodes and reuse waiting gate frames.
   const resumeFrames =
     suspensionStrategy !== 'wait-in-process'
-      ? await loadResumeFrames(config.executionId, bus, { required: true })
+      ? await loadResumeFrames(call, config.executionId, bus, { required: true })
       : undefined;
 
   const artifactBinding = await resolveWorkflowArtifactBinding({
+    call,
     definition,
     execution: liveExecution,
     runContext,
@@ -368,7 +332,7 @@ async function runRuntimeSequence(
     { executionAttemptId, suspensionStrategy, resumeFrames, runtimeLoopGates },
   );
   const expressionCtx = runtimeCtx.buildExpressionContext();
-  const outcome = await executeSequence(definition.root, runtimeCtx, expressionCtx);
+  const outcome = await executeSequence(call, definition.root, runtimeCtx, expressionCtx);
 
   if (outcome.status === 'failed') {
     return { status: 'failed', error: outcome.error };
@@ -393,18 +357,20 @@ async function runRuntimeSequence(
  * case for exit-based workers. When frame storage is required, missing handlers
  * or storage errors are surfaced so a paused-run resume cannot silently restart
  * as a fresh execution and duplicate side effects.
+ * @param call - Call context of the run.
  * @param executionId - Execution identifier to load frames for.
  * @param bus - Worker-local bus.
  * @param options - Resume-frame loading behavior.
  * @returns Populated resume frame index, or `undefined` when no frames exist.
  */
 async function loadResumeFrames(
+  call: CallContext,
   executionId: string,
   bus: IMakaioBus,
   options: { readonly required?: boolean } = {},
 ): Promise<ReturnType<typeof buildResumeFrameIndex>> {
   try {
-    const result = await bus.requestOptional(WorkflowStorageSubjects.listFrames, { executionId });
+    const result = await bus.requestOptional(call, WorkflowStorageSubjects.listFrames, { executionId });
     if (!result.handled) {
       if (options.required === true) {
         throw new Error(`Frame storage handler is required to resume execution '${executionId}'.`);
@@ -459,6 +425,7 @@ function buildWorkerRunContext(config: WorkflowWorkerConfig, definition: Workflo
  *
  * Paused is not a terminal status: `completedAt` is not set and the distinct
  * `execution.paused` event (not `execution.completed`) notifies host runners.
+ * @param call - Call context of the run.
  * @param bus - Worker-local bus.
  * @param config - Worker configuration carrying execution identifiers.
  * @param liveExecution - The live execution record (mutated to `paused` status).
@@ -466,6 +433,7 @@ function buildWorkerRunContext(config: WorkflowWorkerConfig, definition: Workflo
  * @param pausedAtFrameId - Frame ID of the suspended gate instance.
  */
 async function persistPausedExecution(
+  call: CallContext,
   bus: IMakaioBus,
   config: WorkflowWorkerConfig,
   liveExecution: WorkflowExecution,
@@ -473,8 +441,8 @@ async function persistPausedExecution(
   pausedAtFrameId: string,
 ): Promise<void> {
   liveExecution.status = 'paused';
-  await bus.request(WorkflowStorageSubjects.setExecution, { execution: liveExecution });
-  await bus.emit(WorkflowSubjects.execution.paused, {
+  await bus.request(call, WorkflowStorageSubjects.setExecution, { execution: liveExecution });
+  await bus.emit(call, WorkflowSubjects.execution.paused, {
     executionId: config.executionId,
     workflowId: config.workflowId,
     pausedAtGateId,
@@ -484,6 +452,7 @@ async function persistPausedExecution(
 
 /**
  * Emit the terminal lifecycle event for a completed execution.
+ * @param call - Call context of the run.
  * @param bus - Worker-local bus.
  * @param config - Worker configuration carrying execution identifiers.
  * @param status - Terminal status.
@@ -492,6 +461,7 @@ async function persistPausedExecution(
  * @param error - Error message for failed executions.
  */
 async function emitTerminalExecutionEvent(
+  call: CallContext,
   bus: IMakaioBus,
   config: WorkflowWorkerConfig,
   status: 'completed' | 'failed' | 'cancelled',
@@ -500,21 +470,21 @@ async function emitTerminalExecutionEvent(
   error?: string,
 ): Promise<void> {
   if (status === 'completed') {
-    await bus.emit(WorkflowSubjects.execution.completed, {
+    await bus.emit(call, WorkflowSubjects.execution.completed, {
       executionId: config.executionId,
       workflowId: config.workflowId,
       totalDuration: completedAt - liveExecution.startedAt,
       completedAt,
     });
   } else if (status === 'cancelled') {
-    await bus.emit(WorkflowSubjects.execution.cancelled, {
+    await bus.emit(call, WorkflowSubjects.execution.cancelled, {
       executionId: config.executionId,
       workflowId: config.workflowId,
       reason: WORKFLOW_CANCELLED_REASON,
       completedAt,
     });
   } else {
-    await bus.emit(WorkflowSubjects.execution.failed, {
+    await bus.emit(call, WorkflowSubjects.execution.failed, {
       executionId: config.executionId,
       workflowId: config.workflowId,
       error: error ?? 'Workflow execution failed',
@@ -549,11 +519,11 @@ async function emitTerminalExecutionEvent(
  * on the bus before calling this function. When `setExecutionStart` is
  * available, the orchestrator checkpoints the loaded run context before
  * scheduling nodes; the runtime writes frame state on each transition.
- * @param params - Orchestrator parameters including config, loaded workflow, bus, and signal.
+ * @param params - Orchestrator parameters including call, config, loaded workflow, bus, and signal.
  * @returns Workflow run result with status `completed`, `failed`, `cancelled`, or `paused`.
  */
 export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams): Promise<WorkflowRunResult> {
-  const { config, loaded, bus, signal } = params;
+  const { call, config, loaded, bus, signal } = params;
   const { definition } = loaded;
 
   if (signal.aborted) {
@@ -565,14 +535,14 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
         reason: WORKFLOW_CANCELLED_REASON,
       };
     }
-    return persistPreRuntimeTerminalExecution(bus, config, 'cancelled', WORKFLOW_CANCELLED_REASON);
+    return persistPreRuntimeTerminalExecution(call, bus, config, 'cancelled', WORKFLOW_CANCELLED_REASON);
   }
 
-  const liveExecution = await buildRunningExecution(bus, config);
+  const liveExecution = await buildRunningExecution(call, bus, config);
   const runContext = buildWorkerRunContext(config, definition);
   if (config.terminalAuthority !== 'authority')
-    await persistLoadedExecutionStart(bus, liveExecution, runContext, definition);
-  else await persistAuthorityLoadedState(bus, runContext, definition);
+    await persistLoadedExecutionStart(call, bus, liveExecution, runContext, definition);
+  else await persistAuthorityLoadedState(call, bus, runContext, definition);
 
   const runtimeHandlers = new Map<string, StationHandler>(loaded.runtimeHandlers);
   const runtimeLoopGates = loaded.runtimeLoopGates ?? new Map<string, LoopGateHandler>();
@@ -595,6 +565,7 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
     config.terminalAuthority === 'authority'
       ? async (): Promise<boolean> => false
       : bindSignalCancellation({
+          call,
           signal,
           executionId: config.executionId,
           bus,
@@ -614,6 +585,7 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
     if (definition.root.nodes.length > 0) {
       assertLoopGateHandlersPresent(definition, runtimeLoopGates);
       result = await runRuntimeSequence(
+        call,
         config,
         definition,
         liveExecution,
@@ -646,7 +618,7 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
   // distinct lifecycle event so host runners can checkpoint state and exit.
   if (result.status === 'paused') {
     if (config.terminalAuthority !== 'authority') {
-      await persistPausedExecution(bus, config, liveExecution, result.pausedAtGateId, result.pausedAtFrameId);
+      await persistPausedExecution(call, bus, config, liveExecution, result.pausedAtGateId, result.pausedAtFrameId);
     }
     return buildWorkflowRunResult(config, result);
   }
@@ -660,8 +632,8 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
   liveExecution.status = result.status;
   liveExecution.completedAt = completedAt;
   liveExecution.error = terminalError;
-  await bus.request(WorkflowStorageSubjects.setExecution, { execution: liveExecution });
-  await emitTerminalExecutionEvent(bus, config, result.status, liveExecution, completedAt, terminalError);
+  await bus.request(call, WorkflowStorageSubjects.setExecution, { execution: liveExecution });
+  await emitTerminalExecutionEvent(call, bus, config, result.status, liveExecution, completedAt, terminalError);
 
   return buildWorkflowRunResult(config, result);
 }

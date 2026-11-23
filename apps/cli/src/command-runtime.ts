@@ -9,6 +9,7 @@ import type {
 } from '@makaio/kernel/cli';
 import { readCancellation } from '@makaio/kernel';
 import { formatConnectionError } from './connection-error.js';
+import { rootCallFor } from './schema-adapter.js';
 import { installHostShutdown, resourceStepStopBudgetMs } from '@makaio/runtime-node';
 import { CLI_COMMAND_ABORT_SIGNALS, CLI_COMMAND_SIGNAL_EXIT_CODES, outerBoundMs } from '@makaio/utils';
 
@@ -339,7 +340,8 @@ export async function finishCommand(
  * received during embedded boot or `beforeRun` still abort the handler signal
  * while outer `finally` blocks dispose command-owned resources.
  * @param args - Parsed command arguments.
- * @param bus - Connected bus instance.
+ * @param bus - Effective command bus (connected or embedded), or `null` when offline. The context's `call` is
+ *   the root call context of this bus; offline it comes from the process bus.
  * @param signalContext - Optional pre-created signal context for this invocation.
  * @returns Context and a `finish` function that gives the process signals back.
  */
@@ -350,6 +352,7 @@ export function createProcessCommandContext<TArgs>(
 ): ProcessCommandContextResult<TArgs> {
   const context: CommandContext<TArgs> = {
     args,
+    call: rootCallFor(bus),
     bus,
     output: {
       write: (text: string) => void process.stdout.write(text),

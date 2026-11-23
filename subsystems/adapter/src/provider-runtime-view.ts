@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   ResolvedProviderContextSchema,
   type ResolvedProviderAuth,
@@ -50,12 +51,14 @@ export interface ProviderRuntimeContextView {
  * The selected auth method is validated against provider/client definition
  * storage before the refs-only context is emitted. Invalid, disabled, or
  * dangling configs fail here and never become an inferred/ambient fallback.
+ * @param call - Call context of the handled message this assembly serves.
  * @param bus - Bus used to resolve provider/client definition metadata.
  * @param providerConfigId - Provider config identifier.
  * @param raw - Raw canonical provider-config file from the captured snapshot.
  * @returns Validated refs-only context plus the exact provider definition used.
  */
 export async function buildProviderRuntimeContextFromRaw(
+  call: CallContext,
   bus: IMakaioBus,
   providerConfigId: string,
   raw: ProviderConfigFile,
@@ -67,7 +70,7 @@ export async function buildProviderRuntimeContextFromRaw(
     );
   }
 
-  const validated = await validateProviderConfigAuth(bus, raw.definitionId, raw.auth);
+  const validated = await validateProviderConfigAuth(call, bus, raw.definitionId, raw.auth);
   assertProviderConfigAuthDefinitionsEnabled(validated);
   const auth = buildResolvedProviderAuth(raw.auth, validated.method);
   const endpointOverrides = { ...(validated.provider.endpoints ?? {}), ...(raw.endpointOverrides ?? {}) };

@@ -327,7 +327,7 @@ export function registerRuntimeHandlers(
     );
 
     cleanups.push(
-      bus.on(ProviderRuntimeSubjects.listModelFetchAdapters, async ({ payload, setResult }) => {
+      bus.on(ProviderRuntimeSubjects.listModelFetchAdapters, async ({ call, payload, setResult }) => {
         const adapterNames: string[] = [];
         for (const adapterDef of getLoadedAdapters()) {
           const adapterId = adapterDef.options.adapterId;
@@ -341,7 +341,7 @@ export function registerRuntimeHandlers(
           }
 
           try {
-            await resolveAdapterRuntimeSnapshot(bus, {
+            await resolveAdapterRuntimeSnapshot(call, bus, {
               adapterName: adapterDef.name,
               providerConfigId: payload.providerConfigId,
             });
@@ -358,13 +358,13 @@ export function registerRuntimeHandlers(
     );
 
     cleanups.push(
-      bus.on(ProviderRuntimeSubjects.fetchModels, async ({ payload, setResult }) => {
+      bus.on(ProviderRuntimeSubjects.fetchModels, async ({ call, payload, setResult }) => {
         const adapterDef = getLoadedAdapters().find((adapter) => adapter.name === payload.adapterName);
         if (!adapterDef) {
           throw new Error(`Adapter '${payload.adapterName}' is not loaded for live model discovery`);
         }
 
-        const runtime = await resolveAdapterRuntimeSnapshot(bus, {
+        const runtime = await resolveAdapterRuntimeSnapshot(call, bus, {
           adapterName: adapterDef.name,
           providerConfigId: payload.providerConfigId,
         });
@@ -380,8 +380,8 @@ export function registerRuntimeHandlers(
         }
 
         const baseUrl = resolveModelFetchBaseUrl(runtime);
-        const auth = await resolveBoundProviderAuth(runtime.boundProviderAuth, (refs) =>
-          resolveConnectorCredentials(bus, refs),
+        const auth = await resolveBoundProviderAuth(call, runtime.boundProviderAuth, (resolverCall, refs) =>
+          resolveConnectorCredentials(resolverCall, bus, refs),
         );
         const models = await (instance as AdapterWithFetchModels).fetchModels(baseUrl, auth);
         setResult({ models });

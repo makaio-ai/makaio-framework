@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { evaluateSync, type ExpressionContext } from '@makaio/expression';
 import { ArtifactSubjects } from '@makaio/contracts';
 import type {
@@ -84,6 +85,8 @@ export function makeWorkflowActor(executionId: string): ArtifactActor {
  * Options for {@link resolveOrCreateArtifactBinding}.
  */
 export interface ArtifactBindingResolutionOptions {
+  /** Call of the handled message the binding is resolved for; forwarded to the artifact service requests. */
+  readonly call: CallContext;
   /**
    * Authoring-time options from the workflow's `.artifact()` call.
    * Carries the `schema` Zod validator, `statusPath`, and optional `resolve`
@@ -115,6 +118,8 @@ export interface ArtifactBindingResolutionOptions {
  * Options for resolving the artifact binding declared on a workflow definition.
  */
 export interface WorkflowArtifactBindingResolutionOptions {
+  /** Call of the handled message the binding is resolved for; forwarded to the artifact service requests. */
+  readonly call: CallContext;
   /** Workflow definition that may declare a primary artifact binding. */
   readonly definition: WorkflowDefinition;
   /** Live execution state used for expression inputs and actor attribution. */
@@ -223,13 +228,13 @@ function normalizeInitialData(value: unknown): Record<string, unknown> | undefin
 export async function resolveOrCreateArtifactBinding(
   options: ArtifactBindingResolutionOptions,
 ): Promise<ArtifactBindingState | undefined> {
-  const { bindingOptions, binding, existingArtifactRef, executionId, scope, initialData, bus } = options;
+  const { call, bindingOptions, binding, existingArtifactRef, executionId, scope, initialData, bus } = options;
 
   let current: ArtifactRevision | null = null;
 
   if (existingArtifactRef !== undefined) {
     // Attempt to resolve the latest revision of the referenced artifact.
-    const queryResponse = await bus.request(ArtifactSubjects.query, {
+    const queryResponse = await bus.request(call, ArtifactSubjects.query, {
       kind: existingArtifactRef.kind,
       ids: [existingArtifactRef.id],
       currentOnly: true,
@@ -249,7 +254,7 @@ export async function resolveOrCreateArtifactBinding(
       );
     }
     // Create a new artifact with the provided initial data.
-    const createResponse = await bus.request(ArtifactSubjects.create, {
+    const createResponse = await bus.request(call, ArtifactSubjects.create, {
       kind: binding.kind,
       schemaVersion: binding.schemaVersion,
       scope: scope ?? binding.scope,
@@ -281,7 +286,7 @@ export async function resolveOrCreateArtifactBinding(
 export async function resolveWorkflowArtifactBinding(
   options: WorkflowArtifactBindingResolutionOptions,
 ): Promise<ArtifactBindingState | undefined> {
-  const { definition, execution, runContext, zodSchema, bus } = options;
+  const { call, definition, execution, runContext, zodSchema, bus } = options;
   const binding = definition.artifact;
   if (binding === undefined) {
     return undefined;
@@ -302,6 +307,7 @@ export async function resolveWorkflowArtifactBinding(
       : undefined;
 
   const bindingState = await resolveOrCreateArtifactBinding({
+    call,
     bindingOptions: {
       kind: binding.kind,
       schemaVersion: binding.schemaVersion,

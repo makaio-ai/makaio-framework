@@ -1,4 +1,5 @@
 import type { ScopedBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { SystemPrompt } from '@makaio/contracts';
 import type { AgentConnectorConfigOverrides } from './types.js';
 import type { ConfigFactoryInput } from '../adapter/index.js';
@@ -20,8 +21,11 @@ export interface ConnectorCleanupDiagnostic {
   readonly agentId: string;
 }
 
-/** Final async guard run after the replacement is ready but before it becomes primary. */
-export type ConnectorSwapCommitGuard = () => void | Promise<void>;
+/**
+ * Final async guard run after the replacement is ready but before it becomes primary.
+ * @param call - Call of the message that caused the swap
+ */
+export type ConnectorSwapCommitGuard = (call: CallContext) => void | Promise<void>;
 
 /**
  * Sink for what a close this swap performed itself observed.
@@ -62,11 +66,15 @@ export type SwapRuntimeCloseSink<TConnector extends Pick<AIAgentConnector, 'clos
  * durable currency itself, so the sink records the identity and stays silent.
  *
  * **Named rather than written out at each site**, because it is written out at
- * three: a site that redeclares it with one parameter still accepts the
- * two-parameter sink, and the flag would then be dropped by a later wrapper
+ * three: a site that redeclares it without the flag still accepts the
+ * full sink, and the flag would then be dropped by a later wrapper
  * with no type error and no symptom but a second settle producer.
+ * @param call - Call of the message that caused the movement
+ * @param adapterSessionId - Provider-confirmed session identity, when available
+ * @param settledByCaller - Whether the caller settles the movement itself
  */
 export type AdapterSessionPublicationSink = (
+  call: CallContext,
   adapterSessionId: string | undefined,
   settledByCaller?: boolean,
 ) => void | Promise<void>;
@@ -96,8 +104,9 @@ export interface AgentConnectorLifecycleManagerConfig<
    * connector rotates on the same in-flight decisions the original does, and a
    * generation created without the sink would leave the session row advertising
    * the thread it abandoned.
+   * @param call - Call of the message that caused the rotation
    */
-  announceAdapterSessionMoved: () => Promise<void>;
+  announceAdapterSessionMoved: (call: CallContext) => Promise<void>;
   /** Wire adapter-specific events on a connector instance. */
   wireEvents: (connector: TConnector) => void | Promise<void>;
   /** Emit idle lifecycle event on processing-state idle transitions. */
@@ -116,10 +125,7 @@ export interface AgentConnectorLifecycleManagerConfig<
    * unless the swap's caller settles that movement's currency itself, which it
    * says with `settledByCaller` and the sink then records without announcing.
    */
-  setLastKnownAdapterSessionId: (
-    adapterSessionId: string | undefined,
-    settledByCaller?: boolean,
-  ) => void | Promise<void>;
+  setLastKnownAdapterSessionId: AdapterSessionPublicationSink;
   /** Publish a sanitized cleanup diagnostic without exposing connector errors. */
   reportCleanupFailure: (diagnostic: ConnectorCleanupDiagnostic) => void | Promise<void>;
 }
@@ -249,6 +255,7 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
    * Replace the active connector with a fresh instance.
    *
    * Uses create-before-close pattern with rollback to preserve availability.
+   * @param call - Call of the swap's caller, forwarded to the replacement's initialization
    * @param configOverrides - Optional runtime override fields
    * @param beforeCommit - Final guard after replacement initialization and before publication
    * @param settledByCaller - Whether the caller writes the replacement's durable
@@ -261,6 +268,7 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
    * @returns The replacement's provider-confirmed session ID, when it has one
    */
   public async swapConnector(
+    call: CallContext,
     configOverrides?: AgentConnectorConfigOverrides,
     beforeCommit?: ConnectorSwapCommitGuard,
     settledByCaller = false,
@@ -271,10 +279,11 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
     if (currentConnector.getProcessingState() !== 'idle') {
       throw new Error(`Cannot swap connector while processing (state: ${currentConnector.getProcessingState()})`);
     }
-    const newRuntime = await this.createReplacementRuntime(currentConnector, configOverrides);
+    const newRuntime = await this.createReplacementRuntime(call, currentConnector, configOverrides);
     const oldWiringCleanups = this.connectorWiringCleanups;
     this.connectorWiringCleanups = [];
     const confirmedAdapterSessionId = await this.initializeReplacement(
+      call,
       newRuntime,
       oldWiringCleanups,
       beforeCommit,
@@ -294,21 +303,23 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
     // case with nothing to announce — the ordering it needs is its own, and it
     // takes it after the swap returns.
     if (confirmedAdapterSessionId !== undefined) {
-      await this.config.setLastKnownAdapterSessionId(confirmedAdapterSessionId, settledByCaller);
+      await this.config.setLastKnownAdapterSessionId(call, confirmedAdapterSessionId, settledByCaller);
     }
     this.config.setConnectorRuntime(newRuntime);
     this.runWiringCleanups(oldWiringCleanups);
-    await this.closePreviousRuntime(currentRuntime, onRuntimeClose);
+    await this.closePreviousRuntime(call, currentRuntime, onRuntimeClose);
     return confirmedAdapterSessionId;
   }
 
   /**
    * Build and materialize the replacement connector runtime.
+   * @param call - Call of the swap's caller, forwarded to auth preparation
    * @param currentConnector - Active connector whose runtime values provide defaults
    * @param configOverrides - Optional requested runtime changes
    * @returns Prepared replacement connector and auth lease
    */
   private async createReplacementRuntime(
+    call: CallContext,
     currentConnector: TConnector,
     configOverrides: AgentConnectorConfigOverrides | undefined,
   ): Promise<ConnectorRuntimeHandle<TConnector>> {
@@ -328,6 +339,7 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
 
     const fullConfig = await this.config.configFactory(configInput);
     return createConnectorRuntime({
+      call,
       config: fullConfig,
       connectorFactory: this.config.connectorFactory,
       onMessageSent: this.config.createOnMessageSent(),
@@ -338,6 +350,7 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
 
   /**
    * Wire and initialize a replacement, restoring the current wiring on failure.
+   * @param call - Call of the swap's caller
    * @param newRuntime - Replacement connector and auth lease
    * @param oldWiringCleanups - Wiring still owned by the active connector
    * @param beforeCommit - Optional final publication guard
@@ -346,6 +359,7 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
    * @returns Provider-confirmed session ID, when the replacement has one
    */
   private async initializeReplacement(
+    call: CallContext,
     newRuntime: ConnectorRuntimeHandle<TConnector>,
     oldWiringCleanups: Array<() => void>,
     beforeCommit: ConnectorSwapCommitGuard | undefined,
@@ -354,13 +368,14 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
     try {
       await this.wireAllConnectorEvents(newRuntime.connector);
       await newRuntime.connector.initialize({
+        call,
         systemPrompt: this.config.getRuntimeSystemPrompt(),
       });
       // Resolve provider-owned metadata before the commit guard. Once the guard
       // commits an account activation, the only remaining state transition must
       // be the synchronous publication of this ready runtime.
       const confirmedAdapterSessionId = newRuntime.connector.getConfirmedAdapterSessionId();
-      await beforeCommit?.();
+      await beforeCommit?.(call);
       return confirmedAdapterSessionId;
     } catch (wiringError) {
       // Managed close handles partially-wired resources and the auth lease.
@@ -369,7 +384,7 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
       // arbitrary external subscriptions installed by wireEvents().
       this.clearConnectorWiring();
       this.connectorWiringCleanups = oldWiringCleanups;
-      const cleanupReport = await closeConnectorRuntime(newRuntime);
+      const cleanupReport = await closeConnectorRuntime(call, newRuntime);
       // Reported whatever it says: a failure means the replacement's connector and
       // lease are unaccounted for and the handle travels to whoever may still be
       // answerable for it, and a weak-but-clean class means nobody downstream may
@@ -407,14 +422,16 @@ export class AgentConnectorLifecycleManager<TBus extends ScopedBus<string>, TCon
    * its lease; a teardown told only about *failures* would additionally treat a
    * clean-but-weak class as clean, and answer for the agent more strongly than the
    * superseded runtime ever allowed.
+   * @param call - Call of the swap; the lease release is sent with it
    * @param currentRuntime - Superseded connector and auth lease
    * @param onRuntimeClose - Sink for what this close observed
    */
   private async closePreviousRuntime(
+    call: CallContext,
     currentRuntime: ConnectorRuntimeHandle<TConnector>,
     onRuntimeClose: SwapRuntimeCloseSink<TConnector> | undefined,
   ): Promise<void> {
-    const report = await closeConnectorRuntime(currentRuntime);
+    const report = await closeConnectorRuntime(call, currentRuntime);
     onRuntimeClose?.(report, currentRuntime);
     if (report.closeError === undefined) return;
     const diagnostic: ConnectorCleanupDiagnostic = {

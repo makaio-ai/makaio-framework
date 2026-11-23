@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { VersionRangeSchema, defineAdapterProviderAuth } from '@makaio/contracts';
 import { ClientStorageSubjects } from '@makaio/services-core/settings/storage';
+import { createTestCall } from '@makaio/test-utils';
 import { buildCompatibleAuthOptions } from '../compatible-auth-options.js';
 import type { LoadedAdapter } from '../adapter-runtime-types.js';
 
@@ -112,6 +113,7 @@ describe('buildCompatibleAuthOptions', () => {
 
     try {
       const options = await buildCompatibleAuthOptions(
+        createTestCall(),
         MakaioBus,
         [createLoadedAdapter('claude-z'), createLoadedAdapter('claude-a')],
         'anthropic',
@@ -153,7 +155,7 @@ describe('buildCompatibleAuthOptions', () => {
 
   it('fails dangling binding definitions instead of deriving a method from provider identity', async () => {
     await expect(
-      buildCompatibleAuthOptions(MakaioBus, [createLoadedAdapter('claude-code', false)], 'anthropic'),
+      buildCompatibleAuthOptions(createTestCall(), MakaioBus, [createLoadedAdapter('claude-code', false)], 'anthropic'),
     ).rejects.toThrow(/binds undeclared provider auth method/);
   });
 
@@ -176,9 +178,9 @@ describe('buildCompatibleAuthOptions', () => {
       providers: [{ ...provider, auth: invalidAuth }],
     };
 
-    await expect(buildCompatibleAuthOptions(MakaioBus, [invalidAdapter], 'anthropic')).rejects.toThrow(
-      /Explicit authentication requires/,
-    );
+    await expect(
+      buildCompatibleAuthOptions(createTestCall(), MakaioBus, [invalidAdapter], 'anthropic'),
+    ).rejects.toThrow(/Explicit authentication requires/);
   });
 
   it('rejects conflicting declarations for one owner-qualified method', async () => {
@@ -186,6 +188,7 @@ describe('buildCompatibleAuthOptions', () => {
     try {
       await expect(
         buildCompatibleAuthOptions(
+          createTestCall(),
           MakaioBus,
           [
             createLoadedAdapter('claude-a'),

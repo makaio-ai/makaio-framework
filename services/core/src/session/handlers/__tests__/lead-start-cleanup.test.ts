@@ -10,6 +10,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   AdapterSubjects,
   SessionOwnershipStorageSubjects,
@@ -103,7 +104,7 @@ describe('start cleanup release discipline (I15b)', () => {
       });
     });
 
-    const rollback = await rollbackReservedStart(rollbackBus, agentId, undefined);
+    const rollback = await rollbackReservedStart(createTestCall(), rollbackBus, agentId, undefined);
 
     unsubscribe();
     expect(rollback).toEqual({ rowDeleted: false });
@@ -177,7 +178,13 @@ describe('start cleanup release discipline (I15b)', () => {
     const foreign = await reserve(sessionId, agentId, 'provider-foreign');
     expect(mine.claim?.claimToken).not.toBe(foreign.claim?.claimToken);
 
-    await abandonDispatchedStart(bus, agentId, CALLER_OWNED, new StartClaimTokens([mine.claim?.claimToken]));
+    await abandonDispatchedStart(
+      createTestCall(),
+      bus,
+      agentId,
+      CALLER_OWNED,
+      new StartClaimTokens([mine.claim?.claimToken]),
+    );
 
     expect(await claimStates()).toEqual([
       ['provider-foreign', 'held'],
@@ -195,7 +202,7 @@ describe('start cleanup release discipline (I15b)', () => {
     const agentId = await seedStartingAgent(sessionId, 'agent-keyless');
     await reserve(sessionId, agentId, 'provider-unrelated');
 
-    await abandonDispatchedStart(bus, agentId, CALLER_OWNED, new StartClaimTokens([undefined]));
+    await abandonDispatchedStart(createTestCall(), bus, agentId, CALLER_OWNED, new StartClaimTokens([undefined]));
 
     expect(await claimStates()).toEqual([['provider-unrelated', 'held']]);
   });
@@ -217,6 +224,7 @@ describe('start cleanup release discipline (I15b)', () => {
     const refusal = buildRefusal(outcome);
 
     const failure = await applySettlementOutcome(
+      createTestCall(),
       bus,
       ADAPTER_ID,
       agentId,
@@ -258,6 +266,7 @@ describe('start cleanup release discipline (I15b)', () => {
     // Accepted, so it returns — and the effective generation is recorded on the
     // way through, which is the whole point of recording before deciding.
     await applySettlementOutcome(
+      createTestCall(),
       bus,
       ADAPTER_ID,
       agentId,
@@ -268,7 +277,7 @@ describe('start cleanup release discipline (I15b)', () => {
     );
 
     // The later failure: the status compare-and-swap this attempt loses.
-    await abandonDispatchedStart(bus, agentId, CALLER_OWNED, claimTokens);
+    await abandonDispatchedStart(createTestCall(), bus, agentId, CALLER_OWNED, claimTokens);
 
     expect(await claimStates()).toEqual([
       ['provider-mine', 'abandoned'],
@@ -296,7 +305,7 @@ describe('start cleanup release discipline (I15b)', () => {
     expect(settled.outcome).toBe('settled');
     expect(settled.outcome === 'settled' ? settled.claim.claimToken : undefined).toBe(claimToken);
     // And the attempt can give it back naming nothing but what it minted.
-    await abandonDispatchedStart(bus, agentId, CALLER_OWNED, new StartClaimTokens([claimToken]));
+    await abandonDispatchedStart(createTestCall(), bus, agentId, CALLER_OWNED, new StartClaimTokens([claimToken]));
     expect(await claimStates()).toEqual([['provider-caller-token', 'abandoned']]);
   });
 

@@ -39,7 +39,7 @@ describe('Request middleware replacePayload', () => {
       { priority: 50 },
     );
 
-    const result = await MakaioBus.request(RequestSubjects.process, {
+    const result = await MakaioBus.request(MakaioBus.own('root'), RequestSubjects.process, {
       input: 'test',
     });
 
@@ -84,7 +84,7 @@ describe('Request middleware replacePayload', () => {
       { priority: 0 },
     );
 
-    const result = await MakaioBus.request(RequestSubjects.process, {
+    const result = await MakaioBus.request(MakaioBus.own('root'), RequestSubjects.process, {
       input: 'original',
     });
 
@@ -121,7 +121,7 @@ describe('Request middleware replacePayload', () => {
       { priority: 50 },
     );
 
-    const result = await MakaioBus.request(RequestSubjects.process, {
+    const result = await MakaioBus.request(MakaioBus.own('root'), RequestSubjects.process, {
       input: 'base',
     });
 

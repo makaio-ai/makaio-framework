@@ -20,6 +20,7 @@ import type {
   TurnInitiator,
   TurnUsage,
 } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 import { TurnStorageSubjects } from '../turn/namespace.js';
 import { MessageStorageSubjects } from './messages/namespace.js';
 import { SessionEventStorageSubjects } from './session-events/index.js';
@@ -149,6 +150,7 @@ function turnLifecycleEventId(type: 'turn.started' | 'turn.completed', turnId: s
  * Check whether a prior ingestion recorded the turn's `turn.completed`
  * lifecycle row (the durable marker that the turn's `session.turn.*` side
  * effects ran to completion).
+ * @param call - Call context of the ingestion this probe belongs to
  * @param bus - Bus used for the session-event storage probe
  * @param sessionId - Session the turn belongs to
  * @param turnId - Stable Makaio turn ID
@@ -156,11 +158,12 @@ function turnLifecycleEventId(type: 'turn.started' | 'turn.completed', turnId: s
  *   when no session-event storage is registered (resume detection impossible)
  */
 async function turnCompletionRecorded(
+  call: CallContext,
   bus: IMakaioBus,
   sessionId: string,
   turnId: string,
 ): Promise<boolean | undefined> {
-  const probe = await bus.requestOptional(SessionEventStorageSubjects.getByIds, {
+  const probe = await bus.requestOptional(call, SessionEventStorageSubjects.getByIds, {
     sessionId,
     eventIds: [turnLifecycleEventId('turn.completed', turnId)],
   });
@@ -219,32 +222,36 @@ async function turnCompletionRecorded(
  * (contract point 3 — `getByTurn` — would be unfulfillable) and a warning is
  * logged; the turn row still persists, and a later re-ingestion that carries
  * messages emits via the resume path.
+ * @param call - Call context of the import operation ingesting this turn
  * @param bus - Bus used for storage requests and event emission
  * @param params - Turn identity, completion state, marker, and messages
  * @returns Stable turn identity and whether this call created the turn
  */
 export function ingestCompletedTurn(
+  call: CallContext,
   bus: IMakaioBus,
   params: IngestCompletedTurnParams,
 ): Promise<IngestCompletedTurnResult> {
   const anchorKey = JSON.stringify([params.sessionId, params.turnAnchorId]);
-  return chainOnAnchor(anchorKey, () => executeIngestCompletedTurn(bus, params));
+  return chainOnAnchor(anchorKey, () => executeIngestCompletedTurn(call, bus, params));
 }
 
 /**
  * The serialized body of {@link ingestCompletedTurn} — see its contract docs.
+ * @param call - Call context of the import operation ingesting this turn
  * @param bus - Bus used for storage requests and event emission
  * @param params - Turn identity, completion state, marker, and messages
  * @returns Stable turn identity and whether this call created the turn
  */
 async function executeIngestCompletedTurn(
+  call: CallContext,
   bus: IMakaioBus,
   params: IngestCompletedTurnParams,
 ): Promise<IngestCompletedTurnResult> {
   const { sessionId, turnAnchorId, startedAt, completedAt, status, error, usage, initiator } = params;
 
   // 1. Anchor-keyed turn upsert — assigns turnNumber on first ingestion only.
-  const { turn, created } = await bus.request(TurnStorageSubjects.ingestCompleted, {
+  const { turn, created } = await bus.request(call, TurnStorageSubjects.ingestCompleted, {
     sessionId,
     turnAnchorId,
     startedAt,
@@ -259,7 +266,7 @@ async function executeIngestCompletedTurn(
   let firstUserMessageId: string | undefined;
   let firstMessageId: string | undefined;
   for (const message of params.messages) {
-    const { messageId } = await bus.request(MessageStorageSubjects.upsertByAdapterMessageId, {
+    const { messageId } = await bus.request(call, MessageStorageSubjects.upsertByAdapterMessageId, {
       sessionId,
       turnId: turn.turnId,
       adapterMessageId: message.adapterMessageId,
@@ -281,7 +288,7 @@ async function executeIngestCompletedTurn(
   //    only when the durable completion record is missing (invariant b).
   let shouldEmit = created;
   if (!created) {
-    const recorded = await turnCompletionRecorded(bus, sessionId, turn.turnId);
+    const recorded = await turnCompletionRecorded(call, bus, sessionId, turn.turnId);
     shouldEmit = recorded === false;
   }
 
@@ -294,7 +301,7 @@ async function executeIngestCompletedTurn(
           `skipping session.turn.* emission (getByTurn contract unfulfillable)`,
       );
     } else {
-      await emitIngestedTurnEvents(bus, params, turn, firstUserMessageId ?? firstMessageId);
+      await emitIngestedTurnEvents(call, bus, params, turn, firstUserMessageId ?? firstMessageId);
     }
   }
 
@@ -309,6 +316,7 @@ async function executeIngestCompletedTurn(
  * deterministic eventIds, so retried appends are idempotent and the completed
  * row doubles as the durable "side effects done" marker read by the
  * emission-resume probe.
+ * @param call - Call context of the import operation ingesting this turn
  * @param bus - Bus used for lifecycle persistence and event emission
  * @param params - Original ingestion parameters (payload fields, marker)
  * @param turn - Stable turn identity from the anchor upsert
@@ -317,6 +325,7 @@ async function executeIngestCompletedTurn(
  *   continuations still need an anchor message)
  */
 async function emitIngestedTurnEvents(
+  call: CallContext,
   bus: IMakaioBus,
   params: IngestCompletedTurnParams,
   turn: { turnId: string; turnNumber: number },
@@ -343,19 +352,19 @@ async function emitIngestedTurnEvents(
     ingestionMarker,
   };
 
-  await appendSessionLifecycleEvent(bus, {
+  await appendSessionLifecycleEvent(call, bus, {
     type: 'turn.started',
     sessionId,
     payload: startedPayload,
     eventId: turnLifecycleEventId('turn.started', turn.turnId),
   });
-  await appendSessionLifecycleEvent(bus, {
+  await appendSessionLifecycleEvent(call, bus, {
     type: 'turn.completed',
     sessionId,
     payload: completedPayload,
     eventId: turnLifecycleEventId('turn.completed', turn.turnId),
   });
 
-  await bus.emit(SessionSubjects.turn.started, startedPayload);
-  await bus.emit(SessionSubjects.turn.completed, completedPayload);
+  await bus.emit(call, SessionSubjects.turn.started, startedPayload);
+  await bus.emit(call, SessionSubjects.turn.completed, completedPayload);
 }

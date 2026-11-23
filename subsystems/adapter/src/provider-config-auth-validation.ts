@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type {
   ClientAuthMethodDefinition,
   ProviderAuthMethodDefinition,
@@ -75,6 +76,7 @@ export class ProviderConfigAuthValidationError extends Error {
  * Validate a normalized auth selection against provider/client definition
  * storage. No compatibility is inferred from provider IDs: client-owned
  * methods are resolved only from the referenced client definition.
+ * @param call - Call context of the handled message this validation serves.
  * @param bus - Bus used to read provider and client definitions.
  * @param definitionId - Provider definition selected by the containing config.
  * @param auth - Complete normalized auth selection.
@@ -82,12 +84,14 @@ export class ProviderConfigAuthValidationError extends Error {
  * @returns The validated method and definition records from one lookup snapshot.
  */
 export async function validateProviderConfigAuth(
+  call: CallContext,
   bus: IMakaioBus,
   definitionId: string,
   auth: ProviderConfigAuth,
   knownProvider?: ProviderRecord,
 ): Promise<ValidatedProviderConfigAuth> {
-  const provider = knownProvider ?? (await bus.request(ProviderStorageSubjects.get, { id: definitionId })).provider;
+  const provider =
+    knownProvider ?? (await bus.request(call, ProviderStorageSubjects.get, { id: definitionId })).provider;
   if (!provider || provider.id !== definitionId) {
     throw new ProviderConfigAuthValidationError(
       'provider-definition-not-found',
@@ -105,7 +109,7 @@ export async function validateProviderConfigAuth(
     }
     method = provider.authMethods.find(({ id }) => id === auth.method.methodId);
   } else {
-    ({ client } = await bus.request(ClientStorageSubjects.get, { id: auth.method.clientId }));
+    ({ client } = await bus.request(call, ClientStorageSubjects.get, { id: auth.method.clientId }));
     if (!client) {
       throw new ProviderConfigAuthValidationError(
         'client-definition-not-found',

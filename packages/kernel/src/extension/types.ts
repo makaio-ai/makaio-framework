@@ -1,4 +1,5 @@
 import type {
+  CredentialResolver,
   ExtensionContributionProcessor,
   ExtensionOperatorConfigSource,
   ExtensionWarning,
@@ -10,6 +11,7 @@ import type {
   VersionLiteral,
 } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { PartyRef } from '@makaio/core';
 import type { ComponentState } from '../observability/index.js';
 import type { InstalledExtensionRecord } from '../observability/installed-extension-catalog-schemas.js';
 
@@ -40,17 +42,48 @@ export type InstalledExtensionCatalogSource = () => Promise<readonly InstalledEx
 export type KernelExtensionContext = NodeExtensionContext<IMakaioBus>;
 
 /**
+ * Host-supplied factory that binds a credential resolver to the carrier that asks.
+ *
+ * The host provides this once instead of a shared resolver. The coordinator calls
+ * it per extension context with the requester taken from the extension's own
+ * identity and with the very bus instance it hands out as `ctx.bus`, so the
+ * resolver can never be steered by an argument of the extension, by `call.caller`,
+ * or by the bus of the credential provider.
+ * @param requester - Carrier of the extension that will hold the resolver.
+ * @param bus - The carrier-bound bus instance of that extension.
+ * @returns A resolver bound to `requester`.
+ */
+export type CredentialResolverBinder = (requester: PartyRef, bus: IMakaioBus) => CredentialResolver;
+
+/**
  * Host-supplied Node fields of {@link KernelExtensionContext}: everything the
  * composition root provides once for all extensions.
  *
  * Omits the fields the coordinator owns and assembles per extension at
  * context-build time (`bus`, `identity`, `getService`, `dataDir`, `config`,
- * `signal`, `hasExtension`, `openContributions`).
+ * `signal`, `hasExtension`, `openContributions`) and `credentials`, which the
+ * coordinator derives per extension from {@link ExtensionContextBase.credentialsFor}.
  */
 export type ExtensionContextBase = Omit<
   KernelExtensionContext,
-  'bus' | 'identity' | 'getService' | 'dataDir' | 'config' | 'signal' | 'hasExtension' | 'openContributions'
->;
+  | 'bus'
+  | 'identity'
+  | 'getService'
+  | 'dataDir'
+  | 'config'
+  | 'signal'
+  | 'hasExtension'
+  | 'openContributions'
+  | 'credentials'
+> & {
+  /**
+   * Factory for the per-extension credential resolver.
+   *
+   * Absent when the host offers no credential resolution; extensions then get no
+   * `ctx.credentials`. It never appears on the context handed to an extension.
+   */
+  readonly credentialsFor?: CredentialResolverBinder;
+};
 
 /** Concrete executable extension shape loaded by the kernel coordinator. */
 export type KernelMakaioExtension = MakaioExtension<KernelExtensionContext>;

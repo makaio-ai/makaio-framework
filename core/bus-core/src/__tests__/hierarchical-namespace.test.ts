@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus } from '../bus.js';
-import { createBusContext } from '../index.js';
+import { createBusContext } from '../kernel-api.js';
 import { z } from 'zod';
 import { createBusNamespace } from '@makaio/core';
 
@@ -122,7 +122,7 @@ describe('Hierarchical Namespace Registration', () => {
     });
 
     // Emit using the returned namespace object
-    await MakaioBus.emit(TestSubjects.event, {
+    await MakaioBus.emit(MakaioBus.own('root'), TestSubjects.event, {
       message: 'Hello from hierarchical namespace!',
     });
 

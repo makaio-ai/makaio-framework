@@ -14,7 +14,8 @@
  *   tsx packages/framework/build.ts  (from framework workspace root)
  *
  * Groups:
- *   1. bus    — `@makaio/bus-core` bundles all deps inline (singleton root)
+ *   1. bus    — `@makaio/bus-core` bundled; `@makaio/core`/`@makaio/contracts` are
+ *               externalized to `@makaio/framework/*` (one declaration, one runtime copy)
  *   2. core   — framework packages that externalize framework siblings
  *   3. react  — 3 UI packages that additionally externalize React + handle SCSS
  */
@@ -25,6 +26,7 @@ import { build, type UserConfig } from 'tsdown';
 import { FRAMEWORK_PUBLIC_PACKAGE_SUBPATHS } from '@makaio/build-tooling/framework-public-surface';
 import {
   frameworkBusPreset,
+  frameworkExternals,
   frameworkPreset,
   frameworkReactPreset,
 } from '@makaio/build-tooling/tsdown-framework-preset';
@@ -195,6 +197,7 @@ const configs: Array<UserConfig & { name: string }> = [
   {
     name: 'bus',
     ...frameworkBusPreset,
+    plugins: [frameworkExternals()],
     entry: buildEntryMap(busPackages),
     outDir: DIST,
   },

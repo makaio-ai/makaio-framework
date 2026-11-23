@@ -117,25 +117,25 @@ export function registerSessionOwnershipAuthority(
     bus.on(
       SessionSubjects.ownership.reserveStart,
       async (ctx) => {
-        ctx.setResult(await admission.run(() => runReserveStart(context, ctx.payload)));
+        ctx.setResult(await admission.run(() => runReserveStart(ctx.call, context, ctx.payload)));
       },
       { filter: { ownerInstanceId: context.instanceId } },
     ),
     bus.on(
       SessionSubjects.ownership.settleMovement,
       async (ctx) => {
-        ctx.setResult(await admission.run(() => runSettleMovement(context, ctx.payload)));
+        ctx.setResult(await admission.run(() => runSettleMovement(ctx.call, context, ctx.payload)));
       },
       { filter: { ownerInstanceId: context.instanceId } },
     ),
     bus.on(SessionSubjects.ownership.release, async (ctx) => {
-      ctx.setResult(await admission.run(() => runRelease(context, ctx.payload)));
+      ctx.setResult(await admission.run(() => runRelease(ctx.call, context, ctx.payload)));
     }),
     bus.on(SessionSubjects.ownership.reconcile, async (ctx) => {
-      ctx.setResult(await admission.run(() => runReconcile(context)));
+      ctx.setResult(await admission.run(() => runReconcile(ctx.call, context)));
     }),
     bus.on(SessionSubjects.ownership.continuation, async (ctx) => {
-      ctx.setResult(await admission.run(() => runContinuation(context, ctx.payload)));
+      ctx.setResult(await admission.run(() => runContinuation(ctx.call, context, ctx.payload)));
     }),
   ];
 
@@ -163,7 +163,7 @@ export function registerSessionOwnershipAuthority(
       closePromise = (async () => {
         await admission.drain();
         if (teardownEvidence === undefined || !teardownWasObserved(teardownEvidence)) return;
-        await bus.requestOptional(SessionOwnershipStorageSubjects.retireInstance, {
+        await bus.requestOptional(bus.own('stop'), SessionOwnershipStorageSubjects.retireInstance, {
           instanceId: context.instanceId,
         });
       })();

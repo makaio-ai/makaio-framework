@@ -12,7 +12,8 @@ import { AgentTeardownArbiter } from '@makaio/ai-adapters-core';
 import os from 'node:os';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { AgentSubjects, type ConnectorTeardownResult } from '@makaio/contracts';
+import { AgentSubjects, type CallContext, type ConnectorTeardownResult } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import {
   AIAgentConnector,
   type AgentStartResult,
@@ -105,10 +106,11 @@ class TestClaudeConnector extends AIAgentConnector<TestBus> {
    * Emit a raw SDK message on the scoped sdk.event subject, exactly like the
    * production connectors do (metadata-stripped payload; `emit()` injects
    * the connector identity fields).
+   * @param call - Call context that caused the SDK event
    * @param message - Raw Claude SDK result message to deliver to the agent
    */
-  public emitSdkEvent(message: RawSdkResultMessage): Promise<void> {
-    return this.emit(TestNamespace.subjects.sdk.event, message);
+  public emitSdkEvent(call: CallContext, message: RawSdkResultMessage): Promise<void> {
+    return this.emit(call, TestNamespace.subjects.sdk.event, message);
   }
 }
 
@@ -122,10 +124,11 @@ class TestClaudeAgent extends ClaudeCodeAgent<typeof TEST_NAMESPACE, TestClaudeC
 
 /**
  * Create a fully wired TestClaudeAgent backed by the stub connector.
+ * @param call - Call context that initializes the agent
  * @returns Agent under test and its connector
  */
-async function makeAgent(): Promise<{ agent: TestClaudeAgent; connector: TestClaudeConnector }> {
-  const adapterBus = await TestNamespace.scopedBus();
+async function makeAgent(call: CallContext): Promise<{ agent: TestClaudeAgent; connector: TestClaudeConnector }> {
+  const adapterBus = await TestNamespace.scopedBus(MakaioBus);
   let connector: TestClaudeConnector | undefined;
   const agent = new TestClaudeAgent({
     agentId: TEST_AGENT_ID,
@@ -153,7 +156,7 @@ async function makeAgent(): Promise<{ agent: TestClaudeAgent; connector: TestCla
     },
   });
 
-  await agent.init();
+  await agent.init(call);
   if (!connector) throw new Error('connectorFactory was not invoked during init()');
   return { agent, connector };
 }
@@ -211,10 +214,11 @@ describe('ClaudeCodeAgent terminal result usage', () => {
       usageEvents.push(ctx.payload as Record<string, unknown>);
     });
 
-    const { agent, connector } = await makeAgent();
+    const call = createTestCall();
+    const { agent, connector } = await makeAgent(call);
     agents.push(agent);
 
-    await connector.emitSdkEvent(makeResultMessage(0.42));
+    await connector.emitSdkEvent(call, makeResultMessage(0.42));
 
     await vi.waitFor(() => expect(usageEvents).toHaveLength(1));
     expect(usageEvents[0]).toMatchObject({

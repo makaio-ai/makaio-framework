@@ -125,7 +125,7 @@ export function createRuntimeReadyWaiter(bus: IMakaioBus, timeoutMs = DEFAULT_RE
 
   void (async () => {
     try {
-      const result = await bus.requestOptional(KernelSubjects.isReady, {});
+      const result = await bus.requestOptional(bus.own('start'), KernelSubjects.isReady, {});
       if (settled) return;
 
       if (result.handled && result.data.ready) {

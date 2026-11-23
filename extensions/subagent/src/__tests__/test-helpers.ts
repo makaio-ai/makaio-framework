@@ -3,6 +3,7 @@ import { createMakaioContext } from '@makaio/core';
 import { createBusInstance } from '@makaio/bus-core';
 import { SubagentConfigSchema, SubagentError, type SubagentConfig } from '@makaio/contracts';
 import type { ToolExecutionContext, BusLike } from '@makaio/tools-core';
+import { createTestCall } from '@makaio/test-utils';
 
 /**
  * Helper to create SubagentConfig with defaults applied.
@@ -43,6 +44,18 @@ export function expectSubagentError(fn: () => void, expectedCode: string): void 
 type MockRequestHandler<Req = unknown, Res = unknown> = (payload: Req) => Res | Promise<Res>;
 
 /**
+ * Extract the subject and payload from either bus request overload.
+ * @param args - Request arguments in call or own form
+ * @returns Subject and payload passed to the mock handler
+ */
+function mockRequestArgs(args: readonly unknown[]): { subject: string; payload: unknown } {
+  const first = args[0];
+  const own = typeof first === 'object' && first !== null && 'subject' in first;
+  const subject = (own ? first : args[1]) as { subject: string };
+  return { subject: subject.subject, payload: args[own ? 1 : 2] };
+}
+
+/**
  * Creates a mock bus for testing subagent tools.
  *
  * Uses vitest spies to intercept request calls without mutating the bus instance.
@@ -60,8 +73,8 @@ export function createMockBus(): {
   const requestHandlers = new Map<string, MockRequestHandler>();
 
   // Spy on the request method to intercept calls
-  const requestSpy = vi.spyOn(bus, 'request').mockImplementation(async (subject, payload) => {
-    const subjectString = (subject as { subject: string }).subject;
+  const requestSpy = vi.spyOn(bus, 'request').mockImplementation(async (...args: unknown[]) => {
+    const { subject: subjectString, payload } = mockRequestArgs(args);
     const handler = requestHandlers.get(subjectString);
     if (handler) {
       const result = handler(payload);
@@ -72,8 +85,8 @@ export function createMockBus(): {
 
   // Spy on requestOptional to intercept optional-service calls.
   // Returns { handled: true, data } when a handler is registered, { handled: false } otherwise.
-  const requestOptionalSpy = vi.spyOn(bus, 'requestOptional').mockImplementation(async (subject, payload) => {
-    const subjectString = (subject as { subject: string }).subject;
+  const requestOptionalSpy = vi.spyOn(bus, 'requestOptional').mockImplementation(async (...args: unknown[]) => {
+    const { subject: subjectString, payload } = mockRequestArgs(args);
     const handler = requestHandlers.get(subjectString);
     if (!handler) {
       return { handled: false };
@@ -108,6 +121,7 @@ export function createParentContext(options: {
 }): ToolExecutionContext {
   return {
     ...createMakaioContext({ cwd: '/test' }),
+    call: createTestCall(),
     sessionId: options.sessionId ?? 'parent-session-1',
     subagentDepth: options.subagentDepth ?? 0,
     bus: options.bus,
@@ -127,6 +141,7 @@ export function createChildContext(options: {
 }): ToolExecutionContext {
   return {
     ...createMakaioContext({ cwd: '/test' }),
+    call: createTestCall(),
     sessionId: options.sessionId ?? 'child-session-1',
     turnId: 'child-turn-1',
     toolCallId: 'child-tool-call-1',

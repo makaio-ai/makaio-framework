@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { SessionSubjects, type IMakaioSession } from '@makaio/contracts';
 import { assembleForkContext } from '../assemble-fork-context.js';
 import {
@@ -107,6 +108,7 @@ describe('assembleForkContext - native locality', () => {
       const forkSession = setupNativeForkScenario();
 
       const result = await assembleForkContext(
+        createTestCall(),
         MakaioBus,
         forkSession,
         'fork',
@@ -129,6 +131,7 @@ describe('assembleForkContext - native locality', () => {
       const forkSession = setupNativeForkScenario();
 
       const result = await assembleForkContext(
+        createTestCall(),
         MakaioBus,
         forkSession,
         'fork',
@@ -145,6 +148,7 @@ describe('assembleForkContext - native locality', () => {
       const forkSession = setupNativeForkScenario();
 
       const result = await assembleForkContext(
+        createTestCall(),
         MakaioBus,
         forkSession,
         'fork',
@@ -166,6 +170,7 @@ describe('assembleForkContext - native locality', () => {
       });
 
       const result = await assembleForkContext(
+        createTestCall(),
         MakaioBus,
         forkSession,
         'fork',
@@ -184,6 +189,7 @@ describe('assembleForkContext - native locality', () => {
       });
 
       const result = await assembleForkContext(
+        createTestCall(),
         MakaioBus,
         forkSession,
         'fork',
@@ -210,6 +216,7 @@ describe('assembleForkContext - native locality', () => {
       );
 
       const result = await assembleForkContext(
+        createTestCall(),
         MakaioBus,
         forkSession,
         'fork',
@@ -227,6 +234,7 @@ describe('assembleForkContext - native locality', () => {
       const forkSession = setupNativeForkScenario({}, { currentAdapterSessionIdState: 'moved' });
 
       const result = await assembleForkContext(
+        createTestCall(),
         MakaioBus,
         forkSession,
         'fork',
@@ -248,6 +256,7 @@ describe('assembleForkContext - native locality', () => {
       const forkSession = setupNativeForkScenario();
 
       const result = await assembleForkContext(
+        createTestCall(),
         MakaioBus,
         forkSession,
         'fork',
@@ -286,6 +295,7 @@ describe('assembleForkContext - native locality', () => {
       mockGetMessage(cleanup, 'parent-msg-no-adapter', parentMsgNoAdapter);
 
       const result = await assembleForkContext(
+        createTestCall(),
         MakaioBus,
         forkSession,
         'fork',
@@ -308,6 +318,7 @@ describe('assembleForkContext - native locality', () => {
       });
 
       const result = await assembleForkContext(
+        createTestCall(),
         MakaioBus,
         forkSession,
         'fork',
@@ -332,6 +343,7 @@ describe('assembleForkContext - native locality', () => {
       });
 
       const result = await assembleForkContext(
+        createTestCall(),
         MakaioBus,
         forkSession,
         'fork',
@@ -352,6 +364,7 @@ describe('assembleForkContext - native locality', () => {
       const forkSession = setupNativeForkScenario({}, { machineId: remoteMachine });
 
       const result = await assembleForkContext(
+        createTestCall(),
         MakaioBus,
         forkSession,
         'fork',
@@ -373,6 +386,7 @@ describe('assembleForkContext - native locality', () => {
 
       // Pass no localMachineId — evaluator cannot confirm identity.
       const result = await assembleForkContext(
+        createTestCall(),
         MakaioBus,
         forkSession,
         'fork',
@@ -397,6 +411,7 @@ describe('assembleForkContext - native locality', () => {
 
       const originalContext = {};
       const result = await assembleForkContext(
+        createTestCall(),
         MakaioBus,
         forkSession,
         'fork',

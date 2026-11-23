@@ -67,7 +67,7 @@ Operations:
     try {
       switch (input.op) {
         case 'get': {
-          const { pr } = await bus.request(VCSPRSubjects.get, {
+          const { pr } = await bus.request(ctx.call, VCSPRSubjects.get, {
             repoPath,
             prNumber: input.pr,
           });
@@ -75,7 +75,7 @@ Operations:
         }
 
         case 'list': {
-          const { prs } = await bus.request(VCSPRSubjects.list, {
+          const { prs } = await bus.request(ctx.call, VCSPRSubjects.list, {
             repoPath,
             branch: input.branch,
           });
@@ -83,7 +83,7 @@ Operations:
         }
 
         case 'refresh': {
-          const { pr } = await bus.request(VCSPRSubjects.refresh, {
+          const { pr } = await bus.request(ctx.call, VCSPRSubjects.refresh, {
             repoPath,
             prNumber: input.pr,
           });

@@ -1,4 +1,4 @@
-import { createBusContext, createBusInstance } from '@makaio/bus-core';
+import { createBusInstance } from '@makaio/bus-core';
 import { ServerTransport } from '@makaio/bus-transport-websocket';
 import {
   ExecutionAttemptNamespace,
@@ -46,7 +46,7 @@ async function fixture(registered = true) {
     await authority.registerRuntime({ ...ids, runtimeIncarnationId });
     await authority.markRuntimeReady({ ...ids, runtimeGeneration, readyAt: new Date().toISOString() });
   }
-  const bus = createBusInstance({ context: createBusContext() });
+  const bus = createBusInstance();
   bus.registerNamespace(ExecutionAttemptNamespace);
   const transport = new AttemptGateTransport();
   bus.registerTransport(transport);
@@ -78,7 +78,7 @@ async function fixture(registered = true) {
     },
   };
   const reconcile = (signal?: AbortSignal) =>
-    reconcileAttemptCancellation({ bus, authority }, { ...ids, timeoutMs: 25, signal });
+    reconcileAttemptCancellation(bus.own('root'), { bus, authority }, { ...ids, timeoutMs: 25, signal });
   const cancel = () => authority.requestAttemptCancellation({ ...ids, requestKey: 'stop' });
   return { repository, authority, ids, bus, transport, correlation, receipt, report, reconcile, cancel };
 }
@@ -166,7 +166,9 @@ describe('bounded Attempt Cancel delivery', () => {
     });
     loseResponse = false;
     const authority = new ExecutionAttemptAuthority(h.repository, { bootstrapTimeoutMs: 60_000 });
-    expect(await reconcileAttemptCancellation({ authority, bus: h.bus }, { ...h.ids, timeoutMs: 100 })).toEqual({
+    expect(
+      await reconcileAttemptCancellation(h.bus.own('root'), { authority, bus: h.bus }, { ...h.ids, timeoutMs: 100 }),
+    ).toEqual({
       kind: 'received',
       persistence: { kind: 'accepted' },
     });
@@ -180,7 +182,9 @@ describe('bounded Attempt Cancel delivery', () => {
     controller.abort('shutdown');
     expect(await h.reconcile(controller.signal)).toEqual({ kind: 'aborted' });
     expect((await h.authority.readAttemptCancellationControl(h.ids))?.evidence).toEqual([]);
-    await expect(reconcileAttemptCancellation(h, { ...h.ids, timeoutMs: 0 })).rejects.toThrow('positive safe integer');
+    await expect(reconcileAttemptCancellation(h.bus.own('root'), h, { ...h.ids, timeoutMs: 0 })).rejects.toThrow(
+      'positive safe integer',
+    );
   });
 
   it('rejects an answer claiming a different runtime than the one addressed', async () => {
@@ -217,7 +221,11 @@ describe('bounded Attempt Cancel delivery', () => {
         ctx.setResult({ decision: 'received', receipt: h.receipt });
       });
     cleanups.push(unregister);
-    const pending = reconcileAttemptCancellation(h, { ...h.ids, timeoutMs: 1_000, signal: controller.signal });
+    const pending = reconcileAttemptCancellation(h.bus.own('root'), h, {
+      ...h.ids,
+      timeoutMs: 1_000,
+      signal: controller.signal,
+    });
     await started;
     controller.abort('shutdown');
     expect(await pending).toEqual({ kind: 'aborted' });
@@ -242,6 +250,7 @@ describe('bounded Attempt Cancel delivery', () => {
     };
     expect(
       await reconcileAttemptCancellation(
+        h.bus.own('root'),
         { authority, bus: h.bus },
         { ...h.ids, timeoutMs: 100, signal: second.signal },
       ),
@@ -294,24 +303,23 @@ describe('bounded Attempt Cancel delivery', () => {
     const websocket = new MockWebSocketServer();
     const runtimeA = new MockWebSocket();
     const runtimeB = new MockWebSocket();
+    const identityOf = (socket: unknown): string | undefined =>
+      socket === runtimeA ? runtimeAIdentity : socket === runtimeB ? runtimeBIdentity : undefined;
     const server = new ServerTransport({
       websocket,
       auth: {
         authenticateClient: async () => undefined,
         authenticateServer: async () => undefined,
         handleAuthMessage: () => false,
+        // Subject restrictions follow the authenticated identity, as with HMAC.
+        getAuthenticatedIdentityId: identityOf,
         getReceiveContext: (socket) => {
-          const id = socket === runtimeA ? runtimeAIdentity : socket === runtimeB ? runtimeBIdentity : undefined;
+          const id = identityOf(socket);
           return id === undefined
             ? undefined
             : {
                 transportName: 'websocket',
-                peer: {
-                  kind: 'workflow-execution-attempt',
-                  id,
-                  authenticated: true,
-                  claims: { executionId: h.ids.executionId },
-                },
+                caller: attemptPeer(id, h.ids.executionId),
               };
         },
         isSocketAuthenticated: () => true,
@@ -382,6 +390,7 @@ describe('bounded Attempt Cancel delivery', () => {
       runtimeB.clearSentMessages();
 
       const operationDelivered = h.bus.request(
+        h.bus.own('root'),
         ExecutionAttemptSubjects.operation.deliver,
         {
           executionAttemptId: h.ids.executionAttemptId,
@@ -411,6 +420,7 @@ describe('bounded Attempt Cancel delivery', () => {
       runtimeA.clearSentMessages();
 
       const gateDelivered = h.bus.request(
+        h.bus.own('root'),
         WorkflowSubjects.gate.respond,
         {
           executionId: h.ids.executionId,

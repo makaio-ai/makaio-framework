@@ -22,6 +22,7 @@ import {
   type WorkflowSequenceNode,
   type WorkflowStationNode,
 } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import { RuntimeContext } from '../runtime/runtime-context.js';
 import { executeStationNode } from '../runtime/station-node.js';
 import { createWorkflowStateContext } from '../runtime/workflow-state-context.js';
@@ -157,7 +158,7 @@ describe('executeStationNode', () => {
     };
 
     const ctx = makeCtx({ greet: handler });
-    const outcome = await executeStationNode(node, ctx, emptyExpressionCtx);
+    const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     if (outcome.status === 'completed') {
@@ -193,7 +194,7 @@ describe('executeStationNode', () => {
       new AbortController().signal,
     );
 
-    await executeStationNode(node, ctx, emptyExpressionCtx);
+    await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(received[0]).toEqual({ inputs: { key: 'value' }, config: { mode: 'strict' } });
   });
@@ -223,7 +224,7 @@ describe('executeStationNode', () => {
     };
 
     const ctx = makeCtx({ consumer: handler });
-    await executeStationNode(node, ctx, expressionCtx);
+    await executeStationNode(createTestCall(), node, ctx, expressionCtx);
 
     expect(receivedPreviousSteps).toMatchObject({
       'prior-step': { status: 'completed', output: { result: 42 } },
@@ -254,7 +255,7 @@ describe('executeStationNode', () => {
       receivedPayload = eventCtx.payload;
     });
 
-    const outcome = await executeStationNode(node, ctx, emptyExpressionCtx, 'frame-progress');
+    const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-progress');
 
     expect(outcome.status).toBe('completed');
     expect(receivedPayload).toMatchObject({
@@ -287,7 +288,13 @@ describe('executeStationNode', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     try {
-      const outcome = await executeStationNode(node, ctx, emptyExpressionCtx, 'frame-invalid-progress');
+      const outcome = await executeStationNode(
+        createTestCall(),
+        node,
+        ctx,
+        emptyExpressionCtx,
+        'frame-invalid-progress',
+      );
 
       expect(outcome.status).toBe('failed');
       if (outcome.status === 'failed') {
@@ -315,7 +322,13 @@ describe('executeStationNode', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     try {
-      const outcome = await executeStationNode(node, ctx, emptyExpressionCtx, 'frame-observer-failure');
+      const outcome = await executeStationNode(
+        createTestCall(),
+        node,
+        ctx,
+        emptyExpressionCtx,
+        'frame-observer-failure',
+      );
 
       expect(outcome.status).toBe('completed');
     } finally {
@@ -344,7 +357,13 @@ describe('executeStationNode', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     try {
-      const outcome = await executeStationNode(node, ctx, emptyExpressionCtx, 'frame-validation-observer-failure');
+      const outcome = await executeStationNode(
+        createTestCall(),
+        node,
+        ctx,
+        emptyExpressionCtx,
+        'frame-validation-observer-failure',
+      );
 
       expect(outcome.status).toBe('completed');
     } finally {
@@ -361,7 +380,7 @@ describe('executeStationNode', () => {
     };
 
     const ctx = makeCtx({});
-    const outcome = await executeStationNode(node, ctx, emptyExpressionCtx);
+    const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
@@ -399,7 +418,7 @@ describe('executeStationNode', () => {
     });
 
     try {
-      const outcome = await executeStationNode(node, ctx, {
+      const outcome = await executeStationNode(createTestCall(), node, ctx, {
         ...emptyExpressionCtx,
         inputs: { title: 'the implementation' },
       });
@@ -444,7 +463,7 @@ describe('executeStationNode', () => {
     });
 
     try {
-      const outcome = await executeStationNode(node, ctx, emptyExpressionCtx);
+      const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
       expect(outcome).toEqual({ status: 'completed', output: 'handler result' });
     } finally {
@@ -461,7 +480,7 @@ describe('executeStationNode', () => {
     };
     const ctx = makeCtx({});
 
-    const outcome = await executeStationNode(node, ctx, emptyExpressionCtx);
+    const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
@@ -482,7 +501,7 @@ describe('executeStationNode', () => {
     });
 
     try {
-      const outcome = await executeStationNode(node, ctx, emptyExpressionCtx);
+      const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
       expect(outcome.status).toBe('failed');
       if (outcome.status === 'failed') {
@@ -509,7 +528,7 @@ describe('executeStationNode', () => {
     });
 
     try {
-      const outcome = await executeStationNode(node, ctx, emptyExpressionCtx);
+      const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
       expect(outcome.status).toBe('failed');
       if (outcome.status === 'failed') {
@@ -554,7 +573,9 @@ describe('executeStationNode', () => {
     });
 
     try {
-      await expect(executeStationNode(node, ctx, emptyExpressionCtx)).resolves.toEqual(scenario.expected);
+      await expect(executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx)).resolves.toEqual(
+        scenario.expected,
+      );
     } finally {
       unsubscribeRole();
       unsubscribeSpawn();
@@ -598,7 +619,7 @@ describe('executeStationNode', () => {
     });
 
     try {
-      const outcomePromise = executeStationNode(node, ctx, emptyExpressionCtx);
+      const outcomePromise = executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
       await awaitEntered;
       controller.abort();
 
@@ -652,7 +673,7 @@ describe('executeStationNode', () => {
     });
 
     try {
-      const outcomePromise = executeStationNode(node, ctx, emptyExpressionCtx);
+      const outcomePromise = executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
       await awaitEntered;
       controller.abort();
 
@@ -698,6 +719,7 @@ describe('executeStationNode', () => {
 
     try {
       const outcome = await executeRoleSubagentNode(
+        createTestCall(),
         {
           nodeId: 'abandoned-role-station',
           nodeLabel: 'Station node',
@@ -747,6 +769,7 @@ describe('executeStationNode', () => {
     try {
       await expect(
         executeRoleSubagentNode(
+          createTestCall(),
           {
             nodeId: 'await-failed-role-station',
             nodeLabel: 'Station node',
@@ -804,6 +827,7 @@ describe('executeStationNode', () => {
 
     try {
       const outcome = await executeRoleSubagentNode(
+        createTestCall(),
         {
           nodeId: 'analyze',
           nodeLabel: 'Station node',
@@ -867,6 +891,7 @@ describe('executeStationNode', () => {
 
     try {
       const outcome = await executeRoleSubagentNode(
+        createTestCall(),
         {
           nodeId: 'delayed-link',
           nodeLabel: 'Station node',
@@ -915,6 +940,7 @@ describe('executeStationNode', () => {
     });
 
     const outcomePromise = executeRoleSubagentNode(
+      createTestCall(),
       {
         nodeId: 'timeout-link',
         nodeLabel: 'Station node',
@@ -953,6 +979,7 @@ describe('executeStationNode', () => {
   it('passes the workflow abort signal to frame session status polling', async () => {
     const controller = new AbortController();
     const ctx = makeCtx({}, controller.signal);
+    const call = createTestCall();
     const requestOptionalSpy = vi.spyOn(ctx.bus, 'requestOptional');
     const cleanupRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
       requestCtx.setResult({ adapterName: 'test-adapter' });
@@ -973,6 +1000,7 @@ describe('executeStationNode', () => {
     try {
       await expect(
         executeRoleSubagentNode(
+          call,
           {
             nodeId: 'signal-link',
             nodeLabel: 'Station node',
@@ -990,6 +1018,7 @@ describe('executeStationNode', () => {
       ).resolves.toEqual({ status: 'completed', output: 'done with signal' });
 
       expect(requestOptionalSpy).toHaveBeenCalledWith(
+        call,
         SubagentSubjects.getStatus,
         { subagentId: 'subagent-status-signal' },
         expect.objectContaining({ signal: controller.signal, timeout: expect.any(Number) }),
@@ -1005,6 +1034,7 @@ describe('executeStationNode', () => {
 
   it('issues the subagent await request without the bus envelope timeout', async () => {
     const ctx = makeCtx({});
+    const call = createTestCall();
     const requestOptionalSpy = vi.spyOn(ctx.bus, 'requestOptional');
     const cleanupRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
       requestCtx.setResult({ adapterName: 'test-adapter' });
@@ -1019,6 +1049,7 @@ describe('executeStationNode', () => {
     try {
       await expect(
         executeRoleSubagentNode(
+          call,
           {
             nodeId: 'await-options',
             nodeLabel: 'Station node',
@@ -1040,6 +1071,7 @@ describe('executeStationNode', () => {
       // enforced by the subagent service handler. Without the option, every
       // delegate turn longer than 60s dies regardless of node.timeoutMs.
       expect(requestOptionalSpy).toHaveBeenCalledWith(
+        call,
         SubagentSubjects.await,
         { subagentId: 'subagent-await-options', timeoutMs: 90_000 },
         { timeout: 0 },
@@ -1079,6 +1111,7 @@ describe('executeStationNode', () => {
     });
 
     const outcomePromise = executeRoleSubagentNode(
+      createTestCall(),
       {
         nodeId: 'abort-delay-link',
         nodeLabel: 'Station node',
@@ -1144,7 +1177,7 @@ describe('executeStationNode', () => {
       new AbortController().signal,
     );
 
-    const outcome = await executeStationNode(node, ctx, emptyExpressionCtx);
+    const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     expect(receivedBus).toBe(bus);
@@ -1162,7 +1195,7 @@ describe('executeStationNode', () => {
     };
 
     const ctx = makeCtx({ broken: handler });
-    const outcome = await executeStationNode(node, ctx, emptyExpressionCtx);
+    const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
@@ -1182,7 +1215,7 @@ describe('executeStationNode', () => {
     abortCtrl.abort();
 
     const ctx = makeCtx({ slow: handler }, abortCtrl.signal);
-    const outcome = await executeStationNode(node, ctx, emptyExpressionCtx);
+    const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('cancelled');
   });
@@ -1202,7 +1235,7 @@ describe('executeStationNode', () => {
 
     const abortCtrl = new AbortController();
     const ctx = makeCtx({ 'check-signal': handler }, abortCtrl.signal);
-    await executeStationNode(node, ctx, emptyExpressionCtx);
+    await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(capturedSignal).toBe(abortCtrl.signal);
   });
@@ -1252,7 +1285,7 @@ describe('executeStationNode', () => {
       },
     );
 
-    await executeStationNode(node, ctx, emptyExpressionCtx);
+    await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(receivedContext).toEqual({
       repoPath: '/repo/runtime',
@@ -1358,7 +1391,7 @@ describe('executeDelegateNode', () => {
     });
     const unsubscribeSendMessage = ctx.bus.on(SessionSubjects.sendMessage, async (requestCtx) => {
       sentMessages.push(requestCtx.payload);
-      await ctx.bus.emit(AgentSubjects.complete, {
+      await ctx.bus.emit(requestCtx.call, AgentSubjects.complete, {
         agentId: 'agent-review-delegate',
         adapterId: 'adapter-review-delegate',
         adapterName: 'claude-code',
@@ -1392,6 +1425,7 @@ describe('executeDelegateNode', () => {
 
     try {
       const outcome = await executeDelegateRoleNode(
+        createTestCall(),
         node,
         ctx,
         {
@@ -1487,6 +1521,7 @@ describe('executeDelegateNode', () => {
 
     try {
       const outcome = await executeDelegateRoleNode(
+        createTestCall(),
         node,
         ctx,
         {
@@ -1554,6 +1589,7 @@ describe('executeDelegateNode', () => {
 
     try {
       const outcome = await executeDelegateRoleNode(
+        createTestCall(),
         node,
         ctx,
         {
@@ -1604,7 +1640,7 @@ describe('executeDelegateNode', () => {
     };
     const ctx = makeCtx({});
 
-    const outcome = await executeDelegateRoleNode(node, ctx, emptyExpressionCtx);
+    const outcome = await executeDelegateRoleNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
@@ -1637,7 +1673,7 @@ describe('executeDelegateNode', () => {
     });
 
     try {
-      const outcome = await executeDelegateAgentNode(node, ctx, {
+      const outcome = await executeDelegateAgentNode(createTestCall(), node, ctx, {
         ...emptyExpressionCtx,
         inputs: { task: 'Add tests', branch: 'workflow-api' },
       });
@@ -1723,7 +1759,9 @@ describe('executeDelegateNode', () => {
     });
 
     try {
-      await expect(executeDelegateAgentNode(node, ctx, emptyExpressionCtx, 'frame-read')).resolves.toEqual({
+      await expect(
+        executeDelegateAgentNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-read'),
+      ).resolves.toEqual({
         status: 'completed',
         output: { artifact: { id: 'artifact-1' }, summary: 'model summary' },
       });
@@ -1759,9 +1797,9 @@ describe('executeDelegateNode', () => {
     });
 
     try {
-      await expect(executeDelegateAgentNode(node, ctx, emptyExpressionCtx, 'frame-read')).rejects.toThrow(
-        'authority unavailable',
-      );
+      await expect(
+        executeDelegateAgentNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-read'),
+      ).rejects.toThrow('authority unavailable');
     } finally {
       unsubscribeAgent();
       unsubscribeSpawn();
@@ -1800,7 +1838,7 @@ describe('executeDelegateNode', () => {
     });
 
     try {
-      const outcome = executeDelegateAgentNode(node, ctx, emptyExpressionCtx, 'frame-read');
+      const outcome = executeDelegateAgentNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-read');
       await finalizerStarted;
       controller.abort();
       await expect(outcome).resolves.toEqual({ status: 'cancelled' });
@@ -1845,7 +1883,7 @@ describe('executeDelegateNode', () => {
       requestCtx.setResult({ agentId: 'agent-review', adapterSessionId: 'adapter-session-review', role: 'lead' });
     });
     const unsubscribeSend = ctx.bus.on(SessionSubjects.sendMessage, async (requestCtx) => {
-      await ctx.bus.emit(AgentSubjects.complete, {
+      await ctx.bus.emit(requestCtx.call, AgentSubjects.complete, {
         agentId: 'agent-review',
         adapterId: 'adapter-review',
         adapterName: 'claude-code',
@@ -1880,7 +1918,7 @@ describe('executeDelegateNode', () => {
     });
 
     try {
-      const outcome = executeDelegateRoleNode(node, ctx, emptyExpressionCtx, 'frame-review');
+      const outcome = executeDelegateRoleNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-review');
       await finalizerStarted;
       controller.abort();
       await expect(outcome).resolves.toEqual({ status: 'cancelled' });
@@ -1905,7 +1943,7 @@ describe('executeDelegateNode', () => {
     };
     const ctx = makeCtx({});
 
-    const outcome = await executeDelegateAgentNode(node, ctx, emptyExpressionCtx);
+    const outcome = await executeDelegateAgentNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
@@ -1941,6 +1979,7 @@ describe('executeSequence frame persistence', () => {
 
     try {
       const outcome = await executeSequence(
+        createTestCall(),
         {
           id: 'root',
           type: 'sequence',
@@ -1991,13 +2030,13 @@ describe('executeSequence frame persistence', () => {
     });
 
     try {
-      const firstFrame = ctx.createFrame({ nodeId: 'review', nodeType: 'station', path: [] });
-      await ctx.updateFrame(firstFrame.frameId, { status: 'running', startedAt: 10 });
-      await ctx.updateFrame(firstFrame.frameId, { status: 'completed', completedAt: 20 });
+      const firstFrame = ctx.createFrame(createTestCall(), { nodeId: 'review', nodeType: 'station', path: [] });
+      await ctx.updateFrame(createTestCall(), firstFrame.frameId, { status: 'running', startedAt: 10 });
+      await ctx.updateFrame(createTestCall(), firstFrame.frameId, { status: 'completed', completedAt: 20 });
 
-      const secondFrame = ctx.createFrame({ nodeId: 'review', nodeType: 'station', path: [] });
-      await ctx.updateFrame(secondFrame.frameId, { status: 'running', startedAt: 30 });
-      await ctx.updateFrame(secondFrame.frameId, { status: 'completed', completedAt: 40 });
+      const secondFrame = ctx.createFrame(createTestCall(), { nodeId: 'review', nodeType: 'station', path: [] });
+      await ctx.updateFrame(createTestCall(), secondFrame.frameId, { status: 'running', startedAt: 30 });
+      await ctx.updateFrame(createTestCall(), secondFrame.frameId, { status: 'completed', completedAt: 40 });
 
       expect(persistedSpans.filter((span) => span.status === 'completed')).toEqual([
         { frameId: firstFrame.frameId, stepId: 'review', status: 'completed' },
@@ -2041,7 +2080,7 @@ describe('executeSequence expression output aliases', () => {
       ],
     };
 
-    const outcome = await executeSequence(root, makeCtx(handlers), {
+    const outcome = await executeSequence(createTestCall(), root, makeCtx(handlers), {
       ...emptyExpressionCtx,
       inputs: { run: 'yes', skipSkipped: true },
     });
@@ -2073,7 +2112,7 @@ describe('executeSequence expression output aliases', () => {
       ],
     };
 
-    const outcome = await executeSequence(root, makeCtx(handlers), emptyExpressionCtx);
+    const outcome = await executeSequence(createTestCall(), root, makeCtx(handlers), emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     expect(fixRan).toBe(true);
@@ -2104,7 +2143,7 @@ describe('executeSequence expression output aliases', () => {
       nodes: [{ id: 'aggregate', type: 'station', prompt: 'Aggregate' } as WorkflowStationNode, iterateNode],
     };
 
-    const outcome = await executeSequence(root, makeCtx(handlers), emptyExpressionCtx);
+    const outcome = await executeSequence(createTestCall(), root, makeCtx(handlers), emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     expect(applied).toEqual(['a', 'b']);
@@ -2161,13 +2200,14 @@ describe('executeParallelNode (all-settled mode)', () => {
     });
 
     const ctx = makeCtx(handlers);
-    const parallelFrame = ctx.createFrame({
+    const parallelFrame = ctx.createFrame(createTestCall(), {
       nodeId: 'parallel-1',
       nodeType: 'parallel',
       path: [],
     });
 
     const outcome = await executeParallelNode(
+      createTestCall(),
       node,
       ctx,
       emptyExpressionCtx,
@@ -2208,13 +2248,14 @@ describe('executeParallelNode (all-settled mode)', () => {
         'parallel-order__alpha__draft': () => 'draft-output',
         'parallel-order__alpha__final': () => 'final-output',
       });
-      const parallelFrame = ctx.createFrame({
+      const parallelFrame = ctx.createFrame(createTestCall(), {
         nodeId: 'parallel-order',
         nodeType: 'parallel',
         path: [],
       });
 
       const outcome = await executeParallelNode(
+        createTestCall(),
         node,
         ctx,
         emptyExpressionCtx,
@@ -2243,13 +2284,14 @@ describe('executeParallelNode (all-settled mode)', () => {
     });
 
     const ctx = makeCtx(handlers);
-    const parallelFrame = ctx.createFrame({
+    const parallelFrame = ctx.createFrame(createTestCall(), {
       nodeId: 'parallel-mixed',
       nodeType: 'parallel',
       path: [],
     });
 
     const outcome = await executeParallelNode(
+      createTestCall(),
       node,
       ctx,
       emptyExpressionCtx,
@@ -2300,7 +2342,7 @@ describe('executeParallelNode (all-settled mode)', () => {
       });
       requestCtx.setResult({ frameId: frame.frameId });
     });
-    const parallelFrame = ctx.createFrame({
+    const parallelFrame = ctx.createFrame(createTestCall(), {
       nodeId: 'framed-parallel',
       nodeType: 'parallel',
       path: [],
@@ -2308,6 +2350,7 @@ describe('executeParallelNode (all-settled mode)', () => {
 
     try {
       const outcome = await executeParallelNode(
+        createTestCall(),
         node,
         ctx,
         emptyExpressionCtx,
@@ -2374,13 +2417,14 @@ describe('executeParallelNode (all-settled mode)', () => {
     };
 
     const ctx = makeCtx({});
-    const parallelFrame = ctx.createFrame({
+    const parallelFrame = ctx.createFrame(createTestCall(), {
       nodeId: 'empty-parallel',
       nodeType: 'parallel',
       path: [],
     });
 
     const outcome = await executeParallelNode(
+      createTestCall(),
       node,
       ctx,
       emptyExpressionCtx,
@@ -2408,13 +2452,14 @@ describe('executeParallelNode (all-settled mode)', () => {
     abortCtrl.abort();
 
     const ctx = makeCtx(handlers, abortCtrl.signal);
-    const parallelFrame = ctx.createFrame({
+    const parallelFrame = ctx.createFrame(createTestCall(), {
       nodeId: 'aborted-parallel',
       nodeType: 'parallel',
       path: [],
     });
 
     const outcome = await executeParallelNode(
+      createTestCall(),
       node,
       ctx,
       emptyExpressionCtx,
@@ -2465,13 +2510,14 @@ describe('executeParallelNode (fail-fast mode)', () => {
     };
 
     const ctx = makeCtx(handlers);
-    const parallelFrame = ctx.createFrame({
+    const parallelFrame = ctx.createFrame(createTestCall(), {
       nodeId: 'fail-fast',
       nodeType: 'parallel',
       path: [],
     });
 
     const outcome = await executeParallelNode(
+      createTestCall(),
       node,
       ctx,
       emptyExpressionCtx,
@@ -2548,13 +2594,14 @@ describe('executeParallelNode (fail-fast mode)', () => {
     };
 
     const ctx = makeCtx(handlers);
-    const parallelFrame = ctx.createFrame({
+    const parallelFrame = ctx.createFrame(createTestCall(), {
       nodeId: 'ff-sibling',
       nodeType: 'parallel',
       path: [],
     });
 
     const outcome = await executeParallelNode(
+      createTestCall(),
       node,
       ctx,
       emptyExpressionCtx,
@@ -2606,7 +2653,7 @@ describe('executeSequence with serialized parallel mode', () => {
     const root = { id: 'serialized-root', type: 'sequence' as const, nodes: [parallel] };
     const ctx = makeCtx(handlers);
 
-    const outcome = await executeSequence(root, ctx, emptyExpressionCtx);
+    const outcome = await executeSequence(createTestCall(), root, ctx, emptyExpressionCtx);
 
     expect(outcome).toEqual({ status: 'failed', error: 'serialized branch failed' });
   });
@@ -2695,7 +2742,7 @@ describe('station handler state context', () => {
     };
 
     try {
-      const outcome = await executeStationNode(node, runtimeCtx, emptyExpressionCtx);
+      const outcome = await executeStationNode(createTestCall(), node, runtimeCtx, emptyExpressionCtx);
 
       expect(outcome.status).toBe('completed');
       expect(capturedState).toEqual({
@@ -2733,7 +2780,7 @@ describe('station handler state context', () => {
       prompt: 'No state',
     };
 
-    await executeStationNode(node, runtimeCtx, emptyExpressionCtx);
+    await executeStationNode(createTestCall(), node, runtimeCtx, emptyExpressionCtx);
     expect(capturedState).toBeUndefined();
   });
 
@@ -2799,7 +2846,7 @@ describe('station handler state context', () => {
     };
 
     try {
-      const outcome = await executeStationNode(node, runtimeCtx, emptyExpressionCtx);
+      const outcome = await executeStationNode(createTestCall(), node, runtimeCtx, emptyExpressionCtx);
 
       expect(outcome.status).toBe('completed');
       expect(finalState).toEqual({ count: 2 });
@@ -2843,7 +2890,7 @@ describe('station handler state context', () => {
       });
     });
 
-    const state = createWorkflowStateContext('exec-patch-test', bus);
+    const state = createWorkflowStateContext(createTestCall(), 'exec-patch-test', bus);
 
     try {
       const updated = await state.update(async (draft) => {
@@ -2914,7 +2961,7 @@ describe('station handler state context', () => {
       });
     });
 
-    const state = createWorkflowStateContext('exec-primitive-state-test', bus);
+    const state = createWorkflowStateContext(createTestCall(), 'exec-primitive-state-test', bus);
 
     try {
       const updated = await state.update(() => 1);
@@ -2940,7 +2987,7 @@ describe('station handler state context', () => {
     const cleanupPatch = bus.on(WorkflowSubjects.state.patch, () => {
       throw new Error('state sequence conflict: expected 0, got 1');
     });
-    const state = createWorkflowStateContext('exec-conflict-test', bus);
+    const state = createWorkflowStateContext(createTestCall(), 'exec-conflict-test', bus);
 
     try {
       await expect(

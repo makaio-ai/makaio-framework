@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MakaioBus, createBusInstance } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import type { RawCredential } from '../interfaces/credential-source.js';
 import { AccountManager } from '../account-manager.js';
@@ -123,7 +124,9 @@ describe('AccountManager', () => {
         const accounts = await isolatedStore.list('claude-code');
         expect(accounts.find((account) => account.active)?.id).toBe(accountBId);
         expect(accounts.find((account) => account.id === accountAId)?.active).toBe(false);
-        expect(await isolatedStore.metadataStore.getLatestTimelineEntry('claude-code', 'switch')).toBeNull();
+        expect(
+          await isolatedStore.metadataStore.getLatestTimelineEntry(createTestCall(), 'claude-code', 'switch'),
+        ).toBeNull();
         expect(errors).toContainEqual(
           expect.objectContaining({
             clientId: 'claude-code',

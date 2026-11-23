@@ -35,12 +35,12 @@ export function registerSubagentSessionOrchestrationMocks(
 ): void {
   bus.on(SessionSubjects.agent.attachResolved, async (ctx) => {
     options.onAttachResolvedPayload?.(ctx.payload);
-    const { adapterId } = await bus.request(AdapterRuntimeSubjects.resolveId, {
+    const { adapterId } = await bus.request(ctx.call, AdapterRuntimeSubjects.resolveId, {
       adapterName: ctx.payload.agent.adapterName ?? 'unknown-adapter',
     });
     let started;
     try {
-      started = await bus.request(AdapterSubjects.startAgent, {
+      started = await bus.request(ctx.call, AdapterSubjects.startAgent, {
         adapterId,
         sessionId: ctx.payload.sessionId,
         role: ctx.payload.role ?? 'lead',
@@ -68,7 +68,7 @@ export function registerSubagentSessionOrchestrationMocks(
         ctx.payload.assertInitialMessageAdmission();
       }
       if (ctx.payload.initialMessage !== undefined) {
-        await bus.request(SessionSubjects.sendMessage, {
+        await bus.request(ctx.call, SessionSubjects.sendMessage, {
           sessionId: ctx.payload.sessionId,
           message: ctx.payload.initialMessage,
           source: ctx.payload.source,

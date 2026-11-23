@@ -17,7 +17,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
-import { createBusContext, createBusInstance } from '@makaio/bus-core';
+import { createBusInstance } from '@makaio/bus-core';
 import { closeHttpServer, listenOnLoopback } from './__tests__/http-test-helpers.js';
 import { BusServerTransportProvider } from './bus-server-transport.js';
 
@@ -58,7 +58,7 @@ describe('BusServerTransportProvider — WebSocket upgrade integration', () => {
     const server = createServer();
     const port = await listenOnLoopback(server);
     // Use an isolated bus instance to avoid polluting the global singleton.
-    const bus = createBusInstance({ context: createBusContext() });
+    const bus = createBusInstance();
     const transport = new BusServerTransportProvider({
       httpServer: server,
     });
@@ -83,7 +83,7 @@ describe('BusServerTransportProvider — WebSocket upgrade integration', () => {
   it('passes non-bus upgrade requests to downstream listeners without destroying the socket', async () => {
     const server = createServer();
     const port = await listenOnLoopback(server);
-    const bus = createBusInstance({ context: createBusContext() });
+    const bus = createBusInstance();
     const transport = new BusServerTransportProvider({
       httpServer: server,
     });

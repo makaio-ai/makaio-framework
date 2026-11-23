@@ -12,6 +12,7 @@ import {
   type PackedExtensionDescriptor,
   type PackedPackageManifest,
 } from './npm-packlist-policy.js';
+import { isFrameworkOwnedImport } from '../../build-tooling/framework-import-map.js';
 import { NPM_PUBLISH_DIRECTORY } from './npm-publish-staging.js';
 
 const FRAMEWORK_ROOT = resolve(import.meta.dirname, '..', '..');
@@ -649,6 +650,87 @@ describe('checkDeclarationDependencies', () => {
 
   it('returns no issues when declarationImports is empty', () => {
     const issues = checkDeclarationDependencies({ name: '@makaio/core' }, {});
+    expect(issues).toEqual([]);
+  });
+});
+
+/** Directories never scanned for workspace packages or their sources. */
+const SKIPPED_SCAN_DIRS = new Set(['.yarn', 'build', 'dist', 'node_modules']);
+/** Source files that never reach built output. */
+const NON_SHIPPED_SOURCE_PATTERN = /(?:\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)(?:__tests__|tests)\/)/u;
+/** Static, re-export and dynamic import specifiers (type-only imports included: they reach declarations). */
+const MAKAIO_SPECIFIER_PATTERN = /(?:\bfrom\s*|\bimport\s*\(?\s*)['"](@makaio\/[^'"]+)['"]/gu;
+/** Build entry files that name the preset or plugin which rewrites framework-owned imports. */
+const REWRITING_BUILD_FILES = ['build.ts', 'tsdown.config.ts'];
+const REWRITING_BUILD_PATTERN = /tsdown-(?:framework|extension|adapter)-(?:preset|build)|frameworkExternals/u;
+
+/** The only manifest field the non-private package scan reads. */
+type PrivateFlagManifest = { private?: boolean };
+
+/**
+ * Find every non-private package directory under a root, whether or not it sets `publishConfig.access`.
+ * @param root - Directory to scan recursively.
+ * @returns Absolute package directories.
+ */
+function discoverNonPrivatePackageDirs(root: string): string[] {
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    if (!entry.isDirectory() || SKIPPED_SCAN_DIRS.has(entry.name)) return [];
+    const dir = join(root, entry.name);
+    const manifestPath = join(dir, 'package.json');
+    const isPublishable = existsSync(manifestPath) && readJsonFile<PrivateFlagManifest>(manifestPath).private !== true;
+    const own = isPublishable ? [dir] : [];
+    return [...own, ...discoverNonPrivatePackageDirs(dir)];
+  });
+}
+
+function listShippedSourceFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return NON_SHIPPED_SOURCE_PATTERN.test(`${path}/`) ? [] : listShippedSourceFiles(path);
+    return /\.[cm]?tsx?$/u.test(entry.name) && !NON_SHIPPED_SOURCE_PATTERN.test(path) ? [path] : [];
+  });
+}
+
+function findRewrittenFrameworkImport(packageDir: string, ownName: string): string | undefined {
+  const srcDir = join(packageDir, 'src');
+  if (!existsSync(srcDir)) return undefined;
+  for (const file of listShippedSourceFiles(srcDir)) {
+    for (const match of readFileSync(file, 'utf8').matchAll(MAKAIO_SPECIFIER_PATTERN)) {
+      const specifier = match[1];
+      if (specifier !== undefined && !specifier.startsWith(ownName) && isFrameworkOwnedImport(specifier)) {
+        return `${file}: ${specifier}`;
+      }
+    }
+  }
+  return undefined;
+}
+
+function usesRewritingBuild(packageDir: string): boolean {
+  return REWRITING_BUILD_FILES.some((name) => {
+    const path = join(packageDir, name);
+    return existsSync(path) && REWRITING_BUILD_PATTERN.test(readFileSync(path, 'utf8'));
+  });
+}
+
+describe('framework peer dependency for rewritten imports', () => {
+  // Built output of a package built with a rewriting preset imports `@makaio/framework/*` whenever its
+  // sources import a framework-owned workspace package, so its manifest must declare the framework peer
+  // (the staging check in npm-publish-staging.ts enforces the same on built output). `sdks/*` build with
+  // plain tsdown, bundle their workspace deps and are exempt by the preset check, not by path.
+  it('is declared by every non-private package whose rewriting build imports framework-owned packages', () => {
+    const rewritingPackages = discoverNonPrivatePackageDirs(FRAMEWORK_ROOT).filter(usesRewritingBuild);
+    expect(rewritingPackages.length).toBeGreaterThan(40);
+
+    const issues = rewritingPackages.flatMap((dir) => {
+      const manifest = readPackageJson(dir);
+      if (manifest.name === '@makaio/framework') return [];
+      if (manifest.peerDependencies?.['@makaio/framework'] !== undefined) return [];
+      const importer = findRewrittenFrameworkImport(dir, manifest.name ?? dir);
+      return importer
+        ? [`${manifest.name}: imports a framework-owned package (${importer}) without a @makaio/framework peer`]
+        : [];
+    });
+
     expect(issues).toEqual([]);
   });
 });

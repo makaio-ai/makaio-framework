@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createMockScopedBus } from '@makaio/test-utils';
+import { createMockBus, createMockScopedBus, createTestCall } from '@makaio/test-utils';
 import type { PreparedAdapterAuthRuntime } from '../../config/adapter-auth-runtime.js';
 import { asAgentConnector, MockConnector } from '../../agent/__tests__/helpers/mock-agent.js';
 import { ConformanceConnectorRuntimeRegistry } from '../conformance-connector-runtime-registry.js';
@@ -10,6 +10,7 @@ function preparedRuntime(): PreparedAdapterAuthRuntime {
   return {
     config: {
       bus,
+      globalBus: createMockBus().bus,
       agentId: 'agent-1',
       adapterId: 'adapter-1',
       adapterName: 'test-adapter',
@@ -40,7 +41,8 @@ describe('ConformanceConnectorRuntimeRegistry', () => {
       },
     });
 
-    await Promise.all([connector.close(), connector.close(), registry.closeAll()]);
+    const call = createTestCall();
+    await Promise.all([connector.close(call), connector.close(call), registry.closeAll()]);
 
     expect(close).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();

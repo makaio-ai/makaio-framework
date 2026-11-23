@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import { CodexAppServerNamespace } from '../namespaces/index.js';
 import {
   createConnectorTestContext,
@@ -102,11 +103,14 @@ describe('CodexAppServerConnector - Turn lifecycle', () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Now send a new message - it should become the pending message
-    const messageHandle = await ctx.connector.sendMessage({
-      role: 'user',
-      message: 'Another message',
-      blocks: [{ type: 'text', content: 'Another message' }],
-    });
+    const messageHandle = await ctx.connector.sendMessage(
+      {
+        role: 'user',
+        message: 'Another message',
+        blocks: [{ type: 'text', content: 'Another message' }],
+      },
+      { call: createTestCall() },
+    );
 
     // Simulate turn lifecycle for the new message
     await ctx.mockJsonRpcClient.receiveNotification('turn/started', {
@@ -152,6 +156,7 @@ describe('CodexAppServerConnector - outputSchema forwarding', () => {
           blocks: [{ type: 'text', content: 'Hello' }],
         },
         {
+          call: createTestCall(),
           responseSchema: { schema: { type: 'object' }, name: 'object_schema' },
         },
       );

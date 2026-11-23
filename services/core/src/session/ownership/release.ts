@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import {
   SessionOwnershipStorageSubjects,
   type SessionOwnershipReleaseAgentClaimsResult,
@@ -32,15 +33,17 @@ import type { OwnershipAuthorityContext } from './context.js';
  * handler that threw. A removal would then fail on a host that owns no claims
  * to begin with. Same degrade posture as everywhere else in this wave: no
  * store, nothing taken, nothing to give back.
+ * @param call - Call of the handled ownership request.
  * @param context - Composed authority context.
  * @param request - Which claims to give up, and how.
  * @returns What the release retired.
  */
 export async function runRelease(
+  call: CallContext,
   context: OwnershipAuthorityContext,
   request: SessionOwnershipReleaseServiceRequest,
 ): Promise<SessionOwnershipReleaseAgentClaimsResult> {
-  const released = await context.bus.requestOptional(SessionOwnershipStorageSubjects.releaseAgentClaims, {
+  const released = await context.bus.requestOptional(call, SessionOwnershipStorageSubjects.releaseAgentClaims, {
     agentId: request.agentId,
     ...(request.claimToken !== undefined && { claimToken: request.claimToken }),
     disposition: request.disposition,

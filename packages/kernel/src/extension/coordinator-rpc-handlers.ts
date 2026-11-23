@@ -1,11 +1,11 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { ProviderDefinitionSchema, type ProviderDefinition, ExtensionWarning } from '@makaio/contracts';
-import type { CliContribution } from '../cli/types.js';
 import { CliRpcSubjects } from '../bus/cli/namespace.js';
 import { ExtensionSubjects } from '../observability/extension-namespace.js';
 import type { ExtensionInfo } from '../observability/shared-schemas.js';
 import type { InstalledExtensionCatalogEntry } from '../observability/installed-extension-catalog-schemas.js';
-import { handleListContributions, handleExecute } from './cli-rpc-handlers.js';
+import { handleListContributions, handleExecute, type CliExecuteTarget } from './cli-rpc-handlers.js';
+import type { OwnedCliContribution } from './extension-surface-collector.js';
 import type { SetEnabledResult } from './extension-toggle.js';
 import type { ExtensionEntry } from './types.js';
 
@@ -15,7 +15,13 @@ import type { ExtensionEntry } from './types.js';
 export interface RpcHost {
   readonly bus: IMakaioBus;
   readonly entries: ReadonlyMap<string, ExtensionEntry>;
-  readonly cliContributions: ReadonlyArray<CliContribution>;
+  readonly cliContributions: ReadonlyArray<OwnedCliContribution>;
+  /**
+   * Return the carrier bus of a loaded extension, whatever its state.
+   * @param extensionName - Name of the extension.
+   * @returns The carrier bus, or `undefined` only when no entry with that name exists.
+   */
+  carrierBusOf(extensionName: string): IMakaioBus | undefined;
   list(): ExtensionInfo[];
   /**
    * Return the current {@link ExtensionInfo} snapshot for a single named
@@ -34,6 +40,19 @@ export interface RpcHost {
    *   installed-extension catalog to report.
    */
   getInstalledCatalog(): Promise<InstalledExtensionCatalogEntry[] | null>;
+}
+
+/**
+ * Resolve the contribution serving a CLI command together with its owner's carrier bus.
+ * @param host - Coordinator surface providing the collected contributions and extension contexts.
+ * @param command - Name of the requested CLI command.
+ * @returns The target, or `undefined` when no loaded extension contributes the command.
+ */
+function resolveExecuteTarget(host: RpcHost, command: string): CliExecuteTarget | undefined {
+  const owned = host.cliContributions.find((entry) => entry.contribution.name === command);
+  if (!owned) return undefined;
+  const bus = host.carrierBusOf(owned.extensionName);
+  return bus ? { contribution: owned.contribution, bus } : undefined;
 }
 
 /**
@@ -99,13 +118,15 @@ export function registerCoordinatorRpcHandlers(host: RpcHost): Array<() => void>
 
   cleanups.push(
     host.bus.on(CliRpcSubjects.listContributions, (ctx) => {
-      ctx.setResult({ contributions: handleListContributions(host.cliContributions) });
+      ctx.setResult({
+        contributions: handleListContributions(host.cliContributions.map((owned) => owned.contribution)),
+      });
     }),
   );
 
   cleanups.push(
     host.bus.on(CliRpcSubjects.execute, async (ctx) => {
-      ctx.setResult(await handleExecute(ctx.payload, host.cliContributions, host.bus));
+      ctx.setResult(await handleExecute(ctx.payload, resolveExecuteTarget(host, ctx.payload.command), ctx.call));
     }),
   );
 

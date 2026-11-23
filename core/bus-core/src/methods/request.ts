@@ -1,6 +1,7 @@
 import type { RequestOptions, MakaioBusContext, WithReceiveContext } from '../types/index.js';
 import { isRequestCancellation, NoHandlerError, TimeoutError } from '../errors/index.js';
-import type { OptionalResult, SubjectDefinition } from '@makaio/core';
+import type { CallContext, OptionalResult, PartyRef, SubjectDefinition } from '@makaio/core';
+import { enterSend } from '../call-context/send-entry.js';
 import { nanoid } from 'nanoid';
 import { invokeAnyHandlers } from '../utils/invoke-any-handlers.js';
 import { notifyMessageObservers } from '../observability/subject-telemetry-projector.js';
@@ -60,15 +61,25 @@ function resolveAllowedTransports(transports: RequestOptions['transports']): Arr
   return names.length > 0 ? names.map(String) : undefined;
 }
 
-type InternalRequestOptions = RequestOptions & WithReceiveContext;
+type InternalRequestOptions = RequestOptions & Pick<WithReceiveContext, 'transport'>;
 
 /**
- * Execute a request and wait for a response.
+ * Send a request on behalf of a carrier and wait for a response.
+ *
+ * This is the entry for SENDS: it enters through {@link enterSend}, which turns
+ * the call context the sender passed into the context the message carries
+ * (caller is the carrier, principal and attestation come from `call`) and
+ * reports the use of an own context. Contexts of messages that were
+ * already received enter through {@link requestWithMintedCall} instead.
  * @param context - Makaio bus context
+ * @param carrier - Carrier of the sending bus instance
+ * @param call - Call context the sender passed
  * @param subjectDefinition - Concrete request subject (wildcards not allowed)
  * @param payload - Request payload
  * @param options - Request options (timeout, correlationId, transports)
  * @returns Response value
+ * @throws InvalidCallContextError When `call` was not minted by the core
+ * @throws ForeignOwnContextError When `call` belongs to another carrier or bus context
  * @see {@link IMakaioBus.request} for full documentation and examples.
  */
 export async function request<
@@ -77,6 +88,35 @@ export async function request<
   Response extends T['$meta']['payload']['response'],
 >(
   context: MakaioBusContext,
+  carrier: PartyRef,
+  call: CallContext,
+  subjectDefinition: T,
+  payload: Request,
+  options?: InternalRequestOptions,
+): Promise<Response> {
+  const sent = enterSend(call, context, carrier, getFullSubjectForSubjectDefinition(subjectDefinition));
+  return requestWithMintedCall<T, Request, Response>(context, sent, subjectDefinition, payload, options);
+}
+
+/**
+ * Execute a request whose call context already exists and wait for a response.
+ *
+ * This is the entry for contexts that are already minted: the context a send
+ * derived in {@link request}. It neither derives nor checks the carrier.
+ * @param context - Makaio bus context
+ * @param call - Minted call context the message carries
+ * @param subjectDefinition - Concrete request subject (wildcards not allowed)
+ * @param payload - Request payload
+ * @param options - Request options (timeout, correlationId, transports)
+ * @returns Response value
+ */
+export async function requestWithMintedCall<
+  T extends SubjectDefinition,
+  Request extends T['$meta']['payload']['request'],
+  Response extends T['$meta']['payload']['response'],
+>(
+  context: MakaioBusContext,
+  call: CallContext,
   subjectDefinition: T,
   payload: Request,
   options?: InternalRequestOptions,
@@ -121,6 +161,8 @@ export async function request<
     messageId,
     correlationId,
     transport: options?.transport,
+    caller: { kind: call.caller.kind, id: call.caller.id },
+    principal: { kind: call.principal.kind, id: call.principal.id },
     localOnly,
   });
 
@@ -134,6 +176,7 @@ export async function request<
   let outcome: Awaited<ReturnType<typeof dispatch>>;
   try {
     const dispatchPromise = dispatch(context, subjectDefinition, payload, {
+      call,
       allowedTransports,
       correlationId,
       messageId,
@@ -169,6 +212,8 @@ export async function request<
  * Only missing-handler failures are caught; caller cancellation reasons (even a
  * NoHandlerError), timeouts, validation and handler errors propagate.
  * @param context - Makaio bus context
+ * @param carrier - Carrier of the sending bus instance
+ * @param call - Call context the sender passed
  * @param subjectDefinition - Concrete request subject (wildcards not allowed)
  * @param payload - Request payload
  * @param options - Request options (timeout, correlationId, transports)
@@ -181,12 +226,14 @@ export async function requestOptional<
   Response extends T['$meta']['payload']['response'],
 >(
   context: MakaioBusContext,
+  carrier: PartyRef,
+  call: CallContext,
   subjectDefinition: T,
   payload: Request,
   options?: RequestOptions,
 ): Promise<OptionalResult<Response>> {
   try {
-    const data = await request<T, Request, Response>(context, subjectDefinition, payload, options);
+    const data = await request<T, Request, Response>(context, carrier, call, subjectDefinition, payload, options);
     return { handled: true, data };
   } catch (e) {
     if (e instanceof NoHandlerError && !isRequestCancellation(e, options?.signal)) {

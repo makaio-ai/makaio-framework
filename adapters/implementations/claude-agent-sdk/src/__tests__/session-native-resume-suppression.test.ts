@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { MessageHandle, UserMessageQueue } from '@makaio/ai-adapters-core';
+import type { query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import { McpSubjects, type CallContext, type Party, type ResponseSchemaDescriptor } from '@makaio/contracts';
+import { createTestCall } from '@makaio/test-utils';
 import type { SDKMessage } from '@makaio/client-claude-code';
 
 /**
@@ -35,7 +38,7 @@ const queryHarness = vi.hoisted(() => {
         if (waiting) {
           const resolve = waiting;
           waiting = undefined;
-          resolve({ value: undefined as unknown as SDKMessage, done: true });
+          resolve({ value: undefined, done: true });
         }
       };
 
@@ -46,7 +49,7 @@ const queryHarness = vi.hoisted(() => {
           }
           if (done) {
             return Promise.resolve({
-              value: undefined as unknown as SDKMessage,
+              value: undefined,
               done: true,
             });
           }
@@ -57,7 +60,7 @@ const queryHarness = vi.hoisted(() => {
         return(): Promise<IteratorResult<SDKMessage>> {
           done = true;
           return Promise.resolve({
-            value: undefined as unknown as SDKMessage,
+            value: undefined,
             done: true,
           });
         },
@@ -71,7 +74,7 @@ const queryHarness = vi.hoisted(() => {
   };
 
   return {
-    queryFn: vi.fn(() => queryInstance),
+    queryFn: vi.fn((_params: Parameters<typeof sdkQuery>[0]) => queryInstance),
     queryInstance,
     /**
      * Emit a message into the active consumption loop.
@@ -103,14 +106,24 @@ import { ClaudeConnectorSession } from '../session.js';
 import type { ClaudeSessionConfig } from '../types/index.js';
 
 const RESUME_TARGET = 'stored-provider-session';
+const PERSON_A: Party = { kind: 'acme.person', id: 'person-a' };
+const PERSON_B: Party = { kind: 'acme.person', id: 'person-b' };
+const RESPONSE_SCHEMA: ResponseSchemaDescriptor = { schema: { type: 'object' } };
 
 /**
  * Create a message handle carrying an explicit native-resume decision.
  * @param useNativeResume - Caller decision on native resume, or undefined for legacy callers
+ * @param call - Operation call carried by the message
+ * @param responseSchema - Structured output schema for the turn
  * @returns Message handle containing a text prompt
  */
-function makeHandle(useNativeResume?: boolean): MessageHandle {
+function makeHandle(
+  useNativeResume?: boolean,
+  call = createTestCall(),
+  responseSchema?: ResponseSchemaDescriptor,
+): MessageHandle {
   return new MessageHandle(
+    call,
     `message-${String(useNativeResume)}`,
     {
       role: 'user',
@@ -120,7 +133,7 @@ function makeHandle(useNativeResume?: boolean): MessageHandle {
     'enqueue',
     undefined,
     undefined,
-    undefined,
+    responseSchema,
     false,
     undefined,
     undefined,
@@ -131,11 +144,14 @@ function makeHandle(useNativeResume?: boolean): MessageHandle {
 
 /**
  * Create an initialized SDK session whose config carries a start-time resume target.
+ * @param call - Operation call passed to session initialization
  * @returns Session under test and its shared (mutable) config
  */
-async function makeInitializedSession(): Promise<{ session: ClaudeConnectorSession; config: ClaudeSessionConfig }> {
+async function makeInitializedSession(
+  call = createTestCall(),
+): Promise<{ session: ClaudeConnectorSession; config: ClaudeSessionConfig }> {
   const config: ClaudeSessionConfig = {
-    bus: await ClaudeCodeConnectorNamespace.scopedBus(),
+    bus: await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus),
     adapterId: 'adapter-test',
     adapterName: 'claude-code',
     agentId: 'agent-test',
@@ -145,8 +161,8 @@ async function makeInitializedSession(): Promise<{ session: ClaudeConnectorSessi
     emitSdkEvent: vi.fn(async () => undefined),
     resumeAdapterSessionId: RESUME_TARGET,
   };
-  const session = new ClaudeConnectorSession(config);
-  await session.initialize(() => vi.fn());
+  const session = new ClaudeConnectorSession(config, MakaioBus);
+  await session.initialize(call, () => vi.fn());
   return { session, config };
 }
 
@@ -155,9 +171,9 @@ async function makeInitializedSession(): Promise<{ session: ClaudeConnectorSessi
  * @param index - Call index (0-based)
  * @returns Options object passed to the SDK query factory
  */
-function queryOptions(index: number): Record<string, unknown> {
-  const call = queryHarness.queryFn.mock.calls[index] as unknown as [{ options: Record<string, unknown> }] | undefined;
-  if (!call) throw new Error(`No query() call recorded at index ${index}`);
+function queryOptions(index: number): NonNullable<Parameters<typeof sdkQuery>[0]['options']> {
+  const call = queryHarness.queryFn.mock.calls[index];
+  if (!call?.[0].options) throw new Error(`No query() call recorded at index ${index}`);
   return call[0].options;
 }
 
@@ -169,6 +185,32 @@ describe('ClaudeConnectorSession native resume suppression', () => {
 
   afterEach(() => {
     MakaioBus.__resetHandlers?.();
+  });
+
+  it.each([
+    { trigger: 'native resume suppression', useNativeResume: false, responseSchema: undefined },
+    { trigger: 'response schema change', useNativeResume: true, responseSchema: RESPONSE_SCHEMA },
+  ])('registers under the initialization and turn principals during $trigger', async ({
+    useNativeResume,
+    responseSchema,
+  }) => {
+    const registrationCalls: CallContext[] = [];
+    MakaioBus.on(McpSubjects.session.register, (ctx) => {
+      registrationCalls.push(ctx.call);
+      ctx.setResult({ port: 12345 });
+    });
+
+    const { session } = await makeInitializedSession(createTestCall({ principal: PERSON_A }));
+    try {
+      const turnCall = createTestCall({ principal: PERSON_B });
+      const queue = new UserMessageQueue();
+      queue.enqueue(makeHandle(useNativeResume, turnCall, responseSchema));
+      await session.processQueue(queue);
+
+      expect(registrationCalls.map(({ principal }) => principal)).toEqual([PERSON_A, PERSON_B]);
+    } finally {
+      await session.abort(createTestCall());
+    }
   });
 
   it('rotates the resume-armed query to a fresh one when useNativeResume is false', async () => {
@@ -192,7 +234,7 @@ describe('ClaudeConnectorSession native resume suppression', () => {
       expect(config.resumeAdapterSessionId).toBeUndefined();
       expect(session.getConfirmedSessionId()).not.toBe(RESUME_TARGET);
     } finally {
-      await session.abort();
+      await session.abort(createTestCall());
     }
   });
 
@@ -207,7 +249,7 @@ describe('ClaudeConnectorSession native resume suppression', () => {
       expect(queryOptions(0).resume).toBe(RESUME_TARGET);
       expect(config.resumeAdapterSessionId).toBe(RESUME_TARGET);
     } finally {
-      await session.abort();
+      await session.abort(createTestCall());
     }
   });
 
@@ -221,7 +263,7 @@ describe('ClaudeConnectorSession native resume suppression', () => {
       expect(queryHarness.queryFn).toHaveBeenCalledTimes(1);
       expect(queryOptions(0).resume).toBe(RESUME_TARGET);
     } finally {
-      await session.abort();
+      await session.abort(createTestCall());
     }
   });
 
@@ -236,7 +278,7 @@ describe('ClaudeConnectorSession native resume suppression', () => {
       expect(session.getConfirmedSessionId()).toBe(RESUME_TARGET);
       expect(session.resumeTargetPendingSuppression()).toBe(RESUME_TARGET);
     } finally {
-      await session.abort();
+      await session.abort(createTestCall());
     }
   });
 
@@ -249,7 +291,7 @@ describe('ClaudeConnectorSession native resume suppression', () => {
 
       expect(session.resumeTargetPendingSuppression()).toBeUndefined();
     } finally {
-      await session.abort();
+      await session.abort(createTestCall());
     }
   });
 
@@ -268,7 +310,7 @@ describe('ClaudeConnectorSession native resume suppression', () => {
       // A confirmed generation owns its provider thread: nothing to abandon.
       expect(session.resumeTargetPendingSuppression()).toBeUndefined();
     } finally {
-      await session.abort();
+      await session.abort(createTestCall());
     }
   });
 
@@ -293,7 +335,7 @@ describe('ClaudeConnectorSession native resume suppression', () => {
       expect(queryHarness.queryFn).toHaveBeenCalledTimes(1);
       expect(config.resumeAdapterSessionId).toBe(RESUME_TARGET);
     } finally {
-      await session.abort();
+      await session.abort(createTestCall());
     }
   });
 });

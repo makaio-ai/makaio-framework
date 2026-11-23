@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { RequestError, createBusInstance } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AccountManagerSubjects } from '../bus/namespace.js';
 import { AccountManager } from '../account-manager.js';
 import { InMemoryCredentialSource } from './testing/in-memory-source.js';
@@ -39,7 +40,7 @@ describe('AccountManager — usage.history handler', () => {
   });
 
   it('returns an empty entries array when no data has been written', async () => {
-    const result = await historyBus.request(AccountManagerSubjects.usage.history, {
+    const result = await historyBus.request(createTestCall(), AccountManagerSubjects.usage.history, {
       clientId: 'claude-code',
       accountId: 'acc-no-data',
       from: HISTORY_TEST_FROM,
@@ -54,21 +55,21 @@ describe('AccountManager — usage.history handler', () => {
     const accountId = 'acc-test-001';
     const ts1 = Date.UTC(2026, 3, 15, 10, 0, 0);
     const ts2 = Date.UTC(2026, 3, 15, 11, 0, 0);
-    await historyStore.usageSnapshotStore.append(clientId, accountId, {
+    await historyStore.usageSnapshotStore.append(createTestCall(), clientId, accountId, {
       ts: ts2,
       windowId: '5h',
       utilization: 40,
       resetsAt: ts2 + 1000,
       blocked: false,
     });
-    await historyStore.usageSnapshotStore.append(clientId, accountId, {
+    await historyStore.usageSnapshotStore.append(createTestCall(), clientId, accountId, {
       ts: ts1,
       windowId: '5h',
       utilization: 30,
       resetsAt: ts1 + 1000,
       blocked: false,
     });
-    await historyStore.usageSnapshotStore.append(clientId, 'acc-other', {
+    await historyStore.usageSnapshotStore.append(createTestCall(), clientId, 'acc-other', {
       ts: ts1,
       windowId: '5h',
       utilization: 99,
@@ -76,7 +77,7 @@ describe('AccountManager — usage.history handler', () => {
       blocked: false,
     });
 
-    const result = await historyBus.request(AccountManagerSubjects.usage.history, {
+    const result = await historyBus.request(createTestCall(), AccountManagerSubjects.usage.history, {
       clientId,
       accountId,
       from: HISTORY_TEST_FROM,
@@ -90,7 +91,7 @@ describe('AccountManager — usage.history handler', () => {
 
   it('rejects empty clientId/accountId at the request contract', async () => {
     await expect(
-      historyBus.request(AccountManagerSubjects.usage.history, {
+      historyBus.request(createTestCall(), AccountManagerSubjects.usage.history, {
         clientId: '',
         accountId: 'acc-test-003',
         from: HISTORY_TEST_FROM,
@@ -99,7 +100,7 @@ describe('AccountManager — usage.history handler', () => {
     ).rejects.toBeInstanceOf(RequestError);
 
     await expect(
-      historyBus.request(AccountManagerSubjects.usage.history, {
+      historyBus.request(createTestCall(), AccountManagerSubjects.usage.history, {
         clientId: 'claude-code',
         accountId: '',
         from: HISTORY_TEST_FROM,
@@ -110,7 +111,7 @@ describe('AccountManager — usage.history handler', () => {
 
   it('rejects history ranges longer than 31 days at the request contract', async () => {
     await expect(
-      historyBus.request(AccountManagerSubjects.usage.history, {
+      historyBus.request(createTestCall(), AccountManagerSubjects.usage.history, {
         clientId: 'claude-code',
         accountId: 'acc-test-003',
         from: HISTORY_TEST_FROM,
@@ -123,14 +124,14 @@ describe('AccountManager — usage.history handler', () => {
     const clientId = 'claude-code';
     const accountId = 'acc-test-002';
     const ts = Date.UTC(2026, 3, 15, 10, 0, 0);
-    await historyStore.usageSnapshotStore.append(clientId, accountId, {
+    await historyStore.usageSnapshotStore.append(createTestCall(), clientId, accountId, {
       ts,
       windowId: '5h',
       utilization: 50,
       resetsAt: ts + 1000,
       blocked: false,
     });
-    await historyStore.usageSnapshotStore.append(clientId, accountId, {
+    await historyStore.usageSnapshotStore.append(createTestCall(), clientId, accountId, {
       ts: ts + 1000,
       windowId: '7d',
       utilization: 60,
@@ -138,7 +139,7 @@ describe('AccountManager — usage.history handler', () => {
       blocked: false,
     });
 
-    const result = await historyBus.request(AccountManagerSubjects.usage.history, {
+    const result = await historyBus.request(createTestCall(), AccountManagerSubjects.usage.history, {
       clientId,
       accountId,
       windowId: '5h',
@@ -164,7 +165,7 @@ describe('AccountManager — usage.history handler', () => {
     await noReaderService.init();
 
     try {
-      const result = await noReaderBus.request(AccountManagerSubjects.usage.history, {
+      const result = await noReaderBus.request(createTestCall(), AccountManagerSubjects.usage.history, {
         clientId: 'claude-code',
         accountId: 'acc-no-reader',
         from: HISTORY_TEST_FROM,

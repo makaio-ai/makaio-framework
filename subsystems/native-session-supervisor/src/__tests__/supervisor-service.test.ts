@@ -15,13 +15,16 @@ import {
   MAKAIO_LOCAL_CLI_HMAC_IDENTITY_ID,
   registerHmacIdentitySecret,
   registerMakaioLocalCliHmacIdentity,
-  resolveHmacIdentityPeer,
+  resolveHmacIdentityParty,
   resolveHmacIdentitySecret,
   ServerTransport,
   type TransportAuth,
   type WebSocketLike,
   WebSocketClientTransport,
 } from '@makaio/bus-transport-websocket';
+import { createTestCall } from '@makaio/test-utils';
+import type { TransportReceiveContext } from '@makaio/core';
+import type { ConnectionCloseObserver } from '../terminal-attachment-registry.js';
 import type { MakaioDatabase } from '@makaio/storage-drizzle';
 import {
   NativeSessionSupervisorNamespace,
@@ -129,10 +132,14 @@ describe('SupervisorService', () => {
   let dbClose: () => void;
   let storageCleanup: (() => void) | undefined;
   let service: SupervisorService;
+  let serverTransport: ServerTransport | undefined;
+  const observeConnectionClosed: ConnectionCloseObserver = (transportName, onClosed) =>
+    serverTransport?.name === transportName ? serverTransport.onConnectionClosed(onClosed) : undefined;
   let getLastProcess: () => ReturnType<typeof createMockProcess> | null;
   let getLastSpawnOptions: () => IPtySpawnOptions | null;
 
   beforeEach(async () => {
+    serverTransport = undefined;
     ({ db, close: dbClose } = await createTestDb());
     storageCleanup = registerDrizzleSupervisorRuntimeStorage(MakaioBus, db);
 
@@ -142,7 +149,7 @@ describe('SupervisorService', () => {
 
     const factory: PtyRuntimeFactory = (handlers) => new PtyRuntime(mock.backend, handlers);
 
-    service = new SupervisorService(MakaioBus, factory);
+    service = new SupervisorService(MakaioBus, observeConnectionClosed, factory);
     await service.init();
   });
 
@@ -165,7 +172,7 @@ describe('SupervisorService', () => {
     it('marks persisted running runtimes as unknown because PTY handles are process-local', async () => {
       await service.destroy();
 
-      await MakaioBus.request(SupervisorRuntimeStorageSubjects.set, {
+      await MakaioBus.request(createTestCall(), SupervisorRuntimeStorageSubjects.set, {
         supervisorSessionId: 'persisted-running',
         clientId: 'test-client',
         pid: 12345,
@@ -181,7 +188,7 @@ describe('SupervisorService', () => {
       getLastSpawnOptions = mock.getLastSpawnOptions;
       const factory: PtyRuntimeFactory = (handlers) => new PtyRuntime(mock.backend, handlers);
 
-      service = new SupervisorService(MakaioBus, factory);
+      service = new SupervisorService(MakaioBus, observeConnectionClosed, factory);
       await service.init();
 
       const runtime = service.getRegistry().getBySupervisorId('persisted-running');
@@ -196,7 +203,7 @@ describe('SupervisorService', () => {
 
   describe('launch', () => {
     it('spawns a PTY and returns supervisorSessionId and pid', async () => {
-      const response = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+      const response = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.launch, {
         clientId: 'claude-code',
         cwd: '/home/user',
         command: '/bin/bash',
@@ -210,12 +217,16 @@ describe('SupervisorService', () => {
     });
 
     it('registers the runtime in the registry with status = running', async () => {
-      const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
-        clientId: 'claude-code',
-        cwd: '/home/user',
-        command: '/bin/bash',
-        args: [],
-      });
+      const { supervisorSessionId } = await MakaioBus.request(
+        createTestCall(),
+        NativeSessionSupervisorSubjects.launch,
+        {
+          clientId: 'claude-code',
+          cwd: '/home/user',
+          command: '/bin/bash',
+          args: [],
+        },
+      );
 
       const runtime = service.getRegistry().getBySupervisorId(supervisorSessionId);
       expect(runtime).toBeDefined();
@@ -225,14 +236,18 @@ describe('SupervisorService', () => {
     });
 
     it('stores optional sessionId and adapterSessionId correlations', async () => {
-      const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
-        clientId: 'test-client',
-        cwd: '/tmp',
-        command: '/bin/sh',
-        args: [],
-        sessionId: 'sess_abc',
-        adapterSessionId: 'adp_xyz',
-      });
+      const { supervisorSessionId } = await MakaioBus.request(
+        createTestCall(),
+        NativeSessionSupervisorSubjects.launch,
+        {
+          clientId: 'test-client',
+          cwd: '/tmp',
+          command: '/bin/sh',
+          args: [],
+          sessionId: 'sess_abc',
+          adapterSessionId: 'adp_xyz',
+        },
+      );
 
       expect(service.getRegistry().getBySessionId('sess_abc')?.supervisorSessionId).toBe(supervisorSessionId);
       expect(service.getRegistry().getByAdapterSessionId('adp_xyz')?.supervisorSessionId).toBe(supervisorSessionId);
@@ -265,6 +280,7 @@ describe('SupervisorService', () => {
       process.env[inheritedEnvKey] = 'host-only';
       try {
         ({ supervisorSessionId: launchedSupervisorSessionId } = await MakaioBus.request(
+          createTestCall(),
           NativeSessionSupervisorSubjects.launch,
           {
             clientId: 'claude-code',
@@ -281,7 +297,7 @@ describe('SupervisorService', () => {
           },
         ));
 
-        await MakaioBus.request(NativeSessionSupervisorSubjects.stop, {
+        await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.stop, {
           supervisorSessionId: launchedSupervisorSessionId,
         });
       } finally {
@@ -337,7 +353,7 @@ describe('SupervisorService', () => {
 
       let supervisorSessionId: string;
       try {
-        ({ supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+        ({ supervisorSessionId } = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.launch, {
           clientId: 'claude-code',
           cwd: '/home/user',
           command: '/bin/bash',
@@ -346,7 +362,7 @@ describe('SupervisorService', () => {
           clientProfileName: 'work',
         }));
 
-        await MakaioBus.request(NativeSessionSupervisorSubjects.stop, { supervisorSessionId });
+        await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.stop, { supervisorSessionId });
       } finally {
         for (const cleanup of cleanups) cleanup();
       }
@@ -372,7 +388,7 @@ describe('SupervisorService', () => {
 
       let supervisorSessionId: string;
       try {
-        ({ supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+        ({ supervisorSessionId } = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.launch, {
           clientId: 'claude-code',
           cwd: '/home/user',
           command: '/bin/bash',
@@ -409,7 +425,7 @@ describe('SupervisorService', () => {
 
       let supervisorSessionId: string;
       try {
-        ({ supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+        ({ supervisorSessionId } = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.launch, {
           clientId: 'claude-code',
           cwd: '/home/user',
           command: '/bin/bash',
@@ -417,9 +433,9 @@ describe('SupervisorService', () => {
           clientProfileName: 'work',
         }));
 
-        await expect(MakaioBus.request(NativeSessionSupervisorSubjects.stop, { supervisorSessionId })).rejects.toThrow(
-          `Failed to release config lease for supervised runtime '${supervisorSessionId}'`,
-        );
+        await expect(
+          MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.stop, { supervisorSessionId }),
+        ).rejects.toThrow(`Failed to release config lease for supervised runtime '${supervisorSessionId}'`);
         expect(destroyAttempts).toBe(1);
 
         await service.destroy();
@@ -446,7 +462,7 @@ describe('SupervisorService', () => {
 
       try {
         await expect(
-          MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+          MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.launch, {
             clientId: 'test-client',
             cwd: '/tmp',
             command: '/bin/sh',
@@ -476,19 +492,23 @@ describe('SupervisorService', () => {
     let launchedId: string;
 
     beforeEach(async () => {
-      const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
-        clientId: 'test-client',
-        cwd: '/tmp',
-        command: '/bin/sh',
-        args: [],
-        sessionId: 'sess_status',
-        adapterSessionId: 'adp_status',
-      });
+      const { supervisorSessionId } = await MakaioBus.request(
+        createTestCall(),
+        NativeSessionSupervisorSubjects.launch,
+        {
+          clientId: 'test-client',
+          cwd: '/tmp',
+          command: '/bin/sh',
+          args: [],
+          sessionId: 'sess_status',
+          adapterSessionId: 'adp_status',
+        },
+      );
       launchedId = supervisorSessionId;
     });
 
     it('returns a snapshot when looking up by supervisorSessionId', async () => {
-      const { runtimes } = await MakaioBus.request(NativeSessionSupervisorSubjects.status, {
+      const { runtimes } = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.status, {
         supervisorSessionId: launchedId,
       });
 
@@ -498,7 +518,7 @@ describe('SupervisorService', () => {
     });
 
     it('returns a snapshot when looking up by sessionId', async () => {
-      const { runtimes } = await MakaioBus.request(NativeSessionSupervisorSubjects.status, {
+      const { runtimes } = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.status, {
         sessionId: 'sess_status',
       });
 
@@ -507,7 +527,7 @@ describe('SupervisorService', () => {
     });
 
     it('returns a snapshot when looking up by adapterSessionId', async () => {
-      const { runtimes } = await MakaioBus.request(NativeSessionSupervisorSubjects.status, {
+      const { runtimes } = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.status, {
         adapterSessionId: 'adp_status',
       });
 
@@ -517,19 +537,19 @@ describe('SupervisorService', () => {
 
     it('returns all runtimes when no locator is provided', async () => {
       // Launch a second runtime
-      await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+      await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.launch, {
         clientId: 'other-client',
         cwd: '/var',
         command: '/bin/sh',
         args: [],
       });
 
-      const { runtimes } = await MakaioBus.request(NativeSessionSupervisorSubjects.status, {});
+      const { runtimes } = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.status, {});
       expect(runtimes.length).toBeGreaterThanOrEqual(2);
     });
 
     it('returns an empty array for an unknown supervisorSessionId', async () => {
-      const { runtimes } = await MakaioBus.request(NativeSessionSupervisorSubjects.status, {
+      const { runtimes } = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.status, {
         supervisorSessionId: 'nonexistent',
       });
       expect(runtimes).toHaveLength(0);
@@ -539,14 +559,14 @@ describe('SupervisorService', () => {
       // Exercises the `adapterSessionId` branch of _handleStatus. The branch
       // must delegate to registry.getByAdapterSessionId() and return [] when no
       // runtime is found — symmetrically to the supervisorSessionId branch.
-      const { runtimes } = await MakaioBus.request(NativeSessionSupervisorSubjects.status, {
+      const { runtimes } = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.status, {
         adapterSessionId: 'nonexistent_adp',
       });
       expect(runtimes).toHaveLength(0);
     });
 
     it('returns an empty array for an unknown sessionId', async () => {
-      const { runtimes } = await MakaioBus.request(NativeSessionSupervisorSubjects.status, {
+      const { runtimes } = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.status, {
         sessionId: 'nonexistent_sess',
       });
       expect(runtimes).toHaveLength(0);
@@ -556,7 +576,7 @@ describe('SupervisorService', () => {
       // Verifies that the toSnapshot() helper preserves the adapterSessionId
       // field in status responses, completing the adapterSessionId round-trip
       // through the _handleStatus branch.
-      const { runtimes } = await MakaioBus.request(NativeSessionSupervisorSubjects.status, {
+      const { runtimes } = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.status, {
         adapterSessionId: 'adp_status',
       });
 
@@ -573,17 +593,21 @@ describe('SupervisorService', () => {
 
   describe('stop', () => {
     it('kills the PTY process and marks the runtime as stopped', async () => {
-      const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
-        clientId: 'test-client',
-        cwd: '/tmp',
-        command: '/bin/sh',
-        args: [],
-      });
+      const { supervisorSessionId } = await MakaioBus.request(
+        createTestCall(),
+        NativeSessionSupervisorSubjects.launch,
+        {
+          clientId: 'test-client',
+          cwd: '/tmp',
+          command: '/bin/sh',
+          args: [],
+        },
+      );
 
       const mockProcess = getLastProcess();
       expect(mockProcess).not.toBeNull();
 
-      const { success } = await MakaioBus.request(NativeSessionSupervisorSubjects.stop, {
+      const { success } = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.stop, {
         supervisorSessionId,
       });
 
@@ -597,17 +621,21 @@ describe('SupervisorService', () => {
     });
 
     it('preserves stopped status when the killed PTY later emits an exit event', async () => {
-      const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
-        clientId: 'test-client',
-        cwd: '/tmp',
-        command: '/bin/sh',
-        args: [],
-      });
+      const { supervisorSessionId } = await MakaioBus.request(
+        createTestCall(),
+        NativeSessionSupervisorSubjects.launch,
+        {
+          clientId: 'test-client',
+          cwd: '/tmp',
+          command: '/bin/sh',
+          args: [],
+        },
+      );
 
       const mockProcess = getLastProcess();
       expect(mockProcess).not.toBeNull();
 
-      await MakaioBus.request(NativeSessionSupervisorSubjects.stop, {
+      await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.stop, {
         supervisorSessionId,
       });
 
@@ -623,16 +651,20 @@ describe('SupervisorService', () => {
     });
 
     it('forwards a custom signal to the PTY kill call', async () => {
-      const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
-        clientId: 'test-client',
-        cwd: '/tmp',
-        command: '/bin/sh',
-        args: [],
-      });
+      const { supervisorSessionId } = await MakaioBus.request(
+        createTestCall(),
+        NativeSessionSupervisorSubjects.launch,
+        {
+          clientId: 'test-client',
+          cwd: '/tmp',
+          command: '/bin/sh',
+          args: [],
+        },
+      );
 
       const mockProcess = getLastProcess();
 
-      await MakaioBus.request(NativeSessionSupervisorSubjects.stop, {
+      await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.stop, {
         supervisorSessionId,
         signal: 'SIGKILL',
       });
@@ -641,7 +673,7 @@ describe('SupervisorService', () => {
     });
 
     it('returns success = false for an unknown supervisorSessionId', async () => {
-      const { success } = await MakaioBus.request(NativeSessionSupervisorSubjects.stop, {
+      const { success } = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.stop, {
         supervisorSessionId: 'nonexistent',
       });
       expect(success).toBe(false);
@@ -652,7 +684,7 @@ describe('SupervisorService', () => {
       // so the registry loads it as 'unknown' (no in-memory PTY).
       await service.destroy();
 
-      await MakaioBus.request(SupervisorRuntimeStorageSubjects.set, {
+      await MakaioBus.request(createTestCall(), SupervisorRuntimeStorageSubjects.set, {
         supervisorSessionId: 'hydrated-unknown',
         clientId: 'test-client',
         pid: 99999,
@@ -666,13 +698,13 @@ describe('SupervisorService', () => {
       const mock = createMockBackend();
       getLastProcess = mock.getLastProcess;
       const factory: PtyRuntimeFactory = (handlers) => new PtyRuntime(mock.backend, handlers);
-      service = new SupervisorService(MakaioBus, factory);
+      service = new SupervisorService(MakaioBus, observeConnectionClosed, factory);
       await service.init();
 
       const hydratedRuntime = service.getRegistry().getBySupervisorId('hydrated-unknown');
       expect(hydratedRuntime?.status).toBe('unknown');
 
-      const { success } = await MakaioBus.request(NativeSessionSupervisorSubjects.stop, {
+      const { success } = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.stop, {
         supervisorSessionId: 'hydrated-unknown',
       });
 
@@ -691,19 +723,23 @@ describe('SupervisorService', () => {
     let launchedId: string;
 
     beforeEach(async () => {
-      const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
-        clientId: 'test-client',
-        cwd: '/tmp',
-        command: '/bin/sh',
-        args: [],
-        sessionId: 'sess_attach',
-        adapterSessionId: 'adp_attach',
-      });
+      const { supervisorSessionId } = await MakaioBus.request(
+        createTestCall(),
+        NativeSessionSupervisorSubjects.launch,
+        {
+          clientId: 'test-client',
+          cwd: '/tmp',
+          command: '/bin/sh',
+          args: [],
+          sessionId: 'sess_attach',
+          adapterSessionId: 'adp_attach',
+        },
+      );
       launchedId = supervisorSessionId;
     });
 
     it('resolves and attaches via supervisorSessionId', async () => {
-      const response = await MakaioBus.request(NativeSessionSupervisorSubjects.attach, {
+      const response = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.attach, {
         supervisorSessionId: launchedId,
       });
 
@@ -713,7 +749,7 @@ describe('SupervisorService', () => {
     });
 
     it('resolves and attaches via sessionId', async () => {
-      const response = await MakaioBus.request(NativeSessionSupervisorSubjects.attach, {
+      const response = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.attach, {
         sessionId: 'sess_attach',
       });
 
@@ -722,7 +758,7 @@ describe('SupervisorService', () => {
     });
 
     it('resolves and attaches via adapterSessionId', async () => {
-      const response = await MakaioBus.request(NativeSessionSupervisorSubjects.attach, {
+      const response = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.attach, {
         adapterSessionId: 'adp_attach',
       });
 
@@ -731,25 +767,25 @@ describe('SupervisorService', () => {
     });
 
     it('returns success = false for an unknown sessionId', async () => {
-      const response = await MakaioBus.request(NativeSessionSupervisorSubjects.attach, {
+      const response = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.attach, {
         sessionId: 'unknown_session',
       });
       expect(response.success).toBe(false);
     });
 
     it('returns success = false for an unknown adapterSessionId', async () => {
-      const response = await MakaioBus.request(NativeSessionSupervisorSubjects.attach, {
+      const response = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.attach, {
         adapterSessionId: 'unknown_adp',
       });
       expect(response.success).toBe(false);
     });
 
     it('returns success = false after the runtime has been stopped', async () => {
-      await MakaioBus.request(NativeSessionSupervisorSubjects.stop, {
+      await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.stop, {
         supervisorSessionId: launchedId,
       });
 
-      const response = await MakaioBus.request(NativeSessionSupervisorSubjects.attach, {
+      const response = await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.attach, {
         supervisorSessionId: launchedId,
       });
 
@@ -765,7 +801,7 @@ describe('SupervisorService', () => {
     it('accepts the named local CLI peer over a real WebSocket while rejecting global and other HMAC peers', async () => {
       const secret = 'terminal-attachment-test-secret';
       const unregisterLocalCli = registerMakaioLocalCliHmacIdentity(secret);
-      const unregisterOtherPeer = registerHmacIdentitySecret('other-peer:v1', secret, { peerKind: 'other-peer' });
+      const unregisterOtherPeer = registerHmacIdentitySecret('other-peer:v1', secret, { partyKind: 'test.other-peer' });
       const websocket = new WebSocketServer({ host: '127.0.0.1', path: '/bus', port: 0 });
       await new Promise<void>((resolve, reject) => {
         websocket.once('listening', resolve);
@@ -774,9 +810,13 @@ describe('SupervisorService', () => {
       const address = websocket.address();
       if (address === null || typeof address === 'string') throw new Error('Expected a TCP WebSocket address');
 
-      const serverTransport = new ServerTransport({
+      serverTransport = new ServerTransport({
         websocket,
-        auth: new HmacAuth({ secret, resolveSecret: resolveHmacIdentitySecret, resolvePeer: resolveHmacIdentityPeer }),
+        auth: new HmacAuth({
+          secret,
+          resolveSecret: resolveHmacIdentitySecret,
+          resolveParty: resolveHmacIdentityParty,
+        }),
       });
       MakaioBus.registerTransport(serverTransport);
       await serverTransport.connect();
@@ -812,16 +852,20 @@ describe('SupervisorService', () => {
         });
         await waitForSubscriptionPropagation(unsubscribeSecond);
 
-        const { supervisorSessionId } = await localCli.request(NativeSessionSupervisorSubjects.launch, {
-          clientId: 'claude-agent-sdk',
-          cwd: '/tmp',
-          command: 'claude',
-          args: [],
-          adapterSessionId: 'adapter-session-1',
-        });
+        const { supervisorSessionId } = await localCli.request(
+          createTestCall(),
+          NativeSessionSupervisorSubjects.launch,
+          {
+            clientId: 'claude-agent-sdk',
+            cwd: '/tmp',
+            command: 'claude',
+            args: [],
+            adapterSessionId: 'adapter-session-1',
+          },
+        );
         const attachmentId = '18d9f462-48e9-4b96-bc93-37a96d09831c';
         await expect(
-          localCli.request(NativeSessionSupervisorSubjects.terminal.open, {
+          localCli.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.open, {
             attachmentId,
             locator: { adapterSessionId: 'adapter-session-1' },
           }),
@@ -832,10 +876,10 @@ describe('SupervisorService', () => {
         expect(secondOutput).toEqual([]);
 
         await expect(
-          secondLocalCli.request(NativeSessionSupervisorSubjects.terminal.close, { attachmentId }),
+          secondLocalCli.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.close, { attachmentId }),
         ).resolves.toEqual({ success: false });
         await expect(
-          secondLocalCli.request(NativeSessionSupervisorSubjects.terminal.input, {
+          secondLocalCli.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.input, {
             attachmentId,
             data: 'foreign-input',
           }),
@@ -843,42 +887,51 @@ describe('SupervisorService', () => {
         await new Promise((resolve) => setTimeout(resolve, 20));
         expect(process?.write).not.toHaveBeenCalledWith('foreign-input');
 
-        await localCli.request(NativeSessionSupervisorSubjects.terminal.input, { attachmentId, data: '/compact' });
-        await localCli.request(NativeSessionSupervisorSubjects.terminal.resize, { attachmentId, cols: 120, rows: 40 });
+        await localCli.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.input, {
+          attachmentId,
+          data: '/compact',
+        });
+        await localCli.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.resize, {
+          attachmentId,
+          cols: 120,
+          rows: 40,
+        });
         await vi.waitFor(() => {
           expect(process?.write).toHaveBeenCalledWith('/compact');
           expect(process?.resize).toHaveBeenCalledWith(120, 40);
         });
         await expect(
-          localCli.request(NativeSessionSupervisorSubjects.terminal.close, { attachmentId }),
+          localCli.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.close, { attachmentId }),
         ).resolves.toEqual({
           success: true,
         });
         const localAttachmentId = 'c8dd005d-f036-44c2-8148-3e2607128e1c';
-        await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.open, {
+        await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.open, {
           attachmentId: localAttachmentId,
           locator: { supervisorSessionId },
         });
         process?._fireData('local-only');
         await new Promise((resolve) => setTimeout(resolve, 20));
         expect(output).toEqual(['ready']);
-        await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.close, { attachmentId: localAttachmentId });
+        await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.close, {
+          attachmentId: localAttachmentId,
+        });
         expect(process?.kill).not.toHaveBeenCalled();
         unsubscribe();
         unsubscribeSecond();
 
         const globalPeer = await connectClient();
         await expect(
-          globalPeer.request(NativeSessionSupervisorSubjects.terminal.open, {
+          globalPeer.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.open, {
             attachmentId: 'a45877ca-0d39-4f92-bc98-682d7210c2e2',
             locator: { supervisorSessionId },
           }),
         ).rejects.toThrow('Unauthorized: supervisor.terminal.open requires local CLI control');
 
         const otherPeer = await connectClient('other-peer:v1');
-        await expect(otherPeer.request(NativeSessionSupervisorSubjects.stop, { supervisorSessionId })).rejects.toThrow(
-          'Unauthorized: supervisor.stop requires local CLI control',
-        );
+        await expect(
+          otherPeer.request(createTestCall(), NativeSessionSupervisorSubjects.stop, { supervisorSessionId }),
+        ).rejects.toThrow('Unauthorized: supervisor.stop requires local CLI control');
       } finally {
         for (const client of clients.reverse()) await client.disconnect();
         MakaioBus.unregisterTransport(serverTransport.name);
@@ -898,10 +951,7 @@ describe('SupervisorService', () => {
       if (address === null || typeof address === 'string') throw new Error('Expected a TCP WebSocket address');
 
       let connectedSockets = 0;
-      const contexts = new Map<
-        WebSocketLike,
-        { transportName: string; connectionId?: string; peer?: { kind: string; authenticated?: boolean } }
-      >();
+      const contexts = new Map<WebSocketLike, TransportReceiveContext>();
       const auth: TransportAuth = {
         authenticateClient: async () => undefined,
         authenticateServer: async (socket) => {
@@ -910,13 +960,15 @@ describe('SupervisorService', () => {
             contexts.set(socket, {
               transportName: '',
               connectionId: 'host-loopback-connection',
-              peer: { kind: 'makaio-loopback', authenticated: false },
+              caller: { kind: 'makaio.loopback', id: 'host-loopback-connection' },
+              authenticated: false,
             });
           } else if (connectedSockets === 2) {
             contexts.set(socket, {
               transportName: '',
               connectionId: 'forged-loopback-connection',
-              peer: { kind: 'makaio-loopback', authenticated: true },
+              caller: { kind: 'makaio.loopback', id: 'forged-loopback-connection' },
+              authenticated: true,
             });
           } else {
             contexts.set(socket, { transportName: '' });
@@ -927,7 +979,7 @@ describe('SupervisorService', () => {
         cleanupSocket: (socket) => contexts.delete(socket),
         cleanup: () => contexts.clear(),
       };
-      const serverTransport = new ServerTransport({ websocket, auth });
+      serverTransport = new ServerTransport({ websocket, auth });
       MakaioBus.registerTransport(serverTransport);
       await serverTransport.connect();
 
@@ -949,22 +1001,26 @@ describe('SupervisorService', () => {
 
       try {
         const loopbackClient = await connectClient();
-        const { supervisorSessionId } = await loopbackClient.request(NativeSessionSupervisorSubjects.launch, {
-          clientId: 'claude-agent-sdk',
-          cwd: '/tmp',
-          command: 'claude',
-          args: [],
-        });
+        const { supervisorSessionId } = await loopbackClient.request(
+          createTestCall(),
+          NativeSessionSupervisorSubjects.launch,
+          {
+            clientId: 'claude-agent-sdk',
+            cwd: '/tmp',
+            command: 'claude',
+            args: [],
+          },
+        );
         expect(supervisorSessionId).toEqual(expect.any(String));
 
         const forgedClient = await connectClient();
         await expect(
-          forgedClient.request(NativeSessionSupervisorSubjects.stop, { supervisorSessionId }),
+          forgedClient.request(createTestCall(), NativeSessionSupervisorSubjects.stop, { supervisorSessionId }),
         ).rejects.toThrow('Unauthorized: supervisor.stop requires local CLI control');
 
         const claimlessClient = await connectClient();
         await expect(
-          claimlessClient.request(NativeSessionSupervisorSubjects.stop, { supervisorSessionId }),
+          claimlessClient.request(createTestCall(), NativeSessionSupervisorSubjects.stop, { supervisorSessionId }),
         ).rejects.toThrow('Unauthorized: supervisor.stop requires local CLI control');
       } finally {
         for (const client of clients.reverse()) await client.disconnect();
@@ -974,19 +1030,23 @@ describe('SupervisorService', () => {
     });
 
     it('routes output, forwards input and resize, and detaches without stopping the PTY', async () => {
-      const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
-        clientId: 'codex',
-        cwd: '/tmp',
-        command: 'codex',
-        args: [],
-      });
+      const { supervisorSessionId } = await MakaioBus.request(
+        createTestCall(),
+        NativeSessionSupervisorSubjects.launch,
+        {
+          clientId: 'codex',
+          cwd: '/tmp',
+          command: 'codex',
+          args: [],
+        },
+      );
       const attachmentId = '18d9f462-48e9-4b96-bc93-37a96d09831c';
       const output: Array<{ attachmentId: string; seq: number; data: string }> = [];
       const unsubscribe = MakaioBus.on(NativeSessionSupervisorSubjects.terminal.output, (ctx) => {
         output.push(ctx.payload);
       });
       expect(
-        await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.open, {
+        await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.open, {
           attachmentId,
           locator: { supervisorSessionId },
         }),
@@ -994,11 +1054,20 @@ describe('SupervisorService', () => {
       const process = getLastProcess();
       process?._fireData('ready');
       await vi.waitFor(() => expect(output).toStrictEqual([{ attachmentId, seq: 1, data: 'ready' }]));
-      await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.input, { attachmentId, data: '/compact' });
-      await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.resize, { attachmentId, cols: 120, rows: 40 });
+      await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.input, {
+        attachmentId,
+        data: '/compact',
+      });
+      await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.resize, {
+        attachmentId,
+        cols: 120,
+        rows: 40,
+      });
       expect(process?.write).toHaveBeenCalledWith('/compact');
       expect(process?.resize).toHaveBeenCalledWith(120, 40);
-      expect(await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.close, { attachmentId })).toStrictEqual({
+      expect(
+        await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.close, { attachmentId }),
+      ).toStrictEqual({
         success: true,
       });
       expect(process?.kill).not.toHaveBeenCalled();
@@ -1006,27 +1075,33 @@ describe('SupervisorService', () => {
     });
 
     it('keeps a second attachment live when the first detaches', async () => {
-      const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
-        clientId: 'codex',
-        cwd: '/tmp',
-        command: 'codex',
-        args: [],
-      });
+      const { supervisorSessionId } = await MakaioBus.request(
+        createTestCall(),
+        NativeSessionSupervisorSubjects.launch,
+        {
+          clientId: 'codex',
+          cwd: '/tmp',
+          command: 'codex',
+          args: [],
+        },
+      );
       const first = 'a45877ca-0d39-4f92-bc98-682d7210c2e2';
       const second = '42f879e3-0aa3-45e9-a7ce-1e446bdb8e2a';
       const output: string[] = [];
       const unsubscribe = MakaioBus.on(NativeSessionSupervisorSubjects.terminal.output, (ctx) => {
         output.push(`${ctx.payload.attachmentId}:${ctx.payload.data}`);
       });
-      await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.open, {
+      await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.open, {
         attachmentId: first,
         locator: { supervisorSessionId },
       });
-      await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.open, {
+      await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.open, {
         attachmentId: second,
         locator: { supervisorSessionId },
       });
-      await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.close, { attachmentId: first });
+      await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.close, {
+        attachmentId: first,
+      });
       getLastProcess()?._fireData('still-running');
       await vi.waitFor(() => expect(output).toStrictEqual([`${second}:still-running`]));
       expect(getLastProcess()?.kill).not.toHaveBeenCalled();
@@ -1034,24 +1109,35 @@ describe('SupervisorService', () => {
     });
 
     it('rejects input and resize after an attachment closes', async () => {
-      const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
-        clientId: 'codex',
-        cwd: '/tmp',
-        command: 'codex',
-        args: [],
-      });
+      const { supervisorSessionId } = await MakaioBus.request(
+        createTestCall(),
+        NativeSessionSupervisorSubjects.launch,
+        {
+          clientId: 'codex',
+          cwd: '/tmp',
+          command: 'codex',
+          args: [],
+        },
+      );
       const attachmentId = 'c8dd005d-f036-44c2-8148-3e2607128e1c';
-      await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.open, {
+      await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.open, {
         attachmentId,
         locator: { supervisorSessionId },
       });
-      await MakaioBus.request(NativeSessionSupervisorSubjects.terminal.close, { attachmentId });
+      await MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.close, { attachmentId });
 
       await expect(
-        MakaioBus.request(NativeSessionSupervisorSubjects.terminal.input, { attachmentId, data: 'late-input' }),
+        MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.input, {
+          attachmentId,
+          data: 'late-input',
+        }),
       ).rejects.toThrow(`Terminal attachment '${attachmentId}' is not open`);
       await expect(
-        MakaioBus.request(NativeSessionSupervisorSubjects.terminal.resize, { attachmentId, cols: 120, rows: 40 }),
+        MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.terminal.resize, {
+          attachmentId,
+          cols: 120,
+          rows: 40,
+        }),
       ).rejects.toThrow(`Terminal attachment '${attachmentId}' is not open`);
     });
   });
@@ -1062,12 +1148,16 @@ describe('SupervisorService', () => {
 
   describe('natural PTY exit', () => {
     it('marks the registry entry as exited when the PTY process exits naturally', async () => {
-      const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
-        clientId: 'test-client',
-        cwd: '/tmp',
-        command: '/bin/sh',
-        args: [],
-      });
+      const { supervisorSessionId } = await MakaioBus.request(
+        createTestCall(),
+        NativeSessionSupervisorSubjects.launch,
+        {
+          clientId: 'test-client',
+          cwd: '/tmp',
+          command: '/bin/sh',
+          args: [],
+        },
+      );
 
       const mockProcess = getLastProcess();
       expect(mockProcess).not.toBeNull();
@@ -1107,13 +1197,17 @@ describe('SupervisorService', () => {
       ];
 
       try {
-        const { supervisorSessionId } = await MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
-          clientId: 'claude-code',
-          cwd: '/tmp',
-          command: '/bin/sh',
-          args: [],
-          clientProfileName: 'work',
-        });
+        const { supervisorSessionId } = await MakaioBus.request(
+          createTestCall(),
+          NativeSessionSupervisorSubjects.launch,
+          {
+            clientId: 'claude-code',
+            cwd: '/tmp',
+            command: '/bin/sh',
+            args: [],
+            clientProfileName: 'work',
+          },
+        );
         const mockProcess = getLastProcess();
         expect(mockProcess).not.toBeNull();
 
@@ -1149,7 +1243,7 @@ describe('SupervisorService', () => {
       );
 
       try {
-        const launchPromise = MakaioBus.request(NativeSessionSupervisorSubjects.launch, {
+        const launchPromise = MakaioBus.request(createTestCall(), NativeSessionSupervisorSubjects.launch, {
           clientId: 'test-client',
           cwd: '/tmp',
           command: '/bin/sh',

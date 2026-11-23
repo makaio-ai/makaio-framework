@@ -19,7 +19,7 @@ export function registerAbandonHandler(bus: IMakaioBus): () => void {
     const { parentSessionId, childSessionId } = ctx.payload;
 
     // 1. Validate child exists
-    const { session: childSession } = await bus.request(SessionSubjects.get, {
+    const { session: childSession } = await bus.request(ctx.call, SessionSubjects.get, {
       sessionId: childSessionId,
     });
 
@@ -40,7 +40,7 @@ export function registerAbandonHandler(bus: IMakaioBus): () => void {
     // 3. Close child session
     // close is intentionally idempotent. Already-closed children return success,
     // and abandon relies on closed state rather than duplicate session.closed events.
-    const closeResult = await bus.request(SessionSubjects.close, {
+    const closeResult = await bus.request(ctx.call, SessionSubjects.close, {
       sessionId: childSessionId,
     });
 
@@ -49,7 +49,7 @@ export function registerAbandonHandler(bus: IMakaioBus): () => void {
     }
 
     // 4. Emit abandoned event
-    await bus.emit(SessionSubjects.abandoned, {
+    await bus.emit(ctx.call, SessionSubjects.abandoned, {
       sessionId: childSessionId,
       parentSessionId,
     });

@@ -1,4 +1,5 @@
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import {
   ArtifactSubjects,
   ArtifactKindRegistrationSchema,
@@ -182,7 +183,7 @@ export class ArtifactSchemaRegistry extends BaseService {
     }
 
     this.registerHandler(ArtifactSubjects.kind.register, (ctx) => {
-      this.registerKind(ctx.payload);
+      this.registerKindWithCall(ctx.call, ctx.payload);
       ctx.setResult({ registered: true });
     });
 
@@ -254,16 +255,17 @@ export class ArtifactSchemaRegistry extends BaseService {
   /**
    * Recomputes the winner for a kind slot from its current contributions and
    * emits a `kind.changed` event when the active registration changes.
+   * @param call - Call context for the registration change.
    * @param key - Composite kind key produced by {@link kindKey}.
    */
-  private recomputeKindWinner(key: string): void {
+  private recomputeKindWinner(call: CallContext, key: string): void {
     const contributions = this.kindContributions.get(key);
     const previous = this.kinds.get(key);
 
     if (contributions === undefined || contributions.size === 0) {
       this.kindContributions.delete(key);
       this.kinds.delete(key);
-      this.emitKindChangedFromKey(key, previous);
+      this.emitKindChanged(call, previous);
       return;
     }
 
@@ -278,25 +280,50 @@ export class ArtifactSchemaRegistry extends BaseService {
 
     this.kinds.set(key, cloneRegistration(resolvedWinner.registration));
     if (JSON.stringify(previous) !== JSON.stringify(resolvedWinner.registration)) {
-      void this.bus.emit(ArtifactSubjects.kind.changed, {
-        kind: resolvedWinner.registration.kind,
-        schemaVersion: resolvedWinner.registration.schemaVersion,
-      });
+      this.emitKindChanged(call, resolvedWinner.registration);
     }
   }
 
   /**
-   * Emits a `kind.changed` event derived from a composite key, but only
-   * when there was a previous registration to signal the change against.
-   * @param key - Composite kind key produced by {@link kindKey}.
-   * @param previous - The registration that was previously active, if any.
+   * Emits a `kind.changed` event when a registration is available.
+   * @param call - Call context for the registration change.
+   * @param registration - The registration identifying the changed kind, if any.
    */
-  private emitKindChangedFromKey(key: string, previous: ArtifactKindRegistration | undefined): void {
-    if (previous === undefined) return;
-    void this.bus.emit(ArtifactSubjects.kind.changed, {
-      kind: previous.kind,
-      schemaVersion: previous.schemaVersion,
-    });
+  private emitKindChanged(call: CallContext, registration: ArtifactKindRegistration | undefined): void {
+    if (registration === undefined) return;
+    void this.bus
+      .emit(call, ArtifactSubjects.kind.changed, { kind: registration.kind, schemaVersion: registration.schemaVersion })
+      .catch((error) =>
+        console.warn(`[ArtifactSchemaRegistry] Failed to emit ${ArtifactSubjects.kind.changed.subject}:`, error),
+      );
+  }
+
+  /**
+   * Register a contribution received directly from another carrier.
+   * @param registration - Kind registration payload.
+   * @param owner - Owner identity. Defaults to the extension bus owner.
+   */
+  public registerKind(
+    registration: ArtifactKindRegistration,
+    owner: ArtifactKindRegistrationOwner = EXTENSION_BUS_OWNER,
+  ): void {
+    // ORIGIN: Direct calls from another carrier start work on this registry's bus.
+    this.registerKindWithCall(this.bus.own('shared-work'), registration, owner);
+  }
+
+  /**
+   * Remove a contribution received directly from another carrier.
+   * @param kind - Kind discriminator string.
+   * @param schemaVersion - Positive schema version.
+   * @param owner - Owner identity. Defaults to the extension bus owner.
+   */
+  public deregisterKind(
+    kind: string,
+    schemaVersion: number,
+    owner: ArtifactKindRegistrationOwner = EXTENSION_BUS_OWNER,
+  ): void {
+    // ORIGIN: Direct calls from another carrier start work on this registry's bus.
+    this.deregisterKindWithCall(this.bus.own('shared-work'), kind, schemaVersion, owner);
   }
 
   /**
@@ -306,13 +333,17 @@ export class ArtifactSchemaRegistry extends BaseService {
    * Bus RPC registrations (without an explicit owner) are attributed to
    * {@link EXTENSION_BUS_OWNER} and treated as extension-tier contributions.
    *
+   * This method becomes public as soon as a handler on another carrier must pass a received call into this registry.
+   *
    * Same-tier repo conflicts (two distinct factory-repo or target-repo owners
    * for the same slot) are rejected with a console warning; the first owner
    * registered at that tier retains ownership.
+   * @param call - Call context for the registration change.
    * @param registration - Kind registration payload.
    * @param owner - Owner identity. Defaults to the extension bus owner.
    */
-  public registerKind(
+  private registerKindWithCall(
+    call: CallContext,
     registration: ArtifactKindRegistration,
     owner: ArtifactKindRegistrationOwner = EXTENSION_BUS_OWNER,
   ): void {
@@ -345,20 +376,24 @@ export class ArtifactSchemaRegistry extends BaseService {
           : existingContribution.order,
     });
     this.kindContributions.set(key, contributions);
-    this.recomputeKindWinner(key);
+    this.recomputeKindWinner(call, key);
   }
 
   /**
    * Remove a kind registration by `kind + schemaVersion` for the given owner.
    *
+   * This method becomes public as soon as a handler on another carrier must pass a received call into this registry.
+   *
    * If the deregistered owner was the active winner, the next-highest owner
    * automatically becomes active. Bus RPC callers without an explicit owner
    * are attributed to {@link EXTENSION_BUS_OWNER}.
+   * @param call - Call context for the registration change.
    * @param kind - Kind discriminator string.
    * @param schemaVersion - Positive schema version.
    * @param owner - Owner identity. Defaults to the extension bus owner.
    */
-  public deregisterKind(
+  private deregisterKindWithCall(
+    call: CallContext,
     kind: string,
     schemaVersion: number,
     owner: ArtifactKindRegistrationOwner = EXTENSION_BUS_OWNER,
@@ -367,7 +402,7 @@ export class ArtifactSchemaRegistry extends BaseService {
     const contributions = this.kindContributions.get(key);
     if (contributions === undefined) return;
     contributions.delete(ownerId(owner));
-    this.recomputeKindWinner(key);
+    this.recomputeKindWinner(call, key);
   }
 
   /**
@@ -378,10 +413,12 @@ export class ArtifactSchemaRegistry extends BaseService {
    * the replacement recompute their winner after all changes are applied.
    *
    * Other owners' contributions are unaffected.
+   * @param call - Call context for the registration change.
    * @param owner - The owner whose registrations are being replaced.
    * @param registrations - The new set of kind registrations for this owner.
    */
   public replaceKindRegistrationsForOwner(
+    call: CallContext,
     owner: ArtifactKindRegistrationOwner,
     registrations: readonly ArtifactKindRegistration[],
   ): void {
@@ -422,7 +459,7 @@ export class ArtifactSchemaRegistry extends BaseService {
     }
 
     for (const key of touched) {
-      this.recomputeKindWinner(key);
+      this.recomputeKindWinner(call, key);
     }
   }
 

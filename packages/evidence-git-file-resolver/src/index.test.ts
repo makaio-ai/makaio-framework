@@ -1,4 +1,4 @@
-import { createBusContext, createBusInstance, NoHandlerError } from '@makaio/bus-core';
+import { createBusInstance, NoHandlerError } from '@makaio/bus-core';
 import { ArtifactNamespace, ArtifactSubjects, type EvidenceValue } from '@makaio/contracts';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -95,7 +95,7 @@ describe('Git file evidence resolver', () => {
   });
 
   it('routes by evidence and repository kind, forwards request context, and unregisters cleanly', async () => {
-    const bus = createBusInstance({ context: createBusContext() });
+    const bus = createBusInstance();
     bus.registerNamespace(ArtifactNamespace);
     const githubContexts: GitFileReadContext[] = [];
     const githubRead = vi.fn(async (_source: GitFileEvidence['source'], context: GitFileReadContext) => {

@@ -1,11 +1,7 @@
-import { createBusInstance, openChannel, type MakaioBusContext } from '@makaio/bus-core';
+import { openChannel, type IMakaioBus } from '@makaio/bus-core';
 import type { CredentialRef } from '@makaio/contracts/config';
 import { CredentialSubjects } from '@makaio/contracts';
-
-/** Minimal bus surface needed to resolve credentials against the shared runtime context. */
-interface CredentialBusContextProvider {
-  getContext(): MakaioBusContext;
-}
+import type { CallContext } from '@makaio/core';
 
 /** Stable credential-resolution failure categories. */
 export type ConnectorCredentialResolutionErrorCode = 'credential-unavailable' | 'credential-request-failed';
@@ -45,13 +41,15 @@ export class ConnectorCredentialResolutionError extends Error {
  * operation fails with a sanitized typed error. Trusted normalized-auth
  * callers may declare optional selected fields; unavailable optional refs are
  * omitted rather than turning an explicit selection into an ambient fallback.
- * @param bus - Bus instance with context access for channel token retrieval
+ * @param call - Call context of the work the lookup belongs to
+ * @param bus - Bus instance of the requesting carrier; token retrieval and the channel run over it
  * @param credentialRefs - Credential refs keyed by field name
  * @param options - Trusted required/optional policy for selected fields
  * @returns Plaintext credential values keyed by field name
  */
 export async function resolveConnectorCredentials(
-  bus: CredentialBusContextProvider,
+  call: CallContext,
+  bus: IMakaioBus,
   credentialRefs: Record<string, CredentialRef>,
   options: ConnectorCredentialResolutionOptions = {},
 ): Promise<Record<string, string>> {
@@ -62,16 +60,14 @@ export async function resolveConnectorCredentials(
 
   const resolved: Record<string, string> = {};
   const optionalFields = new Set(options.optionalFields);
-  const context = bus.getContext();
-  const rootBus = createBusInstance({ context });
-  const { token } = await rootBus.request(CredentialSubjects.getChannelToken, {});
-  const channel = await openChannel(context, 'credentials', { token, transports: [] });
+  const { token } = await bus.request(call, CredentialSubjects.getChannelToken, {});
+  const channel = await openChannel(bus, 'credentials', { token, transports: [] });
 
   try {
     const values = await Promise.all(
       entries.map(async ([field, ref]) => {
         try {
-          const result = await channel.request(CredentialSubjects.resolve, { ref });
+          const result = await channel.request(call, CredentialSubjects.resolve, { ref });
           if (result.value === null) {
             if (optionalFields.has(field)) return undefined;
             throw new ConnectorCredentialResolutionError('credential-unavailable');

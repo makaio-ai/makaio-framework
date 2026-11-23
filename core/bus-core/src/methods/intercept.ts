@@ -3,7 +3,7 @@ import type { InterceptorContext, InterceptorHandler } from '../types/intercepto
 import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 import { matchesFilter } from '../utils/payload-filter.js';
 import { insertSorted } from '../utils/insert-sorted.js';
-import type { SubjectDefinition } from '@makaio/core';
+import type { PartyRef, SubjectDefinition } from '@makaio/core';
 
 /**
  * Register an interceptor for a subject.
@@ -13,6 +13,7 @@ import type { SubjectDefinition } from '@makaio/core';
  * - Event blocking via `stopPropagation()`
  * - Sequential execution in priority order (highest first)
  * @param context - Makaio bus context
+ * @param owner - Carrier of the bus instance registering the interceptor; stored as `InterceptorEntry.owner` (kind and id only)
  * @param subjectDefinition - Subject definition with subject pattern and metadata
  * @param handler - Interceptor handler function
  * @param options - Optional priority and filter options
@@ -20,6 +21,7 @@ import type { SubjectDefinition } from '@makaio/core';
  */
 export function intercept<T extends SubjectDefinition>(
   context: MakaioBusContext,
+  owner: PartyRef,
   subjectDefinition: T,
   handler: InterceptorHandler<T['$meta']['payload']>,
   options?: InterceptOptions,
@@ -46,6 +48,7 @@ export function intercept<T extends SubjectDefinition>(
   const entry: InterceptorEntry<InterceptorHandler<unknown>> = {
     handler: effectiveHandler,
     priority,
+    owner: { kind: owner.kind, id: owner.id },
   };
 
   insertSorted(entries, entry);

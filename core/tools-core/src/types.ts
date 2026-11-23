@@ -1,5 +1,5 @@
 import type { z } from 'zod';
-import type { MakaioContext } from '@makaio/core';
+import type { CallContext, MakaioContext } from '@makaio/core';
 import type { ToolAnnotations } from '@makaio/contracts';
 import type { IMakaioBus } from '@makaio/bus-core';
 
@@ -14,8 +14,9 @@ export type BusLike = IMakaioBus;
 /**
  * Extended execution context for tools that need session and bus access.
  *
- * Extends MakaioContext with optional sessionId and bus properties for tools
- * that need to:
+ * Extends MakaioContext with the call context of the execution request, plus
+ * optional sessionId and bus properties for tools that need to:
+ * - Send messages on behalf of the caller of the execution request (call)
  * - Correlate operations with a specific session (sessionId)
  * - Emit events or make requests during execution (bus)
  * @example
@@ -24,12 +25,20 @@ export type BusLike = IMakaioBus;
  *   cwd: '/workspace',
  *   env: { NODE_ENV: 'development' },
  *   platform: 'posix',
+ *   call,
  *   sessionId: 'session-123',
- *   bus: makaioBus,
+ *   bus: extensionBus,
  * });
  * ```
  */
 export interface ToolExecutionContext extends MakaioContext {
+  /**
+   * Call context of the execution request.
+   * A tool sends over {@link bus} with this call; tool implementations are never
+   * roots and do not mint a context of their own for the execution.
+   */
+  call: CallContext;
+
   /**
    * Session identifier for multi-session task correlation.
    * Tools can use this to associate work with a specific session.
@@ -84,8 +93,9 @@ export interface ToolExecutionContext extends MakaioContext {
   toolCallId?: string;
 
   /**
-   * Bus instance for event communication.
-   * Tools can use this to emit events (e.g., task.created, task.updated).
+   * Bus instance of the extension that contributes the tool.
+   * Tools can use this to emit events (e.g., task.created, task.updated),
+   * passing {@link call} as the call context of every send.
    */
   bus?: BusLike;
 }

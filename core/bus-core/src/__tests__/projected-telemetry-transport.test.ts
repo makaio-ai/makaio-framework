@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { createBusNamespace, observability } from '@makaio/core';
 import type { BusMessage, BusTransport } from '../types/transports.js';
 import { createBusInstance } from '../bus.js';
+import { busContextOf } from '../kernel-api.js';
 import { createProjectedTelemetryTransport, createSubjectTelemetryProjectorRegistry } from '../observability/index.js';
 
 function createInnerTransport(): { transport: BusTransport; sent: BusMessage[] } {
@@ -46,7 +47,7 @@ describe('createProjectedTelemetryTransport', () => {
     const transport = createProjectedTelemetryTransport({
       name: 'upstream-telemetry',
       inner: inner.transport,
-      namespaceRegistry: bus.getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(bus).namespaceRegistry,
       machineId: 'machine-1',
     });
 
@@ -80,7 +81,7 @@ describe('createProjectedTelemetryTransport', () => {
     const transport = createProjectedTelemetryTransport({
       name: 'upstream-telemetry',
       inner: inner.transport,
-      namespaceRegistry: createBusInstance().getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(createBusInstance()).namespaceRegistry,
     });
 
     transport.onReceive(async () => {
@@ -104,7 +105,7 @@ describe('createProjectedTelemetryTransport', () => {
     const transport = createProjectedTelemetryTransport({
       name: 'upstream-telemetry',
       inner: inner.transport,
-      namespaceRegistry: createBusInstance().getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(createBusInstance()).namespaceRegistry,
     });
 
     const result = await transport.send({
@@ -125,7 +126,7 @@ describe('createProjectedTelemetryTransport', () => {
     const transport = createProjectedTelemetryTransport({
       name: 'upstream-telemetry',
       inner: inner.transport,
-      namespaceRegistry: createBusInstance().getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(createBusInstance()).namespaceRegistry,
     });
 
     const result = await transport.send({
@@ -143,7 +144,7 @@ describe('createProjectedTelemetryTransport', () => {
     const transport = createProjectedTelemetryTransport({
       name: 'upstream-telemetry',
       inner: inner.transport,
-      namespaceRegistry: createBusInstance().getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(createBusInstance()).namespaceRegistry,
     });
 
     await transport.subscribe('session.list', undefined, [0]);
@@ -166,7 +167,7 @@ describe('createProjectedTelemetryTransport', () => {
     const transport = createProjectedTelemetryTransport({
       name: 'upstream-telemetry',
       inner: inner.transport,
-      namespaceRegistry: bus.getContext().namespaceRegistry,
+      namespaceRegistry: busContextOf(bus).namespaceRegistry,
       projectorRegistry,
     });
 

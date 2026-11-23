@@ -3,7 +3,7 @@
  *
  * Covers:
  * - Extensions booted through the ExtensionCoordinator receive a `credentials`
- *   field on their context when one is supplied in `extensionContextBase`.
+ *   field on their context when `extensionContextBase.credentialsFor` supplies one.
  * - `ctx.credentials.resolve` can resolve `env:` refs from the process environment.
  * - `NodeCredentialProvider.resolve` returns null (never throws) for `stored:` refs.
  * - `NodeCredentialProvider.resolve` returns null (never throws) for missing `file:` refs.
@@ -14,10 +14,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBusInstance, createChannelEndpoint } from '@makaio/bus-core';
-import { CredentialSubjects, FrameworkContractNamespaces } from '@makaio/contracts';
+import { CredentialSubjects, FrameworkContractNamespaces, type Party } from '@makaio/contracts';
 import { buildStoredCredentialRef, CredentialRefSchema } from '@makaio/contracts/config';
 import { ExtensionCoordinator, type KernelMakaioExtension } from '@makaio/kernel';
 import type { NodeExtensionContext } from '@makaio/contracts/extension';
+import { createTestCall } from '@makaio/test-utils';
 import { NodeCredentialProvider, StoredCredentialProvider } from '../credential-provider.js';
 
 const TEST_MAKAIO_HOME = '/home/test/.makaio';
@@ -64,7 +65,7 @@ describe('NodeExtensionContext.credentials', () => {
         username: 'test',
         machineId: 'machine-1',
         tryImport: async () => null,
-        credentials,
+        credentialsFor: () => credentials,
       },
     });
 
@@ -95,7 +96,7 @@ describe('NodeExtensionContext.credentials', () => {
         return {
           init: async () => {
             if (nodeCtx.credentials) {
-              resolvedValue = await nodeCtx.credentials.resolve(ref);
+              resolvedValue = await nodeCtx.credentials.resolve(createTestCall(), ref);
             }
           },
           destroy: async () => {},
@@ -111,7 +112,7 @@ describe('NodeExtensionContext.credentials', () => {
         username: 'test',
         machineId: 'machine-1',
         tryImport: async () => null,
-        credentials,
+        credentialsFor: () => credentials,
       },
     });
 
@@ -138,7 +139,7 @@ describe('NodeCredentialProvider.resolve', () => {
     // stored: refs require a bus-backed credential service; NodeCredentialProvider
     // must never try to forward them to resolveCredentialRef (which would return
     // the ref string itself as a raw token, violating the null contract).
-    const result = await provider.resolve(ref);
+    const result = await provider.resolve(createTestCall(), ref);
     expect(result).toBeNull();
   });
 
@@ -148,7 +149,7 @@ describe('NodeCredentialProvider.resolve', () => {
     const missingPath = path.join(os.tmpdir(), `makaio-test-missing-cred-${Date.now()}.txt`);
     const ref = CredentialRefSchema.parse(`file:${missingPath}`);
 
-    const result = await provider.resolve(ref);
+    const result = await provider.resolve(createTestCall(), ref);
     expect(result).toBeNull();
   });
 });
@@ -162,11 +163,11 @@ describe('StoredCredentialProvider.resolve', () => {
     const bus = createBusInstance();
     bus.registerNamespaces(FrameworkContractNamespaces);
 
-    const provider = new StoredCredentialProvider(bus);
+    const provider = StoredCredentialProvider.forHost(bus);
     const ref = buildStoredCredentialRef('provider-config-123', 'apiKey');
 
     // Must not throw even though CredentialSubjects.getChannelToken has no handler.
-    const result = await provider.resolve(ref);
+    const result = await provider.resolve(createTestCall(), ref);
     expect(result).toBeNull();
   });
 
@@ -178,12 +179,55 @@ describe('StoredCredentialProvider.resolve', () => {
       const bus = createBusInstance();
       bus.registerNamespaces(FrameworkContractNamespaces);
 
-      const provider = new StoredCredentialProvider(bus);
+      const provider = StoredCredentialProvider.forHost(bus);
       const ref = CredentialRefSchema.parse(`env:${ENV_VAR}`);
-      const result = await provider.resolve(ref);
+      const result = await provider.resolve(createTestCall(), ref);
       expect(result).toBe('fallback-secret');
     } finally {
       delete process.env[ENV_VAR];
+    }
+  });
+
+  it('opens one provider-owned channel and forwards each lookup principal', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespaces(FrameworkContractNamespaces);
+    const provider = StoredCredentialProvider.forHost(bus);
+    const token = 'shared-channel-test-token';
+    const personA: Party = { kind: 'test.user', id: 'alice' };
+    const personB: Party = { kind: 'test.user', id: 'bob' };
+    const openPrincipals: Party[] = [];
+    const lookupPrincipals: Party[] = [];
+    let openedChannels = 0;
+
+    const endpoint = createChannelEndpoint(
+      bus,
+      'credentials',
+      (channel) => {
+        openedChannels++;
+        channel.on(CredentialSubjects.get, (ctx) => {
+          lookupPrincipals.push(ctx.call.principal);
+          ctx.setResult({ credentials: { apiKey: 'resolved-value' } });
+        });
+      },
+      { token },
+    );
+    const offToken = bus.on(CredentialSubjects.getChannelToken, (ctx) => {
+      openPrincipals.push(ctx.call.principal);
+      ctx.setResult({ token });
+    });
+
+    try {
+      const ref = buildStoredCredentialRef('provider-config-shared-channel', 'apiKey');
+      await expect(provider.resolve(createTestCall({ principal: personA }), ref)).resolves.toBe('resolved-value');
+      await expect(provider.resolve(createTestCall({ principal: personB }), ref)).resolves.toBe('resolved-value');
+
+      expect(openPrincipals).toEqual([bus.own('shared-work').principal]);
+      expect(openedChannels).toBe(1);
+      expect(lookupPrincipals).toEqual([personA, personB]);
+    } finally {
+      provider.close();
+      offToken();
+      endpoint.close();
     }
   });
 
@@ -198,12 +242,12 @@ describe('StoredCredentialProvider.resolve', () => {
     const bus = createBusInstance();
     bus.registerNamespaces(FrameworkContractNamespaces);
 
-    const provider = new StoredCredentialProvider(bus);
+    const provider = StoredCredentialProvider.forHost(bus);
     const ref = buildStoredCredentialRef(PROVIDER_CONFIG_ID, CREDENTIAL_KEY);
 
     // First call: no getChannelToken handler is registered — must return null
     // without throwing.
-    const firstResult = await provider.resolve(ref);
+    const firstResult = await provider.resolve(createTestCall(), ref);
     expect(firstResult).toBeNull();
 
     // Now register a real credential channel endpoint — bus handler for
@@ -217,7 +261,7 @@ describe('StoredCredentialProvider.resolve', () => {
       );
 
       const endpoint = createChannelEndpoint(
-        bus.getContext(),
+        bus,
         'credentials',
         (channel) => {
           channel.on(CredentialSubjects.get, (ctx) => {
@@ -231,7 +275,7 @@ describe('StoredCredentialProvider.resolve', () => {
       cleanups.push(() => endpoint.close());
 
       // Second call: handler is now registered — must return the credential value.
-      const secondResult = await provider.resolve(ref);
+      const secondResult = await provider.resolve(createTestCall(), ref);
       expect(secondResult).toBe(CREDENTIAL_VALUE);
     } finally {
       for (const cleanup of cleanups) {

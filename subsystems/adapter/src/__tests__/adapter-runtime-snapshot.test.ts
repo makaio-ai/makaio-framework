@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { ExtensionSubjects } from '@makaio/kernel';
 import { VersionRangeSchema, defineAdapterProviderAuth } from '@makaio/contracts';
 import { ClientDefinitionSchema } from '@makaio/contracts/client';
@@ -145,7 +146,7 @@ describe('resolveAdapterRuntimeSnapshot', () => {
       });
     });
 
-    const result = await resolveAdapterRuntimeSnapshot({
+    const result = await resolveAdapterRuntimeSnapshot(createTestCall(), {
       bus: MakaioBus,
       adapter: loadedAdapter(),
       snapshot: providerSnapshot(),
@@ -178,7 +179,12 @@ describe('resolveAdapterRuntimeSnapshot', () => {
     const adapter: LoadedAdapter = { ...loadedAdapter(), providerRefs: [] };
 
     await expect(
-      resolveAdapterRuntimeSnapshot({ bus: MakaioBus, adapter, snapshot: providerSnapshot(), isBound: true }),
+      resolveAdapterRuntimeSnapshot(createTestCall(), {
+        bus: MakaioBus,
+        adapter,
+        snapshot: providerSnapshot(),
+        isBound: true,
+      }),
     ).resolves.toEqual({ status: 'error', code: 'provider-incompatible' });
   });
 
@@ -201,7 +207,12 @@ describe('resolveAdapterRuntimeSnapshot', () => {
     };
 
     await expect(
-      resolveAdapterRuntimeSnapshot({ bus: MakaioBus, adapter, snapshot: providerSnapshot(), isBound: true }),
+      resolveAdapterRuntimeSnapshot(createTestCall(), {
+        bus: MakaioBus,
+        adapter,
+        snapshot: providerSnapshot(),
+        isBound: true,
+      }),
     ).resolves.toEqual({ status: 'error', code: 'auth-binding-missing' });
   });
 
@@ -223,7 +234,7 @@ describe('resolveAdapterRuntimeSnapshot', () => {
 
     try {
       await expect(
-        resolveAdapterRuntimeSnapshot({
+        resolveAdapterRuntimeSnapshot(createTestCall(), {
           bus: MakaioBus,
           adapter: loadedAdapter(),
           snapshot: providerSnapshot(),
@@ -237,7 +248,7 @@ describe('resolveAdapterRuntimeSnapshot', () => {
 
   it('returns a typed failure when the captured config snapshot does not bind the adapter', async () => {
     await expect(
-      resolveAdapterRuntimeSnapshot({
+      resolveAdapterRuntimeSnapshot(createTestCall(), {
         bus: MakaioBus,
         adapter: loadedAdapter(),
         snapshot: providerSnapshot(),
@@ -287,7 +298,7 @@ describe('resolveAdapterRuntimeSnapshot', () => {
     });
 
     try {
-      const pending = store.resolveBoundProviderRuntimeSnapshot('claude-code', 'anthropic-work');
+      const pending = store.resolveBoundProviderRuntimeSnapshot(createTestCall(), 'claude-code', 'anthropic-work');
       await definitionLookupStarted;
       await store.commitSnapshotMutation((nextSnapshot) => {
         nextSnapshot.adapters.set('claude-code', { ...rawAdapter, bindings: [] });

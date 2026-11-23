@@ -20,6 +20,7 @@
  */
 
 import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import { SessionSubjects } from '@makaio/contracts';
 import { SessionStorageSubjects } from '../storage/namespace.js';
 import {
@@ -55,24 +56,28 @@ function compileChildSessionPatterns(childAdapterSessionIds: ReadonlySet<string>
  * whose tool_output references `subagentSessionId`. When a unique match is found,
  * the subagent is re-parented from the parent to the compress child and its
  * `spawningToolCallId` is backfilled.
+ * @param call - Call context of the import-completed message being handled
  * @param bus - The bus instance for storage requests
  * @param subagentSessionId - Makaio session ID of the newly linked subagent
  * @param parentMakaioSessionId - Makaio session ID of the parent session
  */
 async function tryReparentSubagentToCompressChild(
+  call: CallContext,
   bus: IMakaioBus,
   subagentSessionId: string,
   parentMakaioSessionId: string,
 ): Promise<void> {
   // Find all compress children of the parent session
-  const { children: parentChildren } = await bus.request(SessionStorageSubjects.getChildren, {
+  const { children: parentChildren } = await bus.request(call, SessionStorageSubjects.getChildren, {
     sessionId: parentMakaioSessionId,
   });
 
   const compressChildren = parentChildren.filter((child) => child.branchKind === 'compress');
   if (compressChildren.length === 0) return;
 
-  const { session: subagentSession } = await bus.request(SessionStorageSubjects.get, { sessionId: subagentSessionId });
+  const { session: subagentSession } = await bus.request(call, SessionStorageSubjects.get, {
+    sessionId: subagentSessionId,
+  });
   const subagentAdapterSessionId = subagentSession?.adapterSessionId;
   if (!subagentAdapterSessionId) return;
 
@@ -80,7 +85,7 @@ async function tryReparentSubagentToCompressChild(
 
   const matchResults = await Promise.all(
     compressChildren.map(async (compressChild): Promise<{ parentSessionId: string; toolCallId: string } | null> => {
-      const messages = await fetchAllMessages(bus, compressChild.sessionId);
+      const messages = await fetchAllMessages(call, bus, compressChild.sessionId);
       const agentToolCalls = collectAgentToolCalls(messages);
       if (agentToolCalls.length === 0) return null;
 
@@ -111,7 +116,7 @@ async function tryReparentSubagentToCompressChild(
 
   if (matches.length !== 1) return;
 
-  await bus.request(SessionStorageSubjects.update, {
+  await bus.request(call, SessionStorageSubjects.update, {
     sessionId: subagentSessionId,
     parentSessionId: matches[0].parentSessionId,
     spawningToolCallId: matches[0].toolCallId,
@@ -120,11 +125,13 @@ async function tryReparentSubagentToCompressChild(
 
 /**
  * Re-parent existing subagent children from a parent session to a newly linked compress child.
+ * @param call - Call context of the import-completed message being handled
  * @param bus - The bus instance for storage requests
  * @param compressChild - The compress child session (already fetched by caller)
  * @param importSource - Source identity from the import completion event
  */
 async function tryReparentParentSubagentsToCompressChild(
+  call: CallContext,
   bus: IMakaioBus,
   compressChild: { sessionId: string; parentExternalSessionId?: string; source?: string },
   importSource?: string,
@@ -135,21 +142,21 @@ async function tryReparentParentSubagentsToCompressChild(
 
   const compressChildSessionId = compressChild.sessionId;
 
-  const { session: parentSession } = await bus.request(SessionStorageSubjects.getByAdapterSessionId, {
+  const { session: parentSession } = await bus.request(call, SessionStorageSubjects.getByAdapterSessionId, {
     adapterSessionId: parentExternalSessionId,
     source,
   });
   const parentMakaioSessionId = parentSession?.sessionId;
   if (!parentMakaioSessionId) return;
 
-  const { children } = await bus.request(SessionStorageSubjects.getChildren, {
+  const { children } = await bus.request(call, SessionStorageSubjects.getChildren, {
     sessionId: parentMakaioSessionId,
   });
 
-  const subagentAdapterToSessionId = await buildSubagentAdapterToSessionIdMap(bus, children);
+  const subagentAdapterToSessionId = await buildSubagentAdapterToSessionIdMap(call, bus, children);
   if (subagentAdapterToSessionId.size === 0) return;
 
-  const messages = await fetchAllMessages(bus, compressChildSessionId);
+  const messages = await fetchAllMessages(call, bus, compressChildSessionId);
   const agentToolCalls = collectAgentToolCalls(messages);
   if (agentToolCalls.length === 0) return;
 
@@ -183,7 +190,7 @@ async function tryReparentParentSubagentsToCompressChild(
 
   const updates = [...assignments].map(async ([childSessionId, toolCallId]) => {
     try {
-      await bus.request(SessionStorageSubjects.update, {
+      await bus.request(call, SessionStorageSubjects.update, {
         sessionId: childSessionId,
         parentSessionId: compressChildSessionId,
         spawningToolCallId: toolCallId,
@@ -204,11 +211,13 @@ async function tryReparentParentSubagentsToCompressChild(
 
 /**
  * Resolve adapter session IDs for existing subagent children.
+ * @param call - Call context of the import-completed message being handled
  * @param bus - The bus instance for storage requests
  * @param children - Child sessions of the parent Makaio session
  * @returns Map from subagent adapterSessionId to Makaio sessionId
  */
 async function buildSubagentAdapterToSessionIdMap(
+  call: CallContext,
   bus: IMakaioBus,
   children: Array<{ sessionId: string; branchKind?: string | null }>,
 ): Promise<Map<string, string>> {
@@ -216,7 +225,7 @@ async function buildSubagentAdapterToSessionIdMap(
     children
       .filter((child) => child.branchKind === 'subagent')
       .map(async (child) => {
-        const { session } = await bus.request(SessionStorageSubjects.get, { sessionId: child.sessionId });
+        const { session } = await bus.request(call, SessionStorageSubjects.get, { sessionId: child.sessionId });
         return session?.adapterSessionId
           ? { sessionId: child.sessionId, adapterSessionId: session.adapterSessionId }
           : null;
@@ -260,20 +269,20 @@ export function registerCompressLineageResolver(bus: IMakaioBus): () => void {
     try {
       const { sessionId: linkedSessionId, source } = ctx.payload;
 
-      const { session: linkedMakaioSession } = await bus.request(SessionStorageSubjects.get, {
+      const { session: linkedMakaioSession } = await bus.request(ctx.call, SessionStorageSubjects.get, {
         sessionId: linkedSessionId,
       });
       if (!linkedMakaioSession) return;
 
       // --- Path B: subagent linked → check compress children of its parent ---
       if (linkedMakaioSession.branchKind === 'subagent' && linkedMakaioSession.parentSessionId !== undefined) {
-        await tryReparentSubagentToCompressChild(bus, linkedSessionId, linkedMakaioSession.parentSessionId);
+        await tryReparentSubagentToCompressChild(ctx.call, bus, linkedSessionId, linkedMakaioSession.parentSessionId);
         return;
       }
 
       // --- Path A: compress child linked → re-parent existing subagents of parent ---
       if (linkedMakaioSession.branchKind !== 'compress') return;
-      await tryReparentParentSubagentsToCompressChild(bus, linkedMakaioSession, source);
+      await tryReparentParentSubagentsToCompressChild(ctx.call, bus, linkedMakaioSession, source);
     } catch (error) {
       console.error('[CompressLineageResolver] Failed to resolve compress lineage', {
         payload: ctx.payload,

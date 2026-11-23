@@ -34,7 +34,7 @@ export const createTestConfig = async (
   options?: CreateConformanceTestConfigOptions,
 ): Promise<ConformanceTestConfig<ClaudeCodeConnectorBus, ClaudeSdkConnector, ClaudeCodeAgent>> => {
   const { scopedBus } = ClaudeCodeConnectorNamespace;
-  const bus = await scopedBus();
+  const bus = await scopedBus(MakaioBus);
   const testPreset = resolveConformanceTestPreset({
     adapterName: ClaudeCodeAdapterName,
     testProviderDefinitionId: testPresetId,
@@ -67,7 +67,7 @@ export const createTestConfig = async (
         connectorFactory: (resolvedConfig) =>
           new ClaudeSdkConnector({
             ...resolvedConfig,
-            // Conformance tests create `bus` via `Namespace.scopedBus()`, which is a
+            // Conformance tests create `bus` via `Namespace.scopedBus(bus)`, which is a
             // typed view over the same MakaioBus context rather than a separate
             // handler registry. Cross-namespace account observations still need the
             // global client subject, so the requester intentionally targets MakaioBus.

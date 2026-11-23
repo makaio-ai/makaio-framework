@@ -11,6 +11,7 @@ import {
 } from '@makaio/ai-adapters-core';
 import type { ConnectorTeardownResult } from '@makaio/contracts';
 import { readClaudeProviderBaseUrl, resolveClaudeProcessEnv } from '@makaio/ai-adapters-claude-process-shared';
+import type { SDKMessage } from '@makaio/client-claude-code';
 import { type ClaudeCodeCliConnectorBus, ClaudeCodeCliConnectorSubjects } from './namespace/index.js';
 import { ClaudeCliSession } from './session.js';
 import { ClaudeCodeCliAdapterName } from './constants.js';
@@ -18,18 +19,21 @@ import type { ClaudeCliAgentConfig, ClaudeCliSessionConfig } from './types.js';
 
 const SDK_METADATA_KEYS = ['agentId', 'adapterId', 'adapterSessionId', 'adapterName'] as const;
 
+/** SDK event payload without connector-managed metadata, optionally tagged with the originating message. */
+type ConnectorSdkEventPayload = Omit<SDKMessage, (typeof SDK_METADATA_KEYS)[number]>;
+
 /**
  * Remove connector-managed metadata keys so `emit()` can inject canonical values.
  * @param payload - Raw SDK event payload received from the provider.
  * @returns SDK payload without connector-managed metadata fields, or undefined for non-object payloads
  */
-function stripSdkMetadata(payload: unknown): Record<string, unknown> | undefined {
+function stripSdkMetadata(payload: unknown): ConnectorSdkEventPayload | undefined {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   const sanitized: Record<string, unknown> = { ...(payload as Record<string, unknown>) };
   for (const key of SDK_METADATA_KEYS) {
     delete sanitized[key];
   }
-  return sanitized;
+  return sanitized as ConnectorSdkEventPayload;
 }
 
 /**
@@ -114,7 +118,10 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
       mcpUpstreamServers: cliConfig.mcpUpstreamServers,
       makaioSessionId: this.sessionId,
       systemPrompt: this.systemPrompt,
-      emitSdkEvent: async (msg) => {
+      emitSdkEvent: async (_sessionCall, msg) => {
+        // Attribution is decided by the pending turn handle at receipt, captured before any await (FACT-375):
+        // the session's call belongs to the turn that installed the transport callback and outlives it.
+        const pending = this.pendingMessageHandle;
         this.logLowLevelEvent(msg);
         // Sync adapterSessionId before emitting
         if (this.session) {
@@ -129,10 +136,16 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
           console.warn('[ClaudeCliConnector] Dropping non-object SDK event payload', { payloadType: typeof msg });
           return;
         }
-        await this.emit(ClaudeCodeCliConnectorSubjects.sdk.event, {
+        const payload: ConnectorSdkEventPayload & { originatingMessageId?: string } = {
           ...sdkEventPayload,
-          ...(this.pendingMessageHandle !== undefined && { originatingMessageId: this.pendingMessageHandle.messageId }),
-        } as Parameters<typeof this.emit<typeof ClaudeCodeCliConnectorSubjects.sdk.event>>[1]);
+          originatingMessageId: pending?.messageId,
+        };
+        // R1: a pending turn attributes the event to its call. R2: without one it is an observation.
+        await this.emit<typeof ClaudeCodeCliConnectorSubjects.sdk.event>(
+          pending?.call ?? this.globalBus.own('observer'),
+          ClaudeCodeCliConnectorSubjects.sdk.event,
+          payload,
+        );
       },
       onTurnStart: (handle) => {
         this.pendingMessageHandle = handle;
@@ -285,10 +298,10 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
   /**
    * Start the connector with an initial user message.
    * @param message - The first user message
-   * @param options - Optional start options
+   * @param options - Start options carrying the call of the handled message
    * @returns Agent start result with session ID and message handle
    */
-  public async start(message: NormalizedMessageInput, options?: ConnectorStartOptions): Promise<AgentStartResult> {
+  public async start(message: NormalizedMessageInput, options: ConnectorStartOptions): Promise<AgentStartResult> {
     await this.resetSessionIfSystemPromptChanged(options);
     if (!this.session) {
       await this.initializeSession();
@@ -314,12 +327,12 @@ export class ClaudeCliConnector extends AIAgentConnector<ClaudeCodeCliConnectorB
   /**
    * Send a follow-up user message.
    * @param message - The user message
-   * @param options - Optional delivery mode options
+   * @param options - Delivery options carrying the call of the handled message
    * @returns MessageHandle for tracking
    */
   public async sendMessage(
     message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
+    options: ConnectorSendMessageOptions,
   ): Promise<MessageHandle> {
     if (!this.session) {
       await this.initializeSession();

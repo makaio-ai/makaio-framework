@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { AgentSubjects } from '@makaio/contracts';
+import type { CallContext } from '@makaio/core';
 
 /**
  * Input for the model-change confirmation flow.
@@ -44,10 +45,14 @@ interface ModelChangeWarningResult {
  * - If no handler is registered (`!result.handled`), the change is auto-approved.
  *   This is the correct behaviour for OSS / headless mode.
  * - Otherwise the handler's decision is forwarded to the caller.
+ * @param call - Call context of the model change request this validation belongs to
  * @param input - Model change warning inputs
  * @returns Whether the swap should proceed and whether to request edit history
  */
-export async function confirmModelChange(input: ModelChangeWarningInput): Promise<ModelChangeWarningResult> {
+export async function confirmModelChange(
+  call: CallContext,
+  input: ModelChangeWarningInput,
+): Promise<ModelChangeWarningResult> {
   const { bus, agentId, currentModel, nextModel, skipWarning } = input;
 
   if (skipWarning) {
@@ -57,7 +62,7 @@ export async function confirmModelChange(input: ModelChangeWarningInput): Promis
   // requestOptional intentionally propagates non-NoHandlerError exceptions.
   // Silently approving a model change when the registered validator crashes
   // would be a worse failure mode; callers should handle propagated errors.
-  const result = await bus.requestOptional(AgentSubjects.validateModelChange, {
+  const result = await bus.requestOptional(call, AgentSubjects.validateModelChange, {
     agentId,
     currentModel,
     nextModel,

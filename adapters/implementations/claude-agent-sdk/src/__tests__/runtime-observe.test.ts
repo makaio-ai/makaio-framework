@@ -22,6 +22,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { AgentSubjects } from '@makaio/contracts';
 import { ClientSubjects, type ClientRuntimeObserveRequest } from '@makaio/contracts/client';
 import type { OptionalResult } from '@makaio/core';
+import { createTestCall } from '@makaio/test-utils';
 
 // ---------------------------------------------------------------------------
 // SDK mock — minimal query stub; the runtime-observe test does not exercise
@@ -61,7 +62,7 @@ import { createIdleQueryMock } from './idle-query-mock.js';
  * @returns Agent instance ready for `initialize()`
  */
 async function makeAgent(opts: { sessionId?: string; clientId?: string } = {}): Promise<ClaudeCodeAgent> {
-  const adapterBus = await ClaudeCodeConnectorNamespace.scopedBus();
+  const adapterBus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
   return new ClaudeCodeAgent({
     adapterBus,
     teardownArbiter: new AgentTeardownArbiter(),
@@ -111,7 +112,7 @@ describe('ClaudeCodeAgent — client.runtime.observe producer', () => {
   afterEach(async () => {
     for (const fn of cleanup) fn();
     cleanup = [];
-    await Promise.all(agents.map((agent) => agent.close()));
+    await Promise.all(agents.map((agent) => agent.close({ call: createTestCall() })));
     agents = [];
   });
 
@@ -131,7 +132,7 @@ describe('ClaudeCodeAgent — client.runtime.observe producer', () => {
       }),
     );
 
-    await agent.initialize();
+    await agent.initialize(createTestCall());
 
     await vi.waitFor(() => expect(requests).toHaveLength(1));
 
@@ -156,7 +157,7 @@ describe('ClaudeCodeAgent — client.runtime.observe producer', () => {
       }),
     );
 
-    await agent.initialize();
+    await agent.initialize(createTestCall());
     await vi.waitFor(() => expect(requests).toHaveLength(1));
 
     expect(requests[0]?.source).toEqual({ layer: 'adapter', producer: 'claude-agent-sdk' });
@@ -174,7 +175,7 @@ describe('ClaudeCodeAgent — client.runtime.observe producer', () => {
       }),
     );
 
-    await agent.initialize();
+    await agent.initialize(createTestCall());
     await vi.waitFor(() => expect(requests).toHaveLength(1));
 
     // adapterSessionId must be a non-empty UUID-like string — it is either a
@@ -196,7 +197,7 @@ describe('ClaudeCodeAgent — client.runtime.observe producer', () => {
       }),
     );
 
-    await agent.initialize();
+    await agent.initialize(createTestCall());
     await vi.waitFor(() => expect(requests).toHaveLength(1));
 
     expect(requests[0]?.clientId).toBe('claude-code');
@@ -214,7 +215,7 @@ describe('ClaudeCodeAgent — client.runtime.observe producer', () => {
       }),
     );
 
-    await agent.initialize();
+    await agent.initialize(createTestCall());
     await vi.waitFor(() => expect(requests).toHaveLength(1));
 
     expect(requests[0]).not.toHaveProperty('sessionId');
@@ -236,7 +237,7 @@ describe('ClaudeCodeAgent — client.runtime.observe producer', () => {
 
     // Must not throw — best-effort guarantee. Non-fork sessions return the
     // locally-authoritative session ID immediately.
-    await expect(agent.initialize()).resolves.toEqual(expect.any(String));
+    await expect(agent.initialize(createTestCall())).resolves.toEqual(expect.any(String));
   });
 
   it('initialize() succeeds when no handler is registered for runtime.observe', async () => {
@@ -245,18 +246,20 @@ describe('ClaudeCodeAgent — client.runtime.observe producer', () => {
 
     // No handler registered — requestOptional returns { handled: false }.
     // Non-fork sessions return the locally-authoritative session ID immediately.
-    await expect(agent.initialize()).resolves.toEqual(expect.any(String));
+    await expect(agent.initialize(createTestCall())).resolves.toEqual(expect.any(String));
   });
 
   it('retries runtime observation from the next lifecycle signal after an unhandled initialize observation', async () => {
     const agent = await makeAgent({ sessionId: 'framework-session-retry', clientId: 'claude-code' });
     agents.push(agent);
     const requestOptionalSpy = vi.spyOn(MakaioBus, 'requestOptional');
+    const call = createTestCall();
 
     try {
-      await agent.initialize();
+      await agent.initialize(call);
 
       expect(requestOptionalSpy).toHaveBeenCalledWith(
+        call,
         ClientSubjects.runtime.observe,
         expect.objectContaining({
           clientId: 'claude-code',
@@ -276,7 +279,7 @@ describe('ClaudeCodeAgent — client.runtime.observe producer', () => {
       }),
     );
 
-    await MakaioBus.emit(AgentSubjects.started, {
+    await MakaioBus.emit(createTestCall(), AgentSubjects.started, {
       agentId: 'agent-test',
       adapterId: 'adapter-test',
       adapterName: 'claude-agent-sdk',
@@ -313,10 +316,10 @@ describe('ClaudeCodeAgent — client.runtime.observe producer', () => {
       }),
     );
 
-    await agent.initialize();
+    await agent.initialize(createTestCall());
     await vi.waitFor(() => expect(requests).toHaveLength(1));
 
-    await MakaioBus.emit(AgentSubjects.started, {
+    await MakaioBus.emit(createTestCall(), AgentSubjects.started, {
       agentId: 'agent-test',
       adapterId: 'adapter-test',
       adapterName: 'claude-agent-sdk',

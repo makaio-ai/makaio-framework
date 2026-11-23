@@ -47,7 +47,7 @@ export function completeTaskTool() {
       }
 
       try {
-        const result = await context.bus.request(SubagentSubjects.completeTask, {
+        const result = await context.bus.request(context.call, SubagentSubjects.completeTask, {
           sessionId: context.sessionId,
           ...(context.turnId !== undefined && { turnId: context.turnId }),
           result: input.result,

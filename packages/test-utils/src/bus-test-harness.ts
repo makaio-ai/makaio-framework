@@ -14,7 +14,7 @@
  * const manager = new WorkspaceStateManager(bus);
  *
  * // Assert calls
- * expect(request).toHaveBeenCalledWith(expect.anything(), { key: 'foo' });
+ * expect(request).toHaveBeenCalledWith(expect.anything(), expect.anything(), { key: 'foo' });
  * ```
  */
 
@@ -23,8 +23,10 @@ import {
   createBusInstance,
   getFullSubjectForSubjectDefinition,
   type IMakaioBus,
+  type RegisteredSubjectSchema,
   type ScopedBus,
 } from '@makaio/bus-core';
+import { busContextOf } from '@makaio/bus-core/kernel-api';
 
 /**
  * Full structural shape required by `IMakaioBus` for test doubles.
@@ -46,7 +48,7 @@ interface MockBusShape {
   broadcast: Mock;
   scoped: Mock;
   __onAny: Mock;
-  getContext: Mock;
+  own: Mock;
   registerNamespace: Mock;
   registerNamespaces: Mock;
   getSchema: Mock;
@@ -72,7 +74,6 @@ interface ScopedMockBusShape {
   intercept: Mock;
   requestOptional: Mock;
   withFilter: Mock;
-  getContext: Mock;
 }
 
 /**
@@ -91,6 +92,8 @@ export interface MockBusResult {
   requestOptional: Mock;
   /** Mock for bus.withFilter() */
   withFilter: Mock;
+  /** Mock for bus.own() - returns a real minted call context */
+  own: Mock;
   /** Resolves or replaces the backing promise returned by the live bus.ready getter. */
   setReady: (ready?: Promise<void>) => void;
 }
@@ -192,6 +195,19 @@ function createSetReady(transportMethods: MockTransportMethods): (ready?: Promis
 }
 
 /**
+ * Build an `own` mock that returns real minted call contexts.
+ *
+ * Contexts come from the public `createBusInstance().own(purpose)` path, so
+ * `toHaveBeenCalledWith(expect.anything(), ...)` on `request` and `emit` finds
+ * a defined `call` argument (`expect.anything()` does not match `undefined`).
+ * @returns Mock `own` backed by a private real bus instance
+ */
+function createOwnMock(): Mock<IMakaioBus['own']> {
+  const owner = createBusInstance();
+  return vi.fn((purpose: Parameters<IMakaioBus['own']>[0]) => owner.own(purpose));
+}
+
+/**
  * Creates a mock bus for unit tests.
  *
  * Returns a partial mock with the most commonly used methods.
@@ -204,6 +220,7 @@ export function createMockBus(): MockBusResult {
   const on = vi.fn().mockReturnValue(() => {});
   const requestOptional = vi.fn();
   const withFilter = vi.fn().mockReturnThis();
+  const own = createOwnMock();
   const transportMethods = createMockTransportMethods();
   const setReady = createSetReady(transportMethods);
 
@@ -219,7 +236,7 @@ export function createMockBus(): MockBusResult {
     broadcast: vi.fn(),
     scoped: vi.fn(),
     __onAny: vi.fn(),
-    getContext: vi.fn(),
+    own,
     registerNamespace: vi.fn(),
     registerNamespaces: vi.fn(),
     getSchema: vi.fn(),
@@ -235,7 +252,7 @@ export function createMockBus(): MockBusResult {
     },
   };
 
-  return { bus: bus as IMakaioBus, request, emit, on, requestOptional, withFilter, setReady };
+  return { bus: bus as IMakaioBus, request, emit, on, requestOptional, withFilter, own, setReady };
 }
 
 /**
@@ -248,8 +265,6 @@ export interface MockGlobalBusResult extends MockBusResult {
   scoped: Mock;
   /** Mock for bus.__onAny() */
   __onAny: Mock;
-  /** Mock for bus.getContext() */
-  getContext: Mock;
   /** Mock for bus.registerNamespace() */
   registerNamespace: Mock;
   /** Mock for bus.registerNamespaces() */
@@ -275,7 +290,7 @@ export function createMockGlobalBus(namespace = 'global'): MockGlobalBusResult {
   const once = vi.fn().mockResolvedValue({});
   const scoped = vi.fn();
   const __onAny = vi.fn().mockReturnValue(() => {});
-  const getContext = vi.fn();
+  const own = createOwnMock();
   const registerNamespace = vi.fn();
   const registerNamespaces = vi.fn();
   const getSchema = vi.fn();
@@ -294,7 +309,7 @@ export function createMockGlobalBus(namespace = 'global'): MockGlobalBusResult {
     broadcast: vi.fn(),
     scoped,
     __onAny,
-    getContext,
+    own,
     registerNamespace,
     registerNamespaces,
     getSchema,
@@ -317,11 +332,11 @@ export function createMockGlobalBus(namespace = 'global'): MockGlobalBusResult {
     on,
     requestOptional,
     withFilter,
+    own,
     setReady,
     once,
     scoped,
     __onAny,
-    getContext,
     registerNamespace,
     registerNamespaces,
     getSchema,
@@ -369,7 +384,6 @@ export function createMockScopedBus(namespace = 'test'): MockScopedBusResult {
     intercept: vi.fn(),
     requestOptional: vi.fn(),
     withFilter,
-    getContext: vi.fn(),
   } satisfies ScopedMockBusShape as ScopedBus<string>;
 
   return { bus, request, emit, on, once, withFilter };
@@ -378,7 +392,9 @@ export function createMockScopedBus(namespace = 'test'): MockScopedBusResult {
 /**
  * Creates a real bus instance for integration tests.
  *
- * Use this when you need schema validation and real handler execution.
+ * Use this when you need schema validation and real handler execution. The
+ * instance is bound to the host party of its own fresh context; send with
+ * `bus.own('root')` as the call context.
  * @returns Real IMakaioBus instance
  */
 export function createTestBusInstance(): IMakaioBus {
@@ -406,10 +422,22 @@ export type BusSubjectRef = Parameters<typeof getFullSubjectForSubjectDefinition
  */
 export function countSubjectHandlers(bus: IMakaioBus, subject: BusSubjectRef): number {
   const fullSubject = getFullSubjectForSubjectDefinition(subject);
-  const context = bus.getContext();
+  const context = busContextOf(bus);
   return (
     (context.requestHandlers.get(fullSubject)?.length ?? 0) + (context.eventHandlers.get(fullSubject)?.length ?? 0)
   );
+}
+
+/**
+ * List the subjects registered in a bus instance's namespace registry.
+ *
+ * Reads the bus context's namespace registry directly so tests and tooling can
+ * inspect the real registered subject metadata of a bus.
+ * @param bus - Bus whose namespace registry is read
+ * @returns Registered subject metadata of that bus
+ */
+export function listRegisteredSubjects(bus: IMakaioBus): RegisteredSubjectSchema[] {
+  return busContextOf(bus).namespaceRegistry.listRegisteredSubjects();
 }
 
 /**

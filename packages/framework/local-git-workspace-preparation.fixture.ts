@@ -12,6 +12,7 @@ import {
   ExecutionAttemptSubjects,
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
+  MAKAIO_JOB_RUN_PARTY_KIND,
   WorkerSubjects,
 } from '@makaio/framework/contracts';
 import { HmacAuth, WebSocketClientTransport } from '@makaio/framework/node/transports';
@@ -147,8 +148,8 @@ try {
       auth: new HmacAuth({
         secret,
         resolveSecret: (id) => id === created.executionAttemptId ? secret : null,
-        resolvePeer: (id) => id === created.executionAttemptId
-          ? { kind: 'workflow-execution-attempt', id, authenticated: true, claims: { executionId } }
+        resolveParty: (id) => id === created.executionAttemptId
+          ? { kind: MAKAIO_JOB_RUN_PARTY_KIND, id, claims: { executionId } }
           : null,
       }),
     });

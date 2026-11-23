@@ -24,7 +24,7 @@ import { AIAgent, type NormalizedCallUsage } from '@makaio/ai-adapters-core';
 import { CodexAppServerConnector } from './connector.js';
 import { CodexAppServerSubjects, type CodexAppServerBus } from './namespaces/index.js';
 import { registerToolApprovalHandler } from './tool-handling.js';
-import { AgentSubjects, ClientSubjects, type SessionMessageBlock } from '@makaio/contracts';
+import { AgentSubjects, ClientSubjects, type CallContext, type SessionMessageBlock } from '@makaio/contracts';
 import { buildClientSessionBase, emitBestEffort } from '@makaio/subsystem-client';
 
 /**
@@ -173,17 +173,17 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
     const filteredBus = this.globalBus.withFilter({ agentId: this.agentId });
 
     this.addBusHandlerCleanup(
-      filteredBus.on(AgentSubjects.turn.started, () => {
+      filteredBus.on(AgentSubjects.turn.started, (ctx) => {
         emitBestEffort(async () => {
-          await this.globalBus.emit(ClientSubjects.session.turn.started, this.getClientSessionBase());
+          await this.globalBus.emit(ctx.call, ClientSubjects.session.turn.started, this.getClientSessionBase());
         });
       }),
     );
 
     this.addBusHandlerCleanup(
-      filteredBus.on(AgentSubjects.turn.completed, () => {
+      filteredBus.on(AgentSubjects.turn.completed, (ctx) => {
         emitBestEffort(async () => {
-          await this.globalBus.emit(ClientSubjects.session.turn.completed, this.getClientSessionBase());
+          await this.globalBus.emit(ctx.call, ClientSubjects.session.turn.completed, this.getClientSessionBase());
         });
       }),
     );
@@ -192,7 +192,7 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
       filteredBus.on(AgentSubjects.user_message.sent, (ctx) => {
         const prompt = ctx.payload.content.message;
         emitBestEffort(async () => {
-          await this.globalBus.emit(ClientSubjects.session.userPrompt.submitted, {
+          await this.globalBus.emit(ctx.call, ClientSubjects.session.userPrompt.submitted, {
             ...this.getClientSessionBase(),
             ...(prompt !== undefined && { prompt }),
           });
@@ -207,14 +207,14 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
    */
   private wireThreadLifecycleEvents(connector: CodexAppServerConnector): void {
     // thread.started -> agent.started
-    this.subscribeConnector(connector, CodexAppServerSubjects.thread_started, async () => {
+    this.subscribeConnector(connector, CodexAppServerSubjects.thread_started, async (ctx) => {
       // Reset cache for new turn
       this.toolCallCache.clear();
       this.toolOutputCache.clear();
       this.toolBlockIndexMap.clear();
-      await this.emitStart();
+      await this.emitStart(ctx.call);
       emitBestEffort(async () => {
-        await this.globalBus.emit(ClientSubjects.session.started, this.getClientSessionBase());
+        await this.globalBus.emit(ctx.call, ClientSubjects.session.started, this.getClientSessionBase());
       });
 
       // Best-effort runtime observation — the adapter session ID is strong evidence
@@ -223,7 +223,7 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
       const adapterSessionId = this.connector?.adapterSessionId;
       if (adapterSessionId) {
         void this.globalBus
-          .requestOptional(ClientSubjects.runtime.observe, {
+          .requestOptional(ctx.call, ClientSubjects.runtime.observe, {
             clientId: this.config.clientId ?? 'codex',
             source: { layer: 'adapter', producer: 'codex-app-server' },
             observedAt: Date.now(),
@@ -247,20 +247,20 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
    */
   private wireMessageEvents(connector: CodexAppServerConnector): void {
     this.subscribeConnector(connector, CodexAppServerSubjects.agent_message_delta, async (ctx) => {
-      await this.emitGlobal(AgentSubjects.message_delta, { text: ctx.payload.delta });
+      await this.emitGlobal(ctx.call, AgentSubjects.message_delta, { text: ctx.payload.delta });
     });
     this.subscribeConnector(connector, CodexAppServerSubjects.agent_message, async (ctx) => {
-      await this.emitGlobal(AgentSubjects.message, { content: ctx.payload.message });
-      await this.emitStepStarted('text');
-      await this.emitStepFinished('text', { type: 'text', content: ctx.payload.message });
+      await this.emitGlobal(ctx.call, AgentSubjects.message, { content: ctx.payload.message });
+      await this.emitStepStarted(ctx.call, 'text');
+      await this.emitStepFinished(ctx.call, 'text', { type: 'text', content: ctx.payload.message });
     });
     this.subscribeConnector(connector, CodexAppServerSubjects.reasoning_delta, async (ctx) => {
-      await this.emitGlobal(AgentSubjects.reasoning_delta, { content: ctx.payload.delta });
+      await this.emitGlobal(ctx.call, AgentSubjects.reasoning_delta, { content: ctx.payload.delta });
     });
     this.subscribeConnector(connector, CodexAppServerSubjects.reasoning, async (ctx) => {
-      await this.emitGlobal(AgentSubjects.reasoning, { content: ctx.payload.reasoning });
-      await this.emitStepStarted('reasoning');
-      await this.emitStepFinished('reasoning', { type: 'reasoning', content: ctx.payload.reasoning });
+      await this.emitGlobal(ctx.call, AgentSubjects.reasoning, { content: ctx.payload.reasoning });
+      await this.emitStepStarted(ctx.call, 'reasoning');
+      await this.emitStepFinished(ctx.call, 'reasoning', { type: 'reasoning', content: ctx.payload.reasoning });
     });
   }
 
@@ -295,7 +295,7 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
         },
       });
 
-      await this.emitGlobal(AgentSubjects.tool.use, {
+      await this.emitGlobal(ctx.call, AgentSubjects.tool.use, {
         toolName: 'bash',
         args: { command: payload.command, cwd: payload.cwd },
         toolCallId: payload.callId,
@@ -304,7 +304,7 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
 
     // Tool execution started (command) -> emit step.started with tool_call content
     this.subscribeConnector(connector, CodexAppServerSubjects.exec_command_begin, async (ctx) => {
-      await this.handleExecCommandBegin(ctx.payload);
+      await this.handleExecCommandBegin(ctx.call, ctx.payload);
     });
 
     // Tool output delta -> accumulate output for step.finished
@@ -313,7 +313,7 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
       const current = this.toolOutputCache.get(payload.callId) ?? '';
       const appended = current + payload.chunk;
       this.toolOutputCache.set(payload.callId, capToolOutputCache(appended));
-      await this.emitGlobal(AgentSubjects.tool.output, {
+      await this.emitGlobal(ctx.call, AgentSubjects.tool.output, {
         output: payload.chunk,
         toolCallId: payload.callId,
       });
@@ -322,7 +322,7 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
     // Tool execution completed -> emit step.finished with tool_output content
     this.subscribeConnector(connector, CodexAppServerSubjects.exec_command_end, async (ctx) => {
       const payload = ctx.payload;
-      await this.emitGlobal(AgentSubjects.tool.completed, {
+      await this.emitGlobal(ctx.call, AgentSubjects.tool.completed, {
         toolName: 'bash',
         args: this.toolCallCache.get(payload.callId)?.args,
         result: { exitCode: payload.exitCode },
@@ -330,12 +330,13 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
         toolCallId: payload.callId,
       });
       await this.emitToolStepFinished(
+        ctx.call,
         payload.callId,
         this.toolOutputCache.get(payload.callId) ?? `Command completed with exit code ${payload.exitCode}`,
         payload.exitCode !== 0,
       );
       emitBestEffort(async () => {
-        await this.globalBus.emit(ClientSubjects.session.tool.post, {
+        await this.globalBus.emit(ctx.call, ClientSubjects.session.tool.post, {
           ...this.getClientSessionBase(),
           toolName: 'bash',
           toolCallId: payload.callId,
@@ -348,9 +349,13 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
   /**
    * Handle exec_command_begin: build step.started content, emit step.started,
    * tool.started, and client.session.tool.pre.
+   * @param call - Call context of the exec_command_begin event; the client.session event is sent under it
    * @param payload - The exec_command_begin event payload
    */
-  private async handleExecCommandBegin(payload: { callId: string; command: string[]; cwd: string }): Promise<void> {
+  private async handleExecCommandBegin(
+    call: CallContext,
+    payload: { callId: string; command: string[]; cwd: string },
+  ): Promise<void> {
     const cachedTool = this.toolCallCache.get(payload.callId);
     const toolCallContent: SessionMessageBlock = cachedTool
       ? {
@@ -369,18 +374,19 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
     const blockIndex = this.getBlockIndex();
     this.toolBlockIndexMap.set(payload.callId, blockIndex);
     await this.emitStepStarted(
+      call,
       'tool_use',
       { type: 'tool_use', toolName: 'bash', toolCallId: payload.callId },
       toolCallContent,
     );
     this.incrementBlockIndex();
 
-    await this.emitGlobal(AgentSubjects.tool.started, {
+    await this.emitGlobal(call, AgentSubjects.tool.started, {
       toolName: 'bash',
       toolCallId: payload.callId,
     });
     emitBestEffort(async () => {
-      await this.globalBus.emit(ClientSubjects.session.tool.pre, {
+      await this.globalBus.emit(call, ClientSubjects.session.tool.pre, {
         ...this.getClientSessionBase(),
         toolName: 'bash',
         toolCallId: payload.callId,
@@ -397,18 +403,19 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
       const { itemId, reason, grantRoot } = ctx.payload;
       const args = { reason, grantRoot };
       this.toolCallCache.set(itemId, { command: [], cwd: '', toolCallId: itemId, name: 'patch', args });
-      await this.emitGlobal(AgentSubjects.tool.use, { toolName: 'patch', args, toolCallId: itemId });
+      await this.emitGlobal(ctx.call, AgentSubjects.tool.use, { toolName: 'patch', args, toolCallId: itemId });
       // Reserve blockIndex for this tool call
       const blockIndex = this.getBlockIndex();
       this.toolBlockIndexMap.set(itemId, blockIndex);
       await this.emitStepStarted(
+        ctx.call,
         'tool_use',
         { type: 'tool_use', toolName: 'patch', toolCallId: itemId },
         { type: 'tool_call', toolCallId: itemId, name: 'patch', args },
       );
       this.incrementBlockIndex(); // Reserve this slot
       emitBestEffort(async () => {
-        await this.globalBus.emit(ClientSubjects.session.tool.pre, {
+        await this.globalBus.emit(ctx.call, ClientSubjects.session.tool.pre, {
           ...this.getClientSessionBase(),
           toolName: 'patch',
           toolCallId: itemId,
@@ -420,22 +427,22 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
       const current = this.toolOutputCache.get(itemId) ?? '';
       const appended = current + delta;
       this.toolOutputCache.set(itemId, capToolOutputCache(appended));
-      await this.emitGlobal(AgentSubjects.tool.output, { output: delta, toolCallId: itemId });
+      await this.emitGlobal(ctx.call, AgentSubjects.tool.output, { output: delta, toolCallId: itemId });
     });
     this.subscribeConnector(connector, CodexAppServerSubjects.item_completed, async (ctx) => {
       const cached = this.toolCallCache.get(ctx.payload.itemId);
       if (cached?.name === 'patch') {
         const output = this.toolOutputCache.get(ctx.payload.itemId) ?? 'File change applied';
-        await this.emitGlobal(AgentSubjects.tool.completed, {
+        await this.emitGlobal(ctx.call, AgentSubjects.tool.completed, {
           toolName: 'patch',
           args: cached.args,
           result: { output },
           success: true,
           toolCallId: ctx.payload.itemId,
         });
-        await this.emitToolStepFinished(ctx.payload.itemId, output, false);
+        await this.emitToolStepFinished(ctx.call, ctx.payload.itemId, output, false);
         emitBestEffort(async () => {
-          await this.globalBus.emit(ClientSubjects.session.tool.post, {
+          await this.globalBus.emit(ctx.call, ClientSubjects.session.tool.post, {
             ...this.getClientSessionBase(),
             toolName: 'patch',
             toolCallId: ctx.payload.itemId,
@@ -461,16 +468,17 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
       this.toolCallCache.set(itemId, { command: [], cwd: '', toolCallId: itemId, name, args });
       const blockIndex = this.getBlockIndex();
       this.toolBlockIndexMap.set(itemId, blockIndex);
-      await this.emitGlobal(AgentSubjects.tool.use, { toolName: name, args, toolCallId: itemId });
-      await this.emitGlobal(AgentSubjects.tool.started, { toolName: name, toolCallId: itemId });
+      await this.emitGlobal(ctx.call, AgentSubjects.tool.use, { toolName: name, args, toolCallId: itemId });
+      await this.emitGlobal(ctx.call, AgentSubjects.tool.started, { toolName: name, toolCallId: itemId });
       await this.emitStepStarted(
+        ctx.call,
         'tool_use',
         { type: 'tool_use', toolName: name, toolCallId: itemId },
         { type: 'tool_call', toolCallId: itemId, name, args },
       );
       this.incrementBlockIndex();
       emitBestEffort(async () => {
-        await this.globalBus.emit(ClientSubjects.session.tool.pre, {
+        await this.globalBus.emit(ctx.call, ClientSubjects.session.tool.pre, {
           ...this.getClientSessionBase(),
           toolName: name,
           toolCallId: itemId,
@@ -482,17 +490,17 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
     this.subscribeConnector(connector, CodexAppServerSubjects.dynamic_tool_call_end, async (ctx) => {
       const { itemId, name, output, success } = ctx.payload;
       const cached = this.toolCallCache.get(itemId);
-      await this.emitGlobal(AgentSubjects.tool.output, { output, toolCallId: itemId });
-      await this.emitGlobal(AgentSubjects.tool.completed, {
+      await this.emitGlobal(ctx.call, AgentSubjects.tool.output, { output, toolCallId: itemId });
+      await this.emitGlobal(ctx.call, AgentSubjects.tool.completed, {
         toolName: name,
         args: cached?.args,
         result: { output },
         success,
         toolCallId: itemId,
       });
-      await this.emitToolStepFinished(itemId, output, !success);
+      await this.emitToolStepFinished(ctx.call, itemId, output, !success);
       emitBestEffort(async () => {
-        await this.globalBus.emit(ClientSubjects.session.tool.post, {
+        await this.globalBus.emit(ctx.call, ClientSubjects.session.tool.post, {
           ...this.getClientSessionBase(),
           toolName: name,
           toolCallId: itemId,
@@ -526,11 +534,11 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
         costUnitType: 'tokens',
         contextWindow: payload.modelContextWindow,
       };
-      await this.trackUsage(normalized);
+      await this.trackUsage(ctx.call, normalized);
 
       // Emit context window update if we have the context window size
       if (payload.modelContextWindow) {
-        await this.emitContextWindowUpdate({
+        await this.emitContextWindowUpdate(ctx.call, {
           currentTokens: payload.totalTokens,
           maxTokens: payload.modelContextWindow,
           cachedTokens: payload.inputCachedTokens,
@@ -544,7 +552,7 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
    *
    * Uses centralized tool-handling helper for consistent approval flow.
    * Note: adapterSessionId may be undefined at wire time — the lazy callback resolves it
-   * at request time via connector.getAdapterSessionId() to avoid the race condition.
+   * at request time via connector.getAdapterSessionId(call) to avoid the race condition.
    * sessionId is always set for agents running within a session; asserted here as the
    * Zod schema on AgentSubjects.toolApprove enforces it at runtime.
    * @param connector - The CodexAppServerConnector to wire RPC from
@@ -553,7 +561,7 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
     this.addConnectorWiringCleanup(
       registerToolApprovalHandler(
         connector,
-        async () => {
+        async (call: CallContext) => {
           if (this.sessionId == null) {
             throw new Error('Agent sessionId is required for tool approval');
           }
@@ -561,7 +569,7 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
             adapterId: this.adapterId,
             adapterName: this.adapterName,
             agentId: this.agentId,
-            adapterSessionId: await this.getAdapterSessionId(),
+            adapterSessionId: await this.getAdapterSessionId(call),
             sessionId: this.sessionId,
           };
         },
@@ -573,11 +581,17 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
   /**
    * Emit tool step.finished and cleanup cached data.
    * Shared helper for bash and patch tool completion.
+   * @param call - Call context of the connector event that completes the tool
    * @param toolCallId - Tool call identifier
    * @param output - Tool output content
    * @param isError - Whether the tool execution failed
    */
-  private async emitToolStepFinished(toolCallId: string, output: string, isError: boolean): Promise<void> {
+  private async emitToolStepFinished(
+    call: CallContext,
+    toolCallId: string,
+    output: string,
+    isError: boolean,
+  ): Promise<void> {
     // Use stored blockIndex from step.started for correlation
     const blockIndex = this.toolBlockIndexMap.get(toolCallId);
     if (blockIndex === undefined) {
@@ -586,7 +600,7 @@ export class CodexAppServerAgent extends AIAgent<CodexAppServerBus, CodexAppServ
     const resolvedBlockIndex = blockIndex ?? -1;
     this.toolBlockIndexMap.delete(toolCallId);
     const content: SessionMessageBlock = { type: 'tool_output', toolCallId, output, isError };
-    await this.emitGlobal(AgentSubjects.step.finished, {
+    await this.emitGlobal(call, AgentSubjects.step.finished, {
       stepType: 'tool_use',
       blockIndex: resolvedBlockIndex,
       content,

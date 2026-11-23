@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import {
   SessionSubjects,
   type IMakaioSession,
@@ -28,18 +29,20 @@ const MAX_LINEAGE_HOPS = 64;
  * `lastActivityAt` is not refreshed. Activity is what turns produce; a
  * continuation observation says where a conversation lives, not that anything
  * was said in it.
+ * @param call - Handled message the continuation is performed for.
  * @param context - Composed authority context.
  * @param request - The session the continuation was observed for.
  * @returns The row that was acted on and what happened to it.
  */
 export async function runContinuation(
+  call: CallContext,
   context: OwnershipAuthorityContext,
   request: { sessionId: string },
 ): Promise<SessionOwnershipContinuationServiceResult> {
-  const named = await readSession(context, request.sessionId);
+  const named = await readSession(call, context, request.sessionId);
   if (named === null) return { outcome: 'not-found' };
 
-  const lineage = await resolveLineageRoot(context, named);
+  const lineage = await resolveLineageRoot(call, context, named);
   if (lineage.kind === 'unresolved') return { outcome: 'unresolved', sessionId: named.sessionId };
   const root = lineage.session;
 
@@ -51,14 +54,14 @@ export async function runContinuation(
   // unconditional update, and a deletion would make the write match nothing at
   // all. Both are reported by the same refusal, so the transition is re-read
   // rather than assumed.
-  const updated = await context.bus.requestOptional(SessionStorageSubjects.update, {
+  const updated = await context.bus.requestOptional(call, SessionStorageSubjects.update, {
     sessionId: root.sessionId,
     status: 'active',
     expectedStatus: ['closed'],
   });
-  if (!updated.handled || !updated.data.success) return classifyRefusedReopen(context, root.sessionId);
+  if (!updated.handled || !updated.data.success) return classifyRefusedReopen(call, context, root.sessionId);
 
-  await context.bus.emit(SessionSubjects.updated, {
+  await context.bus.emit(call, SessionSubjects.updated, {
     sessionId: root.sessionId,
     changedProperties: ['status'],
   });
@@ -73,26 +76,33 @@ export async function runContinuation(
  * the row is re-read. Either way nothing was written and nothing is announced:
  * `session.updated` promises a change, and a status this call did not make is
  * not one.
+ * @param call - Handled message the continuation is performed for.
  * @param context - Composed authority context.
  * @param sessionId - Row whose reopen was refused.
  * @returns `not-found` when the row is gone, `unchanged` otherwise.
  */
 async function classifyRefusedReopen(
+  call: CallContext,
   context: OwnershipAuthorityContext,
   sessionId: string,
 ): Promise<SessionOwnershipContinuationServiceResult> {
-  const current = await readSession(context, sessionId);
+  const current = await readSession(call, context, sessionId);
   return current === null ? { outcome: 'not-found' } : { outcome: 'unchanged', sessionId };
 }
 
 /**
  * Read one session row, degrading an unhandled store to "absent".
+ * @param call - Handled message the continuation is performed for.
  * @param context - Composed authority context.
  * @param sessionId - Row to read.
  * @returns The row, or `null` when it does not exist or cannot be read.
  */
-async function readSession(context: OwnershipAuthorityContext, sessionId: string): Promise<IMakaioSession | null> {
-  const result = await context.bus.requestOptional(SessionStorageSubjects.get, { sessionId });
+async function readSession(
+  call: CallContext,
+  context: OwnershipAuthorityContext,
+  sessionId: string,
+): Promise<IMakaioSession | null> {
+  const result = await context.bus.requestOptional(call, SessionStorageSubjects.get, { sessionId });
   return result.handled ? result.data.session : null;
 }
 
@@ -126,17 +136,19 @@ type LineageResolution =
  * A walk that cannot reach such a row is **unresolved**, never "the last row we
  * saw": every row the walk passes through is a compress child by construction,
  * and those carry no provider identity and are never reopened.
+ * @param call - Handled message the continuation is performed for.
  * @param context - Composed authority context.
  * @param session - The named row.
  * @returns The lineage root, or that the lineage leads to none.
  */
 async function resolveLineageRoot(
+  call: CallContext,
   context: OwnershipAuthorityContext,
   session: IMakaioSession,
 ): Promise<LineageResolution> {
   if (session.branchKind !== 'compress') return { kind: 'root', session };
   if (session.rootSessionId !== undefined) {
-    const recorded = await readSession(context, session.rootSessionId);
+    const recorded = await readSession(call, context, session.rootSessionId);
     // A recorded root that is itself a compress child is a broken lineage, not
     // a root: trusting the pointer would reopen a synthesized view.
     return recorded === null || recorded.branchKind === 'compress'
@@ -150,7 +162,7 @@ async function resolveLineageRoot(
   let current = session;
   for (let hop = 0; hop < MAX_LINEAGE_HOPS; hop += 1) {
     if (current.parentSessionId === undefined) return { kind: 'unresolved' };
-    const parent = await readSession(context, current.parentSessionId);
+    const parent = await readSession(call, context, current.parentSessionId);
     if (parent === null) return { kind: 'unresolved' };
     if (parent.branchKind !== 'compress') return { kind: 'root', session: parent };
     current = parent;

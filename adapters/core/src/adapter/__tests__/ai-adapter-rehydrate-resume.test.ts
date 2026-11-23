@@ -3,6 +3,7 @@ import os from 'node:os';
 import { MakaioBus } from '@makaio/bus-core';
 import { AdapterSubjects, AgentSubjects, type AdapterSessionMoved } from '@makaio/contracts';
 import { AgentStorageSubjects } from '@makaio/services-core/session';
+import { createTestCall } from '@makaio/test-utils';
 import {
   createTestAdapter,
   MockConnector,
@@ -71,6 +72,7 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
       },
       configFactory: async (input) => ({
         bus: input.bus,
+        globalBus: input.globalBus,
         agentId: input.agentId,
         adapterId: input.adapterId,
         adapterName: input.adapterName,
@@ -218,7 +220,7 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
       const agent = createdAgents.at(-1);
       if (!agent) throw new Error('Expected the rehydrate to have created an agent');
       rejectNext = false;
-      await agent.recordConfirmedAdapterSession('mock-adapter-session-id');
+      await agent.recordConfirmedAdapterSession(createTestCall(), 'mock-adapter-session-id');
 
       expect(movements.map((movement) => movement.adapterSessionId)).toEqual([
         'mock-adapter-session-id',
@@ -265,6 +267,7 @@ describe('AIAdapter.handleRehydrateAgent native resume context', () => {
       ({ adapter } = createTestAdapter('test-adapter-warm-rehydrate-config', {
         configFactory: async (input) => ({
           bus: input.bus,
+          globalBus: input.globalBus,
           agentId: input.agentId,
           adapterId: input.adapterId,
           adapterName: input.adapterName,
@@ -487,7 +490,7 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
 
     // Free the registered occupancy — only a stranded pending claim could
     // still lock the provider session afterwards.
-    expect((await adapter.disposeAgent('agent-divergent')).found).toBe(true);
+    expect((await adapter.disposeAgent(createTestCall(), 'agent-divergent')).found).toBe(true);
 
     const startResult = await MakaioBus.request(AdapterSubjects.startAgent, {
       adapterId: adapter.adapterId,
@@ -550,6 +553,7 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
     ({ adapter } = createTestAdapter('test-adapter-claim', {
       configFactory: async (input) => ({
         bus: input.bus,
+        globalBus: input.globalBus,
         agentId: input.agentId ?? 'test-agent',
         adapterId: input.adapterId ?? 'test-adapter-id',
         adapterName: 'test-adapter-claim',
@@ -725,14 +729,14 @@ describe('AIAdapter.handleRehydrateAgent adapter-session claim discipline', () =
     if (!rehydrated) throw new Error('Expected rehydrated agent handle');
     expect(rehydrated.adapterSessionId).toBe('mock-adapter-session-id');
     expect(rehydrated.agent).toBeInstanceOf(TestAgent);
-    await expect(rehydrated.agent.getAdapterSessionId()).resolves.toBe('mock-adapter-session-id');
+    await expect(rehydrated.agent.getAdapterSessionId(createTestCall())).resolves.toBe('mock-adapter-session-id');
 
     const activeAgents = adapter.getActiveAgents();
     expect(activeAgents).toHaveLength(1);
     const activeAgent = activeAgents[0];
     if (!activeAgent) throw new Error('Expected active agent handle');
     expect(activeAgent.agent).toBe(rehydrated.agent);
-    await expect(activeAgent.agent.getAdapterSessionId()).resolves.toBe('mock-adapter-session-id');
+    await expect(activeAgent.agent.getAdapterSessionId(createTestCall())).resolves.toBe('mock-adapter-session-id');
 
     // Because the provider confirmed a different identity, the claimed
     // resume target has no live writer anymore and must be released — a

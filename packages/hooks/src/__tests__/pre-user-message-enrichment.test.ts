@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { SessionSubjects } from '@makaio/contracts';
 import { TurnStorageSubjects } from '@makaio/services-core/turn';
+import { createTestCall } from '@makaio/test-utils';
 import { createHook } from '../create-hook.js';
 import { runPreUserMessageHooks, resetPreUserMessageHooks } from '../runners/pre-user-message-runner.js';
 import type { PreUserMessageContext } from '../types/hook-context.js';
@@ -51,12 +52,14 @@ describe('PreUserMessage session enrichment', () => {
 
     let capturedCtx: PreUserMessageContext | undefined;
     const { unsubscribe } = createHook('PreUserMessage', {
+      bus: MakaioBus,
       handler: (ctx) => {
         capturedCtx = ctx;
       },
     });
 
     await runPreUserMessageHooks(
+      createTestCall(),
       createRunnerInput({
         sessionId: 'session-123',
       }),
@@ -122,12 +125,14 @@ describe('PreUserMessage session enrichment', () => {
 
     let capturedCtx: PreUserMessageContext | undefined;
     const { unsubscribe } = createHook('PreUserMessage', {
+      bus: MakaioBus,
       handler: (ctx) => {
         capturedCtx = ctx;
       },
     });
 
     await runPreUserMessageHooks(
+      createTestCall(),
       createRunnerInput({
         sessionId: 'session-abc',
       }),
@@ -156,12 +161,14 @@ describe('PreUserMessage session enrichment', () => {
 
     let capturedCtx: PreUserMessageContext | undefined;
     const { unsubscribe } = createHook('PreUserMessage', {
+      bus: MakaioBus,
       handler: (ctx) => {
         capturedCtx = ctx;
       },
     });
 
     await runPreUserMessageHooks(
+      createTestCall(),
       createRunnerInput({
         sessionId: 'nonexistent-session',
       }),
@@ -179,12 +186,14 @@ describe('PreUserMessage session enrichment', () => {
   it('maintains backwards compatibility without sessionId', async () => {
     let capturedCtx: PreUserMessageContext | undefined;
     const { unsubscribe } = createHook('PreUserMessage', {
+      bus: MakaioBus,
       handler: (ctx) => {
         capturedCtx = ctx;
       },
     });
 
     await runPreUserMessageHooks(
+      createTestCall(),
       createRunnerInput({
         sessionId: undefined,
       }),
@@ -225,12 +234,13 @@ describe('PreUserMessage session enrichment', () => {
 
     let capturedCtx: PreUserMessageContext | undefined;
     const { unsubscribe } = createHook('PreUserMessage', {
+      bus: MakaioBus,
       handler: (ctx) => {
         capturedCtx = ctx;
       },
     });
 
-    await runPreUserMessageHooks(createRunnerInput({ sessionId: 'session-owned-fields' }), MakaioBus);
+    await runPreUserMessageHooks(createTestCall(), createRunnerInput({ sessionId: 'session-owned-fields' }), MakaioBus);
 
     expect(capturedCtx?.hookEvent).toBe('PreUserMessage');
     expect(capturedCtx?.payload.sessionId).toBe('session-owned-fields');
@@ -292,12 +302,14 @@ describe('PreUserMessage session enrichment', () => {
 
     let capturedCtx: PreUserMessageContext | undefined;
     const { unsubscribe } = createHook('PreUserMessage', {
+      bus: MakaioBus,
       handler: (ctx) => {
         capturedCtx = ctx;
       },
     });
 
     await runPreUserMessageHooks(
+      createTestCall(),
       createRunnerInput({
         sessionId: 'session-with-history',
       }),
@@ -324,12 +336,14 @@ describe('PreUserMessage session enrichment', () => {
 
     let capturedCtx: PreUserMessageContext | undefined;
     const { unsubscribe } = createHook('PreUserMessage', {
+      bus: MakaioBus,
       handler: (ctx) => {
         capturedCtx = ctx;
       },
     });
 
     await runPreUserMessageHooks(
+      createTestCall(),
       createRunnerInput({
         sessionId: 'session-123',
       }),
@@ -394,12 +408,13 @@ describe('PreUserMessage session enrichment', () => {
 
     let capturedCtx: PreUserMessageContext | undefined;
     const { unsubscribe } = createHook('PreUserMessage', {
+      bus: MakaioBus,
       handler: (ctx) => {
         capturedCtx = ctx;
       },
     });
 
-    await runPreUserMessageHooks(createRunnerInput({ sessionId: 'session-wt' }), MakaioBus);
+    await runPreUserMessageHooks(createTestCall(), createRunnerInput({ sessionId: 'session-wt' }), MakaioBus);
 
     const worktree = capturedCtx?.contextExtensions.worktree as Record<string, unknown> | undefined;
     expect(worktree).toBeDefined();
@@ -449,12 +464,13 @@ describe('PreUserMessage session enrichment', () => {
 
     let capturedCtx: PreUserMessageContext | undefined;
     const { unsubscribe } = createHook('PreUserMessage', {
+      bus: MakaioBus,
       handler: (ctx) => {
         capturedCtx = ctx;
       },
     });
 
-    await runPreUserMessageHooks(createRunnerInput({ sessionId: 'session-wt-fail' }), MakaioBus);
+    await runPreUserMessageHooks(createTestCall(), createRunnerInput({ sessionId: 'session-wt-fail' }), MakaioBus);
 
     // Session is still enriched despite enrichContext failing
     expect(capturedCtx?.session?.sessionId).toBe('session-wt-fail');

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { ToolRegistry, type ToolsetPolicyProvider } from '../tool-registry.js';
 import { defineToolset, defineTool, toolSuccess, ToolErrorCodes } from '@makaio/tools-core';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 
 describe('ToolRegistry.listToolsWithToolsets policy filtering', () => {
   const tool1 = defineTool({
@@ -173,7 +174,7 @@ describe('ToolRegistry policy enforcement on execute', () => {
     const registry = new ToolRegistry({ bus: MakaioBus });
     await registry.register(restrictedToolset);
 
-    const result = await registry.execute('echo', { message: 'hello' });
+    const result = await registry.execute(createTestCall(), 'echo', { message: 'hello' });
 
     expect(result.success).toBe(true);
     registry.dispose();
@@ -184,7 +185,7 @@ describe('ToolRegistry policy enforcement on execute', () => {
     const registry = new ToolRegistry({ bus: MakaioBus, policyProvider });
     await registry.register(restrictedToolset);
 
-    const result = await registry.execute('echo', { message: 'hello' });
+    const result = await registry.execute(createTestCall(), 'echo', { message: 'hello' });
 
     expect(result.success).toBe(true);
     registry.dispose();
@@ -200,7 +201,7 @@ describe('ToolRegistry policy enforcement on execute', () => {
     const registry = new ToolRegistry({ bus: MakaioBus, policyProvider });
     await registry.register(restrictedToolset);
 
-    const result = await registry.execute('echo', { message: 'hello' });
+    const result = await registry.execute(createTestCall(), 'echo', { message: 'hello' });
 
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -221,14 +222,19 @@ describe('ToolRegistry policy enforcement on execute', () => {
     await registry.register(restrictedToolset);
 
     // No adapter specified
-    const result1 = await registry.execute('echo', { message: 'hello' });
+    const result1 = await registry.execute(createTestCall(), 'echo', { message: 'hello' });
     expect(result1.success).toBe(false);
     if (!result1.success) {
       expect(result1.error.code).toBe(ToolErrorCodes.PERMISSION_DENIED);
     }
 
     // Wrong adapter
-    const result2 = await registry.execute('echo', { message: 'hello' }, { adapterId: 'other-adapter' });
+    const result2 = await registry.execute(
+      createTestCall(),
+      'echo',
+      { message: 'hello' },
+      { adapterId: 'other-adapter' },
+    );
     expect(result2.success).toBe(false);
 
     registry.dispose();
@@ -244,7 +250,7 @@ describe('ToolRegistry policy enforcement on execute', () => {
     const registry = new ToolRegistry({ bus: MakaioBus, policyProvider });
     await registry.register(restrictedToolset);
 
-    const result = await registry.execute('echo', { message: 'hello' }, { adapterId: 'claude-code' });
+    const result = await registry.execute(createTestCall(), 'echo', { message: 'hello' }, { adapterId: 'claude-code' });
 
     expect(result.success).toBe(true);
     registry.dispose();
@@ -260,7 +266,12 @@ describe('ToolRegistry policy enforcement on execute', () => {
     const registry = new ToolRegistry({ bus: MakaioBus, policyProvider });
     await registry.register(restrictedToolset);
 
-    const result = await registry.execute('echo', { message: 'hello' }, { adapterName: 'claude-code' });
+    const result = await registry.execute(
+      createTestCall(),
+      'echo',
+      { message: 'hello' },
+      { adapterName: 'claude-code' },
+    );
 
     expect(result.success).toBe(true);
     registry.dispose();
@@ -278,6 +289,7 @@ describe('ToolRegistry policy enforcement on execute', () => {
 
     // Should succeed when adapterName matches, even if adapterId doesn't
     const result1 = await registry.execute(
+      createTestCall(),
       'echo',
       { message: 'hello' },
       {
@@ -289,6 +301,7 @@ describe('ToolRegistry policy enforcement on execute', () => {
 
     // Should fail when adapterName doesn't match, even if adapterId does
     const result2 = await registry.execute(
+      createTestCall(),
       'echo',
       { message: 'hello' },
       {

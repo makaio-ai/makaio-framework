@@ -1,3 +1,4 @@
+import type { CallContext } from '@makaio/core';
 import type { WorkflowRunResult } from '@makaio/contracts';
 import { WorkflowSubjects } from './namespace.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
@@ -6,11 +7,16 @@ import { commitExecutionLifecycleTransition, type FinalizerDeps } from './workfl
 /**
  * Park a runner result using the owner's shared Cancel/Resume ordering point.
  * An already parked execution releases local ownership without republishing.
+ * @param call - Call context of the handled message the pause serves.
  * @param deps - Owner lifecycle dependencies.
  * @param result - Correlated paused result carrying its gate identity.
  * @returns Whether the serialized transition accepted this pause, including replay.
  */
-export async function parkExecution(deps: FinalizerDeps, result: WorkflowRunResult): Promise<boolean> {
+export async function parkExecution(
+  call: CallContext,
+  deps: FinalizerDeps,
+  result: WorkflowRunResult,
+): Promise<boolean> {
   if (result.pausedAtGateId === undefined || result.pausedAtFrameId === undefined) {
     throw new Error(`Paused runner result for '${result.executionId}' is missing gate identity`);
   }
@@ -18,11 +24,11 @@ export async function parkExecution(deps: FinalizerDeps, result: WorkflowRunResu
     deps,
     result.executionId,
     async () => {
-      const { paused: transitioned } = await deps.bus.request(WorkflowStorageSubjects.pauseRunningExecution, {
+      const { paused: transitioned } = await deps.bus.request(call, WorkflowStorageSubjects.pauseRunningExecution, {
         executionId: result.executionId,
       });
       if (!transitioned) {
-        const { execution } = await deps.bus.request(WorkflowStorageSubjects.getExecution, {
+        const { execution } = await deps.bus.request(call, WorkflowStorageSubjects.getExecution, {
           executionId: result.executionId,
         });
         if (execution?.status !== 'paused') return 'refused';
@@ -34,7 +40,7 @@ export async function parkExecution(deps: FinalizerDeps, result: WorkflowRunResu
     },
     async (committed) => {
       if (committed !== 'transitioned') return;
-      await deps.bus.emit(WorkflowSubjects.execution.paused, {
+      await deps.bus.emit(call, WorkflowSubjects.execution.paused, {
         executionId: result.executionId,
         workflowId: result.workflowId,
         pausedAtGateId: result.pausedAtGateId,

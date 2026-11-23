@@ -27,8 +27,8 @@ describe('__onAny', () => {
         captured.push(ctx);
       });
 
-      await MakaioBus.emit(namespace1.subjects.event1, { value: 42 });
-      await MakaioBus.emit(namespace2.subjects.event2, { text: 'hello' });
+      await MakaioBus.emit(MakaioBus.own('root'), namespace1.subjects.event1, { value: 42 });
+      await MakaioBus.emit(MakaioBus.own('root'), namespace2.subjects.event2, { text: 'hello' });
 
       expect(captured).toHaveLength(2);
       expect(captured[0]).toMatchObject({
@@ -57,7 +57,7 @@ describe('__onAny', () => {
         captured.push(ctx);
       });
 
-      await MakaioBus.emit(namespace.subjects.orphanEvent, { id: 'test-123' });
+      await MakaioBus.emit(MakaioBus.own('root'), namespace.subjects.orphanEvent, { id: 'test-123' });
 
       expect(captured).toHaveLength(1);
       expect(captured[0]?.payload).toEqual({ id: 'test-123' });
@@ -84,7 +84,7 @@ describe('__onAny', () => {
         ctx.setResult({ result: ctx.payload.input * 2 });
       });
 
-      const result = await MakaioBus.request(namespace.subjects.compute, { input: 21 });
+      const result = await MakaioBus.request(MakaioBus.own('root'), namespace.subjects.compute, { input: 21 });
 
       expect(result).toEqual({ result: 42 });
       expect(captured).toHaveLength(1);
@@ -110,12 +110,12 @@ describe('__onAny', () => {
         captured.push(ctx);
       });
 
-      await MakaioBus.emit(namespace.subjects.tick, { count: 1 });
+      await MakaioBus.emit(MakaioBus.own('root'), namespace.subjects.tick, { count: 1 });
       expect(captured).toHaveLength(1);
 
       unsubscribe();
 
-      await MakaioBus.emit(namespace.subjects.tick, { count: 2 });
+      await MakaioBus.emit(MakaioBus.own('root'), namespace.subjects.tick, { count: 2 });
       expect(captured).toHaveLength(1); // Should not capture second event
     });
   });
@@ -138,7 +138,7 @@ describe('__onAny', () => {
         captured2.push(ctx);
       });
 
-      await MakaioBus.emit(namespace.subjects.signal, { id: 'test' });
+      await MakaioBus.emit(MakaioBus.own('root'), namespace.subjects.signal, { id: 'test' });
 
       expect(captured1).toHaveLength(1);
       expect(captured2).toHaveLength(1);
@@ -160,7 +160,12 @@ describe('__onAny', () => {
         captured.push(ctx);
       });
 
-      await MakaioBus.emit(namespace.subjects.trace, { step: 'start' }, { correlationId: 'trace-123' });
+      await MakaioBus.emit(
+        MakaioBus.own('root'),
+        namespace.subjects.trace,
+        { step: 'start' },
+        { correlationId: 'trace-123' },
+      );
 
       expect(captured).toHaveLength(1);
       expect(captured[0]?.correlationId).toBe('trace-123');

@@ -2,6 +2,7 @@
 /* eslint max-lines: ["error", { "max": 425 }] */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { AdapterSubjects, type IMakaioSession, type MakaioSessionAgent, type SessionMessage } from '@makaio/contracts';
 import { buildRecoveryContext, recoverAgent, verifyAndRecoverAgents } from '../session-orchestrator-helpers.js';
 import { FRESH_WITH_HISTORY_RECOVERY_PLAN } from '../recovery-plan.js';
@@ -60,12 +61,17 @@ describe('SessionOrchestrator recovery helpers', () => {
     const probes = reportAgentsDead();
     const payloads = captureRehydrates();
 
-    const { usable, recoveredAgentIds, deferredAgentIds } = await verifyAndRecoverAgents(bus, [deadAgent], {
-      cwd: '/test/path',
-      model: 'test-model',
-      plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
-      machineId: MACHINE_ID,
-    });
+    const { usable, recoveredAgentIds, deferredAgentIds } = await verifyAndRecoverAgents(
+      createTestCall(),
+      bus,
+      [deadAgent],
+      {
+        cwd: '/test/path',
+        model: 'test-model',
+        plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
+        machineId: MACHINE_ID,
+      },
+    );
 
     expect(payloads[0]).toMatchObject({
       adapterId: deadAgent.adapterId,
@@ -91,7 +97,10 @@ describe('SessionOrchestrator recovery helpers', () => {
     reportAgentsDead();
     captureRehydrates();
 
-    await verifyAndRecoverAgents(bus, [deadAgent], { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN, machineId: MACHINE_ID });
+    await verifyAndRecoverAgents(createTestCall(), bus, [deadAgent], {
+      plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
+      machineId: MACHINE_ID,
+    });
 
     const stored = await bus.request(AgentStorageSubjects.get, { agentId: deadAgent.agentId });
     expect(stored.agent?.status).toBe('idle');
@@ -101,7 +110,7 @@ describe('SessionOrchestrator recovery helpers', () => {
     const deadAgent = await seedAgent('dead-agent-given-adapter', { runtimeOwner: undefined });
     const payloads = captureRehydrates();
 
-    const recovered = await recoverAgent(bus, deadAgent, {
+    const recovered = await recoverAgent(createTestCall(), bus, deadAgent, {
       cwd: '/new/path',
       model: 'new-model',
       plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
@@ -128,7 +137,7 @@ describe('SessionOrchestrator recovery helpers', () => {
     });
     const payloads = captureRehydrates();
 
-    await recoverAgent(bus, deadAgent, {
+    await recoverAgent(createTestCall(), bus, deadAgent, {
       model: 'new-model',
       plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
       machineId: MACHINE_ID,
@@ -145,7 +154,10 @@ describe('SessionOrchestrator recovery helpers', () => {
     });
     const payloads = captureRehydrates();
 
-    await recoverAgent(bus, deadAgent, { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN, machineId: MACHINE_ID });
+    await recoverAgent(createTestCall(), bus, deadAgent, {
+      plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
+      machineId: MACHINE_ID,
+    });
 
     expect(payloads[0]?.model).toBe('existing-model');
   });
@@ -168,7 +180,7 @@ describe('SessionOrchestrator recovery helpers', () => {
       }),
     );
 
-    const { usable, recoveredAgentIds } = await verifyAndRecoverAgents(bus, [aliveAgent], {
+    const { usable, recoveredAgentIds } = await verifyAndRecoverAgents(createTestCall(), bus, [aliveAgent], {
       plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
     });
 
@@ -205,7 +217,7 @@ describe('SessionOrchestrator recovery helpers', () => {
     );
     const payloads = captureRehydrates();
 
-    const { usable, recoveredAgentIds } = await verifyAndRecoverAgents(bus, [deadAgent, aliveAgent], {
+    const { usable, recoveredAgentIds } = await verifyAndRecoverAgents(createTestCall(), bus, [deadAgent, aliveAgent], {
       cwd: '/test/path',
       plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
       machineId: MACHINE_ID,
@@ -238,7 +250,10 @@ describe('SessionOrchestrator recovery helpers', () => {
     );
     const payloads = captureRehydrates();
 
-    await verifyAndRecoverAgents(bus, [deadAgent], { plan: FRESH_WITH_HISTORY_RECOVERY_PLAN, machineId: MACHINE_ID });
+    await verifyAndRecoverAgents(createTestCall(), bus, [deadAgent], {
+      plan: FRESH_WITH_HISTORY_RECOVERY_PLAN,
+      machineId: MACHINE_ID,
+    });
 
     expect(startAgentCalled).toBe(false);
     expect(payloads).toHaveLength(1);
@@ -333,7 +348,7 @@ describe('buildRecoveryContext', () => {
       });
     });
 
-    const result = await buildRecoveryContext(bus, session);
+    const result = await buildRecoveryContext(createTestCall(), bus, session);
 
     expect(result.isFirstTurn).toBe(true);
     expect(result.messageHistory).toBeDefined();

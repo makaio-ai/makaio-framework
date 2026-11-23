@@ -1,4 +1,5 @@
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
+import type { CallContext } from '@makaio/core';
 import type { AdapterContribution, ProtocolId, ProviderAIModel } from '@makaio/contracts';
 import type { ProtocolRef } from '@makaio/contracts/extension';
 import { ExtensionSubjects } from '@makaio/kernel';
@@ -191,7 +192,9 @@ export class AdapterContributionProcessor {
     const completed: LoadedAdapter[] = [];
     const providerModelCache = new Map<string, ProviderAIModel[]>();
 
-    const catalog = await ctx.bus.request(ExtensionSubjects.contributions.catalog, {});
+    // ORIGIN: activation lookups run on the activated extension's carrier.
+    const call = ctx.bus.own('start');
+    const catalog = await ctx.bus.request(call, ExtensionSubjects.contributions.catalog, {});
     const providerDefinitionCache = new Map<string, ProviderDefinitionCacheEntry>();
     for (const entry of catalog.providers) {
       providerDefinitionCache.set(entry.definition.id, entry);
@@ -205,6 +208,7 @@ export class AdapterContributionProcessor {
     try {
       for (const contribution of contributions) {
         const loadedAdapter = await this.activateAdapterContribution(
+          call,
           packageName,
           contribution,
           ctx.bus,
@@ -234,6 +238,7 @@ export class AdapterContributionProcessor {
 
     await this.publishActivatedAdapters(completed);
     const initializedWaitingAdapters = await this.initializeAdaptersWaitingForProviders(
+      call,
       ctx.bus,
       providerModelCache,
       providerDefinitionCache,
@@ -251,17 +256,20 @@ export class AdapterContributionProcessor {
    * 3. Register in the in-memory registry and update package tracking
    * 4. Initialize the instance when enabled
    * 5. Publish `adapter.registered` through the serialized publication chain
+   * @param call - Call context under which the provider and client lookups are sent.
    * @param packageName - Owning package name.
    * @param contribution - Adapter contribution from the package manifest.
    * @param bus - Bus used to resolve registry-populated provider models.
    */
   public async processAdapterContribution(
+    call: CallContext,
     packageName: string,
     contribution: AdapterContribution,
-    bus: IMakaioBus = MakaioBus,
+    bus: IMakaioBus,
   ): Promise<void> {
     const loadedProviderIds = this.coordinator.getLoadedProviderDefinitionIds();
     const loadedAdapter = await this.activateAdapterContribution(
+      call,
       packageName,
       contribution,
       bus,
@@ -280,6 +288,7 @@ export class AdapterContributionProcessor {
    * Publication is intentionally deferred until the package has fully
    * activated. If registration succeeds and a later step fails, this method
    * deregisters the current adapter before re-throwing.
+   * @param call - Call context under which the provider and client lookups are sent.
    * @param packageName - Owning package name.
    * @param contribution - Adapter contribution from the package manifest.
    * @param bus - Bus used to resolve registry-populated provider models.
@@ -290,6 +299,7 @@ export class AdapterContributionProcessor {
    * @returns Loaded adapter after successful registration and optional initialization.
    */
   private async activateAdapterContribution(
+    call: CallContext,
     packageName: string,
     contribution: AdapterContribution,
     bus: IMakaioBus,
@@ -299,6 +309,7 @@ export class AdapterContributionProcessor {
     loadedProviderIds: ReadonlySet<string>,
   ): Promise<LoadedAdapter> {
     const loadedAdapter = await this.buildLoadedAdapter(
+      call,
       packageName,
       contribution,
       bus,
@@ -312,7 +323,7 @@ export class AdapterContributionProcessor {
       await this.ensureAdapterConfig(loadedAdapter);
       const enabled = this.configStore.isAdapterEnabled(loadedAdapter.name);
       if (enabled) {
-        await this.validateEnabledAdapterClientRefs(loadedAdapter, bus, clientCatalog);
+        await this.validateEnabledAdapterClientRefs(call, loadedAdapter, bus, clientCatalog);
       }
 
       this.registry.registerAdapter(loadedAdapter, packageName);
@@ -349,6 +360,7 @@ export class AdapterContributionProcessor {
 
   /**
    * Initialize enabled adapters that were registered before all declared providers were active.
+   * @param call - Call context under which the provider lookups are sent.
    * @param bus - Bus used to resolve the current extension contribution catalog.
    * @param providerModelCache - Per-batch provider model cache.
    * @param providerDefinitionCache - Per-batch provider definition cache, including the currently activating package.
@@ -356,6 +368,7 @@ export class AdapterContributionProcessor {
    * @returns Adapters initialized by this retry pass.
    */
   private async initializeAdaptersWaitingForProviders(
+    call: CallContext,
     bus: IMakaioBus,
     providerModelCache: Map<string, ProviderAIModel[]>,
     providerDefinitionCache: Map<string, ProviderDefinitionCacheEntry>,
@@ -370,6 +383,7 @@ export class AdapterContributionProcessor {
         let refreshed = adapter;
         if (this.getMissingProviderDefinitionIds(adapter, loadedProviderIds).length > 0) {
           const providers = await resolveLoadedAdapterProviders(
+            call,
             adapter,
             bus,
             providerModelCache,
@@ -429,19 +443,21 @@ export class AdapterContributionProcessor {
    * adapter. Concrete binary resolution is deferred until the adapter is enabled
    * so a disabled package can register without requiring the user's CLI binary
    * to be installed at boot.
+   * @param call - Call context under which the catalog and binary lookups are sent.
    * @param loadedAdapter - Adapter whose enabled runtime dependencies are being checked.
    * @param bus - Bus used to resolve binary context and, when needed, the active client catalog.
    * @param clientCatalog - Optional client catalog snapshot already loaded by the activation batch.
    */
   private async validateEnabledAdapterClientRefs(
+    call: CallContext,
     loadedAdapter: LoadedAdapter,
     bus: IMakaioBus,
     clientCatalog?: readonly AdapterClientCatalogEntry[],
   ): Promise<void> {
     if (loadedAdapter.clients === undefined || loadedAdapter.clients.length === 0) return;
     const resolvedClientCatalog =
-      clientCatalog ?? (await bus.request(ExtensionSubjects.contributions.catalog, {})).clients;
-    await validateAdapterClientRefs(loadedAdapter.name, loadedAdapter.clients, resolvedClientCatalog, bus);
+      clientCatalog ?? (await bus.request(call, ExtensionSubjects.contributions.catalog, {})).clients;
+    await validateAdapterClientRefs(call, loadedAdapter.name, loadedAdapter.clients, resolvedClientCatalog, bus);
   }
 
   /**
@@ -454,6 +470,7 @@ export class AdapterContributionProcessor {
    * `getProviderModels` bus request is cached by provider ID so that the same
    * provider queried by multiple adapters in the same boot batch only triggers
    * one RPC call.
+   * @param call - Call context under which the catalog, provider and client lookups are sent.
    * @param packageName - Package that declared this contribution.
    * @param contribution - Adapter manifest and definition pair.
    * @param bus - Bus used to resolve provider model catalogs from the model registry.
@@ -464,9 +481,10 @@ export class AdapterContributionProcessor {
    * @returns Constructed loaded adapter ready for registration.
    */
   public async buildLoadedAdapter(
+    call: CallContext,
     packageName: string,
     contribution: AdapterContribution,
-    bus: IMakaioBus = MakaioBus,
+    bus: IMakaioBus,
     providerModelCache: Map<string, ProviderAIModel[]> = new Map(),
     providerDefinitionCache?: Map<string, ProviderDefinitionCacheEntry>,
     clientCatalog?: readonly AdapterClientCatalogEntry[],
@@ -475,17 +493,17 @@ export class AdapterContributionProcessor {
     const manifest = contribution.manifest;
     const adapterName = def.name;
     const resolvedClientCatalog =
-      clientCatalog ?? (await bus.request(ExtensionSubjects.contributions.catalog, {})).clients;
-    await validateAdapterClientRefs(adapterName, manifest.clients, resolvedClientCatalog, bus, {
+      clientCatalog ?? (await bus.request(call, ExtensionSubjects.contributions.catalog, {})).clients;
+    await validateAdapterClientRefs(call, adapterName, manifest.clients, resolvedClientCatalog, bus, {
       checkBinaryVersions: false,
     });
     const clientDefinitions = resolveAdapterClientDefinitions(manifest.clients, resolvedClientCatalog);
-    const resolvedProviders = await resolveProviderDefinitions(bus, def.providers, adapterName, {
+    const resolvedProviders = await resolveProviderDefinitions(call, bus, def.providers, adapterName, {
       ...(def.providerConfigSchema !== undefined && { adapterConfigSchema: def.providerConfigSchema }),
       ...(clientDefinitions !== undefined && { clientDefinitions }),
       ...(providerDefinitionCache !== undefined && { providerDefinitionCache }),
     });
-    const providers = await populateProviderModels(bus, adapterName, resolvedProviders, providerModelCache);
+    const providers = await populateProviderModels(call, bus, adapterName, resolvedProviders, providerModelCache);
 
     return {
       name: adapterName,

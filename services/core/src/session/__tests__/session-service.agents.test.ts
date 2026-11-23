@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import {
   AdapterSubjects,
   AgentSubjects,
@@ -186,7 +187,7 @@ describe('MakaioSessionService - Agent Management', () => {
       // its claims too, and what this window is about is the designation being
       // cleared under the swap that names the departing agent — exactly this call.
       await gate.reached;
-      const cleared = await designateSessionLead(MakaioBus, {
+      const cleared = await designateSessionLead(createTestCall(), MakaioBus, {
         sessionId,
         agentId: 'lead-removed-mid-handler',
         expectedLeadAgentId: 'lead-removed-mid-handler',

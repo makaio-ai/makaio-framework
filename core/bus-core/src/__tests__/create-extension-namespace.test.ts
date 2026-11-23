@@ -6,11 +6,12 @@ import {
   type ExtensionNamespaceFromConfig,
 } from '../index.js';
 import { z } from 'zod';
+import { busContextOf } from '../kernel-api.js';
 
 describe('createExtensionNamespace', () => {
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
-    MakaioBus.getContext().namespaceRegistry.__resetNamespaces?.();
+    busContextOf(MakaioBus).namespaceRegistry.__resetNamespaces?.();
   });
 
   it('creates an unprefixed extension namespace without registering it on the singleton', () => {
@@ -22,7 +23,7 @@ describe('createExtensionNamespace', () => {
 
     expect(namespace.domain).toBe('bus-core-extension-namespace-test');
     expect(namespace.subjects.changed.$meta.namespace).toBe('extension:bus-core-extension-namespace-test');
-    expect(MakaioBus.getContext().namespaceRegistry.getSchema(namespace.subjects.changed)).toBeUndefined();
+    expect(busContextOf(MakaioBus).namespaceRegistry.getSchema(namespace.subjects.changed)).toBeUndefined();
   });
 
   it('trims surrounding whitespace before creating the extension domain', () => {

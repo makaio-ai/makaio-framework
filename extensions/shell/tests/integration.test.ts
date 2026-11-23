@@ -4,6 +4,7 @@
  * Tests the full workflow using the bus-backed registry pattern.
  */
 
+import { createTestCall } from '@makaio/test-utils';
 import { describe, it, expect, vi } from 'vitest';
 import { shellToolset } from '../src/toolset.js';
 import { getRequiredShellInstance, setupShellManagerTest } from './tools/shared.js';
@@ -32,8 +33,10 @@ describe('shell toolset integration', () => {
 
   describe('full workflow: exec -> status -> grep -> output', () => {
     it('executes complete workflow', async () => {
+      const call = createTestCall();
       // Step 1: Execute a command
       const execResult = await ctx.registry.execute(
+        call,
         'shell_exec',
         {
           command: 'echo "line1"; echo "ERROR: something failed"; echo "line3"',
@@ -56,6 +59,7 @@ describe('shell toolset integration', () => {
 
       // Step 2: Check status
       const statusResult = await ctx.registry.execute(
+        call,
         'shell_status',
         { shellId },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -77,6 +81,7 @@ describe('shell toolset integration', () => {
 
       // Step 3: Grep for errors
       const grepResult = await ctx.registry.execute(
+        call,
         'shell_grep',
         {
           shellId,
@@ -102,6 +107,7 @@ describe('shell toolset integration', () => {
 
       // Step 4: Get raw output
       const outputResult = await ctx.registry.execute(
+        call,
         'shell_output',
         {
           shellId,
@@ -124,8 +130,10 @@ describe('shell toolset integration', () => {
 
   describe('interactive shell workflow: exec -> send -> output', () => {
     it('sends input to a shell and captures response', async () => {
+      const call = createTestCall();
       // Start a cat command that echoes input
       const execResult = await ctx.registry.execute(
+        call,
         'shell_exec',
         {
           command: 'cat',
@@ -143,6 +151,7 @@ describe('shell toolset integration', () => {
       await vi.waitFor(
         async () => {
           const statusResult = await ctx.registry.execute(
+            call,
             'shell_status',
             { shellId },
             { contextOverrides: { constraints: ctx.constraints } },
@@ -157,6 +166,7 @@ describe('shell toolset integration', () => {
 
       // Send input
       const sendResult = await ctx.registry.execute(
+        call,
         'shell_send',
         {
           shellId,
@@ -175,6 +185,7 @@ describe('shell toolset integration', () => {
       await vi.waitFor(
         async () => {
           const outputResult = await ctx.registry.execute(
+            call,
             'shell_output',
             {
               shellId,
@@ -202,8 +213,10 @@ describe('shell toolset integration', () => {
 
   describe('kill workflow: exec -> kill -> status', () => {
     it('kills a running process', async () => {
+      const call = createTestCall();
       // Start a long-running command
       const execResult = await ctx.registry.execute(
+        call,
         'shell_exec',
         {
           command: 'sleep 60',
@@ -220,6 +233,7 @@ describe('shell toolset integration', () => {
 
       // Verify it's running
       const runningStatus = await ctx.registry.execute(
+        call,
         'shell_status',
         { shellId },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -231,6 +245,7 @@ describe('shell toolset integration', () => {
 
       // Kill it
       const killResult = await ctx.registry.execute(
+        call,
         'shell_kill',
         {
           shellId,
@@ -251,6 +266,7 @@ describe('shell toolset integration', () => {
 
       // Verify it's exited
       const exitedStatus = await ctx.registry.execute(
+        call,
         'shell_status',
         { shellId },
         { contextOverrides: { constraints: ctx.constraints } },
@@ -264,8 +280,10 @@ describe('shell toolset integration', () => {
 
   describe('stderr handling', () => {
     it('captures and searches stderr separately', async () => {
+      const call = createTestCall();
       // Command that outputs to both stdout and stderr
       const execResult = await ctx.registry.execute(
+        call,
         'shell_exec',
         {
           command: 'echo "stdout message"; echo "stderr message" >&2',
@@ -284,6 +302,7 @@ describe('shell toolset integration', () => {
 
       // Grep only stderr
       const grepResult = await ctx.registry.execute(
+        call,
         'shell_grep',
         {
           shellId,
@@ -306,6 +325,7 @@ describe('shell toolset integration', () => {
 
       // Get stderr output only
       const stderrOutput = await ctx.registry.execute(
+        call,
         'shell_output',
         {
           shellId,

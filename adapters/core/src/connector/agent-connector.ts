@@ -1,12 +1,12 @@
 // NOTE: do NOT change the eslint override on the next line without explicit human approval
 /* eslint max-lines: ["error", { "max": 580 }] */
-import { MakaioBus, NoHandlerError, OnOptions, RequestError } from '@makaio/bus-core';
-import type { IFilteredBus, IMakaioBus, ScopedBus } from '@makaio/bus-core';
+import { NoHandlerError, OnOptions, RequestError } from '@makaio/bus-core';
+import type { EmitSubject, IFilteredBus, IMakaioBus, ScopedBus } from '@makaio/bus-core';
 import {
   DirectoryNotFoundError,
   type HandlerForSubjectDefinition,
+  type CallContext,
   type ScopedSubjectDefinition,
-  type SubjectRecord,
 } from '@makaio/core';
 import type { SystemPrompt, AIReasoningLevel, ConnectorTeardownResult } from '@makaio/contracts';
 import type {
@@ -15,6 +15,9 @@ import type {
   ConnectorStartOptions,
   EmitteryEvents,
   BaseAgentConnectorConfig,
+  ExtractScopedBusSubjects,
+  Forbid,
+  ForbiddenKeys,
 } from '../agent/types.js';
 export type { BaseAgentConnectorConfig };
 import { cleanEnvForAdapter } from '../utils/index.js';
@@ -22,11 +25,12 @@ import { DeferredPromise } from '@makaio/utils';
 import Emittery from 'emittery';
 import { getProcessingStateUpdates } from '../utils/getProcessingStateUpdates.js';
 import {
-  MessageHandle,
+  type MessageHandle,
   type MessageHandleOptions,
   type MessageResult,
   type ProcessingState,
 } from '../message-handle/index.js';
+import { buildMessageHandle } from '../message-handle/message-handle.js';
 import type { NormalizedMessageInput } from '../utils/normalizeMessageInput.js';
 import * as process from 'node:process';
 import * as fs from 'node:fs';
@@ -34,15 +38,6 @@ import os from 'node:os';
 import { TurnNumberLedger } from './turn-number-ledger.js';
 import type { UnknownRecord } from 'type-fest';
 import { resolveTimeouts, type TrackedTimeoutConfig } from '@makaio/utils';
-
-type Forbid<T, K extends PropertyKey> = Omit<T, K> & { [P in K]?: never };
-type ForbiddenKeys = 'agentId' | 'adapterId' | 'adapterSessionId' | 'adapterName' | 'sessionId';
-/** Extract Subjects type parameter from a ScopedBus */
-type ExtractScopedBusSubjects<T> = T extends { withFilter: (...args: unknown[]) => IFilteredBus<string, infer S> }
-  ? S
-  : T extends ScopedBus<string, infer S>
-    ? S
-    : SubjectRecord;
 
 /**
  * Abstract base class for AI agent implementations.
@@ -112,7 +107,7 @@ export abstract class AIAgentConnector<
     if (!fs.existsSync(cwd)) throw new DirectoryNotFoundError(cwd);
     this.agentId = config.agentId ?? crypto.randomUUID();
     this.scopedBus = config.bus;
-    this.globalBus = config.globalBus ?? MakaioBus;
+    this.globalBus = config.globalBus;
     this.filteredBus = config.bus.withFilter({
       agentId: this.agentId,
     });
@@ -208,7 +203,7 @@ export abstract class AIAgentConnector<
    * Implementations MUST be idempotent (no-op if already initialized).
    * @param options - Optional start options (e.g., systemPrompt for Claude)
    */
-  public abstract initialize(options?: ConnectorStartOptions): Promise<void>;
+  public abstract initialize(options: ConnectorStartOptions): Promise<void>;
 
   /**
    * Start agent with initial message.
@@ -216,7 +211,7 @@ export abstract class AIAgentConnector<
    * @param options - Optional start options (e.g., delivery mode)
    * @returns Session ID, agent ID, and message handle for tracking
    */
-  public abstract start(message: NormalizedMessageInput, options?: ConnectorStartOptions): Promise<AgentStartResult>;
+  public abstract start(message: NormalizedMessageInput, options: ConnectorStartOptions): Promise<AgentStartResult>;
 
   /**
    * Send a message to the agent.
@@ -227,15 +222,16 @@ export abstract class AIAgentConnector<
    */
   public abstract sendMessage(
     message: NormalizedMessageInput,
-    options?: ConnectorSendMessageOptions,
+    options: ConnectorSendMessageOptions,
   ): Promise<MessageHandle>;
 
   /**
    * Abort the agent and cleanup resources (panic mode).
    * Triggers AbortController which may cause provider errors.
    * Use close() for graceful shutdown instead.
+   * @param call - Call of the operation that aborts this connector
    */
-  public abstract abort(): void;
+  public abstract abort(call: CallContext): void;
 
   /**
    * Tear this connector down and report what was observed; unlike `abort()` this
@@ -243,15 +239,17 @@ export abstract class AIAgentConnector<
    * asserts, and only *local* evidence counts: a third-party `dispose`, a wrapper type or the absence of a thrown
    * error prove no provider-side end. Unobservable ⇒ `detached` with a `detail`;
    * an unaccounted failed stage ⇒ `unknown`, named. Throwing also means `unknown`.
+   * @param call - Call of the teardown that closes this connector
    * @returns What this runtime observed about the end of its resources
    */
-  public abstract close(): Promise<ConnectorTeardownResult>;
+  public abstract close(call: CallContext): Promise<ConnectorTeardownResult>;
 
   /**
    * Get session ID, waiting for provider to generate it if not yet available.
+   * @param call - Call of the operation that needs the session ID
    * @returns Session ID from provider
    */
-  public abstract getAdapterSessionId(): Promise<string>;
+  public abstract getAdapterSessionId(call: CallContext): Promise<string>;
 
   /**
    * The provider session ID this connector is currently authoritative on, or
@@ -291,31 +289,11 @@ export abstract class AIAgentConnector<
   /**
    * Create a MessageHandle with standard initialization (messageId, adapterSessionId, onMessageSent).
    * @param message - Normalized user message
-   * @param options - Optional message options (id, delivery mode, history, and turn context)
+   * @param options - Message options (call, id, delivery mode, history, and turn context)
    * @returns Initialized MessageHandle instance
    */
-  protected createMessageHandle(message: NormalizedMessageInput, options?: MessageHandleOptions): MessageHandle {
-    const messageId = options?.messageId ?? crypto.randomUUID();
-    const handle = new MessageHandle(
-      messageId,
-      message,
-      options?.deliveryMode ?? 'enqueue',
-      options?.messageHistory,
-      options?.turnContext,
-      options?.responseSchema,
-      options?.internalRetry ?? false,
-      options?.cacheStrategy,
-      options?.requestCorrelation === undefined ? undefined : { ...options.requestCorrelation, messageId },
-      options?.turnId,
-      options?.useNativeResume,
-    );
-    handle.adapterSessionId = this.adapterSessionId;
-    // Suppress user_message.sent for internal retry turns — the retry is an
-    // implementation detail and should not be surfaced as a new user message.
-    if (!options?.internalRetry) {
-      this.config.onMessageSent?.(handle);
-    }
-    return handle;
+  protected createMessageHandle(message: NormalizedMessageInput, options: MessageHandleOptions): MessageHandle {
+    return buildMessageHandle(message, options, this.adapterSessionId, this.config.onMessageSent);
   }
 
   /** Signal MCP tools changed; connectors with direct-inject refresh override this. */
@@ -410,9 +388,10 @@ export abstract class AIAgentConnector<
 
   /**
    * Interrupt the current message processing.
+   * @param call - Call of the operation that interrupts this connector
    * @returns Promise that resolves when interrupt is handled
    */
-  public abstract interrupt(): Promise<void>;
+  public abstract interrupt(call: CallContext): Promise<void>;
 
   /**
    * Marks pending message as failed, calls error handler, resolves completion promise.
@@ -432,6 +411,7 @@ export abstract class AIAgentConnector<
     this.errorHandler?.(err, terminate);
 
     // Mark pending message as completed (with error) to unblock completion queue
+    const pending = this.pendingMessageHandle;
     if (this.pendingMessageHandle) {
       this.pendingMessageHandle.markCompleted({
         outcome: 'error',
@@ -442,7 +422,9 @@ export abstract class AIAgentConnector<
     }
 
     if (terminate) {
-      this.abort();
+      // A terminating error inside a turn aborts under that turn's call; outside any turn the
+      // connector observes the provider failure as its own origin.
+      this.abort(pending?.call ?? this.globalBus.own('observer'));
     }
   }
 
@@ -476,15 +458,17 @@ export abstract class AIAgentConnector<
    *
    * Wraps `scopedBus.request()` to automatically include connector identity
    * (adapterName, agentId, adapterId, adapterSessionId) in the payload.
+   * @param call - Call context of the turn that needs the approval
    * @param subject - Subject definition for the tool approval request
    * @param payload - Request payload (metadata fields are forbidden and auto-injected)
    * @returns Promise resolving to the approval response
    */
   protected requestToolApproval<TSubject extends ScopedSubjectDefinition<TBus['namespace']>>(
+    call: CallContext,
     subject: TSubject,
     payload: Forbid<TSubject['$meta']['payload']['request'], ForbiddenKeys>,
   ): Promise<TSubject['$meta']['payload']['response']> {
-    return this.scopedBus.request(subject, {
+    return this.scopedBus.request<TSubject>(call, subject, {
       ...payload,
       adapterName: this.adapterName,
       agentId: this.agentId,
@@ -500,15 +484,17 @@ export abstract class AIAgentConnector<
    * Handles the common `RequestError`/`NoHandlerError` path by logging a helpful
    * message via `handleError` and re-throwing so callers can decide whether to
    * surface the failure or fall back to a denial.
+   * @param call - Call context of the turn that needs the approval
    * @param subject - Scoped subject definition for the tool approval request
    * @param payload - Payload that must not include adapter metadata
    * @returns Tool approval response payload
    */
   protected async requestToolApprovalWithHandling<TSubject extends ScopedSubjectDefinition<TBus['namespace']>>(
+    call: CallContext,
     subject: TSubject,
     payload: Forbid<TSubject['$meta']['payload']['request'], ForbiddenKeys>,
   ): Promise<TSubject['$meta']['payload']['response']> {
-    return this.requestToolApproval(subject, payload).catch((error) => {
+    return this.requestToolApproval<TSubject>(call, subject, payload).catch((error) => {
       let errorToHandle = error;
       if (error instanceof RequestError || error instanceof NoHandlerError) {
         errorToHandle = new Error(
@@ -521,25 +507,39 @@ export abstract class AIAgentConnector<
   }
 
   /**
-   * Emit an event via the scoped bus with auto-injected metadata.
-   *
-   * Wraps `scopedBus.emit()` to automatically include connector identity
-   * (adapterName, agentId, adapterId, adapterSessionId) in the payload.
+   * Emit an event a call caused (start, turn state, completion) via the scoped bus,
+   * with auto-injected connector identity (adapterName, agentId, adapterId, adapterSessionId).
+   * @param call - Call context of the call that caused the event
    * @param subject - Subject definition for the event
    * @param payload - Event payload (metadata fields are forbidden and auto-injected)
    * @returns Promise that resolves when the event is emitted
    */
-  protected emit<TSubject extends ScopedSubjectDefinition<TBus['namespace']>>(
-    subject: TSubject,
-    payload: Forbid<TSubject['$meta']['payload'], ForbiddenKeys>,
+  protected emit<S extends ScopedSubjectDefinition<TBus['namespace']>>(
+    call: CallContext,
+    subject: EmitSubject<S>,
+    payload: Forbid<S['$meta']['payload'], ForbiddenKeys>,
   ): Promise<void> {
-    return this.scopedBus.emit(subject, {
+    return this.scopedBus.emit<S>(call, subject, {
       ...payload,
       adapterName: this.adapterName,
       agentId: this.agentId,
       adapterId: this.adapterId,
       adapterSessionId: this.adapterSessionId,
-    } as UnknownRecord);
+    } as S['$meta']['payload']);
+  }
+
+  /**
+   * Emit an observation no call caused (session-wide or SDK-reported event), sent with the
+   * carrier bus's `observer` context.
+   * @param subject - Subject definition for the event
+   * @param payload - Event payload (metadata fields are forbidden and auto-injected)
+   * @returns Promise that resolves when the event is emitted
+   */
+  protected emitObserved<S extends ScopedSubjectDefinition<TBus['namespace']>>(
+    subject: EmitSubject<S>,
+    payload: Forbid<S['$meta']['payload'], ForbiddenKeys>,
+  ): Promise<void> {
+    return this.emit<S>(this.globalBus.own('observer'), subject, payload);
   }
 
   /**

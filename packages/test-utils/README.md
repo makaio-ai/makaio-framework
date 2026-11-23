@@ -28,10 +28,10 @@ protocol:
 
 Root exports are bus and extension-context test helpers only:
 
-- `createMockBus()` — Partial mock for unit tests (request, emit, on, requestOptional, withFilter)
-- `createMockGlobalBus(namespace?)` — Full mock for adapter/agent tests (adds once, scoped, __onAny, getContext, registerNamespace, getSchema)
-- `createMockScopedBus(namespace?)` — Mock `ScopedBus<string>` for adapter-internal tests
-- `createTestBusInstance()` — Real bus instance for integration tests. Payload schema validation applies for namespaces registered in that bus context.
+- `createMockBus()` — Partial mock for unit tests (request, emit, on, requestOptional, withFilter, own)
+- `createMockGlobalBus(namespace?)` — Full mock for adapter/agent tests (adds once, scoped, __onAny, own, registerNamespace, getSchema)
+- `createMockScopedBus(namespace?)` — Mock `ScopedBus<string>` for adapter-internal tests (no `own`: a scoped bus has none)
+- `createTestBusInstance()` — Real bus instance for integration tests. Send with `bus.own('root')` as the call context. Payload schema validation applies for namespaces registered in that bus context.
 - `makeStubExtensionContext(bus, overrides?)` — Minimal extension context for service and package tests
 - `makeStubNodeExtensionContext(bus, overrides?)` — Same plus inert Node fields (`platform: 'linux'`, `homedir`, `makaioHome`, `username`)
 - `makeStubOpenContributionReader(sets?)` — Open-contribution reader over a fixed map; no ownership check
@@ -64,7 +64,7 @@ import { usePluginStorageTestLifecycle, createPluginTestDb } from '@makaio/test-
 const { bus, request } = createMockBus();
 request.mockResolvedValue({ profile: null });
 const service = new MyService(bus);
-expect(request).toHaveBeenCalledWith(expect.anything(), { id: '123' });
+expect(request).toHaveBeenCalledWith(expect.anything(), expect.anything(), { id: '123' });
 
 const MakaioBus = createTestBusInstance();
 
@@ -79,8 +79,8 @@ const ctx = usePluginStorageTestLifecycle(() =>
 );
 
 it('stores and retrieves', async () => {
-  await MakaioBus.request(MySubjects.set, { entity: { id: '1', ... } });
-  const result = await MakaioBus.request(MySubjects.get, { id: '1' });
+  await MakaioBus.request(MakaioBus.own('root'), MySubjects.set, { entity: { id: '1', ... } });
+  const result = await MakaioBus.request(MakaioBus.own('root'), MySubjects.get, { id: '1' });
   expect(result.entity).toBeDefined();
 });
 ```

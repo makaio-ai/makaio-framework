@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { createTestCall } from '@makaio/test-utils';
 import {
   createConnectorTestContext,
   cleanupConnectorTestContext,
@@ -35,21 +36,27 @@ describe('CodexAppServerConnector - Message queue', () => {
     });
 
     // Send another message while turn is active
-    const handle2 = await ctx.connector.sendMessage({
-      role: 'user',
-      message: 'Second message',
-      blocks: [{ type: 'text', content: 'Second message' }],
-    });
+    const handle2 = await ctx.connector.sendMessage(
+      {
+        role: 'user',
+        message: 'Second message',
+        blocks: [{ type: 'text', content: 'Second message' }],
+      },
+      { call: createTestCall() },
+    );
     expect(handle2).toBeDefined();
   });
 
   it('should process queued message after turn completes', async () => {
     // Send second message
-    const _handle2 = await ctx.connector.sendMessage({
-      role: 'user',
-      message: 'Second message',
-      blocks: [{ type: 'text', content: 'Second message' }],
-    });
+    const _handle2 = await ctx.connector.sendMessage(
+      {
+        role: 'user',
+        message: 'Second message',
+        blocks: [{ type: 'text', content: 'Second message' }],
+      },
+      { call: createTestCall() },
+    );
 
     // Complete first turn
     await ctx.mockJsonRpcClient.receiveNotification('turn/started', {
