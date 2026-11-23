@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import {
   ALLOCATION_LISTING_MAX_LIMIT,
@@ -92,8 +93,54 @@ describe('allocation scope and observations', () => {
       'setting-invalid',
       'binding-mismatch',
     ])('requires empty observations for %s', (reason) => {
-      expect(AllocationScopeBlockSchema.safeParse({ ...block, reason, observations: [] }).success).toBe(true);
-      expect(AllocationScopeBlockSchema.safeParse({ ...block, reason }).success).toBe(false);
+      const withoutListing = { ...block, reason, observations: [] };
+      expect(AllocationScopeBlockSchema.safeParse(withoutListing).success).toBe(false);
+      const completeness = {
+        kind: 'unknown',
+        evidence: {
+          source: 'worker.local:primary',
+          summary: 'Listing unavailable',
+          observedAt: '2026-11-23T11:00:00Z',
+        },
+      };
+      expect(AllocationScopeBlockSchema.safeParse({ ...withoutListing, completeness }).success).toBe(true);
+      expect(AllocationScopeBlockSchema.safeParse({ ...block, reason, completeness }).success).toBe(false);
+    });
+
+    it.each([
+      1,
+      ALLOCATION_LISTING_MAX_LIMIT - 1,
+    ])('accepts a complete listing of %s allocations below the cap', (count) => {
+      const observations = Array.from({ length: count }, () => firstObservation);
+      expect(AllocationScopeBlockSchema.safeParse({ ...block, observations }).success).toBe(true);
+    });
+
+    it('projects the blocked observation limit into JSON Schema', () => {
+      const projected = z.toJSONSchema(AllocationScopeBlockSchema);
+      expect(projected.oneOf).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            properties: expect.objectContaining({
+              observations: expect.objectContaining({ maxItems: 0 }),
+            }),
+          }),
+        ]),
+      );
+    });
+
+    it('requires unknown completeness when the observation cap is reached', () => {
+      const observations = Array.from({ length: ALLOCATION_LISTING_MAX_LIMIT }, () => firstObservation);
+      const capped = { ...block, observations };
+      expect(AllocationScopeBlockSchema.safeParse(capped).success).toBe(false);
+      expect(
+        AllocationScopeBlockSchema.safeParse({
+          ...capped,
+          completeness: {
+            kind: 'unknown',
+            evidence: { source: 'worker.local:primary', summary: 'Cap reached', observedAt: '2026-11-23T00:00:00Z' },
+          },
+        }).success,
+      ).toBe(true);
     });
 
     it('rejects observations for a provider outside the block', () => {

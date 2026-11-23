@@ -31,11 +31,16 @@ export const AllocationObservationSchema = z
   .strict();
 export type AllocationObservation = z.infer<typeof AllocationObservationSchema>;
 
+/** An observation whose completeness could not be established. */
+export const UnknownAllocationListingCompletenessSchema = z.strictObject({
+  kind: z.literal('unknown'),
+  evidence: BoundedRecoveryEvidenceSchema,
+});
+
 /** Completeness of a listing, stated on its last page only. */
 export const AllocationListingCompletenessSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('complete') }).strict(),
-  /** Observations stand; neither absence nor uniqueness may be concluded. */
-  z.object({ kind: z.literal('unknown'), evidence: BoundedRecoveryEvidenceSchema }).strict(),
+  z.strictObject({ kind: z.literal('complete') }),
+  UnknownAllocationListingCompletenessSchema,
 ]);
 export type AllocationListingCompleteness = z.infer<typeof AllocationListingCompletenessSchema>;
 
