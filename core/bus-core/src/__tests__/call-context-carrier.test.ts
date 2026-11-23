@@ -86,8 +86,9 @@ function collector(): { report: (message: string) => void; lines: string[] } {
 describe('own', () => {
   it('rejects an own context sent by the same extension on another bus context', async () => {
     const first = createCarrierBus(createBusInstance(), CARRIER_A);
-    const second = createCarrierBus(createBusInstance(), { ...CARRIER_A });
-    const { subjects } = second.registerNamespace(createBusNamespace('carrierBinding', { changed: z.object({}) }));
+    const host = createBusInstance();
+    const second = createCarrierBus(host, { ...CARRIER_A });
+    const { subjects } = host.registerNamespace(createBusNamespace('carrierBinding', { changed: z.object({}) }));
 
     await expect(second.emit(first.own('start'), subjects.changed, {})).rejects.toThrow(ForeignOwnContextError);
   });

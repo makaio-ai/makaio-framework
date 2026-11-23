@@ -65,12 +65,15 @@ type RuntimeNodeExtensionContext = NodeExtensionContext<IMakaioBus>;
 
 /**
  * Register lifecycle protocol subjects for one detached extension.
- * @param ctx - Node extension context containing the host bus.
+ * The kernel retains the claim for the lifetime of the extension entry.
+ * @param ctx - Context of the represented extension.
  * @param extensionName - Detached extension name.
  * @returns Lifecycle subject definitions scoped to the detached extension.
  */
 function registerDetachedLifecycleSubjects(ctx: RuntimeNodeExtensionContext, extensionName: string) {
-  return ctx.bus.registerNamespace(createBusNamespace(`extension.${extensionName}`, DetachedLifecycleSchemas)).subjects;
+  const namespace = createBusNamespace(`extension.${extensionName}`, DetachedLifecycleSchemas);
+  ctx.namespaces.lease(namespace);
+  return namespace.subjects;
 }
 
 type DetachedLifecycleSubjects = ReturnType<typeof registerDetachedLifecycleSubjects>;
@@ -81,7 +84,7 @@ type DetachedLifecycleSubjects = ReturnType<typeof registerDetachedLifecycleSubj
  * Namespace registration is idempotent at the bus layer, but each detached
  * service owns one lifecycle namespace for its whole init/destroy lifetime.
  * Caching that registration keeps both lifecycle phases on the same subject
- * objects and avoids duplicate registerNamespace calls in tests and hosts.
+ * objects and avoids duplicate lease requests.
  * @param ctx - Node extension context containing the host bus.
  * @param extensionName - Detached extension name.
  * @returns Function that returns cached lifecycle subjects.
@@ -486,6 +489,7 @@ class McpStdioExtensionService implements ExtensionServiceLifecycle {
     const { startMcpClientBridge } = await import('@makaio/subsystem-mcp-http-server');
     const { transport: transportConfig } = this.descriptor;
 
+    // ORIGIN: Starting the detached extension opens its MCP client bridge.
     this.bridge = await startMcpClientBridge(this.ctx.bus.own('start'), {
       command: transportConfig.command,
       args: transportConfig.args,
@@ -502,6 +506,7 @@ class McpStdioExtensionService implements ExtensionServiceLifecycle {
    */
   public async destroy(): Promise<void> {
     if (this.bridge !== null) {
+      // ORIGIN: Stopping the detached extension closes its MCP client bridge.
       await this.bridge.close(this.ctx.bus.own('stop'));
       this.bridge = null;
     }

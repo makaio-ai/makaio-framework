@@ -7,6 +7,7 @@
  * adapter from ever coming up in a host where that authority is missing, and
  * the coordinator is the thing that enforces it.
  */
+import { createBusNamespace } from '@makaio/core';
 import { describe, expect, it } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
@@ -105,6 +106,7 @@ describe('orderAfterAdapterSubsystem', () => {
       definition: {
         name: 'x',
         providers: [],
+        busNamespace: createBusNamespace('adapter:x', {}),
         defaultTimeouts: {
           initialization: 1_000,
           acknowledgement: 1_000,
@@ -112,7 +114,7 @@ describe('orderAfterAdapterSubsystem', () => {
           toolApproval: 1_000,
           eventWait: 1_000,
         },
-        createAdapter: async () => ({}),
+        createAdapter: async () => ({ namespaceName: 'adapter:x' }),
       },
     },
   ];

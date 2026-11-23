@@ -29,10 +29,10 @@ import '@makaio/storage-drizzle';
 // Now StorageNamespaceExtensions.drizzle is available
 ```
 
-**Create storage namespace with drizzle tables:**
+**Define a storage namespace with Drizzle tables:**
 
 ```typescript
-import { createStorageNamespace } from '@makaio/storage-drizzle';
+import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
 import { z } from 'zod';
 
@@ -44,7 +44,7 @@ export const sessionsTable = sqliteTable('sessions', {
 });
 
 // Create namespace with extension
-export const SessionStorage = createStorageNamespace('session', {
+export const SessionStorage = createStorageNamespaceDefinition('session', {
   schemas: {
     get: {
       request: z.object({ sessionId: z.string() }),
@@ -59,6 +59,10 @@ export const SessionStorage = createStorageNamespace('session', {
 // Type-safe access
 const table = SessionStorage.extensions.drizzle?.sessions;
 ```
+
+Extensions include a static definition in the manifest's `namespaces` array or
+use `ctx.namespaces.lease(definition)` for runtime definitions. A host with an
+`IHostMakaioBus` calls `bus.registerNamespace(SessionStorage)` at composition time.
 
 **Create database client:**
 
@@ -268,7 +272,6 @@ each engine owns its drivers and dialect behavior while exposing one `MakaioData
 
 **Root entry (`@makaio/storage-drizzle`):**
 
-- `createStorageNamespace` - Re-export from `@makaio/storage-core`
 - `executeTransaction(db, callback)` - Execute a callback in a Drizzle transaction
 - `registerDrizzleHandlers(registration)` - Wrap typed storage handler registration for
   extension manifests

@@ -100,9 +100,10 @@ export type BusSendOperations<Subjects extends SubjectDefinition, StrictNamespac
    * - `transports: ['ws', 'nats']` - Send only to specified transports
    * @example
    * ```typescript
-   * const { subjects: AgentSubjects } = MakaioBus.registerNamespace('agent', {
+   * const definition = createBusNamespace('agent', {
    *   started: z.object({ agentId: z.string() }),
    * });
+   * const { subjects: AgentSubjects } = MakaioBus.registerNamespace(definition);
    *
    * // Forward a handled message (call form), send to all transports (default)
    * await emit(call, AgentSubjects.started, { agentId: 'agent-123' });

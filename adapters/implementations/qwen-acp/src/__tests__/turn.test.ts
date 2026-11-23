@@ -62,6 +62,7 @@ describe('QwenAcpTurn', () => {
 
   beforeEach(async () => {
     call = createTestCall();
+    MakaioBus.registerNamespaces([QwenAcpNamespace.definition]);
     bus = await QwenAcpNamespace.scopedBus(MakaioBus);
     turn = makeTurn(call, bus);
   });

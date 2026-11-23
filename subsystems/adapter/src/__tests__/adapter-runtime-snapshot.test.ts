@@ -1,3 +1,4 @@
+import { createBusNamespace } from '@makaio/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { createTestCall, makeStubExtensionBus } from '@makaio/test-utils';
@@ -83,11 +84,13 @@ function providerSnapshot(): ProviderRuntimeSnapshot {
 
 /** Build loaded adapter metadata with selected and compatible declarations. */
 function loadedAdapter(): LoadedAdapter {
+  const busNamespace = createBusNamespace('adapter:claude-code', {});
   return {
     name: 'claude-code',
     packageName: '@makaio/adapter-claude-code',
     carrierBus: makeStubExtensionBus(MakaioBus, '@makaio/adapter-claude-code'),
-    factory: async () => ({}),
+    busNamespace,
+    factory: async () => ({ namespaceName: busNamespace.name }),
     options: {},
     providerDefinitionIds: ['anthropic', 'openai'],
     providerRefs: [

@@ -1,5 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { teardownWasObserved } from '@makaio/contracts';
+import { MakaioError } from '@makaio/core';
 import {
   initializeEnabledAdapters,
   type AdapterRetirementAttempt,
@@ -7,6 +8,35 @@ import {
 } from './adapter-runtime-lifecycle.js';
 import { deferAdapterActivation, type DeferredAdapterActivation } from './adapter-runtime-deferred-activation.js';
 import type { AdapterInstance, AdapterRuntimeEntry, LoadedAdapter } from './adapter-runtime-types.js';
+
+/** Stable reasons an adapter's bus namespace definition can be rejected. */
+export type AdapterDefinitionInvalidErrorCode = 'bus-namespace-missing' | 'bus-namespace-mismatch';
+
+/** A contributed adapter is missing its namespace or uses a different domain. */
+export class AdapterDefinitionInvalidError extends MakaioError {
+  public readonly code: AdapterDefinitionInvalidErrorCode;
+  public readonly declaredNamespace: string | undefined;
+  public readonly actualNamespace: string | undefined;
+
+  /**
+   * @param adapterName - Name of the adapter contribution.
+   * @param namespaces - Declared and actual domains when the two disagree.
+   */
+  public constructor(
+    public readonly adapterName: string,
+    ...namespaces: [] | [declaredNamespace: string, actualNamespace: string]
+  ) {
+    const [declaredNamespace, actualNamespace] = namespaces;
+    super(
+      namespaces.length === 0
+        ? `Adapter "${adapterName}" must declare a busNamespace.`
+        : `Adapter "${adapterName}" declared namespace "${declaredNamespace}" but uses "${actualNamespace}".`,
+    );
+    this.code = namespaces.length === 0 ? 'bus-namespace-missing' : 'bus-namespace-mismatch';
+    this.declaredNamespace = declaredNamespace;
+    this.actualNamespace = actualNamespace;
+  }
+}
 
 /** Dependencies for admitting adapters into the runtime's existing lifecycle maps. */
 export interface AdapterRuntimeAdmissionDependencies {
@@ -88,7 +118,7 @@ export async function initializeAdapterRuntime(options: InitializeAdapterRuntime
   if (existing?.state === 'retiring' && (await settleRetiringAdapterAdmission(options, adapterId, existing, deferred)))
     return;
   const initializedInstances = new Map<string, AdapterInstance>();
-  // Admission belongs to extension activation or its deferred continuation, without an inbound message.
+  // ORIGIN: admission belongs to extension activation or its deferred continuation.
   await initializeEnabledAdapters(
     bus.own('start'),
     bus,
@@ -104,6 +134,9 @@ export async function initializeAdapterRuntime(options: InitializeAdapterRuntime
       const instance = initializedInstances.get(initializedAdapterId);
       if (instance === undefined) {
         throw new Error(`Initialized adapter ${initializedAdapterId} was not retained by its lifecycle`);
+      }
+      if (instance.namespaceName !== adapter.busNamespace.name) {
+        throw new AdapterDefinitionInvalidError(adapter.name, adapter.busNamespace.name, instance.namespaceName);
       }
       adapterEntries.set(initializedAdapterId, { state: 'live', instance, ownerInstanceId });
     },

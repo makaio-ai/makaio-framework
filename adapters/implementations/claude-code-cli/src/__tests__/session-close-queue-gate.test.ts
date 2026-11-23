@@ -76,6 +76,8 @@ function successResult(): SDKMessage {
   };
 }
 
+MakaioBus.registerNamespaces([ClaudeCodeCliConnectorNamespace.definition]);
+
 describe('ClaudeCliSession shutdown vs queue processing', () => {
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();

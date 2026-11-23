@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
+import { ownerOf } from '@makaio/bus-core/kernel-api';
 import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import {
   AgentSubjects,
@@ -16,6 +17,7 @@ import {
   WorkflowSubjects,
   type IMakaioSession,
 } from '@makaio/contracts';
+import { createBusNamespace } from '@makaio/core';
 import type { KernelMakaioExtension } from '@makaio/kernel';
 import { readOnlyFilesystemToolset } from '@makaio/extension-filesystem';
 import { defineTool, defineToolset, toolSuccess } from '@makaio/tools-core';
@@ -53,6 +55,53 @@ function createEmptyAdapterRepository() {
 }
 
 describe('createIsolatedWorkflowRuntime integration', () => {
+  it('keeps extension namespaces owned through authority transport detachment', async () => {
+    const name = 'shutdown-routing';
+    const namespace = createBusNamespace(name, { ping: z.object({}) });
+    const destroy = vi.fn();
+    const observedAtDisconnect = vi.fn();
+    const runtime = await createIsolatedWorkflowRuntime({
+      /**
+       * Register a transport that observes the teardown order without opening a socket.
+       * @param bus - The isolated runtime bus.
+       */
+      async connectAuthority(bus) {
+        bus.registerTransport({
+          name: 'authority',
+          connect: async () => {},
+          disconnect: async () => {
+            observedAtDisconnect(ownerOf(bus, namespace.name), destroy.mock.calls.length);
+          },
+          onReceive: () => () => {},
+          canSend: () => false,
+          send: async () => {
+            throw new Error('Unexpected authority message');
+          },
+          subscribe: async () => {},
+          unsubscribe: async () => {},
+        });
+        await bus.connect();
+      },
+      contributedPackages: [
+        { name, displayName: name, version: '1.0.0', namespaces: [namespace], create: () => ({ destroy }) },
+      ],
+      configRepository: createEmptyAdapterRepository(),
+      context: {
+        cwd: tmpdir(),
+        platform: process.platform,
+        homedir: '/runtime-home',
+        makaioHome: '/runtime-makaio-home',
+        username: 'workflow-worker',
+        machineId: 'isolated-worker-shutdown',
+      },
+      toolsets: [],
+    });
+
+    await runtime.shutdown();
+    expect(observedAtDisconnect).toHaveBeenCalledExactlyOnceWith({ kind: 'extension', extension: name }, 1);
+    expect(runtime.coordinator.namespaceOwners().ownerOf(namespace.name)).toBeUndefined();
+  });
+
   it('preserves the startup failure after cleanup', async () => {
     const startupFailure = new Error('authority connection rejected');
 

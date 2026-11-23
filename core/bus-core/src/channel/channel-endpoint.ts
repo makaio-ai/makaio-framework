@@ -23,9 +23,8 @@ const SYSTEM_NAMESPACE = 'system';
 /**
  * Concrete type for the `system.channel.open` SubjectDefinition.
  *
- * This mirrors what `registerNamespace('system', SystemChannelSchemas).subjects.channel.open`
- * returns, without importing the global `MakaioBus` singleton (which would introduce
- * a circular module dependency through the barrel export).
+ * This matches the subject exposed by the pure `system` namespace definition
+ * built from `SystemChannelSchemas`.
  */
 type ChannelOpenSubjectDef = SubjectDefinition<
   { 'channel.open': RequestMessagePayload<ChannelOpenRequest, ChannelOpenResponse> },
@@ -34,11 +33,10 @@ type ChannelOpenSubjectDef = SubjectDefinition<
 >;
 
 /**
- * Ensure the `system` namespace is registered on the given bus context and
+ * Register the `system` namespace as the host on the given bus context and
  * return the typed `channel.open` subject definition.
  *
- * Idempotent: `registerNamespace` returns the already-registered namespace on
- * repeated calls, so this is always safe to call at the top of every entry point.
+ * Repeated host registrations of the same definition reuse the registration.
  * @param context - Bus context to register the namespace on
  * @returns The `channel.open` SubjectDefinition
  */

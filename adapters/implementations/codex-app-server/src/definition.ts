@@ -6,13 +6,14 @@ import type { AIAdapterDefinition } from '@makaio/ai-adapters-core';
 import { createCodexAppServerAdapter } from './adapter.js';
 import { CodexAppServerAdapterName, DEFAULT_TIMEOUTS, DefaultModel } from './constants.js';
 import { CodexAppServerProviderConfigSchema } from './schemas.js';
-import type { CodexAppServerBus } from './namespaces/index.js';
+import { CodexAppServerNamespace, type CodexAppServerBus } from './namespaces/index.js';
 import type { CodexAppServerConnector } from './connector.js';
 import type { CodexAppServerAgent } from './agent.js';
 import { defaultPresetId, providerAuthById, providerIds } from './provider.js';
 
 export const adapterDefinition: AIAdapterDefinition<CodexAppServerBus, CodexAppServerConnector, CodexAppServerAgent> = {
   name: CodexAppServerAdapterName,
+  busNamespace: CodexAppServerNamespace.definition,
   displayName: 'Codex App-Server',
   defaultPresetId,
   description: 'Direct integration with codex app-server via stdio subprocess using JSON-RPC 2.0 over JSONL',

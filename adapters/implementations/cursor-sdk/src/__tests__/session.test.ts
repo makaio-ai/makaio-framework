@@ -4,7 +4,7 @@ import {
   type MessageResult,
   type NormalizedMessageInput,
 } from '@makaio/ai-adapters-core';
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { McpSubjects, type CallContext } from '@makaio/contracts';
 import { createTestBusInstance, createTestCall, makeStubExtensionBus } from '@makaio/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -116,7 +116,7 @@ const TEST_MESSAGE: NormalizedMessageInput = {
 async function createSession(
   call: CallContext,
   providerConfig?: CursorSdkProviderConfig,
-  globalBus = MakaioBus,
+  globalBus: IMakaioBus = MakaioBus,
 ): Promise<CursorSdkSession> {
   const session = new CursorSdkSession({
     bus: await CursorSdkNamespace.scopedBus(globalBus),
@@ -166,6 +166,8 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
   }
   throw new Error('Timed out waiting for test condition');
 }
+
+MakaioBus.registerNamespaces([CursorSdkNamespace.definition]);
 
 describe('CursorSdkSession', () => {
   beforeEach(() => {

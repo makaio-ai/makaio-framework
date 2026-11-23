@@ -18,6 +18,7 @@ import type { NormalizedMessageInput } from '@makaio/ai-adapters-core';
  * @returns Promise resolving to a CodexAppServerBus
  */
 function createTestBus(): Promise<CodexAppServerBus> {
+  MakaioBus.registerNamespaces([CodexAppServerNamespace.definition]);
   return CodexAppServerNamespace.scopedBus(MakaioBus);
 }
 

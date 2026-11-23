@@ -54,9 +54,13 @@ export type ExtractFilterPayload<T> = T extends { __filterPayload?: infer F } ? 
  * Derive a ScopedBus type from a BusNamespace, preserving Domain, Subjects, and FilterPayload.
  * @example
  * ```typescript
- * const MyNamespace = MakaioBus.registerNamespace('myDomain', { ... });
+ * import { MakaioBus } from '@makaio/bus-core';
+ * import { createBusNamespace } from '@makaio/core';
+ * import { z } from 'zod';
+ *
+ * const definition = createBusNamespace('myDomain', { changed: z.object({ id: z.string() }) });
+ * const MyNamespace = MakaioBus.registerNamespace(definition);
  * export type MyBus = ScopedBusFor<typeof MyNamespace>;
- * // Equivalent to: ScopedBus<'myDomain', { ...subjects... }, FilterPayload>
  * ```
  */
 export type ScopedBusFor<T> =

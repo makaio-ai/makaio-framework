@@ -83,6 +83,8 @@ afterEach(() => {
   MakaioBus.__resetHandlers?.();
 });
 
+MakaioBus.registerNamespaces([AnthropicSdkConnectorNamespace.definition]);
+
 describe('Anthropic Factory Gateway request correlation', () => {
   it('sends allowlisted headers with a distinct matching LLM call ID for every request', async () => {
     const bus = await AnthropicSdkConnectorNamespace.scopedBus(MakaioBus);

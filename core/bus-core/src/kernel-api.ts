@@ -2,16 +2,16 @@
  * Kernel entry of `@makaio/bus-core`.
  *
  * This file names the functions that mint, carry, and check call contexts and that
- * build bus instances around a shared context. It is for the kernel and composition
- * code of the framework only: `bus-core` itself, the kernel package, transports,
+ * build bus instances around a shared context. It also provides namespace ownership operations.
+ * It is for the kernel and composition code of the framework only: `bus-core` itself, the kernel package, transports,
  * runtime boot code, test utilities, and the composition roots of an application.
  * Extension code must not import it. A lint rule added later in this package enforces
  * that boundary; until then the boundary is convention. The public index
  * (`./index.ts`) deliberately carries none of these names.
  *
  * The groups below are the one fixed list of kernel names. A name belongs here when
- * calling it can create or change who a message is attributed to, or when it hands out
- * a bus that bypasses the carrier binding of the public API.
+ * it controls message attribution, exposes a bus outside the public carrier binding,
+ * or manages namespace ownership.
  *
  * Note on `createBusInstance({ context })`: the `context` option of the public
  * `createBusInstance` is a kernel capability too. It cannot be exported under a name of
@@ -21,6 +21,12 @@
  * Internal to `bus-core` and intentionally not listed: `buildBusInstance`, `enterSend`,
  * `deriveSent`, `own` (carrier-level), and the `methods/*` entry points.
  */
+
+import type { NamespaceLease } from '@makaio/contracts/extension';
+import type { BusNamespaceDefinition, RegistrableBusNamespaceDefinition, SubjectSchema } from '@makaio/core';
+import { busContextOf } from './bus-instance.js';
+import type { NamespaceHolder, TypedNamespace } from './registries/namespace-registry.js';
+import type { IMakaioBus } from './types/bus.js';
 
 /**
  * Minting and inspecting call contexts.
@@ -60,7 +66,7 @@ export { callFromReceive } from './call-context/wire.js';
  *   replace the former public `getContext()` and throw for objects that are not buses
  *   built by the kernel.
  */
-export { busCarrierOf, busContextOf, createCarrierBus } from './bus-instance.js';
+export { busCarrierOf, busContextOf, createCarrierBus, type CarrierNamespaceRegistration } from './bus-instance.js';
 
 /**
  * Bus contexts and unscoped views.
@@ -72,3 +78,77 @@ export { busCarrierOf, busContextOf, createCarrierBus } from './bus-instance.js'
  */
 export { createBusContext } from './bus.js';
 export { createFilteredBus } from './filtered-bus.js';
+
+export {
+  CORE_NAMESPACE_PREFIXES,
+  HOST_NAMESPACE_HOLDER,
+  NamespaceOwnershipError,
+  type NamespaceHolder,
+} from './registries/namespace-registry.js';
+export type { NamespaceLease } from '@makaio/contracts/extension';
+
+/**
+ * Claim a bus namespace for a named holder.
+ *
+ * `leaseNamespace` and `HOST_NAMESPACE_HOLDER` are for trusted code in the host process, and extensions claim through `ctx.namespaces`.
+ * @param bus - Bus whose registry will hold the claim.
+ * @param definition - Namespace definition to register.
+ * @param holder - Host or extension claiming the namespace.
+ * @returns An independent release handle with the registered namespace.
+ */
+export function leaseNamespace<Domain extends string, Schemas extends Record<string, SubjectSchema>>(
+  bus: IMakaioBus,
+  definition: BusNamespaceDefinition<Domain, Schemas>,
+  holder: NamespaceHolder,
+): NamespaceLease & { namespace: TypedNamespace<Domain, Schemas> };
+export function leaseNamespace(
+  bus: IMakaioBus,
+  definition: RegistrableBusNamespaceDefinition,
+  holder: NamespaceHolder,
+): NamespaceLease;
+export function leaseNamespace(
+  bus: IMakaioBus,
+  definition: RegistrableBusNamespaceDefinition,
+  holder: NamespaceHolder,
+): NamespaceLease {
+  return busContextOf(bus).namespaceRegistry.leaseNamespace(definition as BusNamespaceDefinition, holder);
+}
+
+/**
+ * Look up the holder of a namespace, including reserved host namespaces.
+ * @param bus - Bus whose registry to query.
+ * @param namespace - Domain to look up.
+ * @returns The current holder, if any.
+ */
+export function ownerOf(bus: IMakaioBus, namespace: string): NamespaceHolder | undefined {
+  return busContextOf(bus).namespaceRegistry.ownerOf(namespace);
+}
+
+/**
+ * List the registered namespaces and their holders in namespace order.
+ * @param bus - Bus whose registry to query.
+ * @returns Registered namespace owners in namespace order.
+ */
+export function listOwners(bus: IMakaioBus): readonly { namespace: string; owner: NamespaceHolder }[] {
+  return busContextOf(bus).namespaceRegistry.listOwners();
+}
+
+/**
+ * Check if a namespace has been registered.
+ * @param bus - Bus whose registry to query.
+ * @param name - Domain to look up.
+ * @returns True if the domain is registered.
+ */
+export function hasNamespace(bus: IMakaioBus, name: string): boolean {
+  return busContextOf(bus).namespaceRegistry.hasNamespace(name);
+}
+
+/**
+ * Resolve a subject's registered namespace by exact match or longest registered prefix.
+ * @param bus - Bus whose registry to query.
+ * @param subject - Fully qualified subject.
+ * @returns The registered namespace, if any.
+ */
+export function namespaceOf(bus: IMakaioBus, subject: string): string | undefined {
+  return busContextOf(bus).namespaceRegistry.namespaceOf(subject);
+}

@@ -200,8 +200,10 @@ export function createDeterministicAdapterContribution(capture: DeterministicAda
     ],
     scrubEnvVars: [],
   });
+  const namespace = createAdapterNamespace('workflow-test-adapter', {});
   const definition: AIAdapterDefinition<FixtureBus, DeterministicConnector, DeterministicAgent> = {
     name: 'workflow-test-adapter',
+    busNamespace: namespace.definition,
     providers: [{ definitionId: 'deterministic-provider', auth: providerAuth }],
     defaultTimeouts: {
       initialization: 1_000,
@@ -223,7 +225,7 @@ export function createDeterministicAdapterContribution(capture: DeterministicAda
         machineId: options.machineId,
         ownerInstanceId: options.ownerInstanceId,
         clientId: options.clientId,
-        namespace: createAdapterNamespace('workflow-test-adapter', {}),
+        namespace,
         scopedBus,
         globalBus: runtimeBus,
         agentFactory: (config) => new DeterministicAgent(config),

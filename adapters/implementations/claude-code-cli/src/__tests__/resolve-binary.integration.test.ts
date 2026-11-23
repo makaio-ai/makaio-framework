@@ -59,6 +59,7 @@ async function makeConnector(
     disallowedTools?: string[];
   } = {},
 ): Promise<ClaudeCliConnector> {
+  MakaioBus.registerNamespaces([ClaudeCodeCliConnectorNamespace.definition]);
   const bus = (await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus)) as ClaudeCodeCliConnectorBus;
   const providerConfig: TestProviderConfig | undefined =
     options.baseUrl === undefined ? undefined : { baseUrl: options.baseUrl };

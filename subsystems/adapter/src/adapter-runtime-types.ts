@@ -2,6 +2,7 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type {
   ProtocolId,
   AdapterClientRef,
+  AdapterContribution,
   AdapterProviderDefinitionContract,
   AdapterProviderRef,
   ConnectorTeardownResult,
@@ -97,12 +98,13 @@ export interface AdapterRuntimeInitOptions extends AdapterInitOptions {
 /**
  * Minimal adapter instance surface returned by the adapter factory.
  *
- * Captures the `adapterId` field needed by the runtime to validate instance
- * identity after initialization.
+ * Exposes the runtime identity and bus domain used by the instance.
  */
 export interface AdapterInstance {
   /** Unique identifier assigned when the adapter instance is created. */
   adapterId?: string;
+  /** Domain actually used by the adapter. */
+  readonly namespaceName: string;
   /** Preferred awaitable shutdown hook, which may report actual teardown evidence. */
   closeAsync?: () => void | ConnectorTeardownResult | Promise<void | ConnectorTeardownResult>;
   /** Legacy shutdown hook, which may report actual teardown evidence. */
@@ -169,6 +171,8 @@ export interface LoadedAdapter {
   packageName: string;
   /** Carrier of the extension that contributed this adapter. */
   readonly carrierBus: IMakaioBus;
+  /** Bus namespace declared by the adapter definition. */
+  readonly busNamespace: AdapterContribution['definition']['busNamespace'];
   /**
    * Factory function that creates a live adapter instance.
    *

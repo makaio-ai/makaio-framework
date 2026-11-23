@@ -80,14 +80,12 @@ is invisible to callers.
 
 ## Your First Bus Interaction
 
-The bus is the foundation of everything. Here is a minimal example that
-registers a namespace, subscribes to events, and emits:
+Define the namespace and export its typed subjects:
 
 ```ts
-import { MakaioBus } from '@makaio/framework/bus';
+import { createBusNamespace } from '@makaio/framework/core';
 import { z } from 'zod';
 
-// 1. Define schemas
 const GreeterSchemas = {
   greeted: z.object({
     name: z.string(),
@@ -99,39 +97,47 @@ const GreeterSchemas = {
   },
 };
 
-// 2. Register a namespace
-const GreeterNamespace = MakaioBus.registerNamespace('greeter', GreeterSchemas);
-const GreeterSubjects = GreeterNamespace.subjects;
+export const GreeterNamespace = createBusNamespace('greeter', GreeterSchemas);
+export const GreeterSubjects = GreeterNamespace.subjects;
+```
 
-// 3. Subscribe to events
-MakaioBus.on(GreeterSubjects.greeted, (ctx) => {
+An extension declares this definition in its manifest with
+`namespaces: [GreeterNamespace]`. For definitions created at runtime, use
+`ctx.namespaces.lease(definition)`. If another holder already owns the domain,
+registration fails with `namespace-already-owned`.
+
+To run this example as a host, register the definition on an isolated bus:
+
+```ts
+import { createBusInstance, type IHostMakaioBus } from '@makaio/framework/bus';
+
+const bus: IHostMakaioBus = createBusInstance();
+bus.registerNamespace(GreeterNamespace);
+
+bus.on(GreeterSubjects.greeted, (ctx) => {
   console.info(`${ctx.payload.name} was greeted at ${ctx.payload.timestamp}`);
 });
 
-// 4. Handle requests
-MakaioBus.on(GreeterSubjects.greet, (ctx) => {
+bus.on(GreeterSubjects.greet, (ctx) => {
   const greeting = `Hello, ${ctx.payload.name}!`;
   ctx.setResult({ greeting });
 });
 
-// 5. Emit an event
-await MakaioBus.emit(GreeterSubjects.greeted, {
-  name: 'World',
-  timestamp: Date.now(),
-});
-
-// 6. Wait for the next matching event (promise-based, with timeout)
-const ctx = await MakaioBus.once(GreeterSubjects.greeted, {
+// Subscribe before emitting so the wait can observe the event.
+const greeted = bus.once(GreeterSubjects.greeted, {
   filter: { name: 'World' },
   timeoutMs: 5_000,
 });
+// ORIGIN: The host example initiates the greeting.
+const call = bus.own('root');
+await bus.emit(call, GreeterSubjects.greeted, {
+  name: 'World',
+  timestamp: Date.now(),
+});
+const ctx = await greeted;
 console.info(ctx.payload.timestamp);
 
-// 7. Make a request
-const { greeting } = await MakaioBus.request(
-  GreeterSubjects.greet,
-  { name: 'Developer' },
-);
+const { greeting } = await bus.request(call, GreeterSubjects.greet, { name: 'Developer' });
 console.info(greeting); // "Hello, Developer!"
 ```
 
@@ -184,7 +190,8 @@ call tools directly:
 ```ts
 import { ToolSubjects } from '@makaio/framework/contracts';
 
-const result = await bus.request(ToolSubjects.execute, {
+// ORIGIN: This example invokes the tool directly.
+const result = await bus.request(bus.own('root'), ToolSubjects.execute, {
   toolName: 'current_time',
   input: {},
 });
@@ -278,6 +285,8 @@ const sessionId = crypto.randomUUID();
 
 // This auto-creates the session and attaches an agent
 const { messageId, turnId } = await bus.request(
+  // ORIGIN: This example starts a conversation.
+  bus.own('root'),
   SessionSubjects.sendMessage,
   {
     sessionId,
@@ -323,11 +332,13 @@ then call `adapter.startAgent` directly:
 import { AdapterSubjects } from '@makaio/framework/contracts';
 import { AdapterRuntimeSubjects } from '@makaio/framework/services';
 
-const { adapterId } = await bus.request(AdapterRuntimeSubjects.resolveId, {
+// ORIGIN: This example starts an agent directly through the adapter.
+const call = bus.own('root');
+const { adapterId } = await bus.request(call, AdapterRuntimeSubjects.resolveId, {
   adapterName: 'openai-node',
 });
 
-const result = await bus.request(AdapterSubjects.startAgent, {
+const result = await bus.request(call, AdapterSubjects.startAgent, {
   adapterId,
   role: 'lead',
   mode: 'create',

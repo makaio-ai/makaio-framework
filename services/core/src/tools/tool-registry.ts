@@ -347,6 +347,7 @@ export class ToolRegistry {
     return {
       ...baseContext,
       call,
+      // Direct host registrations use the registry bus, including toolsets supplied to the isolated workflow runtime.
       bus: this.toolsetBuses.get(toolsetName) ?? this.bus,
       sessionId: overrides?.sessionId,
       agentId: overrides?.agentId,

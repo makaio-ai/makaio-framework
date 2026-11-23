@@ -1,4 +1,5 @@
 import type { SubjectDefinition } from '@makaio/core';
+import { CHANNEL_NAMESPACE_PREFIX } from '../channel/types.js';
 import type { MakaioBusContext } from '../types/index.js';
 
 const warned = new Set<string>();
@@ -23,7 +24,7 @@ export function warnIfUnregistered(
   if (process.env['MAKAIO_DEBUG'] !== 'true') return;
 
   if (subjectDefinition.subject.includes('*')) return;
-  if (subjectDefinition.$meta.namespace.startsWith('channel:')) return;
+  if (subjectDefinition.$meta.namespace.startsWith(CHANNEL_NAMESPACE_PREFIX)) return;
 
   // Registered subjects are the steady-state — check the authoritative map first.
   const schema = context.namespaceRegistry.getSchema(fullKey);
@@ -37,7 +38,8 @@ export function warnIfUnregistered(
   console.warn(
     `[MakaioBus] Subject '${fullKey}' used but namespace '${namespace}' ` +
       `is not registered. Validation and local-subject routing are disabled. ` +
-      `Call registerNamespace() at boot.`,
+      `Use manifest namespaces or ctx.namespaces.lease(definition). ` +
+      `Hosts use IHostMakaioBus.registerNamespace(definition).`,
   );
 }
 

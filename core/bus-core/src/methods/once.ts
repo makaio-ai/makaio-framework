@@ -77,41 +77,59 @@ type ContextForSubjectDefinition<T extends SubjectDefinition> = Parameters<Handl
  * @returns Unsubscribe function for manual cleanup if needed
  * @example Basic one-time event handler
  * ```typescript
- * const { subjects: AgentSubjects } = MakaioBus.registerNamespace('agent', {
+ * import { createBusNamespace } from '@makaio/core';
+ * import { createBusInstance } from '@makaio/bus-core';
+ * import { z } from 'zod';
+ *
+ * const definition = createBusNamespace('agent', {
  *   started: z.object({ agentId: z.string() }),
  * });
+ * const bus = createBusInstance();
+ * const { subjects: AgentSubjects } = bus.registerNamespace(definition);
  *
- * once(AgentSubjects.started, (context) => {
+ * bus.once(AgentSubjects.started, (context) => {
  *   console.debug('Agent started once:', context.payload.agentId);
  * });
  *
- * await emit(AgentSubjects.started, { agentId: 'agent-123' }); // Handler fires
- * await emit(AgentSubjects.started, { agentId: 'agent-456' }); // Handler does NOT fire
+ * // ORIGIN: The example initiates this event.
+ * await bus.emit(bus.own('root'), AgentSubjects.started, { agentId: 'agent-123' }); // Handler fires
+ * // ORIGIN: The example initiates this event.
+ * await bus.emit(bus.own('root'), AgentSubjects.started, { agentId: 'agent-456' }); // Handler does NOT fire
  * ```
  * @example Manual unsubscribe before first fire
  * ```typescript
- * const unsubscribe = once(AgentSubjects.started, (context) => {
+ * const unsubscribe = bus.once(AgentSubjects.started, (context) => {
  *   console.debug('This will never run');
  * });
  *
  * unsubscribe(); // Manually unsubscribe before event fires
- * await emit(AgentSubjects.started, { agentId: 'agent-123' }); // Handler does NOT fire
+ * // ORIGIN: The example initiates this event.
+ * await bus.emit(bus.own('root'), AgentSubjects.started, { agentId: 'agent-123' }); // Handler does NOT fire
  * ```
  * @example One-time request handler
  * ```typescript
- * const { subjects: AgentSubjects } = MakaioBus.registerNamespace('agent', {
+ * import { createBusNamespace } from '@makaio/core';
+ * import { createBusInstance } from '@makaio/bus-core';
+ * import { z } from 'zod';
+ *
+ * const definition = createBusNamespace('agent', {
  *   toolApprove: {
  *     request: z.object({ toolName: z.string() }),
  *     response: z.object({ approved: z.boolean() }),
  *   },
  * });
+ * const bus = createBusInstance();
+ * const { subjects: AgentSubjects } = bus.registerNamespace(definition);
  *
- * once(AgentSubjects.toolApprove, (context) => {
+ * bus.once(AgentSubjects.toolApprove, (context) => {
  *   context.setResult({ approved: true });
  * });
  *
- * await request(AgentSubjects.toolApprove, { toolName: 'deleteFile' }); // Handler fires
- * await request(AgentSubjects.toolApprove, { toolName: 'createFile' }); // Handler does NOT fire
+ * // ORIGIN: The example initiates this request.
+ * await bus.request(bus.own('root'), AgentSubjects.toolApprove, { toolName: 'deleteFile' }); // Handler fires
+ * // ORIGIN: The example initiates this request.
+ * const result = await bus.requestOptional(bus.own('root'), AgentSubjects.toolApprove, { toolName: 'createFile' });
+ * console.debug(result.handled); // false
  * ```
  * @see {@link on} for the underlying subscription mechanism
  */

@@ -53,6 +53,7 @@ interface AdapterContribution<TAdapter = unknown> {
 | Field | Type | Purpose |
 |-------|------|---------|
 | `name` | `string` | Must match `manifest.name` |
+| `busNamespace` | `RegistrableBusNamespaceDefinition` | Scoped namespace definition leased by the contributing extension |
 | `providers` | `AdapterProviderRef[]` | Provider IDs this adapter serves |
 | `defaultTimeouts` | `RequiredTimeoutConfig` | Timeout defaults |
 | `createAdapter` | `function` | Factory: `(options?) => Promise<TAdapter>` |
@@ -78,14 +79,17 @@ Extension discovered (descriptor.json)
            3. Build LoadedAdapter from definition + manifest
            4. Ensure file-backed config exists ($MAKAIO_HOME/adapters/)
            5. Register in in-memory loadedAdapters map
-           6. Initialize if enabled (call createAdapter factory)
+           6. Lease busNamespace for the contributing extension
+           7. Initialize if enabled (call createAdapter and check its namespace)
         → Publish adapter.registered event
           → Adapter ready for agents
 ```
 
-If any adapter in a package fails during activation, the processor rolls back all adapters from
-that package — reverse-iterating contributions and deregistering each — then marks the extension
-as `failed`.
+An existing claim by a different holder (including the host) rejects the lease with
+`namespace-already-owned`. If any adapter in a package fails during activation,
+including when its instance uses a different domain than declared, the processor
+deregisters the package's adapters in reverse order and releases its leases. The
+coordinator marks the extension as `failed`.
 
 ## File-backed configuration
 

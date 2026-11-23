@@ -13,9 +13,9 @@ their own storage namespaces and swap backends without changing consumers.
 ## Defining a Storage Namespace
 
 ```ts
-import { createStorageNamespace } from '@makaio/storage-core';
+import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 
-const SessionStorageNamespace = createStorageNamespace('session', {
+const SessionStorageNamespace = createStorageNamespaceDefinition('session', {
   schemas: {
     get: {
       request: z.object({ sessionId: z.string() }),
@@ -40,9 +40,14 @@ export const SessionStorageSubjects = SessionStorageNamespace.subjects;
 // Subjects: storage:session.get, storage:session.set, etc.
 ```
 
-`createStorageNamespace` prepends `storage:` to the domain name and registers
-the namespace on the bus. The resulting subjects are typed request subjects —
-consumers get full type inference on both request payloads and responses.
+`createStorageNamespaceDefinition` prepends `storage:` and creates typed
+subjects and schemas. Extensions declare static definitions in their manifest's
+`namespaces` array or claim runtime definitions with `ctx.namespaces.lease(definition)`.
+Host code registers a definition at composition time on an `IHostMakaioBus`:
+
+```ts
+bus.registerNamespace(SessionStorageNamespace);
+```
 
 ## Implementing a Handler
 
@@ -90,8 +95,9 @@ backend serves their requests.
 ```ts
 import { SessionStorageSubjects } from '@makaio/contracts/session';
 
-// The consumer imports only the subject — never the handler implementation
+// ORIGIN: The caller looks up a session on this bus.
 const { session } = await bus.request(
+  bus.own('root'),
   SessionStorageSubjects.get,
   { sessionId: '123' },
 );
@@ -109,6 +115,7 @@ and register storage handlers during extension boot:
 ```ts
 const myExtension: MakaioExtension = {
   name: 'my-extension',
+  namespaces: [MyStorageNamespace],
   storage: {
     packageRoot: import.meta.dirname,
     migrations: './drizzle',
@@ -125,7 +132,7 @@ it returns an optional cleanup function.
 
 The kernel runs migrations in dependency order during boot, then calls each
 extension's `registerHandlers` to wire up handlers. Your extension's consumers
-use `bus.request(MyStorageSubjects.get, ...)` — they never import your handler
+use `bus.request(call, MyStorageSubjects.get, ...)` — they never import your handler
 implementation.
 
 ## Why Bus-Mediated Storage

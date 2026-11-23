@@ -91,6 +91,7 @@ function makeExecutionContext(
 async function makeConnector(
   overrides: { env?: Record<string, string>; clientExecution?: ClientExecutionContext } = {},
 ): Promise<QwenAcpConnector> {
+  MakaioBus.registerNamespaces([QwenAcpNamespace.definition]);
   const bus = await QwenAcpNamespace.scopedBus(MakaioBus);
   return new QwenAcpConnector({
     bus,

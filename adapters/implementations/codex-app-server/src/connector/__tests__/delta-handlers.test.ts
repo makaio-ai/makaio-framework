@@ -22,7 +22,9 @@ describe('delta-handlers - Type guards', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    const bus = await CodexAppServerNamespace.scopedBus(createTestBusInstance());
+    const hostBus = createTestBusInstance();
+    hostBus.registerNamespaces([CodexAppServerNamespace.definition]);
+    const bus = await CodexAppServerNamespace.scopedBus(hostBus);
     const call = createTestCall();
     emit = (subject, payload) => bus.emit(call, subject, payload);
     consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});

@@ -4,7 +4,7 @@
  * Separate file to avoid circular dependency with config.ts.
  */
 import type { AIAdapterDefinition } from '@makaio/ai-adapters-core';
-import type { CursorSdkBus } from './namespaces/index.js';
+import { CursorSdkNamespace, type CursorSdkBus } from './namespaces/index.js';
 import type { CursorSdkConnector } from './connector.js';
 import type { CursorSdkAgent } from './agent.js';
 import { CursorSdkAdapterName, DEFAULT_TIMEOUTS } from './constants.js';
@@ -15,6 +15,7 @@ import { defaultPresetId, providerAuthById, providerIds } from './provider.js';
 /** Adapter definition for the Cursor SDK adapter. */
 export const adapterDefinition: AIAdapterDefinition<CursorSdkBus, CursorSdkConnector, CursorSdkAgent> = {
   name: CursorSdkAdapterName,
+  busNamespace: CursorSdkNamespace.definition,
   displayName: 'Cursor SDK',
   description: 'Cursor AI editor agent via TypeScript SDK',
   defaultPresetId,

@@ -94,6 +94,7 @@ async function createConnector(
   hostBus: ReturnType<typeof createTestBusInstance>,
   onMessageSent?: (handle: MessageHandle) => void,
 ): Promise<TestStreamConnector> {
+  hostBus.registerNamespaces([TestNamespace.definition]);
   return new TestStreamConnector({
     bus: await TestNamespace.scopedBus(hostBus),
     globalBus: hostBus,
@@ -171,7 +172,7 @@ describe('BaseStreamConnector terminal initialization', () => {
 
   it('keeps a turn handler that completed before close takes the terminal latch', async () => {
     const hostBus = createTestBusInstance();
-    await TestNamespace.scopedBus(hostBus);
+    hostBus.registerNamespaces([TestNamespace.definition]);
     let releaseFirstHandler: (() => void) | undefined;
     const firstHandlerStarted = new Promise<void>((resolve) => {
       hostBus.on(TestNamespace.subjects.turn.turn_started, async () => {

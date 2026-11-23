@@ -1,4 +1,4 @@
-import { createBusInstance, ForeignOwnContextError, type IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, ForeignOwnContextError, type IHostMakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import type { CredentialResolver, ExtensionServiceLifecycle } from '@makaio/contracts';
 import { createBusNamespace } from '@makaio/core';
 import type { CallContext, PartyRef } from '@makaio/core';
@@ -52,7 +52,7 @@ function recordingExtension(name: string, contexts: Map<string, KernelExtensionC
 
 /** Everything a started pair of extensions leaves behind. */
 interface StartedPair {
-  readonly host: IMakaioBus;
+  readonly host: IHostMakaioBus;
   readonly ctxA: KernelExtensionContext;
   readonly ctxB: KernelExtensionContext;
   readonly binderCalls: BinderCall[];

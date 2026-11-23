@@ -43,7 +43,9 @@ describe('stream-bridge', () => {
 
       beforeAll(async () => {
         events = [];
-        const bus = await OpenAINodeConnectorNamespace.scopedBus(createBusInstance());
+        const hostBus = createBusInstance();
+        hostBus.registerNamespaces([OpenAINodeConnectorNamespace.definition]);
+        const bus = await OpenAINodeConnectorNamespace.scopedBus(hostBus);
 
         bus.on(OpenAINodeConnectorSubjects.sdk.event, (context) => {
           envelopes.push(context.payload);
@@ -137,7 +139,9 @@ describe('stream-bridge', () => {
 
   it('keeps hidden finalizer tool calls out of public tool_calls events', async () => {
     const events: SdkEventMessage[] = [];
-    const bus = await OpenAINodeConnectorNamespace.scopedBus(createBusInstance());
+    const hostBus = createBusInstance();
+    hostBus.registerNamespaces([OpenAINodeConnectorNamespace.definition]);
+    const bus = await OpenAINodeConnectorNamespace.scopedBus(hostBus);
     const finalizerChunks: ChatCompletionChunk[] = [
       {
         id: 'chunk-1',

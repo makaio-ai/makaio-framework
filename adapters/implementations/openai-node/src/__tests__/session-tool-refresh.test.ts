@@ -85,6 +85,7 @@ async function createSession(
   overrides: Partial<OpenAISessionConfig> = {},
 ): Promise<{ session: TestOpenAIConnectorSession; bus: OpenAINodeConnectorBus }> {
   const globalBus = createTestBusInstance();
+  globalBus.registerNamespaces([OpenAINodeConnectorNamespace.definition]);
   const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
   const session = new TestOpenAIConnectorSession({
     bus,

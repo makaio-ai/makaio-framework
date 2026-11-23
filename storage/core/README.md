@@ -4,7 +4,7 @@ Factory for creating bus-integrated storage namespaces with `storage:` prefix co
 
 ## Quick Index
 
-- `./src/create-storage-namespace.ts` – factory function for storage namespaces
+- `./src/create-storage-namespace-definition.ts` – factory for storage namespace definitions
 - `./src/create-extension-storage-namespace.ts` – extension namespace helper that creates
   `storage:extension:{name}` subjects
 - `./src/types.ts` – type definitions and extension interfaces
@@ -53,18 +53,18 @@ export interface StorageNamespaceExtensions {}
    };
    ```
 
-2. **Create storage namespace** with optional extensions:
+2. **Define a storage namespace** with optional ORM metadata:
    ```ts
-   import { createStorageNamespace } from '@makaio/storage-core';
+   import { createStorageNamespaceDefinition } from '@makaio/storage-core';
 
-   export const ItemStorageNamespace = createStorageNamespace('item', {
+   export const ItemStorageNamespace = createStorageNamespaceDefinition('item', {
      schemas,
      extensions: {
        drizzle: { items: itemsTable },
      },
    });
 
-   // Bus namespace is registered as 'storage:item'
+   // ItemStorageNamespace.name is 'storage:item'
    // ItemStorageNamespace.domain remains 'item'
    // Subjects: storage:item.get, storage:item.set
    ```
@@ -74,7 +74,12 @@ export interface StorageNamespaceExtensions {}
    export const ItemStorageSubjects = ItemStorageNamespace.subjects;
    ```
 
-4. **Implement handler** with mappers:
+4. **Register the namespace** through its holder. An extension includes a static
+   definition in its manifest with `namespaces: [ItemStorageNamespace]` or claims a
+   runtime definition with `ctx.namespaces.lease(definition)`. Host code calls
+   `bus.registerNamespace(ItemStorageNamespace)` on an `IHostMakaioBus`.
+
+5. **Implement handler** with mappers:
    ```ts
    export function registerDrizzleItemStorage(bus: IMakaioBus, db: MakaioDatabase) {
      return bus.on(ItemStorageSubjects.get, async (ctx) => {
@@ -84,14 +89,15 @@ export interface StorageNamespaceExtensions {}
    }
    ```
 
-5. **Consume via bus** (storage backend is transparent):
+6. **Consume via bus** (storage backend is transparent):
    ```ts
-   const { item } = await bus.request(ItemStorageSubjects.get, { id: '123' });
+   // ORIGIN: The caller initiates an item lookup on this bus.
+   const { item } = await bus.request(bus.own('root'), ItemStorageSubjects.get, { id: '123' });
    ```
 
 ## Architectural Responsibilities
 
-- **Prefix convention** – `createStorageNamespace()` registers typed bus subjects under
+- **Prefix convention** – `createStorageNamespaceDefinition()` defines typed bus subjects under
   `storage:{domain}` while preserving the namespace `domain` property as the unprefixed domain
 - **Schema ownership** – Zod schemas define the bus contract; handlers own the mapping
 - **Handler ownership** – Storage namespace creation does not register request handlers; each
@@ -133,10 +139,7 @@ ItemStorageNamespace.extensions.drizzle?.items
 Create new storage domains without modifying core:
 
 ```ts
-export const CacheStorageNamespace = createStorageNamespace('cache', {
-  schemas: { ... },
-  extensions: { redis: redisConfig },
-});
+export const CacheStorageNamespace = createStorageNamespaceDefinition('cache', { schemas });
 // → storage:cache.get, storage:cache.set, etc.
 ```
 
@@ -160,4 +163,4 @@ Pass the unprefixed extension name. The helper rejects empty names and names tha
 ## Related
 
 - [@makaio/storage-drizzle](../drizzle/) – Drizzle/libSQL client factory
-- [@makaio/bus-core](../../packages/bus-core/README.md) – underlying bus infrastructure
+- [@makaio/bus-core](../../core/bus-core/README.md) – underlying bus infrastructure

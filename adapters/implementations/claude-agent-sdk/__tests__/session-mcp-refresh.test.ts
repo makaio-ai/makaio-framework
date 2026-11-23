@@ -5,6 +5,7 @@ import { ClaudeConnectorSession } from '../src/session.js';
 
 describe('ClaudeConnectorSession MCP refresh', () => {
   it('pushes refreshed MCP servers into the live query', async () => {
+    MakaioBus.registerNamespaces([ClaudeCodeConnectorNamespace.definition]);
     const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
     const session = new ClaudeConnectorSession(
       {

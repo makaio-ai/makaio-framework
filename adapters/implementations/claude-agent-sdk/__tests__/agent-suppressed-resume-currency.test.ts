@@ -49,6 +49,7 @@ const RESUME_TARGET = 'stored-provider-session';
  * @returns Agent wired to the real SDK connector
  */
 async function makeResumeArmedAgent(): Promise<ClaudeCodeAgent> {
+  MakaioBus.registerNamespaces([ClaudeCodeConnectorNamespace.definition]);
   const adapterBus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
   return new ClaudeCodeAgent({
     adapterBus,

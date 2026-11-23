@@ -28,6 +28,8 @@ import {
   createMessageHandle,
 } from './fixtures/query-harness.js';
 
+MakaioBus.registerNamespaces([ClaudeCodeConnectorNamespace.definition]);
+
 describe('ClaudeConnectorSession shutdown vs queue processing', () => {
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();

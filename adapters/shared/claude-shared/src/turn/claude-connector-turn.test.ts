@@ -30,6 +30,7 @@ describe('ClaudeConnectorTurn.finishOnError', () => {
     const namespace = createClaudeConnectorNamespace(
       `adapter:claude-turn-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     );
+    MakaioBus.registerNamespaces([namespace.definition]);
     const bus = await namespace.scopedBus(MakaioBus);
     const call = createTestCall();
     const interrupt = vi.fn(async () => {});

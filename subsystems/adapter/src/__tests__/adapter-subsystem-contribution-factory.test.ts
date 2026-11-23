@@ -1,3 +1,4 @@
+import { createBusNamespace } from '@makaio/core';
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
@@ -22,6 +23,7 @@ const TEST_ADAPTER_CONTRIBUTION = {
   definition: {
     name: 'test-adapter-pkg',
     providers: [],
+    busNamespace: createBusNamespace('adapter:test-adapter-pkg', {}),
     defaultTimeouts: {
       initialization: 1,
       acknowledgement: 1,
@@ -29,7 +31,7 @@ const TEST_ADAPTER_CONTRIBUTION = {
       toolApproval: 1,
       eventWait: 1,
     },
-    createAdapter: async () => ({}),
+    createAdapter: async () => ({ namespaceName: 'adapter:test-adapter-pkg' }),
   },
 } satisfies AdapterContribution;
 

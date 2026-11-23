@@ -45,6 +45,7 @@ let scopedBus: AnthropicSdkBus;
 
 beforeEach(async () => {
   MakaioBus.__resetHandlers?.();
+  MakaioBus.registerNamespaces([AnthropicSdkConnectorNamespace.definition]);
   scopedBus = await AnthropicSdkConnectorNamespace.scopedBus(MakaioBus);
 });
 

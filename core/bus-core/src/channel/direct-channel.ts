@@ -1,4 +1,4 @@
-import type { IDirectChannel } from './types.js';
+import { CHANNEL_NAMESPACE_PREFIX, type IDirectChannel } from './types.js';
 import type { MakaioBusContext } from '../types/bus.js';
 import type { BusTransportKeys } from '../registries/transport-registry.js';
 import type {
@@ -92,7 +92,7 @@ function makeChannelEventDef(channelId: string, subject: string): ChannelEventSu
   return {
     subject,
     $meta: {
-      namespace: `channel:${channelId}`,
+      namespace: `${CHANNEL_NAMESPACE_PREFIX}${channelId}`,
       isRequest: false,
       payload: {} as EventMessagePayload<EncryptedPayload>,
       local: false,
@@ -119,7 +119,7 @@ function makeChannelRequestDef(channelId: string, subject: string): ChannelReque
   return {
     subject,
     $meta: {
-      namespace: `channel:${channelId}`,
+      namespace: `${CHANNEL_NAMESPACE_PREFIX}${channelId}`,
       isRequest: true,
       payload: {} as RequestMessagePayload<EncryptedPayload, EncryptedPayload>,
       local: false,

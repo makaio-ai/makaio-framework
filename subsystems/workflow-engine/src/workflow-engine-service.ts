@@ -1,6 +1,6 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { CallContext } from '@makaio/core';
-import type { IWorkflowRunner } from '@makaio/contracts';
+import type { ExtensionContext, IWorkflowRunner } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import type { AutomationTriggerBindingRuntime } from '@makaio/services-core/automation-trigger';
 import { WorkflowTriggerReconciler } from './workflow-trigger-reconciler.js';
@@ -84,9 +84,14 @@ export class WorkflowEngineService extends BaseService {
 
   /**
    * @param bus - Shared runtime bus.
+   * @param namespaces - Extension capability for success finalizer registration.
    * @param options - Optional workflow runner and executor config overrides.
    */
-  public constructor(bus: IMakaioBus, options?: WorkflowEngineServiceOptions) {
+  public constructor(
+    bus: IMakaioBus,
+    namespaces: ExtensionContext['namespaces'],
+    options?: WorkflowEngineServiceOptions,
+  ) {
     super(bus);
     let authority = options?.executionAttemptAuthority;
     if (!authority && options?.executionAttemptRepository) {
@@ -99,6 +104,7 @@ export class WorkflowEngineService extends BaseService {
     this.attemptAuthority = authority;
     this.workflowExecutor = new WorkflowExecutor(
       bus,
+      namespaces,
       options?.executorConfig,
       options?.workflowRunner,
       this.attemptAuthority,

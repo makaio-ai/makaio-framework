@@ -314,6 +314,7 @@ const tick = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms))
  * @returns A connector wired to the scoped connector bus.
  */
 async function makeConnector(): Promise<ClaudeSdkConnector> {
+  MakaioBus.registerNamespaces([ClaudeCodeConnectorNamespace.definition]);
   const bus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
   return new ClaudeSdkConnector({
     bus,

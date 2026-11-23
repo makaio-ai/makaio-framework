@@ -68,8 +68,8 @@ const CODEX_CONFORMANCE_CLIENT_ID = codexClientDefinition.id;
 export const createTestConfig = async (
   options?: CreateConformanceTestConfigOptions,
 ): Promise<ConformanceTestConfig<CodexAppServerBus, CodexAppServerConnector, CodexAppServerAgent>> => {
-  const { scopedBus } = CodexAppServerNamespace;
-  const bus = await scopedBus(MakaioBus);
+  MakaioBus.registerNamespaces([CodexAppServerNamespace.definition]);
+  const bus = await CodexAppServerNamespace.scopedBus(MakaioBus);
   const testPreset = resolveConformanceTestPreset({
     adapterName: CodexAppServerAdapterName,
     testProviderDefinitionId: testPresetId,

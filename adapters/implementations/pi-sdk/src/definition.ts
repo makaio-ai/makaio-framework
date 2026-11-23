@@ -6,13 +6,14 @@ import type { AIAdapterDefinition } from '@makaio/ai-adapters-core';
 import { createPiSdkAdapter } from './adapter.js';
 import { PiSdkAdapterName, DEFAULT_TIMEOUTS } from './constants.js';
 import { PiSdkProviderConfigSchema } from './schemas.js';
-import type { PiSdkBus } from './namespaces/index.js';
+import { PiSdkNamespace, type PiSdkBus } from './namespaces/index.js';
 import type { PiConnector } from './connector.js';
 import type { PiAgent } from './agent.js';
 import { defaultPresetId, providerAuthById } from './provider.js';
 
 export const adapterDefinition: AIAdapterDefinition<PiSdkBus, PiConnector, PiAgent> = {
   name: PiSdkAdapterName,
+  busNamespace: PiSdkNamespace.definition,
   displayName: 'Pi SDK',
   defaultPresetId,
   description: 'Pi coding agent SDK wrapper',

@@ -1,5 +1,5 @@
 import os from 'node:os';
-import { MakaioBus, type ScopedBus } from '@makaio/bus-core';
+import type { ScopedBus } from '@makaio/bus-core';
 import {
   AIAdapter,
   AIAgent,
@@ -167,7 +167,6 @@ class DevexSmokeAdapter extends AIAdapter<DevexSmokeBus, DevexSmokeConnector, De
  * @returns Initialized local-only adapter instance.
  */
 export async function createDevexSmokeAdapter(options: AIAdapterRuntimeInitOptions): Promise<DevexSmokeAdapter> {
-  const scopedBus = (await DevexSmokeNamespace.scopedBus(MakaioBus)) as DevexSmokeBus;
   const adapter = new DevexSmokeAdapter({
     adapterId: options.adapterId,
     machineId: options.machineId,
@@ -176,12 +175,11 @@ export async function createDevexSmokeAdapter(options: AIAdapterRuntimeInitOptio
     capabilities: [],
     nativeTools: [],
     namespace: DevexSmokeNamespace,
-    scopedBus,
-    globalBus: MakaioBus,
+    globalBus: options.globalBus,
     definitionProviders: PROVIDER_DEFINITIONS,
     agentFactory: (config) => new DevexSmokeAgent(config),
     configFactory: async (input) => ({
-      bus: scopedBus,
+      bus: input.bus,
       globalBus: input.globalBus,
       agentId: input.agentId ?? 'devex-smoke-agent',
       adapterId: input.adapterId ?? 'devex-smoke-adapter-id',
@@ -221,6 +219,7 @@ export async function createDevexSmokeAdapter(options: AIAdapterRuntimeInitOptio
  */
 export const adapterDefinition: AIAdapterDefinition<DevexSmokeBus, DevexSmokeConnector, DevexSmokeAgent> = {
   name: DEVEX_SMOKE_ADAPTER_NAME,
+  busNamespace: DevexSmokeNamespace.definition,
   displayName: 'DevEx Smoke Adapter',
   description: 'Local-only adapter used by the CLI SDK smoke test',
   providers: PROVIDER_REFS,

@@ -247,8 +247,8 @@ async function resolveTestProjectDir(requestedCwd: string | undefined): Promise<
 export const createTestConfig = async (
   options?: CreateConformanceTestConfigOptions,
 ): Promise<ConformanceTestConfig<ClaudeCodeTmuxConnectorBus, ClaudeCodeTmuxConnector, ClaudeCodeTmuxAgent>> => {
-  const { scopedBus } = ClaudeCodeTmuxConnectorNamespace;
-  const bus = await scopedBus(MakaioBus);
+  MakaioBus.registerNamespaces([ClaudeCodeTmuxConnectorNamespace.definition]);
+  const bus = await ClaudeCodeTmuxConnectorNamespace.scopedBus(MakaioBus);
   ensureTestTmuxServerPrepared();
 
   const testPreset = resolveConformanceTestPreset({

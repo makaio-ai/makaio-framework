@@ -95,6 +95,7 @@ async function makeAgent(call: CallContext): Promise<{
   const acpHandle = makeAcpHandle('acp-session-1', promptReleased);
   mockCreateAcpConnection.mockResolvedValueOnce(acpHandle);
 
+  MakaioBus.registerNamespaces([QwenAcpNamespace.definition]);
   const adapterBus = await QwenAcpNamespace.scopedBus(MakaioBus);
   let connector: QwenAcpConnector | undefined;
   const agent = new QwenAcpAgent({

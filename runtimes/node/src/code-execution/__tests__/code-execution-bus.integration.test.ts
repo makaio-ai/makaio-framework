@@ -8,6 +8,7 @@ import {
   type BusMessage,
   type BusRequestMessage,
   type BusTransport,
+  type IHostMakaioBus,
   type IMakaioBus,
 } from '@makaio/bus-core';
 import { busContextOf } from '@makaio/bus-core/kernel-api';
@@ -299,7 +300,7 @@ async function runTeardown(steps: readonly TeardownStep[]): Promise<void> {
 
 describe('code-execution.execute over the real bus', () => {
   let scratch: CodeExecutionScratch;
-  let bus: IMakaioBus;
+  let bus: IHostMakaioBus;
   let capabilities: CapabilityService;
   let service: CodeExecutionService;
   let provider: PiscinaCodeExecutionProvider;

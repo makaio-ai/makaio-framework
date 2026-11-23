@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { createCarrierBus } from '@makaio/bus-core/kernel-api';
 import type { NodeExtensionContext } from '@makaio/contracts';
+import { WORKER_NAMESPACE_CLAIM_UNAVAILABLE } from '@makaio/contracts/extension';
 import type { Toolset } from '@makaio/tools-core';
 
 /** A toolset and the carrier from the context of its contributing extension. */
@@ -115,6 +116,27 @@ type WorkerToolsetContext = Omit<NodeExtensionContext, 'bus' | 'config' | 'ident
   readonly identity: { readonly extensionName: string };
 };
 
+/** A toolset attempted to claim a namespace without an activated extension. */
+export class WorkerNamespaceClaimError extends Error {
+  public readonly code = WORKER_NAMESPACE_CLAIM_UNAVAILABLE;
+
+  /** Explain why the worker toolset cannot claim namespaces. */
+  public constructor() {
+    super(
+      'Namespace claims are not available in the workflow worker: no extension is activated there; the worker registers its namespaces as host.',
+    );
+    this.name = 'WorkerNamespaceClaimError';
+  }
+}
+
+/**
+ * Reject a namespace claim in a worker toolset context.
+ * @throws WorkerNamespaceClaimError Always, since workers do not activate extensions.
+ */
+function rejectNamespaceClaim(): never {
+  throw new WorkerNamespaceClaimError();
+}
+
 /**
  * Minimal context passed to `tools.createToolsets()` in the worker environment.
  *
@@ -131,7 +153,10 @@ function createWorkerToolsetContext(
   options?: WorkerRuntimeContributionLoadOptions,
 ): WorkerToolsetContext {
   return Object.freeze({
-    bus: options?.bus === undefined ? undefined : createCarrierBus(options.bus, { kind: 'makaio.extension', id: name }),
+    bus:
+      options?.bus === undefined
+        ? undefined
+        : createCarrierBus(options.bus, { kind: 'makaio.extension', id: name }, rejectNamespaceClaim),
     identity: Object.freeze({ extensionName: name }),
     dataDir: '',
     machineId: '',
@@ -145,6 +170,7 @@ function createWorkerToolsetContext(
       throw new Error('Worker-local contribution context does not expose host services.');
     },
     hasExtension: () => false,
+    namespaces: { lease: rejectNamespaceClaim },
     openContributions: {
       of: () => {
         throw new Error(

@@ -44,7 +44,7 @@ export function createWorkflowEnginePackage(options?: WorkflowEngineServiceOptio
      * @returns Uninitialized workflow engine service instance.
      */
     create: (ctx) =>
-      new WorkflowEngineService(ctx.bus, {
+      new WorkflowEngineService(ctx.bus, ctx.namespaces, {
         ...options,
         automationTriggerBindingRuntime: () => ctx.getService(AutomationTriggerBindingRuntimeToken),
       }),

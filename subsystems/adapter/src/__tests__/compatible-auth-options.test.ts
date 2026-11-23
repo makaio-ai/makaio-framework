@@ -1,3 +1,4 @@
+import { createBusNamespace } from '@makaio/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { VersionRangeSchema, defineAdapterProviderAuth } from '@makaio/contracts';
@@ -53,12 +54,14 @@ function createLoadedAdapter(
     scrubEnvVars: ['ANTHROPIC_API_KEY'],
   });
 
+  const busNamespace = createBusNamespace(`adapter:${name}`, {});
   return {
     name,
     displayName: name,
     packageName: `@makaio/adapter-${name}`,
     carrierBus: makeStubExtensionBus(MakaioBus, `@makaio/adapter-${name}`),
-    factory: async () => ({}),
+    busNamespace,
+    factory: async () => ({ namespaceName: busNamespace.name }),
     options: {},
     providerDefinitionIds: ['anthropic'],
     providerRefs: [{ definitionId: 'anthropic', auth }],

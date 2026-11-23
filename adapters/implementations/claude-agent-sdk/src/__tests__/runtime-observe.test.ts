@@ -62,6 +62,7 @@ import { createIdleQueryMock } from './idle-query-mock.js';
  * @returns Agent instance ready for `initialize()`
  */
 async function makeAgent(opts: { sessionId?: string; clientId?: string } = {}): Promise<ClaudeCodeAgent> {
+  MakaioBus.registerNamespaces([ClaudeCodeConnectorNamespace.definition]);
   const adapterBus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
   return new ClaudeCodeAgent({
     adapterBus,

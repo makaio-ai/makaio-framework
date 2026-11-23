@@ -1,6 +1,8 @@
+import { NAMESPACE_ALREADY_OWNED, type NamespaceLease } from '@makaio/contracts/extension';
 import { z } from 'zod';
 import { getFullSubjectForSubjectDefinition } from '../utils/subject-transformation.js';
 
+import { CHANNEL_NAMESPACE_PREFIX } from '../channel/types.js';
 import type { BusNamespace } from '../types/namespace.js';
 import { inspectSubjectSchema } from '@makaio/core';
 import { isRequestSchema } from '../utils/is-request-schema.js';
@@ -17,10 +19,10 @@ import type { ScopedBus } from '../scoped-bus.js';
 import type {
   BaseSubjectSchema,
   BusNamespaceDefinition,
+  ExtensionName,
   FilterablePayloadIntersection,
   JournalOptions,
   NamespaceRegistrationOptions,
-  RegistrableBusNamespaceDefinition,
   SchemaViolationReport,
   SubjectDefinition,
   SubjectRecordFromSchemaRecord,
@@ -56,7 +58,7 @@ function assertZodObject(schema: unknown, label: string): asserts schema is z.Zo
  * @param label - Human-readable label for error messages.
  * @returns Extended schema carrying the original schema metadata.
  */
-function extendZodObjectPreservingMetadata(
+function extendZodObject(
   schema: z.ZodObject<z.ZodRawShape>,
   extension: z.ZodRawShape,
   label: string,
@@ -81,9 +83,7 @@ function extendZodObjectPreservingMetadata(
  */
 function compareStrings(left: string, right: string): number {
   const foldedComparison = compareCodePointStrings(left.toLowerCase(), right.toLowerCase());
-  if (foldedComparison !== 0) return foldedComparison;
-
-  return compareCodePointStrings(left, right);
+  return foldedComparison || compareCodePointStrings(left, right);
 }
 
 /**
@@ -94,21 +94,15 @@ function compareStrings(left: string, right: string): number {
  */
 function compareCodePointStrings(left: string, right: string): number {
   if (left === right) return 0;
-
-  const leftCodePoints = Array.from(left);
-  const rightCodePoints = Array.from(right);
-  const length = Math.min(leftCodePoints.length, rightCodePoints.length);
-
-  for (let index = 0; index < length; index += 1) {
-    const leftCodePoint = leftCodePoints[index].codePointAt(0);
-    const rightCodePoint = rightCodePoints[index].codePointAt(0);
-
-    if (leftCodePoint !== rightCodePoint) {
-      return (leftCodePoint ?? 0) < (rightCodePoint ?? 0) ? -1 : 1;
-    }
+  let offset = 0;
+  for (const char of left) {
+    const leftPoint = char.codePointAt(0) ?? 0;
+    const rightPoint = right.codePointAt(offset);
+    if (rightPoint === undefined) return 1;
+    if (leftPoint !== rightPoint) return leftPoint < rightPoint ? -1 : 1;
+    offset += char.length;
   }
-
-  return leftCodePoints.length - rightCodePoints.length;
+  return -1;
 }
 
 // Canonical owner: @makaio/core. Re-exported for consumers importing from @makaio/bus-core.
@@ -171,16 +165,16 @@ export interface RegisteredSubjectSchema {
  */
 function warnOnSchemaCollision(
   domain: string,
-  existingSchemas: ReadonlyMap<string, BaseSubjectSchema>,
-  newSchemas: ReadonlyMap<string, BaseSubjectSchema>,
+  existingSchemas: SubjectInspections,
+  newSchemas: SubjectInspections,
 ): void {
   const existingKeys = Array.from(existingSchemas.keys());
   const newKeys = Array.from(newSchemas.keys());
   const added = newKeys.filter((key) => !existingSchemas.has(key));
   const removed = existingKeys.filter((key) => !newSchemas.has(key));
   const changed = newKeys.filter((key) => {
-    const existing = existingSchemas.get(key);
-    const incoming = newSchemas.get(key);
+    const existing = existingSchemas.get(key)?.schema;
+    const incoming = newSchemas.get(key)?.schema;
     return existing !== undefined && incoming !== undefined && !schemaDefinitionsEqual(existing, incoming);
   });
 
@@ -206,12 +200,7 @@ function warnOnSchemaCollision(
  * @returns True when the schemas describe the same payload contract.
  */
 function schemaDefinitionsEqual(existing: BaseSubjectSchema, incoming: BaseSubjectSchema): boolean {
-  const existingFingerprint = schemaFingerprint(existing);
-  const incomingFingerprint = schemaFingerprint(incoming);
-  if (typeof existingFingerprint === 'string' && typeof incomingFingerprint === 'string') {
-    return existingFingerprint === incomingFingerprint;
-  }
-  return existing === incoming;
+  return existing === incoming || schemaFingerprint(existing) === schemaFingerprint(incoming);
 }
 
 /**
@@ -239,30 +228,12 @@ function schemaFingerprint(schema: BaseSubjectSchema): string | BaseSubjectSchem
  * @param schemas - Raw subject schemas from a namespace definition.
  * @returns Schema inspections keyed by canonical subject key.
  */
-function buildNamespaceInspections(
-  schemas: Record<string, SubjectSchema>,
-): ReadonlyMap<string, SubjectSchemaInspection<BaseSubjectSchema>> {
+function buildNamespaceInspections(schemas: Record<string, SubjectSchema>): SubjectInspections {
   const inspections = new Map<string, SubjectSchemaInspection<BaseSubjectSchema>>();
   for (const [subject, schema] of Object.entries(schemas)) {
     inspections.set(subject, inspectSubjectSchema(schema));
   }
   return inspections;
-}
-
-/**
- * Project a namespace's schema inspections to the comparable runtime schema
- * map used for duplicate-registration schema-drift warnings.
- * @param inspections - Schema inspections keyed by canonical subject key.
- * @returns Unwrapped subject schemas keyed by canonical subject key.
- */
-function schemasFromInspections(
-  inspections: ReadonlyMap<string, SubjectSchemaInspection<BaseSubjectSchema>>,
-): ReadonlyMap<string, BaseSubjectSchema> {
-  const schemas = new Map<string, BaseSubjectSchema>();
-  for (const [subject, inspection] of inspections) {
-    schemas.set(subject, inspection.schema);
-  }
-  return schemas;
 }
 
 /**
@@ -292,349 +263,449 @@ function warnOnValidationConfigCollision(domain: string, existing: ValidationCon
   );
 }
 
+/** Identity responsible for a namespace registration. */
+export type NamespaceHolder =
+  | { readonly kind: 'host' }
+  | { readonly kind: 'extension'; readonly extension: ExtensionName };
+
+/** Holder used for host registrations and reserved namespaces. */
+export const HOST_NAMESPACE_HOLDER = Object.freeze({ kind: 'host' } as const);
+
+/** Namespace prefixes reserved for the host, even before registration. */
+export const CORE_NAMESPACE_PREFIXES = ['makaio:', CHANNEL_NAMESPACE_PREFIX] as const;
+
+/** Another holder already owns the requested namespace. */
+export class NamespaceOwnershipError extends Error {
+  public readonly code: typeof NAMESPACE_ALREADY_OWNED = NAMESPACE_ALREADY_OWNED;
+
+  /**
+   * Create an error describing a rejected namespace claim.
+   * @param namespace - Domain that was claimed.
+   * @param owner - Existing holder.
+   * @param requester - Holder attempting to claim the domain.
+   */
+  public constructor(
+    public readonly namespace: string,
+    public readonly owner: NamespaceHolder,
+    public readonly requester: NamespaceHolder,
+  ) {
+    super(
+      `[MakaioBus] Namespace '${namespace}' is already owned by ${holderLabel(owner)}; ` +
+        `${holderLabel(requester)} cannot claim it.`,
+    );
+    this.name = 'NamespaceOwnershipError';
+  }
+}
+
 /**
- * Creates the namespace registry used by a bus context.
- *
- * Maintains a runtime map of registered namespaces and their subject schemas,
- * enabling schema lookup, request-subject detection, local-subject detection,
- * and validation configuration for namespaces that bundle incompatible Zod versions.
- * @returns Namespace registry with registerNamespace, getSchema, listRegisteredSubjects,
- *   isRequestSubject, isLocalSubject, getValidationConfig, and (test-only) __resetNamespaces methods
+ * Format a holder for diagnostics.
+ * @param holder - Holder to describe.
+ * @returns The host or the extension name.
  */
-// eslint-disable-next-line max-lines-per-function -- registry factory holds schema, local, and exempt tracking; splitting would fragment related state
-export const createNamespaceRegistry = () => {
-  // Internal runtime registry for namespace lookup
-  const namespaceRegistry = new Map<string, unknown>();
-  // Canonical unwrapped schemas per namespace (for example `channel.open`) so
-  // collision warnings compare both subject keys and same-key schema drift.
-  const namespaceSubjectSchemas = new Map<string, ReadonlyMap<string, BaseSubjectSchema>>();
-  // Routing metadata per namespace, keyed by subject name. Compared during
-  // duplicate registration to detect security-critical routing mismatches.
-  const namespaceRoutingMetadata = new Map<string, ReadonlyMap<string, SubjectRoutingMetadata>>();
-  // Internal registry for subject schemas (always unwrapped)
-  const subjectSchemas = new Map<string, BaseSubjectSchema>();
-  const registeredSubjects = new Map<string, RegisteredSubjectSchema>();
-  // Full subject keys registered with subject wrappers. The wrapper marks
-  // read during registration (see `inspectSubjectSchema`) determine routing
-  // behavior, but the schema stored for lookup is the unwrapped payload
-  // schema, so each routing flag is tracked in its own set here.
-  const localSubjects = new Set<string>();
-  const collectorOnlySubjects = new Set<string>();
-  const hostLocalRequestSubjects = new Set<string>();
-  // Validation configuration per namespace domain
-  const validationConfig = new Map<string, ValidationConfig>();
-  // Default transport visibility per fully-qualified subject key.
-  // Populated at registration time from namespace-level defaultTransports.
-  const defaultTransportsMap = new Map<string, 'all' | 'local-only'>();
+function holderLabel(holder: NamespaceHolder): string {
+  return holder.kind === 'host' ? 'the host' : `extension '${holder.extension}'`;
+}
 
-  return {
-    /**
-     * Register a namespace in the runtime registry.
-     *
-     * Accepts a {@link BusNamespaceDefinition} created by `createBusNamespace()` from
-     * `@makaio/core`. The FilterPayload type parameter is computed eagerly from the
-     * schemas, enabling type-safe filtering via `withFilter()`.
-     * @param definition - Namespace definition created by `createBusNamespace()`
-     * @returns The registered namespace with `scopedBus()` and pre-computed FilterPayload type
-     */
-    registerNamespace<Domain extends string, Schemas extends Record<string, SubjectSchema>>(
-      definition: BusNamespaceDefinition<Domain, Schemas>,
-    ): BusNamespace<
-      Domain,
-      SubjectRecordFromSchemaRecord<Schemas>,
-      FilterablePayloadIntersection<SubjectRecordFromSchemaRecord<Schemas>>,
-      Schemas
-    > {
-      const { name: domain, schemas, options } = definition;
-      const incomingInspections = buildNamespaceInspections(schemas);
-      const incomingSubjectSchemas = schemasFromInspections(incomingInspections);
-      const incomingRoutingMetadata = buildNamespaceRoutingMetadataFromInspections(incomingInspections);
+type SubjectInspections = ReadonlyMap<string, SubjectSchemaInspection<BaseSubjectSchema>>;
+type LocalityMarks = Pick<SubjectRoutingMetadata, 'local' | 'hostLocalRequest'>;
 
-      // Type alias for the computed FilterPayload - evaluated at registration time
-      type Subjects = SubjectRecordFromSchemaRecord<Schemas>;
-      type FilterPayload = FilterablePayloadIntersection<Subjects>;
-      type NamespaceType = BusNamespace<Domain, Subjects, FilterPayload, Schemas>;
-
-      // Check if namespace already exists - if so, return it (idempotent)
-      const existing = namespaceRegistry.get(domain);
-      if (existing) {
-        // SECURITY: Check routing metadata FIRST — a mismatch here means the same
-        // subject carries different security semantics depending on registration
-        // order. This throws rather than warns because silent success would defeat
-        // the no-relay guarantee of hostLocalRequest or the isolation of localSubject.
-        failOnRoutingMetadataCollision(
-          domain,
-          namespaceRoutingMetadata.get(domain) ?? new Map(),
-          incomingRoutingMetadata,
-        );
-        warnOnSchemaCollision(domain, namespaceSubjectSchemas.get(domain) ?? new Map(), incomingSubjectSchemas);
-        warnOnValidationConfigCollision(
-          domain,
-          validationConfig.get(domain) ?? { mode: 'strict' },
-          validationConfigFromOptions(options),
-        );
-        return existing as NamespaceType;
-      }
-
-      validationConfig.set(domain, validationConfigFromOptions(options));
-      namespaceSubjectSchemas.set(domain, incomingSubjectSchemas);
-      namespaceRoutingMetadata.set(domain, incomingRoutingMetadata);
-
-      for (const [subject, inspection] of incomingInspections) {
-        const fullSubjectKey = `${domain}.${subject}`;
-        const { local, collectorOnly, channel, hostLocalRequest, journal } = inspection.marks;
-        const unwrappedSchema = inspection.schema;
-        // Store unwrapped schema so getSchema/isRequestSubject work correctly
-        subjectSchemas.set(fullSubjectKey, unwrappedSchema);
-        registeredSubjects.set(fullSubjectKey, {
-          namespace: domain,
-          subject,
-          fullSubject: fullSubjectKey,
-          schema: unwrappedSchema,
-          local,
-          collectorOnly,
-          channel,
-          hostLocalRequest,
-          journal,
-        });
-        if (local) {
-          localSubjects.add(fullSubjectKey);
-        }
-        if (collectorOnly) {
-          collectorOnlySubjects.add(fullSubjectKey);
-        }
-        if (hostLocalRequest) {
-          hostLocalRequestSubjects.add(fullSubjectKey);
-        }
-        // Propagate namespace-level defaultTransports to each subject key so
-        // emit() can resolve the effective default in O(1).
-        if (definition.defaultTransports) {
-          defaultTransportsMap.set(fullSubjectKey, definition.defaultTransports);
-        }
-      }
-
-      const namespace: NamespaceType = {
-        name: domain,
-        subjects: definition.subjects as NamespaceType['subjects'],
-        scopedBus: (bus) => Promise.resolve(bus.scoped(namespace) as ScopedBus<Domain, Subjects, FilterPayload>),
-      };
-
-      namespaceRegistry.set(domain, namespace);
-
-      return namespace;
-    },
-
-    /**
-     * Register multiple namespaces in a single call.
-     *
-     * Iterates `definitions` and calls `registerNamespace()` for each. Useful
-     * at composition roots to register a catalog of namespace definitions in one
-     * statement:
-     *
-     * ```typescript
-     * MakaioBus.registerNamespaces(FrameworkContractNamespaces);
-     * ```
-     * @param definitions - Array of namespace definitions to register
-     */
-    registerNamespaces(definitions: readonly RegistrableBusNamespaceDefinition[]): void {
-      for (const definition of definitions) {
-        this.registerNamespace(definition as BusNamespaceDefinition<string, Record<string, SubjectSchema>>);
-      }
-    },
-    /**
-     * Get the schema for a registered subject.
-     * Returns the unwrapped schema: every routing wrapper (`localSubject()`, `channelSubject()`,
-     * `collectorOnlySubject()`, `hostLocalRequest()`, `journalSubject()`, `defaultTransports()`)
-     * is removed during registration, leaving only the underlying event or request schema.
-     * @param subject - Subject identifier (e.g., "adapter.getCapabilities")
-     * @returns Schema if found, undefined otherwise
-     */
-    getSchema(subject: string | SubjectDefinition): BaseSubjectSchema | undefined {
-      const subjectKey = typeof subject === 'string' ? subject : getFullSubjectForSubjectDefinition(subject);
-      return subjectSchemas.get(subjectKey);
-    },
-    /**
-     * List all registered subjects with their runtime schema metadata.
-     * @returns Registered subjects sorted by fully-qualified subject key
-     */
-    listRegisteredSubjects(): RegisteredSubjectSchema[] {
-      return Array.from(registeredSubjects.values())
-        .map((subject) => ({
-          ...subject,
-          schema: isRequestSchema(subject.schema) ? { ...subject.schema } : subject.schema,
-        }))
-        .sort((a, b) => compareStrings(a.fullSubject, b.fullSubject));
-    },
-    /**
-     * Get the full registration record for a subject.
-     * @param subject - Fully-qualified subject identifier (e.g., "adapter.getCapabilities")
-     * @returns A copy of the registration record if found (replacing one of its
-     *   fields does not change the registry), undefined otherwise
-     */
-    getRegisteredSubject(subject: string): RegisteredSubjectSchema | undefined {
-      const entry = registeredSubjects.get(subject);
-      return entry === undefined ? undefined : { ...entry };
-    },
-    /**
-     * Check if a subject is registered as a request subject.
-     * @param subject - Subject identifier
-     * @returns True if subject exists and is a request schema
-     */
-    isRequestSubject(subject: string): boolean {
-      const schema = subjectSchemas.get(subject);
-      if (!schema) return false;
-      return isRequestSchema(schema);
-    },
-    /**
-     * Check if a subject was registered as a local-only subject.
-     *
-     * Local subjects must never be routed over transports. The `__local`
-     * routing mark is read from the subject's wrapper layer during
-     * registration — including a `localSubject()` wrapped under a
-     * `journalSubject()` layer — and the registered schema itself carries no
-     * wrapper, so locality is tracked in a separate set populated at
-     * registration time.
-     * @param subject - Full subject identifier (e.g., "widget.register")
-     * @returns True if the subject was wrapped with `localSubject()`
-     */
-    isLocalSubject(subject: string): boolean {
-      return localSubjects.has(subject);
-    },
-    /**
-     * Check if a subject is collector-only.
-     *
-     * Collector-only events may enter from a transport and run local handlers,
-     * but must not be relayed onward to other transports.
-     * @param subject - Full subject identifier (e.g., "subject-telemetry.fact")
-     * @returns True if the subject was wrapped with `collectorOnlySubject()`
-     */
-    isCollectorOnlySubject(subject: string): boolean {
-      return collectorOnlySubjects.has(subject);
-    },
-    /**
-     * Check if a subject was registered as a host-local request subject.
-     *
-     * Host-local request subjects accept direct remote ingress — a transport
-     * may deliver the request to this host — but the receiving bus must never
-     * relay the request onward to other transports after ingress.
-     * @param subject - Full subject identifier (e.g., "agent.resolveCapability")
-     * @returns True if the subject was wrapped with `hostLocalRequest()`
-     */
-    isHostLocalRequestSubject(subject: string): boolean {
-      return hostLocalRequestSubjects.has(subject);
-    },
-    /**
-     * Get the default transport visibility for a subject.
-     *
-     * Returns the namespace-level `defaultTransports` value recorded at
-     * registration time. Subject-level overrides in `SubjectDefinitionMeta`
-     * take precedence and are resolved by `emit()` directly from the subject
-     * definition token.
-     *
-     * Returns `'all'` when no namespace-level default was registered.
-     * @param subject - Fully-qualified subject identifier (e.g., `"session.list"`)
-     * @returns Effective namespace-level default transport visibility
-     */
-    getDefaultTransports(subject: string): 'all' | 'local-only' {
-      return defaultTransportsMap.get(subject) ?? 'all';
-    },
-    /**
-     * Get the validation configuration for a subject.
-     *
-     * Looks up the namespace from the subject's prefix and returns
-     * the registered mode and optional violation callback.
-     * @param subject - Full subject identifier (e.g., "adapter:claude-code.sdk.event")
-     * @returns Validation config, or `{ mode: 'strict' }` if none registered
-     */
-    getValidationConfig(subject: string): ValidationConfig {
-      let bestMatch: { namespace: string; config: ValidationConfig } | undefined;
-      for (const [ns, config] of validationConfig) {
-        if (subject === ns || subject.startsWith(ns + '.')) {
-          if (!bestMatch || ns.length > bestMatch.namespace.length) {
-            bestMatch = { namespace: ns, config };
-          }
-        }
-      }
-      return bestMatch?.config ?? { mode: 'strict' };
-    },
-    /**
-     * Extend a registered subject's schema with new fields.
-     *
-     * For request subjects, extends the request and/or response ZodObject via `.safeExtend()`.
-     * For event subjects, extends the event ZodObject via `.safeExtend()`.
-     * Successive calls accumulate fields; if a later extension redefines an existing key, the later definition wins.
-     * @param fullSubjectKey - Fully-qualified key (e.g., "session.list")
-     * @param additionalFields - For request subjects: `{ request?, response? }` each a record
-     *   of Zod field definitions. For event subjects: a flat record of Zod field definitions.
-     * @throws Error if the subject is not registered or the existing schema is not a ZodObject
-     */
-    extendSubjectSchema(
-      fullSubjectKey: string,
-      additionalFields: z.ZodRawShape | { request?: z.ZodRawShape; response?: z.ZodRawShape },
-    ): void {
-      const current = subjectSchemas.get(fullSubjectKey);
-      if (!current) {
-        throw new Error(
-          `[MakaioBus] Cannot extend subject '${fullSubjectKey}': not registered. ` +
-            `Ensure the owning namespace is imported before calling extendSubject().`,
-        );
-      }
-
-      if (isRequestSchema(current)) {
-        const ext = additionalFields as { request?: z.ZodRawShape; response?: z.ZodRawShape };
-        if (ext.request) assertZodObject(current.request, `'${fullSubjectKey}' request`);
-        if (ext.response) assertZodObject(current.response, `'${fullSubjectKey}' response`);
-        const extended = {
-          request: ext.request
-            ? extendZodObjectPreservingMetadata(
-                current.request as z.ZodObject<z.ZodRawShape>,
-                ext.request,
-                `'${fullSubjectKey}' request`,
-              )
-            : current.request,
-          response: ext.response
-            ? extendZodObjectPreservingMetadata(
-                current.response as z.ZodObject<z.ZodRawShape>,
-                ext.response,
-                `'${fullSubjectKey}' response`,
-              )
-            : current.response,
-        };
-        subjectSchemas.set(fullSubjectKey, extended);
-        const entry = registeredSubjects.get(fullSubjectKey);
-        if (entry) registeredSubjects.set(fullSubjectKey, { ...entry, schema: extended });
-      } else {
-        assertZodObject(current, `'${fullSubjectKey}'`);
-        const extended = extendZodObjectPreservingMetadata(
-          current,
-          additionalFields as z.ZodRawShape,
-          `'${fullSubjectKey}'`,
-        );
-        subjectSchemas.set(fullSubjectKey, extended);
-        const entry = registeredSubjects.get(fullSubjectKey);
-        if (entry) registeredSubjects.set(fullSubjectKey, { ...entry, schema: extended });
-      }
-    },
-    /**
-     * Reset all registered namespaces (for testing only).
-     * @internal
-     */
-    __resetNamespaces:
-      process.env.NODE_ENV === 'test'
-        ? () => {
-            namespaceRegistry.clear();
-            namespaceSubjectSchemas.clear();
-            namespaceRoutingMetadata.clear();
-            subjectSchemas.clear();
-            registeredSubjects.clear();
-            localSubjects.clear();
-            collectorOnlySubjects.clear();
-            hostLocalRequestSubjects.clear();
-            validationConfig.clear();
-            defaultTransportsMap.clear();
-          }
-        : undefined,
-  };
+type RegisteredNamespace<Namespace = unknown> = {
+  namespace: Namespace;
+  /** Null marks a permanent host registration. */
+  leases: Set<NamespaceLease> | null;
+  holder: NamespaceHolder;
+  inspections: SubjectInspections;
+  routing: ReadonlyMap<string, SubjectRoutingMetadata>;
+  validation: ValidationConfig;
+  defaultTransports?: 'all' | 'local-only';
 };
 
-export type NamespaceRegistry = ReturnType<typeof createNamespaceRegistry>;
+/** Registered namespace preserving the names and schemas from its definition. */
+export type TypedNamespace<Domain extends string, Schemas extends Record<string, SubjectSchema>> = BusNamespace<
+  Domain,
+  SubjectRecordFromSchemaRecord<Schemas>,
+  FilterablePayloadIntersection<SubjectRecordFromSchemaRecord<Schemas>>,
+  Schemas
+>;
+
+/** Runtime namespace and subject metadata for one bus context. */
+export class NamespaceRegistry {
+  private readonly namespaces = new Map<string, RegisteredNamespace>();
+  // Dotted domains and dotted subject keys can produce the same fully qualified key.
+  // Keep both registrations so releasing one cannot erase the other's contract.
+  private readonly registeredSubjects = new Map<string, RegisteredSubjectSchema[]>();
+  // A released domain keeps only transport restrictions until its next claim.
+  private readonly releasedLocality = new Map<string, Map<string, LocalityMarks>>();
+
+  /**
+   * Register a namespace as the host.
+   * @param definition - Namespace definition created by `createBusNamespace()`.
+   * @returns The registered namespace with its typed subjects and scoped bus factory.
+   */
+  public registerNamespace<Domain extends string, Schemas extends Record<string, SubjectSchema>>(
+    definition: BusNamespaceDefinition<Domain, Schemas>,
+  ): TypedNamespace<Domain, Schemas> {
+    const registration = this.register(definition, HOST_NAMESPACE_HOLDER);
+    registration.leases = null;
+    return registration.namespace;
+  }
+
+  /**
+   * Claim a namespace for a named holder.
+   * @param definition - Namespace definition to register.
+   * @param holder - Host or extension claiming the namespace.
+   * @returns An independent release handle and the registered namespace.
+   */
+  public leaseNamespace<Domain extends string, Schemas extends Record<string, SubjectSchema>>(
+    definition: BusNamespaceDefinition<Domain, Schemas>,
+    holder: NamespaceHolder,
+  ): NamespaceLease & { namespace: TypedNamespace<Domain, Schemas> } {
+    const registration = this.register(definition, holder);
+    const lease = {
+      namespace: registration.namespace,
+      /** Release this claim once and unregister the last leased claim. */
+      release: () => {
+        if (registration.leases?.delete(lease) && registration.leases.size === 0) {
+          this.release(registration.namespace.name, registration);
+        }
+      },
+    };
+    registration.leases?.add(lease);
+    return lease;
+  }
+
+  /**
+   * Register schemas and metadata for a domain after checking its holder and duplicate contracts.
+   * @param definition - Namespace definition to register.
+   * @param holder - Host or extension claiming the namespace.
+   * @returns The registration shared by this domain’s claims.
+   */
+  private register<Domain extends string, Schemas extends Record<string, SubjectSchema>>(
+    definition: BusNamespaceDefinition<Domain, Schemas>,
+    holder: NamespaceHolder,
+  ): RegisteredNamespace<TypedNamespace<Domain, Schemas>> {
+    const { name: domain, schemas, options, defaultTransports } = definition;
+    const owner = this.ownerOf(domain);
+    if (
+      owner &&
+      (owner.kind !== holder.kind ||
+        (owner.kind === 'extension' && holder.kind === 'extension' && owner.extension !== holder.extension))
+    ) {
+      throw new NamespaceOwnershipError(domain, owner, holder);
+    }
+
+    const inspections = buildNamespaceInspections(schemas);
+    const routing = buildNamespaceRoutingMetadataFromInspections(inspections);
+    const validation = validationConfigFromOptions(options);
+    const existing = this.namespaces.get(domain);
+    if (existing) {
+      failOnRoutingMetadataCollision(domain, existing.routing, routing);
+      warnOnSchemaCollision(domain, existing.inspections, inspections);
+      warnOnValidationConfigCollision(domain, existing.validation, validation);
+      return existing as RegisteredNamespace<TypedNamespace<Domain, Schemas>>;
+    }
+
+    const namespace: TypedNamespace<Domain, Schemas> = {
+      name: domain,
+      subjects: definition.subjects,
+      scopedBus: (bus) =>
+        Promise.resolve(
+          bus.scoped(namespace) as ScopedBus<
+            Domain,
+            SubjectRecordFromSchemaRecord<Schemas>,
+            FilterablePayloadIntersection<SubjectRecordFromSchemaRecord<Schemas>>
+          >,
+        ),
+    };
+    const registration = {
+      namespace,
+      leases: new Set<NamespaceLease>(),
+      holder: Object.freeze({ ...holder }),
+      inspections,
+      routing,
+      validation,
+      defaultTransports,
+    };
+    this.namespaces.set(domain, registration);
+    this.releasedLocality.delete(domain);
+    for (const [subject, inspection] of inspections) {
+      const fullSubject = `${domain}.${subject}`;
+      const { local, collectorOnly, channel, hostLocalRequest, journal } = inspection.marks;
+      const registrations = this.registeredSubjects.get(fullSubject) ?? [];
+      registrations.push({
+        namespace: domain,
+        subject,
+        fullSubject,
+        schema: inspection.schema,
+        local,
+        collectorOnly,
+        channel,
+        hostLocalRequest,
+        journal,
+      });
+      this.registeredSubjects.set(fullSubject, registrations);
+    }
+    return registration;
+  }
+
+  /**
+   * Remove the registration after the last lease is released. Keep the locality marks
+   * so surviving handlers cannot receive or relay traffic the registration restricted.
+   * This discards schema extensions added through {@link extendSubjectSchema} by any caller.
+   * A subsequent claim registers the original schemas from its namespace definition.
+   * @param domain - Domain to release.
+   * @param registration - Record that identifies this lease's registration.
+   */
+  private release(domain: string, registration: RegisteredNamespace): void {
+    if (this.namespaces.get(domain) !== registration) return;
+    const locality = new Map<string, LocalityMarks>();
+    for (const [subject, { local, hostLocalRequest }] of registration.routing) {
+      if (local || hostLocalRequest) locality.set(subject, { local, hostLocalRequest });
+      const fullSubject = `${domain}.${subject}`;
+      const remaining = this.registeredSubjects.get(fullSubject)?.filter((entry) => entry.namespace !== domain);
+      if (remaining?.length) this.registeredSubjects.set(fullSubject, remaining);
+      else this.registeredSubjects.delete(fullSubject);
+    }
+    if (locality.size > 0) this.releasedLocality.set(domain, locality);
+    this.namespaces.delete(domain);
+  }
+
+  /**
+   * Resolve the holder of a namespace, including reservations.
+   * @param namespace - Domain to inspect.
+   * @returns The current holder or undefined for an unclaimed domain.
+   */
+  public ownerOf(namespace: string): NamespaceHolder | undefined {
+    if (CORE_NAMESPACE_PREFIXES.some((prefix) => namespace.startsWith(prefix))) return HOST_NAMESPACE_HOLDER;
+    return this.namespaces.get(namespace)?.holder;
+  }
+
+  /**
+   * List holders of registered namespaces in namespace order.
+   * @returns Registered namespaces and their holders.
+   */
+  public listOwners(): readonly { namespace: string; owner: NamespaceHolder }[] {
+    return Array.from(this.namespaces, ([namespace, { holder: owner }]) => ({ namespace, owner })).sort((left, right) =>
+      compareCodePointStrings(left.namespace, right.namespace),
+    );
+  }
+
+  /**
+   * Check whether a namespace is registered.
+   * @param name - Domain to look up.
+   * @returns True if the domain has a registration.
+   */
+  public hasNamespace(name: string): boolean {
+    return this.namespaces.has(name);
+  }
+
+  /**
+   * Resolve the domain for a subject, preferring the exact subject record.
+   * @param subject - Fully qualified subject.
+   * @returns The domain or undefined when the subject has no registered domain.
+   */
+  public namespaceOf(subject: string): string | undefined {
+    return this.registeredSubjects.get(subject)?.at(-1)?.namespace ?? this.findNamespacePrefix(subject);
+  }
+
+  /**
+   * Search for the longest matching domain ending at a dot boundary.
+   * @param subject - String to search.
+   * @param matches - Test a candidate domain and its subject key. Defaults to checking registration.
+   * @returns The longest matching prefix or undefined.
+   */
+  private findNamespacePrefix(subject: string, matches?: (domain: string, key: string) => boolean): string | undefined {
+    for (let dot = subject.lastIndexOf('.'); dot >= 0; dot = subject.lastIndexOf('.', dot - 1)) {
+      const candidate = subject.slice(0, dot);
+      const matched = matches?.(candidate, subject.slice(dot + 1)) ?? (dot > 0 && this.hasNamespace(candidate));
+      if (matched) return candidate;
+      if (dot === 0) break;
+    }
+    return undefined;
+  }
+
+  /**
+   * Get the schema for a registered subject.
+   * Returns the unwrapped schema: every routing wrapper (`localSubject()`, `channelSubject()`,
+   * `collectorOnlySubject()`, `hostLocalRequest()`, `journalSubject()`, `defaultTransports()`)
+   * is removed during registration, leaving only the underlying event or request schema.
+   * @param subject - Subject identifier (e.g., "adapter.getCapabilities")
+   * @returns Schema if found, undefined otherwise
+   */
+  public getSchema(subject: string | SubjectDefinition): BaseSubjectSchema | undefined {
+    const subjectKey = typeof subject === 'string' ? subject : getFullSubjectForSubjectDefinition(subject);
+    return this.registeredSubjects.get(subjectKey)?.at(-1)?.schema;
+  }
+  /**
+   * List all registered subjects with their runtime schema metadata.
+   * @returns Registered subjects sorted by fully-qualified subject key
+   */
+  public listRegisteredSubjects(): RegisteredSubjectSchema[] {
+    return Array.from(this.registeredSubjects.values())
+      .flatMap((registrations) => {
+        const subject = registrations.at(-1);
+        if (!subject) return [];
+        return [{ ...subject, schema: isRequestSchema(subject.schema) ? { ...subject.schema } : subject.schema }];
+      })
+      .sort((a, b) => compareStrings(a.fullSubject, b.fullSubject));
+  }
+  /**
+   * Get the full registration record for a subject.
+   * @param subject - Fully-qualified subject identifier (e.g., "adapter.getCapabilities")
+   * @returns A copy of the registration record if found (replacing one of its
+   *   fields does not change the registry), undefined otherwise
+   */
+  public getRegisteredSubject(subject: string): RegisteredSubjectSchema | undefined {
+    const entry = this.registeredSubjects.get(subject)?.at(-1);
+    return entry === undefined ? undefined : { ...entry };
+  }
+  /**
+   * Check if a subject is registered as a request subject.
+   * @param subject - Subject identifier
+   * @returns True if subject exists and is a request schema
+   */
+  public isRequestSubject(subject: string): boolean {
+    const schema = this.getSchema(subject);
+    return schema !== undefined && isRequestSchema(schema);
+  }
+  /**
+   * Check if a subject was registered as a local-only subject.
+   *
+   * Local subjects must never be routed over transports. The `__local`
+   * routing mark is read from the subject's wrapper layer during
+   * registration, including a `localSubject()` wrapped under a `journalSubject()` layer.
+   * @param subject - Full subject identifier (e.g., "widget.register")
+   * @returns True if the subject was wrapped with `localSubject()`
+   */
+  public isLocalSubject(subject: string): boolean {
+    return this.hasLocalityMark(subject, 'local');
+  }
+  /**
+   * Check if a subject is collector-only.
+   *
+   * Collector-only events may enter from a transport and run local handlers,
+   * but must not be relayed onward to other transports.
+   * @param subject - Full subject identifier (e.g., "subject-telemetry.fact")
+   * @returns True if the subject was wrapped with `collectorOnlySubject()`
+   */
+  public isCollectorOnlySubject(subject: string): boolean {
+    return this.registeredSubjects.get(subject)?.some((entry) => entry.collectorOnly) ?? false;
+  }
+  /**
+   * Check if a subject was registered as a host-local request subject.
+   *
+   * Host-local request subjects accept direct remote ingress — a transport
+   * may deliver the request to this host — but the receiving bus must never
+   * relay the request onward to other transports after ingress.
+   * @param subject - Full subject identifier (e.g., "agent.resolveCapability")
+   * @returns True if the subject was wrapped with `hostLocalRequest()`
+   */
+  public isHostLocalRequestSubject(subject: string): boolean {
+    return this.hasLocalityMark(subject, 'hostLocalRequest');
+  }
+
+  /**
+   * Check live registrations and released domains that can declare this exact subject.
+   * @param subject - Fully qualified subject.
+   * @param mark - Transport restriction to look up.
+   * @returns Whether any matching declaration sets the restriction.
+   */
+  private hasLocalityMark(subject: string, mark: keyof LocalityMarks): boolean {
+    if (this.registeredSubjects.get(subject)?.some((entry) => entry[mark])) return true;
+    if (this.releasedLocality.size === 0) return false;
+    const matches = (domain: string, key: string) => this.releasedLocality.get(domain)?.get(key)?.[mark] === true;
+    return this.findNamespacePrefix(subject, matches) !== undefined;
+  }
+  /**
+   * Get the default transport visibility for a subject.
+   *
+   * Returns the namespace-level `defaultTransports` value recorded at
+   * registration time. Subject-level overrides in `SubjectDefinitionMeta`
+   * take precedence and are resolved by `emit()` directly from the subject
+   * definition token.
+   *
+   * Returns `'all'` when no namespace-level default was registered.
+   * @param subject - Fully-qualified subject identifier (e.g., `"session.list"`)
+   * @returns Effective namespace-level default transport visibility
+   */
+  public getDefaultTransports(subject: string): 'all' | 'local-only' {
+    const registrations = this.registeredSubjects.get(subject) ?? [];
+    for (let index = registrations.length - 1; index >= 0; index -= 1) {
+      const policy = this.namespaces.get(registrations[index].namespace)?.defaultTransports;
+      if (policy !== undefined) return policy;
+    }
+    return 'all';
+  }
+  /**
+   * Get the validation configuration for a subject.
+   *
+   * Looks up the namespace from the subject's prefix and returns
+   * the registered mode and optional violation callback.
+   * @param subject - Full subject identifier (e.g., "adapter:claude-code.sdk.event")
+   * @returns Validation config, or `{ mode: 'strict' }` if none registered
+   */
+  public getValidationConfig(subject: string): ValidationConfig {
+    const domain = this.hasNamespace(subject) ? subject : this.findNamespacePrefix(subject);
+    return (domain === undefined ? undefined : this.namespaces.get(domain)?.validation) ?? { mode: 'strict' };
+  }
+  /**
+   * Extend a registered subject's schema with new fields.
+   *
+   * For request subjects, extends the request and/or response ZodObject via `.safeExtend()`.
+   * For event subjects, extends the event ZodObject via `.safeExtend()`.
+   * Successive calls accumulate fields; if a later extension redefines an existing key, the later definition wins.
+   * @param fullSubjectKey - Fully-qualified key (e.g., "session.list")
+   * @param additionalFields - For request subjects: `{ request?, response? }` each a record
+   *   of Zod field definitions. For event subjects: a flat record of Zod field definitions.
+   * @throws Error if the subject is not registered or the existing schema is not a ZodObject
+   */
+  public extendSubjectSchema(
+    fullSubjectKey: string,
+    additionalFields: z.ZodRawShape | { request?: z.ZodRawShape; response?: z.ZodRawShape },
+  ): void {
+    const entry = this.registeredSubjects.get(fullSubjectKey)?.at(-1);
+    if (!entry) {
+      throw new Error(
+        `[MakaioBus] Cannot extend subject '${fullSubjectKey}': not registered. ` +
+          `Ensure the owning namespace is imported before calling extendSubject().`,
+      );
+    }
+
+    const current = entry.schema;
+    if (isRequestSchema(current)) {
+      const ext = additionalFields as { request?: z.ZodRawShape; response?: z.ZodRawShape };
+      const { request, response } = current;
+      const requestLabel = `'${fullSubjectKey}' request`;
+      const responseLabel = `'${fullSubjectKey}' response`;
+      if (ext.request) assertZodObject(request, requestLabel);
+      if (ext.response) assertZodObject(response, responseLabel);
+      entry.schema = {
+        request: ext.request ? extendZodObject(request as z.ZodObject, ext.request, requestLabel) : request,
+        response: ext.response ? extendZodObject(response as z.ZodObject, ext.response, responseLabel) : response,
+      };
+    } else {
+      assertZodObject(current, `'${fullSubjectKey}'`);
+      entry.schema = extendZodObject(current, additionalFields as z.ZodRawShape, `'${fullSubjectKey}'`);
+    }
+  }
+  /**
+   * Reset all registered namespaces (for testing only).
+   * @internal
+   */
+  public readonly __resetNamespaces =
+    process.env.NODE_ENV === 'test'
+      ? () => {
+          this.namespaces.clear();
+          this.registeredSubjects.clear();
+          this.releasedLocality.clear();
+        }
+      : undefined;
+}
+
+/**
+ * Create the namespace registry for a bus context.
+ * @returns An empty namespace registry.
+ */
+export function createNamespaceRegistry(): NamespaceRegistry {
+  return new NamespaceRegistry();
+}

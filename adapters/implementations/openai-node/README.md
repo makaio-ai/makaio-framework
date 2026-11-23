@@ -181,7 +181,7 @@ src/
 ├── stream-bridge.ts      # SDK stream normalization
 ├── schemas.ts            # Non-secret provider config schema
 ├── namespaces/
-│   ├── index.ts          # Namespace registration
+│   ├── index.ts          # Namespace definition (leased during contribution activation)
 │   └── schemas/          # Event type schemas
 │       ├── chunk.ts
 │       ├── message.ts

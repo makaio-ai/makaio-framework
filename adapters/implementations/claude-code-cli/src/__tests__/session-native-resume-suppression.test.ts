@@ -103,6 +103,7 @@ function makeHandle(useNativeResume?: boolean): MessageHandle {
  * @returns Session under test
  */
 async function makeSession(): Promise<ClaudeCliSession> {
+  MakaioBus.registerNamespaces([ClaudeCodeCliConnectorNamespace.definition]);
   const config: ClaudeCliSessionConfig = {
     bus: await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus),
     globalBus: MakaioBus,

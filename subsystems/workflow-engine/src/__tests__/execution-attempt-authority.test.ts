@@ -6,6 +6,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { buildDeferred } from '../runtime/deferred.js';
 import { WorkflowEngineService } from '../workflow-engine-service.js';
+import { createWorkflowTestNamespaceCapability } from './workflow-executor.test-setup.js';
 import { workflowAttemptOutcomeCodec } from '../workflow-attempt-outcome.js';
 import type { ExecutionAttemptRepository } from '../execution-attempt-repository.js';
 import type { ProviderOperationClaim } from '../provider-operation.js';
@@ -1876,15 +1877,18 @@ describe('ExecutionAttemptAuthority', () => {
 describe('construction gates', () => {
   it('requires an explicit bootstrap budget when constructing its own Authority', () => {
     const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    expect(() => new WorkflowEngineService(MakaioBus, { executionAttemptRepository: repository })).toThrow(
-      'executionAttemptBootstrapTimeoutMs',
-    );
+    expect(
+      () =>
+        new WorkflowEngineService(MakaioBus, createWorkflowTestNamespaceCapability(), {
+          executionAttemptRepository: repository,
+        }),
+    ).toThrow('executionAttemptBootstrapTimeoutMs');
   });
 
   it('uses a prebuilt Authority without a redundant host budget', () => {
     const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
     const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
-    const service = new WorkflowEngineService(MakaioBus, {
+    const service = new WorkflowEngineService(MakaioBus, createWorkflowTestNamespaceCapability(), {
       executionAttemptRepository: repository,
       executionAttemptAuthority: authority,
     });
@@ -1892,13 +1896,13 @@ describe('construction gates', () => {
   });
   it('framework-only/in-process boots without a repository', () => {
     // No executionAttemptRepository -> no authority, service still constructs
-    const service = new WorkflowEngineService(MakaioBus);
+    const service = new WorkflowEngineService(MakaioBus, createWorkflowTestNamespaceCapability());
     expect(service.executionAttemptAuthority).toBeUndefined();
   });
 
   it('service exposes the Authority when a repository is injected', () => {
     const repository = createInMemoryAttemptRepository(workflowRunResultOutcomeCodec);
-    const service = new WorkflowEngineService(MakaioBus, {
+    const service = new WorkflowEngineService(MakaioBus, createWorkflowTestNamespaceCapability(), {
       executionAttemptRepository: repository,
       executionAttemptBootstrapTimeoutMs: 60_000,
     });
@@ -1907,7 +1911,7 @@ describe('construction gates', () => {
 
   it('Piscina mode boots without a repository', () => {
     // Piscina mode does not require attempt tracking
-    const service = new WorkflowEngineService(MakaioBus, {
+    const service = new WorkflowEngineService(MakaioBus, createWorkflowTestNamespaceCapability(), {
       workflowRunner: undefined,
     });
     expect(service.executionAttemptAuthority).toBeUndefined();

@@ -36,7 +36,7 @@ describe('coderabbitPackage', () => {
   });
 
   it('registers and unregisters review capabilities during lifecycle', async () => {
-    const bus = createBusInstance();
+    const bus: IMakaioBus = createBusInstance();
     const capabilityService = new CapabilityService(bus);
     await capabilityService.init();
     const service = await coderabbitPackage.create!({
@@ -60,7 +60,7 @@ describe('coderabbitPackage', () => {
   });
 
   it('rolls back registered capabilities when processor registration fails during init', async () => {
-    const bus = createBusInstance();
+    const bus: IMakaioBus = createBusInstance();
     const capabilityService = new CapabilityService(bus);
     await capabilityService.init();
     const failProcessorRegister = bus.on(CapabilitySubjects.register, (ctx) => {
@@ -83,7 +83,7 @@ describe('coderabbitPackage', () => {
   });
 
   it('does not remove a pre-existing processor when init processor registration fails', async () => {
-    const bus = createBusInstance();
+    const bus: IMakaioBus = createBusInstance();
     const capabilityService = new CapabilityService(bus);
     await capabilityService.init();
     await bus.emit(CapabilitySubjects.register, {
@@ -113,7 +113,7 @@ describe('coderabbitPackage', () => {
 
   it('attempts to unregister source and processor even when one unregister fails', async () => {
     const unregistrations: ProviderUnregistration[] = [];
-    const bus = createBusInstance();
+    const bus: IMakaioBus = createBusInstance();
     bus.on(CapabilitySubjects.unregister, (ctx) => {
       const unregistration = ctx.payload as ProviderUnregistration;
       unregistrations.push(unregistration);
@@ -140,7 +140,7 @@ describe('coderabbitPackage', () => {
   });
 
   it('contributes an executable review-posted trigger whose parameters carry no severity threshold', async () => {
-    const bus = createBusInstance();
+    const bus: IMakaioBus = createBusInstance();
 
     const triggers = await contributeTriggers(bus);
 

@@ -1,7 +1,13 @@
 import { createServer } from 'node:http';
 import { describe, it, expect } from 'vitest';
-import { createBusInstance } from '@makaio/bus-core';
-import { AgentSubjects, FrameworkContractNamespaces, McpSubjects, WorkflowSubjects } from '@makaio/contracts';
+import { createBusInstance, ValidationError } from '@makaio/bus-core';
+import {
+  AgentSubjects,
+  FrameworkContractNamespaces,
+  McpSubjects,
+  WorkflowNamespace,
+  WorkflowSubjects,
+} from '@makaio/contracts';
 import { closeHttpServer, listenOnLoopback } from '../../../__tests__/http-test-helpers.js';
 import { BusServerTransportProvider } from '../../../bus-server-transport.js';
 import { bootWorkerBus, bootWorkerRuntime } from '../worker-boot.js';
@@ -37,7 +43,9 @@ describe('bootWorkerBus', () => {
     const runtime = await bootWorkerRuntime(handle, { toolsets: [] });
 
     try {
-      const registration = await handle.bus.request(McpSubjects.session.register, {
+      // ORIGIN: The test acts as the worker registering its local MCP session.
+      const call = handle.bus.own('root');
+      const registration = await handle.bus.request(call, McpSubjects.session.register, {
         adapterSessionId: 'worker-mcp-session',
         agentId: 'agent-1',
         adapterId: 'adapter-1',
@@ -53,9 +61,29 @@ describe('bootWorkerBus', () => {
     }
   });
 
+  it('validates and routes workflow requests on a worker with no authority connection', async () => {
+    const handle = await bootWorkerBus({ busAuth: { kind: 'none' } });
+    const role = { adapterName: 'test-adapter' };
+    const unsubscribe = handle.bus.on(WorkflowSubjects.resolveRole, (ctx) => ctx.setResult(role));
+
+    try {
+      // ORIGIN: The test submits role lookups from the worker bus.
+      const call = handle.bus.own('root');
+      await expect(handle.bus.request(call, WorkflowSubjects.resolveRole, { roleId: '' })).rejects.toBeInstanceOf(
+        ValidationError,
+      );
+      await expect(handle.bus.request(call, WorkflowSubjects.resolveRole, { roleId: 'reviewer' })).resolves.toEqual(
+        role,
+      );
+    } finally {
+      unsubscribe();
+      await handle.close();
+    }
+  });
+
   it('worker bus is fully ready for host requests immediately after bootWorkerBus() returns', async () => {
     const hostBus = createBusInstance();
-    hostBus.registerNamespaces(FrameworkContractNamespaces);
+    hostBus.registerNamespaces([...FrameworkContractNamespaces, WorkflowNamespace]);
 
     const server = createServer();
     const port = await listenOnLoopback(server);
@@ -75,7 +103,10 @@ describe('bootWorkerBus', () => {
         busAuth: { kind: 'none' },
       });
 
+      // ORIGIN: The test acts as a worker reading an execution from the authority.
+      const call = worker.bus.own('root');
       const result = await worker.bus.request(
+        call,
         WorkflowSubjects.getExecution,
         { executionId: 'exec-ready' },
         { timeout: 1_000 },

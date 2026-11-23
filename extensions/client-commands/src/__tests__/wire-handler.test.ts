@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IHostMakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { ClientWiringApplyResponseSchema } from '@makaio/subsystem-client';
 import { createBusNamespace } from '@makaio/core';
 import { z } from 'zod';
@@ -71,7 +71,7 @@ function createContext(
  * @returns Subjects registered on the local test bus. The `wiring.apply`
  *   subject is accessible as `subjects.wiring.apply` (nested dot notation).
  */
-function registerTestClientWiringNamespace(bus: IMakaioBus, clientId: string) {
+function registerTestClientWiringNamespace(bus: IHostMakaioBus, clientId: string) {
   return bus.registerNamespace(
     createBusNamespace(`client:${clientId}`, {
       'wiring.apply': {
@@ -92,7 +92,7 @@ function registerTestClientWiringNamespace(bus: IMakaioBus, clientId: string) {
 // ---------------------------------------------------------------------------
 
 describe('runClientWireCommand', () => {
-  let bus: IMakaioBus;
+  let bus: IHostMakaioBus;
 
   beforeEach(() => {
     bus = createBusInstance();
@@ -294,7 +294,7 @@ describe('resolveDefaultEnvPairs', () => {
 // ---------------------------------------------------------------------------
 
 describe('runClientWireCommand envPairs', () => {
-  let bus: IMakaioBus;
+  let bus: IHostMakaioBus;
 
   beforeEach(() => {
     bus = createBusInstance();

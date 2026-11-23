@@ -23,7 +23,6 @@ import { McpNamespace } from './mcp/namespace.js';
 import { NativeSessionSupervisorNamespace } from './native-session-supervisor/namespace.js';
 import { PlatformNamespace } from './platform/namespace.js';
 import { RightsNamespace } from './rights/namespace.js';
-import { GitHookNamespace } from './capabilities/git-hooks/namespace.js';
 import { ReviewNamespace } from './capabilities/review/namespace.js';
 import { SessionNamespace } from './session/namespace.js';
 import { SkillNamespace } from './skill/namespace.js';
@@ -37,7 +36,6 @@ import { VCSEventsNamespace } from './capabilities/vcs/events.js';
 import { VCSPRNamespace } from './capabilities/vcs-pr/namespace.js';
 import { VisionNamespace } from './capabilities/vision/namespace.js';
 import { VoiceNamespace } from './capabilities/voice/namespace.js';
-import { WorkflowNamespace } from './workflow/namespace.js';
 import { WorkflowBlocksNamespace } from './workflow-blocks/namespace.js';
 import { WorkerNamespace } from './worker/namespace.js';
 
@@ -48,10 +46,10 @@ import { SessionStorageNamespace } from './session/session-storage-namespace.js'
 import { SkillStorageNamespace } from './skill/storage-namespace.js';
 
 /**
- * All Tier-A framework contract bus namespace definitions.
+ * Framework contract bus namespace definitions owned by the host.
  *
  * Composition roots register these at boot time to enable schema validation,
- * local-subject routing, and `extendSubject()` for all framework subjects:
+ * local-subject routing, and `extendSubject()` for host-owned subjects:
  * @example
  * ```typescript
  * import { FrameworkContractNamespaces } from '@makaio/contracts';
@@ -79,7 +77,6 @@ export const FrameworkContractNamespaces: readonly RegistrableBusNamespaceDefini
   CredentialNamespace,
   ExecutionAttemptNamespace,
   FacetNamespace,
-  GitHookNamespace,
   MaterializationNamespace,
   HarnessNamespace,
   HostNamespace,
@@ -102,7 +99,6 @@ export const FrameworkContractNamespaces: readonly RegistrableBusNamespaceDefini
   VCSPRNamespace,
   VisionNamespace,
   VoiceNamespace,
-  WorkflowNamespace,
   WorkflowBlocksNamespace,
   WorkerNamespace,
 ] as RegistrableBusNamespaceDefinition[];

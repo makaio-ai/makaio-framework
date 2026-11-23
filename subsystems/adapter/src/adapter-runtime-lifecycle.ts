@@ -454,6 +454,8 @@ async function initializeOneEnabledAdapter(
 
 /**
  * Initialize the subset of loaded adapters that are enabled in settings.
+ * Single-adapter initialization rethrows the original failure. A batch reports
+ * its original failures in adapter order through an AggregateError.
  * @param call - Call context of the handled message.
  * @param bus - Bus instance used for adapter-subsystem requests.
  * @param machineId - Current machine identifier.
@@ -493,6 +495,7 @@ export async function initializeEnabledAdapters(
     try {
       await initializeOneEnabledAdapter(call, adapter, context);
     } catch (error) {
+      if (adapters.length === 1) throw error;
       failedAdapters.push({ adapterName: adapter.name, error });
     }
   }
@@ -504,7 +507,10 @@ export async function initializeEnabledAdapters(
         return `${adapterName}: ${message}`;
       })
       .join('; ');
-    throw new Error(`Failed to initialize enabled adapters: ${failures}`);
+    throw new AggregateError(
+      failedAdapters.map(({ error }) => error),
+      `Failed to initialize enabled adapters: ${failures}`,
+    );
   }
 }
 

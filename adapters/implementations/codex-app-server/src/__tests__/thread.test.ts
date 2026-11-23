@@ -14,7 +14,9 @@ describe('CodexAppServerThread', () => {
   let thread: CodexAppServerThread;
 
   beforeEach(async () => {
-    bus = await CodexAppServerNamespace.scopedBus(createTestBusInstance());
+    const hostBus = createTestBusInstance();
+    hostBus.registerNamespaces([CodexAppServerNamespace.definition]);
+    bus = await CodexAppServerNamespace.scopedBus(hostBus);
     thread = new CodexAppServerThread({
       bus,
       adapterId,

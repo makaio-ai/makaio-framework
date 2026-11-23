@@ -45,6 +45,12 @@ describe('unregistered namespace warning', () => {
 
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("Subject 'warning-test.event' used"));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Use manifest namespaces or ctx.namespaces.lease(definition). ' +
+          'Hosts use IHostMakaioBus.registerNamespace(definition).',
+      ),
+    );
   });
 
   it('warns for unregistered request handlers', () => {

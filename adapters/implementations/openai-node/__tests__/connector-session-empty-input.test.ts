@@ -10,6 +10,7 @@ import { OpenAINodeConnectorNamespace } from '../src/namespaces/index.js';
 describe('OpenAIConnectorSession empty input guard', () => {
   it('rejects empty user content in buildMessages', async () => {
     const globalBus = createTestBusInstance();
+    globalBus.registerNamespaces([OpenAINodeConnectorNamespace.definition]);
     const bus = await OpenAINodeConnectorNamespace.scopedBus(globalBus);
     const session = new OpenAIConnectorSession({
       bus,

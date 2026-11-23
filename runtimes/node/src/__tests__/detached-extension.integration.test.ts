@@ -89,50 +89,41 @@ function makeTestContext(bus: ReturnType<typeof createBusInstance>): NodeExtensi
   });
 }
 
-/**
- * Register the detached extension lifecycle namespace used by the fixture.
- * @param bus - Bus instance under test.
- * @returns Lifecycle subjects for the test detached extension.
- */
-function registerLifecycleSubjects(bus: ReturnType<typeof createBusInstance>) {
-  return bus.registerNamespace(
-    createBusNamespace('extension.test-detached', {
-      init: {
-        request: z.object({
-          config: z.unknown().optional(),
-          context: z
-            .object({
-              dataDir: z.string().optional(),
-              machineId: z.string().optional(),
-              makaioHome: z.string().optional(),
-              platform: z.string().optional(),
-              username: z.string().optional(),
-            })
-            .optional(),
-        }),
-        response: z.object({ ready: z.boolean() }),
-      },
-      ready: z.object({
-        ready: z.boolean(),
-        config: z.unknown().optional(),
-        context: z
-          .object({
-            dataDir: z.string().optional(),
-            machineId: z.string().optional(),
-            makaioHome: z.string().optional(),
-            platform: z.string().optional(),
-            username: z.string().optional(),
-          })
-          .optional(),
-      }),
-      destroy: {
-        request: z.object({ reason: z.string().optional() }),
-        response: z.object({ stopped: z.boolean() }),
-      },
-      stopped: z.object({ stopped: z.boolean() }),
+const LifecycleSubjects = createBusNamespace('extension.test-detached', {
+  init: {
+    request: z.object({
+      config: z.unknown().optional(),
+      context: z
+        .object({
+          dataDir: z.string().optional(),
+          machineId: z.string().optional(),
+          makaioHome: z.string().optional(),
+          platform: z.string().optional(),
+          username: z.string().optional(),
+        })
+        .optional(),
     }),
-  ).subjects;
-}
+    response: z.object({ ready: z.boolean() }),
+  },
+  ready: z.object({
+    ready: z.boolean(),
+    config: z.unknown().optional(),
+    context: z
+      .object({
+        dataDir: z.string().optional(),
+        machineId: z.string().optional(),
+        makaioHome: z.string().optional(),
+        platform: z.string().optional(),
+        username: z.string().optional(),
+      })
+      .optional(),
+  }),
+  destroy: {
+    request: z.object({ reason: z.string().optional() }),
+    response: z.object({ stopped: z.boolean() }),
+  },
+  stopped: z.object({ stopped: z.boolean() }),
+}).subjects;
 
 /**
  * Wait until a condition returns true, polling at a fixed interval.
@@ -216,7 +207,6 @@ describe('detached extension integration (bus-stdio)', () => {
 
   it('init() sends the detached lifecycle init request with config and runtime context', async () => {
     const bus = createBusInstance();
-    const LifecycleSubjects = registerLifecycleSubjects(bus);
     const descriptor = makeTestDescriptor();
     const pkg = createDetachedExtensionPackage(descriptor, FIXTURES_DIR);
     const ctx = makeTestContext(bus);
@@ -277,7 +267,6 @@ describe('detached extension integration (bus-stdio)', () => {
 
   it('destroy() unregisters the transport and stops the child process', async () => {
     const bus = createBusInstance();
-    const LifecycleSubjects = registerLifecycleSubjects(bus);
     const descriptor = makeTestDescriptor();
     const pkg = createDetachedExtensionPackage(descriptor, FIXTURES_DIR);
     const ctx = makeTestContext(bus);
@@ -461,7 +450,6 @@ describe('detached extension integration (bus-websocket process lifecycle)', () 
     inits: unknown[];
   }> {
     const bus = createBusInstance();
-    const LifecycleSubjects = registerLifecycleSubjects(bus);
     const inits: unknown[] = [];
     bus.on(LifecycleSubjects.init, async (request) => {
       inits.push(request.payload);

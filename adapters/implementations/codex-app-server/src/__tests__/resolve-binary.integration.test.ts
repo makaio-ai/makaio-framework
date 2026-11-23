@@ -73,6 +73,7 @@ async function makeConnector(
     adapterAuth?: ResolvedAdapterAuth;
   } = {},
 ): Promise<CodexAppServerConnector> {
+  MakaioBus.registerNamespaces([CodexAppServerNamespace.definition]);
   const bus = await CodexAppServerNamespace.scopedBus(MakaioBus);
   const cwd = mkdtempSync(join(tmpdir(), 'codex-central-runtime-test-'));
   tempDirectories.push(cwd);

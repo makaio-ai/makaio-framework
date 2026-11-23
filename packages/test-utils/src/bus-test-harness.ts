@@ -22,6 +22,7 @@ import { expect, vi, type Mock } from 'vitest';
 import {
   createBusInstance,
   getFullSubjectForSubjectDefinition,
+  type IHostMakaioBus,
   type IMakaioBus,
   type RegisteredSubjectSchema,
   type ScopedBus,
@@ -395,9 +396,9 @@ export function createMockScopedBus(namespace = 'test'): MockScopedBusResult {
  * Use this when you need schema validation and real handler execution. The
  * instance is bound to the host party of its own fresh context; send with
  * `bus.own('root')` as the call context.
- * @returns Real IMakaioBus instance
+ * @returns Real host bus instance.
  */
-export function createTestBusInstance(): IMakaioBus {
+export function createTestBusInstance(): IHostMakaioBus {
   return createBusInstance();
 }
 

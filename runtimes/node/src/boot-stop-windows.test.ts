@@ -1,5 +1,10 @@
 import { writeSync } from 'node:fs';
-import { createBusInstance } from '@makaio/bus-core';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createBusInstance, localSubject, NoHandlerError, type BusMessage, type IMakaioBus } from '@makaio/bus-core';
+import { busContextOf, ownerOf } from '@makaio/bus-core/kernel-api';
+import { createBusNamespace } from '@makaio/core';
 import {
   ExtensionCoordinator,
   runBoundedShutdownSteps,
@@ -7,6 +12,9 @@ import {
   type KernelMakaioExtension,
 } from '@makaio/kernel';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
+import { bootMakaioRuntimeCore } from './boot.js';
+import { ExplicitDescriptorDiscovery } from './extension-discovery.js';
 import { installHostShutdown } from './host-shutdown.js';
 import {
   bootCancellationBudgetMs,
@@ -24,6 +32,7 @@ vi.mock('node:fs', async (importOriginal) => ({
 describe('the windows a runtime boot and its teardown run in', () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -64,6 +73,108 @@ describe('the windows a runtime boot and its teardown run in', () => {
     expect(failures).toEqual([]);
     expect(closed).toEqual(['credentials', 'transport']);
     expect(coordinator.list().find((info) => info.name === 'uses-all')?.state).toBe('stopped');
+  });
+
+  it.each([
+    'resolves',
+    'rejects',
+  ] as const)('keeps extension requests local until transport disconnect %s and then releases the claim', async (disconnectOutcome) => {
+    const name = 'shutdown-routing';
+    const subject = `${name}.inspect`;
+    const inspect = { request: z.object({}), response: z.object({}) };
+    const namespace = createBusNamespace(name, { inspect: localSubject(inspect) }, { defaultTransports: 'local-only' });
+    const catalog = createBusNamespace(name, { inspect });
+    const sent: string[] = [];
+    const makaioHome = await mkdtemp(join(tmpdir(), 'makaio-shutdown-routing-'));
+    vi.stubEnv('MAKAIO_DATABASE_URL', undefined);
+    vi.stubEnv('MAKAIO_DATABASE_PATH', join(makaioHome, 'runtime.sqlite'));
+    vi.stubEnv('MAKAIO_SKIP_EXTENSIONS', undefined);
+    let unregister = (): void => {};
+    let beforeDisconnect = async (): Promise<void> => {};
+    const transport = {
+      name,
+      connect: async () => {},
+      disconnect: async () => {},
+      onReceive: () => () => {},
+      subscribe: async () => {},
+      unsubscribe: async () => {},
+      /**
+       * Limit the test peer to the request whose routing is under test.
+       * @param message - Candidate outbound message.
+       */
+      canSend(message: BusMessage): boolean {
+        return message.type === 'request' && message.namespace === name && message.subject === 'inspect';
+      },
+      /**
+       * Record a remote dispatch and decline the request.
+       * @param message - Message dispatched by the bus.
+       */
+      async send(message: BusMessage): Promise<never> {
+        if (message.type === 'request') sent.push(`${message.namespace}.${message.subject}`);
+        throw new NoHandlerError(subject);
+      },
+    };
+    const provider = {
+      /**
+       * Register the peer and advertise its handler for the test request.
+       * @param bus - The runtime's bus.
+       */
+      async connect(bus: IMakaioBus): Promise<void> {
+        bus.registerTransport(transport);
+        unregister = () => bus.unregisterTransport(name);
+        busContextOf(bus).remoteRequestHandlers.set(subject, [{ transport: name, priority: 0 }]);
+      },
+      async disconnect(): Promise<void> {
+        try {
+          await beforeDisconnect();
+        } finally {
+          unregister();
+        }
+      },
+    };
+
+    try {
+      const runtime = await bootMakaioRuntimeCore(provider, 0, '127.0.0.1', {
+        makaioHome,
+        frameworkVersion: '3.0.0',
+        hostCapabilities: ['node'],
+        discovery: new ExplicitDescriptorDiscovery([
+          {
+            descriptor: {
+              name,
+              displayName: name,
+              version: '1.0.0',
+              makaio: { framework: '>=1.0.0' },
+              entrypoints: { server: true },
+            },
+            extensionPath: makaioHome,
+            source: 'local',
+            preloadedModule: { default: { name, displayName: name, version: '1.0.0', namespaces: [namespace] } },
+          },
+        ]),
+      });
+      const disconnectError = new Error('transport disconnect failed');
+      beforeDisconnect = async () => {
+        expect(runtime.coordinator.getInfo(name)?.state).toBe('stopped');
+        // ORIGIN: The test probes routing on the runtime bus just before the peer disconnects.
+        const call = runtime.bus.own('root');
+        // A catalog token relies on the live registry for its routing policy.
+        await expect(runtime.bus.requestOptional(call, catalog.subjects.inspect, {})).resolves.toEqual({
+          handled: false,
+        });
+        expect(sent).toEqual([]);
+        expect(busContextOf(runtime.bus).namespaceRegistry.isLocalSubject(subject)).toBe(true);
+        if (disconnectOutcome === 'rejects') throw disconnectError;
+      };
+      if (disconnectOutcome === 'rejects') {
+        await expect(runtime.shutdown()).rejects.toMatchObject({ errors: [disconnectError] });
+      } else {
+        await runtime.shutdown();
+      }
+      expect(ownerOf(runtime.bus, name)).toBeUndefined();
+    } finally {
+      await rm(makaioHome, { recursive: true, force: true });
+    }
   });
 
   describe('a host that waits for a cancelled boot', () => {

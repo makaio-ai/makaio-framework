@@ -1,10 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from 'vitest';
+import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import {
   createWorkflowFinalizerNamespace,
   WorkerNamespace,
   WorkerSubjects,
   WorkflowWorkerConfigSchema,
+  type ExtensionContext,
   type WorkflowDefinition,
 } from '@makaio/contracts';
 import type { Party } from '@makaio/core';
@@ -15,8 +16,10 @@ import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { createSqliteAttemptRepository } from '../testing/sqlite.js';
 import { buildWorkflowAttemptInstruction } from '../workflow-attempt-instruction.js';
 import { workflowAttemptOutcomeCodec } from '../workflow-attempt-outcome.js';
+import { WorkflowEngineService } from '../workflow-engine-service.js';
 import { WorkflowExecutor } from '../workflow-executor.js';
 import {
+  createWorkflowTestNamespaceCapability,
   setupWorkflowExecutorTest,
   teardownWorkflowExecutorTest,
   type WorkflowExecutorTestSetup,
@@ -52,6 +55,15 @@ async function seedAuthorityRun(executionId: string, workflow: WorkflowDefinitio
   return runContext;
 }
 
+it('requires the extension namespace capability when constructing the workflow engine', () => {
+  expectTypeOf(WorkflowExecutor).constructorParameters.toMatchTypeOf<
+    [IMakaioBus, ExtensionContext['namespaces'], ...unknown[]]
+  >();
+  expectTypeOf(WorkflowEngineService).constructorParameters.toMatchTypeOf<
+    [IMakaioBus, ExtensionContext['namespaces'], ...unknown[]]
+  >();
+});
+
 describe('workflow success finalizer', () => {
   let setup: WorkflowExecutorTestSetup | undefined;
 
@@ -72,8 +84,7 @@ describe('workflow success finalizer', () => {
     }
 
     const finalizerId = 'test.success';
-    const { namespace, subjects } = createWorkflowFinalizerNamespace(finalizerId);
-    MakaioBus.registerNamespace(namespace);
+    const { subjects } = createWorkflowFinalizerNamespace(finalizerId);
 
     let acknowledgeDelivery: (() => void) | undefined;
     const deliveryStarted = new Promise<void>((resolve) => {
@@ -162,15 +173,17 @@ describe('workflow success finalizer', () => {
       }),
     );
 
-    const recoveredExecutor = new WorkflowExecutor(MakaioBus, {
-      stepCooldownMs: 0,
-      stepTimeoutMs: 10_000,
-    });
+    const recoveredExecutor = new WorkflowExecutor(
+      MakaioBus,
+      createWorkflowTestNamespaceCapability(),
+      { stepCooldownMs: 0, stepTimeoutMs: 10_000 },
+      undefined,
+      undefined,
+    );
     const completed = new Promise<string>((resolve) => {
       MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => resolve(ctx.payload.executionId));
     });
     let recoveredClaimToken: string | undefined;
-    MakaioBus.registerNamespace(createWorkflowFinalizerNamespace(finalizerId).namespace);
     MakaioBus.on(subjects.finalize, async (ctx) => {
       recoveredClaimToken = ctx.payload.claimToken;
       await MakaioBus.request(WorkflowStorageSubjects.acknowledgeFinalization, {
@@ -204,8 +217,7 @@ describe('workflow success finalizer', () => {
     const runA = 'submitting-run';
     const runB = 'pending-run';
     const finalizerId = 'test.shared-recovery';
-    const { namespace, subjects } = createWorkflowFinalizerNamespace(finalizerId);
-    MakaioBus.registerNamespace(namespace);
+    const { subjects } = createWorkflowFinalizerNamespace(finalizerId);
     MakaioBus.registerNamespace(WorkerNamespace);
     const workflow = { ...createWorkflowDefinition({ id: 'shared-recovery' }), successFinalizerId: finalizerId };
     await setup.workflowExecutor.init();
@@ -242,7 +254,13 @@ describe('workflow success finalizer', () => {
         preservation: { required: [] },
       }),
     );
-    const recoveredExecutor = new WorkflowExecutor(MakaioBus, undefined, undefined, authority);
+    const recoveredExecutor = new WorkflowExecutor(
+      MakaioBus,
+      createWorkflowTestNamespaceCapability(),
+      undefined,
+      undefined,
+      authority,
+    );
     const deliveries: Array<{ executionId: string; principal: Party }> = [];
     const unsubscribe = MakaioBus.on(subjects.finalize, async (ctx) => {
       const { executionId, claimToken } = ctx.payload;
@@ -268,6 +286,7 @@ describe('workflow success finalizer', () => {
           result: { executionId: runA, workflowId: workflow.id, status: 'completed' },
         }),
       ).resolves.toEqual({ decision: 'accepted' });
+      // ORIGIN: Match the executor principal for recovery across executions.
       const executorPrincipal = MakaioBus.own('shared-work').principal;
       const expectedPrincipals = new Map([
         [runA, personA],
@@ -289,8 +308,7 @@ describe('workflow success finalizer', () => {
     }
 
     const finalizerId = 'test.rejecting';
-    const { namespace, subjects } = createWorkflowFinalizerNamespace(finalizerId);
-    MakaioBus.registerNamespace(namespace);
+    const { subjects } = createWorkflowFinalizerNamespace(finalizerId);
     MakaioBus.on(subjects.finalize, (ctx) => ctx.setResult({ accepted: false }));
     await setup.workflowExecutor.init();
     await setup.workflowExecutor.registerSuccessFinalizer(finalizerId);

@@ -8,6 +8,7 @@ import { createWorkflowFinalizerNamespace } from '@makaio/contracts';
 import { eq } from 'drizzle-orm';
 import { resolveSchema } from '@makaio/storage-drizzle';
 import { workflowEngineSchema } from '../storage/schema.variants.js';
+import { createWorkflowTestNamespaceCapability } from './workflow-executor.test-setup.js';
 import { createTestDb, createWorkflowExecution, type TestDbContext } from './shared.js';
 
 const claim = {
@@ -217,10 +218,15 @@ describe('workflow finalization storage', () => {
     MakaioBus.__resetHandlers?.();
     MakaioBus.registerNamespace(WorkflowStorageNamespace);
     const cleanupRestartedHandlers = registerDrizzleWorkflowStorage(MakaioBus, dbContext.db);
-    const restartedExecutor = new WorkflowExecutor(MakaioBus, { stepCooldownMs: 0, stepTimeoutMs: 10_000 });
+    const restartedExecutor = new WorkflowExecutor(
+      MakaioBus,
+      createWorkflowTestNamespaceCapability(),
+      { stepCooldownMs: 0, stepTimeoutMs: 10_000 },
+      undefined,
+      undefined,
+    );
     await restartedExecutor.init();
-    const { namespace, subjects } = createWorkflowFinalizerNamespace(claim.finalizerId);
-    MakaioBus.registerNamespace(namespace);
+    const { subjects } = createWorkflowFinalizerNamespace(claim.finalizerId);
     const stopFinalize = MakaioBus.on(subjects.finalize, () => {
       throw new Error('Settled claims must not be delivered to the finalizer again');
     });
@@ -228,7 +234,7 @@ describe('workflow finalization storage', () => {
     const stopCapture = MakaioBus.on(WorkflowSubjects.execution.completed, (ctx) => {
       published.push(ctx.payload.transitionKey ?? 'missing');
     });
-    await restartedExecutor.registerSuccessFinalizer(claim.finalizerId);
+    const unregister = await restartedExecutor.registerSuccessFinalizer(claim.finalizerId);
 
     expect(published).toEqual([claim.transitionKey]);
     await expect(
@@ -241,6 +247,7 @@ describe('workflow finalization storage', () => {
       .from(workflowFinalizations)
       .where(eq(workflowFinalizations.executionId, claim.executionId));
     expect(afterReplay).toEqual([{ publishedAt: expect.any(Number) }]);
+    unregister();
     await restartedExecutor.destroy();
     cleanupRestartedHandlers();
     stopFinalize();

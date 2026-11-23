@@ -16,6 +16,7 @@ describe('createClaudeConnectorNamespace', () => {
   it('redacts text fields from lenient schema violation samples', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const namespace = createClaudeConnectorNamespace(`adapter:claude-redaction-${crypto.randomUUID()}`);
+    MakaioBus.registerNamespaces([namespace.definition]);
     const bus = await namespace.scopedBus(MakaioBus);
 
     const payload: unknown = {
@@ -34,6 +35,7 @@ describe('createClaudeConnectorNamespace', () => {
     const namespace = createClaudeConnectorNamespace(`adapter:claude-skip-${crypto.randomUUID()}`, {
       busValidationMode: 'skip',
     });
+    MakaioBus.registerNamespaces([namespace.definition]);
     const bus = await namespace.scopedBus(MakaioBus);
 
     const payload: unknown = { type: 'unexpected' };

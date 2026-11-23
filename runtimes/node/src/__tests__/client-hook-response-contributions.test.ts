@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
-import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IHostMakaioBus, type IMakaioBus } from '@makaio/bus-core';
 import { dep } from '@makaio/contracts';
 import { createBusNamespace } from '@makaio/core';
 import { createAppendEffect, type ContributorDefinition } from '@makaio/contracts/client';
@@ -437,7 +437,7 @@ describe('client hook response contributions', () => {
           // bus at callback time and the subscription observes the delivery,
           // proving the bus is usable during hook handling — not just shaped
           // like a bus.
-          const { subjects } = bus.registerNamespace(probe);
+          const { subjects } = (bus as IHostMakaioBus).registerNamespace(probe);
           return [
             {
               lane: 'canonical' as const,
@@ -459,6 +459,10 @@ describe('client hook response contributions', () => {
 
     const runtime = await startRuntime([extension]);
     try {
+      expect(runtime.coordinator.namespaceOwners().ownerOf(probe.name)).toEqual({
+        kind: 'extension',
+        extension: 'ctx-consumer',
+      });
       runtime.bus.on(probe.subjects.fired, (event) => {
         expect(event.call.principal).toEqual(call.principal);
         observed.push(event.payload.source);
@@ -466,10 +470,12 @@ describe('client hook response contributions', () => {
       const result = await runtime.bus.request(call, ClaudeCodeClientSubjects.hook.handle, hookRequest());
       expect(responseOutput(result.stdout).additionalContext).toBe('bus-alive');
       // The extension carrier bus delivers to subscribers on the runtime bus.
+      // ORIGIN: Inspect the captured carrier without an inbound call.
       expect(capturedBus?.own('observer').caller).toEqual({ kind: 'makaio.extension', id: 'ctx-consumer' });
       expect(observed).toEqual(['bus-enricher']);
     } finally {
       await runtime.coordinator.shutdown();
     }
+    expect(runtime.coordinator.namespaceOwners().ownerOf(probe.name)).toBeUndefined();
   });
 });

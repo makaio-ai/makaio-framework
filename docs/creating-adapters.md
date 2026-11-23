@@ -42,7 +42,7 @@ across both.
 
 ## Layer 1: AIAdapter
 
-`AIAdapter` is an abstract class that handles bus registration and agent
+`AIAdapter` is an abstract class that handles bus subscriptions and agent
 lifecycle. Your adapter subclass wires the three factories that tell the
 framework how to create agents and connectors:
 
@@ -77,7 +77,7 @@ The constructor config (`AIAdapterConstructorConfig` in
 |-------|------|---------|
 | `name` | `string` | Unique adapter identifier (e.g., `'openai'`, `'anthropic-sdk'`) |
 | `capabilities` | `string[]` | Declared capabilities (see [Capabilities](#capabilities)) |
-| `namespace` | `BusNamespace` | The adapter's registered bus namespace |
+| `namespace` | `AdapterNamespace` | The scoped namespace whose definition the adapter contribution declares |
 | `agentFactory` | `(config) => AIAgent` | Creates agent instances |
 | `configFactory` | `(input) => Promise<Config>` | Resolves runtime configuration (credentials, model, etc.) |
 | `connectorFactory` | `(config) => AIAgentConnector` | Creates connector instances |
@@ -529,11 +529,11 @@ adapters/implementations/my-provider/
       └── connector.ts       # AIAgentConnector subclass (or BaseStreamConnector)
 ```
 
-### 2. Register a Bus Namespace
+### 2. Declare a Bus Namespace
 
 ```ts
 // src/namespace.ts
-import { MakaioBus } from '@makaio/bus-core';
+import { createAdapterNamespace } from '@makaio/ai-adapters-core';
 import { z } from 'zod';
 
 const MyProviderSchemas = {
@@ -541,11 +541,30 @@ const MyProviderSchemas = {
   'sdk.event': z.object({ eventType: z.string(), data: z.unknown() }),
 };
 
-export const MyProviderNamespace = MakaioBus.registerNamespace(
-  'adapter:myProvider',
-  MyProviderSchemas,
-);
+export const MyProviderNamespace = createAdapterNamespace('adapter:myProvider', MyProviderSchemas);
 ```
+
+Use the same namespace in the adapter constructor and its runtime definition:
+
+```ts
+// src/definition.ts (relevant fields)
+import { MyProviderNamespace } from './namespace.js';
+
+export const myProviderNamespaceDeclaration = {
+  busNamespace: MyProviderNamespace.definition,
+};
+```
+
+Include this `busNamespace` field in the definition you contribute through `adapters`.
+During activation the processor leases it on behalf of the contributing extension
+before calling `createAdapter`. Activation rejects an adapter that uses a different
+domain. Do not register it at module scope: `registerNamespace()` claims it for the
+host, so the extension's lease would fail with `namespace-already-owned`.
+
+In a standalone harness without a contributing extension, register the definition
+explicitly as the host with `bus.registerNamespace(MyProviderNamespace.definition)`
+before creating the adapter on that bus. Use `ctx.namespaces.lease(definition)` for
+other namespaces your extension creates at runtime.
 
 ### 3. Implement the Three Layers
 

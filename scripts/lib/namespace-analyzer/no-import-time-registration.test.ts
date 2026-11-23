@@ -10,7 +10,6 @@ const allowedFiles = new Set([
   'core/bus-core/src/bus.ts',
   'core/bus-core/src/channel/channel-endpoint.ts',
   'subsystems/client/src/create-client-namespace.ts',
-  'storage/core/src/create-storage-namespace.ts',
 ]);
 
 const extensionFactoryFiles = {
@@ -41,8 +40,7 @@ describe('namespace registration side effects', () => {
       .filter(({ file }) => !allowedFiles.has(relative(frameworkRoot, file)))
       .filter(({ source }) => {
         return (
-          /MakaioBus\.registerNamespace\s*\(\s*createBusNamespace/.test(source) ||
-          /MakaioBus\.registerNamespace\s*\(\s*createStorageNamespace/.test(source) ||
+          /MakaioBus\.registerNamespace\s*\(\s*(?:createBusNamespace|createStorageNamespaceDefinition)/.test(source) ||
           /createStorageNamespace\s*\(/.test(source) ||
           (sideEffectfulExtensionFactories.has('createExtensionNamespace') &&
             /createExtensionNamespace\s*\(/.test(source)) ||

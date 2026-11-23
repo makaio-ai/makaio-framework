@@ -17,7 +17,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
-import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IHostMakaioBus } from '@makaio/bus-core';
 import { createTestCall } from '@makaio/test-utils';
 import {
   RawClientHookPayloadSchema,
@@ -52,7 +52,7 @@ afterEach(() => {
  * @returns Subjects registered on the local test bus.
  */
 function registerTestClientNamespace<AdditionalSchemas extends SchemaRecord = Record<never, never>>(
-  bus: IMakaioBus,
+  bus: IHostMakaioBus,
   clientId: string,
   additionalSchemas?: AdditionalSchemas,
 ) {
@@ -191,7 +191,8 @@ describe('runClientHookHandleCommand — observation invariant', () => {
     );
 
     expect(order).toEqual(['received', 'handle']);
-    expect(emit.mock.invocationCallOrder[0]).toBeLessThan(requestOptional.mock.invocationCallOrder[0]);
+    // A missing request call yields NaN, which fails the ordering assertion.
+    expect(emit.mock.invocationCallOrder[0]).toBeLessThan(requestOptional.mock.invocationCallOrder[0] ?? Number.NaN);
   });
 
   it('still emits hook.received when the handle bus call throws', async () => {
@@ -308,7 +309,8 @@ describe('runClientHookHandleCommand — observation invariant', () => {
 
       expect(requestOptional).toHaveBeenCalledOnce();
       expect(order).toEqual(['received', 'handle']);
-      expect(emit.mock.invocationCallOrder[0]).toBeLessThan(requestOptional.mock.invocationCallOrder[0]);
+      // A missing request call yields NaN, which fails the ordering assertion.
+      expect(emit.mock.invocationCallOrder[0]).toBeLessThan(requestOptional.mock.invocationCallOrder[0] ?? Number.NaN);
 
       // The sub-budget fires at 250 ms; fake timers advance to 600 ms but
       // Date.now() at the point requestOptional is called reflects only the

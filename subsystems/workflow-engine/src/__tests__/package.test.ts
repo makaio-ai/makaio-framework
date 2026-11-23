@@ -1,14 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { MakaioBus } from '@makaio/bus-core';
+import { ownerOf } from '@makaio/bus-core/kernel-api';
 import { createBusNamespace } from '@makaio/core';
 import type { ExtensionService, ExtensionToken, NodeExtensionContext } from '@makaio/contracts';
 import { registerDrizzleHandlers } from '@makaio/storage-drizzle';
-import { makeStubNodeExtensionContext } from '@makaio/test-utils';
+import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import { z } from 'zod';
 import {
   BUS_EVENT_AUTOMATION_TRIGGER_KIND,
   CRON_AUTOMATION_TRIGGER_KIND,
+  createWorkflowFinalizerNamespace,
   WorkflowNamespace,
   WorkflowSubjects,
 } from '@makaio/contracts';
@@ -22,6 +24,7 @@ import {
   createCronAutomationTrigger,
 } from '@makaio/services-core/automation-trigger';
 import { WorkflowEngineService } from '../workflow-engine-service.js';
+import { createWorkflowTestNamespaceCapability } from './workflow-executor.test-setup.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import { workflowEnginePackage, WorkflowEngineToken } from '../package.js';
 import { createTestDb, createWorkflowDefinition, type TestDbContext } from './shared.js';
@@ -40,6 +43,7 @@ const { subjects: PackageLifecycleSubjects } = MakaioBus.registerNamespace(
  */
 function createNodeContext(runtime?: AutomationTriggerBindingRuntime): NodeExtensionContext<IMakaioBus> {
   return makeStubNodeExtensionContext(MakaioBus, {
+    identity: stubExtensionIdentity(WorkflowEngineToken.name),
     getService: <T>(token: ExtensionToken<T>): T | undefined =>
       token.name === AutomationTriggerBindingRuntimeToken.name ? (runtime as T | undefined) : undefined,
   });
@@ -117,8 +121,48 @@ describe('workflowEnginePackage', () => {
     await created.destroy();
   });
 
+  it('leases success finalizers for the workflow engine until they are unregistered', async () => {
+    dbContext = await createTestDb();
+    const created = await workflowEnginePackage.create?.(createNodeContext());
+    expectWorkflowEngineService(created);
+    service = created;
+    await service.init();
+
+    const finalizerId = 'test.package-lifecycle';
+    const { namespaceDomain } = createWorkflowFinalizerNamespace(finalizerId);
+    const unregister = await service.registerSuccessFinalizer(finalizerId);
+    try {
+      expect(ownerOf(MakaioBus, namespaceDomain)).toEqual({ kind: 'extension', extension: WorkflowEngineToken.name });
+    } finally {
+      unregister();
+    }
+    expect(ownerOf(MakaioBus, namespaceDomain)).toBeUndefined();
+  });
+
+  it('releases the success finalizer namespace if recovery fails', async () => {
+    dbContext = await createTestDb();
+    const created = await workflowEnginePackage.create?.(createNodeContext());
+    expectWorkflowEngineService(created);
+    service = created;
+    await service.init();
+    cleanupFns.push(
+      MakaioBus.on(
+        WorkflowStorageSubjects.listClaimedFinalizations,
+        () => {
+          throw new Error('Recovery storage unavailable');
+        },
+        { priority: 100 },
+      ),
+    );
+
+    const finalizerId = 'test.failed-recovery';
+    const { namespaceDomain } = createWorkflowFinalizerNamespace(finalizerId);
+    await expect(service.registerSuccessFinalizer(finalizerId)).rejects.toThrow('Recovery storage unavailable');
+    expect(ownerOf(MakaioBus, namespaceDomain)).toBeUndefined();
+  });
+
   it('resolves workspace roots through active resolvers in registration order', async () => {
-    const workflowEngine = new WorkflowEngineService(MakaioBus);
+    const workflowEngine = new WorkflowEngineService(MakaioBus, createWorkflowTestNamespaceCapability());
     const firstCleanup = workflowEngine.registerWorkspaceRootResolver(async () => undefined);
     const secondCleanup = workflowEngine.registerWorkspaceRootResolver(async (workspaceId) =>
       workspaceId === 'acme/factory' ? '/workspaces/factory' : undefined,

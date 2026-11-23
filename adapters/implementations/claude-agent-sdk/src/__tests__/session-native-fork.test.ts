@@ -105,6 +105,8 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 import { ClaudeCodeConnectorNamespace } from '../namespace/index.js';
 import { ClaudeConnectorSession } from '../session.js';
 
+MakaioBus.registerNamespaces([ClaudeCodeConnectorNamespace.definition]);
+
 describe('ClaudeConnectorSession native fork adapter session ID', () => {
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();

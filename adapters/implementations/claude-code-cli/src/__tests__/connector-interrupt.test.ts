@@ -39,6 +39,7 @@ const PERSON_A: Party = { kind: 'acme.person', id: 'person-a' };
  * @returns Claude CLI connector under test.
  */
 async function makeConnector(): Promise<ClaudeCliConnector> {
+  MakaioBus.registerNamespaces([ClaudeCodeCliConnectorNamespace.definition]);
   const bus = await ClaudeCodeCliConnectorNamespace.scopedBus(MakaioBus);
   return new ClaudeCliConnector({
     bus,

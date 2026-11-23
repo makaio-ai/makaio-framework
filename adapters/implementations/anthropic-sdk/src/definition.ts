@@ -7,7 +7,7 @@ import { createAnthropicSdkAdapter } from './adapter.js';
 import { AnthropicSdkAdapterName, DEFAULT_TIMEOUTS } from './constants.js';
 import { AnthropicSdkProviderConfigSchema } from './schemas.js';
 import { defaultPresetId, providerAuthById, providerIds } from './provider.js';
-import type { AnthropicSdkConnectorBus } from './namespaces/index.js';
+import { AnthropicSdkConnectorNamespace, type AnthropicSdkConnectorBus } from './namespaces/index.js';
 import type { AnthropicSdkConnector } from './connector.js';
 import type { AnthropicSdkAgent } from './agent.js';
 
@@ -17,6 +17,7 @@ export const adapterDefinition: AIAdapterDefinition<
   AnthropicSdkAgent
 > = {
   name: AnthropicSdkAdapterName,
+  busNamespace: AnthropicSdkConnectorNamespace.definition,
   displayName: 'Anthropic SDK',
   defaultPresetId,
   description: 'Anthropic Messages API with streaming, tool calling, and extended thinking',

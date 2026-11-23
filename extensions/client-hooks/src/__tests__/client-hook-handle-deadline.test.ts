@@ -20,7 +20,7 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
+import { createBusInstance, type IHostMakaioBus } from '@makaio/bus-core';
 import { RawClientHookPayloadSchema, ClientHookHandleResponseSchema } from '@makaio/subsystem-client';
 import { createBusNamespace, type SchemaRecord } from '@makaio/core';
 import { runClientHookHandleCommand, type ClientHookHandleCommandDependencies } from '../cli/client-hook-command.js';
@@ -41,7 +41,7 @@ afterEach(() => {
  * @returns Subjects registered on the local test bus.
  */
 function registerTestClientNamespace<T extends SchemaRecord = Record<never, never>>(
-  bus: IMakaioBus,
+  bus: IHostMakaioBus,
   clientId: string,
   additionalSchemas?: T,
 ) {

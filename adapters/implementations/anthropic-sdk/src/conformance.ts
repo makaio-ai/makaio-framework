@@ -27,8 +27,8 @@ import { adapterDefinition } from './definition.js';
 export const createTestConfig = async (
   options?: CreateConformanceTestConfigOptions,
 ): Promise<ConformanceTestConfig<AnthropicSdkConnectorBus, AnthropicSdkConnector, AnthropicSdkAgent>> => {
-  const { scopedBus } = AnthropicSdkConnectorNamespace;
-  const bus = await scopedBus(MakaioBus);
+  MakaioBus.registerNamespaces([AnthropicSdkConnectorNamespace.definition]);
+  const bus = await AnthropicSdkConnectorNamespace.scopedBus(MakaioBus);
   const testPreset = resolveConformanceTestPreset({
     adapterName: AnthropicSdkAdapterName,
     testProviderDefinitionId: testPresetId,

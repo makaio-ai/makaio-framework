@@ -45,6 +45,7 @@ type SdkEvent = EventContext<SDKMessage>;
 // Test Setup
 // ─────────────────────────────────────────────────────────────────────────────
 
+MakaioBus.registerNamespaces([ClaudeCodeConnectorNamespace.definition]);
 const scopedBus = await ClaudeCodeConnectorNamespace.scopedBus(MakaioBus);
 
 /**

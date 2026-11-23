@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { createBusInstance } from '@makaio/bus-core';
-import { FrameworkContractNamespaces, FrameworkStorageNamespaces } from '@makaio/contracts';
+import { FrameworkContractNamespaces, FrameworkStorageNamespaces, WorkflowNamespace } from '@makaio/contracts';
 import {
   runWorkloadInvocation,
   type InstalledWorkloadAdapter,
@@ -185,7 +185,8 @@ function createHeadlessConnection(
   credentials: HeadlessWorkerBootstrapCredentials,
 ): BootstrapRuntimeConnection {
   const bus = createBusInstance();
-  bus.registerNamespaces([...FrameworkContractNamespaces, ...FrameworkStorageNamespaces]);
+  // The control bus hosts workflow cancellation subjects without loading the workflow engine extension.
+  bus.registerNamespaces([...FrameworkContractNamespaces, ...FrameworkStorageNamespaces, WorkflowNamespace]);
   return {
     bus,
     async connect(signal) {

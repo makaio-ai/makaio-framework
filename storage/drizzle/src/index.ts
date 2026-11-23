@@ -7,12 +7,12 @@
  * type-safe drizzle schema support to storage namespaces.
  * @example
  * ```typescript
- * import { createStorageNamespace } from '@makaio/storage-core';
+ * import { createStorageNamespaceDefinition } from '@makaio/storage-core';
  * import '@makaio/storage-drizzle'; // Enables drizzle extension
  * import { sessionsTable, sessionAgentsTable } from './schema';
  *
- * const SessionStorage = createStorageNamespace('session', {
- *   schemas: { ... },
+ * const SessionStorage = createStorageNamespaceDefinition('session', {
+ *   schemas,
  *   extensions: {
  *     drizzle: {
  *       sessions: sessionsTable,
@@ -24,6 +24,9 @@
  * // Type-safe access to drizzle schemas
  * const { sessions, sessionAgents } = SessionStorage.extensions.drizzle;
  * ```
+ * Include `SessionStorage` in the extension manifest's `namespaces` array,
+ * claim it at runtime with `ctx.namespaces.lease(SessionStorage)`, or register
+ * it in host code with `bus.registerNamespace(SessionStorage)`.
  * @packageDocumentation
  */
 
@@ -48,7 +51,6 @@ declare module '@makaio/storage-core' {
 
 // Re-export core types for convenience
 export type { StorageNamespace, StorageNamespaceConfig, StorageNamespaceExtensions } from '@makaio/storage-core';
-export { createStorageNamespace } from '@makaio/storage-core';
 
 // Canonical database type alias — import MakaioDatabase from here, not from drizzle-orm/libsql
 export type { MakaioDatabase } from './types';

@@ -13,6 +13,7 @@ export type { ExtensionCoordinatorOptions, InstalledExtensionCatalogSource } fro
 export type { ExtensionStartOptions } from './extension-coordinator.js';
 export type { SetEnabledResult, TransitionOutcome } from './extension-toggle.js';
 export { ExtensionCoordinator } from './extension-coordinator.js';
+export { NamespaceCapabilityClosedError } from './namespace-capability.js';
 export { ExtensionOperatorConfigError } from './resolve-config.js';
 export type { ExtensionConfigResolution } from './resolve-config.js';
 export { coalesceExtensionOverrides, filterEligibleExtensions } from './extension-selection.js';

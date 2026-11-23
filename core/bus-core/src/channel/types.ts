@@ -7,6 +7,9 @@ import type {
   WildcardSubject,
 } from '@makaio/core';
 
+/** Prefix for namespaces used by direct channels. */
+export const CHANNEL_NAMESPACE_PREFIX = 'channel:';
+
 /**
  * Encrypted point-to-point communication channel over the bus.
  *

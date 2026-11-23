@@ -27,8 +27,8 @@ import { adapterDefinition } from './definition.js';
 export const createTestConfig = async (
   options?: CreateConformanceTestConfigOptions,
 ): Promise<ConformanceTestConfig<OpenAINodeConnectorBus, OpenAINodeConnector, OpenAIAgent>> => {
-  const { scopedBus } = OpenAINodeConnectorNamespace;
-  const bus = await scopedBus(MakaioBus);
+  MakaioBus.registerNamespaces([OpenAINodeConnectorNamespace.definition]);
+  const bus = await OpenAINodeConnectorNamespace.scopedBus(MakaioBus);
   const testPreset = resolveConformanceTestPreset({
     adapterName: OpenAINodeAdapterName,
     testProviderDefinitionId: testPresetId,

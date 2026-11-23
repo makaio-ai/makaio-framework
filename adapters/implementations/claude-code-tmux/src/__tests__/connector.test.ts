@@ -223,6 +223,8 @@ function fireSessionStart(sessionId = 'claude-session-abc', delayMs = 5): void {
 // Tests
 // ---------------------------------------------------------------------------
 
+MakaioBus.registerNamespaces([ClaudeCodeTmuxConnectorNamespace.definition]);
+
 describe('ClaudeCodeTmuxConnector', () => {
   beforeEach(() => {
     MakaioBus.__resetHandlers?.();
