@@ -1,6 +1,6 @@
 import type { JsonValue } from '../shared/json-value.js';
 import type {
-  LoopGateOutcome,
+  LoopCheckOutcome,
   WorkflowIterateChainNode,
   WorkflowIterateNode,
   WorkflowLoopNode,
@@ -10,16 +10,11 @@ import type {
 } from './schemas.js';
 
 // ─────────────────────────────────────────────────────────────
-// Loop Gate Context
+// Loop Check Context
 // ─────────────────────────────────────────────────────────────
 
-/**
- * Contextual data passed to a loop gate handler at evaluation time.
- *
- * The handler receives the current round number, max rounds, and
- * identifying information so it can make convergence decisions.
- */
-export interface LoopGateContext {
+/** Context passed to a loop check handler. */
+export interface LoopCheckContext {
   /** Execution ID of the running workflow. */
   readonly executionId: string;
   /** Node ID of the loop node being evaluated. */
@@ -31,16 +26,14 @@ export interface LoopGateContext {
 }
 
 /**
- * Gate handler function signature for loop convergence checks.
- *
- * Registered at runtime (not serialized in the definition); the
- * schema stores only the `handler` name string.
- * @param input - Gate input resolved from the `gate.input` expression.
- * @param config - Gate configuration from `gate.config`.
- * @param ctx - Loop gate context with round and execution metadata.
- * @returns The gate outcome determining the next loop action.
+ * Check handler for loop convergence. It is registered at runtime and the
+ * definition stores its name. Throwing fails the loop node.
+ * @param input - Value resolved from `check.input`, or `null`.
+ * @param config - Value of `check.config`, or `null`.
+ * @param ctx - Round and execution metadata.
+ * @returns The check outcome for this round.
  */
-export type LoopGateHandler = (input: JsonValue, config: JsonValue, ctx: LoopGateContext) => LoopGateOutcome;
+export type LoopCheckHandler = (input: JsonValue, config: JsonValue, ctx: LoopCheckContext) => LoopCheckOutcome;
 
 // ─────────────────────────────────────────────────────────────
 // Nested Loop Validation

@@ -5,4 +5,4 @@
 "@makaio/framework": minor
 ---
 
-Add gated `loop` workflow primitive: a convergence loop that repeats a body sequence until a deterministic gate handler returns `pass`, `loop`, or `escalate`, with runtime-enforced `maxRounds` protection. Escalation reuses existing gate suspend/resume infrastructure for human intervention. Includes authoring API (`defineWorkflow().loop()` and standalone `loop()` factory), walk/projection support, runtime executor with frame-per-round tracking, and worker loader pass-through for `runtimeLoopGates`.
+Add the `loop` workflow primitive. A loop repeats a body sequence until its registered `check` returns `pass`. A check can return `loop` to start another round. When the final round returns `loop`, the workflow fails with a reason. Author loops with `defineWorkflow().loop()` or the standalone `loop()` factory.

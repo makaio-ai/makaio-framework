@@ -1,10 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { MakaioBus } from '@makaio/bus-core';
 import { WorkflowRunContextSchema, type WorkflowRunContext } from '@makaio/contracts';
+import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import { DEFAULT_EXECUTOR_CONFIG } from '../types.js';
 import { buildWorkflowRunContext } from '../workflow-run-context-builder.js';
 import { createTestDb, createWorkflowDefinition, createWorkflowExecution, type TestDbContext } from './shared.js';
+import { setupWorkflowExecutorTest, teardownWorkflowExecutorTest } from './workflow-executor.test-setup.js';
 
 /**
  * Persist a run context together with its parent execution row.
@@ -57,29 +60,6 @@ describe('WorkflowRunContext storage round-trip', () => {
       executionId: runContext.executionId,
     });
     expect(stored?.terminalAuthority).toBe(terminalAuthority);
-  });
-
-  it('builds run contexts with the caller supplied suspension strategy', () => {
-    const runContext = buildWorkflowRunContext(
-      {
-        executionId: 'exec-rc-builder-strategy',
-        workflowId: 'wf-test',
-        coordinatorSessionId: 'session-builder-strategy',
-        source: { kind: 'definition', workflowId: 'wf-test' },
-        definitionSnapshot: createWorkflowDefinition({ id: 'wf-test' }),
-        inputs: {},
-        config: {},
-        scope: { type: 'global' },
-        triggerPayload: {},
-        suspensionStrategy: 'exit-and-redispatch',
-      },
-      {
-        ...DEFAULT_EXECUTOR_CONFIG,
-        platformDefaults: { cwd: '/workspace' },
-      },
-    );
-
-    expect(runContext.suspensionStrategy).toBe('exit-and-redispatch');
   });
 
   it('persists the explicit trigger mode for isolated worker reconstruction', async () => {
@@ -226,40 +206,6 @@ describe('WorkflowRunContext storage round-trip', () => {
 
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
     expect(fetched?.inputs).toBeNull();
-  });
-
-  it('persists dispatch metadata for pause and resume routing', async () => {
-    const executionId = 'exec-rc-dispatch-metadata';
-    const runContext = WorkflowRunContextSchema.parse({
-      ...buildRunContext(executionId),
-      dispatchMetadata: { poolId: 'pool-original', route: { kind: 'worker-pool' } },
-    });
-
-    await persistRunContext(runContext);
-
-    const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
-    expect(fetched?.dispatchMetadata).toEqual({ poolId: 'pool-original', route: { kind: 'worker-pool' } });
-  });
-
-  it('preserves dispatch metadata when a worker checkpoint refreshes run context without it', async () => {
-    const workflow = createWorkflowDefinition({ id: 'wf-test' });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow });
-
-    const executionId = 'exec-rc-start-preserves-dispatch-metadata';
-    await persistRunContext(
-      WorkflowRunContextSchema.parse({
-        ...buildRunContext(executionId),
-        dispatchMetadata: { poolId: 'pool-original', route: { kind: 'worker-pool' } },
-      }),
-    );
-
-    await MakaioBus.request(WorkflowStorageSubjects.setExecutionStart, {
-      execution: createWorkflowExecution({ id: executionId, workflowId: 'wf-test', status: 'running' }),
-      runContext: buildRunContext(executionId),
-    });
-
-    const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
-    expect(fetched?.dispatchMetadata).toEqual({ poolId: 'pool-original', route: { kind: 'worker-pool' } });
   });
 
   it('persists and retrieves a path-sourced run context', async () => {
@@ -450,5 +396,60 @@ describe('WorkflowRunContext storage round-trip', () => {
         },
       }),
     ).toThrow('sourcePath must be relative');
+  });
+});
+
+describe('WorkflowRunContext public reads', () => {
+  it('returns an opaque historical Gate snapshot under strict bus validation', async () => {
+    const setup = await setupWorkflowExecutorTest();
+    vi.stubEnv('NODE_ENV', 'test');
+
+    try {
+      const executionId = 'exec-rc-historical-gate';
+      const workflow = createWorkflowDefinition({ id: 'wf-historical-gate' });
+      const runContext = buildWorkflowRunContext(
+        {
+          executionId,
+          workflowId: workflow.id,
+          coordinatorSessionId: 'session-historical-gate',
+          source: { kind: 'definition', workflowId: workflow.id },
+          definitionSnapshot: workflow,
+          inputs: {},
+          config: {},
+          scope: { type: 'global' },
+          triggerPayload: {},
+        },
+        DEFAULT_EXECUTOR_CONFIG,
+      );
+      await persistRunContext(runContext);
+
+      const historicalSnapshot = {
+        ...workflow,
+        root: {
+          ...workflow.root,
+          nodes: [
+            {
+              id: 'approval',
+              type: 'gate', // legacy-input
+              prompt: 'Approve the run',
+              autoAction: 'reject',
+              timeoutMs: null,
+            },
+          ],
+        },
+      };
+      await setup.dbContext.exec(sql`
+        UPDATE workflow_run_contexts
+        SET definition_snapshot = ${JSON.stringify(historicalSnapshot)}
+        WHERE execution_id = ${executionId}
+      `);
+
+      const stored = await MakaioBus.request(MakaioBus.own('start'), WorkflowSubjects.getRunContext, { executionId });
+      expect(stored.executionId).toBe(executionId);
+      expect(stored.definitionSnapshot).toEqual(historicalSnapshot);
+    } finally {
+      vi.unstubAllEnvs();
+      await teardownWorkflowExecutorTest(setup);
+    }
   });
 });

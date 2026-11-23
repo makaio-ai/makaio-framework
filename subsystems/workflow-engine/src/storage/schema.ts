@@ -7,7 +7,6 @@ import type {
   WorkflowDefinition,
   WorkflowExecutionScope,
   WorkflowFrameState,
-  WorkflowGateInstance,
   WorkflowAutomationTriggerBinding,
   ExecutionLinkType,
   SpanStatus,
@@ -16,7 +15,6 @@ import type {
   WorkflowNodeType,
   WorkflowArtifactBinding,
   WorkflowRunContext,
-  WorkLogGateEvent,
   WorkflowDefinitionProvenance,
   WorkflowWorkerSource,
   JsonPatchOperation,
@@ -80,7 +78,7 @@ export const workflowDefinitionsDual = defineDualTable(
     createdAt: c.epochMs('created_at').notNull(),
     /** Last update timestamp. */
     updatedAt: c.epochMs('updated_at').notNull(),
-    /** Canvas layout hints for the visual editor (JSON object). */
+    /** Legacy column: kept with its data, nothing reads or writes it */
     canvasLayout: c.jsonCol<Record<string, JsonValue>>('canvas_layout'),
     /** Declarations addressed to extensions, keyed by extension name (JSON object). */
     extensions: c.jsonCol<NonNullable<WorkflowDefinition['extensions']>>('extensions'),
@@ -138,7 +136,7 @@ export const workflowExecutionsDual = defineDualTable(
     /** Current execution status. */
     status: c
       .textEnum('status', {
-        enum: ['pending', 'running', 'paused', 'finalizing', 'completed', 'failed', 'cancelled'] as const,
+        enum: ['pending', 'running', 'finalizing', 'completed', 'failed', 'cancelled'] as const,
       })
       .notNull(),
     /** Bound workflow input value (JSON). */
@@ -266,81 +264,6 @@ export const workflowExecutionFrames = workflowExecutionFramesDual.sqlite;
 
 export type InsertWorkflowExecutionFrame = typeof workflowExecutionFrames.$inferInsert;
 export type SelectWorkflowExecutionFrame = typeof workflowExecutionFrames.$inferSelect;
-
-/**
- * Workflow gate instances table.
- *
- * Created when a gate node is entered, updated when the gate is resolved,
- * timed out, or cancelled. Stored independently of frame state so the gate
- * service can query open gates without scanning the full frame tree.
- *
- * CENTRAL tier — migrated alongside `workflow_executions`.
- */
-export const workflowGateInstancesDual = defineDualTable(
-  'workflow_gate_instances',
-  (c) => ({
-    /** Unique gate instance identifier. */
-    id: c.text('id').primaryKey(),
-    /** Execution this gate belongs to. */
-    executionId: c
-      .text('execution_id')
-      .notNull()
-      .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
-    /** Attempt that opened this gate; absent for legacy non-Attempt executions. */
-    executionAttemptId: c.text('execution_attempt_id'),
-    /** Node ID of the gate in the workflow definition. */
-    nodeId: c.text('node_id').notNull(),
-    /** Frame ID of the gate's execution frame. */
-    frameId: c.text('frame_id').notNull(),
-    /**
-     * JSON Schema describing the expected resume data payload.
-     * Callers must satisfy this schema when responding to the gate.
-     */
-    schema: c.jsonCol<Record<string, unknown>>('schema').notNull(),
-    /**
-     * Optional prompt shown to the reviewer after template interpolation.
-     * Populated from the gate node's `prompt` field at execution time.
-     */
-    prompt: c.text('prompt'),
-    /** Current gate status. */
-    status: c.text('status').notNull().default('waiting').$type<WorkflowGateInstance['status']>(),
-    /** Effective timeout action captured when the gate opened. */
-    autoAction: c
-      .textEnum('auto_action', { enum: ['approve', 'reject'] as const })
-      .notNull()
-      .default('reject'),
-    /** Effective timeout in milliseconds captured when the gate opened. */
-    timeoutMs: c.int4('timeout_ms'),
-    /** JSON-serializable resume data submitted by the approver. */
-    resumeData: c.jsonCol<JsonValue>('resume_data'),
-    /** Human-readable rationale supplied by the responder. */
-    reason: c.text('reason'),
-    /** Whether `resume_data` was explicitly submitted, including JSON null. */
-    resumeDataPresent: c.bool('resume_data_present').notNull().default(false),
-    /** Epoch milliseconds when the gate was created (node entered). */
-    createdAt: c.epochMs('created_at').notNull(),
-    /** Epoch milliseconds when the gate left the `waiting` status. */
-    resolvedAt: c.epochMs('resolved_at'),
-  }),
-  {
-    sqlite: (t) => [
-      // Efficient per-execution gate lookup.
-      index('idx_workflow_gate_instances_execution').on(t.executionId),
-      // Frame-based gate lookup for iterate-expanded gates.
-      index('idx_workflow_gate_instances_frame').on(t.frameId),
-    ],
-    postgres: (t) => [
-      pgIndex('idx_workflow_gate_instances_execution').on(t.executionId),
-      pgIndex('idx_workflow_gate_instances_frame').on(t.frameId),
-    ],
-  },
-);
-
-/** SQLite face of the `workflow_gate_instances` table (canonical schema). */
-export const workflowGateInstances = workflowGateInstancesDual.sqlite;
-
-export type InsertWorkflowGateInstance = typeof workflowGateInstances.$inferInsert;
-export type SelectWorkflowGateInstance = typeof workflowGateInstances.$inferSelect;
 
 /**
  * Workflow step spans table.
@@ -490,8 +413,8 @@ export const workflowRunContextsDual = defineDualTable(
       .$type<NonNullable<WorkflowRunContext['triggerMode']>>(),
     /** Explicit artifact reference supplied by the execution starter. */
     artifactRef: c.jsonCol<WorkflowRunContext['artifactRef']>('artifact_ref'),
-    /** Opaque dispatch metadata that must survive pause/resume boundaries. */
-    dispatchMetadata: c.jsonCol<WorkflowRunContext['dispatchMetadata']>('dispatch_metadata'),
+    /** Legacy column: kept with its data, nothing reads or writes it */
+    dispatchMetadata: c.jsonCol<Record<string, JsonValue>>('dispatch_metadata'),
     /** Scope type discriminant. */
     scopeType: c
       .textEnum('scope_type', { enum: ['global', 'workspace', 'session', 'external'] as const })
@@ -508,14 +431,8 @@ export const workflowRunContextsDual = defineDualTable(
     env: c.jsonCol<Record<string, string>>('env').notNull(),
     /** Snapshot creation timestamp (epoch ms). */
     createdAt: c.epochMs('created_at').notNull(),
-    /**
-     * Durable record of the suspension strategy selected for this execution.
-     *
-     * Persisted so resumers and redispatchers can apply the same strategy
-     * without re-resolving provider capabilities. Null for rows created before
-     * this column was introduced — callers should fall back to `'wait-in-process'`.
-     */
-    suspensionStrategy: c.text('suspension_strategy').$type<WorkflowRunContext['suspensionStrategy']>(),
+    /** Legacy column: kept with its data, nothing reads or writes it */
+    suspensionStrategy: c.text('suspension_strategy'),
     /** Component that exclusively owns durable terminalization. */
     terminalAuthority: c.text('terminal_authority').$type<WorkflowRunContext['terminalAuthority']>(),
     /**
@@ -572,7 +489,7 @@ export const worklogSummariesDual = defineDualTable(
      */
     status: c
       .textEnum('status', {
-        enum: ['pending', 'running', 'paused', 'finalizing', 'completed', 'failed', 'cancelled'] as const,
+        enum: ['pending', 'running', 'finalizing', 'completed', 'failed', 'cancelled'] as const,
       })
       .notNull(),
     /** Epoch milliseconds when the execution started. */
@@ -642,7 +559,7 @@ export const worklogFrameEntriesDual = defineDualTable(
     /** Current or terminal frame status. */
     status: c
       .textEnum('status', {
-        enum: ['pending', 'running', 'waiting', 'completed', 'failed', 'skipped', 'cancelled'] as const,
+        enum: ['pending', 'running', 'completed', 'failed', 'skipped', 'cancelled'] as const,
       })
       .notNull(),
     /** Zero-based attempt index. 0 for first attempt, incremented on retry. */
@@ -730,68 +647,6 @@ export const worklogArtifactWrites = worklogArtifactWritesDual.sqlite;
 
 export type InsertWorklogArtifactWrite = typeof worklogArtifactWrites.$inferInsert;
 export type SelectWorklogArtifactWrite = typeof worklogArtifactWrites.$inferSelect;
-
-/**
- * WorkLog gate events table.
- *
- * One row per gate state transition. Enables "show me all pending gates
- * across executions" queries without scanning the full frame state.
- *
- * CENTRAL tier — migrated alongside `workflow_executions`.
- */
-export const worklogGateEventsDual = defineDualTable(
-  'worklog_gate_events',
-  (c) => ({
-    /** Auto-generated surrogate key (executionId:nodeId:frameId). */
-    id: c.text('id').primaryKey(),
-    /** Execution this gate belongs to. */
-    executionId: c
-      .text('execution_id')
-      .notNull()
-      .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
-    /** Node identifier of the gate in the workflow definition. */
-    nodeId: c.text('node_id').notNull(),
-    /** Frame identifier for the gate's execution frame. */
-    frameId: c.text('frame_id').notNull(),
-    /**
-     * Latest gate status. Updated on each gate state transition event.
-     * Mirrors `WorkLogGateEvent.status`.
-     */
-    status: c
-      .textEnum('status', { enum: ['waiting', 'resumed', 'rejected', 'timed-out', 'cancelled'] as const })
-      .notNull()
-      .$type<WorkLogGateEvent['status']>(),
-    /**
-     * Prompt shown to the reviewer, after template interpolation.
-     * Populated when the gate entered `waiting` status.
-     */
-    prompt: c.text('prompt'),
-    /** Epoch milliseconds when the gate entered `waiting`. */
-    openedAt: c.epochMs('opened_at').notNull(),
-    /** Epoch milliseconds when the gate left `waiting`. */
-    resolvedAt: c.epochMs('resolved_at'),
-    /** JSON-serializable resume data submitted by the approver. */
-    resumeData: c.jsonCol<JsonValue>('resume_data'),
-  }),
-  {
-    sqlite: (t) => [
-      // Efficient per-execution gate lookup.
-      index('idx_worklog_gate_events_execution').on(t.executionId),
-      // Index on status for "pending gates" queries.
-      index('idx_worklog_gate_events_status').on(t.status),
-    ],
-    postgres: (t) => [
-      pgIndex('idx_worklog_gate_events_execution').on(t.executionId),
-      pgIndex('idx_worklog_gate_events_status').on(t.status),
-    ],
-  },
-);
-
-/** SQLite face of the `worklog_gate_events` table (canonical schema). */
-export const worklogGateEvents = worklogGateEventsDual.sqlite;
-
-export type InsertWorklogGateEvent = typeof worklogGateEvents.$inferInsert;
-export type SelectWorklogGateEvent = typeof worklogGateEvents.$inferSelect;
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Execution State Tables

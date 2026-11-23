@@ -712,25 +712,6 @@ describe('attempt-scoped raw workflow storage authorization', () => {
         },
       },
       { subject: WorkflowStorageSubjects.listFrames, payload: { executionId: targetExecutionId } },
-      {
-        subject: WorkflowStorageSubjects.setGateInstance,
-        payload: {
-          gate: {
-            executionId: targetExecutionId,
-            nodeId: 'gate-storage',
-            frameId: `gate-frame-${targetExecutionId}`,
-            schema: {},
-            status: 'waiting',
-            autoAction: 'reject',
-            timeoutMs: null,
-            createdAt: 1,
-          },
-        },
-      },
-      {
-        subject: WorkflowStorageSubjects.getGateInstance,
-        payload: { executionId: targetExecutionId, nodeId: 'gate-storage' },
-      },
     ];
   }
 

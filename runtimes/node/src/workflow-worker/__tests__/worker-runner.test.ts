@@ -292,38 +292,6 @@ describe('WorkerRunner', () => {
     expect(capturedRequest!.requirements).toEqual(requirements);
   });
 
-  it('forwards per-run dispatch metadata to the dispatch function', async () => {
-    const authority = createTestAuthority();
-    const dispatchMetadata = { resume: true, providerRunId: 'gha-1' };
-    let capturedRequest: Parameters<WorkerDispatch>[1] | undefined;
-    const dispatch: WorkerDispatch = async (_call, request) => {
-      capturedRequest = request;
-      const result: WorkflowRunResult = {
-        executionId: 'wfx-1',
-        workflowId: 'workflow-1',
-        status: 'completed',
-      };
-      const decision = await authority.commitOutcome(
-        request.executionAttemptId,
-        'wfx-1',
-        authority.canonicalizeOutcome(result),
-      );
-      authority.settleOutcome(
-        request.executionAttemptId,
-        decision.kind === 'accepted' || decision.kind === 'duplicate'
-          ? { ...decision, acceptance: 'projected' }
-          : decision,
-      );
-      return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
-    };
-    const runner = new WorkerRunner({ dispatch, authority });
-    const signal = new AbortController().signal;
-
-    await runner.run(createTestCall(), makeWorkerConfig(), signal, undefined, { dispatchMetadata });
-
-    expect(capturedRequest!.metadata).toEqual(dispatchMetadata);
-  });
-
   it('omits requirements from the dispatch payload when not provided', async () => {
     const authority = createTestAuthority();
     const manifest: WorkerContributionManifest = { contributionRefs: [] };

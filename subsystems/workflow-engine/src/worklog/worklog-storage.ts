@@ -8,14 +8,13 @@ import {
   type JsonValue,
   type WorkflowArtifactBinding,
 } from '@makaio/contracts';
+import { isRetainedGateNodeType } from '../storage/retained-rows.js';
 import type {
   InsertWorklogSummary,
   SelectWorklogSummary,
   InsertWorklogFrameEntry,
   SelectWorklogFrameEntry,
   InsertWorklogArtifactWrite,
-  InsertWorklogGateEvent,
-  SelectWorklogGateEvent,
 } from '../storage/schema.js';
 import { workflowEngineSchema } from '../storage/schema.variants.js';
 
@@ -295,16 +294,18 @@ export async function getWorklogFrameEntryRow(
 /**
  * Retrieve one WorkLog frame entry as its public contract shape.
  *
+ * Stored gate rows from before workflow waiting was removed are kept and do not appear in this response; sums may still include their cost.
+ *
  * Database nulls are normalised to absent optional fields before the value is
  * returned through the public WorkLog RPC. Parsing also protects the RPC from
  * exposing a row that does not satisfy the published projection contract.
  * @param db - Drizzle database instance.
  * @param frameId - Frame identifier to look up.
- * @returns The mapped frame entry, or `null` when not found.
+ * @returns The mapped frame entry, or `null` when unavailable through the public RPC.
  */
 export async function getWorklogFrameEntry(db: MakaioDatabase, frameId: string): Promise<WorkLogFrameEntry | null> {
   const row = await getWorklogFrameEntryRow(db, frameId);
-  if (row === null) return null;
+  if (row === null || isRetainedGateNodeType(row.nodeType)) return null;
 
   return WorkLogFrameEntrySchema.parse({
     executionId: row.executionId,
@@ -367,55 +368,6 @@ export function buildArtifactWriteId(
   writtenAt: number,
 ): string {
   return `${executionId}:${frameId}:${artifactKind}:${artifactId}:${writtenAt}`;
-}
-
-// ─────────────────────────────────────────────────────────────
-// Gate event operations
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Upsert a WorkLog gate event row.
- *
- * Called on `gate.suspended` (creates the row with `waiting` status) and
- * `gate.resumed` (updates to `resumed` status and sets `resolvedAt`).
- * @param db - Drizzle database instance.
- * @param event - Gate event values to insert or update.
- */
-export async function upsertWorklogGateEvent(db: MakaioDatabase, event: InsertWorklogGateEvent): Promise<void> {
-  const { worklogGateEvents } = resolveSchema(db, workflowEngineSchema);
-  await db.insert(worklogGateEvents).values(event).onConflictDoUpdate({
-    target: worklogGateEvents.id,
-    set: event,
-  });
-}
-
-/**
- * Retrieve a single WorkLog gate event by its surrogate ID.
- *
- * Used by `gate.resumed` projection to preserve the prompt and openedAt
- * metadata recorded when the gate first suspended.
- * @param db - Drizzle database instance.
- * @param id - Gate event surrogate key.
- * @returns The gate event row, or `null` when not found.
- */
-export async function getWorklogGateEvent(db: MakaioDatabase, id: string): Promise<SelectWorklogGateEvent | null> {
-  const { worklogGateEvents } = resolveSchema(db, workflowEngineSchema);
-  const rows = await db.select().from(worklogGateEvents).where(eq(worklogGateEvents.id, id)).limit(1);
-  return rows[0] ?? null;
-}
-
-/**
- * Build a stable surrogate key for a gate event row.
- *
- * The key uniquely identifies a gate node execution within an execution.
- * For iterate expansions the `frameId` ensures uniqueness across iterations.
- * @param executionId - Execution identifier.
- * @param nodeId - Gate node identifier.
- * @param frameId - Frame identifier.
- * @returns A stable string key suitable for use as a primary key.
- */
-export function buildGateEventId(executionId: string, nodeId: string, frameId: string): string {
-  return `${executionId}:${nodeId}:${frameId}`;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -629,7 +581,6 @@ export async function aggregateWorklogStats(
   const byStatus: WorkLogStats['byStatus'] = {
     pending: 0,
     running: 0,
-    paused: 0,
     finalizing: 0,
     completed: 0,
     failed: 0,
@@ -658,8 +609,6 @@ export type {
   InsertWorklogFrameEntry,
   SelectWorklogFrameEntry,
   InsertWorklogArtifactWrite,
-  InsertWorklogGateEvent,
-  SelectWorklogGateEvent,
   WorkflowArtifactBinding,
   JsonValue,
 };

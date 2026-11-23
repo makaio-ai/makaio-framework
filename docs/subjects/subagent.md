@@ -63,7 +63,7 @@ Type: Request (RPC)
 | `error` | `string \| undefined` | no |
 | `pendingRequest` | `{ messageId: string; question: string; context?: string \| undefined; } \| undefined` | no |
 | `result` | `string \| undefined` | no |
-| `status` | `"failed" \| "completed" \| "cancelled" \| "timeout" \| "waiting_input"` | yes |
+| `status` | `"failed" \| "completed" \| "cancelled" \| "waiting_input" \| "timeout"` | yes |
 | `toolObservations` | `{ toolName: string; outcome: "success" \| "failure"; artifact?: { kind: string; id: string; revision: string; } \| undefined; }[] \| undefined` | no |
 | `usage` | `{ toolCallCount: number; inputTokens?: number \| undefined; cachedInputTokens?: number \| undefined; outputTokens?: number \| undefined; } \| undefined` | no |
 

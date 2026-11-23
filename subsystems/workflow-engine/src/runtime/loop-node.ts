@@ -1,49 +1,46 @@
 import type { CallContext } from '@makaio/core';
 import { evaluateSync } from '@makaio/expression';
-import type {
-  JsonValue,
-  LoopGateHandler,
-  LoopGateOutcome,
-  WorkflowFrameState,
-  WorkflowLoopNode,
-  WorkflowSequenceNode,
+import {
+  LoopCheckOutcomeSchema,
+  type JsonValue,
+  type LoopCheckHandler,
+  type LoopCheckOutcome,
+  type WorkflowFrameState,
+  type WorkflowLoopNode,
 } from '@makaio/contracts';
 import type { ExecuteSequenceFn, NodeOutcome } from './node-execution.js';
-import { cancelFrame, completeFrame, failFrame, startFrame } from './node-execution.js';
+import { cancelFrame, completeFrame, failFrame, failFrameFromException, startFrame } from './node-execution.js';
 import {
   buildRuntimeExpressionScope,
+  mergeFrameOutput,
   type PrimitiveExpressionContext,
   type RuntimeContext,
 } from './runtime-context.js';
 import { extractLastSequenceOutput } from './iterate-helpers.js';
-import { findReusableResumeFrame, mergeFrameOutput } from './resume-frames.js';
-import { openEscalationGate, resolvePersistedEscalationGate } from './loop-escalation.js';
 
 // -----------------------------------------------------------------
 // Loop output type
 // -----------------------------------------------------------------
 
-/**
- * Output produced by a completed `loop` node.
- *
- * Contains the aggregate loop result including per-round body outputs
- * and the gate outcome that terminated the loop.
- */
+/** Output produced by a completed `loop` node. */
 export interface LoopOutput {
-  /** Whether the loop exited via `pass` or `escalate`. */
-  readonly outcome: 'pass' | 'escalate';
+  /** Whether a check passed before or on the final round. */
+  readonly passed: boolean;
   /** Total number of rounds executed (1-based). */
   readonly rounds: number;
-  /** The gate outcome that caused the loop to exit. */
-  readonly lastGateOutcome: LoopGateOutcome;
   /** Ordered body outputs from each round. */
   readonly bodyOutputs: readonly JsonValue[];
-  /**
-   * Resume data from the escalation gate, when the loop was escalated
-   * and the gate was resolved with user input. Absent for `pass` outcomes
-   * and for escalation outcomes that complete without a gate.
-   */
-  readonly resumeData?: JsonValue;
+}
+
+/**
+ * Build the same output shape for convergence and completion on exhaustion.
+ * @param passed - Whether a check passed.
+ * @param bodyOutputs - Ordered output of all completed rounds.
+ * @returns The completed loop outcome.
+ */
+function completeLoop(passed: boolean, bodyOutputs: JsonValue[]): NodeOutcome {
+  const output: LoopOutput = { passed, rounds: bodyOutputs.length, bodyOutputs };
+  return { status: 'completed', output };
 }
 
 // -----------------------------------------------------------------
@@ -64,20 +61,14 @@ type RoundBodyResult =
   | {
       terminal: false;
       output: JsonValue;
-      replayed: boolean;
-      gateExpressionCtx: PrimitiveExpressionContext;
+      checkExpressionCtx: PrimitiveExpressionContext;
     };
-
-/** Round frame statuses that can be reused while redispatching a parked loop node. */
-const ROUND_RESUME_STATUSES = new Set<WorkflowFrameState['status']>(['completed', 'running']);
 
 /**
  * Execute the body sequence for a single loop round.
  *
- * Creates a per-round iteration frame (or reuses a persisted one from a
- * prior execution), runs the body sequence, and either returns the
- * extracted body output on success or a terminal {@link NodeOutcome} on
- * failure/cancellation/pause.
+ * Creates a per-round iteration frame, runs the body sequence, and returns
+ * its output or propagates failure or cancellation.
  * @param call - Call context of the message that drives this execution run.
  * @param node - The loop node (provides body sequence and node ID).
  * @param round - Zero-based round index for the iteration frame.
@@ -98,80 +89,37 @@ async function executeRoundBody(
   parentFrameId: string,
   parentPath: string[],
 ): Promise<RoundBodyResult> {
-  const resumeFrame = findReusableResumeFrame(ctx.resumeFrames, node.id, {
+  const frame = ctx.createFrame(call, {
+    nodeId: node.id,
+    nodeType: 'loop',
+    path: parentPath,
     parentFrameId,
     iteration: round,
-    statuses: ROUND_RESUME_STATUSES,
   });
-
-  if (resumeFrame?.status === 'completed') {
-    return {
-      terminal: false,
-      output: resumeFrame.output ?? null,
-      replayed: true,
-      gateExpressionCtx: buildLoopGateExpressionContext(node, ctx, expressionCtx, resumeFrame.frameId),
-    };
-  }
-
-  const frame =
-    resumeFrame ??
-    ctx.createFrame(call, {
-      nodeId: node.id,
-      nodeType: 'loop',
-      path: parentPath,
-      parentFrameId,
-      iteration: round,
-    });
 
   if (ctx.signal.aborted) {
     await cancelFrame(call, frame, ctx);
     return { terminal: true, outcome: { status: 'cancelled' } };
   }
 
-  if (resumeFrame === undefined) {
-    await startFrame(call, frame, ctx);
-  }
+  await startFrame(call, frame, ctx);
 
   const bodyOutcome = await runBodySequence(call, node, frame, ctx, expressionCtx, executeSequenceFn);
   if (bodyOutcome !== undefined) {
     return { terminal: true, outcome: bodyOutcome };
   }
 
-  const bodyOutput = extractLastSequenceOutput(node.body as WorkflowSequenceNode, frame.frameId, ctx) ?? null;
+  const bodyOutput = extractLastSequenceOutput(node.body, frame.frameId, ctx) ?? null;
   await completeFrame(call, frame, ctx, bodyOutput);
   return {
     terminal: false,
     output: bodyOutput,
-    replayed: false,
-    gateExpressionCtx: buildLoopGateExpressionContext(node, ctx, expressionCtx, frame.frameId),
+    checkExpressionCtx: buildLoopCheckExpressionContext(node, ctx, expressionCtx, frame.frameId),
   };
 }
 
 /**
- * Check whether redispatch still has a persisted round frame to replay or resume.
- * @param node - Loop node whose round frames are indexed.
- * @param round - Zero-based round index to look up.
- * @param ctx - Runtime context carrying the resume frame index.
- * @param parentFrameId - Loop container frame ID.
- * @returns Whether a matching round frame exists.
- */
-function hasReusableRoundFrame(
-  node: WorkflowLoopNode,
-  round: number,
-  ctx: RuntimeContext,
-  parentFrameId: string,
-): boolean {
-  return (
-    findReusableResumeFrame(ctx.resumeFrames, node.id, {
-      parentFrameId,
-      iteration: round,
-      statuses: ROUND_RESUME_STATUSES,
-    }) !== undefined
-  );
-}
-
-/**
- * Build the expression context visible to the loop gate after a body round.
+ * Build the expression context visible to the loop check after a body round.
  *
  * `executeSequence` keeps body-local frame outputs in its local context, so the
  * loop reconstructs the same public frame view from the runtime frame registry.
@@ -181,25 +129,25 @@ function hasReusableRoundFrame(
  * @param roundFrameId - Frame ID of this loop round.
  * @returns Expression context that includes body node frame outputs.
  */
-function buildLoopGateExpressionContext(
+function buildLoopCheckExpressionContext(
   node: WorkflowLoopNode,
   ctx: RuntimeContext,
   baseCtx: PrimitiveExpressionContext,
   roundFrameId: string,
 ): PrimitiveExpressionContext {
-  let gateCtx = baseCtx;
-  for (const bodyNode of (node.body as WorkflowSequenceNode).nodes) {
+  let checkCtx = baseCtx;
+  for (const bodyNode of node.body.nodes) {
     const frame = ctx
       .getFramesByNodeId(bodyNode.id)
       .find((candidate) => candidate.parentFrameId === roundFrameId && candidate.status === 'completed');
     if (frame !== undefined) {
-      gateCtx = mergeFrameOutput(gateCtx, bodyNode.id, {
+      checkCtx = mergeFrameOutput(checkCtx, bodyNode.id, {
         status: 'completed',
         ...(frame.output !== undefined ? { output: frame.output } : {}),
       });
     }
   }
-  return gateCtx;
+  return checkCtx;
 }
 
 /**
@@ -226,17 +174,9 @@ async function runBodySequence(
 ): Promise<NodeOutcome | undefined> {
   let bodyOutcome: NodeOutcome;
   try {
-    bodyOutcome = await executeSequenceFn(
-      call,
-      node.body as WorkflowSequenceNode,
-      ctx,
-      expressionCtx,
-      frame.frameId,
-      frame.path,
-    );
+    bodyOutcome = await executeSequenceFn(call, node.body, ctx, expressionCtx, frame.frameId, frame.path);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await failFrame(call, frame, ctx, message);
+    const message = await failFrameFromException(call, frame, ctx, error);
     return { status: 'failed', error: message };
   }
 
@@ -249,9 +189,6 @@ async function runBodySequence(
       await cancelFrame(call, frame, ctx);
       return { status: 'cancelled' };
     }
-    case 'paused': {
-      return bodyOutcome;
-    }
     case 'skipped':
     case 'completed': {
       return undefined;
@@ -260,57 +197,59 @@ async function runBodySequence(
 }
 
 // -----------------------------------------------------------------
-// Gate evaluation
+// Check evaluation
 // -----------------------------------------------------------------
 
 /**
- * Evaluate the loop gate handler and return its outcome, applying the
- * max-rounds override when needed.
- *
- * Returns a terminal {@link NodeOutcome} when gate input evaluation
- * fails, or the resolved gate outcome and effective round count.
- * @param node - Loop node providing gate configuration.
+ * Resolve the check input and invoke the handler after a completed round.
+ * @param node - Loop node providing check configuration.
  * @param round - Zero-based round index (converted to 1-based for the handler).
  * @param ctx - Runtime context.
- * @param expressionCtx - Expression context for gate input evaluation.
- * @param gateHandler - Resolved gate handler function.
- * @returns Gate outcome or a terminal failure outcome.
+ * @param expressionCtx - Expression context for check input evaluation.
+ * @param checkHandler - Resolved check handler function.
+ * @returns Check outcome or a terminal failure outcome.
  */
-function evaluateGate(
+function evaluateCheck(
   node: WorkflowLoopNode,
   round: number,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
-  gateHandler: LoopGateHandler,
-): LoopGateOutcome | NodeOutcome {
-  let gateInput: JsonValue = null;
-  if (node.gate.input !== undefined) {
+  checkHandler: LoopCheckHandler,
+): LoopCheckOutcome | Extract<NodeOutcome, { status: 'failed' }> {
+  let checkInput: JsonValue = null;
+  if (node.check.input !== undefined) {
     try {
       const scope = buildRuntimeExpressionScope(expressionCtx);
-      gateInput = evaluateSync(node.gate.input, scope) as JsonValue;
+      checkInput = evaluateSync(node.check.input, scope) as JsonValue;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return {
         status: 'failed',
-        error: `Loop node '${node.id}': gate input expression evaluation failed: ${message}`,
+        error: `Loop node '${node.id}': check input expression evaluation failed: ${message}`,
       };
     }
   }
 
-  const gateConfig: JsonValue = node.gate.config ?? null;
-  const gateOutcome = gateHandler(gateInput, gateConfig, {
-    executionId: ctx.executionId,
-    nodeId: node.id,
-    round: round + 1,
-    maxRounds: node.maxRounds,
-  });
-
-  // Override loop to escalate when max rounds exhausted.
-  if (gateOutcome.kind === 'loop' && round + 1 >= node.maxRounds) {
-    return { kind: 'escalate', reason: 'max_rounds_reached' };
+  try {
+    const outcome = checkHandler(checkInput, node.check.config ?? null, {
+      executionId: ctx.executionId,
+      nodeId: node.id,
+      round: round + 1,
+      maxRounds: node.maxRounds,
+    });
+    const parsed = LoopCheckOutcomeSchema.safeParse(outcome);
+    if (parsed.success) return parsed.data;
+    return {
+      status: 'failed',
+      error: `Loop node '${node.id}': check handler '${node.check.handler}' returned an invalid outcome: ${parsed.error.message}`,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      status: 'failed',
+      error: `Loop node '${node.id}': check handler '${node.check.handler}' threw: ${message}`,
+    };
   }
-
-  return gateOutcome;
 }
 
 // -----------------------------------------------------------------
@@ -318,26 +257,10 @@ function evaluateGate(
 // -----------------------------------------------------------------
 
 /**
- * Execute a `loop` node by running its body sequence up to `maxRounds`
- * times, evaluating the gate handler after each round to determine
- * whether to continue, pass, or escalate.
+ * Execute a `loop` node until a check passes or the round limit is reached.
  *
- * **Execution flow:**
- * 1. Start at round 0 (0-based internally, 1-based in gate context).
- * 2. Create a per-round iteration frame, execute the body sequence.
- * 3. After the body completes, evaluate the gate handler.
- * 4. On `pass`: complete with a pass outcome.
- * 5. On `escalate` without escalation config: complete immediately.
- * 6. On `escalate` with escalation config: open a gate suspension
- *    (in-process or exit-based) and wait for resolution.
- * 7. On `loop`: increment round and re-enter unless `maxRounds` is
- *    reached, in which case the runtime overrides with an escalation.
- *
- * **Resume support:**
- * When the execution is re-dispatched (e.g., after an escalation gate
- * is resolved), previously completed round frames are reused via
- * {@link findReusableResumeFrame} so body sequences are not re-executed.
- * The escalation gate is resolved from persisted state on re-entry.
+ * Each round runs the body in a fresh iteration frame before evaluating the
+ * check. Reaching `maxRounds` without a passing check follows `onExhausted`.
  * @param call - Call context of the message that drives this execution run.
  * @param node - The loop node to execute.
  * @param ctx - Execution-wide runtime context.
@@ -358,19 +281,16 @@ export async function executeLoopNode(
 ): Promise<NodeOutcome> {
   if (ctx.signal.aborted) return { status: 'cancelled' };
 
-  const gateHandler = ctx.runtimeLoopGates.get(node.gate.handler);
-  if (gateHandler === undefined) {
+  const checkHandler = ctx.runtimeLoopChecks.get(node.check.handler);
+  if (checkHandler === undefined) {
     return {
       status: 'failed',
-      error: `Loop node '${node.id}': no gate handler registered for '${node.gate.handler}'`,
+      error: `Loop node '${node.id}': no check handler registered for '${node.check.handler}'`,
     };
   }
 
   const bodyOutputs: JsonValue[] = [];
-  let round = 0;
-
-  // Main loop — executeRoundBody handles frame resume internally.
-  while (true) {
+  for (let round = 0; round < node.maxRounds; round++) {
     if (ctx.signal.aborted) return { status: 'cancelled' };
 
     const bodyResult = await executeRoundBody(
@@ -386,76 +306,13 @@ export async function executeLoopNode(
     if (bodyResult.terminal) return bodyResult.outcome;
     bodyOutputs.push(bodyResult.output);
 
-    // Replayed rounds already passed the gate in a prior execution — skip re-evaluation.
-    if (bodyResult.replayed) {
-      round++;
-      if (hasReusableRoundFrame(node, round, ctx, parentFrameId)) {
-        continue;
-      }
-      if (node.gate.escalation !== undefined && ctx.suspensionStrategy !== 'wait-in-process') {
-        const gateOutcome: LoopGateOutcome = { kind: 'escalate', reason: 'resumed_from_gate' };
-        const earlyOutcome = await resolvePersistedEscalationGate(
-          call,
-          ctx,
-          node,
-          parentFrameId,
-          gateOutcome,
-          round,
-          bodyOutputs,
-        );
-        if (earlyOutcome !== undefined) return earlyOutcome;
-      }
-      continue;
-    }
-
-    const gateResult = evaluateGate(node, round, ctx, bodyResult.gateExpressionCtx, gateHandler);
-    if ('status' in gateResult) return gateResult;
-
-    if (gateResult.kind === 'pass') {
-      return {
-        status: 'completed',
-        output: buildLoopOutput('pass', round + 1, gateResult, bodyOutputs),
-      };
-    }
-    if (gateResult.kind === 'escalate') {
-      if (node.gate.escalation !== undefined) {
-        return openEscalationGate(call, node, ctx, expressionCtx, parentFrameId, gateResult, round + 1, bodyOutputs);
-      }
-      return {
-        status: 'completed',
-        output: buildLoopOutput('escalate', round + 1, gateResult, bodyOutputs),
-      };
-    }
-
-    round++;
+    const checkResult = evaluateCheck(node, round, ctx, bodyResult.checkExpressionCtx, checkHandler);
+    if ('status' in checkResult) return checkResult;
+    if (checkResult.kind === 'pass') return completeLoop(true, bodyOutputs);
   }
-}
-
-// -----------------------------------------------------------------
-// Output construction
-// -----------------------------------------------------------------
-
-/**
- * Build a {@link LoopOutput} record from the loop execution state.
- * @param outcome - Whether the loop exited via pass or escalate.
- * @param rounds - Total number of rounds executed (1-based).
- * @param lastGateOutcome - The gate outcome that terminated the loop.
- * @param bodyOutputs - Per-round body outputs in execution order.
- * @param resumeData - Optional resume data from a resolved escalation gate.
- * @returns JSON-serializable loop output.
- */
-export function buildLoopOutput(
-  outcome: 'pass' | 'escalate',
-  rounds: number,
-  lastGateOutcome: LoopGateOutcome,
-  bodyOutputs: readonly JsonValue[],
-  resumeData?: JsonValue,
-): LoopOutput {
+  if (node.onExhausted === 'complete') return completeLoop(false, bodyOutputs);
   return {
-    outcome,
-    rounds,
-    lastGateOutcome,
-    bodyOutputs,
-    ...(resumeData !== undefined ? { resumeData } : {}),
+    status: 'failed',
+    error: `Loop node '${node.id}' exhausted maxRounds (${node.maxRounds}) without a passing check`,
   };
 }

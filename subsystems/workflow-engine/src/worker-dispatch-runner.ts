@@ -39,8 +39,6 @@ export interface WorkerDispatchRunnerOptions {
   readonly bus: IMakaioBus;
   /** Canonical worker requirements for provider selection. */
   readonly requirements?: WorkerRequirements;
-  /** Opaque metadata forwarded to the Worker dispatch request. */
-  readonly dispatchMetadata?: Record<string, unknown>;
   /**
    * Execution attempt Authority for creating attempts before dispatch
    * and waiting for committed outcomes.
@@ -60,13 +58,12 @@ export interface WorkerDispatchRunnerOptions {
  * Authority before dispatch and waits for the committed outcome
  * via the Authority's in-process waiter. Returns `authority-committed` or
  * `authority-recorded-only` according to the owner's explicit acceptance.
- * @param options - Bus, requirements, optional dispatch metadata,
- *   and Authority.
+ * @param options - Bus, requirements, and Authority.
  * @returns A Worker dispatch runner, or `undefined` when no
  *   capability constraint exists.
  */
 export function createWorkerDispatchRunner(options: WorkerDispatchRunnerOptions): IWorkflowRunner | undefined {
-  const { bus, requirements, dispatchMetadata, authority } = options;
+  const { bus, requirements, authority } = options;
   if (!hasWorkerDispatchRequirements(requirements)) return undefined;
   return {
     terminalAuthority: 'authority',
@@ -108,9 +105,6 @@ export function createWorkerDispatchRunner(options: WorkerDispatchRunnerOptions)
               config: { ...config, terminalAuthority: 'authority' },
               requirements,
               ...(manifest !== undefined ? { manifest } : {}),
-              ...(dispatchMetadata !== undefined || runOptions?.dispatchMetadata !== undefined
-                ? { metadata: { ...dispatchMetadata, ...runOptions?.dispatchMetadata } }
-                : {}),
             },
             { signal },
           ),

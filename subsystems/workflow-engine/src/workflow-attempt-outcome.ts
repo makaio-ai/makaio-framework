@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
   ExecutionAttemptOutcomeSchema,
+  WorkflowError,
+  WorkflowErrorCode,
   WorkflowRunResultSchema,
   type AcceptedAttemptOutcome,
   type WorkflowAttemptOutcome,
@@ -36,13 +38,23 @@ export const workflowAttemptOutcomeCodec: OutcomeCodec<WorkflowAttemptOutcome> =
  * Interpret a generic terminal report against its immutable workflow assignment.
  * @param input - Frozen assignment and the Runtime's generic outcome report.
  * @returns An owner-typed outcome to canonicalize, commit, and then converge.
+ * @throws {@link WorkflowError} If the stored definition cannot be decoded for a workload result.
  */
 export function decodeWorkflowAttemptOutcome(input: AttemptOutcomeDecodingInput): WorkflowAttemptOutcome {
   const report = ExecutionAttemptOutcomeSchema.parse(input.outcome);
   // Input rejection itself can produce a startup failure. Runtime outcomes
   // settle through the generic Attempt fences without re-decoding that input.
   if (report.kind === 'technical-failure' || report.kind === 'cancelled') return report;
-  const invocation = parseWorkflowAttemptInstruction(input.instruction);
+  let invocation: ReturnType<typeof parseWorkflowAttemptInstruction>;
+  try {
+    invocation = parseWorkflowAttemptInstruction(input.instruction);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new WorkflowError(
+      WorkflowErrorCode.DEFINITION_INVALID,
+      `Stored Attempt instruction '${input.instruction.id}' is not executable: ${reason}`,
+    );
+  }
   const result = WorkflowRunResultSchema.parse(report.result);
   if (result.executionId !== invocation.executionId || result.workflowId !== invocation.workflowId) {
     throw new Error('Workflow result identity does not match the frozen instruction');

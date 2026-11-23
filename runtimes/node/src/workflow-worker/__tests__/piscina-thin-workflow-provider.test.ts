@@ -72,7 +72,6 @@ function makeProvisionRequest(
     environment: 'piscina' as const,
     runtimeInputs: {
       workerManifest: overrides?.workerManifest ?? { contributionRefs: [] },
-      suspensionStrategy: workerConfig.suspensionStrategy,
     },
     connection: {
       ...(workerConfig.busUrl !== undefined ? { busUrl: workerConfig.busUrl } : {}),
@@ -231,7 +230,6 @@ describe('PiscinaThinWorkflowProvider', () => {
     expect(provider.baseCapabilities.persistentStorage).toBe(true);
     expect(provider.baseCapabilities.customCapabilities).toContain('workflow.local-runtime');
     expect(provider.baseCapabilities.customCapabilities).toContain('workflow.thin-runner');
-    expect(provider.baseCapabilities.suspensionStrategy).toBe('wait-in-process');
   });
 
   it('explicitly advertises supportsRecovery: false', () => {
@@ -295,7 +293,6 @@ describe('PiscinaThinWorkflowProvider', () => {
 
     expect(provider.baseCapabilities.persistentStorage).toBe(false);
     expect(provider.baseCapabilities.customCapabilities).toEqual(['custom.tag']);
-    expect(provider.baseCapabilities.suspensionStrategy).toBe('wait-in-process');
   });
 
   // ── Allocation reference conformance ──────────────────────

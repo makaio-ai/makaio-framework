@@ -70,7 +70,6 @@ function createWorkflowProvisionRequest(
     environment: 'piscina',
     runtimeInputs: {
       workerManifest: manifest,
-      suspensionStrategy: config.suspensionStrategy,
     },
     connection: {
       ...(config.busUrl !== undefined ? { busUrl: config.busUrl } : {}),

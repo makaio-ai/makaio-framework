@@ -12,7 +12,7 @@ export type WorkflowDefinitionsTable = typeof workflowEngineSchema.sqlite.workfl
 /** A `workflow_definitions` row exactly as the driver maps it (JSON columns decoded). */
 export type DbDefinitionRow = WorkflowDefinitionsTable['$inferSelect'];
 
-/** The twelve JSON columns of `workflow_definitions`; readers select them as undecoded text. */
+/** The eleven active JSON columns of `workflow_definitions`; readers select them as undecoded text. */
 type StoredJsonColumnKey =
   | 'root'
   | 'inputSchema'
@@ -21,7 +21,6 @@ type StoredJsonColumnKey =
   | 'state'
   | 'artifact'
   | 'triggers'
-  | 'canvasLayout'
   | 'extensions'
   | 'source'
   | 'executableSource'
@@ -35,7 +34,6 @@ const STORED_JSON_COLUMN_KEYS: readonly StoredJsonColumnKey[] = [
   'state',
   'artifact',
   'triggers',
-  'canvasLayout',
   'extensions',
   'source',
   'executableSource',
@@ -43,8 +41,11 @@ const STORED_JSON_COLUMN_KEYS: readonly StoredJsonColumnKey[] = [
 ];
 
 /** A `workflow_definitions` row as the readers select it: JSON columns as stored text. */
-export type StoredDefinitionRow = Omit<DbDefinitionRow, StoredJsonColumnKey> &
-  Record<StoredJsonColumnKey, string | null>;
+export type StoredDefinitionRow = {
+  [Key in keyof ReturnType<typeof storedDefinitionSelection>]: Key extends StoredJsonColumnKey
+    ? string | null
+    : DbDefinitionRow[Key];
+};
 
 /**
  * Selection fragment for the stored text of a JSON column; the driver mapping does not decode it.
@@ -74,13 +75,16 @@ export function decodeStoredJson(
 }
 
 /**
- * Selection for `db.select(...)`: every column unchanged, the twelve JSON columns as {@link storedJsonText}.
+ * Select the active definition columns, reading their JSON as {@link storedJsonText}.
+ * Retained columns are excluded so their stored values never pass through the driver decoder.
  * @param columns - Columns of `workflow_definitions` (`getTableColumns`).
  * @returns Field map whose result type is {@link StoredDefinitionRow}.
  */
 export function storedDefinitionSelection(columns: WorkflowDefinitionsTable['_']['columns']) {
   return {
-    ...columns,
+    id: columns.id,
+    name: columns.name,
+    description: columns.description,
     root: storedJsonText(columns.root),
     inputSchema: storedJsonText(columns.inputSchema),
     configSchema: storedJsonText(columns.configSchema),
@@ -88,11 +92,16 @@ export function storedDefinitionSelection(columns: WorkflowDefinitionsTable['_']
     state: storedJsonText(columns.state),
     artifact: storedJsonText(columns.artifact),
     triggers: storedJsonText(columns.triggers),
-    canvasLayout: storedJsonText(columns.canvasLayout),
+    scopeType: columns.scopeType,
+    scopeKind: columns.scopeKind,
+    scopeId: columns.scopeId,
+    createdAt: columns.createdAt,
+    updatedAt: columns.updatedAt,
     extensions: storedJsonText(columns.extensions),
     source: storedJsonText(columns.source),
     executableSource: storedJsonText(columns.executableSource),
     requirements: storedJsonText(columns.requirements),
+    successFinalizerId: columns.successFinalizerId,
   };
 }
 
@@ -150,7 +159,6 @@ export function readStoredDefinition(
     artifact: decodedValues.artifact,
     triggers: decodedValues.triggers,
     scope,
-    canvasLayout: decodedValues.canvasLayout,
     extensions: decodedValues.extensions,
     source: decodedValues.source,
     executableSource: decodedValues.executableSource,

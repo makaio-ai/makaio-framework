@@ -28,8 +28,6 @@ import {
   WorkerRequirementsSchema,
   WorkspaceSnapshotMaterializationSchema,
 } from '../index.js';
-import { SuspensionStrategySchema } from '../../../worker/suspension.js';
-import type { SuspensionStrategy } from '../../../worker/suspension.js';
 import type { WorkerCapabilitiesInput } from '../types.js';
 import type {
   AllocationInspection,
@@ -74,7 +72,6 @@ describe('worker capability contracts', () => {
     expect(parsed).toEqual({
       persistentStorage: false,
       customCapabilities: ['workflow.bus-events'],
-      suspensionStrategy: 'wait-in-process',
       supportsRecovery: false,
       materializationModes: ['local-directory'],
     });
@@ -87,27 +84,13 @@ describe('worker capability contracts', () => {
     expect(WorkerCapabilitiesSchema.parse(capabilities)).toEqual({
       persistentStorage: true,
       customCapabilities: [],
-      suspensionStrategy: 'wait-in-process',
       supportsRecovery: false,
       materializationModes: ['local-directory'],
     });
     expect(requirements).toEqual({ persistentStorage: true });
   });
 
-  it('defaults worker suspension to in-process waiting', () => {
-    expect(SuspensionStrategySchema.parse('exit-and-redispatch')).toBe('exit-and-redispatch');
-    expect(WorkerCapabilitiesSchema.parse({ persistentStorage: true })).toEqual({
-      persistentStorage: true,
-      customCapabilities: [],
-      suspensionStrategy: 'wait-in-process',
-      supportsRecovery: false,
-      materializationModes: ['local-directory'],
-    });
-  });
-
   it('requires providers to expose normalized capabilities', () => {
-    expectTypeOf<WorkerCapabilities['suspensionStrategy']>().toEqualTypeOf<SuspensionStrategy>();
-
     const provider: IWorkerProvider = {
       id: 'test.worker',
       displayName: 'Test Worker',
@@ -119,8 +102,8 @@ describe('worker capability contracts', () => {
       },
     };
 
-    expectTypeOf(provider.baseCapabilities.suspensionStrategy).toEqualTypeOf<SuspensionStrategy>();
-    expect(provider.baseCapabilities.suspensionStrategy).toBe('wait-in-process');
+    expectTypeOf(provider.baseCapabilities).toEqualTypeOf<WorkerCapabilities>();
+    expect(provider.baseCapabilities.supportsRecovery).toBe(false);
   });
 });
 
@@ -136,7 +119,6 @@ describe('WorkerProvisionRequest uses executionAttemptId', () => {
       environment: 'process',
       runtimeInputs: {
         workerManifest: { contributionRefs: [] },
-        suspensionStrategy: 'wait-in-process',
       },
       connection,
       provisioningStartedAt: '2026-07-23T10:00:00Z',
@@ -156,7 +138,6 @@ describe('WorkerProvisionRequest uses executionAttemptId', () => {
       environment: 'piscina',
       runtimeInputs: {
         workerManifest: { contributionRefs: [] },
-        suspensionStrategy: 'wait-in-process',
       },
       connection: { busAuth: { kind: 'none' } },
       provisioningStartedAt: '2026-07-23T10:00:00Z',
@@ -273,7 +254,6 @@ describe('IWorkerProvider provision contract', () => {
         environment: 'test',
         runtimeInputs: {
           workerManifest: { contributionRefs: [] },
-          suspensionStrategy: 'wait-in-process',
         },
         connection: { busAuth: { kind: 'none' } },
         provisioningStartedAt: '2026-07-23T10:00:00Z',

@@ -20,7 +20,6 @@ function request(executionId: string, executionAttemptId: string): WorkerProvisi
           },
         ],
       },
-      suspensionStrategy: 'exit-and-redispatch',
     },
     connection: {
       busUrl: 'ws://worker.example/bus',
@@ -66,7 +65,6 @@ describe('createWorkflowLaunchResolver', () => {
       coordinatorSessionId: config.coordinatorSessionId,
       cancelSubject: config.cancelSubject,
       terminalAuthority: 'authority',
-      suspensionStrategy: 'exit-and-redispatch',
       busUrl: 'ws://worker.example/bus',
       busAuth: { kind: 'hmac', secret: 'worker-connection-secret' },
       env: { PRIVATE_VALUE: 'resolved-for-this-worker' },

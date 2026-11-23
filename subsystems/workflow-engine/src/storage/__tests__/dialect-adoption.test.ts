@@ -12,14 +12,12 @@ import {
   workflowDefinitions,
   workflowExecutions,
   workflowExecutionFrames,
-  workflowGateInstances,
   workflowStepSpans,
   workflowExecutionLinks,
   workflowRunContexts,
   worklogSummaries,
   worklogFrameEntries,
   worklogArtifactWrites,
-  worklogGateEvents,
 } from '../schema.js';
 
 describe('workflow-engine dialect adoption', () => {
@@ -30,14 +28,12 @@ describe('workflow-engine dialect adoption', () => {
     expect(is(resolved.workflowDefinitions, PgTable)).toBe(true);
     expect(is(resolved.workflowExecutions, PgTable)).toBe(true);
     expect(is(resolved.workflowExecutionFrames, PgTable)).toBe(true);
-    expect(is(resolved.workflowGateInstances, PgTable)).toBe(true);
     expect(is(resolved.workflowStepSpans, PgTable)).toBe(true);
     expect(is(resolved.workflowExecutionLinks, PgTable)).toBe(true);
     expect(is(resolved.workflowRunContexts, PgTable)).toBe(true);
     expect(is(resolved.worklogSummaries, PgTable)).toBe(true);
     expect(is(resolved.worklogFrameEntries, PgTable)).toBe(true);
     expect(is(resolved.worklogArtifactWrites, PgTable)).toBe(true);
-    expect(is(resolved.worklogGateEvents, PgTable)).toBe(true);
   });
 
   it('resolves the canonical sqlite tables for an unbranded handle', () => {
@@ -46,14 +42,12 @@ describe('workflow-engine dialect adoption', () => {
     expect(resolved.workflowDefinitions).toBe(workflowDefinitions);
     expect(resolved.workflowExecutions).toBe(workflowExecutions);
     expect(resolved.workflowExecutionFrames).toBe(workflowExecutionFrames);
-    expect(resolved.workflowGateInstances).toBe(workflowGateInstances);
     expect(resolved.workflowStepSpans).toBe(workflowStepSpans);
     expect(resolved.workflowExecutionLinks).toBe(workflowExecutionLinks);
     expect(resolved.workflowRunContexts).toBe(workflowRunContexts);
     expect(resolved.worklogSummaries).toBe(worklogSummaries);
     expect(resolved.worklogFrameEntries).toBe(worklogFrameEntries);
     expect(resolved.worklogArtifactWrites).toBe(worklogArtifactWrites);
-    expect(resolved.worklogGateEvents).toBe(worklogGateEvents);
   });
 
   it('registers exactly one handler per storage subject on an isolated bus and cleanup removes them', async () => {

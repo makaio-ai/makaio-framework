@@ -1,10 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type {
-  WorkflowAgentStepNode,
-  WorkflowDefinition,
-  WorkflowGateNode,
-  WorkflowWorkerConfig,
-} from '@makaio/contracts';
+import type { WorkflowAgentStepNode, WorkflowDefinition, WorkflowWorkerConfig } from '@makaio/contracts';
 
 // ---------------------------------------------------------------------------
 // Mocks — declared before dynamic imports
@@ -55,7 +50,6 @@ function makeConfig(overrides: Partial<WorkflowWorkerConfig> = {}): WorkflowWork
     env: {},
     coordinatorSessionId: 'session-001',
     cancelSubject: 'workflow.cancel.wf-001',
-    suspensionStrategy: 'wait-in-process',
     ...overrides,
   };
 }
@@ -135,13 +129,6 @@ describe('loadWorkflowFromConfig — definition source', () => {
             role: 'analyzer',
             prompt: 'Analyze',
           } as WorkflowAgentStepNode,
-          {
-            id: 'gate-1',
-            type: 'gate' as const,
-            prompt: 'Approve?',
-            autoAction: 'reject' as const,
-            timeoutMs: null,
-          } as WorkflowGateNode,
         ],
       },
     });

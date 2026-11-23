@@ -19,6 +19,7 @@ type RunContextInvariantCase = {
 type InvalidSnapshotCase = {
   readonly name: string;
   readonly snapshot: NonNullable<StoredWorkflowRunContext['definitionSnapshot']>;
+  readonly issuePattern: RegExp;
 };
 
 type RunContextSchemaCase = {
@@ -50,7 +51,6 @@ const context: WorkflowRunContext = {
   cancelSubject: 'workflow.cancel.execution-1',
   env: {},
   createdAt: 1,
-  suspensionStrategy: 'wait-in-process',
 };
 
 const materializationSpec: WorkerMaterializationSpec = {
@@ -70,8 +70,33 @@ const invalidSnapshots: readonly InvalidSnapshotCase[] = [
         nodes: [{ id: 'delegate', type: 'delegate-agent', agentId: 'agent-1', prompt: 'Do the work' }], // legacy-input
       },
     },
+    issuePattern: /definitionSnapshot/,
   },
-  { name: 'undecodable snapshot text', snapshot: '{' },
+  {
+    name: 'a legacy Gate snapshot',
+    snapshot: {
+      ...definition,
+      root: {
+        ...definition.root,
+        nodes: [
+          {
+            id: 'approval',
+            type: 'gate', // legacy-input
+            prompt: 'Approve the run',
+            autoAction: 'reject',
+            timeoutMs: null,
+          },
+        ],
+      },
+    },
+    issuePattern: /definitionSnapshot\.root\.nodes\.0\.type/,
+  },
+  {
+    name: 'a legacy canvas layout snapshot',
+    snapshot: { ...definition, canvasLayout: { compute: { x: 1, y: 2 } } }, // legacy-input
+    issuePattern: /definitionSnapshot: .*canvasLayout/,
+  },
+  { name: 'undecodable snapshot text', snapshot: '{', issuePattern: /definitionSnapshot/ },
 ];
 
 const invariantCases: readonly RunContextInvariantCase[] = [
@@ -113,7 +138,7 @@ describe('stored and executable workflow run contexts', () => {
     expect(WorkflowRunContextSchema.safeParse(candidate).success).toBe(false);
   });
 
-  it.each(invalidSnapshots)('requires an executable snapshot for $name', ({ snapshot }) => {
+  it.each(invalidSnapshots)('requires an executable snapshot for $name', ({ snapshot, issuePattern }) => {
     const stored = StoredWorkflowRunContextSchema.parse({ ...context, definitionSnapshot: snapshot });
 
     expect(() => requireExecutableRunContext(stored)).toThrowError(
@@ -122,7 +147,7 @@ describe('stored and executable workflow run contexts', () => {
         message: expect.stringContaining(stored.executionId),
       }),
     );
-    expect(() => requireExecutableRunContext(stored)).toThrowError(/definitionSnapshot/);
+    expect(() => requireExecutableRunContext(stored)).toThrowError(issuePattern);
   });
 
   it('returns a valid executable context unchanged', () => {
@@ -136,6 +161,16 @@ describe('stored and executable workflow run contexts', () => {
 describe.each(schemaCases)('$name run-context invariants', ({ schema }) => {
   it('accepts a definition source with its snapshot', () => {
     expect(schema.parse(context)).toEqual(context);
+  });
+
+  it('strips retired dispatch fields', () => {
+    const candidate = {
+      ...context,
+      suspensionStrategy: 'exit-and-redispatch', // legacy-input
+      dispatchMetadata: { target: 'worker-1' }, // legacy-input
+    };
+
+    expect(schema.parse(candidate)).toEqual(context);
   });
 
   it('accepts a path source with a matching materialization spec', () => {

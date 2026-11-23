@@ -56,7 +56,7 @@ function createTaskFixture(kind: 'file' | 'definition') {
     workflow,
     runContext,
     runtimeHandlers: new Map(),
-    runtimeLoopGates: new Map(),
+    runtimeLoopChecks: new Map(),
   });
   const start = () => {
     const common = {
@@ -97,10 +97,10 @@ function createTaskFixture(kind: 'file' | 'definition') {
 
 describe.each(['file', 'definition'] as const)('%s runner task ownership', (kind) => {
   it.each([
-    'projected-pause',
+    'projected-completion',
     'recorded-only',
     'rejected',
-  ] as const)('keeps a resumed successor when its predecessor finishes with %s', async (mode) => {
+  ] as const)('keeps a newer invocation when its predecessor finishes with %s', async (mode) => {
     const fixture = createTaskFixture(kind);
     const { deps } = fixture;
     deps.activeExecutions.set(identity.executionId, fixture.createActive());
@@ -123,12 +123,9 @@ describe.each(['file', 'definition'] as const)('%s runner task ownership', (kind
         fixture.first.resolve(
           toCommittedWorkflowRunnerCompletion(
             {
-              outcome:
-                mode === 'projected-pause'
-                  ? { ...identity, status: 'paused', pausedAtGateId: 'gate-1', pausedAtFrameId: 'frame-1' }
-                  : { ...identity, status: 'completed' },
+              outcome: { ...identity, status: 'completed' },
               controlObservation: { controlRevision: 0, cancellation: null },
-              acceptance: mode === 'projected-pause' ? 'projected' : 'recorded-only',
+              acceptance: mode === 'projected-completion' ? 'projected' : 'recorded-only',
             },
             identity,
           ),

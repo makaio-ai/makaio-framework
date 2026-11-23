@@ -43,7 +43,6 @@ async function seedAuthorityRun(executionId: string, workflow: WorkflowDefinitio
     cancelSubject: `workflow.${executionId}.cancel`,
     env: {},
     createdAt: Date.now(),
-    suspensionStrategy: 'wait-in-process' as const,
     terminalAuthority: 'authority' as const,
   };
   await MakaioBus.request(WorkflowStorageSubjects.setExecutionStart, {

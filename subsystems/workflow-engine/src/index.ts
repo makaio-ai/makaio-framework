@@ -6,7 +6,6 @@
  * - Workflow-level execution delegation through the IWorkflowRunner runtime seam
  * - Workflow expression context from inputs, trigger payloads, node outputs, and iteration item/index overlays
  * - OTel-style span records for node duration and usage ingestion
- * - Durable gate state through workflow execution checkpoints
  * @packageDocumentation
  */
 

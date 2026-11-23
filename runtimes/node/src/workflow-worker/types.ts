@@ -1,6 +1,6 @@
 import type {
   CodeStepHandler,
-  LoopGateHandler,
+  LoopCheckHandler,
   WorkerContributionManifest,
   WorkflowDefinition,
   WorkflowZodSchemas,
@@ -23,10 +23,10 @@ export interface RuntimeLoadedWorkflow {
    */
   readonly runtimeHandlers: ReadonlyMap<string, CodeStepHandler>;
   /**
-   * Loop gate handler functions keyed by handler name.
-   * Used by the orchestrator to evaluate loop convergence gates.
+   * Loop check handler functions keyed by handler name.
+   * Used by the orchestrator to evaluate loop convergence.
    */
-  readonly runtimeLoopGates?: ReadonlyMap<string, LoopGateHandler>;
+  readonly runtimeLoopChecks?: ReadonlyMap<string, LoopCheckHandler>;
 }
 
 /**

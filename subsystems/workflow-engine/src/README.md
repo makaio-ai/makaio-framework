@@ -28,7 +28,7 @@ consumption.
 Executes workflow definitions. Steps can be:
 - `agent` — run a persona or profile
 - `shell` — execute a shell command
-- `gate` — conditional branch
+- `loop` — repeat a sequence until its check passes or the round limit is exhausted
 - `forEach` — dynamic fan-out via `for-each-expander.ts`
 
 Dependencies between steps are resolved topologically. Parallel-ready steps

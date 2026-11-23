@@ -34,7 +34,7 @@ export interface FinalizerDeps {
   cancelTimeoutMs?: number;
   /**
    * Persist owner-authorized cancellation before aborting or notifying workers.
-   * @param executionId - Eligible running or paused owner.
+   * @param executionId - Eligible running owner.
    * @param reason - Optional cancellation explanation.
    */
   requestAttemptCancellation?(executionId: string, reason?: string): Promise<void>;
@@ -398,60 +398,16 @@ export function cancelActiveRunnerSteps(
 }
 
 /**
- * Cancel an execution that is parked in storage without active runtime ownership.
+ * Cancel a running workflow execution and release active resources.
  *
- * Exit-and-redispatch providers release the executor's active execution entry
- * after the gate is durably parked. A later public cancel must still
- * terminalize the paused execution and its waiting gates so timeout/manual
- * resume paths cannot continue the run.
- * @param call - Call context of the handled message the cancellation serves.
- * @param deps - Finalizer dependencies.
- * @param executionId - Paused execution identifier to cancel.
- * @param reason - Optional human-readable cancellation reason.
- * @returns True when a paused execution was cancelled.
- */
-async function cancelPausedExecution(
-  call: CallContext,
-  deps: FinalizerDeps,
-  executionId: string,
-  reason?: string,
-): Promise<undefined | { workflowId: string; completedAt: number; gates: Array<{ nodeId: string; frameId: string }> }> {
-  const existing = await deps.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId });
-  if (existing.execution == null) return undefined;
-
-  const workflowId = existing.execution.workflowId;
-  if (workflowId === undefined) {
-    throw new Error(`Paused execution ${executionId} is missing stored workflowId`);
-  }
-
-  const completedAt = Date.now();
-  const { cancelled, gates } = await deps.bus.request(call, WorkflowStorageSubjects.cancelPausedExecution, {
-    executionId,
-    completedAt,
-    reason,
-  });
-  if (!cancelled) return undefined;
-  deps.activeExecutions.delete(executionId);
-  return { workflowId, completedAt, gates };
-}
-
-/**
- * Cancel a running or parked workflow execution and release active resources.
- *
+ * Aborts in-flight shell and runner steps, then persists the cancelled status.
  * In the primitive runtime, the abort signal drives frame-level cancellation.
- * This function handles the execution-level state transition:
- * - Updates execution status to `cancelled`
- * - Aborts shell controllers for any in-flight shell steps
- * - Cancels active runner steps (cooperative abort + hard kill timer)
- * - Cancels waiting gate rows for parked paused executions
- * - Persists the cancelled status
- * - Emits `execution.cancelled`
  * @param call - Call context of the handled message the cancellation serves.
  * @param deps - Finalizer dependencies.
  * @param executionId - Execution identifier to cancel.
  * @param reason - Optional human-readable cancellation reason.
- * @param mode - Control initiation persists intent; outcome convergence does not.
- * @returns True when a running or parked execution was cancelled.
+ * @param mode - Whether to initiate control or record an observed outcome.
+ * @returns Metadata for the committed cancellation, or `undefined` if the execution was ineligible.
  */
 async function cancelExecutionDurably(
   call: CallContext,
@@ -459,15 +415,12 @@ async function cancelExecutionDurably(
   executionId: string,
   reason?: string,
   mode: 'request' | 'converge' = 'converge',
-): Promise<undefined | { workflowId: string; completedAt: number; gates: Array<{ nodeId: string; frameId: string }> }> {
+): Promise<{ workflowId: string; completedAt: number } | undefined> {
   const { execution } = await deps.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId });
-  if (execution?.status !== 'running' && execution?.status !== 'paused') return undefined;
+  if (execution?.status !== 'running') return undefined;
   // This runs inside the existing lifecycle ordering point, so a completed or
   // finalizing owner cannot acquire a new cancel intent after refusing cancel.
   if (mode === 'request') await deps.requestAttemptCancellation?.(executionId, reason);
-  if (execution?.status !== 'running') {
-    return cancelPausedExecution(call, deps, executionId, reason);
-  }
 
   // Durable ownership survives executor restart and may precede loading the
   // executable. A live registry entry is neither required nor authoritative.
@@ -497,11 +450,11 @@ async function cancelExecutionDurably(
     deps.activeExecutions.delete(executionId);
   }
 
-  return { workflowId: execution.workflowId, completedAt: execution.completedAt, gates: [] };
+  return { workflowId: execution.workflowId, completedAt: execution.completedAt };
 }
 
 /**
- * Cancel one execution while excluding concurrent pause projection.
+ * Record an observed cancellation in lifecycle order.
  * @param call - Call context of the handled message the cancellation serves.
  * @param deps - Finalizer dependencies.
  * @param executionId - Execution to cancel.
@@ -557,19 +510,6 @@ async function transitionCancellation(
     () => cancelExecutionDurably(call, deps, executionId, reason, mode),
     async (committed) => {
       if (committed === undefined) return;
-      for (const gate of committed.gates) {
-        await deps.bus
-          .emit(call, WorkflowSubjects.gate.resolved, {
-            executionId,
-            stepId: gate.nodeId,
-            stepType: 'gate',
-            frameId: gate.frameId,
-            source: 'cancelled',
-          })
-          .catch((error: unknown) => {
-            console.error(`[WorkflowFinalizer] Failed to emit cancelled gate resolution for ${gate.frameId}:`, error);
-          });
-      }
       await deps.bus.emit(call, WorkflowSubjects.execution.cancelled, {
         executionId,
         workflowId: committed.workflowId,
@@ -578,8 +518,7 @@ async function transitionCancellation(
       });
     },
     (committed) => {
-      // Control must not queue behind a paused-event subscriber. Its durable
-      // request already committed; ordered lifecycle publication is independent.
+      // Deliver the committed control request independently of ordered lifecycle publication.
       if (committed !== undefined && mode === 'request')
         return deps.notifyAttemptCancellation?.(call, executionId, reason);
     },

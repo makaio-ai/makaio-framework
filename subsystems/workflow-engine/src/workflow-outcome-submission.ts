@@ -2,14 +2,18 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import {
   WorkerSubjects,
   WorkflowRunResultSchema,
-  type OutcomeAckDecision,
+  isDefinitionInvalidError,
   type OutcomeAcceptance,
 } from '@makaio/contracts';
 import { isInProcessCaller, type BaseMessageContext } from '@makaio/core';
 import { resolveExecutionAttemptPeer, type ExecutionAttemptPeerIdentity } from './execution-bound-access.js';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
-import { submitAttemptOutcome, type OutcomeConvergence, type OutcomeConvergenceInput } from './outcome-convergence.js';
-import { registerExecutionAttemptHandlers, type ExecutionAttemptHandlersDeps } from './execution-attempt-handlers.js';
+import type { OutcomeConvergence, OutcomeConvergenceInput } from './outcome-convergence.js';
+import {
+  decodeAndSubmitAttemptOutcome,
+  registerExecutionAttemptHandlers,
+  type ExecutionAttemptHandlersDeps,
+} from './execution-attempt-handlers.js';
 import { decodeWorkflowAttemptOutcome, type WorkflowAttemptOutcome } from './workflow-attempt-outcome.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -103,6 +107,7 @@ export function createWorkflowOutcomeSubmissionDeps(
   return {
     authority: deps.authority,
     decodeOutcome: decodeWorkflowAttemptOutcome,
+    isDecodeConflict: isDefinitionInvalidError,
     convergence: new WorkflowOutcomeConvergence(deps.acceptOutcome),
   };
 }
@@ -123,9 +128,7 @@ export function createWorkflowOutcomeSubmissionDeps(
  * 3. Commits the outcome through the Authority (durable repository decision).
  * 4. For `accepted` or `duplicate` terminal outcomes, converges workflow state
  *    through the executor's idempotent acceptance path.
- * 5. For `accepted` or `duplicate` paused outcomes, converges through the
- *    idempotent durable pause path.
- * 6. ACKs only after the durable Attempt decision and explicit owner acceptance
+ * 5. ACKs only after the durable Attempt decision and explicit owner acceptance
  *    succeed. Recorded-only acceptance does not manufacture a workflow transition.
  * @param bus - Authority-local workflow bus.
  * @param deps - Outcome submission dependencies.
@@ -181,37 +184,18 @@ export function registerOutcomeSubmissionHandler(bus: IMakaioBus, deps: OutcomeS
     const typedResult = WorkflowRunResultSchema.parse(result);
     const instruction = await deps.authority.getInstruction(identity);
     if (instruction === null) throw new Error('No instruction belongs to this workflow Attempt');
-    const outcome = await submission.decodeOutcome({
+    // ACK only after decoding and the durable decision; an accepted or duplicate
+    // outcome also requires successful owner convergence before acknowledgement.
+    const decision = await decodeAndSubmitAttemptOutcome(submission, {
+      ...identity,
+      call: ctx.call,
       instruction,
       outcome: { kind: 'workload-result', result: typedResult },
     });
-
-    // Validate, commit, converge (accepted/duplicate only), settle: the
-    // generic owner boundary owns that order. A throwing convergence leaves
-    // the outcome durably committed and the waiter pending, so the worker's
-    // retry yields `duplicate` and converges again; the error propagates so
-    // the RPC errors and the worker retries.
-    const decision = await submitAttemptOutcome(submission, {
-      call: ctx.call,
-      executionId: identity.executionId,
-      executionAttemptId: identity.executionAttemptId,
-      outcome,
-    });
-
-    // ACK only after durable commit and convergence both succeeded.
-    ctx.setResult({ decision: decisionToAck(decision) });
+    ctx.setResult({ decision });
   });
   return () => {
     cleanupWorkflow();
     cleanupGeneric();
   };
-}
-
-/**
- * Map an internal repository decision kind to the bus ACK decision.
- * @param kind - Repository decision kind.
- * @returns Wire-compatible ACK decision.
- */
-function decisionToAck(kind: 'accepted' | 'duplicate' | 'conflict' | 'fenced'): OutcomeAckDecision {
-  return kind;
 }

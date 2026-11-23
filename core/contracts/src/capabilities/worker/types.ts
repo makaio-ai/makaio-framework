@@ -4,7 +4,6 @@ import type { ICapabilityProvider } from '../../capability/index.js';
 import type { WorkflowWorkerBusAuth, WorkflowWorkerConfig, WorkerContributionManifest } from '../../workflow/index.js';
 import { JsonObjectContractSchema } from '../../shared/json-value.js';
 import type { WorkerRuntimeInputs } from '../../worker/runtime-inputs.js';
-import { SuspensionStrategySchema } from '../../worker/suspension.js';
 
 /** Capability identifier used for Worker providers. */
 export const WORKER_CAPABILITY_ID = 'worker' as const;
@@ -442,15 +441,6 @@ export const WorkerCapabilitiesSchema = z.object({
   persistentStorage: z.boolean(),
   /** Product- or environment-specific capability tags. */
   customCapabilities: z.array(z.string().min(1)).default([]),
-  /**
-   * Suspension behavior this provider uses when a workflow reaches a gate.
-   *
-   * Defaults to `'wait-in-process'` for providers that block in-place
-   * (e.g. local Piscina threads). Providers that exit and redispatch or
-   * exit and resume on a managed environment must declare the appropriate
-   * strategy here so dispatchers can select the right gate-parking path.
-   */
-  suspensionStrategy: SuspensionStrategySchema.default('wait-in-process'),
   /**
    * Whether this provider supports allocation recovery.
    *

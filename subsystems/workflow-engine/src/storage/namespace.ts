@@ -10,10 +10,8 @@ import {
   ExecutionsByArtifactRefsQuerySchema,
   ExecutionLinkSchema,
   ExecutionLinkListQuerySchema,
-  GateInstanceListQuerySchema,
   SpanRecordSchema,
   WorkflowFrameStateSchema,
-  WorkflowGateInstanceSchema,
   WorkflowRunContextSchema,
   StoredWorkflowRunContextSchema,
   WorkflowDefinitionListSchema,
@@ -27,14 +25,12 @@ import {
   workflowDefinitions,
   workflowExecutions,
   workflowExecutionFrames,
-  workflowGateInstances,
   workflowStepSpans,
   workflowExecutionLinks,
   workflowRunContexts,
   worklogSummaries,
   worklogFrameEntries,
   worklogArtifactWrites,
-  worklogGateEvents,
   workflowExecutionState,
   workflowExecutionStateEvents,
 } from './schema.js';
@@ -67,7 +63,6 @@ const TerminalWorklogFrameSchema = WorkLogFrameEntrySchema.extend({
  * - Definition CRUD (get, set, delete, list)
  * - Execution CRUD (getExecution, setExecution, updateExecution, listExecutions)
  * - Frame CRUD (setFrame, getFrame, listFrames)
- * - Gate instance CRUD (setGateInstance, getGateInstance, listGateInstances)
  *
  * Subject prefix: `storage:workflow.*`
  *
@@ -164,12 +159,6 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       response: z.object({ success: z.boolean() }),
     },
 
-    /** Atomically park an execution only while it remains running. */
-    pauseRunningExecution: localSubject({
-      request: z.object({ executionId: z.string().min(1) }),
-      response: z.object({ paused: z.boolean() }),
-    }),
-
     /** Atomically claim the sole terminal transition for a running execution. */
     claimFinalization: localSubject({
       request: z.object({ claim: WorkflowFinalizationClaimSchema }),
@@ -216,18 +205,6 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
     }),
 
     /**
-     * Cancel a paused execution and all of its still-waiting gate instances in
-     * one transaction.
-     */
-    cancelPausedExecution: {
-      request: z.object({ executionId: z.string().min(1), completedAt: z.number(), reason: z.string().optional() }),
-      response: z.object({
-        cancelled: z.boolean(),
-        gates: z.array(WorkflowGateInstanceSchema.extend({ status: z.literal('cancelled') })),
-      }),
-    },
-
-    /**
      * List workflow executions by workflow ID or scope.
      *
      * At least one of `workflowId` or `scope` is required. `limit` is optional
@@ -266,6 +243,8 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
 
     /**
      * Retrieve a single execution frame by `frameId`.
+     *
+     * Stored gate rows from before workflow waiting was removed are kept and do not appear in this response; sums may still include their cost.
      */
     getFrame: {
       request: z.object({ frameId: z.string().min(1) }),
@@ -274,83 +253,13 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
 
     /**
      * List all frames for a given execution.
+     *
+     * Stored gate rows from before workflow waiting was removed are kept and do not appear in this response; sums may still include their cost.
      */
     listFrames: {
       request: z.object({ executionId: z.string().min(1) }),
       response: z.object({ frames: z.array(WorkflowFrameStateSchema) }),
     },
-
-    // ─────────────────────────────────────────────────────────────
-    // Gate Instance CRUD
-    // ─────────────────────────────────────────────────────────────
-
-    /**
-     * Upsert a gate instance record.
-     * Called when a gate node is entered and when it is resolved.
-     */
-    setGateInstance: {
-      request: z.object({ gate: WorkflowGateInstanceSchema }),
-      response: z.object({ id: z.string() }),
-    },
-
-    /**
-     * Resolve a waiting gate instance with compare-and-set semantics.
-     *
-     * Used for manual responses to paused exit-based gates. Only the first
-     * request that observes the persisted gate in `waiting` status wins; all
-     * later responses leave the row unchanged and return `accepted: false`.
-     */
-    resolveWaitingGateInstance: {
-      request: z.object({
-        gate: WorkflowGateInstanceSchema.extend({ status: z.enum(['resumed', 'rejected']) }),
-      }),
-      response: z.object({ accepted: z.boolean() }),
-    },
-
-    /**
-     * Restore a paused execution and its waiting gate in one transaction after
-     * a resolved manual response fails to launch a resume runner.
-     */
-    restorePausedGateResumeState: {
-      request: z.object({
-        execution: WorkflowExecutionSchema.extend({ status: z.literal('paused') }),
-        gate: WorkflowGateInstanceSchema.extend({ status: z.literal('waiting') }),
-      }),
-      response: z.object({ executionId: z.string(), gateId: z.string() }),
-    },
-
-    /**
-     * Retrieve a gate instance by execution ID, node ID, and optional frame ID.
-     * Provide `frameId` when the gate lives inside an `iterate` expansion.
-     */
-    getGateInstance: {
-      request: z.object({
-        executionId: z.string().min(1),
-        nodeId: z.string().min(1),
-        frameId: z.string().min(1).optional(),
-      }),
-      response: z.object({ gate: WorkflowGateInstanceSchema.nullable() }),
-    },
-
-    /**
-     * List gate instances by execution and/or status (bounded query).
-     */
-    listGateInstances: {
-      request: GateInstanceListQuerySchema,
-      response: z.object({ gates: z.array(WorkflowGateInstanceSchema) }),
-    },
-
-    /**
-     * List finite-timeout gate instances whose owning execution is still paused.
-     *
-     * Used by the executor during startup to rehydrate long-lived timeout
-     * wakeups for exit-based runs. This stays storage-local because it exposes
-     * recovery state rather than a product-facing listing contract.
-     */
-    listPausedGateTimeouts: localSubject({
-      request: z.object({}),
-      response: z.object({ gates: z.array(WorkflowGateInstanceSchema) }),
-    }),
 
     // ─────────────────────────────────────────────────────────────
     // Span CRUD
@@ -361,6 +270,11 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       response: z.object({ id: z.string() }),
     },
 
+    /**
+     * List all spans for a given execution.
+     *
+     * Stored gate rows from before workflow waiting was removed are kept and do not appear in this response; sums may still include their cost.
+     */
     listSpans: {
       request: z.object({ executionId: z.string() }),
       response: z.object({ spans: z.array(SpanRecordSchema) }),
@@ -453,14 +367,12 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       workflowDefinitions,
       workflowExecutions,
       workflowExecutionFrames,
-      workflowGateInstances,
       workflowStepSpans,
       workflowExecutionLinks,
       workflowRunContexts,
       worklogSummaries,
       worklogFrameEntries,
       worklogArtifactWrites,
-      worklogGateEvents,
       workflowExecutionState,
       workflowExecutionStateEvents,
       workflowFinalizations,

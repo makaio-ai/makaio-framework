@@ -1,3 +1,4 @@
+import { registerInMemoryFrameStore } from './shared.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import { createTestCall } from '@makaio/test-utils';
@@ -61,6 +62,7 @@ function makeInitialRevision(data: ReviewArtifactData): ArtifactRevision<ReviewA
  */
 function makeBus(): ReturnType<typeof createBusInstance> {
   const bus = createBusInstance();
+  registerInMemoryFrameStore(bus);
   bus.registerNamespace(WorkflowNamespace);
   bus.registerNamespace(ArtifactNamespace);
   return bus;
@@ -164,8 +166,7 @@ describe('review workflow fixture — artifact data shape', () => {
 
     let capturedFindings: ReviewFindings | undefined;
 
-    // Run only up to the 'aggregate' step (before the gate) to avoid
-    // needing a gate responder. We test a sub-sequence directly.
+    // Run a subsequence ending at the aggregate step.
     const built = buildReviewWorkflow({
       onSpec: async () => ({ findings: specFindings }),
       onQuality: async () => ({ findings: qualityFindings }),
@@ -197,8 +198,7 @@ describe('review workflow fixture — artifact data shape', () => {
       bindingState,
     );
 
-    // Execute just the first three nodes in the root sequence: parallel + aggregate
-    // (skip the gate and apply-fix for this focused test).
+    // Exercise only the parallel review and aggregate steps.
     const subSequence = {
       id: 'test-sub',
       type: 'sequence' as const,
@@ -349,6 +349,7 @@ describe('review workflow fixture — artifact data shape', () => {
     const bindingState = makeArtifactBindingState();
 
     const built = buildReviewWorkflow({
+      triageDecision: 'reject',
       onSpec: async () => ({ findings: [] }),
       onQuality: async () => ({ findings: [] }),
       onTestCoverage: async () => ({ findings: [] }),
@@ -379,17 +380,6 @@ describe('review workflow fixture — artifact data shape', () => {
       bindingState,
     );
 
-    setImmediate(() => {
-      void bus.request(WorkflowSubjects.gate.respond, {
-        executionId: 'exec-review-reject-triage',
-        gateId: 'triage',
-        // Approve the gate so the workflow can apply the domain triage
-        // decision carried in resumeData.
-        action: 'approve',
-        resumeData: { action: 'reject', rationale: 'not ready' },
-      });
-    });
-
     const outcome = await executeSequence(createTestCall(), built.definition.root, runtimeCtx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
@@ -408,6 +398,7 @@ describe('review workflow fixture — artifact data shape', () => {
     const bindingState = makeArtifactBindingState();
 
     const built = buildReviewWorkflow({
+      triageDecision: 'approve',
       onSpec: async () => ({ findings: [] }),
       onQuality: async () => ({ findings: [] }),
       onTestCoverage: async () => ({ findings: [] }),
@@ -435,15 +426,6 @@ describe('review workflow fixture — artifact data shape', () => {
       undefined,
       bindingState,
     );
-
-    setImmediate(() => {
-      void bus.request(WorkflowSubjects.gate.respond, {
-        executionId: 'exec-review-approve-triage',
-        gateId: 'triage',
-        action: 'approve',
-        resumeData: { action: 'approve', rationale: 'ship it' },
-      });
-    });
 
     const outcome = await executeSequence(createTestCall(), built.definition.root, runtimeCtx, emptyExpressionCtx);
 

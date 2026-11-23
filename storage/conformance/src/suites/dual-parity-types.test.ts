@@ -229,13 +229,13 @@ type _WorkflowExecutionCongruent = Expect<Equal<WorkflowExecutionSqliteSelect, W
 type _ExecutionStatusSqlite = Expect<
   Equal<
     WorkflowExecutionSqliteSelect['status'],
-    'pending' | 'running' | 'paused' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
+    'pending' | 'running' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
   >
 >;
 type _ExecutionStatusPg = Expect<
   Equal<
     WorkflowExecutionPgSelect['status'],
-    'pending' | 'running' | 'paused' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
+    'pending' | 'running' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
   >
 >;
 // Negative: scopeType must be the narrowed WorkflowExecutionScope union on BOTH dialects.
@@ -301,14 +301,11 @@ type _TotalEstimatedCostPg = Expect<Equal<WorklogSummaryPgSelect['totalEstimated
 type _WorklogSummaryStatusSqlite = Expect<
   Equal<
     WorklogSummarySqliteSelect['status'],
-    'pending' | 'running' | 'paused' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
+    'pending' | 'running' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
   >
 >;
 type _WorklogSummaryStatusPg = Expect<
-  Equal<
-    WorklogSummaryPgSelect['status'],
-    'pending' | 'running' | 'paused' | 'finalizing' | 'completed' | 'failed' | 'cancelled'
-  >
+  Equal<WorklogSummaryPgSelect['status'], 'pending' | 'running' | 'finalizing' | 'completed' | 'failed' | 'cancelled'>
 >;
 
 // ─────────────────────────────────────────────────────────────────────────────

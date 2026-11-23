@@ -1,12 +1,18 @@
 import { z } from 'zod';
 import type { ExtensionName } from '@makaio/core';
 import type { JsonValue } from '../shared/json-value.js';
-import type { WorkflowArtifactBinding, WorkflowDefinition, WorkflowNode, WorkflowSourceLocation } from './schemas.js';
+import type {
+  WorkflowArtifactBinding,
+  WorkflowDefinition,
+  WorkflowLoopNode,
+  WorkflowNode,
+  WorkflowSourceLocation,
+} from './schemas.js';
 import type { WorkflowFinalizerId } from './finalization.js';
 import type { CompletionMode } from '../subagent/schemas.js';
 import type { CodeStepHandler, IterateHandler, PreviousStepOutput, StepContext } from './authoring-context.js';
 import type { WorkflowTriggerDef } from './authoring-triggers.js';
-import type { LoopGateHandler } from './loop.js';
+import type { LoopCheckHandler } from './loop.js';
 
 // ─────────────────────────────────────────────────────────────
 // Node Options and Configuration Types
@@ -48,36 +54,6 @@ export type AgentStepOptions = NodeOptions & {
   /** Authority-owned finalizer applied to the successful result. */
   readonly resultFinalizerId?: string;
 };
-
-/**
- * Options for gate nodes, including the required resume schema.
- */
-export interface GateOptions {
-  /**
-   * Message shown to the reviewer in the approval dialog.
-   * Supports `{{ }}` template interpolation.
-   */
-  readonly prompt: string;
-  /** Optional title for the approval dialog. */
-  readonly title?: string;
-  /**
-   * Action to take when the timeout expires.
-   * - `'approve'`: auto-approve and continue
-   * - `'reject'`: auto-reject and fail
-   */
-  readonly autoAction: 'approve' | 'reject';
-  /**
-   * Timeout in milliseconds before `autoAction` fires.
-   * `null` blocks indefinitely.
-   */
-  readonly timeoutMs: number | null;
-  /**
-   * Zod schema for the resume data payload.
-   * Captured in `zodSchemas.gates[id]`; the JSON Schema equivalent goes in
-   * the node's `resumeSchema` field.
-   */
-  readonly resume?: z.ZodTypeAny;
-}
 
 /**
  * Options for iterate and iterate-chain nodes.
@@ -123,61 +99,37 @@ export interface ParallelOptions {
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Associates a named gate handler string with its runtime evaluate function.
+ * Associates a check handler name with its runtime function.
  *
  * The `handler` string is serialized into the definition; the `evaluate`
- * function is stored in `runtimeLoopGates` and never persisted.
+ * function is stored in `runtimeLoopChecks` and never persisted.
  */
-export interface LoopGateRegistration {
-  /** Registered gate handler name resolved at runtime. */
+export interface LoopCheckRegistration {
+  /** Registered check handler name resolved at runtime. */
   readonly handler: string;
-  /** Runtime gate evaluate function stored in `runtimeLoopGates`. */
-  readonly evaluate: LoopGateHandler;
+  /** Runtime check function stored in `runtimeLoopChecks`. */
+  readonly evaluate: LoopCheckHandler;
 }
 
 /**
  * Options for loop nodes created via the fluent builder or standalone factory.
  *
- * Extends {@link NodeOptions} with loop-specific configuration: round limit,
- * gate handler registration, and optional escalation gate parameters.
+ * Extends {@link NodeOptions} with a round limit and a check handler registration.
  */
 export interface LoopOptions extends NodeOptions {
-  /** Maximum number of loop iterations before the gate forces escalation. */
+  /** Maximum number of rounds to run if the check has yet to pass. */
   readonly maxRounds: number;
-  /** Gate handler registration and optional gate configuration. */
-  readonly gate: LoopGateRegistration & {
+  /** How to finish after all rounds are exhausted. Defaults to failing the loop. */
+  readonly onExhausted?: WorkflowLoopNode['onExhausted'];
+  /** Check registration and optional input and configuration. */
+  readonly check: LoopCheckRegistration & {
     /**
-     * Optional expression resolving to the gate handler's input value.
+     * Optional expression resolving to the check handler's input value.
      * Typically a frame output reference like `'frames.aggregate.output'`.
      */
     readonly input?: string;
-    /** Optional static configuration forwarded to the gate handler. */
+    /** Optional static configuration forwarded to the check handler. */
     readonly config?: JsonValue;
-    /**
-     * Optional escalation configuration for when the gate suspends the loop.
-     * When present, the runtime creates a human gate with this configuration.
-     */
-    readonly escalation?: {
-      /** Title for the escalation gate dialog. */
-      readonly title?: string;
-      /** Prompt shown to the reviewer in the escalation gate. */
-      readonly prompt: string;
-      /**
-       * JSON Schema for the resume data payload submitted when
-       * the escalation gate is resolved.
-       */
-      readonly resumeSchema?: Record<string, JsonValue>;
-      /**
-       * Action to take when the escalation timeout expires.
-       * Defaults to `'reject'`.
-       */
-      readonly autoAction?: 'approve' | 'reject';
-      /**
-       * Timeout in milliseconds before `autoAction` fires.
-       * `null` blocks indefinitely (no timeout).
-       */
-      readonly timeoutMs?: number | null;
-    };
   };
 }
 
@@ -234,8 +186,6 @@ export interface WorkflowZodSchemas {
   readonly output?: z.ZodTypeAny;
   /** Zod schema for the workflow's primary artifact data. */
   readonly artifact?: z.ZodTypeAny;
-  /** Gate resume schemas keyed by gate node ID. */
-  readonly gates: Record<string, z.ZodTypeAny>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -287,10 +237,10 @@ export interface BuiltWorkflow {
    */
   readonly runtimeFactories: ReadonlyMap<string, () => WorkflowNode[]>;
   /**
-   * Loop gate handler functions keyed by handler name.
+   * Loop check handler functions keyed by handler name.
    * Populated by `.loop()` calls and standalone `loop()` factories.
    */
-  readonly runtimeLoopGates: ReadonlyMap<string, LoopGateHandler>;
+  readonly runtimeLoopChecks: ReadonlyMap<string, LoopCheckHandler>;
   /** Zod schemas extracted from the builder for runtime validation. */
   readonly zodSchemas: WorkflowZodSchemas;
   /** Optional authoring-time source metadata for diagnostics. */
@@ -433,17 +383,6 @@ export interface WorkflowBuilder<TTrigger = never, TState extends JsonValue | un
    */
   parallel(id: string, options: ParallelOptions, branches: WorkflowNode[]): WorkflowBuilder<TTrigger, TState>;
   /**
-   * Appends a gate node to the root sequence.
-   *
-   * When a `resume` Zod schema is provided in `options`, it is stored in
-   * `zodSchemas.gates[id]` and its JSON Schema equivalent is written to
-   * the node's `resumeSchema` field.
-   * @param id - Unique gate node identifier
-   * @param options - Gate configuration including prompt and timeout
-   * @returns This builder for chaining
-   */
-  gate(id: string, options: GateOptions): WorkflowBuilder<TTrigger, TState>;
-  /**
    * Appends an iterate node to the root sequence and registers the handler.
    * @param id - Unique iterate node identifier
    * @param handler - Code step handler executed for each collection item
@@ -473,18 +412,18 @@ export interface WorkflowBuilder<TTrigger = never, TState extends JsonValue | un
    */
   iterateChain(id: string, chain: WorkflowNode[], options: IterateOptions): WorkflowBuilder<TTrigger, TState>;
   /**
-   * Appends a loop node to the root sequence with a gated convergence check.
+   * Appends a loop node to the root sequence with a convergence check.
    *
-   * The body nodes are executed on each iteration; the gate handler is
-   * evaluated after each body pass to determine whether to loop, pass,
-   * or escalate. Code step handlers from standalone `codeStep()` factories
-   * in the body are automatically collected into `runtimeHandlers`.
+   * The check runs after each round. A passing check completes the loop.
+   * A throwing check fails the loop. Exhaustion fails by default or completes
+   * when `onExhausted` is set to `'complete'`. Code step handlers from standalone
+   * `codeStep()` factories in the body are automatically collected into `runtimeHandlers`.
    *
    * V1 does not support nested loops; the builder validates this constraint
    * at authoring time.
    * @param id - Unique loop node identifier
    * @param bodyNodes - Ordered list of nodes forming the loop body
-   * @param options - Loop configuration including maxRounds and gate
+   * @param options - Loop configuration including maxRounds and the check
    * @returns This builder for chaining
    */
   loop(id: string, bodyNodes: WorkflowNode[], options: LoopOptions): WorkflowBuilder<TTrigger, TState>;
@@ -497,7 +436,7 @@ export interface WorkflowBuilder<TTrigger = never, TState extends JsonValue | un
   /**
    * Appends an arbitrary pre-built node to the root sequence.
    *
-   * Use this escape hatch to include gate nodes, parallel nodes, iterate nodes,
+   * Use this escape hatch to include parallel nodes, iterate nodes,
    * and other primitive node types without registering a runtime handler.
    * @param node - A fully-constructed workflow node (schema-validated at runtime)
    */

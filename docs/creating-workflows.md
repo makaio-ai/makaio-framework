@@ -1,10 +1,10 @@
 ---
 title: Creating Workflows
-description: Build typed, event-driven workflows using the factory pipeline API with code steps, agent steps, gates, and iterators.
+description: Build typed, event-driven workflows using the factory pipeline API with code steps, agent steps, loops, and iterators.
 ---
 
 Workflows are multi-step automations that combine typed handler functions, agent delegations,
-approval gates, and collection iterators into a linear pipeline. Each workflow declares
+convergence loops, and collection iterators into a linear pipeline. Each workflow declares
 automation trigger bindings (bus events, schedules, or any extension-contributed trigger type) and
 a sequence of nodes that the workflow engine executes in order.
 
@@ -69,11 +69,11 @@ fluent builder or as a standalone factory function.
 | Code Step | `.codeStep()` / `codeStep()` | Sequential handler step |
 | Agent Step | `.agentStep()` / `agentStep()` | Agent invocation for a named role |
 | Parallel | `.parallel()` | Fan-out; runs N branches concurrently |
-| Gate | `.gate()` / `gate()` | Human-in-the-loop suspend/resume |
+| Loop | `.loop()` / `loop()` | Repeat a body until a check passes |
 | Iterate | `.iterate()` / `iterate()` | Single handler mapped over a collection |
 | Iterate chain | `.iterateChain()` / `iterateChain()` | Static sub-chain mapped over a collection |
 
-Standalone factory functions (`codeStep`, `agentStep`, `gate`, `iterate`, `iterateChain`)
+Standalone factory functions (`codeStep`, `agentStep`, `iterate`, `iterateChain`, `loop`)
 create nodes for embedding inside `.parallel()` or `.iterateChain()` calls. They carry the
 same options as their builder-method counterparts.
 
@@ -241,49 +241,32 @@ workflow.parallel('providers', { mode: 'fail-fast' }, [
 ]);
 ```
 
-### `.gate(id, options)`
+### `.loop(id, bodyNodes, options)`
 
-Appends a human-in-the-loop suspend point. The workflow pauses until an external signal
-(`workflow.gate.respond`) arrives. The `resume` Zod schema validates the resume payload;
-resume data is available in subsequent steps through that gate node's `previousSteps` entry.
+Runs the body sequence at least once. After each round, the registered `check`
+returns `{ kind: 'pass' }` to complete the loop or `{ kind: 'loop' }` to start another
+round. A thrown check fails the loop. If every check returns `loop` through
+`maxRounds`, the loop fails by default. Set `onExhausted: 'complete'` to continue
+the workflow when the check never passes.
 
-```typescript
-workflow.gate('approve', {
-  prompt: 'Review findings: {{ output.findings.length }} items need attention',
-  title: 'Approval Gate',
-  autoAction: 'reject',   // action taken on timeout
-  timeoutMs: 7 * 24 * 60 * 60 * 1000, // 7 days; null to block indefinitely
-  resume: z.object({
-    decision: z.enum(['approved', 'rejected']),
-    note: z.string().optional(),
-  }),
-});
-
-workflow.codeStep('post-approval', async (ctx) => {
-  const gate = ctx.previousSteps['approve'];
-  if (gate?.status !== 'completed') return { verdict: 'rejected' };
-  const resume = gate.output as { resumeData?: { decision?: string } };
-  return { verdict: resume.resumeData?.decision ?? 'rejected' };
-});
-```
-
-**Resuming a gate** from outside the workflow:
+Every completed loop outputs `{ passed, rounds, bodyOutputs }`. Use
+`frames.<loop-id>.output.passed` to branch on the check result. It is `true`
+after a passing check and `false` after completing at the round limit.
 
 ```typescript
-bus.request('workflow.gate.respond', {
-  executionId,
-  ...(executionAttemptId !== undefined ? { executionAttemptId } : {}),
-  gateId: 'approve',
-  action: 'approve',
-  resumeData: { decision: 'approved', note: 'LGTM' },
+import { codeStep } from '@makaio/contracts';
+
+workflow.loop('converge', [
+  codeStep('revise', revisionHandler),
+], {
+  maxRounds: 3,
+  check: {
+    handler: 'revision-ready',
+    evaluate: (input) => ({ kind: input === true ? 'pass' : 'loop' }),
+    input: 'frames.revise.output.ready',
+  },
 });
 ```
-
-Gate responses for Attempt-owned workflow runs must preserve the
-`executionAttemptId` from the corresponding `workflow.gate.suspended` event.
-The runtime rejects a missing or different value, preventing a response for one
-Attempt from resuming another Attempt of the same execution. Workflows that do
-not run through an Attempt continue to omit this field.
 
 ### `.iterate(id, handler, options)`
 
@@ -334,8 +317,8 @@ introspection without running the workflow.
 
 This example shows a review workflow with three parallel steps (spec, quality, test
 coverage), an `apply-findings` step that writes agent output back to the workflow Artifact,
-a typed gate for human approval, and an `iterateChain` that processes each finding through a
-multi-step sub-pipeline.
+an `iterateChain` that processes each finding through a multi-step sub-pipeline,
+and a final step that records the review verdict.
 
 ```typescript
 // .makaio/workflows/review.ts
@@ -356,7 +339,6 @@ const ReviewInputSchema = z.object({
 
 const ReviewConfigSchema = z.object({
   reviewerRole: z.string().default('code-reviewer'),
-  autoApprove: z.boolean().default(false),
 });
 
 const ReviewFindingSchema = z.object({
@@ -375,15 +357,20 @@ const ReviewOutputSchema = z.object({
 // ── Handlers ───────────────────────────────────────────────────
 
 async function aggregateFindingsHandler(ctx) {
-  const branches = ctx.previousSteps['delegate-reviews'];
-  if (branches?.status !== 'completed') return { findings: [], hasBlockers: false };
+  const parallel = ctx.previousSteps['delegate-reviews'];
+  if (parallel?.status !== 'completed') return { findings: [], hasBlockers: true };
 
-  const allFindings: ReviewFinding[] = (branches.output as Array<PromiseSettledResult<{ findings: ReviewFinding[] }>>).flatMap(
-    (r) => r.status === 'fulfilled' ? r.value.findings : [],
+  const output = parallel.output as {
+    branches: Record<string, PromiseSettledResult<{ findings: ReviewFinding[] }> | { status: 'cancelled' }>;
+  };
+  const results = Object.values(output.branches);
+  const findings = results.flatMap((result) =>
+    result.status === 'fulfilled' ? result.value.findings : [],
   );
   return {
-    findings: allFindings,
-    hasBlockers: allFindings.some((f) => f.severity === 'blocker'),
+    findings,
+    hasBlockers: results.some((result) => result.status !== 'fulfilled')
+      || findings.some((finding) => finding.severity === 'blocker'),
   };
 }
 
@@ -400,16 +387,14 @@ async function applyFindingsHandler(ctx) {
   return { id: finding.id, applied: true };
 }
 
-async function postApprovalHandler(ctx) {
-  const gate = ctx.previousSteps['approve'];
-  const resume = gate?.status === 'completed'
-    ? (gate.output as { resumeData?: { decision?: string } }).resumeData
-    : undefined;
-  const decision = resume?.decision ?? 'rejected';
-  // Promote domain status through the artifact
-  await ctx.artifact?.updateStatus(decision === 'approved' ? 'approved' : 'blocked');
+async function finalizeReviewHandler(ctx) {
+  const review = ctx.previousSteps['aggregate-findings']?.output as
+    | { hasBlockers: boolean }
+    | undefined;
+  const verdict = review?.hasBlockers === false ? 'approved' : 'blocked';
+  await ctx.artifact?.updateStatus(verdict);
   return {
-    verdict: decision,
+    verdict,
     findingsApplied: ctx.previousSteps['apply-findings']?.output?.length ?? 0,
   };
 }
@@ -459,21 +444,8 @@ const reviewWorkflow = defineWorkflow('review', {
     collection: 'output.findings',
   })
 
-  // Human approval gate — auto-rejects after 7 days
-  // Gate is skipped when autoApprove is true and there are no blockers
-  .gate('approve', {
-    prompt: 'Review complete: {{ output.findings.length }} findings, blockers: {{ output.hasBlockers }}',
-    title: 'Review Approval',
-    autoAction: 'reject',
-    timeoutMs: 7 * 24 * 60 * 60 * 1000,
-    resume: z.object({
-      decision: z.enum(['approved', 'rejected']),
-      note: z.string().optional(),
-    }),
-  })
-
-  // Apply the gate decision to the Artifact status
-  .codeStep('finalize', postApprovalHandler);
+  // Record the verdict on the Artifact
+  .codeStep('finalize', finalizeReviewHandler);
 
 export default reviewWorkflow;
 ```
@@ -493,7 +465,7 @@ makaio workflow run .makaio/workflows/review.ts \
 makaio workflow run .makaio/workflows/review.ts
 # -> "Awaiting trigger for workflow..."
 # Set an implementation-plan artifact status to 'ready-for-review':
-# -> Workflow fires, runs reviews, waits at gate
+# -> Workflow runs the reviews and records the verdict
 ```
 
 ---
@@ -852,7 +824,7 @@ WorkflowExecutor                      import(workflowFile)
   │                                     │
   ├─ runFile(file, payload)            ├─ Pipeline: sequential nodes
   │    → spawn worker ─────────────►   ├─ Parallel: Promise.allSettled branches
-  │                                     ├─ Gate: checkpoint + bus event
+  │                                     ├─ Loop: repeat body and evaluate check
   ├─ lifecycle events ◄──── bus ◄──────├─ Iterate: per-item handler
   │                                     └─ return result
   └─ result ◄───────────────────────────

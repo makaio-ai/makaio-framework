@@ -1,8 +1,6 @@
-import { zodSchemaToJsonRecord } from '../shared/zod-json-schema.js';
 import type {
   WorkflowAgentStepNode,
   WorkflowCodeStepNode,
-  WorkflowGateNode,
   WorkflowIterateChainNode,
   WorkflowIterateNode,
   WorkflowLoopNode,
@@ -11,9 +9,9 @@ import type {
   WorkflowSequenceNode,
 } from './schemas.js';
 import type { CodeStepHandler, IterateHandler } from './authoring-context.js';
-import type { LoopGateHandler } from './loop.js';
+import type { LoopCheckHandler } from './loop.js';
 import { validateNoNestedLoops } from './loop.js';
-import type { AgentStepOptions, GateOptions, IterateOptions, LoopOptions, NodeOptions } from './authoring-builder.js';
+import type { AgentStepOptions, IterateOptions, LoopOptions, NodeOptions } from './authoring-builder.js';
 
 // ─────────────────────────────────────────────────────────────
 // Shared WeakMap for standalone handler registration
@@ -33,15 +31,15 @@ export const standaloneHandlers = new WeakMap<object, CodeStepHandler>();
 
 /**
  * Module-scoped WeakMap that associates standalone-factory loop nodes with
- * their gate handler functions.
+ * their check handler functions.
  *
- * When `loop()` is called with a gate registration, the loop node object is
- * used as a key and the gate evaluate function is stored here. Builder methods
- * (`addNode()`) read this map when incorporating nodes so gate handlers are
- * automatically registered in `runtimeLoopGates` without exposing functions
+ * When `loop()` is called with a check registration, the loop node object is
+ * used as a key and the check function is stored here. Builder methods
+ * (`addNode()`) read this map when incorporating nodes so check handlers are
+ * automatically registered in `runtimeLoopChecks` without exposing functions
  * in the serializable node shape.
  */
-export const standaloneLoopGates = new WeakMap<object, LoopGateHandler>();
+export const standaloneLoopChecks = new WeakMap<object, LoopCheckHandler>();
 
 // ─────────────────────────────────────────────────────────────
 // Standalone Handler Extraction
@@ -51,16 +49,16 @@ export const standaloneLoopGates = new WeakMap<object, LoopGateHandler>();
  * Walks `node` and its descendants, extracting any handlers registered in
  * `standaloneHandlers` and writing them into `handlers`.
  *
- * When `loopGates` is provided, loop gate handlers from `standaloneLoopGates`
+ * When `loopChecks` is provided, loop check handlers from `standaloneLoopChecks`
  * are also extracted into the map in the same recursive pass.
  * @param node - The node to inspect
  * @param handlers - The code step handler map to populate
- * @param loopGates - Optional loop gate handler map to populate
+ * @param loopChecks - Optional loop check handler map to populate
  */
 export function extractStandaloneHandlers(
   node: WorkflowNode,
   handlers: Map<string, CodeStepHandler>,
-  loopGates?: Map<string, LoopGateHandler>,
+  loopChecks?: Map<string, LoopCheckHandler>,
 ): void {
   const handler = standaloneHandlers.get(node);
   if (handler !== undefined) {
@@ -68,24 +66,24 @@ export function extractStandaloneHandlers(
   }
   if (node.type === 'sequence') {
     for (const child of (node as WorkflowSequenceNode).nodes) {
-      extractStandaloneHandlers(child, handlers, loopGates);
+      extractStandaloneHandlers(child, handlers, loopChecks);
     }
   } else if (node.type === 'parallel') {
     for (const branch of Object.values((node as WorkflowParallelNode).branches)) {
-      extractStandaloneHandlers(branch, handlers, loopGates);
+      extractStandaloneHandlers(branch, handlers, loopChecks);
     }
   } else if (node.type === 'iterate') {
-    extractStandaloneHandlers((node as WorkflowIterateNode).body, handlers, loopGates);
+    extractStandaloneHandlers((node as WorkflowIterateNode).body, handlers, loopChecks);
   } else if (node.type === 'iterate-chain') {
-    extractStandaloneHandlers((node as WorkflowIterateChainNode).body, handlers, loopGates);
+    extractStandaloneHandlers((node as WorkflowIterateChainNode).body, handlers, loopChecks);
   } else if (node.type === 'loop') {
-    if (loopGates !== undefined) {
-      const gateHandler = standaloneLoopGates.get(node);
-      if (gateHandler !== undefined) {
-        loopGates.set((node as WorkflowLoopNode).gate.handler, gateHandler);
+    if (loopChecks !== undefined) {
+      const checkHandler = standaloneLoopChecks.get(node);
+      if (checkHandler !== undefined) {
+        loopChecks.set((node as WorkflowLoopNode).check.handler, checkHandler);
       }
     }
-    extractStandaloneHandlers((node as WorkflowLoopNode).body, handlers, loopGates);
+    extractStandaloneHandlers((node as WorkflowLoopNode).body, handlers, loopChecks);
   }
 }
 
@@ -143,26 +141,6 @@ export function agentStep(id: string, role: string, options?: AgentStepOptions):
 }
 
 /**
- * Creates a gate node for use as a standalone node or as a branch entry.
- * @param id - Unique gate node identifier
- * @param options - Gate configuration including prompt and timeout
- * @returns A {@link WorkflowGateNode}
- */
-export function gate(id: string, options: GateOptions): WorkflowGateNode {
-  return {
-    id,
-    type: 'gate',
-    prompt: options.prompt,
-    autoAction: options.autoAction,
-    timeoutMs: options.timeoutMs,
-    ...(options.title !== undefined && { title: options.title }),
-    ...(options.resume !== undefined && {
-      resumeSchema: zodSchemaToJsonRecord(options.resume),
-    }),
-  };
-}
-
-/**
  * Creates an iterate node for use in an `iterateChain()` sub-chain or
  * as a raw node passed to `addNode()`.
  *
@@ -213,17 +191,17 @@ export function iterateChain(id: string, chain: WorkflowNode[], options: Iterate
 /**
  * Creates a loop node for use as a standalone node passed to `addNode()`.
  *
- * The gate evaluate function is stored in the module-scoped
- * `standaloneLoopGates` WeakMap keyed on the returned node object. Builder
+ * The check function is stored in the module-scoped
+ * `standaloneLoopChecks` WeakMap keyed on the returned node object. Builder
  * methods (`addNode()`) read this map when incorporating the node so the
- * gate handler is automatically registered in `runtimeLoopGates` without
+ * check handler is automatically registered in `runtimeLoopChecks` without
  * embedding functions in the serializable node shape.
  *
  * Body node handlers registered via standalone `codeStep()` factories are
  * also collected through the existing `standaloneHandlers` mechanism.
  * @param id - Unique loop node identifier
  * @param bodyNodes - Ordered list of nodes forming the loop body
- * @param options - Loop configuration including maxRounds and gate
+ * @param options - Loop configuration including maxRounds and the check
  * @returns A {@link WorkflowLoopNode} with no functions in the serializable definition
  */
 export function loop(id: string, bodyNodes: WorkflowNode[], options: LoopOptions): WorkflowLoopNode {
@@ -231,8 +209,9 @@ export function loop(id: string, bodyNodes: WorkflowNode[], options: LoopOptions
     id,
     type: 'loop',
     maxRounds: options.maxRounds,
+    ...(options.onExhausted !== undefined && { onExhausted: options.onExhausted }),
     body: { id: `${id}__body`, type: 'sequence', nodes: bodyNodes },
-    gate: buildSerializableLoopGate(options),
+    check: buildSerializableLoopCheck(options),
     ...(options.when !== undefined && { when: options.when }),
     ...(options.skip !== undefined && { skip: options.skip }),
   };
@@ -240,41 +219,23 @@ export function loop(id: string, bodyNodes: WorkflowNode[], options: LoopOptions
   if (nestedError !== undefined) {
     throw new Error(nestedError);
   }
-  standaloneLoopGates.set(node, options.gate.evaluate);
+  standaloneLoopChecks.set(node, options.check.evaluate);
   return node;
 }
 
 /**
- * Builds the serializable gate descriptor from {@link LoopOptions}.
- *
- * Applies schema defaults for `escalation.autoAction` and
- * `escalation.timeoutMs` so the resulting object satisfies
- * `WorkflowLoopNode['gate']` without optional-to-required mismatches.
- * @param options - Loop options containing the gate registration
- * @returns A plain gate object suitable for the serializable node
+ * Builds the serializable check descriptor from {@link LoopOptions}.
+ * @param options - Loop options containing the check registration
+ * @returns The check descriptor included in the loop definition
  */
-export function buildSerializableLoopGate(options: LoopOptions): WorkflowLoopNode['gate'] {
-  const escalation = options.gate.escalation;
+export function buildSerializableLoopCheck(options: LoopOptions): WorkflowLoopNode['check'] {
   return {
-    handler: options.gate.handler,
-    ...(options.gate.input !== undefined && {
-      input: options.gate.input,
+    handler: options.check.handler,
+    ...(options.check.input !== undefined && {
+      input: options.check.input,
     }),
-    ...(options.gate.config !== undefined && {
-      config: options.gate.config,
-    }),
-    ...(escalation !== undefined && {
-      escalation: {
-        prompt: escalation.prompt,
-        autoAction: escalation.autoAction ?? 'reject',
-        timeoutMs: escalation.timeoutMs ?? null,
-        ...(escalation.title !== undefined && {
-          title: escalation.title,
-        }),
-        ...(escalation.resumeSchema !== undefined && {
-          resumeSchema: escalation.resumeSchema,
-        }),
-      },
+    ...(options.check.config !== undefined && {
+      config: options.check.config,
     }),
   };
 }

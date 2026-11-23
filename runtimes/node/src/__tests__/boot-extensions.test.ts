@@ -209,7 +209,6 @@ function makeWorkerConfig(): WorkflowWorkerConfig {
     env: {},
     coordinatorSessionId: 'session-1',
     cancelSubject: 'workflow.wfx-1.cancel',
-    suspensionStrategy: 'wait-in-process',
   };
 }
 

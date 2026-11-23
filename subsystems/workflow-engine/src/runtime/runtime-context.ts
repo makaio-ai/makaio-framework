@@ -7,10 +7,9 @@ import {
   type BuiltWorkflow,
   type CodeStepHandler,
   type JsonValue,
-  type LoopGateHandler,
+  type LoopCheckHandler,
   type PreviousStepOutput,
   type SpanRecord,
-  type SuspensionStrategy,
   type WorkflowDefinition,
   type WorkflowExecution,
   type WorkflowFrameState,
@@ -103,6 +102,42 @@ export function buildPreviousStepsFromFrames(
 }
 
 /**
+ * Terminal frame entry that can be merged into a {@link PrimitiveExpressionContext}.
+ *
+ * Discriminated on `status`:
+ * - `completed`: the node finished successfully and may have produced output.
+ * - `skipped`: the node was skipped by a `when` condition; no output is produced.
+ */
+type MergeableFrameEntry =
+  | { readonly status: 'completed'; readonly output?: JsonValue }
+  | { readonly status: 'skipped' };
+
+/**
+ * Merge a terminal frame entry for `nodeId` into an expression context.
+ *
+ * Produces a new context with the `frames`, `previousSteps`, and `output`
+ * fields updated to reflect the completed or skipped node. The original
+ * context is not mutated.
+ * @param ctx - Current expression context.
+ * @param nodeId - Node whose frame entry is being merged.
+ * @param entry - Terminal frame entry to merge.
+ * @returns Updated expression context reflecting the merged frame.
+ */
+export function mergeFrameOutput(
+  ctx: PrimitiveExpressionContext,
+  nodeId: string,
+  entry: MergeableFrameEntry,
+): PrimitiveExpressionContext {
+  const frames = { ...ctx.frames, [nodeId]: entry };
+  return {
+    ...ctx,
+    frames,
+    previousSteps: buildPreviousStepsFromFrames(frames),
+    output: entry.status === 'completed' ? entry.output : ctx.output,
+  };
+}
+
+/**
  * Build the public expression/template scope from the runtime primitive context.
  *
  * The workflow authoring contract documents `ctx.*` references while earlier
@@ -147,54 +182,17 @@ export interface CreateFrameParams {
 }
 
 /**
- * Index of persisted frames available for resumption in a re-dispatched execution.
- *
- * This structural alias mirrors the interface defined in `resume-frames.ts`,
- * replicated here to avoid a circular module dependency:
- * `resume-frames.ts` imports `PrimitiveExpressionContext` from this module,
- * so importing from `resume-frames.ts` here would create a cycle.
- *
- * Both shapes must be kept in sync. The two access paths are:
- * - `byNodeId`: all frames for a node ID, ordered by `startedAt` ascending.
- * - `byFrameId`: O(1) lookup by frame ID.
- */
-export interface ResumeFrameIndex {
-  /** All frames for a given node ID, preserving storage order (startedAt asc). */
-  readonly byNodeId: ReadonlyMap<string, readonly WorkflowFrameState[]>;
-  /** Direct frame lookup by frame ID. */
-  readonly byFrameId: ReadonlyMap<string, WorkflowFrameState>;
-}
-
-/**
- * Execution-level options that customize runtime behavior beyond the workflow
- * definition, such as suspension strategy and pre-loaded resume data.
+ * Execution-level options for runtime loop checks.
  *
  * All fields are optional; sensible defaults are applied by {@link RuntimeContext}.
  */
 export interface RuntimeExecutionOptions {
-  /** Authority attempt that owns gates opened during this runtime invocation. */
-  readonly executionAttemptId?: string;
   /**
-   * How the runtime should handle workflow suspension points (e.g., gate nodes).
-   * Defaults to `'wait-in-process'` when absent.
-   */
-  readonly suspensionStrategy?: SuspensionStrategy;
-  /**
-   * Pre-loaded resume frames for re-dispatched executions. When populated the
-   * runtime resumes from the provided frame payloads instead of waiting for
-   * external responses.
-   */
-  readonly resumeFrames?: ResumeFrameIndex;
-  /**
-   * Loop gate handler functions keyed by handler name.
+   * Loop check handler functions keyed by handler name.
    * Populated by `.loop()` calls and standalone `loop()` factories.
    * Defaults to an empty map when absent.
    */
-  readonly runtimeLoopGates?: ReadonlyMap<string, LoopGateHandler>;
-}
-
-interface FramePersistenceOptions {
-  readonly requireFrameStorage?: boolean;
+  readonly runtimeLoopChecks?: ReadonlyMap<string, LoopCheckHandler>;
 }
 
 /**
@@ -285,7 +283,7 @@ function toSpanStepType(nodeType: WorkflowNodeType): SpanRecord['stepType'] | un
  * Convert a persisted frame snapshot into the span read-model row used by
  * workflow dashboards.
  *
- * Structural frames and pending, waiting, or cancelled states have no
+ * Structural frames and pending or cancelled states have no
  * equivalent `SpanRecord` shape today, so they remain frame-only lifecycle
  * states.
  * @param executionId - Execution that owns the frame.
@@ -324,6 +322,16 @@ function toFrameSpanRecord(executionId: string, frame: WorkflowFrameState): Span
   };
 }
 
+/** A required runtime frame transition failed. */
+export class FramePersistenceError extends Error {
+  /**
+   * @param cause - Original persistence error.
+   */
+  public constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
+
 // ─────────────────────────────────────────────────────────────
 // RuntimeContext
 // ─────────────────────────────────────────────────────────────
@@ -343,7 +351,7 @@ function toFrameSpanRecord(executionId: string, frame: WorkflowFrameState): Span
 export class RuntimeContext {
   /** All frames created during this execution, keyed by frame ID. */
   private readonly frameRegistry: Map<string, WorkflowFrameState>;
-  /** Per-frame persistence queues preserving transition order. */
+  /** Ordered writes per frame. Rejected writes remain until the execution ends. */
   private readonly framePersistenceTasks = new Map<string, Promise<void>>();
 
   /**
@@ -367,7 +375,7 @@ export class RuntimeContext {
    * @param sharedFrameRegistry - Optional shared frame registry for child contexts.
    * @param artifactBinding - Optional pre-resolved artifact binding state.
    * @param platform - Platform context and environment exposed to code step handlers.
-   * @param options - Execution-level options (suspension strategy, resume frames).
+   * @param options - Execution-level options for loop checks.
    */
   public constructor(
     public readonly executionId: string,
@@ -386,10 +394,7 @@ export class RuntimeContext {
     this.artifactBinding = artifactBinding;
     this.platformContext = platform.context;
     this.env = platform.env;
-    this.suspensionStrategy = options.suspensionStrategy ?? 'wait-in-process';
-    this.executionAttemptId = options.executionAttemptId;
-    this.resumeFrames = options.resumeFrames;
-    this.runtimeLoopGates = options.runtimeLoopGates ?? new Map();
+    this.runtimeLoopChecks = options.runtimeLoopChecks ?? new Map();
   }
 
   /** Platform/workspace context exposed to code step handlers (ephemeral). */
@@ -399,25 +404,10 @@ export class RuntimeContext {
   public readonly env: Record<string, string>;
 
   /**
-   * Suspension strategy selected for this execution run.
-   * Defaults to `'wait-in-process'`.
-   */
-  public readonly suspensionStrategy: SuspensionStrategy;
-
-  /** Authority attempt that owns gates opened during this runtime invocation. */
-  public readonly executionAttemptId: string | undefined;
-
-  /**
-   * Pre-loaded resume frames for re-dispatched executions.
-   * `undefined` when the execution is starting fresh.
-   */
-  public readonly resumeFrames: ResumeFrameIndex | undefined;
-
-  /**
-   * Loop gate handler functions keyed by handler name.
+   * Loop check handler functions keyed by handler name.
    * Empty when the workflow has no loop nodes.
    */
-  public readonly runtimeLoopGates: ReadonlyMap<string, LoopGateHandler>;
+  public readonly runtimeLoopChecks: ReadonlyMap<string, LoopCheckHandler>;
 
   /**
    * Create a child context that shares this execution's frame registry and
@@ -445,10 +435,7 @@ export class RuntimeContext {
       this.artifactBinding,
       { context: this.platformContext, env: this.env },
       {
-        executionAttemptId: this.executionAttemptId,
-        suspensionStrategy: this.suspensionStrategy,
-        resumeFrames: this.resumeFrames,
-        runtimeLoopGates: this.runtimeLoopGates,
+        runtimeLoopChecks: this.runtimeLoopChecks,
       },
     );
   }
@@ -476,14 +463,12 @@ export class RuntimeContext {
    * in the in-memory frame registry, and enqueue a bus upsert to persist the
    * initial row to the database.
    *
-   * For in-process executions, persistence errors are swallowed so a missing
-   * storage handler (e.g. in unit tests without a DB) does not abort execution.
-   * Exit-based executions require durable frame storage because persisted
-   * frames are the resume checkpoint contract.
+   * The initial write is ordered before every subsequent transition. The
+   * next awaited transition reports an error from either write.
    *
    * The returned frame is mutable; since it is the same reference stored in the
    * registry, direct mutations are sufficient for lifecycle helpers. Callers that
-   * know only the frame ID (e.g. gate suspension) use {@link updateFrame} instead.
+   * know only the frame ID use {@link updateFrame} instead.
    * The frame ID is auto-generated and included in the returned path.
    * @param call - Call context of the message that drives this execution run.
    * @param params - Node identity and tree position for the new frame.
@@ -516,56 +501,88 @@ export class RuntimeContext {
    * Persist the current frame state via the workflow storage subject and mirror
    * observable node frames into the span read model consumed by public traces.
    *
-   * Writes are ordered per frame so the initial pending row cannot race after
-   * a later running/completed transition. Missing storage handlers are allowed
-   * for isolated in-process unit tests; exit-based suspension strategies make
-   * frame storage mandatory so a failed checkpoint write fails the execution
-   * before it can park and later replay side effects.
+   * Writes are ordered per frame. A failed frame write remains in the queue
+   * so every later transition observes the error before executing side effects.
+   * If a confirmed frame exists, a failed write attempts one failed checkpoint.
+   * A failed span mirror is reported without blocking required frame writes.
    * @param call - Call context of the message that drives this execution run.
    * @param frame - Frame state to persist.
-   * @param options - Persistence behavior for this write.
    */
-  public async persistFrame(
-    call: CallContext,
-    frame: WorkflowFrameState,
-    options: FramePersistenceOptions = {},
-  ): Promise<void> {
-    const requireFrameStorage = options.requireFrameStorage === true || this.suspensionStrategy !== 'wait-in-process';
+  public async persistFrame(call: CallContext, frame: WorkflowFrameState): Promise<void> {
     const snapshot = snapshotFrame(frame);
-    const span = toFrameSpanRecord(this.executionId, snapshot);
     const previous = this.framePersistenceTasks.get(frame.frameId) ?? Promise.resolve();
-    const task = previous
-      .catch(() => undefined)
-      .then(async () => {
-        if (requireFrameStorage) {
-          await this.bus.request(call, WorkflowStorageSubjects.setFrame, {
-            executionId: this.executionId,
-            frame: snapshot,
-          });
-        } else {
-          await this.bus.requestOptional(call, WorkflowStorageSubjects.setFrame, {
-            executionId: this.executionId,
-            frame: snapshot,
-          });
-        }
-        if (span !== undefined) {
-          await this.bus.requestOptional(call, WorkflowStorageSubjects.setSpan, { span });
-        }
-      })
-      .catch((error: unknown) => {
-        if (requireFrameStorage) {
-          throw error;
-        }
-        console.warn(`[RuntimeContext] Failed to persist frame ${frame.frameId}:`, error);
-      });
+    const task = previous.then(() => this.writeFrameTransition(call, frame, snapshot));
 
     this.framePersistenceTasks.set(frame.frameId, task);
+    await task;
+    if (this.framePersistenceTasks.get(frame.frameId) === task) {
+      this.framePersistenceTasks.delete(frame.frameId);
+    }
+  }
+
+  /**
+   * Write a frame transition and checkpoint its failure once when a row already exists.
+   * @param call - Call context of the execution run.
+   * @param frame - Frame in the live registry.
+   * @param snapshot - Detached state for this write.
+   */
+  private async writeFrameTransition(
+    call: CallContext,
+    frame: WorkflowFrameState,
+    snapshot: WorkflowFrameState,
+  ): Promise<void> {
     try {
-      await task;
-    } finally {
-      if (this.framePersistenceTasks.get(frame.frameId) === task) {
-        this.framePersistenceTasks.delete(frame.frameId);
+      await this.writeFrame(call, snapshot);
+    } catch (error) {
+      const original = snapshot.status === 'failed' ? snapshot.error : undefined;
+      const storageMessage = error instanceof Error ? error.message : String(error);
+      const failure = new FramePersistenceError(
+        original === undefined
+          ? error
+          : new Error(original + ' (frame storage: ' + storageMessage + ')', { cause: error }),
+      );
+      // A rejected initial checkpoint must stop the body before it runs. No
+      // previously confirmed frame exists in that case.
+      if (snapshot.status !== 'pending') {
+        const message = failure.message;
+        const completedAt = Date.now();
+        const failed: WorkflowFrameState = {
+          ...snapshot,
+          status: 'failed',
+          error: message,
+          output: undefined,
+          completedAt,
+        };
+        Object.assign(frame, failed);
+        await this.writeFrame(call, failed)
+          .then(() =>
+            this.emitFrameFailed(
+              call,
+              failed,
+              message,
+              failed.startedAt === undefined ? undefined : Math.max(0, completedAt - failed.startedAt),
+            ),
+          )
+          .catch((checkpointError: unknown) => {
+            console.warn(`[RuntimeContext] Failed to record terminal frame ${frame.frameId}:`, checkpointError);
+          });
       }
+      throw failure;
+    }
+  }
+
+  /**
+   * Store one snapshot and mirror its span when the frame is observable.
+   * @param call - Call context of the execution run.
+   * @param snapshot - Detached frame state to persist.
+   */
+  private async writeFrame(call: CallContext, snapshot: WorkflowFrameState): Promise<void> {
+    await this.bus.request(call, WorkflowStorageSubjects.setFrame, { executionId: this.executionId, frame: snapshot });
+    const span = toFrameSpanRecord(this.executionId, snapshot);
+    if (span !== undefined) {
+      await this.bus.requestOptional(call, WorkflowStorageSubjects.setSpan, { span }).catch((error: unknown) => {
+        console.warn(`[RuntimeContext] Failed to mirror span for frame ${snapshot.frameId}:`, error);
+      });
     }
   }
 
@@ -577,20 +594,14 @@ export class RuntimeContext {
    * @param call - Call context of the message that drives this execution run.
    * @param frameId - The frame to update.
    * @param patch - Fields to merge into the frame.
-   * @param options - Persistence behavior for this update.
    */
-  public async updateFrame(
-    call: CallContext,
-    frameId: string,
-    patch: Partial<WorkflowFrameState>,
-    options: FramePersistenceOptions = {},
-  ): Promise<void> {
+  public async updateFrame(call: CallContext, frameId: string, patch: Partial<WorkflowFrameState>): Promise<void> {
     const frame = this.frameRegistry.get(frameId);
     if (!frame) {
       throw new Error(`Frame not found: ${frameId}`);
     }
     Object.assign(frame, patch);
-    await this.persistFrame(call, frame, options);
+    await this.persistFrame(call, frame);
   }
 
   /**
@@ -738,6 +749,6 @@ export function createRuntimeContext(
     undefined,
     undefined,
     undefined,
-    { runtimeLoopGates: builtWorkflow.runtimeLoopGates },
+    { runtimeLoopChecks: builtWorkflow.runtimeLoopChecks },
   );
 }

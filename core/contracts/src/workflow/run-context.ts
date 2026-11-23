@@ -3,7 +3,6 @@ import { WorkflowDefinitionSchema, WorkflowExecutionScopeSchema } from './schema
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 import { WorkerContributionManifestSchema, WorkflowTriggerModeSchema } from './worker.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
-import { SuspensionStrategySchema } from '../worker/suspension.js';
 import { WorkerMaterializationSpecSchema } from '../capabilities/worker/types.js';
 import { WorkflowError, WorkflowErrorCode } from './errors.js';
 
@@ -80,29 +79,12 @@ function workflowRunContextObject<TDefinitionSnapshotSchema extends z.ZodTypeAny
     artifactRef: WorkflowArtifactRefSchema.optional(),
     /** Coordinator session that owns this execution. */
     coordinatorSessionId: z.string().min(1),
-    /**
-     * Opaque dispatch metadata that must survive pause/resume boundaries.
-     *
-     * Framework code treats this as a generic JSON object. Product-owned
-     * dispatchers may store non-secret routing identity here so resumed
-     * executions can be handed back to the same dispatch target.
-     */
-    dispatchMetadata: JsonObjectContractSchema.optional(),
     /** Bus subject for cancellation signals. */
     cancelSubject: z.string().min(1),
     /** Extra non-secret environment variables. */
     env: z.record(z.string(), z.string()).default({}),
     /** Snapshot creation timestamp (epoch ms). */
     createdAt: z.number(),
-    /**
-     * Durable record of the suspension strategy selected for this execution.
-     *
-     * Persisted alongside the run context so resumers and redispatchers can
-     * apply the same strategy without re-resolving provider capabilities.
-     * Defaults to `'wait-in-process'` for executions started before this
-     * field was introduced.
-     */
-    suspensionStrategy: SuspensionStrategySchema.default('wait-in-process'),
     /** Component that exclusively owns durable terminalization for this execution. */
     terminalAuthority: z.enum(['worker', 'authority']).optional(),
     /**

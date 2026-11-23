@@ -192,7 +192,6 @@ function makeRunContext(executionId: string, materializationSpec?: WorkerMateria
     cancelSubject: `workflow.${executionId}.cancel`,
     env: {},
     createdAt: Date.now(),
-    suspensionStrategy: 'wait-in-process',
     materializationSpec,
   };
 }
@@ -313,7 +312,6 @@ async function createAuthoritySide(
   // Host-selected realization inputs are frozen separately from the immutable instruction.
   const runtimeInputs = structuredClone({
     workerManifest: runContext.workerManifest,
-    suspensionStrategy: runContext.suspensionStrategy,
   });
   const offGetRunContext = authority.on(
     WorkerSubjects.runtime.inputs.get,

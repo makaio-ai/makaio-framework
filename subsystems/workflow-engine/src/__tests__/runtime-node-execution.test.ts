@@ -29,7 +29,9 @@ import { executeAgentStepNode } from '../runtime/delegate-node.js';
 import { elapsedDelegateDuration } from '../runtime/role-subagent-node.js';
 import { executeParallelNode, type ParallelOutput } from '../runtime/parallel-node.js';
 import { executeSequence } from '../runtime/primitive-runtime.js';
-import { WorkflowStorageSubjects } from '../storage/namespace.js';
+import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
+import { runWorkflowOrchestrator } from '../workflow-orchestrator.js';
+import { registerInMemoryFrameStore } from './shared.js';
 
 // ─────────────────────────────────────────────────────────────
 // Test helpers
@@ -65,7 +67,7 @@ function makeExecution(workflowId: string): WorkflowExecution {
 }
 
 /**
- * Create a fresh isolated bus with the WorkflowNamespace registered.
+ * Create a fresh isolated bus with the workflow and storage namespaces registered.
  *
  * Each test gets its own bus instance so handler registrations do not bleed
  * across tests (no shared global state from the test-global MakaioBus).
@@ -73,26 +75,30 @@ function makeExecution(workflowId: string): WorkflowExecution {
 function makeBus(): ReturnType<typeof createBusInstance> {
   const bus = createBusInstance();
   bus.registerNamespace(WorkflowNamespace);
+  bus.registerNamespace(WorkflowStorageNamespace);
   return bus;
 }
 
 /**
- * Create a fresh RuntimeContext with an isolated bus.
+ * Create a fresh RuntimeContext with in-memory frame storage by default.
  * @param handlers - Code step handlers keyed by node ID.
  * @param signal - Optional abort signal.
+ * @param bus - Optional bus for tests that manage storage handlers directly.
  */
 function makeCtx(
   handlers: Record<string, CodeStepHandler>,
   signal: AbortSignal = new AbortController().signal,
+  bus?: ReturnType<typeof makeBus>,
 ): RuntimeContext {
-  const bus = makeBus();
+  const runtimeBus = bus ?? makeBus();
+  if (bus === undefined) registerInMemoryFrameStore(runtimeBus);
   return new RuntimeContext(
     'exec-test',
     'workflow-test',
     makeDefinition('workflow-test'),
     makeExecution('workflow-test'),
     new Map(Object.entries(handlers)),
-    bus,
+    runtimeBus,
     signal,
   );
 }
@@ -1911,12 +1917,69 @@ describe('executeAgentStepNode', () => {
   });
 });
 
-describe('executeSequence frame persistence', () => {
+describe('runtime frame persistence', () => {
+  it.each([
+    {
+      scenario: 'frame storage has no handler',
+      failFirstWrite: false,
+      error: 'No handler registered for request subject "storage:workflow.setFrame"',
+    },
+    {
+      scenario: 'the first frame write fails and later writes could succeed',
+      failFirstWrite: true,
+      error: 'Request to "setFrame" failed: First frame write failed',
+    },
+  ])('fails the workflow before executing a step when $scenario', async ({ failFirstWrite, error }) => {
+    const bus = makeBus();
+    const unsubscribeFrames = failFirstWrite ? registerInMemoryFrameStore(bus, { failFirstWrite }) : undefined;
+    const unsubscribeBootstrap = bus.on(WorkflowSubjects.bootstrapAuthorityState, (ctx) => {
+      ctx.setResult({ persisted: true });
+    });
+    const handler = vi.fn(() => ({ ok: true }));
+    const definition = makeDefinition('frame-storage-failure');
+    definition.root.nodes.push({ id: 'persist', type: 'code-step' });
+    const call = createTestCall();
+    const executionId = 'exec-frame-storage-failure';
+
+    try {
+      const result = await runWorkflowOrchestrator({
+        call,
+        config: {
+          executionId,
+          workflowId: definition.id,
+          source: { kind: 'definition', workflowId: definition.id },
+          coordinatorSessionId: 'coordinator-frame-storage',
+          cancelSubject: 'workflow.exec-frame-storage-failure.cancel',
+          terminalAuthority: 'authority',
+          inputs: {},
+          triggerPayload: {},
+          scope: definition.scope,
+          busAuth: { kind: 'none' },
+          env: {},
+        },
+        loaded: { definition, runtimeHandlers: new Map([['persist', handler]]) },
+        bus,
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toMatchObject({ status: 'failed', error });
+      expect(handler).not.toHaveBeenCalled();
+      if (failFirstWrite) {
+        await expect(bus.request(call, WorkflowStorageSubjects.listFrames, { executionId })).resolves.toEqual({
+          frames: [],
+        });
+      }
+    } finally {
+      unsubscribeBootstrap();
+      unsubscribeFrames?.();
+    }
+  });
+
   it('persists frame lifecycle transitions through setFrame and mirrors span read-model rows', async () => {
     const persistedFrames: Array<{ nodeId: string; output?: unknown; status: WorkflowFrameState['status'] }> = [];
     const persistedSpans: Array<Pick<SpanRecord, 'frameId' | 'stepId' | 'stepType' | 'status' | 'output'>> = [];
     const handler: CodeStepHandler = () => ({ ok: true });
-    const ctx = makeCtx({ persist: handler });
+    const ctx = makeCtx({ persist: handler }, undefined, makeBus());
     const unsubscribeFrame = ctx.bus.on(WorkflowStorageSubjects.setFrame, (requestCtx) => {
       persistedFrames.push({
         nodeId: requestCtx.payload.frame.nodeId,
@@ -1973,6 +2036,33 @@ describe('executeSequence frame persistence', () => {
     } finally {
       unsubscribeFrame();
       unsubscribeSpan();
+    }
+  });
+
+  it('persists the completed frame when the running span mirror fails', async () => {
+    const ctx = makeCtx({ persist: () => ({ ok: true }) });
+    const call = createTestCall();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const unsubscribe = ctx.bus.on(WorkflowStorageSubjects.setSpan, (requestCtx) => {
+      if (requestCtx.payload.span.status === 'running') throw new Error('Span mirror unavailable');
+      requestCtx.setResult({ id: requestCtx.payload.span.frameId });
+    });
+
+    try {
+      const definition = makeDefinition('span-storage-failure');
+      definition.root.nodes.push({ id: 'persist', type: 'code-step' });
+      const result = await executeSequence(call, definition.root, ctx, emptyExpressionCtx);
+
+      expect(result.status).toBe('completed');
+      await expect(
+        ctx.bus.request(call, WorkflowStorageSubjects.listFrames, { executionId: ctx.executionId }),
+      ).resolves.toMatchObject({
+        frames: [{ nodeId: 'persist', status: 'completed', output: { ok: true } }],
+      });
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      unsubscribe();
+      warn.mockRestore();
     }
   });
 
@@ -2283,7 +2373,7 @@ describe('executeParallelNode (all-settled mode)', () => {
       beta: async () => 'b',
     });
 
-    const ctx = makeCtx(handlers);
+    const ctx = makeCtx(handlers, undefined, makeBus());
     const unsubscribe = ctx.bus.on(WorkflowStorageSubjects.setFrame, (requestCtx) => {
       const { frame } = requestCtx.payload;
       persistedFrames.push({

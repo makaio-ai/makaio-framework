@@ -5,7 +5,6 @@ import type {
   WorkflowAgentStepNode,
   WorkflowCodeStepNode,
   WorkflowFrameState,
-  WorkflowGateNode,
   WorkflowIterateChainNode,
   WorkflowIterateNode,
   WorkflowLoopNode,
@@ -15,13 +14,13 @@ import type {
 } from '@makaio/contracts';
 import {
   buildRuntimeExpressionScope,
+  FramePersistenceError,
   type PrimitiveExpressionContext,
   type RuntimeContext,
 } from './runtime-context.js';
 import { executeCodeStepNode } from './code-step-node.js';
 import { executeAgentStepNode } from './delegate-node.js';
 import { executeParallelNode } from './parallel-node.js';
-import { executeGateNode } from './gate-node.js';
 import { executeIterateNode } from './iterate-node.js';
 import { executeIterateChainNode } from './iterate-chain-node.js';
 import { executeLoopNode } from './loop-node.js';
@@ -35,17 +34,11 @@ import { executeLoopNode } from './loop-node.js';
  *
  * Discriminated on `status` so callers can pattern-match without
  * narrowing through `instanceof` checks.
- *
- * The `paused` status is produced when a gate node parks execution for an
- * `exit-and-redispatch` or `exit-and-resume` suspension strategy. The runner
- * should persist state and exit; the workflow will be re-dispatched when the
- * gate is resolved externally.
  */
 export type NodeOutcome =
   | { status: 'completed'; output?: JsonValue }
   | { status: 'skipped' }
   | { status: 'cancelled' }
-  | { status: 'paused'; pausedAtGateId: string; pausedAtFrameId: string }
   | { status: 'failed'; error: string };
 
 // ─────────────────────────────────────────────────────────────
@@ -116,6 +109,45 @@ export async function failFrame(
   frame.completedAt = completedAt;
   await ctx.persistFrame(call, frame);
   await ctx.emitFrameFailed(call, frame, error, durationMs);
+}
+
+/**
+ * Fail the current frame while preserving a child frame's technical failure.
+ * @param call - Call context of the execution run.
+ * @param frame - Enclosing frame being failed.
+ * @param ctx - Context for storing and emitting the failed transition.
+ * @param cause - Exception from the nested runtime.
+ * @returns The message for a business-level failed outcome.
+ */
+export async function failFrameFromException(
+  call: CallContext,
+  frame: WorkflowFrameState,
+  ctx: RuntimeContext,
+  cause: unknown,
+): Promise<string> {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const checkpoint = failFrame(call, frame, ctx, message);
+  if (cause instanceof FramePersistenceError) {
+    await checkpoint.catch((error: unknown) => {
+      console.warn(`[Runtime] Failed to record enclosing frame ${frame.frameId}:`, error);
+    });
+    throw cause;
+  }
+  await checkpoint;
+  return message;
+}
+
+/**
+ * Wait for all started runtime tasks before surfacing a technical failure.
+ * @param tasks - In-flight branches or items in declaration order.
+ * @returns Successful task results in declaration order.
+ */
+export async function drainRuntimeTasks<T>(tasks: Iterable<Promise<T>>): Promise<T[]> {
+  const settled = await Promise.allSettled(tasks);
+  return settled.map((entry) => {
+    if (entry.status === 'rejected') throw entry.reason;
+    return entry.value;
+  });
 }
 
 /**
@@ -198,7 +230,7 @@ export type ExecuteSequenceFn = (
  *
  * This is the central dispatch table for the primitive runtime. All node
  * types are implemented: `sequence`, `code-step`, `agent-step`, `parallel`,
- * `gate`, `iterate`, `iterate-chain`, and `loop`.
+ * `iterate`, `iterate-chain`, and `loop`.
  *
  * The `executeSequenceFn` parameter is injected by `primitive-runtime.ts` to
  * avoid a circular module-level import between this file and
@@ -255,13 +287,6 @@ export async function executeNode(
         parentPath,
         (node as WorkflowParallelNode).mode ?? 'all-settled',
       );
-
-    case 'gate':
-      // The gate's own frame is created by the sequence loop in
-      // primitive-runtime.ts before executeNode is called. The current frame
-      // ID is forwarded so the gate executor can update frame
-      // state while suspended.
-      return executeGateNode(call, node as WorkflowGateNode, ctx, expressionCtx, currentFrameId ?? '');
 
     case 'iterate':
       return executeIterateNode(

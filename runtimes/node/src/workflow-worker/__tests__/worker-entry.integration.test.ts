@@ -5,12 +5,13 @@ import {
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
   ExecutionAttemptSubjects,
+  SubagentSubjects,
   WorkflowSubjects,
   createWorkflowCancelSubject,
+  type WorkflowAgentStepNode,
   type WorkflowExecution,
-  type WorkflowGateNode,
+  type WorkflowNode,
   type WorkflowWorkerConfig,
-  type JsonValue,
 } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from '@makaio/subsystem-workflow-engine';
 import { HmacAuth, resolveHmacIdentityParty, resolveHmacIdentitySecret } from '@makaio/bus-transport-websocket';
@@ -82,6 +83,10 @@ async function startHostWorkflowBus(executionId: string): Promise<HostWorkflowBu
     ctx.setResult({ id: execution.id, executionId: execution.id });
   });
 
+  const offGetExecution = bus.on(WorkflowStorageSubjects.getExecution, (ctx) => {
+    ctx.setResult({ execution: executions.get(ctx.payload.executionId) ?? null });
+  });
+
   const offUpdateExecution = bus.on(WorkflowStorageSubjects.updateExecution, (ctx) => {
     const { executionId, status, error, completedAt } = ctx.payload;
     const execution = executions.get(executionId);
@@ -99,6 +104,10 @@ async function startHostWorkflowBus(executionId: string): Promise<HostWorkflowBu
     ctx.setResult({ id: ctx.payload.span.stepId });
   });
 
+  const offSetFrame = bus.on(WorkflowStorageSubjects.setFrame, (ctx) => {
+    ctx.setResult({ frameId: ctx.payload.frame.frameId });
+  });
+
   // An attempt-owned worker runs with `terminalAuthority: 'authority'`, so it
   // hands its loaded definition back through this gateway instead of writing
   // the execution row itself — the attempt's transport allowlist does not
@@ -112,8 +121,10 @@ async function startHostWorkflowBus(executionId: string): Promise<HostWorkflowBu
   const cleanups: Array<() => void> = [
     offSetExecution,
     offSetExecutionStart,
+    offGetExecution,
     offUpdateExecution,
     offSetSpan,
+    offSetFrame,
     offBootstrapAuthorityState,
   ];
 
@@ -155,19 +166,25 @@ async function startHostWorkflowBus(executionId: string): Promise<HostWorkflowBu
 /**
  * Build a definition-sourced worker config that can execute without file loading.
  * @param busUrl - Host bus URL for storage requests.
+ * @param executionId - Execution identifier for the worker and its cancellation subject.
+ * @param nodes - Nodes in the workflow's root sequence.
  * @returns Workflow worker configuration.
  */
-function makeDefinitionConfig(busUrl: string): WorkflowWorkerConfig {
+function makeDefinitionConfig(
+  busUrl: string,
+  executionId = 'exec-entry-integration',
+  nodes: WorkflowNode[] = [],
+): WorkflowWorkerConfig {
   return {
     source: { kind: 'definition', workflowId: 'wf-entry-integration' },
     definition: {
       id: 'wf-entry-integration',
       name: 'Worker Entry Integration',
-      root: { id: 'wf-entry-integration__root', type: 'sequence' as const, nodes: [] },
+      root: { id: 'wf-entry-integration__root', type: 'sequence', nodes },
       triggers: [],
       scope: { type: 'global' as const },
     },
-    executionId: 'exec-entry-integration',
+    executionId,
     workflowId: 'wf-entry-integration',
     triggerPayload: {},
     inputs: {},
@@ -176,46 +193,7 @@ function makeDefinitionConfig(busUrl: string): WorkflowWorkerConfig {
     busAuth: { kind: 'hmac', secret: HOST_BUS_SECRET },
     env: {},
     coordinatorSessionId: 'session-entry-integration',
-    cancelSubject: 'workflow.cancel.exec-entry-integration',
-    suspensionStrategy: 'wait-in-process',
-  };
-}
-
-/**
- * Build a definition-sourced worker config with a single gate step.
- *
- * Used by gate approval and cancellation integration tests. The gate node
- * emits {@link WorkflowSubjects.gate.suspended} when it opens and waits for
- * a {@link WorkflowSubjects.gate.respond} request from the host bus before
- * continuing.
- * @param busUrl - Host bus URL for storage and gate requests.
- * @returns Workflow worker configuration with one gate step.
- */
-function makeGateConfig(busUrl: string): WorkflowWorkerConfig {
-  return {
-    ...makeDefinitionConfig(busUrl),
-    executionId: 'exec-entry-gate',
-    workflowId: 'wf-entry-gate',
-    cancelSubject: 'workflow.cancel.exec-entry-gate',
-    definition: {
-      id: 'wf-entry-gate',
-      name: 'Worker Entry Gate',
-      root: {
-        id: 'wf-entry-gate__root',
-        type: 'sequence' as const,
-        nodes: [
-          {
-            id: 'approval',
-            type: 'gate' as const,
-            prompt: 'Approve worker execution?',
-            autoAction: 'reject' as const,
-            timeoutMs: 120_000,
-          } as WorkflowGateNode,
-        ],
-      },
-      triggers: [],
-      scope: { type: 'global' as const },
-    },
+    cancelSubject: `workflow.${executionId}.cancel`,
   };
 }
 
@@ -291,186 +269,67 @@ describe('runWorkflowInWorker integration', () => {
     }
   });
 
-  it('routes a gate approval from the host bus to the worker over WebSocket', async () => {
-    const host = await startHostWorkflowBus('exec-entry-gate');
-
-    try {
-      const gateEvents: Array<{ executionId: string; nodeId: string; prompt: string | undefined }> = [];
-
-      // Listen for gate.suspended and respond immediately via gate.respond.
-      const offGate = host.bus.on(WorkflowSubjects.gate.suspended, (ctx) => {
-        gateEvents.push({
-          executionId: ctx.payload.executionId,
-          nodeId: ctx.payload.nodeId,
-          prompt: ctx.payload.prompt,
-        });
-        // Respond asynchronously on the next tick so the worker's gate.respond
-        // subscription is established before the response arrives.
-        setTimeout(() => {
-          void host.bus
-            .request(ctx.call, WorkflowSubjects.gate.respond, {
-              executionId: ctx.payload.executionId,
-              gateId: ctx.payload.nodeId,
-              frameId: ctx.payload.frameId,
-              action: 'approve',
-              resumeData: null as JsonValue,
-            })
-            .catch(() => {});
-        }, 0);
-      });
-
-      try {
-        const result = await runWorkflowInWorker({
-          kind: 'unbound',
-          config: makeGateConfig(host.busUrl),
-          manifest: { contributionRefs: [] },
-          contributionEntrypoints: [],
-        });
-
-        expect(result).toEqual({
-          executionId: 'exec-entry-gate',
-          workflowId: 'wf-entry-gate',
-          status: 'completed',
-        });
-        expect(gateEvents).toEqual([
-          {
-            executionId: 'exec-entry-gate',
-            nodeId: 'approval',
-            prompt: 'Approve worker execution?',
-          },
-        ]);
-      } finally {
-        offGate();
-      }
-    } finally {
-      await host.close();
-    }
-  });
-
-  it('routes an Authority gate approval to an attempt-authenticated worker over WebSocket', async () => {
-    const executionId = 'exec-entry-attempt-gate';
+  it('cancels a running agent step when a cancel event reaches the worker over WebSocket', async () => {
+    const executionId = 'exec-entry-cancel';
     const host = await startHostWorkflowBus(executionId);
-    const { executionAttemptId } = host.attempt;
-    const identity = mintWorkflowExecutionBusSecret({ executionAttemptId, executionId });
+    const agentStep: WorkflowAgentStepNode = {
+      id: 'review',
+      type: 'agent-step',
+      role: 'reviewer',
+      prompt: 'Review the work',
+    };
+    const config = makeDefinitionConfig(host.busUrl, executionId, [agentStep]);
+    const subagentId = 'entry-cancel-subagent';
+    const awaitingSubagent = Promise.withResolvers<string>();
+    const releaseSubagent = Promise.withResolvers<void>();
+    const killedSubagents: string[] = [];
+    const cleanups = [
+      host.bus.on(WorkflowSubjects.resolveRole, (ctx) => ctx.setResult({ adapterName: 'workflow-test-adapter' })),
+      host.bus.on(SubagentSubjects.spawn, (ctx) => ctx.setResult({ subagentId, status: 'spawning' })),
+      host.bus.on(SubagentSubjects.await, async (ctx) => {
+        awaitingSubagent.resolve(ctx.payload.subagentId);
+        await releaseSubagent.promise;
+        ctx.setResult({ status: 'cancelled' });
+      }),
+      host.bus.on(SubagentSubjects.kill, (ctx) => {
+        killedSubagents.push(ctx.payload.subagentId);
+        releaseSubagent.resolve();
+        ctx.setResult({ killed: true });
+      }),
+    ];
 
     try {
-      const gateEvents: Array<{
-        executionId: string;
-        executionAttemptId: string | undefined;
-        nodeId: string;
-        prompt: string | undefined;
-      }> = [];
-      let resolveGateResponse!: (response: { accepted: boolean }) => void;
-      let rejectGateResponse!: (error: unknown) => void;
-      const gateResponse = new Promise<{ accepted: boolean }>((resolve, reject) => {
-        resolveGateResponse = resolve;
-        rejectGateResponse = reject;
+      const runPromise = runWorkflowInWorker({
+        kind: 'unbound',
+        config,
+        manifest: { contributionRefs: [] },
+        contributionEntrypoints: [],
       });
 
-      const offGate = host.bus.on(WorkflowSubjects.gate.suspended, (ctx) => {
-        gateEvents.push({
-          executionId: ctx.payload.executionId,
-          executionAttemptId: ctx.payload.executionAttemptId,
-          nodeId: ctx.payload.nodeId,
-          prompt: ctx.payload.prompt,
-        });
-        // The worker installs its gate endpoint before it emits suspension;
-        // defer the Authority request until the transport has propagated it.
-        setTimeout(() => {
-          void host.bus
-            .request(ctx.call, WorkflowSubjects.gate.respond, {
-              executionId: ctx.payload.executionId,
-              executionAttemptId: ctx.payload.executionAttemptId,
-              gateId: ctx.payload.nodeId,
-              frameId: ctx.payload.frameId,
-              action: 'approve',
-              resumeData: null as JsonValue,
-            })
-            .then(resolveGateResponse, rejectGateResponse);
-        }, 0);
+      // Reaching the subagent wait proves the worker subscribed before it began executing the step.
+      const awaiting = await Promise.race([
+        awaitingSubagent.promise,
+        runPromise.then((result) => {
+          throw new Error(`Worker exited before awaiting its agent step: ${JSON.stringify(result)}`);
+        }),
+      ]);
+      expect(awaiting).toBe(subagentId);
+
+      await host.bus.emit(createWorkflowCancelSubject(config.cancelSubject), {
+        executionId,
+        reason: 'integration cancellation',
       });
 
-      try {
-        const result = await runWorkflowInWorker({
-          kind: 'attempt-bound',
-          executionAttemptId,
-          bootstrapDeadlineAt: host.attempt.bootstrapDeadlineAt,
-          config: {
-            ...makeGateConfig(host.busUrl),
-            executionId,
-            executionAttemptId: 'untrusted-config-attempt',
-            cancelSubject: `workflow.${executionId}.cancel`,
-            busAuth: { kind: 'hmac', secret: identity.secret },
-            terminalAuthority: 'authority',
-          },
-          manifest: { contributionRefs: [] },
-          contributionEntrypoints: [],
-        });
-
-        expect(await gateResponse).toEqual({ accepted: true });
-        expect(result).toEqual({
-          executionId,
-          workflowId: 'wf-entry-gate',
-          status: 'completed',
-        });
-        expect(gateEvents).toEqual([
-          {
-            executionId,
-            executionAttemptId,
-            nodeId: 'approval',
-            prompt: 'Approve worker execution?',
-          },
-        ]);
-      } finally {
-        offGate();
-      }
+      await expect(runPromise).resolves.toMatchObject({
+        executionId,
+        workflowId: config.workflowId,
+        status: 'cancelled',
+      });
+      expect(killedSubagents).toEqual([subagentId]);
+      expect(host.executions.get(executionId)?.status).toBe('cancelled');
     } finally {
-      identity.cleanup();
-      await host.close();
-    }
-  });
-
-  it('terminates a running gate step when a cancel event reaches the worker over WebSocket', async () => {
-    const host = await startHostWorkflowBus('exec-entry-gate');
-
-    try {
-      let gateOpened!: () => void;
-      const gateOpenedPromise = new Promise<void>((resolve) => {
-        gateOpened = resolve;
-      });
-
-      // Listen for gate.suspended: this tells us the gate is open and waiting.
-      // Do NOT respond — the gate should remain suspended until the cancel fires.
-      const offGate = host.bus.on(WorkflowSubjects.gate.suspended, () => {
-        gateOpened();
-      });
-
-      try {
-        const runPromise = runWorkflowInWorker({
-          kind: 'unbound',
-          config: makeGateConfig(host.busUrl),
-          manifest: { contributionRefs: [] },
-          contributionEntrypoints: [],
-        });
-
-        // Wait until the gate is open before sending the cancel event so the
-        // worker bus is fully subscribed on the cancel subject.
-        await gateOpenedPromise;
-
-        await host.bus.emit(createWorkflowCancelSubject('workflow.cancel.exec-entry-gate'), {
-          executionId: 'exec-entry-gate',
-          reason: 'integration cancellation',
-        });
-
-        await expect(runPromise).resolves.toMatchObject({
-          executionId: 'exec-entry-gate',
-          workflowId: 'wf-entry-gate',
-          status: 'cancelled',
-        });
-      } finally {
-        offGate();
-      }
-    } finally {
+      releaseSubagent.resolve();
+      for (const off of cleanups) off();
       await host.close();
     }
   });

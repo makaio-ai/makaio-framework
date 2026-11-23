@@ -5,6 +5,7 @@ import {
   WorkerNamespace,
   WorkerSubjects,
   createWorkflowFinalizerNamespace,
+  WorkflowSchemas,
   WorkflowWorkerConfigSchema,
   requireExecutableRunContext,
   type WorkflowRunResult,
@@ -24,6 +25,21 @@ import { createInMemoryAttemptRepository, type InMemoryAttemptRepository } from 
 import { buildWorkflowAttemptInstruction } from '../workflow-attempt-instruction.js';
 import { workflowAttemptOutcomeCodec, type WorkflowAttemptOutcome } from '../workflow-attempt-outcome.js';
 import { createSqliteAttemptRepository } from '../testing/sqlite.js';
+
+it('rejects a legacy paused outcome at the authority runner request boundary', () => {
+  const parsed = WorkflowSchemas.acceptAuthorityRunnerResult.request.safeParse({
+    executionId: 'authority-invalid',
+    result: {
+      executionId: 'authority-invalid',
+      workflowId: 'workflow-authority-invalid',
+      status: 'paused', // legacy-input
+      pausedAtGateId: 'gate', // legacy-input
+      pausedAtFrameId: 'frame', // legacy-input
+    },
+  });
+
+  expect(parsed).toMatchObject({ success: false, error: { issues: [{ path: ['result', 'status'] }] } });
+});
 
 describe('authority runner result acceptance', () => {
   let setup: WorkflowExecutorTestSetup | undefined;
@@ -64,7 +80,6 @@ describe('authority runner result acceptance', () => {
         cancelSubject: `workflow.${options.executionId}.cancel`,
         env: {},
         createdAt: Date.now(),
-        suspensionStrategy: 'wait-in-process' as const,
         terminalAuthority: options.authority ?? 'authority',
       },
     });
@@ -97,7 +112,7 @@ describe('authority runner result acceptance', () => {
     expect(stored.execution).toEqual(expect.objectContaining({ status: terminal.status }));
   });
 
-  it('rejects missing, mismatched, non-terminal, and worker-owned results', async () => {
+  it('rejects missing, mismatched, and worker-owned results', async () => {
     if (!setup) throw new Error('Workflow executor test setup did not initialize.');
     const executionId = 'authority-invalid';
     const workflow = await seedAuthorityExecution({ executionId, authority: 'worker' });
@@ -116,15 +131,6 @@ describe('authority runner result acceptance', () => {
         status: 'completed',
       }),
     ).rejects.toThrow('execution identity mismatch');
-    await expect(
-      setup.workflowExecutor.acceptAuthorityRunnerResult(createTestCall(), executionId, {
-        executionId,
-        workflowId: workflow.id,
-        status: 'paused',
-        pausedAtGateId: 'gate',
-        pausedAtFrameId: 'frame',
-      }),
-    ).rejects.toThrow('must be terminal');
     await expect(
       setup.workflowExecutor.acceptAuthorityRunnerResult(createTestCall(), executionId, {
         executionId,
@@ -355,7 +361,6 @@ describe('outcome submission handler', () => {
         cancelSubject: `workflow.${executionId}.cancel`,
         env: {},
         createdAt: Date.now(),
-        suspensionStrategy: 'wait-in-process' as const,
         terminalAuthority: 'authority' as const,
       },
     });
@@ -380,30 +385,19 @@ describe('outcome submission handler', () => {
   });
 
   it.each([
-    { status: 'completed' as const, committedBeforeCancel: false },
-    { status: 'completed' as const, committedBeforeCancel: true },
-    { status: 'paused' as const, committedBeforeCancel: false },
-    { status: 'paused' as const, committedBeforeCancel: true },
-  ])('records $status after owner Cancel (earlier commit: $committedBeforeCancel)', async (scenario) => {
-    const executionId = `cancel-wins-${scenario.status}-${scenario.committedBeforeCancel}`;
+    false,
+    true,
+  ])('records completion after owner Cancel (earlier commit: %s)', async (committedBeforeCancel) => {
+    const executionId = `cancel-wins-completed-${committedBeforeCancel}`;
     const workflow = await seedExecution(executionId);
     const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
-    const result: WorkflowRunResult = {
-      executionId,
-      workflowId: workflow.id,
-      ...(scenario.status === 'paused'
-        ? { status: 'paused', pausedAtGateId: 'gate', pausedAtFrameId: 'frame' }
-        : { status: 'completed' }),
-    };
+    const result: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
     const projected: string[] = [];
     const offCompleted = MakaioBus.on(WorkflowSubjects.execution.completed, () => {
       projected.push('completed');
     });
-    const offPaused = MakaioBus.on(WorkflowSubjects.execution.paused, () => {
-      projected.push('paused');
-    });
     try {
-      if (scenario.committedBeforeCancel) {
+      if (committedBeforeCancel) {
         await authority.commitOutcome(attempt.executionAttemptId, executionId, authority.canonicalizeOutcome(result));
       }
       await authority.requestCancellation({ executionId, reason: 'Owner decision' });
@@ -414,11 +408,11 @@ describe('outcome submission handler', () => {
         executionId,
         result,
       });
-      expect(response.decision).toBe(scenario.committedBeforeCancel ? 'duplicate' : 'accepted');
+      expect(response.decision).toBe(committedBeforeCancel ? 'duplicate' : 'accepted');
       await expect(waiter).resolves.toEqual({
         outcome: result,
         acceptance: 'recorded-only',
-        controlObservation: scenario.committedBeforeCancel
+        controlObservation: committedBeforeCancel
           ? { controlRevision: 0, cancellation: null }
           : expect.objectContaining({ controlRevision: 1 }),
       });
@@ -428,7 +422,6 @@ describe('outcome submission handler', () => {
       );
     } finally {
       offCompleted();
-      offPaused();
     }
   });
 
@@ -589,102 +582,13 @@ describe('outcome submission handler', () => {
     await expect(waiter1).rejects.toThrow('fenced');
   });
 
-  it('handles paused outcome through durable suspension', async () => {
-    const executionId = 'outcome-paused';
-    const workflow = await seedExecution(executionId);
-    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
-    const result: WorkflowRunResult = {
-      executionId,
-      workflowId: workflow.id,
-      status: 'paused',
-      pausedAtGateId: 'gate-1',
-      pausedAtFrameId: 'frame-1',
-    };
-
-    const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
-      executionAttemptId: attempt.executionAttemptId,
-      executionId,
-      result,
-    });
-    expect(decision).toBe('accepted');
-
-    const stored = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
-    expect(stored.execution?.status).toBe('paused');
-  });
-
-  it('resumes a paused execution on a second attempt and fences the paused attempt', async () => {
-    const executionId = 'outcome-paused-resumed';
-    const workflow = await seedExecution(executionId);
-    const paused = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
-    const pausedResult: WorkflowRunResult = {
-      executionId,
-      workflowId: workflow.id,
-      status: 'paused',
-      pausedAtGateId: 'gate-1',
-      pausedAtFrameId: 'frame-1',
-    };
-    await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
-      executionAttemptId: paused.executionAttemptId,
-      executionId,
-      result: pausedResult,
-    });
-
-    // Resuming the gate puts the execution back to `running` and dispatches a
-    // second attempt for it, which supersedes the paused one the moment it
-    // exists. The storage write is the one the resume path performs itself.
-    const { execution } = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
-    if (!execution) throw new Error('Paused execution was not persisted.');
-    await MakaioBus.request(WorkflowStorageSubjects.setExecution, {
-      execution: { ...execution, status: 'running' },
-    });
-    const resumed = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
-    const resumedWaiter = authority.waitForOutcome(resumed.executionAttemptId);
-    const terminal: WorkflowRunResult = { executionId, workflowId: workflow.id, status: 'completed' };
-
-    const resumedDecision = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
-      executionAttemptId: resumed.executionAttemptId,
-      executionId,
-      result: terminal,
-    });
-
-    expect(resumedDecision.decision).toBe('accepted');
-    await expect(resumedWaiter).resolves.toEqual({
-      outcome: terminal,
-      controlObservation: { controlRevision: 0, cancellation: null },
-      acceptance: 'projected',
-    });
-
-    // The paused attempt's own worker may still retry: its outcome stays
-    // durably committed, but the execution it would converge is no longer its
-    // own to converge.
-    const lateReplay = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
-      executionAttemptId: paused.executionAttemptId,
-      executionId,
-      result: pausedResult,
-    });
-
-    expect(lateReplay.decision).toBe('fenced');
-    const converged = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
-    expect(converged.execution?.status).toBe('completed');
-  });
-
-  it.each([
-    { status: 'completed' as const },
-    {
-      status: 'paused' as const,
-      pausedAtGateId: 'gate-wrong-workflow',
-      pausedAtFrameId: 'frame-wrong-workflow',
-    },
-  ])('rejects a $status outcome for another workflow before committing or publishing it', async (outcome) => {
-    const executionId = `outcome-wrong-workflow-${outcome.status}`;
+  it('rejects a completed outcome for another workflow before committing or publishing it', async () => {
+    const executionId = 'outcome-wrong-workflow-completed';
     await seedExecution(executionId);
     const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
     const events: string[] = [];
     const offCompleted = MakaioBus.on(WorkflowSubjects.execution.completed, () => {
       events.push('completed');
-    });
-    const offPaused = MakaioBus.on(WorkflowSubjects.execution.paused, () => {
-      events.push('paused');
     });
 
     try {
@@ -692,7 +596,7 @@ describe('outcome submission handler', () => {
         MakaioBus.request(WorkerSubjects.control.outcome.submit, {
           executionAttemptId: attempt.executionAttemptId,
           executionId,
-          result: { executionId, workflowId: 'workflow-wrong', ...outcome },
+          result: { executionId, workflowId: 'workflow-wrong', status: 'completed' },
         }),
       ).rejects.toThrow('Workflow result identity does not match the frozen instruction');
 
@@ -700,7 +604,6 @@ describe('outcome submission handler', () => {
       expect(events).toEqual([]);
     } finally {
       offCompleted();
-      offPaused();
     }
   });
 
@@ -724,33 +627,6 @@ describe('outcome submission handler', () => {
 
     const stored = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
     expect(stored.execution?.status).toBe('completed');
-  });
-
-  it('retries paused outcome after fault and receives duplicate with converged state', async () => {
-    const executionId = 'outcome-paused-fault-retry';
-    const workflow = await seedExecution(executionId);
-    const attempt = await authority.createAttempt(executionId, await makeOwnerInstruction(executionId));
-    const result: WorkflowRunResult = {
-      executionId,
-      workflowId: workflow.id,
-      status: 'paused',
-      pausedAtGateId: 'gate-retry',
-      pausedAtFrameId: 'frame-retry',
-    };
-
-    // Commit attempt outcome (simulates partial commit before workflow park).
-    await authority.commitOutcome(attempt.executionAttemptId, executionId, authority.canonicalizeOutcome(result));
-
-    // Retry: should converge workflow state and ACK duplicate.
-    const { decision } = await MakaioBus.request(WorkerSubjects.control.outcome.submit, {
-      executionAttemptId: attempt.executionAttemptId,
-      executionId,
-      result,
-    });
-    expect(decision).toBe('duplicate');
-
-    const stored = await MakaioBus.request(WorkflowStorageSubjects.getExecution, { executionId });
-    expect(stored.execution?.status).toBe('paused');
   });
 
   // ─────────────────────────────────────────────────────────
@@ -787,40 +663,6 @@ describe('outcome submission handler', () => {
     }
 
     // Victim execution must remain running (no state mutation).
-    const victimStored = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
-      executionId: victimId,
-    });
-    expect(victimStored.execution?.status).toBe('running');
-  });
-
-  it('rejects a paused result whose nested result.executionId targets a different execution', async () => {
-    const victimId = 'outcome-victim-paused';
-    const attackerId = 'outcome-attacker-paused';
-    await seedExecution(victimId);
-    await seedExecution(attackerId);
-    const attempt = await authority.createAttempt(attackerId, await makeOwnerInstruction(attackerId));
-
-    const savedEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'production';
-    try {
-      await expect(
-        MakaioBus.request(WorkerSubjects.control.outcome.submit, {
-          executionAttemptId: attempt.executionAttemptId,
-          executionId: attackerId,
-          result: {
-            executionId: victimId,
-            workflowId: `workflow-${victimId}`,
-            status: 'paused',
-            pausedAtGateId: 'gate-x',
-            pausedAtFrameId: 'frame-x',
-          },
-        }),
-      ).rejects.toThrow(/result\.executionId.*does not match/);
-    } finally {
-      process.env.NODE_ENV = savedEnv;
-    }
-
-    // Victim execution must remain running.
     const victimStored = await MakaioBus.request(WorkflowStorageSubjects.getExecution, {
       executionId: victimId,
     });

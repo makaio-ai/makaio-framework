@@ -76,7 +76,7 @@ describe('workflow workload adapter shutdown', () => {
     const offInputs = controlBus.on(WorkerSubjects.runtime.inputs.get, (ctx) => {
       expect(ctx.payload.executionAttemptId).toBe('attempt-1');
       ctx.setResult({
-        runtimeInputs: { workerManifest: { contributionRefs: [] }, suspensionStrategy: 'wait-in-process' },
+        runtimeInputs: { workerManifest: { contributionRefs: [] } },
       });
     });
     const runtimeBus = createBusInstance();

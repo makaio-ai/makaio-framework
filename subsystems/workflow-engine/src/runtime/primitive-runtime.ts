@@ -1,78 +1,17 @@
 import type { CallContext } from '@makaio/core';
-import type { WorkflowFrameState, WorkflowSequenceNode } from '@makaio/contracts';
-import { type PrimitiveExpressionContext, type RuntimeContext } from './runtime-context.js';
+import type { WorkflowSequenceNode } from '@makaio/contracts';
+import { mergeFrameOutput, type PrimitiveExpressionContext, type RuntimeContext } from './runtime-context.js';
 import {
   cancelFrame,
   completeFrame,
   evaluateNodeCondition,
   executeNode,
   failFrame,
+  failFrameFromException,
   skipFrame,
   startFrame,
   type NodeOutcome,
 } from './node-execution.js';
-import { findReusableResumeFrame, mergeFrameOutput } from './resume-frames.js';
-
-/** Statuses that may be reused for structural containers during redispatch. */
-const STRUCTURAL_RESUME_STATUSES = new Set<WorkflowFrameState['status']>([
-  'completed',
-  'skipped',
-  'waiting',
-  'running',
-]);
-
-/**
- * Whether a node owns structural child frames that must preserve parent frame identity during resume.
- * @param child - Sequence child node.
- * @returns True for structural container node types.
- */
-function isStructuralResumeNode(child: WorkflowSequenceNode['nodes'][number]): boolean {
-  return (
-    child.type === 'parallel' || child.type === 'iterate' || child.type === 'iterate-chain' || child.type === 'loop'
-  );
-}
-
-/**
- * Find a reusable frame for a sequence child, widening statuses only for structural containers.
- * @param ctx - Runtime context carrying the resume index.
- * @param child - Sequence child node.
- * @param parentFrameId - Parent frame ID for structural matching.
- * @returns Matching persisted frame, if one can be reused by the child.
- */
-function findSequenceChildResumeFrame(
-  ctx: RuntimeContext,
-  child: WorkflowSequenceNode['nodes'][number],
-  parentFrameId: string | undefined,
-): WorkflowFrameState | undefined {
-  return findReusableResumeFrame(ctx.resumeFrames, child.id, {
-    parentFrameId,
-    ...(isStructuralResumeNode(child) ? { statuses: STRUCTURAL_RESUME_STATUSES } : {}),
-  });
-}
-
-/**
- * Merge a completed or skipped resume frame into the expression context.
- * @param localCtx - Current expression context.
- * @param child - Sequence child whose frame is being replayed.
- * @param resumeFrame - Persisted resume frame, if present.
- * @returns Updated expression context for terminal frames, otherwise `undefined`.
- */
-function mergeTerminalResumeFrame(
-  localCtx: PrimitiveExpressionContext,
-  child: WorkflowSequenceNode['nodes'][number],
-  resumeFrame: WorkflowFrameState | undefined,
-): PrimitiveExpressionContext | undefined {
-  if (resumeFrame?.status === 'completed') {
-    return mergeFrameOutput(localCtx, child.id, {
-      status: 'completed',
-      ...(resumeFrame.output !== undefined ? { output: resumeFrame.output } : {}),
-    });
-  }
-  if (resumeFrame?.status === 'skipped') {
-    return mergeFrameOutput(localCtx, child.id, { status: 'skipped' });
-  }
-  return undefined;
-}
 
 /**
  * Create and persist a `skipped` frame for a sequence child whose `when` or `skip` condition excluded it.
@@ -141,23 +80,14 @@ async function evaluateConditionExpression(
 /**
  * Execute a single child node within a sequence.
  *
- * Handles frame creation, abort checks, execution dispatch, and outcome
- * application. Returns `null` to indicate the caller should `continue` to the
- * next child (skipped outcome), or a terminal {@link NodeOutcome} when the
- * sequence must stop.
- *
- * When `existingFrame` is provided (a `waiting` gate frame or nonterminal
- * structural frame being reused from a prior execution), the frame is not
- * re-started — the caller has already persisted it and its `status` reflects
- * the durable lifecycle state.
+ * Creates the child frame, checks cancellation, and applies the dispatched outcome.
  * @param call - Call context of the message that drives this execution run.
  * @param child - The child node to execute.
  * @param ctx - Execution-wide runtime context.
  * @param localCtx - Current expression evaluation context.
  * @param parentPath - Accumulated frame-ID path from root to parent (exclusive).
  * @param parentFrameId - Frame ID of the enclosing container node (if any).
- * @param existingFrame - A pre-existing gate or structural frame to reuse instead of creating a new one.
- * @returns Updated localCtx and optional terminal outcome.
+ * @returns Updated expression context and an outcome if the sequence must stop.
  */
 async function executeSequenceChild(
   call: CallContext,
@@ -166,23 +96,18 @@ async function executeSequenceChild(
   localCtx: PrimitiveExpressionContext,
   parentPath: string[],
   parentFrameId: string | undefined,
-  existingFrame?: WorkflowFrameState,
-): Promise<{ updatedCtx: PrimitiveExpressionContext; outcome?: NodeOutcome; skip?: boolean }> {
-  const frame =
-    existingFrame ?? ctx.createFrame(call, { nodeId: child.id, nodeType: child.type, path: parentPath, parentFrameId });
+): Promise<{ updatedCtx: PrimitiveExpressionContext; outcome?: NodeOutcome }> {
+  const frame = ctx.createFrame(call, { nodeId: child.id, nodeType: child.type, path: parentPath, parentFrameId });
   if (ctx.signal.aborted) {
     await cancelFrame(call, frame, ctx);
     return { updatedCtx: localCtx, outcome: { status: 'cancelled' } };
   }
-  if (existingFrame === undefined) {
-    await startFrame(call, frame, ctx);
-  }
+  await startFrame(call, frame, ctx);
   let outcome: NodeOutcome;
   try {
     outcome = await executeNode(call, child, ctx, localCtx, executeSequence, frame.frameId, frame.path);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await failFrame(call, frame, ctx, message);
+    const message = await failFrameFromException(call, frame, ctx, error);
     return { updatedCtx: localCtx, outcome: { status: 'failed', error: message } };
   }
   switch (outcome.status) {
@@ -200,11 +125,6 @@ async function executeSequenceChild(
       await cancelFrame(call, frame, ctx);
       return { updatedCtx: localCtx, outcome: { status: 'cancelled' } };
     }
-    case 'paused': {
-      // The gate already persisted its frame as 'waiting'. Propagate the paused
-      // outcome so the enclosing sequence exits cleanly without altering frame state.
-      return { updatedCtx: localCtx, outcome };
-    }
     case 'failed': {
       await failFrame(call, frame, ctx, outcome.error);
       return { updatedCtx: localCtx, outcome: { status: 'failed', error: outcome.error } };
@@ -216,18 +136,11 @@ async function executeSequenceChild(
  * Execute a `sequence` node by walking its children in declaration order.
  *
  * Each child node is executed sequentially:
- * 1. Check the abort signal — remaining children are cancelled on abort.
- * 2. Resume fast-path — if a prior execution already produced a terminal frame
- *    for this node (`completed` or `skipped`), replay it into the local context
- *    and skip re-execution. A `waiting` gate frame is forwarded so the gate
- *    executor can read the already-resolved gate instance without re-suspending.
- * 3. Evaluate `when` — if falsy, skip the node (and its subtree) without failing.
- * 4. Evaluate `skip` — if truthy, skip the node (and its subtree) without failing.
- * 5. Create a frame for the child.
- * 6. Start the frame (emit `frame.started`).
- * 7. Execute the child via the dispatcher.
- * 8. Apply the outcome to the frame and update the expression context.
- * 9. If the child failed, immediately propagate failure up to the caller.
+ * 1. Check the abort signal before evaluating the next child.
+ * 2. Evaluate `when` and `skip` to decide whether to skip the child and its subtree.
+ * 3. Create and start the frame for a child that will execute.
+ * 4. Dispatch the child, apply its outcome, and update the expression context.
+ * 5. Propagate cancellation or failure to the caller and stop the sequence.
  *
  * The sequence itself does not create a frame; only leaf and container nodes
  * within the sequence have frames. The `parentFrameId` and `parentPath`
@@ -256,16 +169,6 @@ export async function executeSequence(
   for (const child of node.nodes) {
     if (ctx.signal.aborted) {
       return { status: 'cancelled' };
-    }
-
-    // ── Resume-frame fast-path ─────────────────────────────────────────────
-    // When a prior execution already produced a terminal result for this node,
-    // replay it into the local context without re-executing the node.
-    const resumeFrame = findSequenceChildResumeFrame(ctx, child, parentFrameId);
-    const resumedCtx = mergeTerminalResumeFrame(localCtx, child, resumeFrame);
-    if (resumedCtx !== undefined) {
-      localCtx = resumedCtx;
-      continue;
     }
 
     if (child.when !== undefined) {
@@ -306,24 +209,7 @@ export async function executeSequence(
       }
     }
 
-    // Reuse persisted waiting gate frames and nonterminal structural frames.
-    // Loop escalation gates use the loop container as the gate frame and leave
-    // it waiting, while descendant gates leave ancestor containers running.
-    // Both states must preserve frame IDs for redispatch matching.
-    const existingFrame =
-      (resumeFrame?.status === 'waiting' && child.type === 'gate') ||
-      ((resumeFrame?.status === 'running' || resumeFrame?.status === 'waiting') && isStructuralResumeNode(child))
-        ? resumeFrame
-        : undefined;
-    const { updatedCtx, outcome } = await executeSequenceChild(
-      call,
-      child,
-      ctx,
-      localCtx,
-      parentPath,
-      parentFrameId,
-      existingFrame,
-    );
+    const { updatedCtx, outcome } = await executeSequenceChild(call, child, ctx, localCtx, parentPath, parentFrameId);
     localCtx = updatedCtx;
     if (outcome !== undefined) {
       return outcome;

@@ -45,7 +45,6 @@ function toDefinitionDbValues(workflow: WorkflowDefinition, now: number): Insert
     state: workflow.state ?? null,
     artifact: workflow.artifact ?? null,
     triggers: workflow.triggers ?? null,
-    canvasLayout: (workflow.canvasLayout as Record<string, JsonValue> | undefined) ?? null,
     extensions: workflow.extensions ?? null,
     source: workflow.source ?? null,
     executableSource: workflow.executableSource ?? null,
@@ -74,7 +73,7 @@ function definitionEventSubject(
  *
  * Per-column rule: `name`, `root`, `updatedAt`, `state`, `extensions`, `executableSource`, `requirements`,
  * `successFinalizerId` and the scope columns always take the incoming value; `description`, `inputSchema`,
- * `configSchema`, `outputSchema`, `artifact`, `triggers`, `canvasLayout` and `source` keep the stored value when the
+ * `configSchema`, `outputSchema`, `artifact`, `triggers` and `source` keep the stored value when the
  * incoming value is null; `createdAt` is always preserved. This is the only place the "missing value keeps the
  * stored value" rule lives — the re-check in {@link writeDefinition} never reimplements it.
  * @param values - Incoming column values from {@link toDefinitionDbValues}
@@ -103,7 +102,6 @@ function toDefinitionUpdateSet(
     state: values.state,
     artifact: values.artifact !== null ? values.artifact : sql`${columns.artifact}`,
     triggers: values.triggers !== null ? values.triggers : sql`${columns.triggers}`,
-    canvasLayout: values.canvasLayout !== null ? values.canvasLayout : sql`${columns.canvasLayout}`,
     extensions: values.extensions,
     source: values.source !== null ? values.source : sql`${columns.source}`,
     executableSource: values.executableSource,

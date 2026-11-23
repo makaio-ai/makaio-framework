@@ -4,25 +4,21 @@ import { createTestCall } from '@makaio/test-utils';
 import {
   ArtifactNamespace,
   ArtifactSubjects,
+  FrameworkContractNamespaces,
+  SubagentSubjects,
   WORKFLOW_CANCELLED_REASON,
   WorkflowNamespace,
   defineWorkflow,
   codeStep,
   type ArtifactRevision,
-  type CodeStepHandler,
   type WorkflowDefinition,
   type WorkflowExecution,
-  type WorkflowGateNode,
-  type WorkflowIterateNode,
-  type WorkflowParallelNode,
   type WorkflowRunContext,
-  type WorkflowSequenceNode,
-  type WorkflowCodeStepNode,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
 import { runWorkflowOrchestrator } from '../workflow-orchestrator.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
-import { createTestDbForBus } from './shared.js';
+import { createTestDbForBus, registerInMemoryFrameStore } from './shared.js';
 import { resolveWorkflowArtifactBinding } from '../artifact-context/artifact-binding.js';
 import { WorkflowSubjects } from '../namespace.js';
 
@@ -43,7 +39,6 @@ function makeWorkerConfig(overrides?: Partial<WorkflowWorkerConfig>): WorkflowWo
     env: {},
     coordinatorSessionId: 'session-1',
     cancelSubject: 'workflow.wfx-1.cancel',
-    suspensionStrategy: 'wait-in-process',
     ...overrides,
   };
 }
@@ -138,7 +133,6 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
           busAuth: { kind: 'none' },
           coordinatorSessionId: 'session-artifact-context',
           cancelSubject: 'workflow.exec-artifact-context.cancel',
-          suspensionStrategy: 'wait-in-process',
         },
         loaded: workflow,
         bus,
@@ -240,7 +234,6 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
       cancelSubject: 'workflow.exec-start-artifact-ref.cancel',
       env: {},
       createdAt: Date.now(),
-      suspensionStrategy: 'wait-in-process',
     } satisfies WorkflowRunContext;
 
     const binding = await resolveWorkflowArtifactBinding({
@@ -257,16 +250,19 @@ describe('runWorkflowOrchestrator artifact bindings', () => {
   });
 });
 
-describe('runWorkflowOrchestrator cancellation finalization', () => {
-  it('persists failed execution errors for storage-backed reads', async () => {
+describe('runWorkflowOrchestrator terminal finalization', () => {
+  it('persists completed step outputs and the execution error when a later step fails', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);
     bus.registerNamespace(WorkflowStorageNamespace);
     const dbContext = await createTestDbForBus(bus);
 
-    const workflow = defineWorkflow('failed-execution-error-persistence').codeStep('fail-step', async () => {
-      throw new Error('code step failed');
-    });
+    const workflow = defineWorkflow('failed-execution-error-persistence')
+      .codeStep('inspect', () => ({ findings: 3 }))
+      .codeStep('summarize', () => ({ summary: 'three findings' }))
+      .codeStep('fail-step', async () => {
+        throw new Error('code step failed');
+      });
 
     try {
       const result = await runWorkflowOrchestrator({
@@ -289,7 +285,6 @@ describe('runWorkflowOrchestrator cancellation finalization', () => {
           busAuth: { kind: 'none' },
           coordinatorSessionId: 'session-failed-error-persistence',
           cancelSubject: 'workflow.exec-failed-error-persistence.cancel',
-          suspensionStrategy: 'wait-in-process',
         },
         loaded: workflow,
         bus,
@@ -299,9 +294,19 @@ describe('runWorkflowOrchestrator cancellation finalization', () => {
       const { execution } = await bus.request(WorkflowStorageSubjects.getExecution, {
         executionId: 'exec-failed-error-persistence',
       });
+      const { frames } = await bus.request(WorkflowStorageSubjects.listFrames, {
+        executionId: 'exec-failed-error-persistence',
+      });
 
       expect(result).toMatchObject({ status: 'failed', error: 'code step failed' });
       expect(execution).toMatchObject({ status: 'failed', error: 'code step failed' });
+      expect(frames).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ nodeId: 'inspect', status: 'completed', output: { findings: 3 } }),
+          expect.objectContaining({ nodeId: 'summarize', status: 'completed', output: { summary: 'three findings' } }),
+          expect.objectContaining({ nodeId: 'fail-step', status: 'failed' }),
+        ]),
+      );
     } finally {
       dbContext.cleanup();
     }
@@ -350,7 +355,6 @@ describe('runWorkflowOrchestrator cancellation finalization', () => {
           busAuth: { kind: 'none' },
           coordinatorSessionId: 'session-signal-cancel',
           cancelSubject: 'workflow.exec-signal-cancel.cancel',
-          suspensionStrategy: 'wait-in-process',
         },
         loaded: workflow,
         bus,
@@ -451,17 +455,92 @@ describe('runWorkflowOrchestrator cancellation finalization', () => {
   });
 });
 
-describe('runWorkflowOrchestrator gate parking (exit-and-redispatch)', () => {
-  it('passes runtimeLoopGates from loaded workflows into loop execution', async () => {
+describe('runWorkflowOrchestrator node execution', () => {
+  it('completes a mixed workflow without sending pause events or gate messages', async () => {
+    const bus = createBusInstance();
+    bus.registerNamespaces(FrameworkContractNamespaces);
+    const removeFrameStore = registerInMemoryFrameStore(bus);
+    bus.on(WorkflowStorageSubjects.setExecutionStart, (ctx) => {
+      const { id } = ctx.payload.execution;
+      ctx.setResult({ id, executionId: id });
+    });
+    bus.on(WorkflowStorageSubjects.setExecution, (ctx) => ctx.setResult({ id: ctx.payload.execution.id }));
+    bus.on(WorkflowSubjects.resolveRole, (ctx) => ctx.setResult({ adapterName: 'claude-code' }));
+    bus.on(SubagentSubjects.spawn, (ctx) => ctx.setResult({ subagentId: 'subagent-review', status: 'spawning' }));
+    bus.on(SubagentSubjects.await, (ctx) => ctx.setResult({ status: 'completed', result: 'review complete' }));
+
+    const subjects: string[] = [];
+    const stopObserving = bus.observeMessages((message) => {
+      subjects.push(`${message.namespace}.${message.subject}`);
+    });
+
+    const workflow = defineWorkflow('mixed-orchestrator-workflow')
+      .codeStep('prepare', () => ({ runParallel: true }))
+      .agentStep('review', 'reviewer')
+      .parallel('parallel-checks', { when: 'frames.prepare.output.runParallel' }, [
+        codeStep('check-draft', () => true),
+        codeStep('check-sources', () => true),
+      ])
+      .iterate('scan-items', ({ index }) => index ?? -1, { collection: 'inputs.items' })
+      .iterateChain(
+        'count-items',
+        [codeStep('increment', ({ previous }) => (typeof previous === 'number' ? previous + 1 : 1))],
+        { collection: 'inputs.items' },
+      )
+      .loop('finish', [codeStep('verify', () => true)], {
+        maxRounds: 2,
+        check: { handler: 'verified', evaluate: () => ({ kind: 'pass' }) },
+      });
+    const config = makeWorkerConfig({ workflowId: workflow.id, inputs: { items: ['first', 'second'] } });
+
+    try {
+      const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
+        config,
+        loaded: workflow,
+        bus,
+        signal: new AbortController().signal,
+      });
+      const { frames } = await bus.request(WorkflowStorageSubjects.listFrames, { executionId: config.executionId });
+      const completedRootNodes = frames
+        .filter((frame) => frame.parentFrameId === undefined && frame.status === 'completed')
+        .map((frame) => frame.nodeId);
+      const gateSubjects = subjects.filter(
+        (subject) =>
+          /^workflow\.(?:gate\.|listGateInstances$)/.test(subject) ||
+          /^storage:workflow\.(?:.*Gate|pauseRunningExecution$|cancelPausedExecution$)/.test(subject),
+      );
+
+      expect(result.status).toBe('completed');
+      expect(completedRootNodes).toEqual([
+        'prepare',
+        'review',
+        'parallel-checks',
+        'scan-items',
+        'count-items',
+        'finish',
+      ]);
+      expect(subjects).toContain('workflow.execution.completed');
+      expect(subjects).not.toContain('workflow.execution.paused');
+      expect(gateSubjects).toEqual([]);
+    } finally {
+      stopObserving();
+      removeFrameStore();
+    }
+  });
+});
+
+describe('runWorkflowOrchestrator loop checks', () => {
+  it('passes runtimeLoopChecks from loaded workflows into loop execution', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);
     bus.registerNamespace(WorkflowStorageNamespace);
     const dbContext = await createTestDbForBus(bus);
     const body = vi.fn(async () => ({ blockers: [] }));
-    const gate = vi.fn(() => ({ kind: 'pass' as const }));
+    const check = vi.fn(() => ({ kind: 'pass' as const }));
     const workflow = defineWorkflow('orchestrator-loop').loop('converge', [codeStep('aggregate', body)], {
       maxRounds: 3,
-      gate: { handler: 'no-open-blockers', evaluate: gate },
+      check: { handler: 'no-open-blockers', evaluate: check },
     });
 
     try {
@@ -478,23 +557,74 @@ describe('runWorkflowOrchestrator gate parking (exit-and-redispatch)', () => {
 
       expect(result.status).toBe('completed');
       expect(body).toHaveBeenCalledOnce();
-      expect(gate).toHaveBeenCalledOnce();
+      expect(check).toHaveBeenCalledOnce();
     } finally {
       dbContext.cleanup();
     }
   });
 
-  it('fails clearly when a serialized loop definition has no runtime gate handler', async () => {
+  it.each([
+    { name: 'default exhaustion', onExhausted: undefined, check: 'loop', passed: undefined },
+    { name: 'explicit failure', onExhausted: 'fail', check: 'loop', passed: undefined },
+    { name: 'completion on exhaustion', onExhausted: 'complete', check: 'loop', passed: false },
+    { name: 'passing check', onExhausted: 'fail', check: 'pass', passed: true },
+  ] as const)('projects loop output for $name', async ({ onExhausted, check, passed }) => {
+    const bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    const dbContext = await createTestDbForBus(bus);
+    const afterLoop = vi.fn();
+    const workflow = defineWorkflow('loop-output')
+      .loop('review-loop', [codeStep('review', () => 42)], {
+        maxRounds: 2,
+        onExhausted,
+        check: { handler: 'review-done', evaluate: () => ({ kind: check }) },
+      })
+      .codeStep(
+        'after-loop',
+        ({ previousSteps }) => {
+          afterLoop();
+          return previousSteps['review-loop']?.output ?? null;
+        },
+        { when: `frames['review-loop'].output.passed == ${passed === true}` },
+      );
+    const executionId = 'wfx-loop-output';
+    try {
+      const result = await runWorkflowOrchestrator({
+        call: createTestCall(),
+        config: makeWorkerConfig({ executionId, workflowId: workflow.id }),
+        loaded: workflow,
+        bus,
+        signal: new AbortController().signal,
+      });
+      if (passed === undefined) {
+        expect(result).toMatchObject({
+          status: 'failed',
+          error: "Loop node 'review-loop' exhausted maxRounds (2) without a passing check",
+        });
+        expect(afterLoop).not.toHaveBeenCalled();
+        return;
+      }
+      expect(result.status).toBe('completed');
+      expect(afterLoop).toHaveBeenCalledOnce();
+      const { frames } = await bus.request(WorkflowStorageSubjects.listFrames, { executionId });
+      const output = { passed, rounds: passed ? 1 : 2, bodyOutputs: passed ? [42] : [42, 42] };
+      expect(frames).toContainEqual(expect.objectContaining({ nodeId: 'after-loop', status: 'completed', output }));
+    } finally {
+      dbContext.cleanup();
+    }
+  });
+
+  it('fails clearly when a serialized loop definition has no runtime check handler', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);
     bus.registerNamespace(WorkflowStorageNamespace);
     const dbContext = await createTestDbForBus(bus);
-    const workflow = defineWorkflow('orchestrator-loop-missing-gate').loop(
+    const workflow = defineWorkflow('orchestrator-loop-missing-check').loop(
       'converge',
       [codeStep('aggregate', async () => ({ blockers: [] }))],
       {
         maxRounds: 3,
-        gate: { handler: 'missing-gate', evaluate: () => ({ kind: 'pass' as const }) },
+        check: { handler: 'missing-check', evaluate: () => ({ kind: 'pass' as const }) },
       },
     );
 
@@ -502,7 +632,7 @@ describe('runWorkflowOrchestrator gate parking (exit-and-redispatch)', () => {
       const result = await runWorkflowOrchestrator({
         call: createTestCall(),
         config: makeWorkerConfig({
-          executionId: 'wfx-orchestrator-loop-missing-gate',
+          executionId: 'wfx-orchestrator-loop-missing-check',
           workflowId: workflow.id,
         }),
         loaded: { definition: workflow.definition, runtimeHandlers: workflow.runtimeHandlers },
@@ -512,262 +642,16 @@ describe('runWorkflowOrchestrator gate parking (exit-and-redispatch)', () => {
 
       expect(result.status).toBe('failed');
       if (result.status === 'failed') {
-        expect(result.error).toContain('missing loop gate handler(s): missing-gate');
+        expect(result.error).toContain('missing loop check handler(s): missing-check');
       }
-    } finally {
-      dbContext.cleanup();
-    }
-  });
-
-  it('persists paused execution and returns paused result for remote gate parking', async () => {
-    const bus = createBusInstance();
-    bus.registerNamespace(WorkflowNamespace);
-    bus.registerNamespace(WorkflowStorageNamespace);
-    const dbContext = await createTestDbForBus(bus);
-
-    const workflow = defineWorkflow('park-orchestrator').gate('approval', {
-      prompt: 'Continue?',
-      autoAction: 'reject',
-      timeoutMs: null,
-    });
-
-    try {
-      const result = await runWorkflowOrchestrator({
-        call: createTestCall(),
-        config: makeWorkerConfig({
-          executionId: 'wfx-park-orchestrator',
-          workflowId: workflow.id,
-          suspensionStrategy: 'exit-and-redispatch',
-        }),
-        loaded: workflow,
-        bus,
-        signal: new AbortController().signal,
-      });
-
-      expect(result).toMatchObject({
-        status: 'paused',
-        pausedAtGateId: 'approval',
-        pausedAtFrameId: expect.any(String),
-      });
-      const { execution } = await bus.request(WorkflowStorageSubjects.getExecution, {
-        executionId: 'wfx-park-orchestrator',
-      });
-      expect(execution?.status).toBe('paused');
-      expect(execution?.completedAt).toBeUndefined();
     } finally {
       dbContext.cleanup();
     }
   });
 });
 
-describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
-  /**
-   * Register the minimum execution-start persistence handlers needed to observe
-   * resume-frame failures without a full storage backend.
-   * @param bus - Isolated workflow test bus.
-   */
-  function registerSetExecutionOnly(bus: ReturnType<typeof createBusInstance>): void {
-    bus.on(WorkflowStorageSubjects.setExecution, (ctx) => {
-      ctx.setResult({ id: ctx.payload.execution.id });
-    });
-    bus.on(WorkflowStorageSubjects.setExecutionStart, (ctx) => {
-      ctx.setResult({ id: ctx.payload.execution.id, executionId: ctx.payload.execution.id });
-    });
-  }
-
-  it('skips completed frames on resumed remote execution and preserves expression context', async () => {
-    const bus = createBusInstance();
-    bus.registerNamespace(WorkflowNamespace);
-    bus.registerNamespace(WorkflowStorageNamespace);
-    const dbContext = await createTestDbForBus(bus);
-
-    const analyze = vi.fn(async () => ({ findings: 3 }));
-    const implement = vi.fn(async () => ({ sawFindings: 3 }));
-
-    const workflow = defineWorkflow('resume-skip')
-      .codeStep('analyze', analyze)
-      .gate('approve', { prompt: 'Approve?', autoAction: 'reject', timeoutMs: null })
-      .codeStep('implement', implement);
-
-    try {
-      // Seed a minimal execution row so the FK constraint on frames is satisfied.
-      await bus.request(WorkflowStorageSubjects.setExecution, {
-        execution: {
-          id: 'wfx-resume-skip',
-          workflowId: workflow.id,
-          status: 'running',
-          inputs: {},
-          startedAt: 1,
-          scope: { type: 'global' },
-        },
-      });
-      // Seed a completed 'analyze' frame from the prior run.
-      await bus.request(WorkflowStorageSubjects.setFrame, {
-        executionId: 'wfx-resume-skip',
-        frame: {
-          frameId: 'frame-analyze',
-          nodeId: 'analyze',
-          nodeType: 'code-step',
-          path: ['frame-analyze'],
-          status: 'completed',
-          output: { findings: 3 },
-          startedAt: 1,
-          completedAt: 2,
-        },
-      });
-      // Seed a waiting 'approve' frame from the prior run.
-      await bus.request(WorkflowStorageSubjects.setFrame, {
-        executionId: 'wfx-resume-skip',
-        frame: {
-          frameId: 'frame-approve',
-          nodeId: 'approve',
-          nodeType: 'gate',
-          path: ['frame-approve'],
-          status: 'waiting',
-          startedAt: 3,
-        },
-      });
-      // Seed the gate instance with 'resumed' status so the gate executor returns immediately.
-      await bus.request(WorkflowStorageSubjects.setGateInstance, {
-        gate: {
-          executionId: 'wfx-resume-skip',
-          nodeId: 'approve',
-          frameId: 'frame-approve',
-          schema: {},
-          status: 'resumed',
-          autoAction: 'reject',
-          timeoutMs: null,
-          resumeData: { approved: true },
-          createdAt: 3,
-          resolvedAt: 4,
-        },
-      });
-
-      const result = await runWorkflowOrchestrator({
-        call: createTestCall(),
-        config: makeWorkerConfig({
-          executionId: 'wfx-resume-skip',
-          workflowId: workflow.id,
-          suspensionStrategy: 'exit-and-redispatch',
-        }),
-        loaded: workflow,
-        bus,
-        signal: new AbortController().signal,
-      });
-
-      expect(result.status).toBe('completed');
-      // The 'analyze' code step was already completed in the prior run — must not re-execute.
-      expect(analyze).not.toHaveBeenCalled();
-      // The 'implement' code step sees the analyze output from the resumed frame context.
-      expect(implement).toHaveBeenCalledOnce();
-      // Verify that 'implement' received the resumed 'analyze' output in its step context.
-      expect(implement).toHaveBeenCalledWith(
-        expect.objectContaining({
-          previousSteps: expect.objectContaining({
-            analyze: expect.objectContaining({ output: { findings: 3 } }),
-          }),
-        }),
-      );
-    } finally {
-      dbContext.cleanup();
-    }
-  });
-
-  it('fails exit-based redispatch when frame storage is unavailable', async () => {
-    const bus = createBusInstance();
-    bus.registerNamespace(WorkflowNamespace);
-    bus.registerNamespace(WorkflowStorageNamespace);
-    registerSetExecutionOnly(bus);
-
-    const analyze = vi.fn(async () => ({ findings: 3 }));
-    const workflow = defineWorkflow('resume-frame-storage-unavailable').codeStep('analyze', analyze);
-
-    const result = await runWorkflowOrchestrator({
-      call: createTestCall(),
-      config: makeWorkerConfig({
-        executionId: 'wfx-resume-frame-storage-unavailable',
-        workflowId: workflow.id,
-        suspensionStrategy: 'exit-and-redispatch',
-      }),
-      loaded: workflow,
-      bus,
-      signal: new AbortController().signal,
-    });
-
-    expect(result.status).toBe('failed');
-    expect(analyze).not.toHaveBeenCalled();
-  });
-
-  it('fails exit-based redispatch when a completed frame checkpoint cannot persist', async () => {
-    const bus = createBusInstance();
-    bus.registerNamespace(WorkflowNamespace);
-    bus.registerNamespace(WorkflowStorageNamespace);
-    registerSetExecutionOnly(bus);
-    bus.on(WorkflowStorageSubjects.listFrames, (ctx) => {
-      ctx.setResult({ frames: [] });
-    });
-    bus.on(WorkflowStorageSubjects.setFrame, (ctx) => {
-      if (ctx.payload.frame.status === 'completed') {
-        throw new Error('completed frame checkpoint failed');
-      }
-      ctx.setResult({ frameId: ctx.payload.frame.frameId });
-    });
-
-    const analyze = vi.fn(async () => ({ findings: 3 }));
-    const workflow = defineWorkflow('resume-completed-frame-storage-fails')
-      .codeStep('analyze', analyze)
-      .gate('approve', { prompt: 'Approve?', autoAction: 'reject', timeoutMs: null });
-    const suspendedGateIds: string[] = [];
-    bus.on(WorkflowSubjects.gate.suspended, (ctx) => {
-      suspendedGateIds.push(ctx.payload.nodeId);
-    });
-
-    const result = await runWorkflowOrchestrator({
-      call: createTestCall(),
-      config: makeWorkerConfig({
-        executionId: 'wfx-completed-frame-storage-fails',
-        workflowId: workflow.id,
-        suspensionStrategy: 'exit-and-redispatch',
-      }),
-      loaded: workflow,
-      bus,
-      signal: new AbortController().signal,
-    });
-
-    expect(result.status).toBe('failed');
-    expect(analyze).toHaveBeenCalledOnce();
-    expect(suspendedGateIds).toEqual([]);
-  });
-
-  it('fails exit-based redispatch when frame loading throws', async () => {
-    const bus = createBusInstance();
-    bus.registerNamespace(WorkflowNamespace);
-    bus.registerNamespace(WorkflowStorageNamespace);
-    registerSetExecutionOnly(bus);
-    bus.on(WorkflowStorageSubjects.listFrames, () => {
-      throw new Error('frame load failed');
-    });
-
-    const analyze = vi.fn(async () => ({ findings: 3 }));
-    const workflow = defineWorkflow('resume-frame-load-fails').codeStep('analyze', analyze);
-
-    const result = await runWorkflowOrchestrator({
-      call: createTestCall(),
-      config: makeWorkerConfig({
-        executionId: 'wfx-resume-frame-load-fails',
-        workflowId: workflow.id,
-        suspensionStrategy: 'exit-and-redispatch',
-      }),
-      loaded: workflow,
-      bus,
-      signal: new AbortController().signal,
-    });
-
-    expect(result).toMatchObject({ status: 'failed' });
-    expect(analyze).not.toHaveBeenCalled();
-  });
-
-  it('preserves the original execution start timestamp on exit-based redispatch', async () => {
+describe('runWorkflowOrchestrator persisted start timestamps', () => {
+  it('preserves the original execution start timestamp when starting a worker', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);
     bus.registerNamespace(WorkflowStorageNamespace);
@@ -777,13 +661,13 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
       completedEvents.push({ totalDuration: ctx.payload.totalDuration });
     });
 
-    const workflow = defineWorkflow('resume-preserve-started-at').codeStep('analyze', async () => ({ findings: 3 }));
-    const executionId = 'wfx-resume-preserve-started-at';
+    const workflow = defineWorkflow('preserve-started-at').codeStep('analyze', async () => ({ findings: 3 }));
+    const executionId = 'wfx-preserve-started-at';
     const startedAt = Date.now() - 5_000;
     const execution: WorkflowExecution = {
       id: executionId,
       workflowId: workflow.id,
-      coordinatorSessionId: 'session-resume-preserve-started-at',
+      coordinatorSessionId: 'session-preserve-started-at',
       status: 'running',
       inputs: {},
       config: {},
@@ -801,7 +685,6 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
           executionId,
           workflowId: workflow.id,
           coordinatorSessionId: execution.coordinatorSessionId,
-          suspensionStrategy: 'exit-and-redispatch',
         }),
         loaded: workflow,
         bus,
@@ -818,22 +701,22 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
     }
   });
 
-  it('preserves the original execution start timestamp for immediate redispatch completion', async () => {
+  it('preserves the original execution start timestamp for an empty workflow', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkflowNamespace);
     bus.registerNamespace(WorkflowStorageNamespace);
     const dbContext = await createTestDbForBus(bus);
     const workflow: WorkflowDefinition = {
-      id: 'resume-empty-preserve-started-at',
-      root: { id: 'resume-empty-preserve-started-at__root', type: 'sequence', nodes: [] },
+      id: 'empty-preserve-started-at',
+      root: { id: 'empty-preserve-started-at__root', type: 'sequence', nodes: [] },
       scope: { type: 'global' },
     };
-    const executionId = 'wfx-resume-empty-preserve-started-at';
+    const executionId = 'wfx-empty-preserve-started-at';
     const startedAt = Date.now() - 5_000;
     const execution: WorkflowExecution = {
       id: executionId,
       workflowId: workflow.id,
-      coordinatorSessionId: 'session-resume-empty-preserve-started-at',
+      coordinatorSessionId: 'session-empty-preserve-started-at',
       status: 'running',
       inputs: {},
       config: {},
@@ -851,7 +734,6 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
           executionId,
           workflowId: workflow.id,
           coordinatorSessionId: execution.coordinatorSessionId,
-          suspensionStrategy: 'exit-and-redispatch',
         }),
         loaded: { definition: workflow, runtimeHandlers: new Map() },
         bus,
@@ -861,637 +743,6 @@ describe('runWorkflowOrchestrator resume-skip (exit-and-redispatch)', () => {
       const { execution: stored } = await bus.request(WorkflowStorageSubjects.getExecution, { executionId });
       expect(result.status).toBe('completed');
       expect(stored?.startedAt).toBe(startedAt);
-    } finally {
-      dbContext.cleanup();
-    }
-  });
-
-  it('reuses structural iterate frames to resume a repeated gate by frame ID', async () => {
-    const bus = createBusInstance();
-    bus.registerNamespace(WorkflowNamespace);
-    bus.registerNamespace(WorkflowStorageNamespace);
-    const dbContext = await createTestDbForBus(bus);
-
-    const after = vi.fn(async () => ({ continued: true }));
-    const approveGate = {
-      id: 'approve',
-      type: 'gate',
-      prompt: 'Approve item {{ index }}?',
-      autoAction: 'reject',
-      timeoutMs: null,
-    } satisfies WorkflowGateNode;
-    const fanout = {
-      id: 'fanout',
-      type: 'iterate',
-      collection: 'inputs.items',
-      body: {
-        id: 'fanout__body',
-        type: 'sequence',
-        nodes: [approveGate],
-      } satisfies WorkflowSequenceNode,
-    } satisfies WorkflowIterateNode;
-    const afterNode = { id: 'after', type: 'code-step' } satisfies WorkflowCodeStepNode;
-    const workflow = {
-      id: 'resume-iterate-repeated-gate',
-      root: {
-        id: 'resume-iterate-repeated-gate__root',
-        type: 'sequence',
-        nodes: [fanout, afterNode],
-      },
-      scope: { type: 'global' },
-    } satisfies WorkflowDefinition;
-
-    const suspendedEvents: Array<{ frameId: string; nodeId: string }> = [];
-    const offSuspended = bus.on(WorkflowSubjects.gate.suspended, (ctx) => {
-      suspendedEvents.push({ frameId: ctx.payload.frameId, nodeId: ctx.payload.nodeId });
-    });
-
-    try {
-      await bus.request(WorkflowStorageSubjects.setExecution, {
-        execution: {
-          id: 'wfx-resume-iterate',
-          workflowId: workflow.id,
-          status: 'running',
-          inputs: { items: ['first', 'second'] },
-          startedAt: 1,
-          scope: { type: 'global' },
-        },
-      });
-      await bus.request(WorkflowStorageSubjects.setFrame, {
-        executionId: 'wfx-resume-iterate',
-        frame: {
-          frameId: 'frame-fanout',
-          nodeId: 'fanout',
-          nodeType: 'iterate',
-          path: ['frame-fanout'],
-          status: 'running',
-          attempt: 0,
-          startedAt: 1,
-        },
-      });
-      await bus.request(WorkflowStorageSubjects.setFrame, {
-        executionId: 'wfx-resume-iterate',
-        frame: {
-          frameId: 'frame-fanout-item-0',
-          nodeId: 'fanout',
-          nodeType: 'iterate',
-          path: ['frame-fanout', 'frame-fanout-item-0'],
-          parentFrameId: 'frame-fanout',
-          iteration: 0,
-          status: 'completed',
-          attempt: 0,
-          output: { resumeData: { approved: true, item: 'first' } },
-          startedAt: 2,
-          completedAt: 3,
-        },
-      });
-      await bus.request(WorkflowStorageSubjects.setFrame, {
-        executionId: 'wfx-resume-iterate',
-        frame: {
-          frameId: 'frame-fanout-item-1',
-          nodeId: 'fanout',
-          nodeType: 'iterate',
-          path: ['frame-fanout', 'frame-fanout-item-1'],
-          parentFrameId: 'frame-fanout',
-          iteration: 1,
-          status: 'running',
-          attempt: 0,
-          startedAt: 4,
-        },
-      });
-      await bus.request(WorkflowStorageSubjects.setFrame, {
-        executionId: 'wfx-resume-iterate',
-        frame: {
-          frameId: 'frame-approve-item-1',
-          nodeId: 'approve',
-          nodeType: 'gate',
-          path: ['frame-fanout', 'frame-fanout-item-1', 'frame-approve-item-1'],
-          parentFrameId: 'frame-fanout-item-1',
-          status: 'waiting',
-          attempt: 0,
-          startedAt: 5,
-        },
-      });
-      await bus.request(WorkflowStorageSubjects.setGateInstance, {
-        gate: {
-          executionId: 'wfx-resume-iterate',
-          nodeId: 'approve',
-          frameId: 'frame-approve-item-1',
-          schema: {},
-          status: 'resumed',
-          autoAction: 'reject',
-          timeoutMs: null,
-          resumeData: { approved: true, item: 'second' },
-          createdAt: 5,
-          resolvedAt: 6,
-        },
-      });
-
-      const result = await runWorkflowOrchestrator({
-        call: createTestCall(),
-        config: makeWorkerConfig({
-          executionId: 'wfx-resume-iterate',
-          workflowId: workflow.id,
-          inputs: { items: ['first', 'second'] },
-          suspensionStrategy: 'exit-and-redispatch',
-        }),
-        loaded: { definition: workflow, runtimeHandlers: new Map([['after', after]]) },
-        bus,
-        signal: new AbortController().signal,
-      });
-
-      expect(result.status).toBe('completed');
-      expect(after).toHaveBeenCalledOnce();
-      expect(suspendedEvents).toEqual([]);
-
-      const { frames } = await bus.request(WorkflowStorageSubjects.listFrames, {
-        executionId: 'wfx-resume-iterate',
-      });
-      expect(frames.filter((frame) => frame.nodeId === 'approve')).toEqual([
-        expect.objectContaining({
-          frameId: 'frame-approve-item-1',
-          parentFrameId: 'frame-fanout-item-1',
-          status: 'completed',
-          output: { resumeData: { approved: true, item: 'second' } },
-        }),
-      ]);
-    } finally {
-      offSuspended();
-      dbContext.cleanup();
-    }
-  });
-
-  it('cancels parallel siblings when an exit-based branch parks at a gate', async () => {
-    const bus = createBusInstance();
-    bus.registerNamespace(WorkflowNamespace);
-    bus.registerNamespace(WorkflowStorageNamespace);
-    const dbContext = await createTestDbForBus(bus);
-
-    const sideEffects: string[] = [];
-    const side = vi.fn(
-      async (ctx: { readonly signal: AbortSignal }): Promise<null> =>
-        new Promise((resolve) => {
-          setTimeout(() => {
-            if (!ctx.signal.aborted) {
-              sideEffects.push('side-effect');
-            }
-            resolve(null);
-          }, 10);
-        }),
-    );
-
-    const approvalGate = {
-      id: 'approve',
-      type: 'gate',
-      prompt: 'Approve?',
-      autoAction: 'reject',
-      timeoutMs: null,
-    } satisfies WorkflowGateNode;
-    const sideNode = { id: 'side', type: 'code-step' } satisfies WorkflowCodeStepNode;
-    const parallelNode = {
-      id: 'fanout',
-      type: 'parallel',
-      mode: 'all-settled',
-      branches: {
-        approval: {
-          id: 'approval-branch',
-          type: 'sequence',
-          nodes: [approvalGate],
-        } satisfies WorkflowSequenceNode,
-        side: {
-          id: 'side-branch',
-          type: 'sequence',
-          nodes: [sideNode],
-        } satisfies WorkflowSequenceNode,
-      },
-    } satisfies WorkflowParallelNode;
-    const workflow = {
-      id: 'parallel-parks-on-gate',
-      root: {
-        id: 'parallel-parks-on-gate__root',
-        type: 'sequence',
-        nodes: [parallelNode],
-      },
-      scope: { type: 'global' },
-    } satisfies WorkflowDefinition;
-
-    try {
-      const result = await runWorkflowOrchestrator({
-        call: createTestCall(),
-        config: makeWorkerConfig({
-          executionId: 'wfx-parallel-pause',
-          workflowId: workflow.id,
-          suspensionStrategy: 'exit-and-redispatch',
-        }),
-        loaded: { definition: workflow, runtimeHandlers: new Map([['side', side]]) },
-        bus,
-        signal: new AbortController().signal,
-      });
-
-      expect(result).toMatchObject({
-        status: 'paused',
-        pausedAtGateId: 'approve',
-        pausedAtFrameId: expect.any(String),
-      });
-      expect(side).toHaveBeenCalledOnce();
-      expect(sideEffects).toEqual([]);
-    } finally {
-      dbContext.cleanup();
-    }
-  });
-
-  it('keeps paused-sibling branch frames resumable after exit-based parking', async () => {
-    const bus = createBusInstance();
-    bus.registerNamespace(WorkflowNamespace);
-    bus.registerNamespace(WorkflowStorageNamespace);
-    const dbContext = await createTestDbForBus(bus);
-
-    let slowStartedResolve: () => void = () => {};
-    const slowStarted = new Promise<void>((resolve) => {
-      slowStartedResolve = resolve;
-    });
-    const sideEffects: string[] = [];
-    const record = vi.fn(async () => {
-      sideEffects.push('record');
-      return { recorded: true };
-    });
-    const slow = vi.fn(
-      async (ctx: { readonly signal: AbortSignal }): Promise<null> =>
-        new Promise((resolve) => {
-          slowStartedResolve();
-          const timeout = setTimeout(() => {
-            resolve(null);
-          }, 20);
-          if (ctx.signal.aborted) {
-            clearTimeout(timeout);
-            resolve(null);
-            return;
-          }
-          ctx.signal.addEventListener(
-            'abort',
-            () => {
-              clearTimeout(timeout);
-              resolve(null);
-            },
-            { once: true },
-          );
-        }),
-    );
-    const after = vi.fn(async () => ({ continued: true }));
-    const waitForSibling = vi.fn(async () => {
-      await slowStarted;
-      return null;
-    });
-
-    const waitForSiblingNode = {
-      id: 'wait-for-sibling',
-      type: 'code-step',
-    } satisfies WorkflowCodeStepNode;
-    const approvalGate = {
-      id: 'approve',
-      type: 'gate',
-      prompt: 'Approve?',
-      autoAction: 'reject',
-      timeoutMs: null,
-    } satisfies WorkflowGateNode;
-    const recordNode = { id: 'record', type: 'code-step' } satisfies WorkflowCodeStepNode;
-    const slowNode = { id: 'slow', type: 'code-step' } satisfies WorkflowCodeStepNode;
-    const afterNode = { id: 'after', type: 'code-step' } satisfies WorkflowCodeStepNode;
-    const parallelNode = {
-      id: 'fanout',
-      type: 'parallel',
-      mode: 'all-settled',
-      branches: {
-        approval: {
-          id: 'approval-branch',
-          type: 'sequence',
-          nodes: [waitForSiblingNode, approvalGate],
-        } satisfies WorkflowSequenceNode,
-        side: {
-          id: 'side-branch',
-          type: 'sequence',
-          nodes: [recordNode, slowNode, afterNode],
-        } satisfies WorkflowSequenceNode,
-      },
-    } satisfies WorkflowParallelNode;
-    const workflow = {
-      id: 'parallel-pause-resumes-sibling-branch',
-      root: {
-        id: 'parallel-pause-resumes-sibling-branch__root',
-        type: 'sequence',
-        nodes: [parallelNode],
-      },
-      scope: { type: 'global' },
-    } satisfies WorkflowDefinition;
-    const runtimeHandlers = new Map<string, CodeStepHandler>([
-      ['wait-for-sibling', waitForSibling],
-      ['record', record],
-      ['slow', slow],
-      ['after', after],
-    ]);
-
-    try {
-      const firstResult = await runWorkflowOrchestrator({
-        call: createTestCall(),
-        config: makeWorkerConfig({
-          executionId: 'wfx-parallel-resume-sibling',
-          workflowId: workflow.id,
-          suspensionStrategy: 'exit-and-redispatch',
-        }),
-        loaded: {
-          definition: workflow,
-          runtimeHandlers,
-        },
-        bus,
-        signal: new AbortController().signal,
-      });
-
-      expect(firstResult).toMatchObject({
-        status: 'paused',
-        pausedAtGateId: 'approve',
-        pausedAtFrameId: expect.any(String),
-      });
-      expect(record).toHaveBeenCalledOnce();
-      expect(slow).toHaveBeenCalledOnce();
-      expect(after).not.toHaveBeenCalled();
-      const firstRunFrames = await bus.request(WorkflowStorageSubjects.listFrames, {
-        executionId: 'wfx-parallel-resume-sibling',
-      });
-      expect(firstRunFrames.frames).toEqual(
-        expect.arrayContaining([expect.objectContaining({ nodeId: 'fanout', branchKey: 'side', status: 'running' })]),
-      );
-
-      if (firstResult.status !== 'paused') {
-        throw new Error('Expected first run to park at approval gate.');
-      }
-      await bus.request(WorkflowStorageSubjects.setGateInstance, {
-        gate: {
-          executionId: 'wfx-parallel-resume-sibling',
-          nodeId: 'approve',
-          frameId: firstResult.pausedAtFrameId,
-          schema: {},
-          status: 'resumed',
-          autoAction: 'reject',
-          timeoutMs: null,
-          resumeData: { approved: true },
-          createdAt: Date.now(),
-          resolvedAt: Date.now(),
-        },
-      });
-
-      const secondResult = await runWorkflowOrchestrator({
-        call: createTestCall(),
-        config: makeWorkerConfig({
-          executionId: 'wfx-parallel-resume-sibling',
-          workflowId: workflow.id,
-          suspensionStrategy: 'exit-and-redispatch',
-        }),
-        loaded: {
-          definition: workflow,
-          runtimeHandlers,
-        },
-        bus,
-        signal: new AbortController().signal,
-      });
-
-      expect(secondResult.status).toBe('completed');
-      expect(record).toHaveBeenCalledOnce();
-      expect(sideEffects).toEqual(['record']);
-      expect(after).toHaveBeenCalledOnce();
-    } finally {
-      dbContext.cleanup();
-    }
-  });
-
-  it('keeps pause-aborted iterate item frames resumable after exit-based parking', async () => {
-    const bus = createBusInstance();
-    bus.registerNamespace(WorkflowNamespace);
-    bus.registerNamespace(WorkflowStorageNamespace);
-    const dbContext = await createTestDbForBus(bus);
-
-    let slowStartedResolve: () => void = () => {};
-    const slowStarted = new Promise<void>((resolve) => {
-      slowStartedResolve = resolve;
-    });
-    const sideEffects: string[] = [];
-    const record = vi.fn(async () => {
-      sideEffects.push('record');
-      return { recorded: true };
-    });
-    const slow = vi.fn(
-      async (ctx: { readonly signal: AbortSignal }): Promise<null> =>
-        new Promise((resolve) => {
-          slowStartedResolve();
-          const timeout = setTimeout(() => {
-            resolve(null);
-          }, 20);
-          if (ctx.signal.aborted) {
-            clearTimeout(timeout);
-            resolve(null);
-            return;
-          }
-          ctx.signal.addEventListener(
-            'abort',
-            () => {
-              clearTimeout(timeout);
-              resolve(null);
-            },
-            { once: true },
-          );
-        }),
-    );
-    const after = vi.fn(async () => ({ continued: true }));
-    const waitForSibling = vi.fn(async () => {
-      await slowStarted;
-      return null;
-    });
-
-    const waitForSiblingNode = {
-      id: 'wait-for-sibling',
-      type: 'code-step',
-      when: "item == 'approval'",
-    } satisfies WorkflowCodeStepNode;
-    const approvalGate = {
-      id: 'approve',
-      type: 'gate',
-      prompt: 'Approve?',
-      autoAction: 'reject',
-      timeoutMs: null,
-      when: "item == 'approval'",
-    } satisfies WorkflowGateNode;
-    const recordNode = {
-      id: 'record',
-      type: 'code-step',
-      when: "item == 'side'",
-    } satisfies WorkflowCodeStepNode;
-    const slowNode = {
-      id: 'slow',
-      type: 'code-step',
-      when: "item == 'side'",
-    } satisfies WorkflowCodeStepNode;
-    const afterNode = {
-      id: 'after',
-      type: 'code-step',
-      when: "item == 'side'",
-    } satisfies WorkflowCodeStepNode;
-    const iterateNode = {
-      id: 'fanout',
-      type: 'iterate',
-      collection: 'inputs.items',
-      concurrency: 2,
-      body: {
-        id: 'fanout__body',
-        type: 'sequence',
-        nodes: [waitForSiblingNode, approvalGate, recordNode, slowNode, afterNode],
-      } satisfies WorkflowSequenceNode,
-    } satisfies WorkflowIterateNode;
-    const workflow = {
-      id: 'iterate-pause-resumes-sibling-item',
-      root: {
-        id: 'iterate-pause-resumes-sibling-item__root',
-        type: 'sequence',
-        nodes: [iterateNode],
-      },
-      scope: { type: 'global' },
-    } satisfies WorkflowDefinition;
-    const runtimeHandlers = new Map<string, CodeStepHandler>([
-      ['wait-for-sibling', waitForSibling],
-      ['record', record],
-      ['slow', slow],
-      ['after', after],
-    ]);
-
-    try {
-      const firstResult = await runWorkflowOrchestrator({
-        call: createTestCall(),
-        config: makeWorkerConfig({
-          executionId: 'wfx-iterate-resume-sibling',
-          workflowId: workflow.id,
-          inputs: { items: ['approval', 'side'] },
-          suspensionStrategy: 'exit-and-redispatch',
-        }),
-        loaded: { definition: workflow, runtimeHandlers },
-        bus,
-        signal: new AbortController().signal,
-      });
-
-      expect(firstResult).toMatchObject({
-        status: 'paused',
-        pausedAtGateId: 'approve',
-        pausedAtFrameId: expect.any(String),
-      });
-      expect(record).toHaveBeenCalledOnce();
-      expect(slow).toHaveBeenCalledOnce();
-      expect(after).not.toHaveBeenCalled();
-      const firstRunFrames = await bus.request(WorkflowStorageSubjects.listFrames, {
-        executionId: 'wfx-iterate-resume-sibling',
-      });
-      expect(firstRunFrames.frames).toEqual(
-        expect.arrayContaining([expect.objectContaining({ nodeId: 'fanout', iteration: 1, status: 'running' })]),
-      );
-
-      if (firstResult.status !== 'paused') {
-        throw new Error('Expected first run to park at approval gate.');
-      }
-      await bus.request(WorkflowStorageSubjects.setGateInstance, {
-        gate: {
-          executionId: 'wfx-iterate-resume-sibling',
-          nodeId: 'approve',
-          frameId: firstResult.pausedAtFrameId,
-          schema: {},
-          status: 'resumed',
-          autoAction: 'reject',
-          timeoutMs: null,
-          resumeData: { approved: true },
-          createdAt: Date.now(),
-          resolvedAt: Date.now(),
-        },
-      });
-
-      const secondResult = await runWorkflowOrchestrator({
-        call: createTestCall(),
-        config: makeWorkerConfig({
-          executionId: 'wfx-iterate-resume-sibling',
-          workflowId: workflow.id,
-          inputs: { items: ['approval', 'side'] },
-          suspensionStrategy: 'exit-and-redispatch',
-        }),
-        loaded: { definition: workflow, runtimeHandlers },
-        bus,
-        signal: new AbortController().signal,
-      });
-
-      expect(secondResult.status).toBe('completed');
-      expect(record).toHaveBeenCalledOnce();
-      expect(sideEffects).toEqual(['record']);
-      expect(after).toHaveBeenCalledOnce();
-    } finally {
-      dbContext.cleanup();
-    }
-  });
-
-  it('stops launching bounded iterate batches when an exit-based item parks at a gate', async () => {
-    const bus = createBusInstance();
-    bus.registerNamespace(WorkflowNamespace);
-    bus.registerNamespace(WorkflowStorageNamespace);
-    const dbContext = await createTestDbForBus(bus);
-
-    const recordedIndexes: number[] = [];
-    const record = vi.fn(async (ctx: { readonly index?: number }) => {
-      recordedIndexes.push(ctx.index ?? -1);
-      return { index: ctx.index };
-    });
-
-    const recordNode = { id: 'record', type: 'code-step' } satisfies WorkflowCodeStepNode;
-    const approvalGate = {
-      id: 'approve',
-      type: 'gate',
-      prompt: 'Approve item?',
-      autoAction: 'reject',
-      timeoutMs: null,
-    } satisfies WorkflowGateNode;
-    const iterateNode = {
-      id: 'fanout',
-      type: 'iterate',
-      collection: 'inputs.items',
-      concurrency: 1,
-      body: {
-        id: 'fanout__body',
-        type: 'sequence',
-        nodes: [recordNode, approvalGate],
-      } satisfies WorkflowSequenceNode,
-    } satisfies WorkflowIterateNode;
-    const workflow = {
-      id: 'iterate-parks-before-next-batch',
-      root: {
-        id: 'iterate-parks-before-next-batch__root',
-        type: 'sequence',
-        nodes: [iterateNode],
-      },
-      scope: { type: 'global' },
-    } satisfies WorkflowDefinition;
-
-    try {
-      const result = await runWorkflowOrchestrator({
-        call: createTestCall(),
-        config: makeWorkerConfig({
-          executionId: 'wfx-iterate-pause-batch',
-          workflowId: workflow.id,
-          inputs: { items: ['first', 'second'] },
-          suspensionStrategy: 'exit-and-redispatch',
-        }),
-        loaded: { definition: workflow, runtimeHandlers: new Map([['record', record]]) },
-        bus,
-        signal: new AbortController().signal,
-      });
-
-      expect(result).toMatchObject({
-        status: 'paused',
-        pausedAtGateId: 'approve',
-        pausedAtFrameId: expect.any(String),
-      });
-      expect(record).toHaveBeenCalledOnce();
-      expect(recordedIndexes).toEqual([0]);
     } finally {
       dbContext.cleanup();
     }

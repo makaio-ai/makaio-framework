@@ -132,9 +132,12 @@ async function createHarness() {
 /**
  * Create a ready Attempt without relying on a mutable run-context lookup.
  * @param harness - Real Authority and workflow storage fixture.
- * @param workspace - Whether this Attempt requires project Workspace Preparation.
+ * @param options - Preparation requirements and whether to seed a retired workflow input.
  */
-async function readyAttempt(harness: Awaited<ReturnType<typeof createHarness>>, workspace = false) {
+async function readyAttempt(
+  harness: Awaited<ReturnType<typeof createHarness>>,
+  options: { workspace?: boolean; invalidInstruction?: boolean } = {},
+) {
   const instruction = buildWorkflowAttemptInstruction({
     id: 'instruction-1',
     revision: '1',
@@ -146,11 +149,14 @@ async function readyAttempt(harness: Awaited<ReturnType<typeof createHarness>>, 
       coordinatorSessionId: 'session-1',
       cancelSubject: `workflow.${executionId}.cancel`,
     }),
-    ...(workspace
+    ...(options.workspace
       ? { workspace: { provisioning: 'bind' as const, custody: 'external' as const, sourceRoots: [], setup: [] } }
       : {}),
   });
-  const attempt = await harness.authority.createAttempt(executionId, instruction);
+  const attempt = await harness.authority.createAttempt(
+    executionId,
+    options.invalidInstruction ? { ...instruction, workload: { ...instruction.workload, input: {} } } : instruction,
+  );
   const executionAttemptId = attempt.executionAttemptId;
   await driveTestAttemptToAllocated(harness.authority, executionAttemptId, executionId);
   const runtime = await harness.authority.registerRuntime({
@@ -215,7 +221,7 @@ describe('workflow owner canonical outcome ingress', () => {
   });
 
   it('reconverges a duplicate Preparation failure after owner state changed without rerunning Preparation', async () => {
-    const identity = await readyAttempt(harness, true);
+    const identity = await readyAttempt(harness, { workspace: true });
     const admitted = await harness.authority.admitOperation({
       ...identity,
       executionId,
@@ -241,36 +247,6 @@ describe('workflow owner canonical outcome ingress', () => {
       activeOperationKind: 'workspace-preparation',
       operationStartGate: 'closed',
     });
-  });
-
-  it('keeps paused workflow results and their gate identity on the existing owner pause path', async () => {
-    const identity = await readyAttempt(harness);
-    const admitted = await harness.authority.admitOperation({
-      ...identity,
-      executionId,
-      operationKind: 'workload-invocation',
-      admissionKey: 'invoke-1',
-    });
-    if (admitted.kind !== 'admitted') throw new Error('Invocation admission failed');
-    const paused = {
-      executionId,
-      workflowId,
-      status: 'paused' as const,
-      pausedAtGateId: 'gate-1',
-      pausedAtFrameId: 'frame-1',
-    };
-    const request: ExecutionAttemptOutcomeSubmitRequest = {
-      ...identity,
-      operationId: admitted.operationId,
-      outcome: { kind: 'workload-result', result: paused },
-    };
-    expect((await submit(request)).result).toEqual({ decision: 'accepted' });
-    expect((await submit(request)).result).toEqual({ decision: 'duplicate' });
-    expect((await harness.bus.request(WorkflowStorageSubjects.getExecution, { executionId })).execution?.status).toBe(
-      'paused',
-    );
-    expect(JSON.parse(harness.repository.committedOutcomes.get(identity.executionAttemptId)!)).toEqual(paused);
-    expect(harness.observations.failures).toEqual([]);
   });
 
   it('commits confirmed cancellation before owner convergence and reconverges an interrupted acknowledgement', async () => {
@@ -311,6 +287,37 @@ describe('workflow owner canonical outcome ingress', () => {
       'failed',
     );
     expect(JSON.parse(harness.repository.committedOutcomes.get(identity.executionAttemptId)!)).toEqual(result);
+  });
+
+  it('returns a permanent conflict for invalid frozen workflow input through both ingress paths', async () => {
+    const identity = await readyAttempt(harness, { invalidInstruction: true });
+    const admitted = await harness.authority.admitOperation({
+      ...identity,
+      executionId,
+      operationKind: 'workload-invocation',
+      admissionKey: 'legacy-invocation',
+    });
+    if (admitted.kind !== 'admitted') throw new Error('Invocation admission failed');
+
+    const result = { executionId, workflowId, status: 'completed' as const };
+    const generic = await submit({
+      ...identity,
+      operationId: admitted.operationId,
+      outcome: { kind: 'workload-result', result },
+    });
+    expect.soft(generic.error).toBeUndefined();
+    expect.soft(generic.result).toEqual({ decision: 'conflict' });
+    await expect
+      .soft(
+        harness.bus.request(createTestCall(), WorkerSubjects.control.outcome.submit, {
+          executionId,
+          executionAttemptId: identity.executionAttemptId,
+          result,
+        }),
+      )
+      .resolves.toEqual({ decision: 'conflict' });
+    expect(harness.repository.committedOutcomes.size).toBe(0);
+    expect(harness.observations.ownerCalls).toEqual([]);
   });
 
   it('rejects a workflow result with another immutable identity before committing it', async () => {

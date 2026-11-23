@@ -94,7 +94,13 @@ describe.each([
     }
   });
 
-  it('rejects an authority result with DEFINITION_INVALID but finalizes the same unreadable owner as failed through the real bus', async () => {
+  it.each([
+    { node: { type: 'delegate-agent', id: 'obsolete', agentId: 'obsolete-agent', inputExpression: '{}' } }, // legacy-input
+    { node: { type: 'gate', id: 'obsolete-gate' }, canvasLayout: {} }, // legacy-input
+  ])('rejects execution of the stored $node.type but accepts a technical failure through the real bus', async ({
+    node,
+    canvasLayout,
+  }) => {
     const instruction = buildWorkflowAttemptInstruction({
       id: 'unreadable-instruction',
       revision: '1',
@@ -113,12 +119,8 @@ describe.each([
     const definition = createWorkflowDefinition({ id: workflowId });
     const snapshot = {
       ...definition,
-      root: {
-        ...definition.root,
-        nodes: [
-          { type: 'delegate-agent', id: 'obsolete', agentId: 'obsolete-agent', inputExpression: '{}' }, // legacy-input
-        ],
-      },
+      ...(canvasLayout === undefined ? {} : { canvasLayout }), // legacy-input
+      root: { ...definition.root, nodes: [node] },
     };
     await dbContext.exec(
       sql`UPDATE workflow_run_contexts SET definition_snapshot = ${JSON.stringify(snapshot)} WHERE execution_id = ${executionId}`,
@@ -236,7 +238,7 @@ describe('workflow owner technical failure convergence', () => {
     expect(observations).toHaveLength(1);
   });
 
-  it.each(['completed', 'paused', 'finalizing'] as const)('does not overwrite a %s workflow owner', async (status) => {
+  it.each(['completed', 'finalizing'] as const)('does not overwrite a %s workflow owner', async (status) => {
     await seedOwner();
     await MakaioBus.request(WorkflowStorageSubjects.updateExecution, { executionId, status });
     await expect(

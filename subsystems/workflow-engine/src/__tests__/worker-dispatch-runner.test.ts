@@ -5,7 +5,7 @@ import { WorkerNamespace, WorkerSubjects, WorkflowRunContextSchema } from '@maka
 import type { ProviderAllocationRef, WorkerRequirements, WorkflowRunResult } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { hasWorkerDispatchRequirements, createWorkerDispatchRunner } from '../worker-dispatch-runner.js';
-import { launchDefinitionExecutionTask } from '../workflow-definition-dispatch.js';
+import { launchDefinitionExecutionTask, selectDefinitionExecutionDispatch } from '../workflow-definition-dispatch.js';
 import type { StartExecutionDeps } from '../workflow-execution-start.js';
 import type { DefinitionRunnerTaskParams } from '../workflow-runner-tasks.js';
 import { beginTestProvisioning, createInMemoryAttemptRepository } from '../testing/index.js';
@@ -33,7 +33,6 @@ function makeWorkerConfig(): Parameters<NonNullable<ReturnType<typeof createWork
     env: {},
     coordinatorSessionId: 'session-1',
     cancelSubject: 'workflow.wfx-1.cancel',
-    suspensionStrategy: 'wait-in-process',
   };
 }
 
@@ -525,62 +524,6 @@ describe('createWorkerDispatchRunner', () => {
     }
   });
 
-  it('preserves owner metadata and forwards per-dispatch resume input and contributions', async () => {
-    const bus = createBusInstance();
-    bus.registerNamespace(WorkerNamespace);
-
-    const repository = createInMemoryAttemptRepository(workflowAttemptOutcomeCodec);
-    const authority = new ExecutionAttemptAuthority(repository, { bootstrapTimeoutMs: 60_000 });
-
-    let capturedMetadata: Record<string, unknown> | undefined;
-    let capturedManifest: unknown;
-    const offDispatch = bus.on(WorkerSubjects.dispatch, async (ctx) => {
-      capturedMetadata = ctx.payload.metadata;
-      capturedManifest = ctx.payload.manifest;
-      const result: WorkflowRunResult = {
-        executionId: ctx.payload.config.executionId,
-        workflowId: ctx.payload.config.workflowId,
-        status: 'completed',
-      };
-      const decision = await authority.commitOutcome(
-        ctx.payload.executionAttemptId,
-        ctx.payload.config.executionId,
-        authority.canonicalizeOutcome(result),
-      );
-      authority.settleOutcome(
-        ctx.payload.executionAttemptId,
-        decision.kind === 'accepted' || decision.kind === 'duplicate'
-          ? { ...decision, acceptance: 'projected' }
-          : decision,
-      );
-      ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
-    });
-
-    try {
-      const runner = createWorkerDispatchRunner({
-        bus,
-        requirements: { customCapabilities: ['workflow.remote'] },
-        dispatchMetadata: { poolId: 'pool-1', resume: false },
-        authority,
-      });
-
-      await runner!.run(
-        createTestCall(),
-        makeWorkerConfig(),
-        new AbortController().signal,
-        { contributionRefs: [] },
-        {
-          dispatchMetadata: { resume: true },
-        },
-      );
-
-      expect(capturedMetadata).toEqual({ poolId: 'pool-1', resume: true });
-      expect(capturedManifest).toEqual({ contributionRefs: [] });
-    } finally {
-      offDispatch();
-    }
-  });
-
   it('routes through dispatch and carries full requirements when only recoverableAllocation is set', async () => {
     const bus = createBusInstance();
     bus.registerNamespace(WorkerNamespace);
@@ -832,7 +775,12 @@ describe('launchDefinitionExecutionTask requirements threading', () => {
     };
 
     try {
-      await launchDefinitionExecutionTask(createTestCall(), deps, params);
+      await launchDefinitionExecutionTask(
+        createTestCall(),
+        deps,
+        params,
+        selectDefinitionExecutionDispatch(deps, params.workflow),
+      );
 
       expect(dispatchCalled).toBe(true);
       expect(capturedRequirements).toEqual({
@@ -894,7 +842,7 @@ describe('launchDefinitionExecutionTask requirements threading', () => {
     };
 
     const call = createTestCall();
-    await launchDefinitionExecutionTask(call, deps, params);
+    await launchDefinitionExecutionTask(call, deps, params, selectDefinitionExecutionDispatch(deps, params.workflow));
 
     expect(fallbackRunner).toHaveBeenCalledWith(call, 'wfx-no-req');
   });

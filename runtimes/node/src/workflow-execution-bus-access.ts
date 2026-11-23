@@ -96,16 +96,11 @@ const STATIC_EXECUTION_MESSAGE_SUBJECTS = [
   WorkflowStorageSubjects.setFrame,
   WorkflowStorageSubjects.setSpan,
   WorkflowStorageSubjects.listFrames,
-  WorkflowStorageSubjects.getGateInstance,
-  WorkflowStorageSubjects.setGateInstance,
   WorkflowSubjects.frame.started,
   WorkflowSubjects.frame.completed,
   WorkflowSubjects.frame.failed,
   WorkflowSubjects.frame.sessionLinked,
   WorkflowSubjects.execution.progress,
-  WorkflowSubjects.gate.suspended,
-  WorkflowSubjects.gate.resumed,
-  WorkflowSubjects.gate.resolved,
   WorkflowSubjects.state.get,
   WorkflowSubjects.state.patch,
   WorkflowSubjects.resolveRole,
@@ -127,7 +122,6 @@ const STATIC_EXECUTION_MESSAGE_SUBJECTS = [
 const STATIC_EXECUTION_SUBSCRIPTION_SUBJECTS = [
   ExecutionAttemptSubjects.operation.deliver,
   ExecutionAttemptSubjects.control.deliver,
-  WorkflowSubjects.gate.respond,
 ] as const;
 
 /** Directional subject restrictions for an execution-attempt identity. */
@@ -143,9 +137,8 @@ export interface ExecutionAttemptSubjectAccess {
  * attempt.
  *
  * Message subjects include every static operation an attempt may originate.
- * Subscription subjects include only the authority-delivered operation,
- * control, and gate-response endpoints plus the dynamic per-execution
- * cancellation endpoint.
+ * Subscription subjects include only the authority-delivered operation and
+ * control endpoints plus the dynamic per-execution cancellation endpoint.
  * Subjects are statically enumerable even when the workflow content does not
  * use every feature (e.g. state, delegation, artifacts, subagents) because
  * the transport restriction is deny-by-default: listing a subject that the
@@ -204,7 +197,6 @@ export function registerWorkflowExecutionBusSecret(
       requiredSubscriptionFilters: {
         [getFullSubjectForSubjectDefinition(ExecutionAttemptSubjects.operation.deliver)]: { executionAttemptId },
         [getFullSubjectForSubjectDefinition(ExecutionAttemptSubjects.control.deliver)]: { executionAttemptId },
-        [getFullSubjectForSubjectDefinition(WorkflowSubjects.gate.respond)]: { executionAttemptId },
       },
     }),
   };

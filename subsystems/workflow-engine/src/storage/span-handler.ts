@@ -4,6 +4,7 @@ import type { ExecutionLink, SpanRecord } from '@makaio/contracts';
 import { WorkflowStepTypeSchema } from '@makaio/contracts';
 import { resolveSchema, serializeDatabaseOperation, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowStorageSubjects } from './namespace.js';
+import { excludeRetainedGateRows } from './retained-rows.js';
 import { workflowEngineSchema } from './schema.variants.js';
 import { isExecutionBoundAccessAllowed } from '../execution-bound-access.js';
 
@@ -85,11 +86,17 @@ export function registerSpanHandlers(bus: IMakaioBus, db: MakaioDatabase): () =>
     ctx.setResult({ id: `${span.executionId}:${span.frameId}` });
   });
 
+  /** Stored gate rows from before workflow waiting was removed are kept and do not appear in this response; sums may still include their cost. */
   const unsubListSpans = bus.on(WorkflowStorageSubjects.listSpans, async (ctx) => {
     const rows = await db
       .select()
       .from(workflowStepSpans)
-      .where(eq(workflowStepSpans.executionId, ctx.payload.executionId))
+      .where(
+        and(
+          eq(workflowStepSpans.executionId, ctx.payload.executionId),
+          excludeRetainedGateRows(workflowStepSpans.stepType),
+        ),
+      )
       .orderBy(asc(workflowStepSpans.startedAt), asc(workflowStepSpans.stepId), asc(workflowStepSpans.frameId));
     ctx.setResult({ spans: rows.map(mapSpan) });
   });

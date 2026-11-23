@@ -1,4 +1,4 @@
-import { eq, getTableColumns } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import {
   executeTransaction,
   resolveSchema,
@@ -76,12 +76,44 @@ function fromSourceColumns(
 type DbRunContextRow = WorkflowRunContextsTable['$inferSelect'];
 type RunContextStorageExecutor = MakaioDatabase | Parameters<TransactionCallback<void>>[0];
 
+/** A run-context row with the active columns and the definition snapshot as stored text. */
+type StoredRunContextRow = {
+  [Key in keyof ReturnType<typeof runContextSelection>]: Key extends 'definitionSnapshot'
+    ? string | null
+    : DbRunContextRow[Key];
+};
+
 /**
- * A `workflow_run_contexts` row as {@link getRunContext} selects it: every column
- * unchanged except `definitionSnapshot`, read as stored text instead of the
- * driver-decoded definition.
+ * Select the active run-context columns, reading the snapshot as uninterpreted text.
+ * @param table - Dialect-resolved `workflow_run_contexts` table.
+ * @returns Field map whose result type is {@link StoredRunContextRow}.
  */
-type StoredRunContextRow = Omit<DbRunContextRow, 'definitionSnapshot'> & { definitionSnapshot: string | null };
+function runContextSelection(table: WorkflowRunContextsTable) {
+  return {
+    executionId: table.executionId,
+    workflowId: table.workflowId,
+    coordinatorSessionId: table.coordinatorSessionId,
+    sourceKind: table.sourceKind,
+    sourcePath: table.sourcePath,
+    sourceFilename: table.sourceFilename,
+    sourceCode: table.sourceCode,
+    definitionSnapshot: storedJsonText(table.definitionSnapshot),
+    workerManifest: table.workerManifest,
+    inputs: table.inputs,
+    config: table.config,
+    triggerPayload: table.triggerPayload,
+    triggerMode: table.triggerMode,
+    artifactRef: table.artifactRef,
+    scopeType: table.scopeType,
+    scopeKind: table.scopeKind,
+    scopeId: table.scopeId,
+    cancelSubject: table.cancelSubject,
+    env: table.env,
+    createdAt: table.createdAt,
+    terminalAuthority: table.terminalAuthority,
+    materializationSpec: table.materializationSpec,
+  };
+}
 
 /**
  * Decode a stored run-context snapshot without interpreting it as a workflow definition.
@@ -122,15 +154,9 @@ function mapRunContext(row: StoredRunContextRow): StoredWorkflowRunContext {
     triggerMode: row.triggerMode,
     ...(row.artifactRef !== null ? { artifactRef: row.artifactRef } : {}),
     scope: fromScopeColumns(row),
-    ...(row.dispatchMetadata !== null
-      ? { dispatchMetadata: row.dispatchMetadata as WorkflowRunContext['dispatchMetadata'] }
-      : {}),
     cancelSubject: row.cancelSubject,
     env: row.env,
     createdAt: row.createdAt,
-    // Fall back to 'wait-in-process' for rows persisted before the suspension_strategy
-    // column was introduced (value will be null for those rows).
-    suspensionStrategy: row.suspensionStrategy ?? 'wait-in-process',
     ...(row.terminalAuthority !== null ? { terminalAuthority: row.terminalAuthority } : {}),
     ...(row.materializationSpec !== null ? { materializationSpec: row.materializationSpec } : {}),
   };
@@ -156,12 +182,10 @@ function toRunContextDbValues(runContext: WorkflowRunContext): InsertWorkflowRun
     triggerPayload: runContext.triggerPayload as Record<string, JsonValue>,
     triggerMode: runContext.triggerMode ?? 'immediate',
     artifactRef: runContext.artifactRef ?? null,
-    dispatchMetadata: runContext.dispatchMetadata ?? null,
     ...scopeColumns,
     cancelSubject: runContext.cancelSubject,
     env: runContext.env,
     createdAt: runContext.createdAt,
-    suspensionStrategy: runContext.suspensionStrategy,
     terminalAuthority: runContext.terminalAuthority ?? null,
     materializationSpec: runContext.materializationSpec ?? null,
   };
@@ -231,9 +255,8 @@ export function registerRunContextHandlers(bus: IMakaioBus, db: MakaioDatabase):
 
   const unsubGet = bus.on(WorkflowStorageSubjects.getRunContext, async (ctx) => {
     const { executionId } = ctx.payload;
-    const columns = getTableColumns(workflowRunContexts);
     const rows = await db
-      .select({ ...columns, definitionSnapshot: storedJsonText(columns.definitionSnapshot) })
+      .select(runContextSelection(workflowRunContexts))
       .from(workflowRunContexts)
       .where(eq(workflowRunContexts.executionId, executionId));
     const runContext = rows[0] ? mapRunContext(rows[0]) : null;
