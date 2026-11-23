@@ -66,10 +66,12 @@ export const OutcomeSubmitResponseSchema = z.union([
   }),
   RefusalBaseSchema.extend({
     code: z.literal('owner-unavailable'),
+    /** Retry with the same submission when the owner becomes available. */
     retryable: z.literal(true),
   }),
   RefusalBaseSchema.extend({
     code: CoreOutcomeRefusalCodeSchema.exclude(['owner-unavailable']),
+    /** Other core refusals are final. */
     retryable: z.literal(false),
   }),
   RefusalBaseSchema.extend({
@@ -88,7 +90,8 @@ type CoreRefusal = { decision: 'refused'; code: CoreOutcomeRefusalCode };
 
 /**
  * Response from the outcome submission subject. Owner refusals use a string
- * code; the schema excludes reserved engine codes from that branch.
+ * code. TypeScript cannot exclude individual literals from string, so the
+ * runtime schema rejects reserved engine codes on the owner branch.
  */
 export type OutcomeSubmitResponse =
   | Exclude<ParsedOutcomeResponse, CoreRefusal>
@@ -107,7 +110,9 @@ export const JobRunEndingSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     /** The runtime supplied a terminal result. */
     kind: z.literal('result'),
-    /** Worker result checked against the run identity during close. */
+    /** Worker result checked against the run identity during close.
+     * The shared artifact data parser can discard own `__proto__` keys during JSON validation.
+     */
     result: WorkflowRunResultSchema,
   }),
   z.strictObject({
@@ -127,7 +132,7 @@ export type JobRunEnding = z.infer<typeof JobRunEndingSchema>;
 export const JobRunErrorCodeSchema = z.enum([
   /** The run does not exist. */
   'run-unknown',
-  /** The run is outside running; even an early submission is final. */
+  /** The run is not in a state this ending may close. */
   'run-not-running',
   /** The capability holder is not the recorded owner. */
   'not-acceptance-owner',

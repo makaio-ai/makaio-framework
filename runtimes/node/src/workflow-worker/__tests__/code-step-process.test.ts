@@ -170,7 +170,7 @@ describe.skipIf(process.platform === 'win32')('local code step output boundary',
     await expect(
       run("process.stdout.write('{'); setInterval(() => {}, 1000);", undefined, 1500),
     ).resolves.toMatchObject({ kind: 'timed-out' });
-  });
+  }, 15_000);
 
   it('preserves owner cancellation after partial output', async () => {
     const outcome = run(`

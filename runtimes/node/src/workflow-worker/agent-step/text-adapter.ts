@@ -82,7 +82,7 @@ export function createTextAgentStepAdapter(adapterId: string, ownerInstanceId: s
           start: {
             success: false,
             dispatch: 'not-dispatched',
-            message: `Unsupported agent step start field: ${field}`,
+            message: `Unsupported agent step start field: ${field.slice(0, 64)}`,
           },
         };
       }

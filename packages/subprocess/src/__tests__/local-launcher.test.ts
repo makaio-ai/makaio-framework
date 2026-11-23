@@ -57,9 +57,12 @@ describe('local process launcher', () => {
     },
   );
 
-  it('refuses a Windows site before any process or owner directory is created', async () => {
+  it.each([
+    'win32',
+    process.platform === 'linux' ? 'darwin' : 'linux',
+  ] as const)('refuses a declared %s site before any process or owner directory is created', async (platform) => {
     site = createLocalLauncher({
-      platform: 'win32',
+      platform,
       workspaceRoot: workspace,
       stepHomeRoot: join(root, 'steps'),
       runtimeHomeRoot: join(root, 'runtime'),

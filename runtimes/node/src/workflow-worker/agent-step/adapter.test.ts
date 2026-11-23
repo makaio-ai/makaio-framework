@@ -51,7 +51,8 @@ describe('isolated text agent adapter', () => {
           expect(received).toBe(call);
           expect(authorization).toBe(credential);
           expect(input).toEqual({ model: 'stub', prompt: 'check the change' });
-          return { kind: 'completed', reply: { text: 'done' } };
+          const reply = { text: 'done', providerMetadata: authorization };
+          return { kind: 'completed', reply };
         },
       },
       credential,
@@ -170,6 +171,17 @@ describe('isolated text agent adapter', () => {
     expect(JSON.stringify(start)).toContain(`Unsupported agent step start field: ${field}`);
   });
 
+  it('bounds an unsupported field name in the diagnostic', () => {
+    const field = 'unexpected'.repeat(12);
+    const input = { ...step, modelAddress: exampleAddress, request: { ...step.request, [field]: undefined } };
+    const { start } = adapter.start(input, new AbortController().signal);
+    expect(start).toMatchObject({
+      success: false,
+      dispatch: 'not-dispatched',
+      message: `Unsupported agent step start field: ${field.slice(0, 64)}`,
+    });
+  });
+
   it('preserves provider output errors without exposing upstream credentials', async () => {
     const signal = new AbortController().signal;
     const credential = 'synthetic-worker-authorization';
@@ -180,7 +192,8 @@ describe('isolated text agent adapter', () => {
         complete: async ({ request: input }) => {
           if (input.prompt === 'throw') throw new Error(credential);
           if (input.prompt === 'unknown code') return { kind: 'failed', code: credential as ModelFailureCode };
-          return { kind: 'completed', reply: { text: '' } };
+          const reply = input.prompt === 'missing text' ? JSON.parse('{}') : { text: '' };
+          return { kind: 'completed', reply };
         },
       },
       credential,
@@ -190,6 +203,12 @@ describe('isolated text agent adapter', () => {
     try {
       const execution = adapter.start({ ...step, modelAddress: lease.address }, signal);
       await expect(execution.turn).resolves.toEqual({ kind: 'failed', reason: 'reply-invalid' });
+      const missingText = await fetch(lease.address, {
+        method: 'POST',
+        body: JSON.stringify({ model: 'stub', prompt: 'missing text' }),
+      });
+      expect(missingText.status).toBe(502);
+      await expect(missingText.json()).resolves.toEqual({ code: 'reply-invalid' });
       for (const prompt of ['throw', 'unknown code']) {
         const failure = await fetch(lease.address, { method: 'POST', body: JSON.stringify({ model: 'stub', prompt }) });
         expect(failure.status).toBe(502);
