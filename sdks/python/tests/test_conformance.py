@@ -644,15 +644,13 @@ async def test_request_unknown_envelope_field_ignored() -> None:
     assert baseline_response == response
 
 
-async def test_request_with_principal_metadata() -> None:
-    """Conformance: request-with-principal-metadata.
+async def _assert_principal_metadata_request_is_handled(case_id: str) -> None:
+    """Verify envelope tolerance for a request carrying a principal claim.
 
-    Envelope tolerance only: the SDK receive path accepts a request carrying
-    ``metadata.principal`` and handles it like any other request.  The SDK has
-    no principal or caller concept; the receiver's principal decision is
-    verified by the core, not here.
+    The receiver's principal decision is tested in the core.
+    @param case_id: ID of the scenario to replay.
     """
-    case = _case("request-with-principal-metadata")
+    case = _case(case_id)
     fixture = _msg(case["wire"][0]["messageRef"])
     assert "principal" in fixture["metadata"]
 
@@ -666,26 +664,34 @@ async def test_request_with_principal_metadata() -> None:
     assert "metadata" not in response
 
 
-# Maps every case that carries a principal-related assertion kind to the test
-# that runs it against the real SDK implementation.
+async def test_request_with_principal_metadata_returns_response_without_metadata() -> None:
+    """A request containing principal metadata produces a response without metadata."""
+    await _assert_principal_metadata_request_is_handled("request-with-principal-metadata")
+
+
+async def test_request_with_unattested_principal_metadata_returns_response_without_metadata() -> None:
+    """The unattested principal fixture also produces a response without metadata."""
+    await _assert_principal_metadata_request_is_handled("request-with-unattested-principal-metadata")
+
+
+# Maps the caller and principal cases covered by the SDK's send and receive behavior.
 PRINCIPAL_CASE_TESTS = {
-    "request-with-principal-metadata": test_request_with_principal_metadata,
     "request-unknown-envelope-field-ignored": test_request_unknown_envelope_field_ignored,
     "request-without-metadata-is-connector-call": test_request_without_metadata_is_connector_call,
 }
 
 
-def test_principal_cases_all_have_tests() -> None:
-    """Every case with a principal-related assertion kind maps to a test."""
+def test_principal_cases_are_mapped_to_tests_or_require_principal_model() -> None:
+    """Omit only cases marked as requiring a principal model from behavioral coverage."""
+    cases = _load_cases()
     principal_case_ids = {
         c["id"]
-        for c in _load_cases()
+        for c in cases
         if any(a["kind"] in _PRINCIPAL_ASSERTION_KINDS for a in c.get("assertions", []))
     }
-    assert principal_case_ids == set(PRINCIPAL_CASE_TESTS), (
-        f"principal cases without a mapped test or stale mapping: "
-        f"{principal_case_ids ^ set(PRINCIPAL_CASE_TESTS)!r}"
-    )
+    required_case_ids = {c["id"] for c in cases if c.get("requires") == ["principal-model"]}
+    assert set(PRINCIPAL_CASE_TESTS) <= principal_case_ids
+    assert principal_case_ids - PRINCIPAL_CASE_TESTS.keys() == required_case_ids
     for case_id, test in PRINCIPAL_CASE_TESTS.items():
         assert inspect.iscoroutinefunction(test), f"{case_id}: mapped entry is not a test"
         assert test.__module__ == __name__

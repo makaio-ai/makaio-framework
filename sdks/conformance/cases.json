@@ -52,11 +52,13 @@
     {
       "id": "request-with-principal-metadata",
       "title": "Request with metadata.principal",
-      "description": "A request carries metadata.principal as a kind and id. The receiver takes the declared principal from metadata, sets the connection as the caller and attests the principal through that caller. Only kind and id travel, never claims.",
+      "requires": ["principal-model"],
+      "description": "The SDK receives a request over its outbound connection to the core. Because this connection attests in-process principals, the receiver takes the declared kind and id as the principal and records the caller as the attesting party.",
       "wire": [
         {
-          "direction": "client->server",
-          "messageRef": "request.approval.request.with-principal"
+          "direction": "server->client",
+          "messageRef": "request.approval.request.with-principal",
+          "receiverAttestation": "outbound"
         }
       ],
       "assertions": [
@@ -67,6 +69,26 @@
             "kind": "makaio.extension",
             "id": "fixture-extension"
           },
+          "caller": "connection"
+        }
+      ]
+    },
+    {
+      "id": "request-with-unattested-principal-metadata",
+      "title": "Request with unattested metadata.principal",
+      "requires": ["principal-model"],
+      "description": "The SDK receives the same principal claim over a connection without attestation. The receiver ignores the claim, sets the principal to the caller and records no attestation.",
+      "wire": [
+        {
+          "direction": "server->client",
+          "messageRef": "request.approval.request.with-principal",
+          "receiverAttestation": "none"
+        }
+      ],
+      "assertions": [
+        {
+          "kind": "principal-is-caller",
+          "messageRef": "request.approval.request.with-principal",
           "caller": "connection"
         }
       ]

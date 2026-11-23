@@ -9,12 +9,6 @@ const createRootSpy = vi.fn(() => ({ render: renderSpy, unmount: unmountSpy }));
 const preferencesCleanup = vi.fn();
 const registerBrowserPreferencesStorage = vi.fn(() => preferencesCleanup);
 const setWindowId = vi.fn();
-const transportConstructor = vi.fn(function MockWebSocketClientTransport(
-  this: object,
-  options: { createWebSocket: (url: string) => unknown; url: string },
-) {
-  return { options };
-});
 const unregisterTransport = vi.fn();
 const listeners = new Map<string, (ctx: { payload: Record<string, unknown> }) => void>();
 const listenerCleanups = new Map<string, ReturnType<typeof vi.fn>>();
@@ -77,10 +71,6 @@ vi.mock('@makaio/bus-core', async () => {
   };
 });
 
-vi.mock('@makaio/bus-transport-websocket', () => ({
-  WebSocketClientTransport: transportConstructor,
-}));
-
 vi.mock('@makaio/ui-kernel', () => ({
   UiNamespace: { name: 'ui' },
   UiSubjects: { ready: 'ui.ready', navigate: 'ui.navigate' },
@@ -115,7 +105,6 @@ describe('shared renderer bootstrap', { timeout: RENDERER_BOOTSTRAP_TEST_TIMEOUT
     registerBrowserPreferencesStorage.mockClear();
     preferencesCleanup.mockClear();
     setWindowId.mockClear();
-    transportConstructor.mockClear();
     renderSpy.mockClear();
     unmountSpy.mockClear();
     createRootSpy.mockClear();
@@ -126,7 +115,36 @@ describe('shared renderer bootstrap', { timeout: RENDERER_BOOTSTRAP_TEST_TIMEOUT
 
   afterEach(() => {
     window.dispatchEvent(new Event('unload'));
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it.each(['renderer bootstrap', 'plain client'])('derives the principal received via %s', async (connection) => {
+    const { createPrincipalClaimFixture } = await import('./renderer-bootstrap-fixture.js');
+    const { bus, socket, createSocket, received, principal, sendClaim } = createPrincipalClaimFixture();
+    const config = createConfig({ bootComplete: true });
+    const caller = { kind: 'makaio.anonymous', id: 'ws-client' };
+    try {
+      if (connection === 'renderer bootstrap') {
+        registerTransport.mockImplementation(bus.registerTransport);
+        connect.mockImplementation(bus.connect);
+        disconnect.mockImplementation(bus.disconnect);
+        const { bootstrapRenderer } = await import('../src/renderer/bootstrap.js');
+        await bootstrapRenderer({ config, logPrefix: 'electron-ui', surface: 'electron' });
+        expect(createSocket).toHaveBeenCalledExactlyOnceWith(config.busUrl);
+      } else {
+        const { WebSocketClientTransport } = await import('@makaio/bus-transport-websocket');
+        bus.registerTransport(new WebSocketClientTransport({ url: config.busUrl, createWebSocket: () => socket }));
+        await bus.connect();
+      }
+      sendClaim();
+      await waitFor(() => expect(received).toHaveBeenCalledOnce());
+      expect(received.mock.lastCall?.[0]).toEqual(
+        connection === 'renderer bootstrap' ? { caller, principal, attestedBy: caller } : { caller, principal: caller },
+      );
+    } finally {
+      bus.disconnect();
+    }
   });
 
   it('seeds window context, waits for boot completion, and mounts the shared App', async () => {
@@ -149,12 +167,6 @@ describe('shared renderer bootstrap', { timeout: RENDERER_BOOTSTRAP_TEST_TIMEOUT
       expect(document.getElementById('loading-label')?.textContent).toBe('Loading services... (1/3)');
     });
     expect(setWindowId).toHaveBeenCalledWith('test.surface:main');
-    expect(transportConstructor).toHaveBeenCalledWith({
-      // The renderer's connection to the shell host is a core uplink: it attests principals.
-      attestingRole: 'core-uplink',
-      createWebSocket: expect.any(Function),
-      url: 'ws://localhost:6200/bus',
-    });
     expect(registerTransport).toHaveBeenCalledTimes(1);
     expect(connect).toHaveBeenCalledTimes(1);
 

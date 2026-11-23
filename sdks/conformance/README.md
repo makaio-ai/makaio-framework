@@ -11,13 +11,17 @@ facade. It is documentation plus JSON data only. There is no runner here.
 
 ## Case Shape
 
-Each case uses two simple pieces:
+Each case defines a transcript and its expected outcomes:
 
 - `wire` is the ordered transcript of bus frames for the scenario. Each entry has a `direction`
   and a `messageRef` into `fixtures/messages.json`. Some replay cases also mark a `phase`
   such as `initial` or `replay`.
+  SDK receive cases can set `receiverAttestation` to `outbound` for a trusted core uplink
+  or `none` for a connection without attestation.
 - `assertions` describes the semantic outcome the SDK harness should verify after replaying the
   transcript.
+- Optional `requires` declares an SDK capability needed to verify the assertions. The supported
+  value is `["principal-model"]`. SDKs without that capability can still check the wire fixtures.
 
 ## Scope
 
@@ -39,7 +43,12 @@ The cases cover the current Makaio bus protocol shapes and SDK behavioral contra
 - `auth-challenge-response` — HMAC-SHA256 challenge-response handshake sequence
 
 **Caller and principal:**
-- `request-with-principal-metadata` — `metadata.principal` (kind and id only) becomes the principal, the connection is the caller
+
+The two `metadata.principal` cases apply only to SDKs with a principal model. TypeScript
+currently provides this model.
+
+- `request-with-principal-metadata` — The SDK accepts the in-process principal's kind and id from its attesting core uplink and records the caller as the attesting party.
+- `request-with-unattested-principal-metadata` — The SDK ignores the same claim on a connection without attestation, so the principal equals the caller and no attestation is recorded.
 - `request-unknown-envelope-field-ignored` — an unknown envelope field is ignored
 - `request-without-metadata-is-connector-call` — a message without `metadata` is the call of the connector itself (principal equals caller)
 
@@ -86,7 +95,7 @@ The case set includes:
 - local event parallel dispatch
 - local wildcard event matching
 - HMAC auth challenge-response handshake
-- request with `metadata.principal`
+- requests with `metadata.principal` on connections with and without attestation
 - unknown envelope field ignored
 - request without `metadata` as the connector's own call
 

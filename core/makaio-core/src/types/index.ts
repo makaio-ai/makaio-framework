@@ -29,7 +29,7 @@ export type {
   OutboundAttestingConnectionRole,
 } from './message.js';
 
-export { ATTESTING_CONNECTION_ROLES } from './message.js';
+export { attestationForRole, ATTESTING_CONNECTION_ROLES } from './message.js';
 
 export type { JsonValue } from './json-value.js';
 export { JsonValueSchema } from './json-value.js';

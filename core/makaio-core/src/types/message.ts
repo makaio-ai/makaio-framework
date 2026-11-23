@@ -36,6 +36,17 @@ export const ATTESTING_CONNECTION_ROLES = {
 /** Role of a connection authorized to attest principal claims. */
 export type AttestingConnectionRole = keyof typeof ATTESTING_CONNECTION_ROLES;
 
+/**
+ * Look up the attestation granted to a configured connection role.
+ * @param role - The configured connection role.
+ * @returns The attestation direction, or undefined for an unrecognized role.
+ */
+export function attestationForRole(role: string): ConnectionAttestation | undefined {
+  return Object.hasOwn(ATTESTING_CONNECTION_ROLES, role)
+    ? ATTESTING_CONNECTION_ROLES[role as AttestingConnectionRole]
+    : undefined;
+}
+
 type AttestingRoleIn<Direction extends ConnectionAttestation> = {
   [Role in AttestingConnectionRole]: (typeof ATTESTING_CONNECTION_ROLES)[Role] extends Direction ? Role : never;
 }[AttestingConnectionRole];

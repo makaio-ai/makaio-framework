@@ -9,7 +9,7 @@
  * Uses Web Crypto API for HMAC computation (browser and Node.js compatible).
  */
 
-import { ATTESTING_CONNECTION_ROLES, type Party, type TransportReceiveContext } from '@makaio/core';
+import { attestationForRole, type Party, type TransportReceiveContext } from '@makaio/core';
 import type { TransportAuth } from './interface.js';
 import { resolveHmacIdentityAttestingRole } from './identity-secret-registry.js';
 import type { WebSocketLike } from '../types.js';
@@ -559,7 +559,7 @@ export class HmacAuth implements TransportAuth {
     return {
       ...connection,
       caller,
-      ...(role === undefined ? {} : { attests: ATTESTING_CONNECTION_ROLES[role] }),
+      ...(role === undefined ? {} : { attests: attestationForRole(role) }),
     };
   }
 

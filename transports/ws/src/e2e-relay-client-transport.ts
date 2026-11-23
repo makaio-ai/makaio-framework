@@ -26,14 +26,15 @@ import type { RelayControlRegistry } from './relay-control-registry.js';
  * E2E relay client transport configuration.
  *
  * Provide a pre-created `websocket` to wrap a caller-owned socket. All other
- * options are forwarded to `WebSocketClientTransport` (excluding `auth`,
- * `messageTransform`, `url`, `codec`, `createWebSocket`, and `autoReconnect`,
- * which are managed internally by this factory).
+ * options are forwarded to `WebSocketClientTransport` except `auth`,
+ * `messageTransform`, `url`, `codec`, `createWebSocket`, `autoReconnect`,
+ * and `attestingRole`, which are managed by this factory. An E2E connection
+ * never attests principal claims.
  */
 export interface E2ERelayClientTransportOptions
   extends Omit<
     WebSocketClientTransportOptions,
-    'auth' | 'messageTransform' | 'url' | 'createWebSocket' | 'codec' | 'autoReconnect'
+    'auth' | 'messageTransform' | 'url' | 'createWebSocket' | 'codec' | 'autoReconnect' | 'attestingRole'
   > {
   /**
    * Pre-created WebSocket instance to wrap.

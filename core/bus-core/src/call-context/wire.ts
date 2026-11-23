@@ -109,10 +109,11 @@ function acceptPrincipal(
 ): PartyRef | undefined {
   if (principal === undefined) return undefined;
   const { attests } = connection;
-  if (attests !== undefined && (ACCEPTS_IN_PROCESS_PRINCIPAL[attests] || !isInProcessOnlyKind(principal.kind))) {
+  const isAttesting = attests !== undefined && Object.hasOwn(ACCEPTS_IN_PROCESS_PRINCIPAL, attests);
+  if (isAttesting && (ACCEPTS_IN_PROCESS_PRINCIPAL[attests] || !isInProcessOnlyKind(principal.kind))) {
     return principal;
   }
-  const reason = attests === undefined ? 'unattested-principal' : 'in-process-principal';
+  const reason = isAttesting ? 'in-process-principal' : 'unattested-principal';
   reportOnce(report, connection, reason, `Dropped wire principal claim (${reason}).`);
   return undefined;
 }

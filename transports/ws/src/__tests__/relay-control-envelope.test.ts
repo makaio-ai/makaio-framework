@@ -3,7 +3,11 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createRelayControlHelpers, type RelayControlHelpers } from '../relay-control-envelope.js';
+import {
+  createRelayControlHelpers,
+  type RelayControlBusMessage,
+  type RelayControlHelpers,
+} from '../relay-control-envelope.js';
 import { createRelayControlRegistry } from '../relay-control-registry.js';
 import { buildRelayControlTestRegistry } from './relay-control-test-registry.js';
 
@@ -94,6 +98,33 @@ describe('relay-control-envelope', () => {
         v: 1,
         payload: busMessage,
       });
+    });
+
+    it.each<RelayControlBusMessage>([
+      {
+        type: 'request',
+        namespace: 'device',
+        subject: 'relay.verify',
+        messageId: 'msg-request',
+        correlationId: 'corr-request',
+        timeout: 500,
+        payload: { deviceId: 'device-123' },
+      },
+      {
+        type: 'event',
+        namespace: 'relay',
+        subject: 'error',
+        messageId: 'msg-event',
+        payload: { code: 'TEST_ERROR' },
+      },
+    ])('omits metadata from a relay control $type and preserves the remaining fields', (message) => {
+      const envelope = helpers.createRelayControlEnvelope({
+        ...message,
+        metadata: { principal: { kind: 'makaio.host', id: 'example-host' } },
+      });
+
+      expect(envelope.payload).not.toHaveProperty('metadata');
+      expect(envelope.payload).toStrictEqual(message);
     });
   });
 

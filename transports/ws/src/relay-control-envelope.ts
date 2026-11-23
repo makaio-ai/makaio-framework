@@ -34,7 +34,7 @@ export type RelayControlBusMessage = BusEventMessage | BusRequestMessage;
  */
 export interface RelayControlHelpers {
   /**
-   * Create a relay control envelope for a relay-owned bus message.
+   * Wrap a relay-owned bus message in a plaintext envelope, omitting its metadata.
    *
    * Throws when the message is not classified as a control message by the
    * registry (i.e. would not pass {@link isRelayControlBusMessage}).
@@ -172,7 +172,7 @@ export function createRelayControlHelpers(registry: RelayControlRegistry): Relay
   }
 
   /**
-   * Create a relay control envelope for a relay-owned bus message.
+   * Wrap a relay-owned bus message in a plaintext envelope, omitting its metadata.
    * @param message - Relay bus message to wrap
    * @returns Relay control envelope message
    */
@@ -182,11 +182,8 @@ export function createRelayControlHelpers(registry: RelayControlRegistry): Relay
       throw new Error('Invalid relay control message');
     }
 
-    return {
-      type: 'relay-control',
-      v: 1,
-      payload: message,
-    };
+    const { metadata: _metadata, ...payload } = message;
+    return { type: 'relay-control', v: 1, payload };
   }
 
   return {

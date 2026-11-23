@@ -102,6 +102,7 @@ export {
   PartySchema,
   WildcardSubjectKey,
   ATTESTING_CONNECTION_ROLES,
+  attestationForRole,
 } from './types/index.js';
 export type {
   AnyHandler,

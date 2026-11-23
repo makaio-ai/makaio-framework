@@ -10,7 +10,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { ConnectionLostError, type BusEventMessage, type BusMessage } from '@makaio/bus-core';
+import { ConnectionLostError, createBusInstance, type BusEventMessage, type BusMessage } from '@makaio/bus-core';
+import { createBusNamespace, type CallContext } from '@makaio/core';
+import { z } from 'zod';
 import { WebSocketClientTransport, type WebSocketClientTransportReadinessMode } from '../ws-client-transport.js';
 import { DEFAULT_CODEC } from '../ws-client-options.js';
 import { MockWebSocket } from './test-helpers.js';
@@ -733,6 +735,67 @@ describe('WebSocketClientTransport — auth lifecycle', () => {
     });
 
     await transport.disconnect();
+  });
+
+  it.each([
+    {
+      description: 'ignores peer attestation without a configured role',
+      attestingRole: undefined,
+      principalKind: 'makaio.e2e-peer',
+    },
+    {
+      description: 'accepts a principal with the core-uplink role',
+      attestingRole: 'core-uplink',
+      principalKind: 'makaio.e2e-peer',
+    },
+    {
+      description: 'accepts an in-process principal with the core-uplink role',
+      attestingRole: 'core-uplink',
+      principalKind: 'makaio.extension',
+    },
+  ] as const)('$description', async ({ attestingRole, principalKind }) => {
+    const caller = { kind: 'makaio.job-run', id: 'authenticated-peer' };
+    const claimedPrincipal = { kind: principalKind, id: 'claimed-principal' };
+    const receiveContext: TransportReceiveContext = {
+      transportName: '',
+      authenticated: true,
+      caller,
+      attests: 'outbound',
+    };
+    const auth: TransportAuth = {
+      authenticateClient: vi.fn(async () => {}),
+      authenticateServer: vi.fn(async () => {}),
+      handleAuthMessage: vi.fn(() => false),
+      getReceiveContext: () => receiveContext,
+      cleanupSocket: vi.fn(),
+      cleanup: vi.fn(),
+    };
+    const { transport, mock } = makeTransport({ auth, attestingRole, readiness: 'session-established' });
+    const bus = createBusInstance({ transports: [transport] });
+    const { subjects } = bus.registerNamespace(createBusNamespace('test', { received: z.object({}) }));
+    const received = vi.fn<(call: CallContext) => void>();
+    bus.on(subjects.received, (ctx) => received(ctx.call));
+
+    try {
+      await bus.connect();
+      const frame: BusEventMessage = {
+        type: 'event',
+        namespace: 'test',
+        subject: 'received',
+        messageId: 'msg-principal',
+        payload: {},
+        metadata: { principal: claimedPrincipal },
+      };
+      mock.receiveMessage(JSON.stringify(frame));
+
+      await vi.waitFor(() => expect(received).toHaveBeenCalledTimes(1));
+      const [call] = received.mock.calls[0];
+      expect(call.caller).toEqual(caller);
+      expect(call.principal).toEqual(attestingRole === undefined ? caller : claimedPrincipal);
+      expect(call.attestedBy).toEqual(attestingRole === undefined ? undefined : caller);
+    } finally {
+      await bus.disconnect();
+    }
   });
 
   it('cleans auth resources on explicit disconnect', async () => {

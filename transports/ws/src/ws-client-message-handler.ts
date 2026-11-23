@@ -16,11 +16,7 @@ import {
   type BusReceiveHandler,
   type CorrelationTracker,
 } from '@makaio/bus-core';
-import {
-  ATTESTING_CONNECTION_ROLES,
-  type OutboundAttestingConnectionRole,
-  type TransportReceiveContext,
-} from '@makaio/core';
+import { attestationForRole, type OutboundAttestingConnectionRole, type TransportReceiveContext } from '@makaio/core';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -116,6 +112,7 @@ async function dispatchToHandlers(
 
 /**
  * Build the receive context passed to bus handlers.
+ * An end-to-end encrypted peer never attests principal claims, regardless of the configured role.
  * @param options - Transport name, peer authentication and local attestation policy.
  * @returns Receive context for handlers invoked by this transport.
  */
@@ -123,11 +120,14 @@ function buildReceiveContext(
   options: Pick<InboundMessageHandlerDeps, 'name' | 'auth' | 'attestingRole'>,
 ): TransportReceiveContext {
   const { name, auth, attestingRole } = options;
-  const { attests: _peerAttestation, ...peer } = auth?.getReceiveContext?.() ?? {};
+  const receive = auth?.getReceiveContext?.();
+  const { attests: _peerAttestation, ...peer } = receive ?? {};
   return {
     ...peer,
     transportName: name,
-    ...(attestingRole === undefined ? {} : { attests: ATTESTING_CONNECTION_ROLES[attestingRole] }),
+    ...(receive?.encrypted === true || attestingRole === undefined
+      ? {}
+      : { attests: attestationForRole(attestingRole) }),
   };
 }
 

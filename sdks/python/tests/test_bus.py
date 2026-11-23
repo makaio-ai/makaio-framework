@@ -98,8 +98,7 @@ def assert_conformance_assertion_shape(case_id, assertion):
         if not isinstance(assertion.get("resultRef"), str):
             raise AssertionError(f"{case_id} auth-handshake assertions must declare a resultRef")
         return
-    # Principal assertion kinds: shape checks of the case fixture only. The
-    # SDK does not decide caller or principal: the receiving core derives and checks them (FACT-375).
+    # Check the required fields and types in caller and principal fixture assertions.
     if kind == "principal-declared":
         if not isinstance(assertion.get("messageRef"), str):
             raise AssertionError(f"{case_id} principal-declared assertions must declare a messageRef")
@@ -226,6 +225,22 @@ class ConformanceFixtureTest(unittest.TestCase):
             for wire_entry in case["wire"]:
                 with self.subTest(case=case["id"], message_ref=wire_entry["messageRef"]):
                     self.assertIn(wire_entry["messageRef"], messages)
+
+    def test_receiver_attestation_is_declared_only_for_sdk_receive_frames(self):
+        """Validate the optional receiver attestation on each wire entry."""
+        for case in conformance_cases():
+            for wire_entry in case["wire"]:
+                if "receiverAttestation" in wire_entry:
+                    with self.subTest(case=case["id"]):
+                        self.assertEqual(wire_entry["direction"], "server->client")
+                        self.assertIn(wire_entry["receiverAttestation"], ("outbound", "none"))
+
+    def test_case_requirements_use_supported_capabilities(self):
+        """Validate the optional capability requirement for each case."""
+        for case in conformance_cases():
+            if "requires" in case:
+                with self.subTest(case=case["id"]):
+                    self.assertEqual(case["requires"], ["principal-model"])
 
     def test_all_conformance_assertions_are_supported(self):
         messages = conformance_messages()
