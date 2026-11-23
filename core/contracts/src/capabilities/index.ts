@@ -231,3 +231,33 @@ export type {
   GitHookRewritePair,
   IGitHookEventsProvider,
 } from './git-hooks/index.js';
+export {
+  ALLOCATION_LISTING_DEFAULT_LIMIT,
+  ALLOCATION_LISTING_MAX_LIMIT,
+  ALLOCATION_SCOPE_BLOCK_REASONS,
+  AllocationListingCompletenessSchema,
+  AllocationListingRequestSchema,
+  AllocationObservationPageSchema,
+  AllocationObservationSchema,
+  AllocationScopeBlockReasonSchema,
+  AllocationScopeBlockSchema,
+  AllocationScopeValueSchema,
+  AllocationTerminationSchema,
+  MaxRuntimeAssuranceSchema,
+  WORKER_PROVIDER_ID_MAX_LENGTH,
+  WorkerProviderIdSchema,
+  WorkerProviderKeySchema,
+} from './worker/index.js';
+export type {
+  AllocationListingCompleteness,
+  AllocationListingRequest,
+  AllocationObservation,
+  AllocationObservationPage,
+  AllocationScope,
+  AllocationScopeBlock,
+  AllocationScopeBlockReason,
+  AllocationScopeStatus,
+  AllocationTermination,
+  MaxRuntimeAssurance,
+  WorkerProviderId,
+} from './worker/index.js';
