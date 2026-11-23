@@ -23,7 +23,7 @@ function makeBlocks(extensionName = 'alpha'): WorkflowBlockCollection {
           findings: z.array(z.object({ id: z.string() })),
         }),
         runs: {
-          type: 'station',
+          type: 'agent-step',
           prompt: 'Fetch findings for {{ input.target.repository }}.',
           role: `${extensionName}.findings-fetcher`,
         },
@@ -54,7 +54,7 @@ describe('WorkflowBlockRegistry', () => {
     });
 
     expect(listed.steps[0]?.runs).toEqual({
-      type: 'station',
+      type: 'agent-step',
       prompt: 'Fetch findings for {{ input.target.repository }}.',
       role: 'alpha.findings-fetcher',
     });
@@ -195,8 +195,9 @@ describe('WorkflowBlockRegistry', () => {
         {
           ...step,
           runs: {
-            type: 'station',
+            type: 'agent-step',
             prompt: 'Fetch findings.',
+            role: 'alpha.findings-fetcher',
             outputSchema: {
               // Date is not JSON-safe — should fail schema validation
               createdAt: new Date(0) as unknown as string,
@@ -217,7 +218,7 @@ describe('WorkflowBlockRegistry', () => {
     await registry.destroy();
   });
 
-  it('rejects empty station prompts in the catalog response schema', async () => {
+  it('rejects empty agent step prompts in the catalog response schema', async () => {
     const bus = createBusInstance();
     const registry = new WorkflowBlockRegistry(bus);
     await registry.init();
@@ -229,7 +230,8 @@ describe('WorkflowBlockRegistry', () => {
         {
           ...step,
           runs: {
-            type: 'station',
+            type: 'agent-step',
+            role: 'alpha.findings-fetcher',
             prompt: '',
           },
         },
@@ -242,36 +244,6 @@ describe('WorkflowBlockRegistry', () => {
     expect(parsed.success).toBe(false);
     if (!parsed.success) {
       expect(parsed.error.issues.map((issue) => issue.path.join('.'))).toContain('steps.0.runs.prompt');
-    }
-
-    await registry.destroy();
-  });
-
-  it('rejects empty delegate-agent agentId in the catalog response schema', async () => {
-    const bus = createBusInstance();
-    const registry = new WorkflowBlockRegistry(bus);
-    await registry.init();
-    const [step] = makeBlocks('alpha').steps ?? [];
-    if (!step) throw new Error('Test fixture must include a step block');
-
-    await registry.register('alpha', {
-      steps: [
-        {
-          ...step,
-          runs: {
-            type: 'delegate-agent',
-            agentId: '',
-          },
-        },
-      ],
-    });
-
-    const parsed = WorkflowBlocksSchemas.list.response.safeParse({
-      steps: registry.listSteps(),
-    });
-    expect(parsed.success).toBe(false);
-    if (!parsed.success) {
-      expect(parsed.error.issues.map((issue) => issue.path.join('.'))).toContain('steps.0.runs.agentId');
     }
 
     await registry.destroy();
@@ -336,44 +308,6 @@ describe('WorkflowBlockRegistry', () => {
         },
       },
     });
-
-    await registry.destroy();
-  });
-
-  it('accepts station, delegate-agent, and delegate-role run mapping variants', async () => {
-    const bus = createBusInstance();
-    const registry = new WorkflowBlockRegistry(bus);
-    await registry.init();
-    const [step] = makeBlocks('alpha').steps ?? [];
-    if (!step) throw new Error('Test fixture must include a step block');
-
-    await registry.register('alpha', {
-      steps: [
-        {
-          ...step,
-          metadata: { ...step.metadata, name: 'alpha.step-station' },
-          runs: { type: 'station', prompt: 'Do work.' },
-        },
-        {
-          ...step,
-          metadata: { ...step.metadata, name: 'alpha.step-agent' },
-          runs: { type: 'delegate-agent', agentId: 'my-agent' },
-        },
-        {
-          ...step,
-          metadata: { ...step.metadata, name: 'alpha.step-role' },
-          runs: { type: 'delegate-role', role: 'reviewer', prompt: 'Review this.' },
-        },
-      ],
-    });
-
-    const listed = await bus.request(WorkflowBlocksSubjects.list, {});
-    expect(listed.steps.map((s) => s.runs.type)).toEqual(['station', 'delegate-agent', 'delegate-role']);
-
-    const parsed = WorkflowBlocksSchemas.list.response.safeParse({
-      steps: registry.listSteps(),
-    });
-    expect(parsed.success).toBe(true);
 
     await registry.destroy();
   });

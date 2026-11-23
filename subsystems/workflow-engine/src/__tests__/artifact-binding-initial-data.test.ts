@@ -28,7 +28,7 @@ function setup(options: { resolve?: string; create?: string; startRef?: boolean;
   } satisfies WorkflowArtifactBinding;
   const definition = defineWorkflow('report-binding')
     .artifact(binding)
-    .station('noop', async () => null).definition;
+    .codeStep('noop', async () => null).definition;
   const existing: ArtifactRevision = {
     kind: 'report',
     id: 'existing-report',

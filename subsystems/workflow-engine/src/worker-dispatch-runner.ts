@@ -1,6 +1,11 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import { randomUUID } from 'node:crypto';
-import { WorkerSubjects, type IWorkflowRunner, type WorkerRequirements } from '@makaio/contracts';
+import {
+  WorkerSubjects,
+  requireExecutableRunContext,
+  type IWorkflowRunner,
+  type WorkerRequirements,
+} from '@makaio/contracts';
 import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
 import { runAuthorityDispatchedAttempt } from './authority-dispatch-runner.js';
 import { buildWorkflowAttemptInstruction } from './workflow-attempt-instruction.js';
@@ -79,11 +84,12 @@ export function createWorkerDispatchRunner(options: WorkerDispatchRunnerOptions)
             ).runContext
           : undefined;
       signal.throwIfAborted();
+      const executableRunContext = runContext == null ? undefined : requireExecutableRunContext(runContext);
       const instruction = buildWorkflowAttemptInstruction({
         id: randomUUID(),
         revision: '1',
         config,
-        ...(runContext != null ? { runContext } : {}),
+        ...(executableRunContext !== undefined ? { runContext: executableRunContext } : {}),
         preservation: { required: [] },
       });
       // The runner contract owes a completion wrapper; the generic dispatch

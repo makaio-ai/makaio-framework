@@ -1,10 +1,9 @@
 import type { CallContext } from '@makaio/core';
 import {
+  type CodeStepHandler,
   type JsonValue,
-  type ResponseSchemaDescriptor,
-  type StationHandler,
+  type WorkflowCodeStepNode,
   type WorkflowProgressUpdate,
-  type WorkflowStationNode,
 } from '@makaio/contracts';
 import {
   buildPreviousStepsFromFrames,
@@ -14,21 +13,20 @@ import {
 import type { NodeOutcome } from './node-execution.js';
 import { createArtifactContext } from '../artifact-context/update-artifact.js';
 import { createWorkflowStateContext } from './workflow-state-context.js';
-import { executeRoleSubagentNode } from './role-subagent-node.js';
 import { WorkflowSchemas, WorkflowSubjects } from '../namespace.js';
 
 // ─────────────────────────────────────────────────────────────
-// Station node executor
+// Code step node executor
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Execute a `station` node by looking up and invoking its registered handler.
+ * Execute a `code-step` node by looking up and invoking its registered handler.
  *
- * The handler is resolved from `ctx.runtimeHandlers` by the node's own ID.
- * If no handler is registered and the serialized node carries a `role`, the
- * station executes through the role/subagent seam used by GUI-authored workflow
- * blocks. If neither execution path is available, the node fails with a
- * descriptive error rather than silently succeeding with no output.
+ * The handler is resolved from `ctx.runtimeHandlers` by the node's own ID. A
+ * code step without a registered handler fails with a descriptive error
+ * rather than silently succeeding with no output; code steps are
+ * function-free in the persisted definition, so there is no fallback
+ * execution path.
  *
  * The handler receives a {@link StepContext} assembled from the current
  * execution state:
@@ -45,15 +43,15 @@ import { WorkflowSchemas, WorkflowSubjects } from '../namespace.js';
  *   `state` field on the definition, providing `get()` and `update()` for
  *   run-scoped mutable state.
  * @param call - Call context of the handled message this execution serves; forwarded to every bus send.
- * @param node - The station node to execute.
+ * @param node - The code step node to execute.
  * @param ctx - Execution-wide runtime context.
  * @param expressionCtx - Current expression evaluation context (for previousSteps).
- * @param frameId - Frame ID of this station's frame (used for artifact event correlation).
- * @returns Terminal execution outcome for this station.
+ * @param frameId - Frame ID of this code step's frame (used for artifact event correlation).
+ * @returns Terminal execution outcome for this code step.
  */
-export async function executeStationNode(
+export async function executeCodeStepNode(
   call: CallContext,
-  node: WorkflowStationNode,
+  node: WorkflowCodeStepNode,
   ctx: RuntimeContext,
   expressionCtx: PrimitiveExpressionContext,
   frameId?: string,
@@ -66,9 +64,12 @@ export async function executeStationNode(
   // Build previousSteps from the expression context's terminal frame entries.
   const previousSteps = buildPreviousStepsFromFrames(expressionCtx.frames);
 
-  const handler: StationHandler | undefined = ctx.runtimeHandlers.get(node.id);
+  const handler: CodeStepHandler | undefined = ctx.runtimeHandlers.get(node.id);
   if (handler === undefined) {
-    return executeRoleStationNode(call, node, ctx, expressionCtx, frameId);
+    return {
+      status: 'failed',
+      error: `No handler registered for code step '${node.id}'`,
+    };
   }
 
   // Build artifact context when the execution has an active artifact binding.
@@ -91,8 +92,8 @@ export async function executeStationNode(
    * Emit a structured progress signal to the `execution.progress` bus subject.
    *
    * Observer failures are swallowed so a misbehaving subscriber cannot abort the
-   * station handler. Producer-side schema validation errors still propagate and
-   * fail the station because they indicate an invalid progress contract.
+   * code step handler. Producer-side schema validation errors still propagate and
+   * fail the code step because they indicate an invalid progress contract.
    *
    * When `frameId` is absent (e.g. in isolated unit tests that call the executor
    * directly without a frame registry), the emit is skipped — progress signals
@@ -101,7 +102,7 @@ export async function executeStationNode(
    */
   async function updateProgress(update: WorkflowProgressUpdate): Promise<void> {
     if (frameId === undefined) {
-      console.warn(`[station-node] updateProgress called without frameId for node '${node.id}'; skipping emit`);
+      console.warn(`[code-step-node] updateProgress called without frameId for node '${node.id}'; skipping emit`);
       return;
     }
     const payload = WorkflowSchemas['execution.progress'].parse({
@@ -116,8 +117,8 @@ export async function executeStationNode(
       await ctx.bus.emit(call, WorkflowSubjects.execution.progress, payload);
     } catch (error) {
       // The producer payload is parsed before emit; rejections here are
-      // observer-side delivery failures and must not abort the station.
-      console.error(`[station-node] execution.progress observer failed for ${node.id}:`, error);
+      // observer-side delivery failures and must not abort the code step.
+      console.error(`[code-step-node] execution.progress observer failed for ${node.id}:`, error);
     }
   }
 
@@ -157,54 +158,4 @@ export async function executeStationNode(
   }
 
   return { status: 'completed', output };
-}
-
-/**
- * Execute a serialized station node through the role/subagent seam.
- *
- * Code-authored station handlers are preferred when present. This path exists
- * for persisted or GUI-authored workflow definitions, where a station is
- * function-free and carries a role/prompt contract instead.
- * @param call - Call context of the handled message this execution serves.
- * @param node - Station node without a registered runtime handler.
- * @param ctx - Execution-wide runtime context.
- * @param expressionCtx - Current expression evaluation context.
- * @param frameId - Frame ID of this station's frame, forwarded for session link emission.
- * @returns Terminal execution outcome for the role-backed station.
- */
-async function executeRoleStationNode(
-  call: CallContext,
-  node: WorkflowStationNode,
-  ctx: RuntimeContext,
-  expressionCtx: PrimitiveExpressionContext,
-  frameId?: string,
-): Promise<NodeOutcome> {
-  if (node.role === undefined) {
-    return {
-      status: 'failed',
-      error: `No handler registered for station node '${node.id}'`,
-    };
-  }
-
-  const outputSchema: ResponseSchemaDescriptor | undefined =
-    node.outputSchema !== undefined ? { schema: node.outputSchema } : undefined;
-  return executeRoleSubagentNode(
-    call,
-    {
-      nodeId: node.id,
-      nodeLabel: 'Station node',
-      roleId: node.role,
-      prompt: node.prompt,
-      ...(outputSchema !== undefined ? { outputSchema } : {}),
-      ...(node.timeoutMs !== undefined ? { timeoutMs: node.timeoutMs } : {}),
-      ...(node.completion !== undefined ? { completion: node.completion } : {}),
-      unresolvedRoleError: `No runtime handler registered for station node '${node.id}', and role '${node.role}' could not be resolved`,
-      unavailableRuntimeError: `Subagent runtime is not available for station node '${node.id}'`,
-      unavailableAwaitError: `Subagent runtime cannot await station node '${node.id}'`,
-      cancellationLabel: 'station',
-      ...(frameId !== undefined ? { frameId } : {}),
-    },
-    ctx,
-    expressionCtx,
-  );
 }

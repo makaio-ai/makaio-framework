@@ -2,18 +2,19 @@ import * as os from 'node:os';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { CallContext } from '@makaio/core';
 import type { ExpressionContext } from '@makaio/expression';
-import type {
-  BuiltWorkflow,
-  JsonValue,
-  LoopGateHandler,
-  PreviousStepOutput,
-  StationHandler,
-  SpanRecord,
-  SuspensionStrategy,
-  WorkflowDefinition,
-  WorkflowExecution,
-  WorkflowFrameState,
-  WorkflowNodeType,
+import {
+  WorkflowStepTypeSchema,
+  type BuiltWorkflow,
+  type CodeStepHandler,
+  type JsonValue,
+  type LoopGateHandler,
+  type PreviousStepOutput,
+  type SpanRecord,
+  type SuspensionStrategy,
+  type WorkflowDefinition,
+  type WorkflowExecution,
+  type WorkflowFrameState,
+  type WorkflowNodeType,
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
@@ -33,7 +34,7 @@ import type { ArtifactBindingState } from '../artifact-context/artifact-binding.
  *
  * When a node runs inside an `iterate` or `iterate-chain` body, the iterate
  * executor extends this context with `item`, `index`, and (for chain only)
- * `previous` so body nodes and station handlers can reference per-item state.
+ * `previous` so body nodes and code step handlers can reference per-item state.
  */
 export interface PrimitiveExpressionContext {
   /** Workflow input value bound at execution start. */
@@ -51,7 +52,7 @@ export interface PrimitiveExpressionContext {
   /**
    * Handler-compatible aliases for earlier completed or skipped nodes,
    * keyed by node ID. Derived from `frames` so expression conditions can use
-   * the same dependency shape station handlers receive.
+   * the same dependency shape code step handlers receive.
    */
   readonly previousSteps: Record<string, PreviousStepOutput<JsonValue>>;
   /**
@@ -217,10 +218,10 @@ export interface EphemeralPlatformFields {
 }
 
 /**
- * Platform fields made available to station handlers during runtime.
+ * Platform fields made available to code step handlers during runtime.
  */
 export interface RuntimePlatformContext {
-  /** Host/workspace context for station handlers (ephemeral, worker-local). */
+  /** Host/workspace context for code step handlers (ephemeral, worker-local). */
   readonly context: EphemeralPlatformFields;
   /** Extra environment variables injected into this workflow run. */
   readonly env: Record<string, string>;
@@ -276,10 +277,8 @@ function snapshotFrame(frame: WorkflowFrameState): WorkflowFrameState {
  * @returns Span step type for executable/observable nodes, otherwise `undefined`.
  */
 function toSpanStepType(nodeType: WorkflowNodeType): SpanRecord['stepType'] | undefined {
-  if (nodeType === 'station' || nodeType === 'delegate-agent' || nodeType === 'delegate-role' || nodeType === 'gate') {
-    return nodeType;
-  }
-  return undefined;
+  const parsed = WorkflowStepTypeSchema.safeParse(nodeType);
+  return parsed.success ? parsed.data : undefined;
 }
 
 /**
@@ -333,7 +332,7 @@ function toFrameSpanRecord(executionId: string, frame: WorkflowFrameState): Span
  * Execution-wide state container for the primitive runtime.
  *
  * Provides the shared execution identifier, workflow definition, abort
- * signal, bus reference, and station handler map. Manages frame state in
+ * signal, bus reference, and code step handler map. Manages frame state in
  * memory and emits frame lifecycle events to the bus.
  *
  * Frame persistence is delegated to storage subjects while this class remains
@@ -352,7 +351,7 @@ export class RuntimeContext {
    *
    * `undefined` when no artifact binding is configured on the workflow
    * definition. Updated in place after every successful artifact revision
-   * write so all stations share the same authoritative current revision.
+   * write so all code steps share the same authoritative current revision.
    */
   public artifactBinding: ArtifactBindingState | undefined;
 
@@ -362,12 +361,12 @@ export class RuntimeContext {
    * @param workflowId - Workflow definition identifier.
    * @param definition - Workflow definition containing the node tree.
    * @param execution - Current execution state (inputs, trigger payload).
-   * @param runtimeHandlers - Station handler functions keyed by node ID.
+   * @param runtimeHandlers - Code step handler functions keyed by node ID.
    * @param bus - Message bus for event emission.
    * @param signal - Cooperative cancellation signal.
    * @param sharedFrameRegistry - Optional shared frame registry for child contexts.
    * @param artifactBinding - Optional pre-resolved artifact binding state.
-   * @param platform - Platform context and environment exposed to station handlers.
+   * @param platform - Platform context and environment exposed to code step handlers.
    * @param options - Execution-level options (suspension strategy, resume frames).
    */
   public constructor(
@@ -375,7 +374,7 @@ export class RuntimeContext {
     public readonly workflowId: string,
     public readonly definition: WorkflowDefinition,
     public readonly execution: WorkflowExecution,
-    public readonly runtimeHandlers: ReadonlyMap<string, StationHandler>,
+    public readonly runtimeHandlers: ReadonlyMap<string, CodeStepHandler>,
     public readonly bus: IMakaioBus,
     public readonly signal: AbortSignal,
     sharedFrameRegistry?: Map<string, WorkflowFrameState>,
@@ -393,10 +392,10 @@ export class RuntimeContext {
     this.runtimeLoopGates = options.runtimeLoopGates ?? new Map();
   }
 
-  /** Platform/workspace context exposed to station handlers (ephemeral). */
+  /** Platform/workspace context exposed to code step handlers (ephemeral). */
   public readonly platformContext: EphemeralPlatformFields;
 
-  /** Extra environment variables exposed to station handlers. */
+  /** Extra environment variables exposed to code step handlers. */
   public readonly env: Record<string, string>;
 
   /**
@@ -663,6 +662,7 @@ export class RuntimeContext {
         executionId: this.executionId,
         frameId: frame.frameId,
         nodeId: frame.nodeId,
+        nodeType: frame.nodeType,
         output: frame.output,
         duration: durationMs,
         completedAt: frame.completedAt,
@@ -693,6 +693,7 @@ export class RuntimeContext {
         executionId: this.executionId,
         frameId: frame.frameId,
         nodeId: frame.nodeId,
+        nodeType: frame.nodeType,
         error,
         duration: durationMs,
         completedAt: frame.completedAt,

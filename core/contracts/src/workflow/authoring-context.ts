@@ -55,7 +55,7 @@ export type ArtifactUpdater<TData extends Record<string, unknown>> = (
 export interface ArtifactContext<TData extends Record<string, unknown> = Record<string, unknown>> {
   /**
    * Read-only snapshot of the artifact data as it was at the start of the
-   * current station execution.
+   * current code step execution.
    *
    * Mutations are not allowed directly on this object — use `updateArtifact`
    * or `updateStatus` to produce a new revision.
@@ -161,7 +161,7 @@ export interface WorkflowContextBase {
 }
 
 /**
- * Platform and workspace context available to every workflow station function.
+ * Platform and workspace context available to every workflow code step function.
  *
  * These fields are populated from the coordinator context at dispatch time.
  */
@@ -179,19 +179,19 @@ export interface WorkflowContext extends WorkflowContextBase {
  *
  * Predecessors can be completed or skipped. Both remain visible so downstream
  * functions can branch on the terminal status of every declared predecessor.
- * @typeParam TOutput - The station's inferred output type
+ * @typeParam TOutput - The code step's inferred output type
  */
 export type PreviousStepOutput<TOutput extends JsonValue> =
   | {
-      /** JSON-serializable value produced by the completed station. */
+      /** JSON-serializable value produced by the completed code step. */
       readonly output: TOutput;
-      /** Upstream station completed and produced an output. */
+      /** Upstream code step completed and produced an output. */
       readonly status: 'completed';
     }
   | {
-      /** Skipped upstream stations do not produce an output. */
+      /** Skipped upstream code steps do not produce an output. */
       readonly output?: undefined;
-      /** Upstream station was skipped by its `when`/`skip` condition. */
+      /** Upstream code step was skipped by its `when`/`skip` condition. */
       readonly status: 'skipped';
     };
 
@@ -206,7 +206,7 @@ export type { WorkflowProgressUpdate };
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Full execution context passed to a station handler function.
+ * Full execution context passed to a code step handler function.
  *
  * Extends {@link WorkflowContextBase} with a typed `trigger` field and the
  * `previousSteps` map.
@@ -215,13 +215,13 @@ export type { WorkflowProgressUpdate };
  * engine's own context, not under the run's principal. The run's call reaches
  * the handler together with the code step handler context.
  * @typeParam TTrigger - The trigger payload type
- * @typeParam TPreviousSteps - Map of completed predecessor station outputs
+ * @typeParam TPreviousSteps - Map of completed predecessor code step outputs
  * @typeParam TArtifactData - Artifact data shape; defaults to `Record<string, unknown>`
  *   when no artifact binding is declared
  * @typeParam TBus - Runtime bus type supplied by the host runtime; defaults to
  *   `unknown` so the contracts package stays free of any bus implementation dependency.
  *   Bind to `IMakaioBus` (from `@makaio/bus-core`) in host layers that need full bus
- *   authoring surface access inside station handlers.
+ *   authoring surface access inside code step handlers.
  * @typeParam TState - The workflow's declared run state type; defaults to `unknown`
  *   when no state contract is declared on the workflow definition.
  */
@@ -245,7 +245,7 @@ export interface StepContext<
   readonly index?: number;
   /** Output from the previous chain item when running inside an `iterate-chain`. */
   readonly previous?: JsonValue;
-  /** Abort signal for cooperative cancellation of long-running station handlers. */
+  /** Abort signal for cooperative cancellation of long-running code step handlers. */
   readonly signal: AbortSignal;
   /**
    * Artifact access API for the workflow's primary artifact binding.
@@ -267,7 +267,7 @@ export interface StepContext<
    */
   readonly state?: WorkflowStateContext<TState>;
   /**
-   * Runtime bus for station handlers that need to query or write durable
+   * Runtime bus for code step handlers that need to query or write durable
    * artifacts as part of their authored output.
    *
    * Typed as the `TBus` type parameter (defaults to `unknown` in the
@@ -290,20 +290,20 @@ export interface StepContext<
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Station handler context with state presence refined by the builder.
+ * Code step handler context with state presence refined by the builder.
  *
  * Base {@link StepContext} keeps `state` optional because runtime contexts can
  * be constructed without a state contract. The authoring builder uses this
  * type so workflows that declare `.state<T>()` receive a required
- * `WorkflowStateContext<T>` in station handlers, while workflows without state
+ * `WorkflowStateContext<T>` in code step handlers, while workflows without state
  * expose `state` as absent.
  * @typeParam TTrigger - The trigger payload type
- * @typeParam TPreviousSteps - Map of completed predecessor station outputs
+ * @typeParam TPreviousSteps - Map of completed predecessor code step outputs
  * @typeParam TArtifactData - Artifact data shape
  * @typeParam TBus - Runtime bus type supplied by the host runtime
  * @typeParam TState - The workflow's declared run state type
  */
-export type StationStepContext<
+export type CodeStepContext<
   TTrigger,
   TPreviousSteps extends Record<string, PreviousStepOutput<JsonValue>>,
   TArtifactData extends Record<string, unknown> = Record<string, unknown>,
@@ -317,19 +317,19 @@ export type StationStepContext<
       : { readonly state: WorkflowStateContext<TState> });
 
 /**
- * Generic station handler — a function accepting a {@link StationStepContext} and
+ * Generic code step handler — a function accepting a {@link CodeStepContext} and
  * returning a JSON-serializable value.
  *
  * Used in the fluent builder methods where trigger and dependency types are
  * tracked by the builder and erased for runtime handler storage.
  * @typeParam TTrigger - The trigger payload type
- * @typeParam TPreviousSteps - Map of completed predecessor station outputs
+ * @typeParam TPreviousSteps - Map of completed predecessor code step outputs
  * @typeParam TArtifactData - Artifact data shape
  * @typeParam TBus - Runtime bus type supplied by the host runtime
  * @typeParam TState - The workflow's declared run state type; defaults to
  *   `unknown` for erased runtime-handler storage.
  */
-export type StationHandler<
+export type CodeStepHandler<
   TTrigger = unknown,
   TPreviousSteps extends Record<string, PreviousStepOutput<JsonValue>> = Record<string, PreviousStepOutput<JsonValue>>,
   TArtifactData extends Record<string, unknown> = Record<string, unknown>,
@@ -337,15 +337,15 @@ export type StationHandler<
   TState = unknown,
 > = {
   bivarianceHack(
-    ctx: StationStepContext<TTrigger, TPreviousSteps, TArtifactData, TBus, TState>,
+    ctx: CodeStepContext<TTrigger, TPreviousSteps, TArtifactData, TBus, TState>,
   ): JsonValue | Promise<JsonValue>;
 }['bivarianceHack'];
 
 /**
- * Generic iterate handler — same signature as {@link StationHandler} but
+ * Generic iterate handler — same signature as {@link CodeStepHandler} but
  * semantically used for `iterate` node bodies.
  * @typeParam TTrigger - The trigger payload type
- * @typeParam TPreviousSteps - Map of completed predecessor station outputs
+ * @typeParam TPreviousSteps - Map of completed predecessor code step outputs
  * @typeParam TArtifactData - Artifact data shape
  * @typeParam TBus - Runtime bus type supplied by the host runtime
  * @typeParam TState - The workflow's declared run state type
@@ -356,4 +356,4 @@ export type IterateHandler<
   TArtifactData extends Record<string, unknown> = Record<string, unknown>,
   TBus = unknown,
   TState = unknown,
-> = StationHandler<TTrigger, TPreviousSteps, TArtifactData, TBus, TState>;
+> = CodeStepHandler<TTrigger, TPreviousSteps, TArtifactData, TBus, TState>;

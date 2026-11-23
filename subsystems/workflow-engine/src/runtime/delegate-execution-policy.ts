@@ -1,4 +1,4 @@
-import type { WorkflowDelegateAgentNode, WorkflowDelegateRoleNode, WorkflowResolvedRole } from '@makaio/contracts';
+import type { WorkflowAgentStepNode, WorkflowResolvedRole } from '@makaio/contracts';
 
 /**
  * Apply an authority-selected exact allowlist without retaining conflicting
@@ -16,15 +16,12 @@ export function applyExactAllowedTools(
 }
 
 /**
- * Resolve node-owned completion and exact tool policy for a delegate role.
- * @param node - Delegate-role node definition.
+ * Resolve node-owned completion and exact tool policy for an agent step.
+ * @param node - Agent step node definition.
  * @param role - Resolver-provided role configuration.
- * @returns Effective delegate-role execution configuration.
+ * @returns Effective agent-step execution configuration.
  */
-export function resolveDelegateRoleConfig(
-  node: WorkflowDelegateRoleNode,
-  role: WorkflowResolvedRole,
-): WorkflowResolvedRole {
+export function resolveAgentStepConfig(node: WorkflowAgentStepNode, role: WorkflowResolvedRole): WorkflowResolvedRole {
   const resolvedRole = applyExactAllowedTools(
     {
       ...role,
@@ -32,35 +29,19 @@ export function resolveDelegateRoleConfig(
     },
     node.allowedTools,
   );
-  return requiresFreshDelegateRoleContext(resolvedRole) ? { ...resolvedRole, contextMode: 'fresh' } : resolvedRole;
+  return requiresFreshAgentStepContext(resolvedRole) ? { ...resolvedRole, contextMode: 'fresh' } : resolvedRole;
 }
 
 /**
- * Resolve node-owned completion and exact tool policy for an explicit delegate agent.
- * @param node - Delegate-agent node definition.
- * @param role - Resolver-provided agent configuration.
- * @returns Effective delegate-agent execution configuration.
- */
-export function resolveDelegateAgentConfig(
-  node: WorkflowDelegateAgentNode,
-  role: WorkflowResolvedRole,
-): WorkflowResolvedRole {
-  return applyExactAllowedTools(
-    { ...role, completion: node.completion ?? role.completion ?? 'tool' },
-    node.allowedTools,
-  );
-}
-
-/**
- * Determine whether a delegate role belongs to the fresh-context turn cohort.
+ * Determine whether an agent step belongs to the fresh-context turn cohort.
  *
- * These roles historically ran through a dedicated session-turn path whose
+ * These steps historically ran through a dedicated session-turn path whose
  * child sessions intentionally omitted parent-history inheritance. The unified
  * subagent executor must preserve that context contract explicitly.
  * @param role - Effective resolved role configuration.
  * @returns True when the role requires explicit fresh context.
  */
-function requiresFreshDelegateRoleContext(role: WorkflowResolvedRole): boolean {
+function requiresFreshAgentStepContext(role: WorkflowResolvedRole): boolean {
   return (
     role.completion === 'turn' &&
     [

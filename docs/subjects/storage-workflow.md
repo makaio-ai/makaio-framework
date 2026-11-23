@@ -216,7 +216,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `frame` | `{ frameId: string; nodeId: string; nodeType: "sequence" \| "delegate-agent" \| "delegate-role" \| "station" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "failed" \| "completed" \| "cancelled" \| "skipped" \| "pending" \| "running" \| "waiting"; attempt: number; parentFrameId?: string \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; output?: JsonValue \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; } \| null` | yes |
+| `frame` | `{ frameId: string; nodeId: string; nodeType: "sequence" \| "code-step" \| "agent-step" \| "parallel" \| "gate" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "failed" \| "completed" \| "cancelled" \| "skipped" \| "pending" \| "running" \| "waiting"; attempt: number; parentFrameId?: string \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; output?: JsonValue \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; } \| null` | yes |
 
 ### <a id="storage:workflow.getGateInstance"></a>`storage:workflow.getGateInstance` (rpc)
 
@@ -245,6 +245,10 @@ Type: Request (RPC)
 Read the run-context snapshot by execution ID.
 Called internally by the public `workflow.getRunContext` handler.
 
+The snapshot is read as a stored context: `definitionSnapshot`
+is opaque JSON, not re-parsed as a `WorkflowDefinitionSchema`, so a
+stored snapshot that is no longer a valid definition stays readable here.
+
 Subject: `storage:workflow.getRunContext`
 Type: Request (RPC)
 
@@ -258,7 +262,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `runContext` | `{ executionId: string; workflowId: string; source: { kind: "path"; path: string; } \| { kind: "source"; filename: string; source: string; } \| { kind: "definition"; workflowId: string; }; workerManifest: { contributionRefs: { packageName: string; version: string; entrypoint: string; integrity: string; }[]; }; inputs: JsonValue; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; triggerPayload: JsonObject; coordinatorSessionId: string; cancelSubject: string; env: Record<string, string>; createdAt: number; suspensionStrategy: "wait-in-process" \| "exit-and-redispatch" \| "exit-and-resume"; definitionSnapshot?: { id: string; root: { id: string; type: "sequence"; nodes: WorkflowNode[]; when?: string \| undefined; skip?: string \| undefined; writes?: { kind: string; schemaVersion: number; scope: { level: string; ids?: Record<string, string> \| undefined; }; dataExpression?: string \| undefined; }[] \| undefined; }; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; name?: string \| undefined; description?: string \| undefined; inputSchema?: Record<string, JsonValue> \| undefined; configSchema?: Record<string, JsonValue> \| undefined; outputSchema?: Record<string, JsonValue> \| undefined; state?: { schema: Record<string, JsonValue>; initial?: JsonValue \| undefined; } \| undefined; artifact?: { kind: string; schemaVersion: number; scope: { level: string; ids?: Record<string, string> \| undefined; }; resolve?: string \| undefined; create?: string \| undefined; statusPath?: string \| undefined; } \| undefined; triggers?: { kind: string; params: Record<string, JsonValue>; when?: Condition \| undefined; filter?: undefined; filterExpression?: undefined; }[] \| undefined; canvasLayout?: Record<string, JsonValue> \| undefined; extensions?: Record<string, JsonValue> \| undefined; source?: { kind: "editor"; } \| { kind: "extension"; extension: string; metadata: JsonObject; externalId?: string \| undefined; syncedAt?: string \| undefined; } \| undefined; executableSource?: { kind: "path"; path: string; } \| { kind: "source"; filename: string; source: string; } \| { kind: "definition"; workflowId: string; } \| undefined; requirements?: { customCapabilities: string[]; maxRuntimeMs?: number \| undefined; persistentStorage?: boolean \| undefined; recoverableAllocation?: boolean \| undefined; materializationModes?: ("local-directory" \| "workspace-snapshot")[] \| undefined; } \| undefined; successFinalizerId?: string \| undefined; } \| undefined; config?: JsonObject \| undefined; triggerMode?: "immediate" \| "await-trigger" \| undefined; artifactRef?: { kind: string; id: string; } \| undefined; dispatchMetadata?: JsonObject \| undefined; terminalAuthority?: "authority" \| "worker" \| undefined; materializationSpec?: { kind: "local-directory"; workspaceId: string; rootDigest: string; sourcePath: string; } \| { kind: "workspace-snapshot"; snapshotId: string; digest: string; sourcePath: string; } \| undefined; } \| null` | yes |
+| `runContext` | `{ executionId: string; workflowId: string; source: { kind: "path"; path: string; } \| { kind: "source"; filename: string; source: string; } \| { kind: "definition"; workflowId: string; }; workerManifest: { contributionRefs: { packageName: string; version: string; entrypoint: string; integrity: string; }[]; }; inputs: JsonValue; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; triggerPayload: JsonObject; coordinatorSessionId: string; cancelSubject: string; env: Record<string, string>; createdAt: number; suspensionStrategy: "wait-in-process" \| "exit-and-redispatch" \| "exit-and-resume"; definitionSnapshot?: JsonValue \| undefined; config?: JsonObject \| undefined; triggerMode?: "immediate" \| "await-trigger" \| undefined; artifactRef?: { kind: string; id: string; } \| undefined; dispatchMetadata?: JsonObject \| undefined; terminalAuthority?: "authority" \| "worker" \| undefined; materializationSpec?: { kind: "local-directory"; workspaceId: string; rootDigest: string; sourcePath: string; } \| { kind: "workspace-snapshot"; snapshotId: string; digest: string; sourcePath: string; } \| undefined; } \| null` | yes |
 
 ### <a id="storage:workflow.getState"></a>`storage:workflow.getState` (rpc)
 
@@ -299,6 +303,9 @@ _Empty object._
 
 ### <a id="storage:workflow.list"></a>`storage:workflow.list` (rpc)
 
+Answer is itself `WorkflowDefinitionListSchema`, without an envelope: readable
+definitions plus the rows that could not be read.
+
 Subject: `storage:workflow.list`
 Type: Request (RPC)
 
@@ -312,6 +319,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
+| `rejected` | `{ id: string; reason: string; }[]` | yes |
 | `workflows` | `{ id: string; root: { id: string; type: "sequence"; nodes: WorkflowNode[]; when?: string \| undefined; skip?: string \| undefined; writes?: { kind: string; schemaVersion: number; scope: { level: string; ids?: Record<string, string> \| undefined; }; dataExpression?: string \| undefined; }[] \| undefined; }; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; name?: string \| undefined; description?: string \| undefined; inputSchema?: Record<string, JsonValue> \| undefined; configSchema?: Record<string, JsonValue> \| undefined; outputSchema?: Record<string, JsonValue> \| undefined; state?: { schema: Record<string, JsonValue>; initial?: JsonValue \| undefined; } \| undefined; artifact?: { kind: string; schemaVersion: number; scope: { level: string; ids?: Record<string, string> \| undefined; }; resolve?: string \| undefined; create?: string \| undefined; statusPath?: string \| undefined; } \| undefined; triggers?: { kind: string; params: Record<string, JsonValue>; when?: Condition \| undefined; filter?: undefined; filterExpression?: undefined; }[] \| undefined; canvasLayout?: Record<string, JsonValue> \| undefined; extensions?: Record<string, JsonValue> \| undefined; source?: { kind: "editor"; } \| { kind: "extension"; extension: string; metadata: JsonObject; externalId?: string \| undefined; syncedAt?: string \| undefined; } \| undefined; executableSource?: { kind: "path"; path: string; } \| { kind: "source"; filename: string; source: string; } \| { kind: "definition"; workflowId: string; } \| undefined; requirements?: { customCapabilities: string[]; maxRuntimeMs?: number \| undefined; persistentStorage?: boolean \| undefined; recoverableAllocation?: boolean \| undefined; materializationModes?: ("local-directory" \| "workspace-snapshot")[] \| undefined; } \| undefined; successFinalizerId?: string \| undefined; }[]` | yes |
 
 ### <a id="storage:workflow.listClaimedFinalizations"></a>`storage:workflow.listClaimedFinalizations` (rpc)
@@ -416,7 +424,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `frames` | `{ frameId: string; nodeId: string; nodeType: "sequence" \| "delegate-agent" \| "delegate-role" \| "station" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "failed" \| "completed" \| "cancelled" \| "skipped" \| "pending" \| "running" \| "waiting"; attempt: number; parentFrameId?: string \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; output?: JsonValue \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; }[]` | yes |
+| `frames` | `{ frameId: string; nodeId: string; nodeType: "sequence" \| "code-step" \| "agent-step" \| "parallel" \| "gate" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "failed" \| "completed" \| "cancelled" \| "skipped" \| "pending" \| "running" \| "waiting"; attempt: number; parentFrameId?: string \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; output?: JsonValue \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; }[]` | yes |
 
 ### <a id="storage:workflow.listGateInstances"></a>`storage:workflow.listGateInstances` (rpc)
 
@@ -475,7 +483,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `spans` | `{ executionId: string; frameId: string; stepId: string; stepType: "delegate-agent" \| "delegate-role" \| "station" \| "gate"; status: "failed" \| "completed" \| "skipped" \| "running"; startedAt?: number \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; toolCallCount?: number \| undefined; input?: string \| undefined; output?: string \| undefined; }[]` | yes |
+| `spans` | `{ executionId: string; frameId: string; stepId: string; stepType: "code-step" \| "agent-step" \| "gate"; status: "failed" \| "completed" \| "skipped" \| "running"; startedAt?: number \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; toolCallCount?: number \| undefined; input?: string \| undefined; output?: string \| undefined; }[]` | yes |
 
 ### <a id="storage:workflow.listUnpublishedFinalizations"></a>`storage:workflow.listUnpublishedFinalizations` (rpc)
 
@@ -688,7 +696,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `execution` | `{ id: string; workflowId: string; inputs: JsonValue; startedAt: number; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; status: "running"; coordinatorSessionId?: string \| undefined; config?: JsonObject \| undefined; completedAt?: number \| undefined; error?: string \| undefined; reason?: string \| undefined; triggerPayload?: JsonObject \| undefined; artifactRef?: { kind: string; id: string; } \| undefined; }` | yes |
-| `frame` | `{ executionId: string; frameId: string; nodeId: string; nodeType: "sequence" \| "delegate-agent" \| "delegate-role" \| "station" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; attempt: number; status: "running"; startedAt: number; iteration?: number \| undefined; branchKey?: string \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; error?: string \| undefined; } \| undefined` | no |
+| `frame` | `{ executionId: string; frameId: string; nodeId: string; nodeType: "sequence" \| "code-step" \| "agent-step" \| "parallel" \| "gate" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; attempt: number; status: "running"; startedAt: number; iteration?: number \| undefined; branchKey?: string \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; error?: string \| undefined; } \| undefined` | no |
 
 **Response:**
 
@@ -712,7 +720,7 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `executionId` | `string` | yes |
-| `frame` | `{ frameId: string; nodeId: string; nodeType: "sequence" \| "delegate-agent" \| "delegate-role" \| "station" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "failed" \| "completed" \| "cancelled" \| "skipped" \| "pending" \| "running" \| "waiting"; parentFrameId?: string \| undefined; attempt?: number \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; output?: JsonValue \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; }` | yes |
+| `frame` | `{ frameId: string; nodeId: string; nodeType: "sequence" \| "code-step" \| "agent-step" \| "parallel" \| "gate" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "failed" \| "completed" \| "cancelled" \| "skipped" \| "pending" \| "running" \| "waiting"; parentFrameId?: string \| undefined; attempt?: number \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; output?: JsonValue \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; }` | yes |
 
 **Response:**
 
@@ -770,7 +778,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `span` | `{ executionId: string; frameId: string; stepId: string; stepType: "delegate-agent" \| "delegate-role" \| "station" \| "gate"; status: "failed" \| "completed" \| "skipped" \| "running"; startedAt?: number \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; toolCallCount?: number \| undefined; input?: string \| undefined; output?: string \| undefined; }` | yes |
+| `span` | `{ executionId: string; frameId: string; stepId: string; stepType: "code-step" \| "agent-step" \| "gate"; status: "failed" \| "completed" \| "skipped" \| "running"; startedAt?: number \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; toolCallCount?: number \| undefined; input?: string \| undefined; output?: string \| undefined; }` | yes |
 
 **Response:**
 
@@ -792,7 +800,7 @@ Type: Request (RPC)
 | `completedAt` | `number \| undefined` | no |
 | `error` | `string \| undefined` | no |
 | `executionId` | `string` | yes |
-| `frame` | `{ executionId: string; frameId: string; nodeId: string; nodeType: "sequence" \| "delegate-agent" \| "delegate-role" \| "station" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; attempt: number; status: "failed" \| "completed" \| "cancelled"; startedAt: number; completedAt: number; durationMs: number; iteration?: number \| undefined; branchKey?: string \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; error?: string \| undefined; } \| undefined` | no |
+| `frame` | `{ executionId: string; frameId: string; nodeId: string; nodeType: "sequence" \| "code-step" \| "agent-step" \| "parallel" \| "gate" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; attempt: number; status: "failed" \| "completed" \| "cancelled"; startedAt: number; completedAt: number; durationMs: number; iteration?: number \| undefined; branchKey?: string \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; error?: string \| undefined; } \| undefined` | no |
 | `reason` | `string \| undefined` | no |
 | `status` | `"failed" \| "completed" \| "cancelled"` | yes |
 

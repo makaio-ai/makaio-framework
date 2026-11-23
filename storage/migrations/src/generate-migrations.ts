@@ -25,7 +25,11 @@
  * pre-release-only `db:generate:fresh` escape hatch by deleting each present
  * chain directory before regeneration.
  *
- * Usage: `tsx src/generate-migrations.ts [--name <name>] [--fresh]`
+ * `custom: true` forwards drizzle-kit's `--custom` flag to every leg: each chain
+ * receives one empty migration under the shared name for hand-written SQL (for
+ * example a data rewrite), so the chains stay paired by construction.
+ *
+ * Usage: `tsx src/generate-migrations.ts [--name <name>] [--fresh | --custom]`
  * @packageDocumentation
  */
 import { execFileSync } from 'node:child_process';
@@ -123,6 +127,12 @@ export interface GenerateMigrationsOptions {
    * otherwise only appended to.
    */
   fresh?: boolean;
+  /**
+   * When `true`, every leg runs `drizzle-kit generate --custom`: one empty
+   * migration per chain under the shared name, for hand-written SQL. Cannot be
+   * combined with `fresh`.
+   */
+  custom?: boolean;
   /**
    * Absolute workspace root used to discover schema packages during barrel
    * regeneration (step 1). Forwarded to {@link generateSchema}; when omitted,
@@ -226,27 +236,41 @@ function defaultReadNewestJournalTag(chainDir: string): string | undefined {
 }
 
 /**
- * Assert a leg that appended a new migration named it with the shared suffix.
+ * Assert a leg that appended a new migration named it with the shared suffix;
+ * under `--custom`, also assert that the leg appended one at all.
  *
  * drizzle-kit only appends a migration when the schema actually changed; a
  * no-diff run leaves the journal untouched. The naming contract therefore only
  * applies when the newest tag changed across the leg's run: if a new migration
  * landed, its tag must carry the shared `--name` suffix so every chain's newest
  * filename stays correlatable. A no-diff run appends nothing, so there is
- * nothing to correlate and the assertion is satisfied vacuously.
+ * nothing to correlate and the assertion is satisfied vacuously — UNLESS the
+ * leg ran under `--custom`, which must always append an empty migration for
+ * hand-written SQL; installed drizzle-kit catches generation errors and still
+ * exits 0, so a missing append under `--custom` is otherwise invisible.
  * @param dialect - Dialect of the chain (for the error message).
  * @param name - Migration name that should suffix a newly appended tag.
  * @param beforeTag - Newest tag before the leg ran, or `undefined` when empty.
  * @param afterTag - Newest tag after the leg ran, or `undefined` when empty.
+ * @param custom - Whether the leg ran with `--custom`.
  * @throws When a new migration was appended but its tag lacks the `_<name>` suffix.
+ * @throws When `custom` is set and the leg's journal did not advance.
  */
 function assertAppendedTagMatchesName(
   dialect: StorageDialect,
   name: string,
   beforeTag: string | undefined,
   afterTag: string | undefined,
+  custom: boolean,
 ): void {
   if (afterTag === beforeTag) {
+    if (custom) {
+      throw new Error(
+        `--custom did not append a migration to the ${dialect} chain: drizzle-kit exits 0 even when ` +
+          `generation fails, so a missing append is otherwise invisible. Every leg must advance its ` +
+          `journal under '--custom'.`,
+      );
+    }
     // No new migration appended (no schema diff) — nothing to correlate.
     return;
   }
@@ -277,6 +301,8 @@ interface RunGenerationLegParams {
   readonly name: string;
   /** Whether to delete the chain directory first. */
   readonly fresh: boolean;
+  /** Whether drizzle-kit writes an empty migration for hand-written SQL (`--custom`). */
+  readonly custom: boolean;
   /** Optional post-generation normalize script. */
   readonly normalizeScriptPath?: string;
 }
@@ -292,7 +318,15 @@ function runGenerationLeg(params: RunGenerationLegParams): void {
   }
   params.runCommand({
     file: 'tsx',
-    args: [params.drizzleKitBin, 'generate', '--config', params.configPath, '--name', params.name],
+    args: [
+      params.drizzleKitBin,
+      'generate',
+      '--config',
+      params.configPath,
+      '--name',
+      params.name,
+      ...(params.custom ? ['--custom'] : []),
+    ],
     cwd: params.cwd,
   });
   if (params.normalizeScriptPath) {
@@ -310,10 +344,15 @@ function runGenerationLeg(params: RunGenerationLegParams): void {
  * @param options - Generation options.
  * @returns The shared migration name and one result entry per dialect leg.
  * @throws When a leg appends a migration whose tag does not match the shared name.
+ * @throws When `custom` and `fresh` are both set.
  */
 export async function generateMigrations(options: GenerateMigrationsOptions = {}): Promise<GenerateMigrationsResult> {
   const logger = options.logger ?? console;
   const fresh = options.fresh ?? false;
+  const custom = options.custom ?? false;
+  if (custom && fresh) {
+    throw new Error('custom cannot be combined with fresh: a fresh chain is regenerated from the schema');
+  }
   const internals = options.__internals ?? {};
   const runCommand = internals.runCommand ?? defaultRunCommand;
   const resolveEnginePackageRoot = internals.resolveEnginePackageRoot ?? defaultResolveEnginePackageRoot;
@@ -347,8 +386,9 @@ export async function generateMigrations(options: GenerateMigrationsOptions = {}
     chainDir: baselineChainDir,
     name,
     fresh,
+    custom,
   });
-  assertAppendedTagMatchesName(BASELINE_DIALECT, name, baselineBefore, readNewestJournalTag(baselineChainDir));
+  assertAppendedTagMatchesName(BASELINE_DIALECT, name, baselineBefore, readNewestJournalTag(baselineChainDir), custom);
   legs.push({ dialect: BASELINE_DIALECT, chainDir: baselineChainDir, ran: true });
 
   // 3. Non-baseline engine legs — each runs only when its package resolves.
@@ -372,11 +412,12 @@ export async function generateMigrations(options: GenerateMigrationsOptions = {}
       chainDir,
       name,
       fresh,
+      custom,
       normalizeScriptPath: leg.normalizeScriptSpecifier
         ? path.join(engineRoot, leg.normalizeScriptSpecifier)
         : undefined,
     });
-    assertAppendedTagMatchesName(leg.dialect, name, legBefore, readNewestJournalTag(chainDir));
+    assertAppendedTagMatchesName(leg.dialect, name, legBefore, readNewestJournalTag(chainDir), custom);
     legs.push({ dialect: leg.dialect, chainDir, ran: true });
   }
 
@@ -428,20 +469,25 @@ interface ParsedCliArgs {
   readonly name?: string;
   /** Whether `--fresh` was passed. */
   readonly fresh: boolean;
+  /** Whether `--custom` was passed. */
+  readonly custom: boolean;
 }
 
 /**
  * Parse the orchestrator CLI flags from `process.argv`.
  * @param argv - Raw argument vector (typically `process.argv`).
- * @returns Parsed `name` and `fresh` flags.
+ * @returns Parsed `name`, `fresh` and `custom` flags.
  */
 function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
   let name: string | undefined;
   let fresh = false;
+  let custom = false;
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--fresh') {
       fresh = true;
+    } else if (arg === '--custom') {
+      custom = true;
     } else if (arg === '--name') {
       if (i + 1 >= argv.length) {
         throw new Error('--name requires a value');
@@ -452,10 +498,10 @@ function parseCliArgs(argv: readonly string[]): ParsedCliArgs {
       name = arg.slice('--name='.length);
     }
   }
-  return { name, fresh };
+  return { name, fresh, custom };
 }
 
 if (isMainModule()) {
-  const { name, fresh } = parseCliArgs(process.argv);
-  void generateMigrations({ name, fresh });
+  const { name, fresh, custom } = parseCliArgs(process.argv);
+  void generateMigrations({ name, fresh, custom });
 }

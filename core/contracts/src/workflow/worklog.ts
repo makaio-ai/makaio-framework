@@ -36,11 +36,11 @@ export const WorkLogExecutionSummarySchema = z.object({
   completedAt: z.number().optional(),
   /** Wall-clock duration in milliseconds. Present once the execution completes. */
   durationMs: z.number().nonnegative().optional(),
-  /** Aggregated token usage across all station frames. */
+  /** Aggregated token usage across all agent steps. */
   totalInputTokens: z.number().int().nonnegative().optional(),
-  /** Aggregated output tokens across all station frames. */
+  /** Aggregated output tokens across all agent steps. */
   totalOutputTokens: z.number().int().nonnegative().optional(),
-  /** Aggregated estimated cost in USD across all station frames. */
+  /** Aggregated estimated cost in USD across all agent steps. */
   totalEstimatedCost: z.number().nonnegative().optional(),
   /** Human-readable error message when `status` is `'failed'`. */
   error: z.string().optional(),
@@ -91,11 +91,11 @@ export const WorkLogFrameEntrySchema = z.object({
   completedAt: z.number().optional(),
   /** Wall-clock duration in milliseconds. */
   durationMs: z.number().nonnegative().optional(),
-  /** Input tokens consumed (station frames with LLM execution). */
+  /** Input tokens consumed (agent steps with LLM execution). */
   inputTokens: z.number().int().nonnegative().optional(),
-  /** Output tokens produced (station frames with LLM execution). */
+  /** Output tokens produced (agent steps with LLM execution). */
   outputTokens: z.number().int().nonnegative().optional(),
-  /** Estimated cost in USD (station frames with LLM execution). */
+  /** Estimated cost in USD (agent steps with LLM execution). */
   estimatedCost: z.number().nonnegative().optional(),
   /** Human-readable error message when `status` is `'failed'`. */
   error: z.string().optional(),
@@ -181,9 +181,9 @@ export type WorkLogGateEvent = z.infer<typeof WorkLogGateEventSchema>;
 export const WorkLogUsageSummarySchema = z.object({
   /** Execution this summary applies to. */
   executionId: z.string().min(1),
-  /** Total input tokens consumed across all station frames. */
+  /** Total input tokens consumed across all agent steps. */
   inputTokens: z.number().int().nonnegative(),
-  /** Total output tokens produced across all station frames. */
+  /** Total output tokens produced across all agent steps. */
   outputTokens: z.number().int().nonnegative(),
   /** Total cached tokens served from prompt cache (when available). */
   cachedTokens: z.number().int().nonnegative().optional(),

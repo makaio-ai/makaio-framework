@@ -77,7 +77,7 @@ describe('WorkLog storage', () => {
       executionId: 'exec-worklog-storage',
       frameId: 'frame-usage-authority',
       nodeId: 'review',
-      nodeType: 'station',
+      nodeType: 'agent-step',
       path: ['frame-usage-authority'],
       status: 'completed',
       attempt: 0,

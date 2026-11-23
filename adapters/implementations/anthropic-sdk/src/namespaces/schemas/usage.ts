@@ -11,7 +11,7 @@ export const UsageEventSchema = z.object({
   llmCallId: z.string().optional(),
   /** Workflow execution that caused the request, when known. */
   executionId: z.string().optional(),
-  /** Workflow frame/station that caused the request, when known. */
+  /** Workflow frame/step that caused the request, when known. */
   frameId: z.string().optional(),
   /** Number of tokens in the prompt (input) */
   prompt_tokens: z.number(),

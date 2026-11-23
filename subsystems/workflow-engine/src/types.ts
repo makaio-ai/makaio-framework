@@ -1,7 +1,7 @@
 import type { CallContext } from '@makaio/core';
 import type {
+  CodeStepHandler,
   LoopGateHandler,
-  StationHandler,
   StepRunnerBusAuth,
   StepRunnerPlatformDefaults,
   WorkerMaterializationSpec,
@@ -52,7 +52,7 @@ export interface ExecutorConfig {
    * Absolute path to the Makaio data-home directory.
    *
    * Used by the in-process executor to populate the ephemeral platform
-   * context exposed to station handlers. When omitted the executor derives
+   * context exposed to code step handlers. When omitted the executor derives
    * a default from the `MAKAIO_HOME` environment variable or `~/.makaio`.
    */
   makaioHome?: string;
@@ -104,22 +104,22 @@ export const DEFAULT_EXECUTOR_CONFIG: ExecutorConfig = {
 /**
  * Active execution state tracked by the executor.
  *
- * Holds the live execution record, the workflow definition, and the station
- * handler map for handler-bearing executions (e.g. inline builds, runFile).
+ * Holds the live execution record, the workflow definition, and the code
+ * step handler map for handler-bearing executions (e.g. inline builds, runFile).
  */
 export interface ActiveExecution {
   /** The execution state. */
   execution: WorkflowExecution;
   /** The workflow definition being executed. */
   workflow: WorkflowDefinition;
-  /** Durable run-context snapshot used to populate runtime station context. */
+  /** Durable run-context snapshot used to populate runtime code step context. */
   runContext: WorkflowRunContext;
   /**
-   * Station handler functions keyed by node ID.
+   * Code step handler functions keyed by node ID.
    * Populated at execution start for handler-bearing executions
    * (e.g. inline builds, runFile). Empty for definition-backed executions.
    */
-  runtimeHandlers: Map<string, StationHandler>;
+  runtimeHandlers: Map<string, CodeStepHandler>;
   /** Loop gate handler functions keyed by handler name. */
   runtimeLoopGates: Map<string, LoopGateHandler>;
 }

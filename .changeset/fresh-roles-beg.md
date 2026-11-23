@@ -3,4 +3,4 @@
 "@makaio/subsystem-workflow-engine": patch
 ---
 
-Run delegate-role workflow nodes through session-backed turns instead of the subagent spawn/await path.
+Run agent steps through the unified subagent spawn/await lifecycle, preserving fresh context for `completion: 'turn'` without harness fields.

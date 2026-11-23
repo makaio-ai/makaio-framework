@@ -42,7 +42,6 @@ describe('workflow finalization contracts', () => {
       workflowId: 'workflow-1',
       frameId: 'frame-1',
       nodeId: 'read-artifact',
-      nodeType: 'delegate-role',
       rawResult: { summary: 'Read complete' },
       toolObservations: [
         {
@@ -84,6 +83,20 @@ describe('workflow finalization contracts', () => {
             artifact: { kind: 'solution-design', id: 'design-1', revision: '3' },
           },
         ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('rejects a delegate result finalization request carrying a nodeType field', () => {
+    expect(
+      WorkflowDelegateResultFinalizationRequestSchema.safeParse({
+        executionId: 'exec-1',
+        workflowId: 'workflow-1',
+        frameId: 'frame-1',
+        nodeId: 'read-artifact',
+        nodeType: 'delegate-role', // legacy-input
+        rawResult: { summary: 'Read complete' },
+        toolObservations: [],
       }).success,
     ).toBe(false);
   });

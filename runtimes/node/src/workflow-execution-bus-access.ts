@@ -108,7 +108,6 @@ const STATIC_EXECUTION_MESSAGE_SUBJECTS = [
   WorkflowSubjects.gate.resolved,
   WorkflowSubjects.state.get,
   WorkflowSubjects.state.patch,
-  WorkflowSubjects.resolveAgent,
   WorkflowSubjects.resolveRole,
   ArtifactSubjects.kind.list,
   ArtifactSubjects.query,

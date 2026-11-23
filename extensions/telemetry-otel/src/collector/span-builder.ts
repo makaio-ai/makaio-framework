@@ -32,7 +32,7 @@ export interface BuildFrameSpanInput {
   readonly frameId: string;
   /** Node identifier from the workflow definition. */
   readonly nodeId: string;
-  /** Node type discriminant (e.g. `'station'`). */
+  /** Node type discriminant (e.g. `'agent-step'`). */
   readonly nodeType: string;
   /** Ordered path of frame IDs from root to this frame. */
   readonly path: readonly string[];
@@ -307,7 +307,7 @@ export class SpanBuilder {
       namespace: 'workflow',
       subject: 'frame',
       name: `Frame ${input.nodeId}`,
-      kind: isDelegateNodeType(input.nodeType) ? 'client' : 'internal',
+      kind: isAgentStepNodeType(input.nodeType) ? 'client' : 'internal',
       status: input.status,
       startedAt: input.startedAt,
       endedAt: input.endedAt,
@@ -499,10 +499,10 @@ export class SpanBuilder {
 }
 
 /**
- * Determine whether a workflow node type represents a delegated agent call.
+ * Determine whether a workflow node type represents an agent-step call.
  * @param nodeType - Workflow node type discriminant.
  * @returns `true` when the frame should be represented as an OTel client span.
  */
-function isDelegateNodeType(nodeType: string): boolean {
-  return nodeType === 'delegate-agent' || nodeType === 'delegate-role';
+function isAgentStepNodeType(nodeType: string): boolean {
+  return nodeType === 'agent-step';
 }

@@ -3,17 +3,17 @@ import { createBusInstance } from '@makaio/bus-core';
 import { createTestCall } from '@makaio/test-utils';
 import {
   WorkflowNamespace,
+  type CodeStepHandler,
   type JsonValue,
   type LoopGateContext,
   type LoopGateHandler,
   type LoopGateOutcome,
-  type StationHandler,
+  type WorkflowCodeStepNode,
   type WorkflowDefinition,
   type WorkflowExecution,
   type WorkflowFrameState,
   type WorkflowLoopNode,
   type WorkflowSequenceNode,
-  type WorkflowStationNode,
 } from '@makaio/contracts';
 import { RuntimeContext, type RuntimeExecutionOptions } from '../runtime/runtime-context.js';
 import { executeSequence } from '../runtime/primitive-runtime.js';
@@ -65,15 +65,15 @@ function makeBus(): ReturnType<typeof createBusInstance> {
 }
 
 /**
- * Create a RuntimeContext with station handlers and loop gate handlers.
- * @param handlers - Station handlers keyed by node ID.
+ * Create a RuntimeContext with code step handlers and loop gate handlers.
+ * @param handlers - Code step handlers keyed by node ID.
  * @param loopGates - Loop gate handlers keyed by handler name.
  * @param signal - Optional abort signal.
  * @param options - Optional additional runtime execution options.
  * @returns RuntimeContext and the underlying bus.
  */
 function makeCtx(
-  handlers: Record<string, StationHandler>,
+  handlers: Record<string, CodeStepHandler>,
   loopGates: Record<string, LoopGateHandler> = {},
   signal: AbortSignal = new AbortController().signal,
   options: Omit<RuntimeExecutionOptions, 'runtimeLoopGates'> = {},
@@ -109,23 +109,22 @@ const emptyExpressionCtx = {
 // -----------------------------------------------------------------
 
 /**
- * Build a loop node with a single station in its body.
+ * Build a loop node with a single code step in its body.
  * @param nodeId - Loop node ID.
- * @param stationId - Station node ID inside the body.
+ * @param stepId - Code step node ID inside the body.
  * @param gateHandler - Gate handler name.
  * @param maxRounds - Maximum rounds.
  * @returns A WorkflowLoopNode.
  */
-function makeLoopNode(nodeId: string, stationId: string, gateHandler: string, maxRounds: number): WorkflowLoopNode {
-  const stationNode: WorkflowStationNode = {
-    id: stationId,
-    type: 'station',
-    prompt: 'do work',
+function makeLoopNode(nodeId: string, stepId: string, gateHandler: string, maxRounds: number): WorkflowLoopNode {
+  const codeStepNode: WorkflowCodeStepNode = {
+    id: stepId,
+    type: 'code-step',
   };
   const bodySequence: WorkflowSequenceNode = {
     id: `${nodeId}__body`,
     type: 'sequence',
-    nodes: [stationNode],
+    nodes: [codeStepNode],
   };
   return {
     id: nodeId,
@@ -146,7 +145,7 @@ describe('executeLoopNode', () => {
   it('completes when gate returns pass after one round', async () => {
     const call = createTestCall();
     let callCount = 0;
-    const stationHandler: StationHandler = async () => {
+    const codeStepHandler: CodeStepHandler = async () => {
       callCount++;
       return callCount;
     };
@@ -155,14 +154,14 @@ describe('executeLoopNode', () => {
       return { kind: 'pass' };
     };
 
-    const loopNode = makeLoopNode('loop1', 'work-station', 'check-gate', 3);
+    const loopNode = makeLoopNode('loop1', 'work-step', 'check-gate', 3);
     const rootSequence: WorkflowSequenceNode = {
       id: 'root',
       type: 'sequence',
       nodes: [loopNode],
     };
 
-    const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+    const { ctx } = makeCtx({ 'work-step': codeStepHandler }, { 'check-gate': gateHandler });
 
     const outcome = await executeSequence(call, rootSequence, ctx, emptyExpressionCtx);
 
@@ -173,7 +172,7 @@ describe('executeLoopNode', () => {
   it('loops then passes after two rounds', async () => {
     const call = createTestCall();
     let callCount = 0;
-    const stationHandler: StationHandler = async () => {
+    const codeStepHandler: CodeStepHandler = async () => {
       callCount++;
       return callCount * 10;
     };
@@ -185,14 +184,14 @@ describe('executeLoopNode', () => {
       return gateCallCount === 1 ? { kind: 'loop' } : { kind: 'pass' };
     };
 
-    const loopNode = makeLoopNode('loop1', 'work-station', 'check-gate', 5);
+    const loopNode = makeLoopNode('loop1', 'work-step', 'check-gate', 5);
     const rootSequence: WorkflowSequenceNode = {
       id: 'root',
       type: 'sequence',
       nodes: [loopNode],
     };
 
-    const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+    const { ctx } = makeCtx({ 'work-step': codeStepHandler }, { 'check-gate': gateHandler });
 
     const outcome = await executeSequence(call, rootSequence, ctx, emptyExpressionCtx);
 
@@ -215,7 +214,7 @@ describe('executeLoopNode', () => {
 
   it('passes evaluated gate input, config, and loop context after body execution', async () => {
     const call = createTestCall();
-    const stationHandler: StationHandler = async () => ({ score: 42 });
+    const codeStepHandler: CodeStepHandler = async () => ({ score: 42 });
     const gateCalls: Array<{ input: unknown; config: unknown; round: number; maxRounds: number; nodeId: string }> = [];
     const gateHandler: LoopGateHandler = (
       input: JsonValue,
@@ -227,10 +226,10 @@ describe('executeLoopNode', () => {
     };
 
     const loopNode = {
-      ...makeLoopNode('loop-input', 'work-station', 'check-gate', 3),
+      ...makeLoopNode('loop-input', 'work-step', 'check-gate', 3),
       gate: {
         handler: 'check-gate',
-        input: 'frames["work-station"].output.score',
+        input: 'frames["work-step"].output.score',
         config: { threshold: 40 },
       },
     } satisfies WorkflowLoopNode;
@@ -240,7 +239,7 @@ describe('executeLoopNode', () => {
       nodes: [loopNode],
     };
 
-    const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+    const { ctx } = makeCtx({ 'work-step': codeStepHandler }, { 'check-gate': gateHandler });
     const outcome = await executeSequence(call, rootSequence, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
@@ -258,7 +257,7 @@ describe('executeLoopNode', () => {
   it('escalates when max rounds reached', async () => {
     const call = createTestCall();
     let callCount = 0;
-    const stationHandler: StationHandler = async () => {
+    const codeStepHandler: CodeStepHandler = async () => {
       callCount++;
       return callCount;
     };
@@ -270,14 +269,14 @@ describe('executeLoopNode', () => {
 
     // maxRounds: 1 means the body runs once, then gate returns loop,
     // but round + 1 >= maxRounds so the runtime overrides with escalate.
-    const loopNode = makeLoopNode('loop1', 'work-station', 'check-gate', 1);
+    const loopNode = makeLoopNode('loop1', 'work-step', 'check-gate', 1);
     const rootSequence: WorkflowSequenceNode = {
       id: 'root',
       type: 'sequence',
       nodes: [loopNode],
     };
 
-    const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+    const { ctx } = makeCtx({ 'work-step': codeStepHandler }, { 'check-gate': gateHandler });
 
     const outcome = await executeSequence(call, rootSequence, ctx, emptyExpressionCtx);
 
@@ -301,17 +300,17 @@ describe('executeLoopNode', () => {
 
   it('fails with clear error when gate handler is not registered', async () => {
     const call = createTestCall();
-    const stationHandler: StationHandler = async () => 'done';
+    const codeStepHandler: CodeStepHandler = async () => 'done';
 
     // No gate handler registered — the handler name 'missing-gate' has no entry.
-    const loopNode = makeLoopNode('loop1', 'work-station', 'missing-gate', 3);
+    const loopNode = makeLoopNode('loop1', 'work-step', 'missing-gate', 3);
     const rootSequence: WorkflowSequenceNode = {
       id: 'root',
       type: 'sequence',
       nodes: [loopNode],
     };
 
-    const { ctx } = makeCtx({ 'work-station': stationHandler }, {});
+    const { ctx } = makeCtx({ 'work-step': codeStepHandler }, {});
 
     const outcome = await executeSequence(call, rootSequence, ctx, emptyExpressionCtx);
 
@@ -322,30 +321,30 @@ describe('executeLoopNode', () => {
     }
   });
 
-  it('fails when body station throws', async () => {
+  it('fails when body code step throws', async () => {
     const call = createTestCall();
-    const stationHandler: StationHandler = async () => {
-      throw new Error('station exploded');
+    const codeStepHandler: CodeStepHandler = async () => {
+      throw new Error('code step exploded');
     };
 
     const gateHandler: LoopGateHandler = (): LoopGateOutcome => {
       return { kind: 'pass' };
     };
 
-    const loopNode = makeLoopNode('loop1', 'work-station', 'check-gate', 3);
+    const loopNode = makeLoopNode('loop1', 'work-step', 'check-gate', 3);
     const rootSequence: WorkflowSequenceNode = {
       id: 'root',
       type: 'sequence',
       nodes: [loopNode],
     };
 
-    const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+    const { ctx } = makeCtx({ 'work-step': codeStepHandler }, { 'check-gate': gateHandler });
 
     const outcome = await executeSequence(call, rootSequence, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
-      expect(outcome.error).toContain('station exploded');
+      expect(outcome.error).toContain('code step exploded');
     }
   });
 });
@@ -357,7 +356,7 @@ describe('executeLoopNode', () => {
 /**
  * Build a loop node with escalation config for gate suspension tests.
  * @param nodeId - Loop node ID.
- * @param stationId - Station node ID inside the body.
+ * @param stepId - Code step node ID inside the body.
  * @param gateHandler - Gate handler name.
  * @param maxRounds - Maximum rounds.
  * @param escalation - Escalation gate configuration.
@@ -365,12 +364,12 @@ describe('executeLoopNode', () => {
  */
 function makeLoopNodeWithEscalation(
   nodeId: string,
-  stationId: string,
+  stepId: string,
   gateHandler: string,
   maxRounds: number,
   escalation: NonNullable<WorkflowLoopNode['gate']['escalation']>,
 ): WorkflowLoopNode {
-  const base = makeLoopNode(nodeId, stationId, gateHandler, maxRounds);
+  const base = makeLoopNode(nodeId, stepId, gateHandler, maxRounds);
   return {
     ...base,
     gate: {
@@ -384,7 +383,7 @@ describe('executeLoopNode — escalation gate', () => {
   it.each([undefined, 'attempt-a'])('opens escalation for its owning attempt (%s)', async (executionAttemptId) => {
     const call = createTestCall();
     let callCount = 0;
-    const stationHandler: StationHandler = async () => {
+    const codeStepHandler: CodeStepHandler = async () => {
       callCount++;
       return callCount;
     };
@@ -393,14 +392,14 @@ describe('executeLoopNode — escalation gate', () => {
       return { kind: 'escalate', reason: 'review needed' };
     };
 
-    const loopNode = makeLoopNodeWithEscalation('loop-esc', 'work-station', 'check-gate', 3, {
+    const loopNode = makeLoopNodeWithEscalation('loop-esc', 'work-step', 'check-gate', 3, {
       prompt: 'Please review the loop results',
       autoAction: 'reject',
       timeoutMs: null,
     });
 
     const { ctx, bus } = makeCtx(
-      { 'work-station': stationHandler },
+      { 'work-step': codeStepHandler },
       { 'check-gate': gateHandler },
       new AbortController().signal,
       { executionAttemptId },
@@ -468,7 +467,7 @@ describe('executeLoopNode — escalation gate', () => {
   it('returns paused for exit-based suspension on escalation', async () => {
     const call = createTestCall();
     let callCount = 0;
-    const stationHandler: StationHandler = async () => {
+    const codeStepHandler: CodeStepHandler = async () => {
       callCount++;
       return callCount;
     };
@@ -477,14 +476,14 @@ describe('executeLoopNode — escalation gate', () => {
       return { kind: 'escalate', reason: 'needs human review' };
     };
 
-    const loopNode = makeLoopNodeWithEscalation('loop-park', 'work-station', 'check-gate', 3, {
+    const loopNode = makeLoopNodeWithEscalation('loop-park', 'work-step', 'check-gate', 3, {
       prompt: 'Review needed',
       autoAction: 'reject',
       timeoutMs: null,
     });
 
     const { ctx, bus } = makeCtx(
-      { 'work-station': stationHandler },
+      { 'work-step': codeStepHandler },
       { 'check-gate': gateHandler },
       new AbortController().signal,
       { suspensionStrategy: 'exit-and-redispatch' },
@@ -534,17 +533,17 @@ describe('executeLoopNode — escalation gate', () => {
     const call = createTestCall();
     vi.useFakeTimers();
     try {
-      const stationHandler: StationHandler = async () => ({ needsReview: true });
+      const codeStepHandler: CodeStepHandler = async () => ({ needsReview: true });
       const gateHandler: LoopGateHandler = (): LoopGateOutcome => {
         return { kind: 'escalate', reason: 'needs human review' };
       };
 
-      const loopNode = makeLoopNodeWithEscalation('loop-timeout-in-process', 'work-station', 'check-gate', 3, {
+      const loopNode = makeLoopNodeWithEscalation('loop-timeout-in-process', 'work-step', 'check-gate', 3, {
         prompt: 'Review needed',
         autoAction: 'reject',
         timeoutMs: 1000,
       });
-      const { ctx } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+      const { ctx } = makeCtx({ 'work-step': codeStepHandler }, { 'check-gate': gateHandler });
       const containerFrame = ctx.createFrame(call, {
         nodeId: 'loop-timeout-in-process',
         nodeType: 'loop',
@@ -577,7 +576,7 @@ describe('executeLoopNode — escalation gate', () => {
   it('completes without gate when escalation config is absent', async () => {
     const call = createTestCall();
     let callCount = 0;
-    const stationHandler: StationHandler = async () => {
+    const codeStepHandler: CodeStepHandler = async () => {
       callCount++;
       return callCount;
     };
@@ -587,9 +586,9 @@ describe('executeLoopNode — escalation gate', () => {
     };
 
     // No escalation config — use the basic makeLoopNode.
-    const loopNode = makeLoopNode('loop-no-esc', 'work-station', 'check-gate', 3);
+    const loopNode = makeLoopNode('loop-no-esc', 'work-step', 'check-gate', 3);
 
-    const { ctx, bus } = makeCtx({ 'work-station': stationHandler }, { 'check-gate': gateHandler });
+    const { ctx, bus } = makeCtx({ 'work-step': codeStepHandler }, { 'check-gate': gateHandler });
     const parentFrameId = 'test-loop-parent';
 
     // Ensure no gate.suspended is emitted.
@@ -625,7 +624,7 @@ describe('executeLoopNode — resume frame reuse', () => {
     // This test uses executeLoopNode directly with a known parentFrameId
     // to verify frame reuse behavior.
     let callCount = 0;
-    const stationHandler: StationHandler = async () => {
+    const codeStepHandler: CodeStepHandler = async () => {
       callCount++;
       return callCount * 10;
     };
@@ -636,7 +635,7 @@ describe('executeLoopNode — resume frame reuse', () => {
       return { kind: 'pass' };
     };
 
-    const loopNode = makeLoopNode('loop-resume', 'work-station', 'check-gate', 5);
+    const loopNode = makeLoopNode('loop-resume', 'work-step', 'check-gate', 5);
 
     // Build resume frames: 2 completed rounds with known parentFrameId.
     const parentFrameId = 'known-parent-frame';
@@ -671,7 +670,7 @@ describe('executeLoopNode — resume frame reuse', () => {
 
     const resumeIndex = buildResumeFrameIndex(resumeFrames);
     const { ctx } = makeCtx(
-      { 'work-station': stationHandler },
+      { 'work-step': codeStepHandler },
       { 'check-gate': gateHandler },
       new AbortController().signal,
       { resumeFrames: resumeIndex },
@@ -709,7 +708,7 @@ describe('executeLoopNode — resume frame reuse', () => {
 
     const parentFrameId = 'known-parent-frame';
     const loopNode = {
-      ...makeLoopNode('loop-no-output', 'unused-station', 'check-gate', 5),
+      ...makeLoopNode('loop-no-output', 'unused-step', 'check-gate', 5),
       body: {
         id: 'loop-no-output__body',
         type: 'sequence',
@@ -751,7 +750,7 @@ describe('executeLoopNode — resume frame reuse', () => {
 
   it('resolves a persisted escalation gate after replaying completed round frames', async () => {
     const call = createTestCall();
-    const stationHandler: StationHandler = async () => {
+    const codeStepHandler: CodeStepHandler = async () => {
       throw new Error('body should not rerun');
     };
     const gateHandler: LoopGateHandler = () => {
@@ -787,14 +786,14 @@ describe('executeLoopNode — resume frame reuse', () => {
       },
     ];
 
-    const loopNode = makeLoopNodeWithEscalation('loop-resume-gate', 'work-station', 'check-gate', 5, {
+    const loopNode = makeLoopNodeWithEscalation('loop-resume-gate', 'work-step', 'check-gate', 5, {
       prompt: 'Review needed',
       autoAction: 'reject',
       timeoutMs: null,
     });
     const resumeIndex = buildResumeFrameIndex(resumeFrames);
     const { ctx, bus } = makeCtx(
-      { 'work-station': stationHandler },
+      { 'work-step': codeStepHandler },
       { 'check-gate': gateHandler },
       new AbortController().signal,
       { resumeFrames: resumeIndex, suspensionStrategy: 'exit-and-redispatch' },
@@ -834,7 +833,7 @@ describe('executeLoopNode — resume frame reuse', () => {
 
   it('reuses a waiting structural loop frame when resolving an escalation gate on redispatch', async () => {
     const call = createTestCall();
-    const stationHandler: StationHandler = async () => {
+    const codeStepHandler: CodeStepHandler = async () => {
       throw new Error('body should not rerun');
     };
     const gateHandler: LoopGateHandler = () => {
@@ -866,7 +865,7 @@ describe('executeLoopNode — resume frame reuse', () => {
       },
     ]);
 
-    const loopNode = makeLoopNodeWithEscalation('loop-waiting-resume', 'work-station', 'check-gate', 5, {
+    const loopNode = makeLoopNodeWithEscalation('loop-waiting-resume', 'work-step', 'check-gate', 5, {
       prompt: 'Review needed',
       autoAction: 'reject',
       timeoutMs: null,
@@ -877,7 +876,7 @@ describe('executeLoopNode — resume frame reuse', () => {
       nodes: [loopNode],
     };
     const { ctx, bus } = makeCtx(
-      { 'work-station': stationHandler },
+      { 'work-step': codeStepHandler },
       { 'check-gate': gateHandler },
       new AbortController().signal,
       { resumeFrames, suspensionStrategy: 'exit-and-redispatch' },
@@ -928,7 +927,7 @@ describe('executeLoopNode — resume frame reuse', () => {
 
   it('fails an expired persisted escalation gate with auto-reject on redispatch', async () => {
     const call = createTestCall();
-    const loopNode = makeLoopNodeWithEscalation('loop-timeout', 'work-station', 'check-gate', 5, {
+    const loopNode = makeLoopNodeWithEscalation('loop-timeout', 'work-step', 'check-gate', 5, {
       prompt: 'Review needed',
       autoAction: 'reject',
       timeoutMs: 1,
@@ -951,7 +950,7 @@ describe('executeLoopNode — resume frame reuse', () => {
     ]);
     const persistedGateUpdates: unknown[] = [];
     const { ctx, bus } = makeCtx(
-      { 'work-station': async () => 'fresh-output' },
+      { 'work-step': async () => 'fresh-output' },
       { 'check-gate': () => ({ kind: 'loop' }) },
       new AbortController().signal,
       { resumeFrames, suspensionStrategy: 'exit-and-redispatch' },

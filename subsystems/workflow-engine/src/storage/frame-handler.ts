@@ -1,6 +1,7 @@
 import { asc, eq } from 'drizzle-orm';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { JsonValue, WorkflowFrameState } from '@makaio/contracts';
+import { WorkflowNodeTypeSchema } from '@makaio/contracts';
 import { resolveSchema, serializeDatabaseOperation, type MakaioDatabase } from '@makaio/storage-drizzle';
 import { WorkflowStorageSubjects } from './namespace.js';
 import type { InsertWorkflowExecutionFrame } from './schema.js';
@@ -12,14 +13,19 @@ type DbFrameRow = WorkflowExecutionFramesTable['$inferSelect'];
 
 /**
  * Maps a database row to the `WorkflowFrameState` API type.
+ *
+ * `nodeType` is validated against `WorkflowNodeTypeSchema` so that a row the
+ * migration could not decide (an unresolved legacy node row) is rejected
+ * visibly on read instead of being passed through as an unchecked value.
  * @param row - Database row from `workflow_execution_frames`
  * @returns Mapped `WorkflowFrameState` with optional fields normalised
+ * @throws ZodError when `row.nodeType` does not satisfy `WorkflowNodeTypeSchema`.
  */
 function mapFrame(row: DbFrameRow): WorkflowFrameState {
   return {
     frameId: row.frameId,
     nodeId: row.nodeId,
-    nodeType: row.nodeType,
+    nodeType: WorkflowNodeTypeSchema.parse(row.nodeType),
     path: row.path,
     parentFrameId: row.parentFrameId ?? undefined,
     status: row.status,

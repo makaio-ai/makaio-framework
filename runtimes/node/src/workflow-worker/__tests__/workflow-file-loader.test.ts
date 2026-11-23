@@ -30,19 +30,20 @@ afterEach(async () => {
  *
  * The shape mirrors the output of `defineWorkflow()`: an object with
  * `definition` (WorkflowDefinition with pipeline-primitive `root`) and
- * `runtimeHandlers` (`Map<string, fn>`).
+ * `runtimeHandlers` (`Map<string, fn>`). Every generated node has a matching
+ * registered handler, so each is a `code-step` node (no `prompt`).
  * @param id - Workflow identifier.
  * @param stepIds - Step IDs to register in the runtime map.
  * @returns ESM module source string.
  */
 function makeWorkflowModuleSource(id: string, stepIds: string[]): string {
   const stepEntries = stepIds.map((sid) => `['${sid}', (ctx) => ctx]`).join(', ');
-  const stationNodes = stepIds.map((sid) => `{ id: '${sid}', type: 'station', prompt: '${sid}' }`).join(', ');
+  const codeStepNodes = stepIds.map((sid) => `{ id: '${sid}', type: 'code-step' }`).join(', ');
   return `
 const definition = {
   id: '${id}',
   name: '${id}',
-  root: { id: '${id}__root', type: 'sequence', nodes: [${stationNodes}] },
+  root: { id: '${id}__root', type: 'sequence', nodes: [${codeStepNodes}] },
   triggers: [],
   scope: { type: 'global' },
 };
@@ -155,6 +156,62 @@ export default {
 
       await expect(loadWorkflowModule({ kind: 'path', path: filePath })).rejects.toThrow(/invalid workflow module/i);
     });
+
+    it('rejects a retired node type, naming the node type path in the thrown message', async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      await mkdir(dir, { recursive: true });
+
+      const content = `
+const definition = {
+  id: 'legacy-workflow-node',
+  name: 'legacy-workflow-node',
+  root: { id: 'root', type: 'sequence', nodes: [
+    { id: 'n1', type: 'delegate-agent', agentId: 'a', inputExpression: '""', completion: 'turn' }, // legacy-input
+  ] },
+  triggers: [],
+  scope: { type: 'global' },
+};
+const runtimeHandlers = new Map();
+export default { definition, runtimeHandlers };
+`;
+      const filePath = join(dir, 'legacy-workflow-node.mjs');
+      await writeFile(filePath, content, 'utf8');
+
+      const promise = loadWorkflowModule({ kind: 'path', path: filePath });
+      await expect(promise).rejects.toThrow(/invalid workflow module/i);
+      await expect(promise).rejects.toMatchObject({ code: WorkflowErrorCode.NOT_EXECUTABLE });
+      await expect(promise).rejects.toThrow(/"path":\s*\[\s*"root",\s*"nodes",\s*0,\s*"type"/);
+    });
+
+    it('rejects a station node with role even when the module registers a handler under the same ID', async () => {
+      const dir = makeTempDir();
+      tempDirs.push(dir);
+      await mkdir(dir, { recursive: true });
+
+      // The module's own handler map never decides classification; a
+      // `role`-carrying station is a retired shape and is rejected outright,
+      // not silently reinterpreted using the handler it ships with.
+      const content = `
+const definition = {
+  id: 'legacy-station-role',
+  name: 'legacy-station-role',
+  root: { id: 'root', type: 'sequence', nodes: [
+    { id: 'n1', type: 'station', role: 'reviewer', prompt: 'Review the change' }, // legacy-input
+  ] },
+  triggers: [],
+  scope: { type: 'global' },
+};
+const runtimeHandlers = new Map([['n1', (ctx) => ctx]]);
+export default { definition, runtimeHandlers };
+`;
+      const filePath = join(dir, 'legacy-station-role.mjs');
+      await writeFile(filePath, content, 'utf8');
+
+      const promise = loadWorkflowModule({ kind: 'path', path: filePath });
+      await expect(promise).rejects.toThrow(/invalid workflow module/i);
+      await expect(promise).rejects.toMatchObject({ code: WorkflowErrorCode.NOT_EXECUTABLE });
+    });
   });
 
   describe('kind: source', () => {
@@ -252,10 +309,10 @@ function makeBundleModuleSource(entries: Array<{ id: string; stepIds: string[]; 
   const workflowLiterals = entries
     .map(({ id, stepIds, stateSource }) => {
       const stepEntries = stepIds.map((sid) => `['${sid}', (ctx) => ctx]`).join(', ');
-      const stationNodes = stepIds.map((sid) => `{ id: '${sid}', type: 'station', prompt: '${sid}' }`).join(', ');
+      const codeStepNodes = stepIds.map((sid) => `{ id: '${sid}', type: 'code-step' }`).join(', ');
       return (
         `{ definition: { id: '${id}', name: '${id}', ` +
-        `root: { id: '${id}__root', type: 'sequence', nodes: [${stationNodes}] }, ` +
+        `root: { id: '${id}__root', type: 'sequence', nodes: [${codeStepNodes}] }, ` +
         `triggers: [], scope: { type: 'global' }${stateSource !== undefined ? `, state: ${stateSource}` : ''} }, ` +
         `runtimeHandlers: new Map([${stepEntries}]) }`
       );
@@ -276,7 +333,7 @@ const definition = {
   id: 'stateful-wf',
   name: 'Stateful Workflow',
   root: { id: 'stateful-wf__root', type: 'sequence', nodes: [
-    { id: 'step1', type: 'station', prompt: 'do work' },
+    { id: 'step1', type: 'code-step' },
   ] },
   triggers: [],
   scope: { type: 'global' },
@@ -541,7 +598,7 @@ const definition = {
           id: '${id}__loop__body',
           type: 'sequence',
           nodes: [
-            { id: 'step1', type: 'station', prompt: 'do work' },
+            { id: 'step1', type: 'code-step' },
           ],
         },
         gate: {
@@ -581,7 +638,7 @@ describe('loadWorkflowModule — runtimeLoopGates round-trip', () => {
     // Body sequence is preserved inside the loop node
     expect(rootNodes[0]).toMatchObject({
       type: 'loop',
-      body: { nodes: [{ id: 'step1', type: 'station' }] },
+      body: { nodes: [{ id: 'step1', type: 'code-step' }] },
     });
 
     // runtimeLoopGates map is carried through

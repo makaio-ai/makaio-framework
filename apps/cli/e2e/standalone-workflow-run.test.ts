@@ -45,7 +45,7 @@ const workflow = defineWorkflow('standalone-cli-smoke', {
   name: 'Standalone CLI Smoke',
 });
 
-workflow.station('write-marker', async () => {
+workflow.codeStep('write-marker', async () => {
     await writeFile(${JSON.stringify(markerPath)}, JSON.stringify({ ok: true }), 'utf8');
     return { ok: true };
   });

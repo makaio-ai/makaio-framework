@@ -1,6 +1,6 @@
 import type {
+  CodeStepHandler,
   LoopGateHandler,
-  StationHandler,
   WorkerContributionManifest,
   WorkflowDefinition,
   WorkflowZodSchemas,
@@ -18,10 +18,10 @@ export interface RuntimeLoadedWorkflow {
   /** Optional Zod schemas retained from workflow builder exports. */
   readonly zodSchemas?: WorkflowZodSchemas;
   /**
-   * Runtime station handler functions keyed by node ID.
-   * Used by the orchestrator to dispatch `station`-type nodes.
+   * Runtime code step handler functions keyed by node ID.
+   * Used by the orchestrator to dispatch `code-step`-type nodes.
    */
-  readonly runtimeHandlers: ReadonlyMap<string, StationHandler>;
+  readonly runtimeHandlers: ReadonlyMap<string, CodeStepHandler>;
   /**
    * Loop gate handler functions keyed by handler name.
    * Used by the orchestrator to evaluate loop convergence gates.

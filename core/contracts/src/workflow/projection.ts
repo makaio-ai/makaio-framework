@@ -21,7 +21,7 @@ export type WorkflowDefinitionPath = readonly WorkflowDefinitionPathSegment[];
 /**
  * Node role in the static projection.
  *
- * - `leaf` — observable nodes that produce spans: station, delegate-agent, delegate-role, gate.
+ * - `leaf` — observable nodes that produce spans: code-step, agent-step, gate.
  * - `control` — container nodes with fan-out/fan-in semantics: parallel, iterate, iterate-chain.
  * - `structural` — organizational nodes in the static projection. Runtime frame
  *   correlation is only emitted when the runtime creates frames for that node type.
@@ -87,9 +87,8 @@ export interface ProjectedWorkflowGraph {
  */
 function classifyRole(type: WorkflowNodeType): ProjectedNodeRole {
   switch (type) {
-    case 'station':
-    case 'delegate-agent':
-    case 'delegate-role':
+    case 'code-step':
+    case 'agent-step':
     case 'gate':
       return 'leaf';
     case 'parallel':

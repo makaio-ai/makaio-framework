@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { createTestCall } from '@makaio/test-utils';
-import { WorkerNamespace, WorkerSubjects, type IWorkflowRunner, type WorkflowRunContext } from '@makaio/contracts';
+import {
+  WorkerNamespace,
+  WorkerSubjects,
+  type IWorkflowRunner,
+  type StoredWorkflowRunContext,
+} from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
 import { workflowAttemptOutcomeCodec } from '../workflow-attempt-outcome.js';
 import { WorkflowExecutor } from '../workflow-executor.js';
@@ -31,7 +36,7 @@ describe('workflow start terminal ownership', () => {
     source,
     terminalAuthority,
   }) => {
-    const observed = Promise.withResolvers<WorkflowRunContext>();
+    const observed = Promise.withResolvers<StoredWorkflowRunContext>();
     const runner: IWorkflowRunner = {
       ...(terminalAuthority !== undefined ? { terminalAuthority } : {}),
       async run(call, config) {
@@ -69,7 +74,7 @@ describe('workflow start terminal ownership', () => {
     true,
     false,
   ])('derives ownership from actual selection, not Authority presence (requirements: %s)', async (requiresWorker) => {
-    const observed: { context?: WorkflowRunContext } = {};
+    const observed: { context?: StoredWorkflowRunContext } = {};
     const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowAttemptOutcomeCodec), {
       bootstrapTimeoutMs: 60_000,
     });

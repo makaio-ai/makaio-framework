@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { createTestCall } from '@makaio/test-utils';
 import {
+  type CodeStepHandler,
   type IWorkflowRunner,
-  type StationHandler,
+  type WorkflowCodeStepNode,
   type WorkflowRunnerCompletion,
-  type WorkflowStationNode,
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
@@ -299,13 +299,13 @@ describe('workflow public state subjects', () => {
     ).resolves.toEqual({ executionId, sequence: 1, value: { count: 1 } });
   });
 
-  it('initializes state from the loaded file workflow definition before running stations', async () => {
+  it('initializes state from the loaded file workflow definition before running code steps', async () => {
     if (setup) {
       await teardownWorkflowExecutorTest(setup);
       setup = undefined;
     }
 
-    const readStateNode: WorkflowStationNode = { id: 'read-state', type: 'station', prompt: 'Read state' };
+    const readStateNode: WorkflowCodeStepNode = { id: 'read-state', type: 'code-step' };
     const workflow = {
       ...createWorkflowDefinition({
         id: 'file-state-lifecycle',
@@ -327,7 +327,7 @@ describe('workflow public state subjects', () => {
       },
     };
     let observedState: unknown;
-    const readState: StationHandler = async (ctx) => {
+    const readState: CodeStepHandler = async (ctx) => {
       observedState = await ctx.state?.get();
       return { ok: true };
     };
@@ -374,7 +374,7 @@ describe('workflow public state subjects', () => {
       digest: 'sha256:file-state-workspace',
       sourcePath: 'workflows/file-state.ts',
     });
-    expect(runContext?.definitionSnapshot?.state).toEqual(workflow.state);
+    expect(runContext?.definitionSnapshot).toMatchObject({ state: workflow.state });
   });
 
   it('does not pre-seed path-sourced definition runs from stored workflow state', async () => {
@@ -383,7 +383,7 @@ describe('workflow public state subjects', () => {
       setup = undefined;
     }
 
-    const readStateNode: WorkflowStationNode = { id: 'read-path-state', type: 'station', prompt: 'Read state' };
+    const readStateNode: WorkflowCodeStepNode = { id: 'read-path-state', type: 'code-step' };
     const storedWorkflow = {
       ...createWorkflowDefinition({
         id: 'path-sourced-definition-state',
@@ -417,7 +417,7 @@ describe('workflow public state subjects', () => {
       },
     };
     let observedState: unknown;
-    const readState: StationHandler = async (ctx) => {
+    const readState: CodeStepHandler = async (ctx) => {
       observedState = await ctx.state?.get();
       return { ok: true };
     };
@@ -468,6 +468,6 @@ describe('workflow public state subjects', () => {
       digest: 'sha256:path-state-workspace',
       sourcePath: '.makaio/workflows/path-state.ts',
     });
-    expect(runContext?.definitionSnapshot?.state).toEqual(loadedWorkflow.state);
+    expect(runContext?.definitionSnapshot).toMatchObject({ state: loadedWorkflow.state });
   });
 });

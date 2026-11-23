@@ -34,7 +34,7 @@ describe('WorkLog projection service', () => {
         executionId: 'exec-worklog',
         frameId: 'frame-plan',
         nodeId: 'plan',
-        nodeType: 'station',
+        nodeType: 'agent-step',
         path: ['frame-plan'],
       });
 
@@ -75,7 +75,7 @@ describe('WorkLog projection service', () => {
       executionId: 'exec-worklog',
       frameId: 'frame-review',
       nodeId: 'review',
-      nodeType: 'station',
+      nodeType: 'agent-step',
       path: ['frame-review'],
       startedAt: 1_000,
     });
@@ -83,6 +83,7 @@ describe('WorkLog projection service', () => {
       executionId: 'exec-worklog',
       frameId: 'frame-review',
       nodeId: 'review',
+      nodeType: 'agent-step',
       output: { verdict: 'approved' },
       duration: 250,
       completedAt: 1_250,
@@ -95,7 +96,7 @@ describe('WorkLog projection service', () => {
       executionId: 'exec-worklog',
       frameId: 'frame-review',
       nodeId: 'review',
-      nodeType: 'station',
+      nodeType: 'agent-step',
       path: ['frame-review'],
       status: 'completed',
       attempt: 0,
@@ -104,6 +105,41 @@ describe('WorkLog projection service', () => {
       durationMs: 250,
     });
     expect(missing.frame).toBeNull();
+  });
+
+  it('writes the nodeType of frame.completed when no frame.started row preceded it (agent-step)', async () => {
+    await MakaioBus.emit(WorkflowSubjects.frame.completed, {
+      executionId: 'exec-worklog',
+      frameId: 'frame-missed-start-completed',
+      nodeId: 'review',
+      nodeType: 'agent-step',
+      duration: 250,
+      completedAt: 1_250,
+    });
+
+    const result = await MakaioBus.request(WorkflowSubjects.worklog.frame.get, {
+      frameId: 'frame-missed-start-completed',
+    });
+
+    expect(result.frame?.nodeType).toBe('agent-step');
+  });
+
+  it('writes the nodeType of frame.failed when no frame.started row preceded it (code-step)', async () => {
+    await MakaioBus.emit(WorkflowSubjects.frame.failed, {
+      executionId: 'exec-worklog',
+      frameId: 'frame-missed-start-failed',
+      nodeId: 'review',
+      nodeType: 'code-step',
+      error: 'boom',
+      duration: 250,
+      completedAt: 1_250,
+    });
+
+    const result = await MakaioBus.request(WorkflowSubjects.worklog.frame.get, {
+      frameId: 'frame-missed-start-failed',
+    });
+
+    expect(result.frame?.nodeType).toBe('code-step');
   });
 
   it('preserves gate suspension metadata when projecting gate.resumed', async () => {
@@ -295,7 +331,7 @@ describe('WorkLog projection service', () => {
         executionId: 'exec-worklog',
         frameId: 'frame-plan',
         nodeId: 'plan',
-        nodeType: 'station',
+        nodeType: 'agent-step',
         path: ['frame-plan'],
       });
 

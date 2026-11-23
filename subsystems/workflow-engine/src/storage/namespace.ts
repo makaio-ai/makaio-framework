@@ -15,6 +15,8 @@ import {
   WorkflowFrameStateSchema,
   WorkflowGateInstanceSchema,
   WorkflowRunContextSchema,
+  StoredWorkflowRunContextSchema,
+  WorkflowDefinitionListSchema,
   WorkLogFrameEntrySchema,
   JsonPatchOperationSchema,
   JsonValueSchema,
@@ -98,9 +100,13 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
       response: z.object({ deleted: z.boolean() }),
     },
 
+    /**
+     * Answer is itself {@link WorkflowDefinitionListSchema}, without an envelope: readable
+     * definitions plus the rows that could not be read.
+     */
     list: {
       request: WorkflowListQuerySchema,
-      response: z.object({ workflows: z.array(WorkflowDefinitionSchema) }),
+      response: WorkflowDefinitionListSchema,
     },
 
     // ─────────────────────────────────────────────────────────────
@@ -390,10 +396,14 @@ export const WorkflowStorageNamespace = createStorageNamespaceDefinition('workfl
     /**
      * Read the run-context snapshot by execution ID.
      * Called internally by the public `workflow.getRunContext` handler.
+     *
+     * The snapshot is read as a stored context: `definitionSnapshot`
+     * is opaque JSON, not re-parsed as a {@link WorkflowDefinitionSchema}, so a
+     * stored snapshot that is no longer a valid definition stays readable here.
      */
     getRunContext: localSubject({
       request: z.object({ executionId: z.string().min(1) }),
-      response: z.object({ runContext: WorkflowRunContextSchema.nullable() }),
+      response: z.object({ runContext: StoredWorkflowRunContextSchema.nullable() }),
     }),
 
     // ─────────────────────────────────────────────────────────────

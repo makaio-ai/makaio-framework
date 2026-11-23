@@ -39,13 +39,13 @@ export const SpanRecordSchema = z.object({
   /** Wall-clock duration in milliseconds. */
   durationMs: z.number().nonnegative().optional(),
 
-  /** Input tokens consumed (station nodes with LLM execution). */
+  /** Input tokens consumed (agent steps with LLM execution). */
   inputTokens: z.number().int().nonnegative().optional(),
-  /** Output tokens produced (station nodes with LLM execution). */
+  /** Output tokens produced (agent steps with LLM execution). */
   outputTokens: z.number().int().nonnegative().optional(),
-  /** Estimated cost in USD (station nodes with LLM execution). */
+  /** Estimated cost in USD (agent steps with LLM execution). */
   estimatedCost: z.number().nonnegative().optional(),
-  /** Number of tool calls made during execution (station nodes). */
+  /** Number of tool calls made during execution (agent steps). */
   toolCallCount: z.number().int().nonnegative().optional(),
 
   /** Serialized node input (JSON string). */
@@ -80,7 +80,7 @@ export const ExecutionLinkSchema = z.object({
   targetExecutionId: z.string().min(1),
   /** Relationship type. */
   linkType: ExecutionLinkTypeSchema,
-  /** Optional metadata (e.g., reason, target station). */
+  /** Optional metadata (e.g., reason, target step). */
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 

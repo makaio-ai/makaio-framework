@@ -309,6 +309,13 @@
       "when": 1795263641657,
       "tag": "0043_workflow_definition_extensions",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1795369101241,
+      "tag": "0044_workflow_step_names",
+      "breakpoints": true
     }
   ]
 }

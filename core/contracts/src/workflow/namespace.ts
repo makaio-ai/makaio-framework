@@ -6,6 +6,7 @@ import {
   ExecutionsByArtifactRefsQuerySchema,
   ExecutionStatusSchema,
   GateInstanceListQuerySchema,
+  WorkflowDefinitionListSchema,
   WorkflowDefinitionSchema,
   WorkflowExecutionSchema,
   WorkflowExecutionScopeSchema,
@@ -13,13 +14,13 @@ import {
   WorkflowGateInstanceSchema,
   WorkflowListQuerySchema,
   WorkflowNodeTypeSchema,
-  WorkflowResolvedAgentSchema,
   WorkflowResolvedRoleSchema,
 } from './schemas.js';
+import { WorkflowStepTypeSchema } from './step-runner.js';
 import { JsonObjectContractSchema, JsonSchemaRecordSchema, JsonValueSchema } from '../shared/json-value.js';
 import { ExecutionLinkListQuerySchema, ExecutionLinkSchema, SpanRecordSchema } from './span.js';
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
-import { WorkflowRunContextSchema } from './run-context.js';
+import { StoredWorkflowRunContextSchema } from './run-context.js';
 import { WorkerMaterializationSpecSchema } from '../capabilities/worker/types.js';
 import { WorkLogExecutionSummarySchema, WorkLogFrameEntrySchema, WorkLogStatsSchema } from './worklog.js';
 import { JsonPatchOperationSchema } from './json-patch.js';
@@ -34,7 +35,7 @@ import {
 } from './finalization.js';
 
 /**
- * Structured progress signal emitted by a station handler via `ctx.updateProgress()`.
+ * Structured progress signal emitted by a code step handler via `ctx.updateProgress()`.
  *
  * Progress updates are ephemeral — useful for real-time monitoring and
  * observer-specific projections and materializations, but not
@@ -51,7 +52,7 @@ export const WorkflowProgressUpdateSchema = z
      * Optional semantic kind for materialization routing.
      *
      * Observers can match on kind to decide projection behavior: a
-     * `'station-started'` progress might be materialized immediately, while a
+     * `'step-started'` progress might be materialized immediately, while a
      * `'checkpoint'` might be reserved for aggregate views.
      *
      * Not a closed enum — workflow authors define their own vocabulary.
@@ -76,10 +77,10 @@ const StepLifecycleBaseSchema = z.object({
   stepId: z.string(),
   /**
    * Observable node types emitting lifecycle events.
-   * `station`, `delegate-agent`, `delegate-role`, and `gate` emit bus events.
+   * `code-step`, `agent-step`, and `gate` emit bus events.
    * Structural nodes (`sequence`, `parallel`, `iterate`, `iterate-chain`) do not.
    */
-  stepType: z.enum(['station', 'delegate-agent', 'delegate-role', 'gate']),
+  stepType: WorkflowStepTypeSchema,
 });
 
 const GateLifecycleBaseSchema = StepLifecycleBaseSchema.extend({
@@ -154,7 +155,7 @@ export const WorkflowSchemas = {
   },
   listDefinitions: {
     request: WorkflowListQuerySchema,
-    response: z.object({ workflows: z.array(WorkflowDefinitionSchema) }),
+    response: WorkflowDefinitionListSchema,
   },
   'definition.created': WorkflowDefinitionSchema,
   'definition.updated': WorkflowDefinitionSchema,
@@ -425,15 +426,6 @@ export const WorkflowSchemas = {
   },
 
   /**
-   * Resolve an explicit agent definition to its adapter configuration.
-   * Called by the workflow executor when an agent step specifies `agentId`.
-   */
-  resolveAgent: {
-    request: z.object({ agentId: z.string().min(1) }),
-    response: WorkflowResolvedAgentSchema,
-  },
-
-  /**
    * Pull the persisted run-context snapshot for a workflow execution.
    *
    * Called by executors (Piscina threads, Docker containers, remote workers)
@@ -448,7 +440,7 @@ export const WorkflowSchemas = {
    */
   getRunContext: {
     request: z.object({ executionId: z.string().min(1) }),
-    response: WorkflowRunContextSchema,
+    response: StoredWorkflowRunContextSchema,
   },
 
   'execution.started': z.object({
@@ -486,7 +478,7 @@ export const WorkflowSchemas = {
   }),
 
   /**
-   * Ephemeral progress signal emitted by a station handler via `ctx.updateProgress()`.
+   * Ephemeral progress signal emitted by a code step handler via `ctx.updateProgress()`.
    *
    * Progress events are not persisted as WorkLog entries. Observers and
    * materialization providers consume them for real-time projections.
@@ -633,6 +625,8 @@ export const WorkflowSchemas = {
     frameId: z.string(),
     /** Node ID from the workflow definition. */
     nodeId: z.string(),
+    /** Node type discriminant of the frame, so a terminal projection never has to guess it. */
+    nodeType: WorkflowNodeTypeSchema,
     /** JSON-serializable output produced by the node, if any. */
     output: JsonValueSchema.optional(),
     /** Wall-clock duration in milliseconds from frame start to completion. */
@@ -652,6 +646,8 @@ export const WorkflowSchemas = {
     frameId: z.string(),
     /** Node ID from the workflow definition. */
     nodeId: z.string(),
+    /** Node type discriminant of the frame, so a terminal projection never has to guess it. */
+    nodeType: WorkflowNodeTypeSchema,
     /** Human-readable error message. */
     error: z.string(),
     /** Wall-clock duration in milliseconds from frame start to failure. */

@@ -1,7 +1,7 @@
 import { zodSchemaToJsonRecord } from '../shared/zod-json-schema.js';
 import type {
-  WorkflowDelegateAgentNode,
-  WorkflowDelegateRoleNode,
+  WorkflowAgentStepNode,
+  WorkflowCodeStepNode,
   WorkflowGateNode,
   WorkflowIterateChainNode,
   WorkflowIterateNode,
@@ -9,19 +9,11 @@ import type {
   WorkflowNode,
   WorkflowParallelNode,
   WorkflowSequenceNode,
-  WorkflowStationNode,
 } from './schemas.js';
-import type { IterateHandler, StationHandler } from './authoring-context.js';
+import type { CodeStepHandler, IterateHandler } from './authoring-context.js';
 import type { LoopGateHandler } from './loop.js';
 import { validateNoNestedLoops } from './loop.js';
-import type {
-  AgentConfig,
-  DelegateToRoleOptions,
-  GateOptions,
-  IterateOptions,
-  LoopOptions,
-  NodeOptions,
-} from './authoring-builder.js';
+import type { AgentStepOptions, GateOptions, IterateOptions, LoopOptions, NodeOptions } from './authoring-builder.js';
 
 // ─────────────────────────────────────────────────────────────
 // Shared WeakMap for standalone handler registration
@@ -31,13 +23,13 @@ import type {
  * Module-scoped WeakMap that associates standalone-factory nodes with their
  * handler functions.
  *
- * When `station()` or `iterate()` is called with a handler, the executable
- * station node object is used as a key and the handler is stored here. Builder
+ * When `codeStep()` or `iterate()` is called with a handler, the executable
+ * code step node object is used as a key and the handler is stored here. Builder
  * methods (`parallel()`, `iterateChain()`, `addNode()`) read this map when
  * incorporating nodes so handlers are automatically registered in
  * `runtimeHandlers` without exposing functions in the serializable node shape.
  */
-export const standaloneHandlers = new WeakMap<object, StationHandler>();
+export const standaloneHandlers = new WeakMap<object, CodeStepHandler>();
 
 /**
  * Module-scoped WeakMap that associates standalone-factory loop nodes with
@@ -62,12 +54,12 @@ export const standaloneLoopGates = new WeakMap<object, LoopGateHandler>();
  * When `loopGates` is provided, loop gate handlers from `standaloneLoopGates`
  * are also extracted into the map in the same recursive pass.
  * @param node - The node to inspect
- * @param handlers - The station handler map to populate
+ * @param handlers - The code step handler map to populate
  * @param loopGates - Optional loop gate handler map to populate
  */
 export function extractStandaloneHandlers(
   node: WorkflowNode,
-  handlers: Map<string, StationHandler>,
+  handlers: Map<string, CodeStepHandler>,
   loopGates?: Map<string, LoopGateHandler>,
 ): void {
   const handler = standaloneHandlers.get(node);
@@ -102,7 +94,7 @@ export function extractStandaloneHandlers(
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Creates a station node for use as a branch inside a `parallel()` call or
+ * Creates a code step node for use as a branch inside a `parallel()` call or
  * an `iterateChain()` sub-chain.
  *
  * The handler is stored in the module-scoped `standaloneHandlers` WeakMap keyed
@@ -110,16 +102,15 @@ export function extractStandaloneHandlers(
  * `addNode()`) read this map when incorporating the node so the handler is
  * automatically registered in `runtimeHandlers` without embedding functions in
  * the serializable node shape.
- * @param id - Unique station identifier
- * @param handler - Station handler function registered via {@link standaloneHandlers}
+ * @param id - Unique code step identifier
+ * @param handler - Code step handler function registered via {@link standaloneHandlers}
  * @param options - Optional node conditions
- * @returns A {@link WorkflowStationNode} with no function in the serializable definition
+ * @returns A {@link WorkflowCodeStepNode} with no function in the serializable definition
  */
-export function station(id: string, handler: StationHandler, options?: NodeOptions): WorkflowStationNode {
-  const node: WorkflowStationNode = {
+export function codeStep(id: string, handler: CodeStepHandler, options?: NodeOptions): WorkflowCodeStepNode {
+  const node: WorkflowCodeStepNode = {
     id,
-    type: 'station',
-    prompt: id,
+    type: 'code-step',
     ...(options?.when !== undefined && { when: options.when }),
     ...(options?.skip !== undefined && { skip: options.skip }),
   };
@@ -128,40 +119,17 @@ export function station(id: string, handler: StationHandler, options?: NodeOptio
 }
 
 /**
- * Creates a delegate-agent node for use as a branch inside a `parallel()` call
+ * Creates an agent step node for use as a branch inside a `parallel()` call
  * or an `iterateChain()` sub-chain.
  * @param id - Unique node identifier
- * @param config - Agent delegation configuration
- * @param options - Optional node conditions
- * @returns A {@link WorkflowDelegateAgentNode}
+ * @param role - Named product role to delegate the agent step to
+ * @param options - Optional node conditions and agent step settings; `prompt` defaults to the node ID
+ * @returns A {@link WorkflowAgentStepNode}
  */
-export function delegateToAgent(id: string, config: AgentConfig, options?: NodeOptions): WorkflowDelegateAgentNode {
+export function agentStep(id: string, role: string, options?: AgentStepOptions): WorkflowAgentStepNode {
   return {
     id,
-    type: 'delegate-agent',
-    agentId: config.agentId,
-    ...(config.inputExpression !== undefined && { inputExpression: config.inputExpression }),
-    ...(config.outputSchema !== undefined && { outputSchema: config.outputSchema }),
-    ...(config.allowedTools !== undefined && { allowedTools: config.allowedTools }),
-    ...(config.completion !== undefined && { completion: config.completion }),
-    ...(config.resultFinalizerId !== undefined && { resultFinalizerId: config.resultFinalizerId }),
-    ...(options?.when !== undefined && { when: options.when }),
-    ...(options?.skip !== undefined && { skip: options.skip }),
-  };
-}
-
-/**
- * Creates a delegate-role node for use as a branch inside a `parallel()` call
- * or an `iterateChain()` sub-chain.
- * @param id - Unique node identifier
- * @param role - Named product role to delegate to
- * @param options - Optional node conditions and role delegation settings
- * @returns A {@link WorkflowDelegateRoleNode}
- */
-export function delegateToRole(id: string, role: string, options?: DelegateToRoleOptions): WorkflowDelegateRoleNode {
-  return {
-    id,
-    type: 'delegate-role',
+    type: 'agent-step',
     role,
     prompt: options?.prompt ?? id,
     ...(options?.when !== undefined && { when: options.when }),
@@ -199,28 +167,28 @@ export function gate(id: string, options: GateOptions): WorkflowGateNode {
  * as a raw node passed to `addNode()`.
  *
  * The handler is stored in the module-scoped `standaloneHandlers` WeakMap keyed
- * on the synthesized body station. Builder methods (`parallel()`,
+ * on the synthesized body code step. Builder methods (`parallel()`,
  * `iterateChain()`, `addNode()`) read this map when incorporating the node so
  * the handler is automatically registered in `runtimeHandlers` under the
- * station ID that the runtime executes.
+ * code step ID that the runtime executes.
  * @param id - Unique iterate node identifier
- * @param handler - Station handler executed for each collection item
+ * @param handler - Code step handler executed for each collection item
  * @param options - Iterate configuration including collection expression
  * @returns A {@link WorkflowIterateNode}
  */
 export function iterate(id: string, handler: IterateHandler, options: IterateOptions): WorkflowIterateNode {
-  const bodyStationId = `${id}__item`;
-  const bodyStationNode: WorkflowStationNode = { id: bodyStationId, type: 'station', prompt: bodyStationId };
+  const bodyStepId = `${id}__item`;
+  const bodyStepNode: WorkflowCodeStepNode = { id: bodyStepId, type: 'code-step' };
   const node: WorkflowIterateNode = {
     id,
     type: 'iterate',
     collection: options.collection,
-    body: { id: `${id}__body`, type: 'sequence', nodes: [bodyStationNode] },
+    body: { id: `${id}__body`, type: 'sequence', nodes: [bodyStepNode] },
     ...(options.concurrency !== undefined && { concurrency: options.concurrency }),
     ...(options.when !== undefined && { when: options.when }),
     ...(options.skip !== undefined && { skip: options.skip }),
   };
-  standaloneHandlers.set(bodyStationNode, handler);
+  standaloneHandlers.set(bodyStepNode, handler);
   return node;
 }
 
@@ -251,7 +219,7 @@ export function iterateChain(id: string, chain: WorkflowNode[], options: Iterate
  * gate handler is automatically registered in `runtimeLoopGates` without
  * embedding functions in the serializable node shape.
  *
- * Body node handlers registered via standalone `station()` factories are
+ * Body node handlers registered via standalone `codeStep()` factories are
  * also collected through the existing `standaloneHandlers` mechanism.
  * @param id - Unique loop node identifier
  * @param bodyNodes - Ordered list of nodes forming the loop body

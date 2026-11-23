@@ -5,6 +5,7 @@ import { WorkerContributionManifestSchema, WorkflowTriggerModeSchema } from './w
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 import { SuspensionStrategySchema } from '../worker/suspension.js';
 import { WorkerMaterializationSpecSchema } from '../capabilities/worker/types.js';
+import { WorkflowError, WorkflowErrorCode } from './errors.js';
 
 /**
  * Durable source descriptor for a workflow execution.
@@ -33,18 +34,18 @@ const WorkflowRunContextSourceSchema = z.discriminatedUnion('kind', [
 export type WorkflowRunContextSource = z.infer<typeof WorkflowRunContextSourceSchema>;
 
 /**
- * Persisted, per-execution snapshot of the configuration and context needed to
- * run a workflow.
- *
- * Created at execution start by the host, pulled by the executor over the
- * authenticated bus after connecting. Replaces the push-model delivery of
- * {@link WorkflowWorkerConfig} for Worker providers.
- *
- * Does NOT contain: bus URL, auth secret, credential values, or git tokens.
- * Those are transport/bootstrap or secret material, not durable run context.
+ * Builds the unrefined run-context object shape shared by the executable and
+ * the stored schema. Only `definitionSnapshot` varies between the two: the
+ * executable schema parses it as a {@link WorkflowDefinitionSchema}, the
+ * stored schema keeps it as opaque JSON. Every other field is
+ * identical, so this builder is the single place that defines them.
+ * @param definitionSnapshotSchema - Schema for the (optional) definition snapshot field.
+ * @returns An unrefined `z.object` with `definitionSnapshot` typed by `definitionSnapshotSchema`.
  */
-export const WorkflowRunContextSchema = z
-  .object({
+function workflowRunContextObject<TDefinitionSnapshotSchema extends z.ZodTypeAny>(
+  definitionSnapshotSchema: TDefinitionSnapshotSchema,
+) {
+  return z.object({
     /** The executionId this context belongs to (1:1 with WorkflowExecution). */
     executionId: z.string().min(1),
     /** Workflow definition being executed. */
@@ -57,7 +58,7 @@ export const WorkflowRunContextSchema = z
      * Required for definition-sourced executions so a later definition edit
      * cannot change the behaviour of an already-created execution.
      */
-    definitionSnapshot: WorkflowDefinitionSchema.optional(),
+    definitionSnapshot: definitionSnapshotSchema.optional(),
     /** Resolved worker-local contribution packages for this execution. */
     workerManifest: WorkerContributionManifestSchema.default({ contributionRefs: [] }),
     /** Bound input value. */
@@ -118,8 +119,28 @@ export const WorkflowRunContextSchema = z
      * can materialize the workspace without re-resolving.
      */
     materializationSpec: WorkerMaterializationSpecSchema.optional(),
-  })
-  .superRefine((value, ctx) => {
+  });
+}
+
+/**
+ * Applies the three run-context invariants shared by the executable and the
+ * stored schema: a definition-sourced context must carry a snapshot, and a
+ * materialization spec is required for (and only for) a path source whose
+ * `sourcePath` matches.
+ *
+ * `.extend()` cannot widen `definitionSnapshot` on an already-refined object,
+ * and `.safeExtend()` requires type-compatible replacement fields, which the
+ * stored schema deliberately violates (it widens the field to arbitrary
+ * JSON). Applying the refinement once, after {@link workflowRunContextObject}
+ * built the two differently-typed objects, keeps both schemas executable and
+ * avoids re-declaring the invariants twice.
+ * @param schema - Unrefined object built by {@link workflowRunContextObject}.
+ * @returns The schema with the three invariants enforced via `.superRefine()`.
+ */
+function refineRunContextInvariants<TDefinitionSnapshotSchema extends z.ZodTypeAny>(
+  schema: ReturnType<typeof workflowRunContextObject<TDefinitionSnapshotSchema>>,
+) {
+  return schema.superRefine((value, ctx) => {
     if (value.source.kind === 'definition' && value.definitionSnapshot === undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -149,5 +170,68 @@ export const WorkflowRunContextSchema = z
       });
     }
   });
+}
+
+/**
+ * Persisted, per-execution snapshot of the configuration and context needed to
+ * run a workflow.
+ *
+ * Created at execution start by the host, pulled by the executor over the
+ * authenticated bus after connecting. Replaces the push-model delivery of
+ * {@link WorkflowWorkerConfig} for Worker providers.
+ *
+ * Does NOT contain: bus URL, auth secret, credential values, or git tokens.
+ * Those are transport/bootstrap or secret material, not durable run context.
+ */
+export const WorkflowRunContextSchema = refineRunContextInvariants(workflowRunContextObject(WorkflowDefinitionSchema));
 
 export type WorkflowRunContext = z.infer<typeof WorkflowRunContextSchema>;
+
+/**
+ * Stored form of {@link WorkflowRunContextSchema}: identical shape, but
+ * `definitionSnapshot` is opaque JSON instead of a parsed
+ * {@link WorkflowDefinitionSchema}.
+ *
+ * This is what the storage layer reads back: `definition_snapshot` is
+ * selected as stored text and decoded without interpreting the
+ * node tree, so a snapshot that is no longer a valid definition — or not
+ * even valid JSON — stays a readable value here instead of making the row
+ * unreadable. Callers that need an executable definition call
+ * {@link requireExecutableRunContext}.
+ */
+export const StoredWorkflowRunContextSchema = refineRunContextInvariants(workflowRunContextObject(JsonValueSchema));
+
+export type StoredWorkflowRunContext = z.infer<typeof StoredWorkflowRunContextSchema>;
+
+/**
+ * Formats the issues of a failed run-context parse as `<path>: <message>`
+ * entries joined by `; `, matching the reason convention used for stored
+ * workflow definitions.
+ * @param error - Zod error from a failed {@link WorkflowRunContextSchema} parse.
+ * @returns The joined, human-readable reason.
+ */
+function describeRunContextIssues(error: z.ZodError): string {
+  return error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ');
+}
+
+/**
+ * Requires that a stored run context holds an executable definition snapshot.
+ *
+ * Parses the stored context with {@link WorkflowRunContextSchema}: a
+ * snapshot that is not valid JSON, or that does not satisfy
+ * {@link WorkflowDefinitionSchema}, fails visibly instead of being cast.
+ * @param stored - Run context as read back from storage.
+ * @returns The same run context, typed as executable.
+ * @throws {@link WorkflowError} With code `DEFINITION_INVALID` when the stored
+ * snapshot does not satisfy {@link WorkflowDefinitionSchema}.
+ */
+export function requireExecutableRunContext(stored: StoredWorkflowRunContext): WorkflowRunContext {
+  const result = WorkflowRunContextSchema.safeParse(stored);
+  if (!result.success) {
+    throw new WorkflowError(
+      WorkflowErrorCode.DEFINITION_INVALID,
+      `Stored run context '${stored.executionId}' does not hold an executable definition: ${describeRunContextIssues(result.error)}`,
+    );
+  }
+  return result.data;
+}

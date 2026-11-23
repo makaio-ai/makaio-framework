@@ -1,16 +1,25 @@
 import { describe, expect, it, vi } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { createBusInstance } from '@makaio/bus-core';
-import { SessionNamespace, SessionSubjects, WorkflowNamespace, type WorkflowRunContext } from '@makaio/contracts';
+import {
+  isDefinitionInvalidError,
+  SessionNamespace,
+  SessionSubjects,
+  WorkflowNamespace,
+  type WorkflowRunContext,
+} from '@makaio/contracts';
 import { createTestCall } from '@makaio/test-utils';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
+import { workflowDefinitions, workflowExecutions, workflowRunContexts } from '../storage/schema.js';
 import {
   persistLoadedExecutionStart,
+  startExecution,
   startFileExecution,
   type StartExecutionDeps,
 } from '../workflow-execution-start.js';
 import { DEFAULT_EXECUTOR_CONFIG } from '../types.js';
-import { createWorkflowDefinition, createWorkflowExecution } from './shared.js';
+import { createTestDbForBus, createWorkflowDefinition, createWorkflowExecution } from './shared.js';
 
 function makeRunContext(params: Parameters<StartExecutionDeps['buildRunContext']>[0]): WorkflowRunContext {
   return {
@@ -30,6 +39,67 @@ function makeRunContext(params: Parameters<StartExecutionDeps['buildRunContext']
     suspensionStrategy: 'wait-in-process',
   };
 }
+
+describe('startExecution', () => {
+  it.each([
+    'test',
+    'production',
+  ])('rejects an unreadable stored definition before creating a coordinator session, run context or execution in %s mode', async (mode) => {
+    const bus = createBusInstance();
+    const call = bus.own('start');
+    bus.registerNamespace(SessionNamespace);
+    bus.registerNamespace(WorkflowNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
+    const dbContext = await createTestDbForBus(bus);
+    const createdSessions: string[] = [];
+    const offCreate = bus.on(SessionSubjects.create, (ctx) => {
+      createdSessions.push('session-invalid-definition');
+      ctx.setResult({ sessionId: 'session-invalid-definition' });
+    });
+    const deps: StartExecutionDeps = {
+      bus,
+      config: { ...DEFAULT_EXECUTOR_CONFIG, platformDefaults: { cwd: '/repo' } },
+      activeExecutions: new Map(),
+      executionTasks: new Map(),
+      workflowRunner: undefined,
+      materializationSpecResolvers: new Set(),
+      buildRunContext: vi.fn(makeRunContext),
+      buildRunnerTaskDeps: vi.fn(),
+      buildFinalizerDeps: vi.fn(),
+      resolveExecutionWorkspaceRoot: vi.fn(async () => '/repo'),
+      runExecution: vi.fn(async () => {}),
+    };
+    const workflowId = 'wf-invalid-definition';
+    const root = {
+      type: 'sequence',
+      id: 'root',
+      nodes: [{ type: 'delegate-agent', id: 'removed-step', agentId: 'agent' }], // legacy-input
+    };
+
+    try {
+      vi.stubEnv('NODE_ENV', mode);
+      await dbContext.exec(sql`
+          INSERT INTO workflow_definitions (id, name, root, scope_type, created_at, updated_at)
+          VALUES (${workflowId}, ${workflowId}, ${JSON.stringify(root)}, 'global', 1, 1)
+        `);
+
+      await expect(startExecution(call, deps, workflowId)).rejects.toSatisfy(isDefinitionInvalidError);
+      expect(createdSessions).toEqual([]);
+      expect(deps.buildRunContext).not.toHaveBeenCalled();
+      expect(deps.activeExecutions.size).toBe(0);
+      expect(deps.executionTasks.size).toBe(0);
+      expect(await dbContext.db.select().from(workflowExecutions)).toEqual([]);
+      expect(await dbContext.db.select().from(workflowRunContexts)).toEqual([]);
+      expect(await dbContext.db.select({ id: workflowDefinitions.id }).from(workflowDefinitions)).toEqual([
+        { id: workflowId },
+      ]);
+    } finally {
+      vi.unstubAllEnvs();
+      offCreate();
+      await dbContext.cleanup();
+    }
+  });
+});
 
 describe('startFileExecution', () => {
   it('checks the workflow runner before persisting or emitting execution start', async () => {

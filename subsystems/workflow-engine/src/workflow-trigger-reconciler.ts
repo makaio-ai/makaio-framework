@@ -6,7 +6,12 @@ import type {
   WorkflowAutomationTriggerBinding,
   WorkflowDefinition,
 } from '@makaio/contracts';
-import { AutomationTriggerSubjects, WorkflowAutomationTriggerBindingSchema, WorkflowSubjects } from '@makaio/contracts';
+import {
+  AutomationTriggerSubjects,
+  isDefinitionInvalidError,
+  WorkflowAutomationTriggerBindingSchema,
+  WorkflowSubjects,
+} from '@makaio/contracts';
 import type { CallContext } from '@makaio/core';
 import type { AutomationTriggerBindingRuntime } from '@makaio/services-core/automation-trigger';
 import { SerialLane } from '@makaio/utils';
@@ -471,8 +476,19 @@ export class WorkflowTriggerReconciler {
       // arbitrarily old by the time the lane drains, which would let a
       // reconciliation resurrect a workflow deleted meanwhile or forget one
       // created meanwhile.
-      const { workflows } = await this.bus.request(call, WorkflowStorageSubjects.list, {});
+      const { workflows, rejected } = await this.bus.request(call, WorkflowStorageSubjects.list, {});
       const stored = new Set(workflows.map((workflow) => workflow.id));
+
+      // One line for every rejected row: a row that does not satisfy
+      // `WorkflowDefinitionSchema` must not stop the readable workflows below from
+      // reconciling. Their consumers are released by the "no longer stored" pass at
+      // the end of this method, since a rejected id is absent from `stored`.
+      if (rejected.length > 0) {
+        console.error(
+          `${LOG_PREFIX} ${rejected.length} stored workflow definition(s) rejected: ` +
+            rejected.map(({ id, reason }) => `'${id}': ${reason}`).join('; '),
+        );
+      }
 
       for (const workflow of workflows) {
         const triggers = workflow.triggers ?? [];
@@ -498,11 +514,21 @@ export class WorkflowTriggerReconciler {
    * @param call - Call context of the definition event.
    * @param workflowId - Workflow named by the event.
    * @returns Resolves once the refresh has settled.
-   * @throws When the definition cannot be read.
+   * @throws When the definition cannot be read, unless the read failed because the
+   * stored row no longer satisfies `WorkflowDefinitionSchema`: that case is
+   * handled here like a deletion, not rethrown.
    */
   private async refreshDefinition(call: CallContext, workflowId: string): Promise<void> {
     await this.lane.run(async () => {
-      const { workflow } = await this.bus.request(call, WorkflowStorageSubjects.get, { id: workflowId });
+      let workflow: WorkflowDefinition | null;
+      try {
+        ({ workflow } = await this.bus.request(call, WorkflowStorageSubjects.get, { id: workflowId }));
+      } catch (error) {
+        if (!isDefinitionInvalidError(error)) throw error;
+        console.error(`${LOG_PREFIX} stored workflow definition "${workflowId}" rejected:`, error);
+        await this.forgetWorkflowWithinLane(workflowId);
+        return;
+      }
       if (workflow === null) {
         await this.forgetWorkflowWithinLane(workflowId);
         return;

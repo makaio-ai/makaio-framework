@@ -3,15 +3,15 @@ import { createBusInstance, type IMakaioBus } from '@makaio/bus-core';
 import {
   WorkflowNamespace,
   type CallContext,
+  type CodeStepHandler,
   type JsonValue,
-  type StationHandler,
+  type WorkflowCodeStepNode,
   type WorkflowDefinition,
   type WorkflowExecution,
   type WorkflowGateNode,
   type WorkflowIterateChainNode,
   type WorkflowIterateNode,
   type WorkflowSequenceNode,
-  type WorkflowStationNode,
 } from '@makaio/contracts';
 import { createTestCall } from '@makaio/test-utils';
 import { RuntimeContext, type RuntimeExecutionOptions } from '../runtime/runtime-context.js';
@@ -64,12 +64,12 @@ function makeBus(): ReturnType<typeof createBusInstance> {
 
 /**
  * Create a fresh RuntimeContext with an isolated bus.
- * @param handlers - Station handlers keyed by node ID.
+ * @param handlers - Code step handlers keyed by node ID.
  * @param signal - Optional abort signal.
  * @param options - Optional runtime execution options.
  */
 function makeCtx(
-  handlers: Record<string, StationHandler>,
+  handlers: Record<string, CodeStepHandler>,
   signal: AbortSignal = new AbortController().signal,
   options: RuntimeExecutionOptions = {},
 ): RuntimeContext {
@@ -109,30 +109,30 @@ function registerGateParkingStorage(bus: IMakaioBus): void {
 const emptyExpressionCtx = { inputs: {}, trigger: {}, frames: {}, previousSteps: {} };
 
 /**
- * Build an iterate node whose body contains a single station.
+ * Build an iterate node whose body contains a single code step.
  *
  * The `collection` expression must reference a variable in the expression
  * context (e.g., `"inputs.items"`) or be an inline literal
  * (e.g., `"[1, 2, 3]"` via jexl array literals).
  * @param nodeId - Iterate node identifier.
- * @param stationId - Station node identifier inside the body.
+ * @param stepId - Code step identifier inside the body.
  * @param collection - jexl expression resolving to an array.
- * @param handler - Station handler to register.
+ * @param handler - Code step handler to register.
  * @param concurrency - Optional concurrency limit.
  * @returns Configured iterate node and handler map.
  */
 function makeIterateNode(
   nodeId: string,
-  stationId: string,
+  stepId: string,
   collection: string,
-  handler: StationHandler,
+  handler: CodeStepHandler,
   concurrency?: number,
-): { node: WorkflowIterateNode; handlers: Record<string, StationHandler> } {
-  const stationNode: WorkflowStationNode = { id: stationId, type: 'station', prompt: stationId };
+): { node: WorkflowIterateNode; handlers: Record<string, CodeStepHandler> } {
+  const stepNode: WorkflowCodeStepNode = { id: stepId, type: 'code-step' };
   const body: WorkflowSequenceNode = {
     id: `${nodeId}__body`,
     type: 'sequence',
-    nodes: [stationNode],
+    nodes: [stepNode],
   };
   const node: WorkflowIterateNode = {
     id: nodeId,
@@ -141,28 +141,28 @@ function makeIterateNode(
     body,
     ...(concurrency !== undefined && { concurrency }),
   };
-  return { node, handlers: { [stationId]: handler } };
+  return { node, handlers: { [stepId]: handler } };
 }
 
 /**
- * Build an iterate-chain node whose body contains a single station.
+ * Build an iterate-chain node whose body contains a single code step.
  * @param nodeId - Iterate-chain node identifier.
- * @param stationId - Station node identifier inside the body.
+ * @param stepId - Code step identifier inside the body.
  * @param collection - jexl expression resolving to an array.
- * @param handler - Station handler to register.
+ * @param handler - Code step handler to register.
  * @returns Configured iterate-chain node and handler map.
  */
 function makeIterateChainNode(
   nodeId: string,
-  stationId: string,
+  stepId: string,
   collection: string,
-  handler: StationHandler,
-): { node: WorkflowIterateChainNode; handlers: Record<string, StationHandler> } {
-  const stationNode: WorkflowStationNode = { id: stationId, type: 'station', prompt: stationId };
+  handler: CodeStepHandler,
+): { node: WorkflowIterateChainNode; handlers: Record<string, CodeStepHandler> } {
+  const stepNode: WorkflowCodeStepNode = { id: stepId, type: 'code-step' };
   const body: WorkflowSequenceNode = {
     id: `${nodeId}__body`,
     type: 'sequence',
-    nodes: [stationNode],
+    nodes: [stepNode],
   };
   const node: WorkflowIterateChainNode = {
     id: nodeId,
@@ -170,7 +170,7 @@ function makeIterateChainNode(
     collection,
     body,
   };
-  return { node, handlers: { [stationId]: handler } };
+  return { node, handlers: { [stepId]: handler } };
 }
 
 /**
@@ -254,7 +254,7 @@ describe('executeIterateNode', () => {
     expect(received).toEqual(['x', 'y']);
   });
 
-  it('uses the final body station by sequence order when start timestamps tie', async () => {
+  it('uses the final body code step by sequence order when start timestamps tie', async () => {
     const call = createTestCall();
     const dateNow = vi.spyOn(Date, 'now').mockReturnValue(1_000);
     try {
@@ -266,8 +266,8 @@ describe('executeIterateNode', () => {
           id: 'iter-order__body',
           type: 'sequence',
           nodes: [
-            { id: 'iter-order__draft', type: 'station', prompt: 'Draft' } as WorkflowStationNode,
-            { id: 'iter-order__final', type: 'station', prompt: 'Final' } as WorkflowStationNode,
+            { id: 'iter-order__draft', type: 'code-step' } satisfies WorkflowCodeStepNode,
+            { id: 'iter-order__final', type: 'code-step' } satisfies WorkflowCodeStepNode,
           ],
         },
       };
@@ -299,7 +299,7 @@ describe('executeIterateNode', () => {
     }
   });
 
-  it('passes item and index to the station handler', async () => {
+  it('passes item and index to the code step handler', async () => {
     const call = createTestCall();
     const calls: Array<{ item: unknown; index: unknown }> = [];
     const { node, handlers } = makeIterateNode('iter-ctx', 'iter-ctx__item', 'inputs.items', (ctx) => {
@@ -491,15 +491,14 @@ describe('executeIterateNode', () => {
     const slowStarted = new Promise<void>((resolve) => {
       slowStartedResolve = resolve;
     });
-    const startedStations: unknown[] = [];
+    const startedSteps: unknown[] = [];
     const sideEffects: string[] = [];
 
     const waitForSiblingNode = {
       id: 'iter-pause__wait-for-sibling',
-      type: 'station',
-      prompt: 'Wait for sibling',
+      type: 'code-step',
       when: "item == 'pause'",
-    } satisfies WorkflowStationNode;
+    } satisfies WorkflowCodeStepNode;
     const gateNode = {
       id: 'iter-pause__gate',
       type: 'gate',
@@ -508,12 +507,11 @@ describe('executeIterateNode', () => {
       timeoutMs: null,
       when: "item == 'pause'",
     } satisfies WorkflowGateNode;
-    const stationNode = {
+    const stepNode = {
       id: 'iter-pause__worker',
-      type: 'station',
-      prompt: 'Worker',
+      type: 'code-step',
       when: "item != 'pause'",
-    } satisfies WorkflowStationNode;
+    } satisfies WorkflowCodeStepNode;
     const node: WorkflowIterateNode = {
       id: 'iter-pause',
       type: 'iterate',
@@ -522,12 +520,12 @@ describe('executeIterateNode', () => {
       body: {
         id: 'iter-pause__body',
         type: 'sequence',
-        nodes: [waitForSiblingNode, gateNode, stationNode],
+        nodes: [waitForSiblingNode, gateNode, stepNode],
       },
     };
 
-    const worker: StationHandler = async (ctx) => {
-      startedStations.push(ctx.item);
+    const worker: CodeStepHandler = async (ctx) => {
+      startedSteps.push(ctx.item);
       slowStartedResolve();
       await new Promise<void>((resolve) => {
         const timeout = setTimeout(() => {
@@ -582,8 +580,8 @@ describe('executeIterateNode', () => {
       pausedAtGateId: 'iter-pause__gate',
       pausedAtFrameId: expect.any(String),
     });
-    expect(startedStations).toContain('slow');
-    expect(startedStations).not.toContain('later');
+    expect(startedSteps).toContain('slow');
+    expect(startedSteps).not.toContain('later');
     expect(sideEffects).toEqual([]);
     const itemFrames = ctx.getFramesByNodeId('iter-pause').filter((frame) => frame.iteration !== undefined);
     expect(itemFrames.map((frame) => frame.iteration).sort()).toEqual([0, 1]);
@@ -629,7 +627,7 @@ describe('executeIterateChainNode', () => {
     expect(order).toEqual(['a', 'b', 'c']);
   });
 
-  it('passes item, index, and previous to the station handler', async () => {
+  it('passes item, index, and previous to the code step handler', async () => {
     const call = createTestCall();
     const calls: Array<{ item: unknown; index: unknown; previous: unknown }> = [];
     const { node, handlers } = makeIterateChainNode('chain-ctx', 'chain-ctx__item', 'inputs.items', (ctx) => {
@@ -684,7 +682,7 @@ describe('executeIterateChainNode', () => {
     }
   });
 
-  it('chains the final body station output when start timestamps tie', async () => {
+  it('chains the final body code step output when start timestamps tie', async () => {
     const call = createTestCall();
     const dateNow = vi.spyOn(Date, 'now').mockReturnValue(2_000);
     try {
@@ -696,8 +694,8 @@ describe('executeIterateChainNode', () => {
           id: 'chain-order__body',
           type: 'sequence',
           nodes: [
-            { id: 'chain-order__draft', type: 'station', prompt: 'Draft' } as WorkflowStationNode,
-            { id: 'chain-order__final', type: 'station', prompt: 'Final' } as WorkflowStationNode,
+            { id: 'chain-order__draft', type: 'code-step' } satisfies WorkflowCodeStepNode,
+            { id: 'chain-order__final', type: 'code-step' } satisfies WorkflowCodeStepNode,
           ],
         },
       };
@@ -891,14 +889,14 @@ describe('executeIterateChainNode', () => {
 
   it('passes item and index to jexl when/skip conditions in body nodes', async () => {
     const call = createTestCall();
-    // A body station with a `when` condition that references `index`.
+    // A body code step with a `when` condition that references `index`.
     const executed: number[] = [];
     const { node, handlers } = makeIterateChainNode('chain-when', 'chain-when__item', 'inputs.items', (ctx) => {
       executed.push(ctx.index as number);
       return `out-${String(ctx.index)}`;
     });
 
-    // Override the station's `when` condition on the body node.
+    // Override the code step's `when` condition on the body node.
     // We do this by mutating the body's nodes array (test-only hack).
     const bodyNode = node.body.nodes[0];
     (bodyNode as { when?: string }).when = 'index % 2 == 0';
@@ -918,7 +916,7 @@ describe('executeIterateChainNode', () => {
     );
 
     expect(outcome.status).toBe('completed');
-    // Only items at even indices (0, 2) should have executed the station.
+    // Only items at even indices (0, 2) should have executed the code step.
     expect(executed).toEqual([0, 2]);
   });
 
@@ -930,7 +928,7 @@ describe('executeIterateChainNode', () => {
       return null;
     });
 
-    // Mutate the station's when condition to reference `index` (test-only).
+    // Mutate the code step's when condition to reference `index` (test-only).
     const bodyNode = node.body.nodes[0];
     (bodyNode as { when?: string }).when = 'index < 2';
 
@@ -949,7 +947,7 @@ describe('executeIterateChainNode', () => {
     );
 
     expect(outcome.status).toBe('completed');
-    // Only items at indices 0 and 1 should have executed the station.
+    // Only items at indices 0 and 1 should have executed the code step.
     expect(executed.sort()).toEqual([0, 1]);
   });
 });
@@ -1021,11 +1019,11 @@ describe('iterate and iterate-chain via full dispatch (executeSequence)', () => 
       body: {
         id: 'iter-seq__body',
         type: 'sequence',
-        nodes: [{ id: 'iter-seq__item', type: 'station', prompt: 'iter-seq__item' } as WorkflowStationNode],
+        nodes: [{ id: 'iter-seq__item', type: 'code-step' } satisfies WorkflowCodeStepNode],
       },
     };
 
-    const handler: StationHandler = (ctx) => {
+    const handler: CodeStepHandler = (ctx) => {
       const val = ctx.item as JsonValue;
       received.push(val);
       return val;
@@ -1073,11 +1071,11 @@ describe('iterate and iterate-chain via full dispatch (executeSequence)', () => 
       body: {
         id: 'chain-seq__body',
         type: 'sequence',
-        nodes: [{ id: 'chain-seq__item', type: 'station', prompt: 'chain-seq__item' } as WorkflowStationNode],
+        nodes: [{ id: 'chain-seq__item', type: 'code-step' } satisfies WorkflowCodeStepNode],
       },
     };
 
-    const handler: StationHandler = (ctx) => {
+    const handler: CodeStepHandler = (ctx) => {
       calls.push({ item: ctx.item, previous: ctx.previous });
       return `processed-${String(ctx.item)}`;
     };

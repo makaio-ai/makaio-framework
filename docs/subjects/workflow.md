@@ -61,7 +61,6 @@ next: false
 | `listSpans` | [`workflow.listSpans`](#workflow.listSpans) | rpc | — |
 | `registerExternalExecution` | [`workflow.registerExternalExecution`](#workflow.registerExternalExecution) | rpc | — |
 | `rerun` | [`workflow.rerun`](#workflow.rerun) | rpc | — |
-| `resolveAgent` | [`workflow.resolveAgent`](#workflow.resolveAgent) | rpc | — |
 | `resolveRole` | [`workflow.resolveRole`](#workflow.resolveRole) | rpc | — |
 | `runFile` | [`workflow.runFile`](#workflow.runFile) | rpc | — |
 | `setDefinition` | [`workflow.setDefinition`](#workflow.setDefinition) | rpc | — |
@@ -181,7 +180,7 @@ Type: Request (RPC)
 | `completedAt` | `number \| undefined` | no |
 | `error` | `string \| undefined` | no |
 | `executionId` | `string` | yes |
-| `frame` | `{ frameId: string; nodeId: string; nodeType: "delegate-agent" \| "delegate-role" \| "station" \| "gate"; path: string[]; startedAt: number; attempt?: number \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; durationMs?: number \| undefined; } \| undefined` | no |
+| `frame` | `{ frameId: string; nodeId: string; nodeType: "code-step" \| "agent-step" \| "gate"; path: string[]; startedAt: number; attempt?: number \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; durationMs?: number \| undefined; } \| undefined` | no |
 | `reason` | `string \| undefined` | no |
 | `status` | `"failed" \| "completed" \| "cancelled"` | yes |
 
@@ -370,7 +369,7 @@ Type: Event
 
 ### <a id="workflow.execution.progress"></a>`workflow.execution.progress` (event)
 
-Ephemeral progress signal emitted by a station handler via `ctx.updateProgress()`.
+Ephemeral progress signal emitted by a code step handler via `ctx.updateProgress()`.
 
 Progress events are not persisted as WorkLog entries. Observers and
 materialization providers consume them for real-time projections.
@@ -418,7 +417,6 @@ Type: Request (RPC)
 | `finalizerId` | `string` | yes |
 | `frameId` | `string` | yes |
 | `nodeId` | `string` | yes |
-| `nodeType` | `"delegate-agent" \| "delegate-role"` | yes |
 | `rawResult` | `JsonValue` | yes |
 | `toolObservations` | `{ toolName: string; outcome?: "success" \| "failure" \| undefined; artifact?: { kind: string; id: string; revision: string; } \| undefined; }[]` | yes |
 | `workflowId` | `string` | yes |
@@ -444,6 +442,7 @@ Type: Event
 | `executionId` | `string` | yes |
 | `frameId` | `string` | yes |
 | `nodeId` | `string` | yes |
+| `nodeType` | `"sequence" \| "code-step" \| "agent-step" \| "parallel" \| "gate" \| "iterate" \| "iterate-chain" \| "loop"` | yes |
 | `output` | `JsonValue \| undefined` | no |
 
 ### <a id="workflow.frame.failed"></a>`workflow.frame.failed` (event)
@@ -462,6 +461,7 @@ Type: Event
 | `executionId` | `string` | yes |
 | `frameId` | `string` | yes |
 | `nodeId` | `string` | yes |
+| `nodeType` | `"sequence" \| "code-step" \| "agent-step" \| "parallel" \| "gate" \| "iterate" \| "iterate-chain" \| "loop"` | yes |
 
 ### <a id="workflow.frame.sessionLinked"></a>`workflow.frame.sessionLinked` (event)
 
@@ -495,7 +495,7 @@ Type: Event
 | `executionId` | `string` | yes |
 | `frameId` | `string` | yes |
 | `nodeId` | `string` | yes |
-| `nodeType` | `"sequence" \| "delegate-agent" \| "delegate-role" \| "station" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"` | yes |
+| `nodeType` | `"sequence" \| "code-step" \| "agent-step" \| "parallel" \| "gate" \| "iterate" \| "iterate-chain" \| "loop"` | yes |
 | `parentFrameId` | `string \| undefined` | no |
 | `path` | `string[]` | yes |
 | `startedAt` | `number \| undefined` | no |
@@ -695,7 +695,7 @@ Type: Request (RPC)
 | `config` | `JsonObject \| undefined` | no |
 | `coordinatorSessionId` | `string` | yes |
 | `createdAt` | `number` | yes |
-| `definitionSnapshot` | `{ id: string; root: { id: string; type: "sequence"; nodes: WorkflowNode[]; when?: string \| undefined; skip?: string \| undefined; writes?: { kind: string; schemaVersion: number; scope: { level: string; ids?: Record<string, string> \| undefined; }; dataExpression?: string \| undefined; }[] \| undefined; }; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; name?: string \| undefined; description?: string \| undefined; inputSchema?: Record<string, JsonValue> \| undefined; configSchema?: Record<string, JsonValue> \| undefined; outputSchema?: Record<string, JsonValue> \| undefined; state?: { schema: Record<string, JsonValue>; initial?: JsonValue \| undefined; } \| undefined; artifact?: { kind: string; schemaVersion: number; scope: { level: string; ids?: Record<string, string> \| undefined; }; resolve?: string \| undefined; create?: string \| undefined; statusPath?: string \| undefined; } \| undefined; triggers?: { kind: string; params: Record<string, JsonValue>; when?: Condition \| undefined; filter?: undefined; filterExpression?: undefined; }[] \| undefined; canvasLayout?: Record<string, JsonValue> \| undefined; extensions?: Record<string, JsonValue> \| undefined; source?: { kind: "editor"; } \| { kind: "extension"; extension: string; metadata: JsonObject; externalId?: string \| undefined; syncedAt?: string \| undefined; } \| undefined; executableSource?: { kind: "path"; path: string; } \| { kind: "source"; filename: string; source: string; } \| { kind: "definition"; workflowId: string; } \| undefined; requirements?: { customCapabilities: string[]; maxRuntimeMs?: number \| undefined; persistentStorage?: boolean \| undefined; recoverableAllocation?: boolean \| undefined; materializationModes?: ("local-directory" \| "workspace-snapshot")[] \| undefined; } \| undefined; successFinalizerId?: string \| undefined; } \| undefined` | no |
+| `definitionSnapshot` | `JsonValue \| undefined` | no |
 | `dispatchMetadata` | `JsonObject \| undefined` | no |
 | `env` | `Record<string, string>` | yes |
 | `executionId` | `string` | yes |
@@ -725,6 +725,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
+| `rejected` | `{ id: string; reason: string; }[]` | yes |
 | `workflows` | `{ id: string; root: { id: string; type: "sequence"; nodes: WorkflowNode[]; when?: string \| undefined; skip?: string \| undefined; writes?: { kind: string; schemaVersion: number; scope: { level: string; ids?: Record<string, string> \| undefined; }; dataExpression?: string \| undefined; }[] \| undefined; }; scope: { type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; }; name?: string \| undefined; description?: string \| undefined; inputSchema?: Record<string, JsonValue> \| undefined; configSchema?: Record<string, JsonValue> \| undefined; outputSchema?: Record<string, JsonValue> \| undefined; state?: { schema: Record<string, JsonValue>; initial?: JsonValue \| undefined; } \| undefined; artifact?: { kind: string; schemaVersion: number; scope: { level: string; ids?: Record<string, string> \| undefined; }; resolve?: string \| undefined; create?: string \| undefined; statusPath?: string \| undefined; } \| undefined; triggers?: { kind: string; params: Record<string, JsonValue>; when?: Condition \| undefined; filter?: undefined; filterExpression?: undefined; }[] \| undefined; canvasLayout?: Record<string, JsonValue> \| undefined; extensions?: Record<string, JsonValue> \| undefined; source?: { kind: "editor"; } \| { kind: "extension"; extension: string; metadata: JsonObject; externalId?: string \| undefined; syncedAt?: string \| undefined; } \| undefined; executableSource?: { kind: "path"; path: string; } \| { kind: "source"; filename: string; source: string; } \| { kind: "definition"; workflowId: string; } \| undefined; requirements?: { customCapabilities: string[]; maxRuntimeMs?: number \| undefined; persistentStorage?: boolean \| undefined; recoverableAllocation?: boolean \| undefined; materializationModes?: ("local-directory" \| "workspace-snapshot")[] \| undefined; } \| undefined; successFinalizerId?: string \| undefined; }[]` | yes |
 
 ### <a id="workflow.listExecutionLinks"></a>`workflow.listExecutionLinks` (rpc)
@@ -823,7 +824,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `frames` | `{ frameId: string; nodeId: string; nodeType: "sequence" \| "delegate-agent" \| "delegate-role" \| "station" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "failed" \| "completed" \| "cancelled" \| "skipped" \| "pending" \| "running" \| "waiting"; attempt: number; parentFrameId?: string \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; output?: JsonValue \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; }[]` | yes |
+| `frames` | `{ frameId: string; nodeId: string; nodeType: "sequence" \| "code-step" \| "agent-step" \| "parallel" \| "gate" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "failed" \| "completed" \| "cancelled" \| "skipped" \| "pending" \| "running" \| "waiting"; attempt: number; parentFrameId?: string \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; output?: JsonValue \| undefined; error?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; }[]` | yes |
 
 ### <a id="workflow.listGateInstances"></a>`workflow.listGateInstances` (rpc)
 
@@ -872,7 +873,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `spans` | `{ executionId: string; frameId: string; stepId: string; stepType: "delegate-agent" \| "delegate-role" \| "station" \| "gate"; status: "failed" \| "completed" \| "skipped" \| "running"; startedAt?: number \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; toolCallCount?: number \| undefined; input?: string \| undefined; output?: string \| undefined; }[]` | yes |
+| `spans` | `{ executionId: string; frameId: string; stepId: string; stepType: "code-step" \| "agent-step" \| "gate"; status: "failed" \| "completed" \| "skipped" \| "running"; startedAt?: number \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; toolCallCount?: number \| undefined; input?: string \| undefined; output?: string \| undefined; }[]` | yes |
 
 ### <a id="workflow.registerExternalExecution"></a>`workflow.registerExternalExecution` (rpc)
 
@@ -900,7 +901,7 @@ Type: Request (RPC)
 |-------|------|----------|
 | `artifactRef` | `{ kind: string; id: string; } \| undefined` | no |
 | `executionId` | `string \| undefined` | no |
-| `frame` | `{ nodeId: string; nodeType: "delegate-agent" \| "delegate-role" \| "station" \| "gate"; frameId?: string \| undefined; path?: string[] \| undefined; attempt?: number \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; startedAt?: number \| undefined; } \| undefined` | no |
+| `frame` | `{ nodeId: string; nodeType: "code-step" \| "agent-step" \| "gate"; frameId?: string \| undefined; path?: string[] \| undefined; attempt?: number \| undefined; iteration?: number \| undefined; branchKey?: string \| undefined; startedAt?: number \| undefined; } \| undefined` | no |
 | `input` | `JsonValue \| undefined` | no |
 | `name` | `string` | yes |
 | `scope` | `{ type: "global"; } \| { type: "workspace"; id: string; } \| { type: "session"; id: string; } \| { type: "external"; kind: string; id: string; } \| undefined` | no |
@@ -938,38 +939,6 @@ Type: Request (RPC)
 | Field | Type | Required |
 |-------|------|----------|
 | `executionId` | `string` | yes |
-
-### <a id="workflow.resolveAgent"></a>`workflow.resolveAgent` (rpc)
-
-Resolve an explicit agent definition to its adapter configuration.
-Called by the workflow executor when an agent step specifies `agentId`.
-
-Subject: `workflow.resolveAgent`
-Type: Request (RPC)
-
-**Request:**
-
-| Field | Type | Required |
-|-------|------|----------|
-| `agentId` | `string` | yes |
-
-**Response:**
-
-| Field | Type | Required |
-|-------|------|----------|
-| `adapterConfig` | `JsonObject \| undefined` | no |
-| `adapterName` | `string` | yes |
-| `allowedDirectories` | `string[] \| undefined` | no |
-| `completion` | `"tool" \| "turn" \| undefined` | no |
-| `contextMode` | `"fork" \| "fresh" \| undefined` | no |
-| `disallowedTools` | `string[] \| undefined` | no |
-| `harnessId` | `string \| undefined` | no |
-| `model` | `string \| undefined` | no |
-| `providerConfigId` | `string \| undefined` | no |
-| `providerContext` | `{ state: "resolved"; providerConfigId: string; definitionId: string; auth: { mode: "explicit"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "explicit"; label: string; fields: { id: string; label: string; required: boolean; secret: boolean; sourceHints: { kind: "environment"; variable: string; }[]; description?: string \| undefined; }[]; description?: string \| undefined; }; credentialRefs: Record<string, string & $brand<"CredentialRef">>; } \| { mode: "inferred"; method: { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "inferred"; label: string; description?: string \| undefined; }; account?: { managerId: string; accountId: string; } \| undefined; } \| { mode: "none"; method: { owner: "provider"; providerDefinitionId: string; methodId: string; } \| { owner: "client"; clientId: string; methodId: string; }; definition: { id: string; mode: "none"; label: string; description?: string \| undefined; }; }; endpointOverrides?: { anthropic?: string \| undefined; openai?: string \| undefined; } \| undefined; capabilities?: JsonObject \| undefined; } \| { state: "unresolved"; } \| undefined` | no |
-| `reasoningEffort` | `"none" \| "low" \| "medium" \| "high" \| "extra-high" \| undefined` | no |
-| `systemPrompt` | `string \| undefined` | no |
-| `tools` | `string[] \| undefined` | no |
 
 ### <a id="workflow.resolveRole"></a>`workflow.resolveRole` (rpc)
 
@@ -1178,7 +1147,7 @@ Type: Event
 |-------|------|----------|
 | `executionId` | `string` | yes |
 | `stepId` | `string` | yes |
-| `stepType` | `"delegate-agent" \| "delegate-role" \| "station" \| "gate"` | yes |
+| `stepType` | `"code-step" \| "agent-step" \| "gate"` | yes |
 
 ### <a id="workflow.step.completed"></a>`workflow.step.completed` (event)
 
@@ -1191,7 +1160,7 @@ Type: Event
 | `executionId` | `string` | yes |
 | `result` | `JsonValue \| undefined` | no |
 | `stepId` | `string` | yes |
-| `stepType` | `"delegate-agent" \| "delegate-role" \| "station" \| "gate"` | yes |
+| `stepType` | `"code-step" \| "agent-step" \| "gate"` | yes |
 
 ### <a id="workflow.step.failed"></a>`workflow.step.failed` (event)
 
@@ -1203,7 +1172,7 @@ Type: Event
 | `error` | `string` | yes |
 | `executionId` | `string` | yes |
 | `stepId` | `string` | yes |
-| `stepType` | `"delegate-agent" \| "delegate-role" \| "station" \| "gate"` | yes |
+| `stepType` | `"code-step" \| "agent-step" \| "gate"` | yes |
 
 ### <a id="workflow.step.skipped"></a>`workflow.step.skipped` (event)
 
@@ -1216,7 +1185,7 @@ Type: Event
 | `executionId` | `string` | yes |
 | `reason` | `string \| undefined` | no |
 | `stepId` | `string` | yes |
-| `stepType` | `"delegate-agent" \| "delegate-role" \| "station" \| "gate"` | yes |
+| `stepType` | `"code-step" \| "agent-step" \| "gate"` | yes |
 
 ### <a id="workflow.step.started"></a>`workflow.step.started` (event)
 
@@ -1228,7 +1197,7 @@ Type: Event
 | `executionId` | `string` | yes |
 | `sessionId` | `string \| undefined` | no |
 | `stepId` | `string` | yes |
-| `stepType` | `"delegate-agent" \| "delegate-role" \| "station" \| "gate"` | yes |
+| `stepType` | `"code-step" \| "agent-step" \| "gate"` | yes |
 | `subagentId` | `string \| undefined` | no |
 
 ### <a id="workflow.worklog.changed"></a>`workflow.worklog.changed` (event)
@@ -1265,7 +1234,7 @@ Type: Request (RPC)
 
 | Field | Type | Required |
 |-------|------|----------|
-| `frame` | `{ executionId: string; frameId: string; nodeId: string; nodeType: "sequence" \| "delegate-agent" \| "delegate-role" \| "station" \| "gate" \| "parallel" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "failed" \| "completed" \| "cancelled" \| "skipped" \| "pending" \| "running" \| "waiting"; attempt: number; iteration?: number \| undefined; branchKey?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; error?: string \| undefined; } \| null` | yes |
+| `frame` | `{ executionId: string; frameId: string; nodeId: string; nodeType: "sequence" \| "code-step" \| "agent-step" \| "parallel" \| "gate" \| "iterate" \| "iterate-chain" \| "loop"; path: string[]; status: "failed" \| "completed" \| "cancelled" \| "skipped" \| "pending" \| "running" \| "waiting"; attempt: number; iteration?: number \| undefined; branchKey?: string \| undefined; startedAt?: number \| undefined; completedAt?: number \| undefined; durationMs?: number \| undefined; inputTokens?: number \| undefined; outputTokens?: number \| undefined; estimatedCost?: number \| undefined; error?: string \| undefined; } \| null` | yes |
 
 ### <a id="workflow.worklog.get"></a>`workflow.worklog.get` (rpc)
 

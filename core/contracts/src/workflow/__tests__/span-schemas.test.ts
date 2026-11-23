@@ -29,19 +29,19 @@ describe('SpanRecordSchema', () => {
     executionId: 'wfx-abc123',
     frameId: 'frm-abc123',
     stepId: 'analyze-requirements',
-    stepType: 'station',
+    stepType: 'agent-step',
     status: 'completed',
     startedAt: 1716000000000,
     completedAt: 1716000002100,
     durationMs: 2100,
   };
 
-  it('accepts a minimal completed station span', () => {
+  it('accepts a minimal completed agent step span', () => {
     const result = SpanRecordSchema.parse(minimalSpan);
     expect(result.executionId).toBe('wfx-abc123');
     expect(result.frameId).toBe('frm-abc123');
     expect(result.stepId).toBe('analyze-requirements');
-    expect(result.stepType).toBe('station');
+    expect(result.stepType).toBe('agent-step');
     expect(result.status).toBe('completed');
     expect(result.durationMs).toBe(2100);
   });
@@ -51,7 +51,7 @@ describe('SpanRecordSchema', () => {
       executionId: 'wfx-abc123',
       frameId: 'frm-running',
       stepId: 'analyze',
-      stepType: 'station',
+      stepType: 'agent-step',
       status: 'running',
       startedAt: 1716000000000,
     });
@@ -59,10 +59,10 @@ describe('SpanRecordSchema', () => {
     expect(result.durationMs).toBeUndefined();
   });
 
-  it('accepts a full station span with LLM telemetry fields', () => {
+  it('accepts a full agent step span with LLM telemetry fields', () => {
     const result = SpanRecordSchema.parse({
       ...minimalSpan,
-      stepType: 'station',
+      stepType: 'agent-step',
       inputTokens: 12400,
       outputTokens: 3200,
       estimatedCost: 0.12,
@@ -95,8 +95,8 @@ describe('SpanRecordSchema', () => {
     const result = SpanRecordSchema.parse({
       executionId: 'wfx-abc123',
       frameId: 'frm-skipped',
-      stepId: 'optional-station',
-      stepType: 'station',
+      stepId: 'optional-step',
+      stepType: 'agent-step',
       status: 'skipped',
     });
     expect(result.status).toBe('skipped');
@@ -107,8 +107,8 @@ describe('SpanRecordSchema', () => {
     const result = SpanRecordSchema.parse({
       executionId: 'wfx-abc123',
       frameId: 'frm-failed',
-      stepId: 'deploy-station',
-      stepType: 'station',
+      stepId: 'deploy-step',
+      stepType: 'agent-step',
       status: 'failed',
       startedAt: 1716000000000,
       completedAt: 1716000005000,
@@ -165,7 +165,7 @@ describe('ExecutionLinkSchema', () => {
       sourceExecutionId: 'wfx-abc123',
       targetExecutionId: 'wfx-ghi789',
       linkType: 'feedback-loop',
-      metadata: { reason: 'qa-rejected', targetStation: 'requirements-analysis' },
+      metadata: { reason: 'qa-rejected', targetStep: 'requirements-analysis' },
     });
     expect(result.metadata?.reason).toBe('qa-rejected');
   });

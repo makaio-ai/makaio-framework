@@ -8,26 +8,25 @@ import {
   SubagentSubjects,
   WorkflowNamespace,
   WorkflowSubjects,
+  type CodeStepHandler,
   type JsonValue,
   type ProviderContext,
   type SpanRecord,
-  type StationHandler,
+  type WorkflowAgentStepNode,
+  type WorkflowCodeStepNode,
   type WorkflowDefinition,
-  type WorkflowDelegateAgentNode,
-  type WorkflowDelegateRoleNode,
   type WorkflowExecution,
   type WorkflowFrameState,
   type WorkflowIterateNode,
   type WorkflowParallelNode,
   type WorkflowSequenceNode,
-  type WorkflowStationNode,
 } from '@makaio/contracts';
 import { createTestCall } from '@makaio/test-utils';
 import { RuntimeContext } from '../runtime/runtime-context.js';
-import { executeStationNode } from '../runtime/station-node.js';
+import { executeCodeStepNode } from '../runtime/code-step-node.js';
 import { createWorkflowStateContext } from '../runtime/workflow-state-context.js';
-import { executeDelegateAgentNode, executeDelegateRoleNode } from '../runtime/delegate-node.js';
-import { elapsedDelegateDuration, executeRoleSubagentNode } from '../runtime/role-subagent-node.js';
+import { executeAgentStepNode } from '../runtime/delegate-node.js';
+import { elapsedDelegateDuration } from '../runtime/role-subagent-node.js';
 import { executeParallelNode, type ParallelOutput } from '../runtime/parallel-node.js';
 import { executeSequence } from '../runtime/primitive-runtime.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
@@ -79,11 +78,11 @@ function makeBus(): ReturnType<typeof createBusInstance> {
 
 /**
  * Create a fresh RuntimeContext with an isolated bus.
- * @param handlers - Station handlers keyed by node ID.
+ * @param handlers - Code step handlers keyed by node ID.
  * @param signal - Optional abort signal.
  */
 function makeCtx(
-  handlers: Record<string, StationHandler>,
+  handlers: Record<string, CodeStepHandler>,
   signal: AbortSignal = new AbortController().signal,
 ): RuntimeContext {
   const bus = makeBus();
@@ -137,18 +136,17 @@ const REVIEW_PROVIDER_CONTEXT_WITHOUT_CAPABILITIES = {
 } satisfies ProviderContext;
 
 // ─────────────────────────────────────────────────────────────
-// Station node tests
+// Code step and agent step node tests
 // ─────────────────────────────────────────────────────────────
 
-describe('executeStationNode', () => {
+describe('code step and agent step execution', () => {
   it('calls the registered handler and returns its output', async () => {
-    const node: WorkflowStationNode = {
+    const node: WorkflowCodeStepNode = {
       id: 'greet',
-      type: 'station',
-      prompt: 'Say hello',
+      type: 'code-step',
     };
 
-    const handler: StationHandler = async (ctx) => {
+    const handler: CodeStepHandler = async (ctx) => {
       const inputs =
         ctx.inputs !== null && typeof ctx.inputs === 'object' && !Array.isArray(ctx.inputs)
           ? (ctx.inputs as Record<string, unknown>)
@@ -158,7 +156,7 @@ describe('executeStationNode', () => {
     };
 
     const ctx = makeCtx({ greet: handler });
-    const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    const outcome = await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     if (outcome.status === 'completed') {
@@ -167,14 +165,13 @@ describe('executeStationNode', () => {
   });
 
   it('passes execution inputs and config to the handler', async () => {
-    const node: WorkflowStationNode = {
+    const node: WorkflowCodeStepNode = {
       id: 'echo-input',
-      type: 'station',
-      prompt: 'Echo the input',
+      type: 'code-step',
     };
 
     const received: unknown[] = [];
-    const handler: StationHandler = (ctx) => {
+    const handler: CodeStepHandler = (ctx) => {
       received.push({ inputs: ctx.inputs, config: ctx.config });
       return 'ok';
     };
@@ -194,20 +191,19 @@ describe('executeStationNode', () => {
       new AbortController().signal,
     );
 
-    await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(received[0]).toEqual({ inputs: { key: 'value' }, config: { mode: 'strict' } });
   });
 
   it('passes previousSteps from completed frames in the expression context', async () => {
-    const node: WorkflowStationNode = {
+    const node: WorkflowCodeStepNode = {
       id: 'consumer',
-      type: 'station',
-      prompt: 'Use previous step',
+      type: 'code-step',
     };
 
     let receivedPreviousSteps: unknown;
-    const handler: StationHandler = (ctx) => {
+    const handler: CodeStepHandler = (ctx) => {
       receivedPreviousSteps = ctx.previousSteps;
       return null;
     };
@@ -224,7 +220,7 @@ describe('executeStationNode', () => {
     };
 
     const ctx = makeCtx({ consumer: handler });
-    await executeStationNode(createTestCall(), node, ctx, expressionCtx);
+    await executeCodeStepNode(createTestCall(), node, ctx, expressionCtx);
 
     expect(receivedPreviousSteps).toMatchObject({
       'prior-step': { status: 'completed', output: { result: 42 } },
@@ -235,12 +231,11 @@ describe('executeStationNode', () => {
   });
 
   it('emits structured progress updates with execution, workflow, frame, and node identity', async () => {
-    const node: WorkflowStationNode = {
-      id: 'progress-station',
-      type: 'station',
-      prompt: 'Report progress',
+    const node: WorkflowCodeStepNode = {
+      id: 'progress-step',
+      type: 'code-step',
     };
-    const handler: StationHandler = async (ctx) => {
+    const handler: CodeStepHandler = async (ctx) => {
       await ctx.updateProgress({
         message: 'Review draft ready',
         details: 'The review artifact has been updated.',
@@ -249,20 +244,20 @@ describe('executeStationNode', () => {
       });
       return 'done';
     };
-    const ctx = makeCtx({ 'progress-station': handler });
+    const ctx = makeCtx({ 'progress-step': handler });
     let receivedPayload: unknown;
     const unsubscribe = ctx.bus.on(WorkflowSubjects.execution.progress, (eventCtx) => {
       receivedPayload = eventCtx.payload;
     });
 
-    const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-progress');
+    const outcome = await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-progress');
 
     expect(outcome.status).toBe('completed');
     expect(receivedPayload).toMatchObject({
       executionId: 'exec-test',
       workflowId: 'workflow-test',
       frameId: 'frame-progress',
-      nodeId: 'progress-station',
+      nodeId: 'progress-step',
       progress: {
         message: 'Review draft ready',
         details: 'The review artifact has been updated.',
@@ -274,13 +269,12 @@ describe('executeStationNode', () => {
     unsubscribe();
   });
 
-  it('fails the station when updateProgress receives a payload rejected by the progress schema', async () => {
-    const node: WorkflowStationNode = {
+  it('fails the code step when updateProgress receives a payload rejected by the progress schema', async () => {
+    const node: WorkflowCodeStepNode = {
       id: 'invalid-progress',
-      type: 'station',
-      prompt: 'Report invalid progress',
+      type: 'code-step',
     };
-    const handler: StationHandler = async (ctx) => {
+    const handler: CodeStepHandler = async (ctx) => {
       await ctx.updateProgress({ message: '' });
       return 'done';
     };
@@ -288,7 +282,7 @@ describe('executeStationNode', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     try {
-      const outcome = await executeStationNode(
+      const outcome = await executeCodeStepNode(
         createTestCall(),
         node,
         ctx,
@@ -305,13 +299,12 @@ describe('executeStationNode', () => {
     }
   });
 
-  it('does not fail the station when a progress subscriber fails', async () => {
-    const node: WorkflowStationNode = {
+  it('does not fail the code step when a progress subscriber fails', async () => {
+    const node: WorkflowCodeStepNode = {
       id: 'progress-observer-failure',
-      type: 'station',
-      prompt: 'Report progress',
+      type: 'code-step',
     };
-    const handler: StationHandler = async (ctx) => {
+    const handler: CodeStepHandler = async (ctx) => {
       await ctx.updateProgress({ message: 'Observer may fail' });
       return 'done';
     };
@@ -322,7 +315,7 @@ describe('executeStationNode', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     try {
-      const outcome = await executeStationNode(
+      const outcome = await executeCodeStepNode(
         createTestCall(),
         node,
         ctx,
@@ -337,13 +330,12 @@ describe('executeStationNode', () => {
     }
   });
 
-  it('does not fail the station when a progress subscriber throws a ValidationError', async () => {
-    const node: WorkflowStationNode = {
+  it('does not fail the code step when a progress subscriber throws a ValidationError', async () => {
+    const node: WorkflowCodeStepNode = {
       id: 'progress-validation-observer-failure',
-      type: 'station',
-      prompt: 'Report progress',
+      type: 'code-step',
     };
-    const handler: StationHandler = async (ctx) => {
+    const handler: CodeStepHandler = async (ctx) => {
       await ctx.updateProgress({ message: 'Observer validation may fail' });
       return 'done';
     };
@@ -357,7 +349,7 @@ describe('executeStationNode', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     try {
-      const outcome = await executeStationNode(
+      const outcome = await executeCodeStepNode(
         createTestCall(),
         node,
         ctx,
@@ -372,26 +364,115 @@ describe('executeStationNode', () => {
     }
   });
 
-  it('fails with a descriptive message when no handler is registered', async () => {
-    const node: WorkflowStationNode = {
+  it.each([
+    { label: 'no extra fields', fields: {} },
+    { label: 'a stored role', fields: { role: 'reviewer' } },
+    { label: 'a stored prompt', fields: { prompt: 'Review the implementation' } },
+    { label: 'a stored role and prompt', fields: { role: 'reviewer', prompt: 'Review the implementation' } },
+  ])('fails visibly without a registered code handler with $label', async ({ fields }) => {
+    const node: WorkflowCodeStepNode = {
+      ...fields,
       id: 'no-handler',
-      type: 'station',
-      prompt: 'Orphan station',
+      type: 'code-step',
     };
-
     const ctx = makeCtx({});
-    const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    const resolveRole = vi.fn();
+    const spawn = vi.fn();
+    const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, resolveRole);
+    const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, spawn);
 
-    expect(outcome.status).toBe('failed');
-    if (outcome.status === 'failed') {
-      expect(outcome.error).toContain('no-handler');
+    try {
+      await expect(executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx)).resolves.toEqual({
+        status: 'failed',
+        error: "No handler registered for code step 'no-handler'",
+      });
+      expect(resolveRole).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      unsubscribeRole();
+      unsubscribeSpawn();
     }
   });
 
-  it('runs role-backed stations through the subagent seam when no handler is registered', async () => {
-    const node: WorkflowStationNode = {
-      id: 'role-station',
-      type: 'station',
+  it.each([
+    { label: 'object', value: { title: 'Implementation', approved: true } },
+    { label: 'array', value: ['first', 'second'] },
+  ])('renders an agent-step $label placeholder as JSON before spawning', async ({ value }) => {
+    const node: WorkflowAgentStepNode = {
+      id: 'structured-prompt',
+      type: 'agent-step',
+      role: 'reviewer',
+      prompt: 'Review {{ input.details }}',
+    };
+    const ctx = makeCtx({});
+    const spawned: unknown[] = [];
+    const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
+      requestCtx.setResult({ adapterName: 'claude-code' });
+    });
+    const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
+      spawned.push(requestCtx.payload);
+      requestCtx.setResult({ subagentId: 'subagent-structured-prompt', status: 'spawning' });
+    });
+    const unsubscribeAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
+      requestCtx.setResult({ status: 'completed', result: 'review complete' });
+    });
+
+    try {
+      await expect(
+        executeAgentStepNode(createTestCall(), node, ctx, {
+          ...emptyExpressionCtx,
+          inputs: { details: value },
+        }),
+      ).resolves.toEqual({ status: 'completed', output: 'review complete' });
+      expect(spawned).toEqual([
+        expect.objectContaining({
+          config: expect.objectContaining({ task: `Review ${JSON.stringify(value, null, 2)}` }),
+        }),
+      ]);
+    } finally {
+      unsubscribeRole();
+      unsubscribeSpawn();
+      unsubscribeAwait();
+    }
+  });
+
+  it('fails an agent step on a prompt placeholder error before spawning a subagent', async () => {
+    const node: WorkflowAgentStepNode = {
+      id: 'invalid-prompt',
+      type: 'agent-step',
+      role: 'reviewer',
+      prompt: 'Review {{ input.title + }}',
+    };
+    const ctx = makeCtx({});
+    const spawn = vi.fn();
+    const awaitSubagent = vi.fn();
+    const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
+      requestCtx.setResult({ adapterName: 'claude-code' });
+    });
+    const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, spawn);
+    const unsubscribeAwait = ctx.bus.on(SubagentSubjects.await, awaitSubagent);
+
+    try {
+      const outcome = await executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
+      expect(outcome.status).toBe('failed');
+      if (outcome.status === 'failed') {
+        expect(outcome.error).toContain(
+          "agent step 'invalid-prompt': Template placeholder {{ input.title + }} failed to evaluate:",
+        );
+      }
+      expect(spawn).not.toHaveBeenCalled();
+      expect(awaitSubagent).not.toHaveBeenCalled();
+    } finally {
+      unsubscribeRole();
+      unsubscribeSpawn();
+      unsubscribeAwait();
+    }
+  });
+
+  it('runs agent steps through the subagent seam when no handler is registered', async () => {
+    const node: WorkflowAgentStepNode = {
+      id: 'role-step',
+      type: 'agent-step',
       prompt: 'Review {{ input.title }}',
       role: 'reviewer',
       outputSchema: { type: 'object' },
@@ -410,15 +491,15 @@ describe('executeStationNode', () => {
     });
     const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
       spawned.push(requestCtx.payload);
-      requestCtx.setResult({ subagentId: 'subagent-role-station', status: 'spawning' });
+      requestCtx.setResult({ subagentId: 'subagent-role-step', status: 'spawning' });
     });
     const unsubscribeAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
-      expect(requestCtx.payload).toEqual({ subagentId: 'subagent-role-station', timeoutMs: 1_000 });
+      expect(requestCtx.payload).toEqual({ subagentId: 'subagent-role-step', timeoutMs: 1_000 });
       requestCtx.setResult({ status: 'completed', result: 'review complete' });
     });
 
     try {
-      const outcome = await executeStationNode(createTestCall(), node, ctx, {
+      const outcome = await executeAgentStepNode(createTestCall(), node, ctx, {
         ...emptyExpressionCtx,
         inputs: { title: 'the implementation' },
       });
@@ -431,7 +512,7 @@ describe('executeStationNode', () => {
         config: Record<string, unknown>;
       };
       // Isolated runtime-node tests do not create a coordinator session, so
-      // role-backed stations fall back to the execution ID for subagent lineage.
+      // agent steps fall back to the execution ID for subagent lineage.
       expect(spawnPayload.parentSessionId).toBe('exec-test');
       expect(spawnPayload.depth).toBe(1);
       expect(spawnPayload.config).toMatchObject({
@@ -449,49 +530,27 @@ describe('executeStationNode', () => {
     }
   });
 
-  it('prefers a registered station handler over a station role', async () => {
-    const node: WorkflowStationNode = {
-      id: 'handler-wins',
-      type: 'station',
-      prompt: 'Use the role only when no handler exists',
-      role: 'reviewer',
-    };
-    const handler: StationHandler = () => 'handler result';
-    const ctx = makeCtx({ 'handler-wins': handler });
-    const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, () => {
-      throw new Error('Role resolver should not run when a handler is registered.');
-    });
-
-    try {
-      const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
-
-      expect(outcome).toEqual({ status: 'completed', output: 'handler result' });
-    } finally {
-      unsubscribeRole();
-    }
-  });
-
-  it('fails role-backed stations when the role cannot resolve', async () => {
-    const node: WorkflowStationNode = {
+  it('fails agent steps when the role cannot resolve', async () => {
+    const node: WorkflowAgentStepNode = {
       id: 'missing-role',
-      type: 'station',
+      type: 'agent-step',
       prompt: 'Resolve role',
       role: 'unknown-role',
     };
     const ctx = makeCtx({});
 
-    const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    const outcome = await executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
-      expect(outcome.error).toContain("role 'unknown-role' could not be resolved");
+      expect(outcome.error).toContain("Role 'unknown-role' could not be resolved");
     }
   });
 
-  it('fails role-backed stations when subagent runtime is unavailable', async () => {
-    const node: WorkflowStationNode = {
+  it('fails agent steps when subagent runtime is unavailable', async () => {
+    const node: WorkflowAgentStepNode = {
       id: 'missing-subagent',
-      type: 'station',
+      type: 'agent-step',
       prompt: 'Run role',
       role: 'reviewer',
     };
@@ -501,7 +560,7 @@ describe('executeStationNode', () => {
     });
 
     try {
-      const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
+      const outcome = await executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
       expect(outcome.status).toBe('failed');
       if (outcome.status === 'failed') {
@@ -512,10 +571,10 @@ describe('executeStationNode', () => {
     }
   });
 
-  it('fails role-backed stations when the subagent runtime cannot await', async () => {
-    const node: WorkflowStationNode = {
+  it('fails agent steps when the subagent runtime cannot await', async () => {
+    const node: WorkflowAgentStepNode = {
       id: 'missing-await',
-      type: 'station',
+      type: 'agent-step',
       prompt: 'Run role',
       role: 'reviewer',
     };
@@ -528,11 +587,11 @@ describe('executeStationNode', () => {
     });
 
     try {
-      const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
+      const outcome = await executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
       expect(outcome.status).toBe('failed');
       if (outcome.status === 'failed') {
-        expect(outcome.error).toContain("Subagent runtime cannot await station node 'missing-await'");
+        expect(outcome.error).toContain("Subagent runtime cannot await agent step 'missing-await'");
       }
     } finally {
       unsubscribeRole();
@@ -544,17 +603,17 @@ describe('executeStationNode', () => {
     {
       awaitStatus: 'failed' as const,
       awaitError: 'review failed',
-      expected: { status: 'failed' as const, error: "Station node 'subagent-failed' subagent failed: review failed" },
+      expected: { status: 'failed' as const, error: "Agent step 'subagent-failed' subagent failed: review failed" },
     },
     {
       awaitStatus: 'cancelled' as const,
       awaitError: undefined,
       expected: { status: 'cancelled' as const },
     },
-  ])('maps role-backed station subagent $awaitStatus results to node outcomes', async (scenario) => {
-    const node: WorkflowStationNode = {
+  ])('maps agent step subagent $awaitStatus results to node outcomes', async (scenario) => {
+    const node: WorkflowAgentStepNode = {
       id: `subagent-${scenario.awaitStatus}`,
-      type: 'station',
+      type: 'agent-step',
       prompt: 'Run role',
       role: 'reviewer',
     };
@@ -573,7 +632,7 @@ describe('executeStationNode', () => {
     });
 
     try {
-      await expect(executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx)).resolves.toEqual(
+      await expect(executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx)).resolves.toEqual(
         scenario.expected,
       );
     } finally {
@@ -583,10 +642,10 @@ describe('executeStationNode', () => {
     }
   });
 
-  it('cancels and kills role-backed station subagents when the workflow is aborted', async () => {
-    const node: WorkflowStationNode = {
-      id: 'abort-role-station',
-      type: 'station',
+  it('cancels and kills agent step subagents when the workflow is aborted', async () => {
+    const node: WorkflowAgentStepNode = {
+      id: 'abort-role-step',
+      type: 'agent-step',
       prompt: 'Run role',
       role: 'reviewer',
     };
@@ -605,7 +664,7 @@ describe('executeStationNode', () => {
       requestCtx.setResult({ adapterName: 'claude-code' });
     });
     const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
-      requestCtx.setResult({ subagentId: 'subagent-abort-role-station', status: 'spawning' });
+      requestCtx.setResult({ subagentId: 'subagent-abort-role-step', status: 'spawning' });
     });
     const unsubscribeAwait = ctx.bus.on(SubagentSubjects.await, async (requestCtx) => {
       resolveAwaitEntered();
@@ -619,14 +678,14 @@ describe('executeStationNode', () => {
     });
 
     try {
-      const outcomePromise = executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
+      const outcomePromise = executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
       await awaitEntered;
       controller.abort();
 
       await expect(outcomePromise).resolves.toEqual({ status: 'cancelled' });
       expect(killPayload).toEqual({
-        subagentId: 'subagent-abort-role-station',
-        reason: "Workflow execution 'exec-test' cancelled station 'abort-role-station'",
+        subagentId: 'subagent-abort-role-step',
+        reason: "Workflow execution 'exec-test' cancelled agent-step 'abort-role-step'",
       });
     } finally {
       releaseAwait();
@@ -637,10 +696,10 @@ describe('executeStationNode', () => {
     }
   });
 
-  it('returns cancelled when role-backed station child kill fails during abort cleanup', async () => {
-    const node: WorkflowStationNode = {
+  it('returns cancelled when agent step child kill fails during abort cleanup', async () => {
+    const node: WorkflowAgentStepNode = {
       id: 'abort-kill-fails',
-      type: 'station',
+      type: 'agent-step',
       prompt: 'Run role',
       role: 'reviewer',
     };
@@ -673,17 +732,17 @@ describe('executeStationNode', () => {
     });
 
     try {
-      const outcomePromise = executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
+      const outcomePromise = executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
       await awaitEntered;
       controller.abort();
 
       await expect(outcomePromise).resolves.toEqual({ status: 'cancelled' });
       expect(killPayload).toEqual({
         subagentId: 'subagent-abort-kill-fails',
-        reason: "Workflow execution 'exec-test' cancelled station 'abort-kill-fails'",
+        reason: "Workflow execution 'exec-test' cancelled agent-step 'abort-kill-fails'",
       });
       expect(warn).toHaveBeenCalledWith(
-        "[workflow-engine] Best-effort subagent kill failed for 'subagent-abort-kill-fails' (station 'abort-kill-fails')",
+        "[workflow-engine] Best-effort subagent kill failed for 'subagent-abort-kill-fails' (agent-step 'abort-kill-fails')",
         expect.any(Error),
       );
     } finally {
@@ -702,7 +761,7 @@ describe('executeStationNode', () => {
       status: 'waiting_input' as const,
       pendingRequest: { messageId: 'request-1', question: 'Continue?' },
     },
-  ])('kills a role-backed child after non-terminal await status $status', async (awaitResponse) => {
+  ])('kills an agent-step child after non-terminal await status $status', async (awaitResponse) => {
     const ctx = makeCtx({});
     const killPayloads: unknown[] = [];
     const cleanupRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
@@ -718,17 +777,13 @@ describe('executeStationNode', () => {
     });
 
     try {
-      const outcome = await executeRoleSubagentNode(
+      const outcome = await executeAgentStepNode(
         createTestCall(),
         {
-          nodeId: 'abandoned-role-station',
-          nodeLabel: 'Station node',
-          roleId: 'reviewer',
+          type: 'agent-step',
+          id: 'abandoned-role-step',
+          role: 'reviewer',
           prompt: 'Analyze',
-          unresolvedRoleError: 'role missing',
-          unavailableRuntimeError: 'runtime missing',
-          unavailableAwaitError: 'await missing',
-          cancellationLabel: 'station',
         },
         ctx,
         emptyExpressionCtx,
@@ -738,7 +793,7 @@ describe('executeStationNode', () => {
       expect(killPayloads).toEqual([
         {
           subagentId: 'subagent-abandoned',
-          reason: "Workflow execution 'exec-test' abandoned non-terminal station 'abandoned-role-station'",
+          reason: "Workflow execution 'exec-test' abandoned non-terminal agent-step 'abandoned-role-step'",
         },
       ]);
     } finally {
@@ -749,7 +804,7 @@ describe('executeStationNode', () => {
     }
   });
 
-  it('kills a role-backed child when the await request rejects', async () => {
+  it('kills an agent-step child when the await request rejects', async () => {
     const ctx = makeCtx({});
     const killPayloads: unknown[] = [];
     const cleanupRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
@@ -768,17 +823,13 @@ describe('executeStationNode', () => {
 
     try {
       await expect(
-        executeRoleSubagentNode(
+        executeAgentStepNode(
           createTestCall(),
           {
-            nodeId: 'await-failed-role-station',
-            nodeLabel: 'Station node',
-            roleId: 'reviewer',
+            type: 'agent-step',
+            id: 'await-failed-role-step',
+            role: 'reviewer',
             prompt: 'Analyze',
-            unresolvedRoleError: 'role missing',
-            unavailableRuntimeError: 'runtime missing',
-            unavailableAwaitError: 'await missing',
-            cancellationLabel: 'station',
           },
           ctx,
           emptyExpressionCtx,
@@ -787,7 +838,7 @@ describe('executeStationNode', () => {
       expect(killPayloads).toEqual([
         {
           subagentId: 'subagent-await-failed',
-          reason: "Workflow execution 'exec-test' failed awaiting station 'await-failed-role-station'",
+          reason: "Workflow execution 'exec-test' failed awaiting agent-step 'await-failed-role-step'",
         },
       ]);
     } finally {
@@ -798,7 +849,7 @@ describe('executeStationNode', () => {
     }
   });
 
-  it('emits frame.sessionLinked after a role-backed node obtains a child session', async () => {
+  it('emits frame.sessionLinked after an agent step obtains a child session', async () => {
     const links: Array<{ executionId: string; frameId: string; sessionId: string }> = [];
     const ctx = makeCtx({});
     const cleanupLink = ctx.bus.on(WorkflowSubjects.frame.sessionLinked, (eventCtx) => {
@@ -811,10 +862,10 @@ describe('executeStationNode', () => {
       });
     });
     const cleanupSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
-      requestCtx.setResult({ subagentId: 'subagent-role-station', status: 'spawning' });
+      requestCtx.setResult({ subagentId: 'subagent-role-step', status: 'spawning' });
     });
     const cleanupStatus = ctx.bus.on(SubagentSubjects.getStatus, (requestCtx) => {
-      expect(requestCtx.payload.subagentId).toBe('subagent-role-station');
+      expect(requestCtx.payload.subagentId).toBe('subagent-role-step');
       requestCtx.setResult({
         status: 'running',
         childSessionId: 'sess-child',
@@ -826,21 +877,17 @@ describe('executeStationNode', () => {
     });
 
     try {
-      const outcome = await executeRoleSubagentNode(
+      const outcome = await executeAgentStepNode(
         createTestCall(),
         {
-          nodeId: 'analyze',
-          nodeLabel: 'Station node',
-          roleId: 'reviewer',
+          type: 'agent-step',
+          id: 'analyze',
+          role: 'reviewer',
           prompt: 'Analyze',
-          unresolvedRoleError: 'role missing',
-          unavailableRuntimeError: 'runtime missing',
-          unavailableAwaitError: 'await missing',
-          cancellationLabel: 'station',
-          frameId: 'frame-analyze',
         },
         ctx,
         emptyExpressionCtx,
+        'frame-analyze',
       );
 
       expect(outcome).toEqual({ status: 'completed', output: 'done' });
@@ -890,21 +937,17 @@ describe('executeStationNode', () => {
     });
 
     try {
-      const outcome = await executeRoleSubagentNode(
+      const outcome = await executeAgentStepNode(
         createTestCall(),
         {
-          nodeId: 'delayed-link',
-          nodeLabel: 'Station node',
-          roleId: 'reviewer',
+          type: 'agent-step',
+          id: 'delayed-link',
+          role: 'reviewer',
           prompt: 'Analyze',
-          unresolvedRoleError: 'role missing',
-          unavailableRuntimeError: 'runtime missing',
-          unavailableAwaitError: 'await missing',
-          cancellationLabel: 'station',
-          frameId: 'frame-delayed-link',
         },
         ctx,
         emptyExpressionCtx,
+        'frame-delayed-link',
       );
 
       expect(outcome).toEqual({ status: 'completed', output: 'done after delayed link' });
@@ -939,21 +982,17 @@ describe('executeStationNode', () => {
       requestCtx.setResult({ status: 'completed', result: 'done after timeout' });
     });
 
-    const outcomePromise = executeRoleSubagentNode(
+    const outcomePromise = executeAgentStepNode(
       createTestCall(),
       {
-        nodeId: 'timeout-link',
-        nodeLabel: 'Station node',
-        roleId: 'reviewer',
+        type: 'agent-step',
+        id: 'timeout-link',
+        role: 'reviewer',
         prompt: 'Analyze',
-        unresolvedRoleError: 'role missing',
-        unavailableRuntimeError: 'runtime missing',
-        unavailableAwaitError: 'await missing',
-        cancellationLabel: 'station',
-        frameId: 'frame-timeout-link',
       },
       ctx,
       emptyExpressionCtx,
+      'frame-timeout-link',
     );
     let settledOutcome: unknown;
     void outcomePromise.then((outcome) => {
@@ -999,21 +1038,17 @@ describe('executeStationNode', () => {
 
     try {
       await expect(
-        executeRoleSubagentNode(
+        executeAgentStepNode(
           call,
           {
-            nodeId: 'signal-link',
-            nodeLabel: 'Station node',
-            roleId: 'reviewer',
+            type: 'agent-step',
+            id: 'signal-link',
+            role: 'reviewer',
             prompt: 'Analyze',
-            unresolvedRoleError: 'role missing',
-            unavailableRuntimeError: 'runtime missing',
-            unavailableAwaitError: 'await missing',
-            cancellationLabel: 'station',
-            frameId: 'frame-signal-link',
           },
           ctx,
           emptyExpressionCtx,
+          'frame-signal-link',
         ),
       ).resolves.toEqual({ status: 'completed', output: 'done with signal' });
 
@@ -1048,18 +1083,14 @@ describe('executeStationNode', () => {
 
     try {
       await expect(
-        executeRoleSubagentNode(
+        executeAgentStepNode(
           call,
           {
-            nodeId: 'await-options',
-            nodeLabel: 'Station node',
-            roleId: 'reviewer',
+            type: 'agent-step',
+            id: 'await-options',
+            role: 'reviewer',
             prompt: 'Analyze',
             timeoutMs: 90_000,
-            unresolvedRoleError: 'role missing',
-            unavailableRuntimeError: 'runtime missing',
-            unavailableAwaitError: 'await missing',
-            cancellationLabel: 'station',
           },
           ctx,
           emptyExpressionCtx,
@@ -1110,21 +1141,17 @@ describe('executeStationNode', () => {
       requestCtx.setResult({ killed: true });
     });
 
-    const outcomePromise = executeRoleSubagentNode(
+    const outcomePromise = executeAgentStepNode(
       createTestCall(),
       {
-        nodeId: 'abort-delay-link',
-        nodeLabel: 'Station node',
-        roleId: 'reviewer',
+        type: 'agent-step',
+        id: 'abort-delay-link',
+        role: 'reviewer',
         prompt: 'Analyze',
-        unresolvedRoleError: 'role missing',
-        unavailableRuntimeError: 'runtime missing',
-        unavailableAwaitError: 'await missing',
-        cancellationLabel: 'station',
-        frameId: 'frame-abort-delay-link',
       },
       ctx,
       emptyExpressionCtx,
+      'frame-abort-delay-link',
     );
     let settledOutcome: unknown;
     void outcomePromise.then((outcome) => {
@@ -1154,16 +1181,15 @@ describe('executeStationNode', () => {
     }
   });
 
-  it('passes the bus into station step contexts', async () => {
+  it('passes the bus into code step contexts', async () => {
     const bus = makeBus();
     let receivedBus: unknown;
 
-    const node: WorkflowStationNode = {
+    const node: WorkflowCodeStepNode = {
       id: 'capture-bus',
-      type: 'station',
-      prompt: 'Capture bus reference',
+      type: 'code-step',
     };
-    const handler: StationHandler = (ctx) => {
+    const handler: CodeStepHandler = (ctx) => {
       receivedBus = ctx.bus;
       return { ok: true };
     };
@@ -1177,25 +1203,24 @@ describe('executeStationNode', () => {
       new AbortController().signal,
     );
 
-    const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    const outcome = await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('completed');
     expect(receivedBus).toBe(bus);
   });
 
   it('propagates handler errors as failed outcomes', async () => {
-    const node: WorkflowStationNode = {
+    const node: WorkflowCodeStepNode = {
       id: 'broken',
-      type: 'station',
-      prompt: 'Throw',
+      type: 'code-step',
     };
 
-    const handler: StationHandler = () => {
+    const handler: CodeStepHandler = () => {
       throw new Error('Handler exploded');
     };
 
     const ctx = makeCtx({ broken: handler });
-    const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    const outcome = await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
@@ -1204,53 +1229,50 @@ describe('executeStationNode', () => {
   });
 
   it('returns cancelled when the signal is already aborted', async () => {
-    const node: WorkflowStationNode = {
+    const node: WorkflowCodeStepNode = {
       id: 'slow',
-      type: 'station',
-      prompt: 'Slow work',
+      type: 'code-step',
     };
 
-    const handler: StationHandler = () => 'should not run';
+    const handler: CodeStepHandler = () => 'should not run';
     const abortCtrl = new AbortController();
     abortCtrl.abort();
 
     const ctx = makeCtx({ slow: handler }, abortCtrl.signal);
-    const outcome = await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    const outcome = await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('cancelled');
   });
 
   it('passes the abort signal to the handler', async () => {
-    const node: WorkflowStationNode = {
+    const node: WorkflowCodeStepNode = {
       id: 'check-signal',
-      type: 'station',
-      prompt: 'Check signal',
+      type: 'code-step',
     };
 
     let capturedSignal: AbortSignal | undefined;
-    const handler: StationHandler = (ctx) => {
+    const handler: CodeStepHandler = (ctx) => {
       capturedSignal = ctx.signal;
       return null;
     };
 
     const abortCtrl = new AbortController();
     const ctx = makeCtx({ 'check-signal': handler }, abortCtrl.signal);
-    await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(capturedSignal).toBe(abortCtrl.signal);
   });
 
   it('passes platform context and environment from the runtime context to the handler', async () => {
-    const node: WorkflowStationNode = {
+    const node: WorkflowCodeStepNode = {
       id: 'platform-context',
-      type: 'station',
-      prompt: 'Read platform context',
+      type: 'code-step',
     };
 
     let receivedContext:
-      | Pick<Parameters<StationHandler>[0], 'repoPath' | 'makaioHome' | 'os' | 'arch' | 'worktree' | 'env'>
+      | Pick<Parameters<CodeStepHandler>[0], 'repoPath' | 'makaioHome' | 'os' | 'arch' | 'worktree' | 'env'>
       | undefined;
-    const handler: StationHandler = (ctx) => {
+    const handler: CodeStepHandler = (ctx) => {
       receivedContext = {
         repoPath: ctx.repoPath,
         makaioHome: ctx.makaioHome,
@@ -1285,7 +1307,7 @@ describe('executeStationNode', () => {
       },
     );
 
-    await executeStationNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    await executeCodeStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(receivedContext).toEqual({
       repoPath: '/repo/runtime',
@@ -1298,7 +1320,7 @@ describe('executeStationNode', () => {
   });
 });
 
-describe('executeDelegateNode', () => {
+describe('executeAgentStepNode', () => {
   it('normalizes monotonic delegate duration to safe integer milliseconds', () => {
     const now = vi
       .spyOn(performance, 'now')
@@ -1316,10 +1338,10 @@ describe('executeDelegateNode', () => {
     }
   });
 
-  it('runs turn-completed delegate roles through a fresh-context subagent', async () => {
-    const node: WorkflowDelegateRoleNode = {
+  it('runs turn-completed agent steps through a fresh-context subagent', async () => {
+    const node: WorkflowAgentStepNode = {
       id: 'review-delegate',
-      type: 'delegate-role',
+      type: 'agent-step',
       role: 'reviewer',
       prompt: 'Review {{ ctx.inputs.title }}',
       outputSchema: { type: 'object' },
@@ -1424,7 +1446,7 @@ describe('executeDelegateNode', () => {
     });
 
     try {
-      const outcome = await executeDelegateRoleNode(
+      const outcome = await executeAgentStepNode(
         createTestCall(),
         node,
         ctx,
@@ -1494,10 +1516,10 @@ describe('executeDelegateNode', () => {
     }
   });
 
-  it('fails delegate-role execution when the unified subagent runtime is unavailable', async () => {
-    const node: WorkflowDelegateRoleNode = {
+  it('fails agent-step execution when the unified subagent runtime is unavailable', async () => {
+    const node: WorkflowAgentStepNode = {
       id: 'review-delegate-unavailable',
-      type: 'delegate-role',
+      type: 'agent-step',
       role: 'reviewer',
       prompt: 'Review {{ ctx.inputs.title }}',
       completion: 'turn',
@@ -1520,7 +1542,7 @@ describe('executeDelegateNode', () => {
     });
 
     try {
-      const outcome = await executeDelegateRoleNode(
+      const outcome = await executeAgentStepNode(
         createTestCall(),
         node,
         ctx,
@@ -1533,7 +1555,7 @@ describe('executeDelegateNode', () => {
 
       expect(outcome).toEqual({
         status: 'failed',
-        error: "Subagent runtime is not available for delegate-role node 'review-delegate-unavailable'",
+        error: "Subagent runtime is not available for agent step 'review-delegate-unavailable'",
       });
       expect(closedSessions).toEqual([]);
     } finally {
@@ -1543,10 +1565,10 @@ describe('executeDelegateNode', () => {
     }
   });
 
-  it('preserves subagent semantics for delegate-role nodes with default tool completion', async () => {
-    const node: WorkflowDelegateRoleNode = {
+  it('preserves subagent semantics for agent steps with default tool completion', async () => {
+    const node: WorkflowAgentStepNode = {
       id: 'review-delegate-tool',
-      type: 'delegate-role',
+      type: 'agent-step',
       role: 'reviewer',
       prompt: 'Review {{ ctx.inputs.title }}',
       outputSchema: { type: 'object' },
@@ -1588,7 +1610,7 @@ describe('executeDelegateNode', () => {
     });
 
     try {
-      const outcome = await executeDelegateRoleNode(
+      const outcome = await executeAgentStepNode(
         createTestCall(),
         node,
         ctx,
@@ -1631,16 +1653,16 @@ describe('executeDelegateNode', () => {
     }
   });
 
-  it('fails delegate-role nodes when the role cannot resolve', async () => {
-    const node: WorkflowDelegateRoleNode = {
+  it('fails agent steps when the role cannot resolve', async () => {
+    const node: WorkflowAgentStepNode = {
       id: 'missing-reviewer',
-      type: 'delegate-role',
+      type: 'agent-step',
       role: 'unknown-reviewer',
       prompt: 'Review',
     };
     const ctx = makeCtx({});
 
-    const outcome = await executeDelegateRoleNode(createTestCall(), node, ctx, emptyExpressionCtx);
+    const outcome = await executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx);
 
     expect(outcome.status).toBe('failed');
     if (outcome.status === 'failed') {
@@ -1648,68 +1670,20 @@ describe('executeDelegateNode', () => {
     }
   });
 
-  it('runs delegate-agent nodes through the explicit agent resolver seam', async () => {
-    const node: WorkflowDelegateAgentNode = {
-      id: 'implement',
-      type: 'delegate-agent',
-      agentId: 'claude-code-implementer',
-      inputExpression: '{ task: ctx.inputs.task, branch: ctx.inputs.branch }',
-      outputSchema: { type: 'object' },
-      completion: 'turn',
-    };
-    const ctx = makeCtx({});
-    const spawned: unknown[] = [];
-    const unsubscribeAgent = ctx.bus.on(WorkflowSubjects.resolveAgent, (requestCtx) => {
-      expect(requestCtx.payload.agentId).toBe('claude-code-implementer');
-      requestCtx.setResult({ adapterName: 'claude-code', harnessId: 'implementation-harness' });
-    });
-    const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
-      spawned.push(requestCtx.payload);
-      requestCtx.setResult({ subagentId: 'subagent-implement', status: 'spawning' });
-    });
-    const unsubscribeAwait = ctx.bus.on(SubagentSubjects.await, (requestCtx) => {
-      expect(requestCtx.payload).toEqual({ subagentId: 'subagent-implement' });
-      requestCtx.setResult({ status: 'completed', result: 'implemented' });
-    });
-
-    try {
-      const outcome = await executeDelegateAgentNode(createTestCall(), node, ctx, {
-        ...emptyExpressionCtx,
-        inputs: { task: 'Add tests', branch: 'workflow-api' },
-      });
-
-      expect(outcome).toEqual({ status: 'completed', output: 'implemented' });
-      expect(spawned).toHaveLength(1);
-      expect(spawned[0]).toMatchObject({
-        parentSessionId: 'exec-test',
-        depth: 1,
-        config: {
-          task: JSON.stringify({ task: 'Add tests', branch: 'workflow-api' }, null, 2),
-          adapterName: 'claude-code',
-          harnessId: 'implementation-harness',
-          completion: 'turn',
-          responseSchema: { schema: { type: 'object' } },
-        },
-      });
-    } finally {
-      unsubscribeAgent();
-      unsubscribeSpawn();
-      unsubscribeAwait();
-    }
-  });
-
-  it('applies exact node tools and authority finalization before returning a delegate result', async () => {
-    const node: WorkflowDelegateAgentNode = {
+  it('applies exact node tools and authority finalization before returning an agent-step result', async () => {
+    const node: WorkflowAgentStepNode = {
       id: 'read-artifact',
-      type: 'delegate-agent',
-      agentId: 'artifact-reader',
+      type: 'agent-step',
+      role: 'artifact-reader',
+      prompt: 'Read the artifact',
       allowedTools: ['artifact.read'],
+      completion: 'tool',
       resultFinalizerId: 'artifact.read-wrap',
     };
     const ctx = makeCtx({});
     const finalizer = createWorkflowDelegateResultFinalizerNamespace('artifact.read-wrap');
     ctx.bus.registerNamespace(finalizer.namespace);
-    const unsubscribeAgent = ctx.bus.on(WorkflowSubjects.resolveAgent, (requestCtx) => {
+    const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
       requestCtx.setResult({
         adapterName: 'claude-code',
         tools: ['filesystem.write'],
@@ -1741,7 +1715,6 @@ describe('executeDelegateNode', () => {
         workflowId: 'workflow-test',
         frameId: 'frame-read',
         nodeId: 'read-artifact',
-        nodeType: 'delegate-agent',
         rawResult: 'model summary',
         toolObservations: [
           {
@@ -1760,30 +1733,31 @@ describe('executeDelegateNode', () => {
 
     try {
       await expect(
-        executeDelegateAgentNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-read'),
+        executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-read'),
       ).resolves.toEqual({
         status: 'completed',
         output: { artifact: { id: 'artifact-1' }, summary: 'model summary' },
       });
     } finally {
-      unsubscribeAgent();
+      unsubscribeRole();
       unsubscribeSpawn();
       unsubscribeAwait();
       unsubscribeFinalizer();
     }
   });
 
-  it('fails a delegate when its selected authority finalizer rejects', async () => {
-    const node: WorkflowDelegateAgentNode = {
+  it('fails an agent step when its selected authority finalizer rejects', async () => {
+    const node: WorkflowAgentStepNode = {
       id: 'read-artifact',
-      type: 'delegate-agent',
-      agentId: 'artifact-reader',
+      type: 'agent-step',
+      role: 'artifact-reader',
+      prompt: 'Read the artifact',
       resultFinalizerId: 'artifact.read-wrap',
     };
     const ctx = makeCtx({});
     const finalizer = createWorkflowDelegateResultFinalizerNamespace('artifact.read-wrap');
     ctx.bus.registerNamespace(finalizer.namespace);
-    const unsubscribeAgent = ctx.bus.on(WorkflowSubjects.resolveAgent, (requestCtx) => {
+    const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
       requestCtx.setResult({ adapterName: 'claude-code' });
     });
     const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
@@ -1797,23 +1771,24 @@ describe('executeDelegateNode', () => {
     });
 
     try {
-      await expect(
-        executeDelegateAgentNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-read'),
-      ).rejects.toThrow('authority unavailable');
+      await expect(executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-read')).rejects.toThrow(
+        'authority unavailable',
+      );
     } finally {
-      unsubscribeAgent();
+      unsubscribeRole();
       unsubscribeSpawn();
       unsubscribeAwait();
       unsubscribeFinalizer();
     }
   });
 
-  it('cancels a spawned delegate while its authority finalizer is pending', async () => {
+  it('cancels a spawned agent step while its authority finalizer is pending', async () => {
     const controller = new AbortController();
-    const node: WorkflowDelegateAgentNode = {
+    const node: WorkflowAgentStepNode = {
       id: 'read-artifact',
-      type: 'delegate-agent',
-      agentId: 'artifact-reader',
+      type: 'agent-step',
+      role: 'artifact-reader',
+      prompt: 'Read the artifact',
       resultFinalizerId: 'artifact.read-wrap',
     };
     const ctx = makeCtx({}, controller.signal);
@@ -1823,7 +1798,7 @@ describe('executeDelegateNode', () => {
     const finalizerStarted = new Promise<void>((resolve) => {
       markFinalizerStarted = resolve;
     });
-    const unsubscribeAgent = ctx.bus.on(WorkflowSubjects.resolveAgent, (requestCtx) => {
+    const unsubscribeRole = ctx.bus.on(WorkflowSubjects.resolveRole, (requestCtx) => {
       requestCtx.setResult({ adapterName: 'claude-code' });
     });
     const unsubscribeSpawn = ctx.bus.on(SubagentSubjects.spawn, (requestCtx) => {
@@ -1838,23 +1813,23 @@ describe('executeDelegateNode', () => {
     });
 
     try {
-      const outcome = executeDelegateAgentNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-read');
+      const outcome = executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-read');
       await finalizerStarted;
       controller.abort();
       await expect(outcome).resolves.toEqual({ status: 'cancelled' });
     } finally {
-      unsubscribeAgent();
+      unsubscribeRole();
       unsubscribeSpawn();
       unsubscribeAwait();
       unsubscribeFinalizer();
     }
   });
 
-  it('cancels a session-turn delegate while its authority finalizer is pending', async () => {
+  it('cancels a turn-completed agent step while its authority finalizer is pending', async () => {
     const controller = new AbortController();
-    const node: WorkflowDelegateRoleNode = {
+    const node: WorkflowAgentStepNode = {
       id: 'review-delegate',
-      type: 'delegate-role',
+      type: 'agent-step',
       role: 'reviewer',
       prompt: 'Review',
       completion: 'turn',
@@ -1918,7 +1893,7 @@ describe('executeDelegateNode', () => {
     });
 
     try {
-      const outcome = executeDelegateRoleNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-review');
+      const outcome = executeAgentStepNode(createTestCall(), node, ctx, emptyExpressionCtx, 'frame-review');
       await finalizerStarted;
       controller.abort();
       await expect(outcome).resolves.toEqual({ status: 'cancelled' });
@@ -1934,29 +1909,13 @@ describe('executeDelegateNode', () => {
       unsubscribeFinalizer();
     }
   });
-
-  it('fails delegate-agent nodes when the explicit agent cannot resolve', async () => {
-    const node: WorkflowDelegateAgentNode = {
-      id: 'missing-agent',
-      type: 'delegate-agent',
-      agentId: 'unknown-agent',
-    };
-    const ctx = makeCtx({});
-
-    const outcome = await executeDelegateAgentNode(createTestCall(), node, ctx, emptyExpressionCtx);
-
-    expect(outcome.status).toBe('failed');
-    if (outcome.status === 'failed') {
-      expect(outcome.error).toContain("Agent 'unknown-agent' could not be resolved");
-    }
-  });
 });
 
 describe('executeSequence frame persistence', () => {
   it('persists frame lifecycle transitions through setFrame and mirrors span read-model rows', async () => {
     const persistedFrames: Array<{ nodeId: string; output?: unknown; status: WorkflowFrameState['status'] }> = [];
     const persistedSpans: Array<Pick<SpanRecord, 'frameId' | 'stepId' | 'stepType' | 'status' | 'output'>> = [];
-    const handler: StationHandler = () => ({ ok: true });
+    const handler: CodeStepHandler = () => ({ ok: true });
     const ctx = makeCtx({ persist: handler });
     const unsubscribeFrame = ctx.bus.on(WorkflowStorageSubjects.setFrame, (requestCtx) => {
       persistedFrames.push({
@@ -1983,7 +1942,7 @@ describe('executeSequence frame persistence', () => {
         {
           id: 'root',
           type: 'sequence',
-          nodes: [{ id: 'persist', type: 'station', prompt: 'Persist transitions' } as WorkflowStationNode],
+          nodes: [{ id: 'persist', type: 'code-step' } as WorkflowCodeStepNode],
         },
         ctx,
         emptyExpressionCtx,
@@ -1999,14 +1958,14 @@ describe('executeSequence frame persistence', () => {
         expect.objectContaining({
           stepId: 'persist',
           frameId: expect.any(String),
-          stepType: 'station',
+          stepType: 'code-step',
           status: 'running',
           output: undefined,
         }),
         expect.objectContaining({
           stepId: 'persist',
           frameId: expect.any(String),
-          stepType: 'station',
+          stepType: 'code-step',
           status: 'completed',
           output: '{"ok":true}',
         }),
@@ -2030,11 +1989,11 @@ describe('executeSequence frame persistence', () => {
     });
 
     try {
-      const firstFrame = ctx.createFrame(createTestCall(), { nodeId: 'review', nodeType: 'station', path: [] });
+      const firstFrame = ctx.createFrame(createTestCall(), { nodeId: 'review', nodeType: 'code-step', path: [] });
       await ctx.updateFrame(createTestCall(), firstFrame.frameId, { status: 'running', startedAt: 10 });
       await ctx.updateFrame(createTestCall(), firstFrame.frameId, { status: 'completed', completedAt: 20 });
 
-      const secondFrame = ctx.createFrame(createTestCall(), { nodeId: 'review', nodeType: 'station', path: [] });
+      const secondFrame = ctx.createFrame(createTestCall(), { nodeId: 'review', nodeType: 'code-step', path: [] });
       await ctx.updateFrame(createTestCall(), secondFrame.frameId, { status: 'running', startedAt: 30 });
       await ctx.updateFrame(createTestCall(), secondFrame.frameId, { status: 'completed', completedAt: 40 });
 
@@ -2051,7 +2010,7 @@ describe('executeSequence frame persistence', () => {
 describe('executeSequence expression output aliases', () => {
   it('evaluates when and skip expressions against the documented ctx alias', async () => {
     const ran: string[] = [];
-    const handlers: Record<string, StationHandler> = {
+    const handlers: Record<string, CodeStepHandler> = {
       allowed: () => {
         ran.push('allowed');
         return { allowed: true };
@@ -2067,16 +2026,14 @@ describe('executeSequence expression output aliases', () => {
       nodes: [
         {
           id: 'allowed',
-          type: 'station',
-          prompt: 'Allowed',
+          type: 'code-step',
           when: "ctx.inputs.run == 'yes'",
-        } as WorkflowStationNode,
+        } as WorkflowCodeStepNode,
         {
           id: 'skipped',
-          type: 'station',
-          prompt: 'Skipped',
+          type: 'code-step',
           skip: 'ctx.inputs.skipSkipped == true',
-        } as WorkflowStationNode,
+        } as WorkflowCodeStepNode,
       ],
     };
 
@@ -2091,7 +2048,7 @@ describe('executeSequence expression output aliases', () => {
 
   it('evaluates when expressions against previousSteps keyed by earlier node ID', async () => {
     let fixRan = false;
-    const handlers: Record<string, StationHandler> = {
+    const handlers: Record<string, CodeStepHandler> = {
       triage: () => ({ action: 'approve' }),
       fix: () => {
         fixRan = true;
@@ -2102,13 +2059,12 @@ describe('executeSequence expression output aliases', () => {
       id: 'previous-steps-root',
       type: 'sequence',
       nodes: [
-        { id: 'triage', type: 'station', prompt: 'Triage' } as WorkflowStationNode,
+        { id: 'triage', type: 'code-step' } as WorkflowCodeStepNode,
         {
           id: 'fix',
-          type: 'station',
-          prompt: 'Fix',
+          type: 'code-step',
           when: "previousSteps['triage'].output.action == 'approve'",
-        } as WorkflowStationNode,
+        } as WorkflowCodeStepNode,
       ],
     };
 
@@ -2120,7 +2076,7 @@ describe('executeSequence expression output aliases', () => {
 
   it('evaluates iterate collections against the latest completed output alias', async () => {
     const applied: unknown[] = [];
-    const handlers: Record<string, StationHandler> = {
+    const handlers: Record<string, CodeStepHandler> = {
       aggregate: () => ({ findings: ['a', 'b'] }),
       'apply-item': (ctx) => {
         applied.push(ctx.item);
@@ -2134,13 +2090,13 @@ describe('executeSequence expression output aliases', () => {
       body: {
         id: 'apply-findings__body',
         type: 'sequence',
-        nodes: [{ id: 'apply-item', type: 'station', prompt: 'Apply item' } as WorkflowStationNode],
+        nodes: [{ id: 'apply-item', type: 'code-step' } as WorkflowCodeStepNode],
       },
     };
     const root: WorkflowSequenceNode = {
       id: 'output-root',
       type: 'sequence',
-      nodes: [{ id: 'aggregate', type: 'station', prompt: 'Aggregate' } as WorkflowStationNode, iterateNode],
+      nodes: [{ id: 'aggregate', type: 'code-step' } as WorkflowCodeStepNode, iterateNode],
     };
 
     const outcome = await executeSequence(createTestCall(), root, makeCtx(handlers), emptyExpressionCtx);
@@ -2157,29 +2113,28 @@ describe('executeSequence expression output aliases', () => {
 describe('executeParallelNode (all-settled mode)', () => {
   /**
    * Build a parallel node with the given branch IDs, each containing a
-   * single station node whose handler is provided.
+   * single code step whose handler is provided.
    * @param nodeId - Parallel node ID.
    * @param branches - Map of branch key to handler.
    */
   function makeParallelNode(
     nodeId: string,
-    branches: Record<string, StationHandler>,
-  ): { node: WorkflowParallelNode; handlers: Record<string, StationHandler> } {
+    branches: Record<string, CodeStepHandler>,
+  ): { node: WorkflowParallelNode; handlers: Record<string, CodeStepHandler> } {
     const branchMap: WorkflowParallelNode['branches'] = {};
-    const handlers: Record<string, StationHandler> = {};
+    const handlers: Record<string, CodeStepHandler> = {};
 
     for (const [branchKey, handler] of Object.entries(branches)) {
-      const stationId = `${nodeId}__${branchKey}__station`;
-      handlers[stationId] = handler;
+      const codeStepId = `${nodeId}__${branchKey}__step`;
+      handlers[codeStepId] = handler;
       branchMap[branchKey] = {
         id: `${nodeId}__${branchKey}__seq`,
         type: 'sequence',
         nodes: [
           {
-            id: stationId,
-            type: 'station' as const,
-            prompt: stationId,
-          } as WorkflowStationNode,
+            id: codeStepId,
+            type: 'code-step' as const,
+          } as WorkflowCodeStepNode,
         ],
       };
     }
@@ -2226,7 +2181,7 @@ describe('executeParallelNode (all-settled mode)', () => {
     }
   });
 
-  it('uses the final branch station by sequence order when start timestamps tie', async () => {
+  it('uses the final branch code step by sequence order when start timestamps tie', async () => {
     const dateNow = vi.spyOn(Date, 'now').mockReturnValue(3_000);
     try {
       const node: WorkflowParallelNode = {
@@ -2237,8 +2192,8 @@ describe('executeParallelNode (all-settled mode)', () => {
             id: 'parallel-order__alpha',
             type: 'sequence',
             nodes: [
-              { id: 'parallel-order__alpha__draft', type: 'station', prompt: 'Draft' } as WorkflowStationNode,
-              { id: 'parallel-order__alpha__final', type: 'station', prompt: 'Final' } as WorkflowStationNode,
+              { id: 'parallel-order__alpha__draft', type: 'code-step' } as WorkflowCodeStepNode,
+              { id: 'parallel-order__alpha__final', type: 'code-step' } as WorkflowCodeStepNode,
             ],
           },
         },
@@ -2474,13 +2429,13 @@ describe('executeParallelNode (all-settled mode)', () => {
 
 describe('executeParallelNode (fail-fast mode)', () => {
   it('fails the parallel node when a branch fails', async () => {
-    const stationId = 'fail-fast__failing__station';
-    const passingId = 'fail-fast__passing__station';
+    const codeStepId = 'fail-fast__failing__step';
+    const passingId = 'fail-fast__passing__step';
     let passingStarted = false;
     let passingCompleted = false;
 
-    const handlers: Record<string, StationHandler> = {
-      [stationId]: () => {
+    const handlers: Record<string, CodeStepHandler> = {
+      [codeStepId]: () => {
         throw new Error('Branch failed!');
       },
       [passingId]: async () => {
@@ -2499,12 +2454,12 @@ describe('executeParallelNode (fail-fast mode)', () => {
         failing: {
           id: 'fail-fast__failing__seq',
           type: 'sequence',
-          nodes: [{ id: stationId, type: 'station' as const, prompt: stationId } as WorkflowStationNode],
+          nodes: [{ id: codeStepId, type: 'code-step' as const } as WorkflowCodeStepNode],
         },
         passing: {
           id: 'fail-fast__passing__seq',
           type: 'sequence',
-          nodes: [{ id: passingId, type: 'station' as const, prompt: passingId } as WorkflowStationNode],
+          nodes: [{ id: passingId, type: 'code-step' as const } as WorkflowCodeStepNode],
         },
       },
     };
@@ -2541,10 +2496,10 @@ describe('executeParallelNode (fail-fast mode)', () => {
   it('cancels sibling branches when one branch fails', async () => {
     const cancelTracker: string[] = [];
 
-    const fastFailId = 'ff-sibling__fast-fail__station';
-    const slowId = 'ff-sibling__slow__station';
+    const fastFailId = 'ff-sibling__fast-fail__step';
+    const slowId = 'ff-sibling__slow__step';
 
-    const handlers: Record<string, StationHandler> = {
+    const handlers: Record<string, CodeStepHandler> = {
       [fastFailId]: () => {
         cancelTracker.push('fail-started');
         throw new Error('fast fail');
@@ -2583,12 +2538,12 @@ describe('executeParallelNode (fail-fast mode)', () => {
         'fast-fail': {
           id: 'ff-sibling__fast-fail__seq',
           type: 'sequence',
-          nodes: [{ id: fastFailId, type: 'station' as const, prompt: fastFailId } as WorkflowStationNode],
+          nodes: [{ id: fastFailId, type: 'code-step' as const } as WorkflowCodeStepNode],
         },
         slow: {
           id: 'ff-sibling__slow__seq',
           type: 'sequence',
-          nodes: [{ id: slowId, type: 'station' as const, prompt: slowId } as WorkflowStationNode],
+          nodes: [{ id: slowId, type: 'code-step' as const } as WorkflowCodeStepNode],
         },
       },
     };
@@ -2623,7 +2578,7 @@ describe('executeSequence with serialized parallel mode', () => {
   it('uses fail-fast mode from the workflow node schema during dispatcher execution', async () => {
     const failingId = 'serialized-fail-fast__fail';
     const skippedId = 'serialized-fail-fast__slow';
-    const handlers: Record<string, StationHandler> = {
+    const handlers: Record<string, CodeStepHandler> = {
       [failingId]: () => {
         throw new Error('serialized branch failed');
       },
@@ -2641,12 +2596,12 @@ describe('executeSequence with serialized parallel mode', () => {
         fail: {
           id: 'serialized-fail-fast__fail__seq',
           type: 'sequence',
-          nodes: [{ id: failingId, type: 'station', prompt: failingId } as WorkflowStationNode],
+          nodes: [{ id: failingId, type: 'code-step' } as WorkflowCodeStepNode],
         },
         slow: {
           id: 'serialized-fail-fast__slow__seq',
           type: 'sequence',
-          nodes: [{ id: skippedId, type: 'station', prompt: skippedId } as WorkflowStationNode],
+          nodes: [{ id: skippedId, type: 'code-step' } as WorkflowCodeStepNode],
         },
       },
     };
@@ -2660,10 +2615,10 @@ describe('executeSequence with serialized parallel mode', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// Station handler state context tests
+// Code step handler state context tests
 // ─────────────────────────────────────────────────────────────
 
-describe('station handler state context', () => {
+describe('code step handler state context', () => {
   it('provides ctx.state when workflow declares a state contract', async () => {
     const bus = makeBus();
     let currentState = { tier: 'T1', selectedReviewers: [] as string[] };
@@ -2706,8 +2661,8 @@ describe('station handler state context', () => {
     let capturedState: unknown;
     let capturedAfterUpdate: unknown;
 
-    const handlers: Record<string, StationHandler> = {
-      'test-state-station': async (ctx) => {
+    const handlers: Record<string, CodeStepHandler> = {
+      'test-state-step': async (ctx) => {
         // Verify state context exists
         expect(ctx.state).toBeDefined();
 
@@ -2735,14 +2690,13 @@ describe('station handler state context', () => {
       new AbortController().signal,
     );
 
-    const node: WorkflowStationNode = {
-      id: 'test-state-station',
-      type: 'station',
-      prompt: 'Test state',
+    const node: WorkflowCodeStepNode = {
+      id: 'test-state-step',
+      type: 'code-step',
     };
 
     try {
-      const outcome = await executeStationNode(createTestCall(), node, runtimeCtx, emptyExpressionCtx);
+      const outcome = await executeCodeStepNode(createTestCall(), node, runtimeCtx, emptyExpressionCtx);
 
       expect(outcome.status).toBe('completed');
       expect(capturedState).toEqual({
@@ -2766,21 +2720,20 @@ describe('station handler state context', () => {
   it('does not provide ctx.state when workflow has no state contract', async () => {
     let capturedState: unknown = 'sentinel';
 
-    const handlers: Record<string, StationHandler> = {
-      'no-state-station': async (ctx) => {
+    const handlers: Record<string, CodeStepHandler> = {
+      'no-state-step': async (ctx) => {
         capturedState = ctx.state;
         return { ok: true };
       },
     };
 
     const runtimeCtx = makeCtx(handlers);
-    const node: WorkflowStationNode = {
-      id: 'no-state-station',
-      type: 'station',
-      prompt: 'No state',
+    const node: WorkflowCodeStepNode = {
+      id: 'no-state-step',
+      type: 'code-step',
     };
 
-    await executeStationNode(createTestCall(), node, runtimeCtx, emptyExpressionCtx);
+    await executeCodeStepNode(createTestCall(), node, runtimeCtx, emptyExpressionCtx);
     expect(capturedState).toBeUndefined();
   });
 
@@ -2817,8 +2770,8 @@ describe('station handler state context', () => {
 
     let finalState: unknown;
 
-    const handlers: Record<string, StationHandler> = {
-      'seq-station': async (ctx) => {
+    const handlers: Record<string, CodeStepHandler> = {
+      'seq-step': async (ctx) => {
         await ctx.state!.update((draft: unknown) => {
           (draft as Record<string, number>)['count'] = 1;
         });
@@ -2839,14 +2792,13 @@ describe('station handler state context', () => {
       new AbortController().signal,
     );
 
-    const node: WorkflowStationNode = {
-      id: 'seq-station',
-      type: 'station',
-      prompt: 'Sequential updates',
+    const node: WorkflowCodeStepNode = {
+      id: 'seq-step',
+      type: 'code-step',
     };
 
     try {
-      const outcome = await executeStationNode(createTestCall(), node, runtimeCtx, emptyExpressionCtx);
+      const outcome = await executeCodeStepNode(createTestCall(), node, runtimeCtx, emptyExpressionCtx);
 
       expect(outcome.status).toBe('completed');
       expect(finalState).toEqual({ count: 2 });

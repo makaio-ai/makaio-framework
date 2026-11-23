@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { defineWorkflow, station } from '@makaio/contracts';
+import { codeStep, defineWorkflow } from '@makaio/contracts';
 import type { ArtifactContext, JsonValue, PreviousStepOutput, StepContext } from '@makaio/contracts';
 
 // ─────────────────────────────────────────────────────────────
@@ -54,7 +54,7 @@ export const ReviewArtifactDataSchema = z.object({
   /** Aggregated review findings. */
   findings: ReviewFindingsSchema,
   /**
-   * Optional fix output produced by the fix iteration station.
+   * Optional fix output produced by the fix iteration step.
    * Present only when the workflow enters the fix branch.
    */
   fixOutput: z.string().optional(),
@@ -83,7 +83,7 @@ export type TriageGateResume = z.infer<typeof TriageGateResumeSchema>;
 // Delegate output shapes
 // ─────────────────────────────────────────────────────────────
 
-/** Output produced by each review delegate station. */
+/** Output produced by each review agent step. */
 export interface DelegateOutput {
   /** Findings discovered by this delegate. */
   findings: ReviewFinding[];
@@ -110,15 +110,15 @@ interface TriageStatusOutput {
  *   ├─ spec delegate
  *   ├─ quality delegate
  *   └─ test-coverage delegate
- * station(aggregate)        — merge findings into artifact
+ * codeStep(aggregate)        — merge findings into artifact
  * gate(triage)              — human triage checkpoint
- * station(apply-triage-status) — persist approve/reject status
- * station(apply-fix)?       — fix iteration (conditional on triage status)
+ * codeStep(apply-triage-status) — persist approve/reject status
+ * codeStep(apply-fix)?       — fix iteration (conditional on triage status)
  * ```
  *
- * The workflow binds to a `'code-review'` artifact so stations can write
+ * The workflow binds to a `'code-review'` artifact so code steps can write
  * findings incrementally via `ctx.artifact.updateArtifact()`.
- * @param opts - Optional per-station handler overrides for testing.
+ * @param opts - Optional per-code-step handler overrides for testing.
  * @returns A fluent {@link WorkflowBuilder} ready to be executed.
  */
 export function buildReviewWorkflow(opts?: {
@@ -128,9 +128,9 @@ export function buildReviewWorkflow(opts?: {
   readonly onQuality?: (ctx: StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>>) => Promise<DelegateOutput>;
   /** Override for the test-coverage delegate handler. */
   readonly onTestCoverage?: (ctx: StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>>) => Promise<DelegateOutput>;
-  /** Override for the aggregate station handler. */
+  /** Override for the aggregate code step handler. */
   readonly onAggregate?: (ctx: StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>, ReviewArtifactData>) => Promise<ReviewFindings>;
-  /** Override for the fix station handler. */
+  /** Override for the fix code step handler. */
   readonly onFix?: (ctx: StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>, ReviewArtifactData>) => Promise<string>;
 }) {
   return defineWorkflow('review-workflow', {
@@ -148,7 +148,7 @@ export function buildReviewWorkflow(opts?: {
       'review-delegates',
       { mode: 'all-settled' },
       [
-        station('spec-review', async (ctx) => {
+        codeStep('spec-review', async (ctx) => {
           const handler = opts?.onSpec;
           if (handler) {
             return handler(ctx as StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>>);
@@ -159,7 +159,7 @@ export function buildReviewWorkflow(opts?: {
             ],
           };
         }),
-        station('quality-review', async (ctx) => {
+        codeStep('quality-review', async (ctx) => {
           const handler = opts?.onQuality;
           if (handler) {
             return handler(ctx as StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>>);
@@ -170,7 +170,7 @@ export function buildReviewWorkflow(opts?: {
             ],
           };
         }),
-        station('test-coverage-review', async (ctx) => {
+        codeStep('test-coverage-review', async (ctx) => {
           const handler = opts?.onTestCoverage;
           if (handler) {
             return handler(ctx as StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>>);
@@ -183,7 +183,7 @@ export function buildReviewWorkflow(opts?: {
         }),
       ],
     )
-    .station(
+    .codeStep(
       'aggregate',
       async (ctx) => {
         const typedCtx = ctx as StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>, ReviewArtifactData>;
@@ -227,7 +227,7 @@ export function buildReviewWorkflow(opts?: {
       timeoutMs: null,
       resume: TriageGateResumeSchema,
     })
-    .station('apply-triage-status', async (ctx) => {
+    .codeStep('apply-triage-status', async (ctx) => {
       const typedCtx = ctx as StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>, ReviewArtifactData>;
       const triageOutput = typedCtx.previousSteps['triage']?.output;
       const resumeData =
@@ -244,7 +244,7 @@ export function buildReviewWorkflow(opts?: {
 
       return { action: decision.action, status } satisfies TriageStatusOutput;
     })
-    .station(
+    .codeStep(
       'apply-fix',
       async (ctx) => {
         const typedCtx = ctx as StepContext<unknown, Record<string, PreviousStepOutput<JsonValue>>, ReviewArtifactData>;
@@ -280,7 +280,7 @@ export function buildReviewWorkflow(opts?: {
  * The parallel node's output is a record of `{ status, value }` entries
  * keyed by branch name. Each fulfilled branch value should carry a
  * `{ findings: ReviewFinding[] }` payload.
- * @param parallelOutput - The parallel station's output as recorded in `previousSteps`.
+ * @param parallelOutput - The parallel node's output as recorded in `previousSteps`.
  * @param branchKey - The branch key to extract findings for.
  * @returns The extracted findings array, or an empty array if absent.
  */

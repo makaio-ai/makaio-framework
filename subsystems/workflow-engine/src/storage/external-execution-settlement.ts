@@ -277,7 +277,7 @@ export function buildTerminalSummaryValues(
   completedAt: number,
 ): InsertWorklogSummary {
   // The summary represents the execution, not its optional frame. Preserve
-  // the registration timestamp even when a station frame starts later. The
+  // the registration timestamp even when an agent step frame starts later. The
   // lower bound retains compatibility with migrated rows whose historical
   // clocks place their completion before their recorded execution start.
   const startedAt = Math.min(execution.startedAt, completedAt);

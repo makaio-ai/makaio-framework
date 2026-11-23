@@ -15,7 +15,7 @@ const artifactUpdateQueues = new WeakMap<ArtifactBindingState, Promise<void>>();
  *
  * The binding state is the execution-local authority for the current artifact
  * revision. Serializing per binding keeps each update's read, validation, and
- * revise RPC in one ordered revision chain even when station handlers overlap.
+ * revise RPC in one ordered revision chain even when code step handlers overlap.
  * @param bindingState - Shared artifact binding state for this execution.
  * @param operation - Update operation to run after earlier writes settle.
  * @returns The operation result.
@@ -226,30 +226,30 @@ async function resolveUpdate<TData extends Record<string, unknown>>(
  */
 export interface CreateArtifactContextOptions {
   /**
-   * Call context of the station execution that owns this artifact context.
-   * Used only by the sends of `updateArtifact` while that station runs; never stored in a field.
+   * Call context of the code step execution that owns this artifact context.
+   * Used only by the sends of `updateArtifact` while that code step runs; never stored in a field.
    */
   readonly call: CallContext;
   /** Execution identifier — used for actor attribution and event correlation. */
   readonly executionId: string;
   /** Frame identifier — used in `workflow.artifact.updated` events. */
   readonly frameId: string;
-  /** Mutable binding state shared across all stations in this execution. */
+  /** Mutable binding state shared across all code steps in this execution. */
   readonly bindingState: ArtifactBindingState;
   /** Message bus for artifact service RPCs and event emission. */
   readonly bus: IMakaioBus;
 }
 
 /**
- * Build a typed {@link ArtifactContext} for injection into a station's
+ * Build a typed {@link ArtifactContext} for injection into a code step's
  * {@link StepContext}.
  *
  * The returned context is a snapshot-at-call-time view: `data` is frozen
  * from the `bindingState.current.data` at the moment `createArtifactContext`
  * is called. Subsequent `updateArtifact` calls mutate `bindingState.current`
- * in place so the next station invocation sees the latest data.
+ * in place so the next code step invocation sees the latest data.
  * @param options - Construction options including execution/frame IDs and binding state.
- * @returns A typed {@link ArtifactContext} ready for use in a station handler.
+ * @returns A typed {@link ArtifactContext} ready for use in a code step handler.
  */
 export function createArtifactContext<TData extends Record<string, unknown> = Record<string, unknown>>(
   options: CreateArtifactContextOptions,
@@ -296,7 +296,7 @@ export function createArtifactContext<TData extends Record<string, unknown> = Re
       const newRevision = reviseResponse.artifact.revision;
 
       // Emit workflow.artifact.updated event — fire-and-forget so a slow
-      // observer cannot stall station execution.
+      // observer cannot stall code step execution.
       void bus
         .emit(call, WorkflowSubjects.artifact.updated, {
           executionId,

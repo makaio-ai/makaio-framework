@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { createTestCall } from '@makaio/test-utils';
-import { WorkerNamespace, WorkerSubjects, WorkflowWorkerConfigSchema } from '@makaio/contracts';
+import {
+  WorkerNamespace,
+  WorkerSubjects,
+  WorkflowWorkerConfigSchema,
+  requireExecutableRunContext,
+} from '@makaio/contracts';
 import type {
   CallContext,
   WorkflowWorkerConfig,
@@ -845,7 +850,7 @@ describe('WorkflowExecutor — paused gate integration', () => {
       id: 'pause-publication-instruction',
       revision: '1',
       config: WorkflowWorkerConfigSchema.parse({ ...runContext, definition: runContext.definitionSnapshot }),
-      runContext,
+      runContext: requireExecutableRunContext(runContext),
       preservation: { required: [] },
     });
     const attempt = await authority.createAttempt(executionId, instruction);

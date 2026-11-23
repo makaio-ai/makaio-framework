@@ -114,7 +114,6 @@ export const WorkflowDelegateResultFinalizationRequestSchema = z
     workflowId: z.string().min(1),
     frameId: z.string().min(1),
     nodeId: z.string().min(1),
-    nodeType: z.enum(['delegate-agent', 'delegate-role']),
     rawResult: JsonValueSchema,
     toolObservations: z.array(WorkflowDelegateToolObservationSchema),
     economics: WorkflowDelegateEconomicsSchema.optional(),

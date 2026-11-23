@@ -39,7 +39,7 @@ function createWorkflowStorageBus(db: MakaioDatabase) {
  * @param executionId - External execution identifier.
  */
 function buildRegistration(executionId: string) {
-  const frameId = `${executionId}:station`;
+  const frameId = `${executionId}:step`;
   return {
     execution: {
       id: executionId,
@@ -52,8 +52,8 @@ function buildRegistration(executionId: string) {
     frame: {
       executionId,
       frameId,
-      nodeId: 'station',
-      nodeType: 'station' as const,
+      nodeId: 'step',
+      nodeType: 'code-step' as const,
       path: [frameId],
       status: 'running' as const,
       attempt: 0,
@@ -71,7 +71,7 @@ function buildFramedSettlement(
   executionId: string,
   usage?: { readonly inputTokens: number; readonly outputTokens: number; readonly estimatedCost: number },
 ) {
-  const frameId = `${executionId}:station`;
+  const frameId = `${executionId}:step`;
   return {
     executionId,
     status: 'completed' as const,
@@ -79,8 +79,8 @@ function buildFramedSettlement(
     frame: {
       executionId,
       frameId,
-      nodeId: 'station',
-      nodeType: 'station' as const,
+      nodeId: 'step',
+      nodeType: 'code-step' as const,
       path: [frameId],
       status: 'completed' as const,
       attempt: 0,
@@ -172,7 +172,7 @@ describeStorageConformance('workflow external settlement identity', (config) => 
         executionId,
         frameId: advisoryFrameId,
         nodeId: 'advisory',
-        nodeType: 'station',
+        nodeType: 'code-step',
         path: [advisoryFrameId],
         startedAt: startedAt + 25,
       });
@@ -184,6 +184,7 @@ describeStorageConformance('workflow external settlement identity', (config) => 
         executionId,
         frameId: registration.frame.frameId,
         nodeId: registration.frame.nodeId,
+        nodeType: registration.frame.nodeType,
         duration: 100,
         completedAt: startedAt + 100,
       });
@@ -229,6 +230,7 @@ describeStorageConformance('workflow external settlement identity', (config) => 
         executionId,
         frameId: registration.frame.frameId,
         nodeId: registration.frame.nodeId,
+        nodeType: registration.frame.nodeType,
         duration: completedAt - startedAt,
         completedAt,
       });
@@ -274,7 +276,7 @@ describeStorageConformance('workflow external settlement identity', (config) => 
         executionId,
         frameId: lateFrameId,
         nodeId: 'late-telemetry',
-        nodeType: 'station',
+        nodeType: 'code-step',
         path: [lateFrameId],
         startedAt,
       });
@@ -287,6 +289,7 @@ describeStorageConformance('workflow external settlement identity', (config) => 
         executionId,
         frameId: lateFrameId,
         nodeId: 'late-telemetry',
+        nodeType: 'code-step',
         duration: completedAt - startedAt,
         completedAt,
       });
@@ -346,6 +349,7 @@ describeStorageConformance('workflow external settlement identity', (config) => 
           executionId,
           frameId: registration.frame.frameId,
           nodeId: registration.frame.nodeId,
+          nodeType: registration.frame.nodeType,
           duration: completedAt - startedAt,
           completedAt,
         });
@@ -353,7 +357,7 @@ describeStorageConformance('workflow external settlement identity', (config) => 
           executionId,
           frameId: triggerFrameId,
           nodeId: 'reaggregate',
-          nodeType: 'station',
+          nodeType: 'code-step',
           path: [triggerFrameId],
           startedAt,
         });
@@ -389,6 +393,7 @@ describeStorageConformance('workflow external settlement identity', (config) => 
             executionId,
             frameId: triggerFrameId,
             nodeId: 'reaggregate',
+            nodeType: 'code-step',
             duration: completedAt - startedAt,
             completedAt,
           });
@@ -442,7 +447,7 @@ describeStorageConformance('workflow external settlement identity', (config) => 
         executionId,
         frameId: `${executionId}:advisory`,
         nodeId: 'advisory',
-        nodeType: 'station',
+        nodeType: 'code-step',
         path: [`${executionId}:advisory`],
         startedAt,
       });
@@ -453,6 +458,7 @@ describeStorageConformance('workflow external settlement identity', (config) => 
         executionId,
         frameId: `${executionId}:advisory`,
         nodeId: 'advisory',
+        nodeType: 'code-step',
         duration: completedAt - startedAt,
         completedAt,
       });
@@ -492,7 +498,7 @@ describeStorageConformance('workflow external settlement identity', (config) => 
         executionId,
         frameId: registration.frame.frameId,
         nodeId: 'mismatched-advisory-node',
-        nodeType: 'delegate-role',
+        nodeType: 'agent-step',
         path: ['mismatched'],
         startedAt: startedAt - 100,
       });
@@ -580,6 +586,7 @@ describeStorageConformance('workflow external settlement identity', (config) => 
         executionId,
         frameId: `${executionId}:advisory`,
         nodeId: 'advisory',
+        nodeType: 'code-step',
         error: 'legacy failure',
         duration: completedAt - startedAt,
         completedAt,

@@ -61,7 +61,7 @@ export function bindWorkflowInputs(_workflow: Pick<WorkflowDefinition, 'inputSch
  *
  * Mirrors input binding: schema validation is handled at authoring/UI seams for
  * now, while the runtime receives a plain object available as `config.*` in
- * expressions and station contexts.
+ * expressions and code step contexts.
  * @param _workflow - Workflow definition (reserved for future schema-based validation).
  * @param provided - Caller-supplied configuration values.
  * @returns Bound configuration record.

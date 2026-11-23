@@ -7,7 +7,7 @@ import {
   type ArtifactRevision,
   type IWorkflowRunner,
   type WorkflowRunnerCompletion,
-  type WorkflowStationNode,
+  type WorkflowCodeStepNode,
   type WorkflowWorkerConfig,
   serializeArtifactRef,
 } from '@makaio/contracts';
@@ -192,7 +192,7 @@ describe('workflow public artifact subjects', () => {
       }),
     );
 
-    const noopNode: WorkflowStationNode = { id: 'noop', type: 'station', prompt: 'Noop' };
+    const noopNode: WorkflowCodeStepNode = { id: 'noop', type: 'code-step' };
     const workflow = {
       ...createWorkflowDefinition({
         id: 'public-start-artifact-ref-runner',

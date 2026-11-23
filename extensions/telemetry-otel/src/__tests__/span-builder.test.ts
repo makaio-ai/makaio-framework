@@ -53,7 +53,7 @@ describe('SpanBuilder', () => {
         executionId: 'wfx-1',
         frameId: 'frame-a',
         nodeId: 'analyze',
-        nodeType: 'station',
+        nodeType: 'code-step',
         path: ['frame-root', 'frame-a'],
         parentFrameId: 'frame-root',
         startedAt: 1100,
@@ -70,18 +70,18 @@ describe('SpanBuilder', () => {
       expect(draft.kind).toBe('internal');
       expect(draft.attributes['makaio.frame.id']).toBe('frame-a');
       expect(draft.attributes['makaio.frame.node_id']).toBe('analyze');
-      expect(draft.attributes['makaio.frame.node_type']).toBe('station');
+      expect(draft.attributes['makaio.frame.node_type']).toBe('code-step');
       expect(draft.attributes['makaio.frame.path']).toEqual(['frame-root', 'frame-a']);
       expect(draft.attributes['workflow.node.id']).toBeUndefined();
     });
 
-    it('maps delegate frame nodes to client spans', () => {
+    it('maps agent-step frame nodes to client spans', () => {
       const input = {
         executionId: 'wfx-1',
-        frameId: 'frame-delegate',
-        nodeId: 'delegate-node',
-        nodeType: 'delegate-role',
-        path: ['frame-delegate'],
+        frameId: 'frame-agent',
+        nodeId: 'agent-node',
+        nodeType: 'agent-step',
+        path: ['frame-agent'],
         parentFrameId: undefined,
         startedAt: 1100,
         endedAt: 1600,

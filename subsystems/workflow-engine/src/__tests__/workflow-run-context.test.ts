@@ -163,10 +163,7 @@ describe('WorkflowRunContext storage round-trip', () => {
           ? { kind: 'path' as const, path: 'workflow.ts' }
           : { kind: 'source' as const, filename: 'workflow.ts', source: 'export default ...' };
 
-    const definitionSnapshot =
-      sourceKind === 'definition'
-        ? { ...createWorkflowDefinition({ id: 'wf-test' }), createdAt: Date.now(), updatedAt: Date.now() }
-        : undefined;
+    const definitionSnapshot = sourceKind === 'definition' ? createWorkflowDefinition({ id: 'wf-test' }) : undefined;
 
     return WorkflowRunContextSchema.parse({
       executionId,
@@ -294,19 +291,14 @@ describe('WorkflowRunContext storage round-trip', () => {
     // Attach the definition snapshot
     const withSnapshot = {
       ...runContext,
-      definitionSnapshot: {
-        ...workflow,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      },
+      definitionSnapshot: workflow,
     };
 
     await persistRunContext(withSnapshot);
 
     const { runContext: fetched } = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId });
     expect(fetched?.definitionSnapshot).toBeDefined();
-    expect(fetched?.definitionSnapshot?.id).toBe('wf-test');
-    expect(fetched?.definitionSnapshot?.root.nodes).toHaveLength(workflow.root.nodes.length);
+    expect(fetched?.definitionSnapshot).toMatchObject({ id: 'wf-test', root: workflow.root });
   });
 
   it('rejects definition-sourced run contexts without a definition snapshot', () => {

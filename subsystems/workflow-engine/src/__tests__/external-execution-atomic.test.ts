@@ -17,7 +17,7 @@ const registration = {
   input: { repository: 'computeruniverse/ai-factory', workpieceId: 'wp-1' },
   frame: {
     nodeId: 'review',
-    nodeType: 'delegate-role' as const,
+    nodeType: 'agent-step' as const,
     path: ['review'],
     startedAt: 1_000,
   },
@@ -30,7 +30,7 @@ const completion = {
   frame: {
     frameId: `${registration.executionId}:review`,
     nodeId: 'review',
-    nodeType: 'delegate-role' as const,
+    nodeType: 'agent-step' as const,
     path: ['review'],
     startedAt: 1_000,
     durationMs: 250,
@@ -81,7 +81,7 @@ describe('atomic external execution WorkLog settlement', () => {
       expect.objectContaining({
         frameId: `${registration.executionId}:review`,
         nodeId: 'review',
-        nodeType: 'delegate-role',
+        nodeType: 'agent-step',
         path: ['review'],
         status: 'running',
         startedAt: 1_000,
@@ -118,7 +118,7 @@ describe('atomic external execution WorkLog settlement', () => {
       executionId: registration.executionId,
       frameId: advisoryFrameId,
       nodeId: 'advisory',
-      nodeType: 'station',
+      nodeType: 'code-step',
       path: [advisoryFrameId],
       startedAt: 1_050,
     });
@@ -126,6 +126,7 @@ describe('atomic external execution WorkLog settlement', () => {
       executionId: registration.executionId,
       frameId: registrationFrameId,
       nodeId: registration.frame.nodeId,
+      nodeType: registration.frame.nodeType,
       duration: 100,
       completedAt: 1_100,
     });
@@ -198,7 +199,7 @@ describe('atomic external execution WorkLog settlement', () => {
     });
     expect(frame).toMatchObject({
       nodeId: 'review',
-      nodeType: 'delegate-role',
+      nodeType: 'agent-step',
       status: 'completed',
       startedAt: 1_000,
       completedAt: 1_250,
@@ -215,7 +216,7 @@ describe('atomic external execution WorkLog settlement', () => {
       startedAt: 1_000,
       frame: {
         nodeId: 'review',
-        nodeType: 'delegate-role',
+        nodeType: 'agent-step',
         startedAt: 1_100,
       },
     });
@@ -223,6 +224,7 @@ describe('atomic external execution WorkLog settlement', () => {
       executionId,
       frameId,
       nodeId: 'review',
+      nodeType: 'agent-step',
       duration: 100,
       completedAt: 1_200,
     });
@@ -285,7 +287,7 @@ describe('atomic external execution WorkLog settlement', () => {
       await expect(
         MakaioBus.request(WorkflowSubjects.completeExternalExecution, {
           ...completion,
-          frame: { ...completion.frame, nodeType: 'station' },
+          frame: { ...completion.frame, nodeType: 'code-step' },
         }),
       ).rejects.toThrow('registered metadata');
       await MakaioBus.request(WorkflowSubjects.completeExternalExecution, completion);
@@ -340,7 +342,7 @@ describe('atomic external execution WorkLog settlement', () => {
         frame: {
           frameId: `${frameLessExecutionId}:review`,
           nodeId: 'review',
-          nodeType: 'delegate-role',
+          nodeType: 'agent-step',
           path: ['review'],
           startedAt: 1_000,
           durationMs: 250,
@@ -364,7 +366,7 @@ describe('atomic external execution WorkLog settlement', () => {
     await expect(
       MakaioBus.request(WorkflowSubjects.completeExternalExecution, {
         ...completion,
-        frame: { ...completion.frame, nodeType: 'station' },
+        frame: { ...completion.frame, nodeType: 'code-step' },
       }),
     ).rejects.toThrow('registered metadata');
     await expect(
@@ -384,7 +386,7 @@ describe('atomic external execution WorkLog settlement', () => {
     });
     expect(beforeSettlement.execution?.status).toBe('running');
     expect(summaryBeforeSettlement.summary?.status).toBe('running');
-    expect(frameBeforeSettlement.frame).toMatchObject({ nodeType: 'delegate-role', status: 'running' });
+    expect(frameBeforeSettlement.frame).toMatchObject({ nodeType: 'agent-step', status: 'running' });
 
     await MakaioBus.request(WorkflowSubjects.completeExternalExecution, completion);
     await expect(
@@ -393,7 +395,7 @@ describe('atomic external execution WorkLog settlement', () => {
         status: 'failed',
         error: 'conflicting replay',
         completedAt: 1_250,
-        frame: { ...completion.frame, nodeType: 'station' },
+        frame: { ...completion.frame, nodeType: 'code-step' },
       }),
     ).rejects.toThrow('cannot transition from status "completed"');
     await expect(
@@ -424,7 +426,7 @@ describe('atomic external execution WorkLog settlement', () => {
       executionId: registration.executionId,
       frameId: completion.frame.frameId,
       nodeId: 'stale-node',
-      nodeType: 'station',
+      nodeType: 'code-step',
       path: ['stale-node'],
       startedAt: 900,
     });
@@ -432,6 +434,7 @@ describe('atomic external execution WorkLog settlement', () => {
       executionId: registration.executionId,
       frameId: completion.frame.frameId,
       nodeId: 'stale-node',
+      nodeType: 'code-step',
       error: 'late failure',
       completedAt: 1_300,
     });
@@ -445,6 +448,7 @@ describe('atomic external execution WorkLog settlement', () => {
       executionId: registration.executionId,
       frameId: completion.frame.frameId,
       nodeId: 'review',
+      nodeType: 'agent-step',
       duration: 400,
       completedAt: 1_400,
     });
@@ -464,7 +468,7 @@ describe('atomic external execution WorkLog settlement', () => {
     expect(summary).toMatchObject({ workflowId: 'direct-review', status: 'completed', completedAt: 1_250 });
     expect(frame).toMatchObject({
       nodeId: 'review',
-      nodeType: 'delegate-role',
+      nodeType: 'agent-step',
       status: 'completed',
       completedAt: 1_250,
       durationMs: 250,

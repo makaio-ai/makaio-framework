@@ -73,7 +73,7 @@ describe('External execution registration', () => {
       executionId,
       frameId: 'frame-main',
       nodeId: 'main',
-      nodeType: 'station',
+      nodeType: 'agent-step',
       path: ['frame-main'],
       startedAt: 1000,
     });
@@ -83,6 +83,7 @@ describe('External execution registration', () => {
       executionId,
       frameId: 'frame-main',
       nodeId: 'main',
+      nodeType: 'agent-step',
       duration: 500,
       completedAt: 1500,
     });
