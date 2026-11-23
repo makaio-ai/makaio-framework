@@ -80,6 +80,7 @@ export {
   ALLOCATION_LISTING_DEFAULT_LIMIT,
   ALLOCATION_LISTING_MAX_LIMIT,
   AllocationListingCompletenessSchema,
+  UnknownAllocationListingCompletenessSchema,
   AllocationListingRequestSchema,
   AllocationObservationPageSchema,
   AllocationObservationSchema,

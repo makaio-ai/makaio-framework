@@ -31,7 +31,7 @@ export const AllocationObservationSchema = z
   .strict();
 export type AllocationObservation = z.infer<typeof AllocationObservationSchema>;
 
-/** An observation whose completeness could not be established. */
+/** Completeness that could not be established: observations stand; neither absence nor uniqueness may be concluded. */
 export const UnknownAllocationListingCompletenessSchema = z.strictObject({
   kind: z.literal('unknown'),
   evidence: BoundedRecoveryEvidenceSchema,

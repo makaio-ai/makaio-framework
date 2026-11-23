@@ -155,7 +155,7 @@ Type: Request (RPC) — command → decision
 
 | Field | Type | Required |
 |-------|------|----------|
-| `decision` | `"refused" \| "duplicate" \| "admitted"` | yes |
+| `decision` | `"duplicate" \| "refused" \| "admitted"` | yes |
 | `operationId` | `string \| undefined` | no |
 | `refusalReason` | `"resolved" \| "not-found" \| "stale-generation" \| "fenced" \| "gate-closed" \| "not-allocated" \| "operation-active" \| "not-ready" \| "preparation-required" \| "preparation-not-required" \| "preparation-already-completed" \| undefined` | no |
 
@@ -212,7 +212,7 @@ Type: Request (RPC) — delivery → receipt
 
 | Field | Type | Required |
 |-------|------|----------|
-| `receipt` | `"completed" \| "refused" \| "duplicate"` | yes |
+| `receipt` | `"completed" \| "duplicate" \| "refused"` | yes |
 | `refusalReason` | `"stale-generation" \| "unknown-kind" \| undefined` | no |
 
 ### <a id="execution-attempt.operation.report"></a>`execution-attempt.operation.report` (rpc)

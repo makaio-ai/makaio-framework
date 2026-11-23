@@ -316,3 +316,22 @@ export { JobRunIdSchema, StepIdSchema } from './identifiers.js';
 export type { JobRunId, StepId } from './identifiers.js';
 export { JobRunLifecycleStateSchema } from './job-run-lifecycle.js';
 export type { JobRunLifecycleState } from './job-run-lifecycle.js';
+
+export {
+  CoreOutcomeRefusalCodeSchema,
+  JobRunEndingSchema,
+  JobRunErrorCodeSchema,
+  JobRunOutcomeNamespace,
+  JobRunOutcomeSchemas,
+  OutcomeSubmitRequestSchema,
+  OutcomeSubmitResponseSchema,
+} from './job-run-outcome.js';
+export type {
+  CloseJobRunInput,
+  CoreOutcomeRefusalCode,
+  JobRunCapability,
+  JobRunEnding,
+  JobRunErrorCode,
+  OutcomeSubmitRequest,
+  OutcomeSubmitResponse,
+} from './job-run-outcome.js';
