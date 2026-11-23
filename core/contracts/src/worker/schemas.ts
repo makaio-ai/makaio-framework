@@ -5,7 +5,6 @@ import { WorkerRequirementsSchema } from '../capabilities/worker/index.js';
 import { OutcomeAckDecisionSchema, ProviderAllocationRefSchema } from '../capabilities/worker/types.js';
 import { WorkerRuntimeInputsSchema } from './runtime-inputs.js';
 import { AuthEnvironmentVariableNameSchema } from '../auth/definitions.js';
-import { ExecutionAttemptBootstrapStartRefusalReasonSchema } from '../execution-attempt/schemas.js';
 import {
   WorkflowRunResultSchema,
   WorkflowWorkerConfigSchema,
@@ -47,9 +46,19 @@ export const WorkerBootstrapGrantedClaimResponseSchema = z
   })
   .strict();
 
+/** Non-secret terminal refusals at the pre-registration start barrier. */
+export const WorkerBootstrapStartRefusalReasonSchema = z.enum([
+  'not-found',
+  'resolved',
+  'fenced',
+  'allocation-terminated',
+  'gate-closed',
+  'bootstrap-expired',
+]);
+
 /** Non-secret refusals shared with start authorization plus remote claim eligibility. */
 export const WorkerBootstrapClaimRefusalReasonSchema = z.enum([
-  ...ExecutionAttemptBootstrapStartRefusalReasonSchema.options,
+  ...WorkerBootstrapStartRefusalReasonSchema.options,
   'provider-mismatch',
   'claim-expired',
   'not-claimable',
@@ -76,8 +85,6 @@ export type WorkerBootstrapClaimRefusalReason = z.infer<typeof WorkerBootstrapCl
  * must not leak into the framework lifecycle payload surface.
  */
 const WorkerLifecycleBaseSchema = z.object({
-  /** Authority-created attempt identifier for this dispatch. */
-  executionAttemptId: z.string().min(1),
   /** Unique workflow execution identifier. */
   executionId: z.string().min(1),
   /** Execution environment tag (e.g. `'piscina'`, `'process'`). */
@@ -108,7 +115,7 @@ export const WorkerCancelUndeliveredKindSchema = z.enum([
  * One bounded cooperative-Cancel pass that produced no stop evidence.
  *
  * This is a **control-delivery diagnostic, never a terminal state**. It reports
- * what one delivery pass did not prove and leaves the Attempt's real outcome to
+ * what one delivery pass did not prove and leaves the run's actual outcome to
  * the canonical lifecycle events. A still-running Worker whose Cancel went
  * undelivered must remain able to reach `lifecycle.completed`,
  * `lifecycle.failed` or `lifecycle.terminated` afterwards.
@@ -121,7 +128,7 @@ export const WorkerCancelUndeliveredKindSchema = z.enum([
  * is additive and stays outside the status vocabulary by construction.
  *
  * The identity fields are the Worker lifecycle identity on purpose: a consumer
- * correlates a diagnostic to the same Attempt row a lifecycle event projects.
+ * correlates a diagnostic to the same run a lifecycle event projects.
  */
 export const WorkerCancelUndeliveredSchema = WorkerLifecycleBaseSchema.extend({
   /** Which delivery outcome left the Cancel undelivered. */
@@ -149,9 +156,7 @@ export type WorkerCancelUndelivered = z.infer<typeof WorkerCancelUndeliveredSche
  * the generic bus seam used by workflow-level runners that need Worker
  * execution without importing a concrete pool service.
  */
-export const WorkerDispatchRequestSchema = z.object({
-  /** Authority-created attempt identifier for this dispatch. */
-  executionAttemptId: z.string().min(1),
+export const WorkerDispatchRequestSchema = z.strictObject({
   /** Full workflow worker configuration. */
   config: WorkflowWorkerConfigSchema,
   /**
@@ -178,7 +183,7 @@ export const WorkerDispatchRequestSchema = z.object({
  */
 export const WorkerDispatchResponseSchema = z
   .object({
-    executionAttemptId: z.string().min(1),
+    executionId: z.string().min(1),
     allocationRef: ProviderAllocationRefSchema,
   })
   .strict();
@@ -193,7 +198,7 @@ export const WorkerDispatchResponseSchema = z
  * Lifecycle states in order:
  * - `lifecycle.provisioning` — dispatch has selected a provider; Worker allocation is in progress
  * - `lifecycle.booting`      — environment is initialising (importing packages, connecting to bus)
- * - `lifecycle.ready`        — projected from `execution-attempt.runtime.ready`
+ * - `lifecycle.ready`        — Worker Runtime has proven readiness to the host
  * - `lifecycle.busy`         — Worker Runtime has started executing the workflow
  * - `lifecycle.completed`    — execution finished successfully
  * - `lifecycle.failed`       — execution terminated with an error
@@ -221,25 +226,25 @@ export const WorkerSchemas = {
   },
 
   /**
-   * Read the non-secret Runtime inputs selected for the authenticated Attempt.
+   * Read the non-secret Runtime inputs selected for the authenticated run.
    *
-   * The host derives the execution owner from the existing authenticated peer and
-   * resolves the Attempt's binding. A missing binding returns null, never current
+   * The host verifies the run against the authenticated peer and resolves its
+   * frozen binding. A missing binding returns null, never current
    * defaults. Credentials remain on the existing bootstrap path.
    *
    * Subject: `worker.runtime.inputs.get`
    * Type: Request (RPC) — Worker Runtime → host
    */
   'runtime.inputs.get': {
-    request: z.object({ executionAttemptId: z.string().min(1) }).strict(),
+    request: z.object({ executionId: z.string().min(1) }).strict(),
     response: z.object({ runtimeInputs: WorkerRuntimeInputsSchema.nullable() }).strict(),
   },
 
   /**
    * Worker submits a terminal workflow outcome for durable acknowledgement.
    *
-   * The Authority validates the attempt, commits the outcome through the
-   * injected repository, and returns an ACK decision. Workers must not
+   * The host validates the run identity, applies the outcome, and returns a
+   * durable ACK decision. Workers must not
    * exit until they receive the ACK.
    *
    * Subject: `worker.control.outcome.submit`
@@ -248,8 +253,6 @@ export const WorkerSchemas = {
   'control.outcome.submit': {
     request: z
       .object({
-        /** Authority-created attempt identifier. */
-        executionAttemptId: z.string().min(1),
         /** Workflow execution identifier. */
         executionId: z.string().min(1),
         /** Terminal result produced by the isolated workflow runner. */
@@ -277,7 +280,7 @@ export const WorkerSchemas = {
    * Worker claims its execution-scoped bus credentials during bootstrap.
    *
    * The Worker Runtime authenticates its WebSocket connection as a bootstrap peer, then
-   * presents its execution/attempt identity. The server validates that trusted
+   * presents its assigned run identity. The server validates that trusted
    * transport identity and the durable allocation before exchanging it for an
    * execution-scoped `busAuthSecret` used for subsequent communication.
    *
@@ -285,14 +288,7 @@ export const WorkerSchemas = {
    * Type: Request (RPC)
    */
   'control.bootstrap.claim': {
-    request: z
-      .object({
-        /** Unique workflow execution identifier assigned to this worker. */
-        executionId: z.string().min(1),
-        /** Authority-created attempt identifier. */
-        executionAttemptId: z.string().min(1),
-      })
-      .strict(),
+    request: z.object({ executionId: z.string().min(1) }).strict(),
     response: WorkerBootstrapClaimResponseSchema,
   },
 
@@ -333,8 +329,7 @@ export const WorkerSchemas = {
   /**
    * Worker Runtime is connected and ready to accept work.
    *
-   * Projected by the worker pool from `execution-attempt.runtime.ready`, which is
-   * the subject that carries the proven runtime endpoint. This event stays a plain
+   * Published after the host verifies the runtime endpoint. This event stays a plain
    * lifecycle payload: adapter composition is a workflow-runtime concern and is not
    * part of the readiness surface.
    *

@@ -66,9 +66,7 @@ export const MAKAIO_E2E_PEER_PARTY_KIND = 'makaio.e2e-peer';
 /** A worker-thread transport without a peer. */
 export const MAKAIO_WORKER_THREAD_PARTY_KIND = 'makaio.worker-thread';
 
-/**
- * A worker running a job; the `id` stays the `executionAttemptId` and the claims stay `{ executionId }`.
- */
+/** A worker running a job, with an opaque party identifier and host-attested claims. */
 export const MAKAIO_JOB_RUN_PARTY_KIND = 'makaio.job-run';
 
 /** The rule evaluation acting as caller. */

@@ -88,18 +88,9 @@ describe('createStagedPackageJson', () => {
     expect(staged.dependencies?.['node-pty']).toBe('^1.2.0-beta.8');
     expect(exports['./bus']).toEqual(sourceExports['./bus']);
     expect(exports['./workflow-engine']).toEqual(sourceExports['./workflow-engine']);
-    expect(exports['./workflow-engine/testing']).toEqual({
-      types: './dist/workflow-engine/testing/index.d.mts',
-      default: './dist/workflow-engine/testing/index.mjs',
-    });
-    expect(exports['./workflow-engine/testing/sqlite']).toEqual({
-      types: './dist/workflow-engine/testing/sqlite.d.mts',
-      default: './dist/workflow-engine/testing/sqlite.mjs',
-    });
-    expect(exports['./workflow-engine/testing/conformance']).toEqual({
-      types: './dist/workflow-engine/testing/conformance.d.mts',
-      default: './dist/workflow-engine/testing/conformance.mjs',
-    });
+    expect(exports['./workflow-engine/testing']).toBeUndefined();
+    expect(exports['./workflow-engine/testing/sqlite']).toBeUndefined();
+    expect(exports['./workflow-engine/testing/conformance']).toBeUndefined();
     expect(exports['./contracts/native-session-supervisor']).toEqual(
       sourceExports['./contracts/native-session-supervisor'],
     );

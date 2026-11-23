@@ -482,6 +482,10 @@
       "types": "./dist/storage/drizzle/columns/postgres.d.mts",
       "default": "./dist/storage/drizzle/columns/postgres.mjs"
     },
+    "./storage/drizzle/internal/postgres-host-transaction": {
+      "types": "./dist/storage/drizzle/internal/postgres-host-transaction.d.mts",
+      "default": "./dist/storage/drizzle/internal/postgres-host-transaction.mjs"
+    },
     "./storage/handlers": {
       "types": "./dist/storage/handlers/index.d.mts",
       "default": "./dist/storage/handlers/index.mjs"
@@ -637,22 +641,6 @@
     "./workflow-engine": {
       "types": "./dist/workflow-engine/index.d.mts",
       "default": "./dist/workflow-engine/index.mjs"
-    },
-    "./workflow-engine/execution-attempt-repository": {
-      "types": "./dist/workflow-engine/execution-attempt-repository.d.mts",
-      "default": "./dist/workflow-engine/execution-attempt-repository.mjs"
-    },
-    "./workflow-engine/testing": {
-      "types": "./dist/workflow-engine/testing/index.d.mts",
-      "default": "./dist/workflow-engine/testing/index.mjs"
-    },
-    "./workflow-engine/testing/sqlite": {
-      "types": "./dist/workflow-engine/testing/sqlite.d.mts",
-      "default": "./dist/workflow-engine/testing/sqlite.mjs"
-    },
-    "./workflow-engine/testing/conformance": {
-      "types": "./dist/workflow-engine/testing/conformance.d.mts",
-      "default": "./dist/workflow-engine/testing/conformance.mjs"
     },
     "./workflow-engine/package": {
       "types": "./dist/workflow-engine/package.d.mts",

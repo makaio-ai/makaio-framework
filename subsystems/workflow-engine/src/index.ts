@@ -10,6 +10,12 @@
  */
 
 export { WorkflowExecutor } from './workflow-executor.js';
+export type { WorkflowRunAdmissionErrorCode } from './workflow-runner-tasks.js';
+export type {
+  RunCancellationHook,
+  WorkflowRunnerSelectionInput,
+  WorkflowRunnerSelector,
+} from './workflow-runner-selector.js';
 export { WorkflowTriggerReconciler } from './workflow-trigger-reconciler.js';
 export {
   compileWorkflowTriggerCondition,
@@ -24,186 +30,6 @@ export type {
   WorkflowWorkspaceRootResolver,
 } from './types.js';
 export type { WorkflowSuccessFinalizer } from './workflow-execution-finalizer.js';
-export { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
-export { resolveExecutionAttemptPeer } from './execution-bound-access.js';
-export type { ExecutionAttemptPeerIdentity } from './execution-bound-access.js';
-export { registerExecutionAttemptHandlers } from './execution-attempt-handlers.js';
-export {
-  evaluateAttemptControlReceipt,
-  evaluateAttemptControlReport,
-  snapshotAttemptControlReceipt,
-  snapshotAttemptControlReport,
-} from './attempt-control-evidence.js';
-export type {
-  AttemptControlEvidence,
-  AttemptCancellationControlState,
-  AttemptControlEvidenceDecision,
-  AttemptControlEvidenceRepository,
-  ReadAttemptCancellationControlInput,
-  RecordAttemptControlReceiptInput,
-  ReportAttemptControlInput,
-} from './attempt-control-evidence.js';
-export { reconcileAttemptCancellation } from './attempt-control-delivery.js';
-export type {
-  AttemptControlDeliveryDeps,
-  ReconcileAttemptCancellationInput,
-  AttemptControlDeliveryResult,
-} from './attempt-control-delivery.js';
-export type { AttemptOutcomeDecodingInput, ExecutionAttemptHandlersDeps } from './execution-attempt-handlers.js';
-export {
-  WORKFLOW_WORKLOAD_KIND,
-  WORKFLOW_WORKLOAD_VERSION,
-  WorkflowInvocationInputSchema,
-  buildWorkflowAttemptInstruction,
-  parseWorkflowAttemptInstruction,
-} from './workflow-attempt-instruction.js';
-export type {
-  BuildWorkflowAttemptInstructionOptions,
-  WorkflowInvocationInput,
-} from './workflow-attempt-instruction.js';
-export {
-  WorkflowAttemptOutcomeSchema,
-  workflowAttemptOutcomeCodec,
-  decodeWorkflowAttemptOutcome,
-  toCommittedWorkflowRunnerResult,
-  toCommittedWorkflowRunnerCompletion,
-} from './workflow-attempt-outcome.js';
-export type {
-  WorkflowAttemptOutcome,
-  WorkflowAttemptTechnicalFailure,
-  WorkflowAttemptCancellation,
-  CommittedWorkflowOutcomeIdentity,
-} from './workflow-attempt-outcome.js';
-export {
-  registerRuntimeRegistrationHandler,
-  RUNTIME_PROBE_DELIVERY_TIMEOUT_MS,
-} from './runtime-registration.js';
-export type { RuntimeRegistrationDeps } from './runtime-registration.js';
-export { registerOperationAdmissionHandler } from './operation-admission.js';
-export { registerBootstrapStartHandler } from './bootstrap-start-handler.js';
-export type { OperationAdmissionDeps } from './operation-admission.js';
-export { runAuthorityDispatchedAttempt } from './authority-dispatch-runner.js';
-export type { AuthorityDispatchRunnerOptions } from './authority-dispatch-runner.js';
-export { submitAttemptOutcome } from './outcome-convergence.js';
-export type {
-  AcceptedAttemptOutcome,
-  OutcomeAcceptance,
-  AttemptOutcomeSubmission,
-  AttemptOutcomeSubmissionDeps,
-  OutcomeConvergence,
-  OutcomeConvergenceInput,
-  OutcomePreCommitValidation,
-} from './outcome-convergence.js';
-export {
-  ATTEMPT_OPERATION_START_GATES,
-  DuplicateExecutionAttemptError,
-  RuntimeOutcomeFenceMismatchError,
-  assertRuntimeOutcomeFence,
-  EXECUTION_ATTEMPT_STATUSES,
-  EXECUTION_ATTEMPT_SETTLEMENT_KINDS,
-  decodeDurableOutcome,
-  durableOutcome,
-  sameAllocationRef,
-  sameDurableOutcome,
-  evaluateAttemptReachability,
-  evaluateProvisionerIncarnationLoss,
-  evaluateRuntimeRegistration,
-  evaluateOperationAdmission,
-  evaluateOperationCompletion,
-  evaluatePreparationReport,
-  evaluateRuntimeReadiness,
-  evaluateAttemptCancellation,
-  snapshotAttemptOutcomeControl,
-  snapshotRequestAttemptCancellationInput,
-  snapshotRequestExecutionCancellationInput,
-} from './execution-attempt-repository.js';
-export {
-  snapshotEnsureExecutionAttemptInput,
-  snapshotEnsureExecutionAttemptPersistenceInput,
-  snapshotReadAttemptSettlementInput,
-  replayEnsuredAttempt,
-  readAttemptSettlementSnapshot,
-} from './execution-attempt-owner-recovery.js';
-export type {
-  AttemptReachability,
-  AttemptReachabilityDecision,
-  AdmitOperationInput,
-  AttemptControlState,
-  BootstrapStartState,
-  ReadBootstrapStartStateInput,
-  AttemptOperationStartGate,
-  CompleteOperationInput,
-  DurableOutcome,
-  ExecutionOwnerId,
-  MarkRuntimeReadyInput,
-  OperationAdmissionDecision,
-  OperationCompletionDecision,
-  OutcomeCodec,
-  RegisterRuntimeInput,
-  RuntimeReadinessDecision,
-  RuntimeOutcomeFence,
-  RuntimeRegistrationDecision,
-  ExecutionAttemptRecoveryOperations,
-  ExecutionAttemptRepository,
-  ExecutionAttemptCancellationIntent,
-  ExecutionAttemptCancellationDecision,
-  RequestAttemptCancellationInput,
-  RequestExecutionCancellationInput,
-  AttemptOutcomeControlObservation,
-  ExecutionAttemptRecord,
-  RecoverableAttemptRecord,
-  ExecutionAttemptCreate,
-  EnsureExecutionAttemptInput,
-  EnsureExecutionAttemptPersistenceInput,
-  EnsureExecutionAttemptDecision,
-  ReadAttemptSettlementInput,
-  AttemptSettlementRead,
-  AttemptSettlementSnapshot,
-  ExecutionAttemptOutcomeCommit,
-  ExecutionAttemptOutcomeDecision,
-  ExecutionAttemptStatus,
-  ExecutionAttemptSettlementKind,
-  GetInstructionInput,
-  ReportOperationInput,
-  OperationReportDecision,
-  AllocationRefEvolution,
-  AllocationRefEvolutionDecision,
-  AllocationRecordingDecision,
-  AllocationTerminationDecision,
-  BeginProvisioningInput,
-  CompleteProviderOperationInput,
-  DiscoveredAllocationDecision,
-  HandoffProviderOperationInput,
-  InfrastructureFailureDecision,
-  ListOpenProviderOperationsInput,
-  OpenProviderOperationRecord,
-  PendingAttemptAbandonmentDecision,
-  ProvisionerIncarnationLossDecision,
-  ProvisioningAbsenceDecision,
-  ProvisioningClaimDecision,
-  RecordAllocationInput,
-  RecordAllocationTerminatedInput,
-  RecordInfrastructureFailureInput,
-  RecordProviderOperationUncertaintyInput,
-  RecordProvisionerIncarnationLostInput,
-  RecordProvisioningAbsentInput,
-  RenewProviderOperationClaimInput,
-  TakeOverProviderOperationInput,
-} from './execution-attempt-repository.js';
-export { isProviderOperationResolved, PROVIDER_OPERATION_OBLIGATIONS } from './provider-operation.js';
-export type {
-  InitialProviderOperationClaimContext,
-  InitialProviderOperationClaimContextSource,
-  ProviderOperationLeasePolicy,
-  ProviderOperationLeaseRenewal,
-  ProcessBoundProvisionerLossProof,
-  ProviderOperationClaim,
-  ProviderOperationClaimDecision,
-  ProviderOperationCompletionDecision,
-  ProviderOperationMutationDecision,
-  ProviderOperationObligation,
-  ProviderOperationOwnershipRecord,
-} from './provider-operation.js';
 export { WorkflowEngineToken, workflowEnginePackage, createWorkflowEnginePackage } from './package.js';
 export { WorkflowStorageNamespace, WorkflowStorageSubjects } from './storage/namespace.js';
 export { registerDrizzleWorkflowStorage } from './storage/handler.js';
@@ -217,12 +43,5 @@ export {
   worklogFrameEntriesDual,
   workflowExecutionStateDual,
   workflowExecutionStateEventsDual,
-  executionAttemptsDual,
-  activeExecutionAttemptsDual,
-  executionAttemptRequestsDual,
-  providerOperationsDual,
-  executionAttemptCancellationsDual,
-  executionAttemptControlEvidenceDual,
 } from './storage/schema.js';
 export { initializeWorkflowState, getWorkflowState, patchWorkflowState } from './storage/state-handler.js';
-export type { BootstrapStartAuthority, BootstrapStartOptions } from './bootstrap-start.js';

@@ -5,21 +5,12 @@ import type {
   StepRunnerPlatformDefaults,
   WorkerContributionManifest,
 } from '@makaio/contracts';
-import { requireExecutableRunContext, WorkerSubjects } from '@makaio/contracts';
-import type { CallContext } from '@makaio/core';
 import type { IMakaioBus } from '@makaio/bus-core';
-import {
-  ExecutionAttemptAuthority,
-  WorkflowStorageSubjects,
-  type ExecutionAttemptRepository,
-  type WorkflowAttemptOutcome,
-  type WorkflowMaterializationSpecResolver,
-} from '@makaio/subsystem-workflow-engine';
+import type { WorkflowMaterializationSpecResolver } from '@makaio/subsystem-workflow-engine';
 import type { WorkflowRunnerBootOptions } from '../boot-types.js';
 import type { WorkflowWorkerEntryMode } from './worker-entry-resolver.js';
 import { ThinWorkflowPiscinaRunner } from './thin-workflow-piscina-runner.js';
 import { resolveWorkflowWorkerEntry } from './worker-entry-resolver.js';
-import { WorkerRunner } from './worker-runner.js';
 import { InProcessWorkflowRunner } from './in-process-workflow-runner.js';
 
 /** Parameters for composing workflow engine runner package options. */
@@ -38,21 +29,9 @@ export interface CreateNodeWorkflowRunnerPackageOptionsParams {
    * Host-owned bus instance forwarded to in-process runner construction.
    *
    * Required when `workflowRunner.mode` is `'in-process'` or omitted on an
-   * explicit runner object. Also used by Worker mode when no explicit
-   * dispatch function is supplied, and reads portable owner context for
-   * path-backed Worker executions. Ignored for Piscina mode.
+   * explicit runner object.
    */
   readonly bus?: IMakaioBus;
-  /**
-   * Injected execution attempt persistence port.
-   *
-   * Required when `workflowRunner.mode` is `'worker'`. Threaded
-   * through to the workflow engine service options so the Authority
-   * service can delegate durable decisions.
-   */
-  readonly executionAttemptRepository?: ExecutionAttemptRepository<WorkflowAttemptOutcome>;
-  /** Explicit creation-time bootstrap budget, required whenever a repository is injected. */
-  readonly executionAttemptBootstrapTimeoutMs?: number;
   /** Host-owned resolvers for portable path-backed workflow starts. */
   readonly workflowMaterializationSpecResolvers?: readonly WorkflowMaterializationSpecResolver[];
 }
@@ -76,20 +55,6 @@ export interface NodeWorkflowRunnerPackageOptions {
     /** Makaio data-home path forwarded to workflow workers. */
     readonly makaioHome?: string;
   };
-  /**
-   * Injected execution attempt persistence port.
-   *
-   * Forwarded whenever the host supplies it, independently of runner mode.
-   */
-  readonly executionAttemptRepository?: ExecutionAttemptRepository<WorkflowAttemptOutcome>;
-  /**
-   * Execution attempt Authority constructed from the injected repository.
-   *
-   * Present whenever the host supplies a repository and bootstrap budget.
-   * Shared between an Authority-backed runner (for attempt creation before dispatch) and
-   * the workflow engine service (for outcome commitment).
-   */
-  readonly executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowAttemptOutcome>;
   /** Host-owned resolvers forwarded to the workflow engine service. */
   readonly workflowMaterializationSpecResolvers?: readonly WorkflowMaterializationSpecResolver[];
 }
@@ -110,28 +75,6 @@ function createEmptyWorkerContributionManifest(): WorkerContributionManifest {
 export function createNodeWorkflowRunnerPackageOptions(
   params: CreateNodeWorkflowRunnerPackageOptionsParams,
 ): NodeWorkflowRunnerPackageOptions {
-  // Construction gate: Worker mode requires an injected repository.
-  if (params.workflowRunner?.mode === 'worker' && !params.executionAttemptRepository) {
-    throw new Error(
-      `Worker dispatch mode requires an ExecutionAttemptRepository. ` +
-        `Pass 'executionAttemptRepository' to createNodeWorkflowRunnerPackageOptions ` +
-        `when workflowRunner.mode is 'worker'.`,
-    );
-  }
-
-  // Create the Authority early so it can be shared between the runner
-  // (attempt creation before dispatch) and the engine service (outcome commitment).
-  let executionAttemptAuthority: ExecutionAttemptAuthority<WorkflowAttemptOutcome> | undefined;
-  if (params.executionAttemptRepository) {
-    const bootstrapTimeoutMs = params.executionAttemptBootstrapTimeoutMs;
-    if (bootstrapTimeoutMs === undefined) {
-      throw new Error('An ExecutionAttemptRepository requires executionAttemptBootstrapTimeoutMs');
-    }
-    executionAttemptAuthority = new ExecutionAttemptAuthority(params.executionAttemptRepository, {
-      bootstrapTimeoutMs,
-    });
-  }
-
   const defaultWorkerEntryMode: WorkflowWorkerEntryMode =
     basename(params.runtimeModuleDir) === 'src' ? 'source' : 'dist';
   const workflowRunner = createNodeWorkflowRunner({
@@ -139,7 +82,6 @@ export function createNodeWorkflowRunnerPackageOptions(
     defaultWorkerEntryMode,
     runner: params.workflowRunner,
     bus: params.bus,
-    authority: executionAttemptAuthority,
   });
 
   return {
@@ -150,12 +92,6 @@ export function createNodeWorkflowRunnerPackageOptions(
       platformDefaults: params.platformDefaults,
       makaioHome: params.makaioHome,
     },
-    ...(params.executionAttemptRepository !== undefined && {
-      executionAttemptRepository: params.executionAttemptRepository,
-    }),
-    ...(executionAttemptAuthority !== undefined && {
-      executionAttemptAuthority,
-    }),
     ...(params.workflowMaterializationSpecResolvers !== undefined && {
       workflowMaterializationSpecResolvers: params.workflowMaterializationSpecResolvers,
     }),
@@ -177,18 +113,9 @@ interface CreateNodeWorkflowRunnerParams {
    * Host-owned bus instance forwarded to {@link InProcessWorkflowRunner}.
    *
    * Required when `runner` is present and its `mode` is `'in-process'` or
-   * omitted. Also required for `'worker'` mode when no explicit dispatch
-   * function is supplied, and for reading portable owner context before
-   * path-backed Worker dispatch. Ignored for Piscina mode.
+   * omitted.
    */
   readonly bus?: IMakaioBus;
-  /**
-   * Execution attempt Authority injected into Worker runners.
-   *
-   * Required when `runner.mode` is `'worker'`. The runner uses this
-   * to create attempts before dispatch and wait for committed outcomes.
-   */
-  readonly authority?: ExecutionAttemptAuthority<WorkflowAttemptOutcome>;
 }
 
 /**
@@ -218,51 +145,6 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
       return new InProcessWorkflowRunner({ bus: params.bus });
     }
 
-    case 'worker': {
-      if (params.authority === undefined) {
-        throw new Error(
-          `WorkerRunner requires an ExecutionAttemptAuthority. ` +
-            `Pass 'authority' to createNodeWorkflowRunner when runner.mode is 'worker'.`,
-        );
-      }
-      const bus = params.bus;
-      const dispatch =
-        runner.dispatch ??
-        (bus === undefined
-          ? undefined
-          : (call, request, signal) =>
-              bus.request(
-                call,
-                WorkerSubjects.dispatch,
-                {
-                  executionAttemptId: request.executionAttemptId,
-                  config: request.config,
-                  manifest: request.manifest,
-                  requirements: request.requirements,
-                  metadata: request.metadata,
-                },
-                { signal },
-              ));
-      if (dispatch === undefined) {
-        throw new Error(
-          `WorkerRunner requires either a dispatch function or a bus instance. ` +
-            `Pass 'bus' to createNodeWorkflowRunner when runner.mode is 'worker'.`,
-        );
-      }
-      return new WorkerRunner({
-        dispatch,
-        authority: params.authority,
-        ...(bus !== undefined && {
-          readRunContext: async (call: CallContext, executionId: string, signal: AbortSignal) => {
-            const stored = await bus.request(call, WorkflowStorageSubjects.getRunContext, { executionId }, { signal });
-            return stored.runContext === null ? null : requireExecutableRunContext(stored.runContext);
-          },
-        }),
-        ...(runner.manifest !== undefined && { manifest: runner.manifest }),
-        ...(runner.requirements !== undefined && { requirements: runner.requirements }),
-      });
-    }
-
     case 'piscina': {
       const workerEntry =
         runner.workerEntry ??
@@ -279,5 +161,7 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
         idleTimeoutMs: runner.idleTimeoutMs,
       });
     }
+    default:
+      throw new Error('Unsupported workflow runner mode. Configure Worker dispatch through the host.');
   }
 }

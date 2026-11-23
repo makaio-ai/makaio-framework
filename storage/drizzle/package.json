@@ -10,6 +10,7 @@
     "./client": "./src/client.ts",
     "./columns/sqlite": "./src/columns/sqlite.ts",
     "./columns/postgres": "./src/columns/postgres.ts",
+    "./internal/postgres-host-transaction": "./src/internal/postgres-host-transaction.ts",
     "./package.json": "./package.json"
   },
   "devDependencies": {
@@ -37,6 +38,7 @@
       "./client": "./dist/client.mjs",
       "./columns/sqlite": "./dist/columns/sqlite.mjs",
       "./columns/postgres": "./dist/columns/postgres.mjs",
+      "./internal/postgres-host-transaction": "./dist/internal/postgres-host-transaction.mjs",
       "./package.json": "./package.json"
     }
   },

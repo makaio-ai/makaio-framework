@@ -3,7 +3,6 @@ import { WorkflowRunContextSchema, type WorkflowRunnerCompletion } from '@makaio
 import { createTestCall } from '@makaio/test-utils';
 import { buildExecutionTask, buildFileExecutionTask, type RunnerTaskDeps } from '../workflow-runner-tasks.js';
 import { registerExecutionTask } from '../workflow-execution-task-registration.js';
-import { toCommittedWorkflowRunnerCompletion } from '../workflow-attempt-outcome.js';
 import type { ActiveExecution } from '../types.js';
 import { createWorkflowDefinition, createWorkflowExecution } from './shared.js';
 
@@ -121,14 +120,9 @@ describe.each(['file', 'definition'] as const)('%s runner task ownership', (kind
         fixture.first.reject(error);
       } else {
         fixture.first.resolve(
-          toCommittedWorkflowRunnerCompletion(
-            {
-              outcome: { ...identity, status: 'completed' },
-              controlObservation: { controlRevision: 0, cancellation: null },
-              acceptance: mode === 'projected-completion' ? 'projected' : 'recorded-only',
-            },
-            identity,
-          ),
+          mode === 'projected-completion'
+            ? { state: 'authority-committed', result: { ...identity, status: 'completed' } }
+            : { state: 'authority-recorded-only', ...identity },
         );
       }
       await predecessor;
@@ -140,16 +134,7 @@ describe.each(['file', 'definition'] as const)('%s runner task ownership', (kind
       if (mode === 'rejected') expect(logged).toHaveBeenCalledWith(expect.stringContaining('Superseded'), error);
       else expect(logged).not.toHaveBeenCalled();
     } finally {
-      fixture.second.resolve(
-        toCommittedWorkflowRunnerCompletion(
-          {
-            outcome: { ...identity, status: 'completed' },
-            acceptance: 'projected',
-            controlObservation: null,
-          },
-          identity,
-        ),
-      );
+      fixture.second.resolve({ state: 'authority-committed', result: { ...identity, status: 'completed' } });
       await successor;
       logged.mockRestore();
     }
@@ -162,16 +147,7 @@ describe.each(['file', 'definition'] as const)('%s runner task ownership', (kind
     const fixture = createTaskFixture(kind);
     const task = fixture.start();
     await fixture.firstEntered.promise;
-    fixture.first.resolve(
-      toCommittedWorkflowRunnerCompletion(
-        {
-          outcome: { ...identity, status: 'completed' },
-          acceptance: 'projected',
-          controlObservation: null,
-        },
-        identity,
-      ),
-    );
+    fixture.first.resolve({ state: 'authority-committed', result: { ...identity, status: 'completed' } });
     await task;
     expect(fixture.deps.workflowAbortControllers.size).toBe(0);
     expect(fixture.deps.executionTasks.size).toBe(0);

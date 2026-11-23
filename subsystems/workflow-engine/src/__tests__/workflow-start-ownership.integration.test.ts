@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
 import { createTestCall } from '@makaio/test-utils';
 import {
@@ -7,15 +7,10 @@ import {
   type IWorkflowRunner,
   type StoredWorkflowRunContext,
 } from '@makaio/contracts';
-import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
-import { workflowAttemptOutcomeCodec } from '../workflow-attempt-outcome.js';
-import { WorkflowExecutor } from '../workflow-executor.js';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
-import { createInMemoryAttemptRepository } from '../testing/in-memory-attempt-repository.js';
 import { createWorkflowDefinition } from './shared.js';
 import {
-  createWorkflowTestNamespaceCapability,
   setupWorkflowExecutorTest,
   teardownWorkflowExecutorTest,
   type WorkflowExecutorTestSetup,
@@ -50,6 +45,8 @@ describe('workflow start terminal ownership', () => {
       },
     };
     setup = await setupWorkflowExecutorTest({ workflowRunner: runner });
+    const selectRunner = vi.fn(() => undefined);
+    setup.cleanupFns.push(setup.workflowExecutor.registerWorkflowRunnerSelector(selectRunner));
     setup.workflowExecutor.registerWorkflowMaterializationSpecResolver({
       resolve: async () => ({
         kind: 'workspace-snapshot',
@@ -69,46 +66,51 @@ describe('workflow start terminal ownership', () => {
       await MakaioBus.request(createTestCall(), WorkflowSubjects.start, { workflowId: workflow.id });
     }
     expect((await observed.promise).terminalAuthority).toBe(terminalAuthority);
+    expect(selectRunner).toHaveBeenCalledTimes(source === 'file' ? 0 : 1);
+  });
+
+  it('completes a local definition run without a worker outcome endpoint', async () => {
+    setup = await setupWorkflowExecutorTest();
+    MakaioBus.registerNamespace(WorkerNamespace);
+    const workflow = createWorkflowDefinition({
+      id: 'local-run',
+      root: { type: 'sequence', id: 'root', nodes: [] },
+    });
+    const call = createTestCall();
+    await MakaioBus.request(call, WorkflowStorageSubjects.set, { workflow });
+    const started = await MakaioBus.request(call, WorkflowSubjects.start, { workflowId: workflow.id });
+    if ('error' in started) throw new Error(String(started.error));
+    const { executionId } = started;
+
+    await expect
+      .poll(() => MakaioBus.request(call, WorkflowStorageSubjects.getExecution, { executionId }))
+      .toMatchObject({ execution: { id: executionId, status: 'completed' } });
+    await expect(
+      MakaioBus.requestOptional(call, WorkerSubjects.control.outcome.submit, {
+        executionId,
+        result: { executionId, workflowId: workflow.id, status: 'completed' },
+      }),
+    ).resolves.toEqual({ handled: false });
   });
 
   it.each([
     true,
     false,
-  ])('derives ownership from actual selection, not Authority presence (requirements: %s)', async (requiresWorker) => {
+  ])('derives ownership from the registered selector (requirements: %s)', async (requiresWorker) => {
     const observed: { context?: StoredWorkflowRunContext } = {};
-    const authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowAttemptOutcomeCodec), {
-      bootstrapTimeoutMs: 60_000,
-    });
-    setup = await setupWorkflowExecutorTest({ initExecutor: false });
-    await setup.workflowExecutor.destroy();
-    setup.workflowExecutor = new WorkflowExecutor(
-      MakaioBus,
-      createWorkflowTestNamespaceCapability(),
-      undefined,
-      {
-        run: async (call, config) => {
-          if (requiresWorker) throw new Error('Fallback runner must not be selected');
-          const { runContext } = await MakaioBus.request(call, WorkflowStorageSubjects.getRunContext, {
-            executionId: config.executionId,
-          });
-          if (!runContext) throw new Error('Owner context missing at fallback invocation');
-          observed.context = runContext;
-          throw new Error('Test runner stops after observing the persisted fallback contract');
-        },
-      },
-      authority,
-    );
-    MakaioBus.registerNamespace(WorkerNamespace);
-    await setup.workflowExecutor.init();
+    const observe: IWorkflowRunner['run'] = async (call, config) => {
+      const { runContext } = await MakaioBus.request(call, WorkflowStorageSubjects.getRunContext, {
+        executionId: config.executionId,
+      });
+      if (!runContext) throw new Error('Owner context missing at runner invocation');
+      observed.context = runContext;
+      throw new Error('Test runner stops after observing the persisted launch contract');
+    };
+    setup = await setupWorkflowExecutorTest({ workflowRunner: { run: observe } });
     setup.cleanupFns.push(
-      MakaioBus.on(WorkerSubjects.dispatch, async (ctx) => {
-        const { runContext } = await MakaioBus.request(ctx.call, WorkflowStorageSubjects.getRunContext, {
-          executionId: ctx.payload.config.executionId,
-        });
-        if (!runContext) throw new Error('Owner context missing at dispatch');
-        observed.context = runContext;
-        throw new Error('Test provider stops after observing the persisted dispatch contract');
-      }),
+      setup.workflowExecutor.registerWorkflowRunnerSelector((_call, { requirements }) =>
+        requirements === undefined ? undefined : { terminalAuthority: 'authority', run: observe },
+      ),
     );
     const workflow = {
       ...createWorkflowDefinition({

@@ -30,9 +30,8 @@ import {
   type RunnerTaskDeps,
 } from './workflow-runner-tasks.js';
 import { launchDefinitionExecutionTask, selectDefinitionExecutionDispatch } from './workflow-definition-dispatch.js';
-import type { ExecutionAttemptAuthority } from './execution-attempt-authority.js';
-import type { WorkflowAttemptOutcome } from './workflow-attempt-outcome.js';
 import { registerExecutionTask } from './workflow-execution-task-registration.js';
+import type { WorkflowRunnerSelector } from './workflow-runner-selector.js';
 
 /**
  * Dependencies injected into the execution start helpers.
@@ -52,6 +51,8 @@ export interface StartExecutionDeps {
   executionTasks: Map<string, Promise<void>>;
   /** Optional workflow-level runner for isolated execution. */
   workflowRunner: IWorkflowRunner | undefined;
+  /** Host selection hook for definition-backed execution. */
+  workflowRunnerSelector?: WorkflowRunnerSelector;
   /**
    * Build a fully populated {@link WorkflowRunContext} for persistence.
    * @param params - Source-specific context fields.
@@ -90,14 +91,6 @@ export interface StartExecutionDeps {
    * @param executionId - Target execution identifier.
    */
   runExecution(call: CallContext, executionId: string): Promise<void>;
-  /**
-   * Execution attempt Authority for Worker dispatch runners.
-   *
-   * When present, the dispatch runner uses this Authority to create
-   * attempts before dispatch and wait for committed outcomes. When absent,
-   * Worker dispatch is unavailable.
-   */
-  executionAttemptAuthority?: ExecutionAttemptAuthority<WorkflowAttemptOutcome>;
   /** Host seams that resolve immutable workspace references for path starts. */
   materializationSpecResolvers: ReadonlySet<WorkflowMaterializationSpecResolver>;
 }
@@ -547,7 +540,7 @@ export async function startResolvedDefinitionExecution(
   // that exact immutable definition for every definition launch, including
   // path-backed runners, so remote finalization never trusts worker input.
   const definitionSnapshot = options.definitionSnapshot ?? workflow;
-  const dispatch = selectDefinitionExecutionDispatch(deps, workflow);
+  const dispatch = selectDefinitionExecutionDispatch(call, deps, { executionId, requirements: workflow.requirements });
   assertRunnerBackedSourceDispatchAvailable(dispatch.runner, executionSource, workflowId);
   const { source: durableSource, materializationSpec } = await resolveDurablePathSource(
     call,

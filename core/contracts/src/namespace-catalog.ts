@@ -12,7 +12,6 @@ import { ClientNamespace } from './client/namespace.js';
 import { CodeExecutionNamespace } from './code-execution/namespace.js';
 import { ConfigNamespace } from './config/config-namespace.js';
 import { CredentialNamespace } from './credential/namespace.js';
-import { ExecutionAttemptNamespace } from './execution-attempt/namespace.js';
 import { FacetNamespace } from './facet/namespace.js';
 import { MaterializationNamespace } from './materialization/namespace.js';
 import { HarnessNamespace } from './harness/namespace.js';
@@ -75,7 +74,6 @@ export const FrameworkContractNamespaces: readonly RegistrableBusNamespaceDefini
   CodeExecutionNamespace,
   ConfigNamespace,
   CredentialNamespace,
-  ExecutionAttemptNamespace,
   FacetNamespace,
   MaterializationNamespace,
   HarnessNamespace,

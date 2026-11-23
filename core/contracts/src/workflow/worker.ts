@@ -5,8 +5,6 @@ import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.
 import { WorkflowArtifactRefSchema } from './artifact-ref.js';
 import { ArtifactRevisionSchema, type ArtifactRevision } from '../artifact/index.js';
 import { WorkerContributionRefSchema, WorkerMaterializationSpecSchema } from '../capabilities/worker/types.js';
-import type { ExecutionAttemptOutcome } from '../execution-attempt/instruction.js';
-import type { AcceptedAttemptOutcome } from '../execution-attempt/outcome-acceptance.js';
 
 // ─────────────────────────────────────────────────────────────
 // Worker Bus Auth
@@ -79,8 +77,6 @@ export const WorkflowWorkerConfigSchema = z.object({
   definition: WorkflowDefinitionSchema.optional(),
   /** Unique execution identifier for this workflow run. */
   executionId: z.string().min(1),
-  /** Authority attempt that owns this worker run, when dispatched through an Attempt. */
-  executionAttemptId: z.string().min(1).optional(),
   /** Workflow definition identifier. */
   workflowId: z.string().min(1),
   /**
@@ -316,15 +312,14 @@ export type WorkerContributionManifest = z.infer<typeof WorkerContributionManife
  */
 export interface WorkflowRunnerRunOptions {
   /**
-   * Local owner admission around durable attempt creation only. A runner must
-   * release this boundary before dispatching or awaiting the workload outcome.
-   * The callback stays in the calling process.
-   * Direct runner consumers that omit it own their own admission policy.
+   * Run durable worker setup only while the workflow run permits new work.
+   * The runner releases the boundary before dispatch or waiting for the outcome.
+   * The callback stays in the calling process. Direct runner consumers that omit it own admission.
    * @param create - Creation operation executed only while the owner permits new work.
    * @returns The result of the admitted creation operation.
    * @typeParam T - Creation result retained by the dispatch runner.
    */
-  readonly withAttemptCreation?: <T>(create: () => Promise<T>) => Promise<T>;
+  readonly withRunAdmission?: <T>(create: () => Promise<T>) => Promise<T>;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -351,25 +346,12 @@ export type WorkflowRunnerCompletion =
   | {
       readonly state: 'authority-committed';
       readonly result: WorkflowRunResult;
-      readonly acceptedOutcome: AcceptedAttemptOutcome<WorkflowAttemptOutcome> & { readonly acceptance: 'projected' };
     }
   | {
       readonly state: 'authority-recorded-only';
       readonly executionId: string;
       readonly workflowId: string;
-      readonly acceptedOutcome: AcceptedAttemptOutcome<WorkflowAttemptOutcome> & {
-        readonly acceptance: 'recorded-only';
-      };
     };
-
-/** Technical failure retained without inventing a workflow-produced result. */
-export type WorkflowAttemptTechnicalFailure = Extract<ExecutionAttemptOutcome, { kind: 'technical-failure' }>;
-
-/** Confirmed cooperative stop retained independently of a workflow-produced result. */
-export type WorkflowAttemptCancellation = Extract<ExecutionAttemptOutcome, { kind: 'cancelled' }>;
-
-/** Canonical workflow-owner outcome, separate from its lifecycle interpretation. */
-export type WorkflowAttemptOutcome = WorkflowRunResult | WorkflowAttemptTechnicalFailure | WorkflowAttemptCancellation;
 
 // ─────────────────────────────────────────────────────────────
 // Workflow Runner Interface

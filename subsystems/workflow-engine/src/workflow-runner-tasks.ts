@@ -10,7 +10,7 @@ import {
   type WorkflowRunResult,
   type WorkflowWorkerConfig,
 } from '@makaio/contracts';
-import type { CallContext } from '@makaio/core';
+import { MakaioError, type CallContext } from '@makaio/core';
 import type { ActiveExecution, ExecutorConfig } from './types.js';
 import type { FinalizerDeps } from './workflow-execution-finalizer.js';
 import {
@@ -477,13 +477,27 @@ export function buildExecutionTask(
     .finally(() => releaseRunnerTask(deps, executionId, ownedExecution, controller));
 }
 
+/** Stable refusal code a host runner receives when durable state disallows admission. */
+export type WorkflowRunAdmissionErrorCode = 'run-not-admissible';
+
+/** Durable workflow state refused admission to new runner work. */
+class WorkflowRunAdmissionError extends MakaioError {
+  /** Stable refusal code exposed to the workflow runner. */
+  public readonly code: WorkflowRunAdmissionErrorCode = 'run-not-admissible';
+
+  /** @param executionId - Run whose durable state disallows admission. */
+  public constructor(executionId: string) {
+    super(`Execution '${executionId}' no longer permits runner admission`);
+  }
+}
+
 /**
- * Bind attempt creation to the current single-owner executor's lifecycle queue.
+ * Bind runner admission to the current single-owner executor's lifecycle queue.
  * The durable status check prevents admission from stale local state.
  * This is owner admission, not a distributed lock between arbitrary executors.
  * @param call - Call context of the message that triggered the execution; forwarded by the status read.
  * @param deps - Current owner's shared lifecycle dependencies.
- * @param executionId - Owner whose new attempt requires admission.
+ * @param executionId - Run whose new work requires admission.
  * @param signal - Local cancellation, checked after acquiring admission.
  * @returns Local-only runner controls, never serialized onto the bus.
  */
@@ -494,7 +508,7 @@ function ownerAdmissionOptions(
   signal: AbortSignal,
 ): WorkflowRunnerRunOptions {
   return {
-    withAttemptCreation: (create) => {
+    withRunAdmission: (create) => {
       const finalizerDeps = deps.buildFinalizerDeps();
       return withExecutionDurableTransition(finalizerDeps, executionId, async () => {
         signal.throwIfAborted();
@@ -502,8 +516,7 @@ function ownerAdmissionOptions(
           executionId,
         });
         signal.throwIfAborted();
-        if (execution?.status !== 'running')
-          throw new Error(`Execution '${executionId}' no longer permits attempt creation`);
+        if (execution?.status !== 'running') throw new WorkflowRunAdmissionError(executionId);
         return create();
       });
     },

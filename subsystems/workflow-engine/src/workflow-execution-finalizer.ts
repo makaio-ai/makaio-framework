@@ -1,3 +1,4 @@
+import type { RunCancellationHook } from './workflow-runner-selector.js';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { CallContext } from '@makaio/core';
 import { WorkflowSubjects } from './namespace.js';
@@ -32,19 +33,15 @@ export interface FinalizerDeps {
   stepRunner?: IStepRunner;
   /** Grace period in ms before forceKill is issued after cooperative abort. */
   cancelTimeoutMs?: number;
-  /**
-   * Persist owner-authorized cancellation before aborting or notifying workers.
-   * @param executionId - Eligible running owner.
-   * @param reason - Optional cancellation explanation.
-   */
-  requestAttemptCancellation?(executionId: string, reason?: string): Promise<void>;
+  /** Persist owner-authorized cancellation before aborting or notifying workers. */
+  recordCancellationIntent?: RunCancellationHook;
   /**
    * Best-effort fast-path delivery after an initiating cancellation commits.
    * @param call - Call context of the cancellation being delivered.
    * @param executionId - Owner whose cancellation request committed.
    * @param reason - Optional cancellation explanation.
    */
-  notifyAttemptCancellation?(call: CallContext, executionId: string, reason?: string): Promise<void>;
+  notifyRunCancellation?(call: CallContext, executionId: string, reason?: string): Promise<void>;
   /** Registered success-finalizer subjects keyed by their stable identity. */
   successFinalizers?: ReadonlyMap<string, WorkflowSuccessFinalizer>;
   /** Execution whose finalization is being replayed by the current result submission. */
@@ -420,7 +417,7 @@ async function cancelExecutionDurably(
   if (execution?.status !== 'running') return undefined;
   // This runs inside the existing lifecycle ordering point, so a completed or
   // finalizing owner cannot acquire a new cancel intent after refusing cancel.
-  if (mode === 'request') await deps.requestAttemptCancellation?.(executionId, reason);
+  if (mode === 'request') await deps.recordCancellationIntent?.(call, executionId, reason);
 
   // Durable ownership survives executor restart and may precede loading the
   // executable. A live registry entry is neither required nor authoritative.
@@ -519,8 +516,7 @@ async function transitionCancellation(
     },
     (committed) => {
       // Deliver the committed control request independently of ordered lifecycle publication.
-      if (committed !== undefined && mode === 'request')
-        return deps.notifyAttemptCancellation?.(call, executionId, reason);
+      if (committed !== undefined && mode === 'request') return deps.notifyRunCancellation?.(call, executionId, reason);
     },
   );
   if (transition === undefined) return false;

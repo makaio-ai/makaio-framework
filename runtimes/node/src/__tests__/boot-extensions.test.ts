@@ -17,17 +17,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createBusInstance } from '@makaio/bus-core';
-import { createTestCall } from '@makaio/test-utils';
-import {
-  ToolSubjects,
-  WorkerNamespace,
-  WorkerSubjects,
-  type ProviderAllocationRef,
-  type WorkerDispatch,
-  type WorkflowWorkerConfig,
-} from '@makaio/contracts';
-import { ExecutionAttemptAuthority, workflowAttemptOutcomeCodec } from '@makaio/subsystem-workflow-engine';
-import { createInMemoryAttemptRepository, requireCommittedOutcome } from '@makaio/subsystem-workflow-engine/testing';
+import { ToolSubjects } from '@makaio/contracts';
 import type { DiscoveredExtension } from '../extension-discovery.js';
 import { ExtensionCoordinator, type ExtensionRuntimeSurface, type KernelMakaioExtension } from '@makaio/kernel';
 import {
@@ -46,7 +36,6 @@ import {
 } from '../boot.js';
 import { isExtensionEnabled } from '../extension-enablement-store.js';
 import { createNodeWorkflowRunner } from '../workflow-worker/index.js';
-import { WorkerRunner } from '../workflow-worker/worker-runner.js';
 import { InProcessWorkflowRunner } from '../workflow-worker/in-process-workflow-runner.js';
 import { resolveExtensionOptions } from '../resolve-extension-options.js';
 import { loadBootExtensions } from '../boot-extension-loading.js';
@@ -90,12 +79,6 @@ import { ClientsCoreToken, createClientsCorePackage } from '@makaio/subsystem-cl
 // ---------------------------------------------------------------------------
 
 const FRAMEWORK_VERSION = '3.0.0';
-
-const TEST_ALLOCATION_REF: ProviderAllocationRef = {
-  version: 1,
-  providerId: 'test-provider',
-  providerData: {},
-};
 
 let fixtureRoot: string | undefined;
 
@@ -185,31 +168,6 @@ function setupArtifactViewBuilderCoordinator(extension: KernelMakaioExtension): 
   ]);
   coordinator.registerContributionProcessor(createArtifactViewBuilderContributionProcessor());
   return coordinator;
-}
-
-/**
- * Create a minimal workflow worker config for runner composition tests.
- * @returns A valid workflow worker config fixture.
- */
-function makeWorkerConfig(): WorkflowWorkerConfig {
-  return {
-    source: { kind: 'definition', workflowId: 'workflow-1' },
-    definition: {
-      id: 'workflow-1',
-      name: 'Test workflow',
-      root: { id: 'root', type: 'sequence', nodes: [] },
-      scope: { type: 'global' },
-    },
-    executionId: 'wfx-1',
-    workflowId: 'workflow-1',
-    triggerPayload: {},
-    inputs: {},
-    scope: { type: 'global' },
-    busAuth: { kind: 'none' },
-    env: {},
-    coordinatorSessionId: 'session-1',
-    cancelSubject: 'workflow.wfx-1.cancel',
-  };
 }
 
 describe('resolveExtensionOptions — extensions', () => {
@@ -1453,9 +1411,6 @@ describe('owner-anchored automation cron scheduler host policy', () => {
 
 describe('workflow-level runner boot composition', () => {
   // These tests verify runner wiring, not repository behavior.
-  const stubAuthority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowAttemptOutcomeCodec), {
-    bootstrapTimeoutMs: 60_000,
-  });
 
   it('returns undefined when no runner is configured', () => {
     const runner = createNodeWorkflowRunner({
@@ -1476,134 +1431,6 @@ describe('workflow-level runner boot composition', () => {
     });
 
     expect(runner).toBeInstanceOf(InProcessWorkflowRunner);
-  });
-
-  it('creates a WorkerRunner for worker mode', () => {
-    const dispatch = vi.fn();
-    const runner = createNodeWorkflowRunner({
-      moduleDir: '/runtime/src',
-      defaultWorkerEntryMode: 'source',
-      runner: {
-        mode: 'worker',
-        dispatch,
-        manifest: { contributionRefs: [] },
-      },
-      authority: stubAuthority,
-    });
-
-    expect(runner).toBeInstanceOf(WorkerRunner);
-  });
-
-  it('creates a WorkerRunner with optional requirements forwarded', () => {
-    const dispatch = vi.fn();
-    const runner = createNodeWorkflowRunner({
-      moduleDir: '/runtime/src',
-      defaultWorkerEntryMode: 'source',
-      runner: {
-        mode: 'worker',
-        dispatch,
-        manifest: { contributionRefs: [] },
-        requirements: { persistentStorage: true, customCapabilities: [] },
-      },
-      authority: stubAuthority,
-    });
-
-    expect(runner).toBeInstanceOf(WorkerRunner);
-  });
-
-  it('creates a bus-backed WorkerRunner when worker mode omits dispatch', async () => {
-    const bus = createBusInstance();
-    bus.registerNamespace(WorkerNamespace);
-    let capturedConfig: unknown;
-    const cleanup = bus.on(WorkerSubjects.dispatch, (ctx) => {
-      capturedConfig = ctx.payload.config;
-      const result = {
-        executionId: ctx.payload.config.executionId,
-        workflowId: ctx.payload.config.workflowId,
-        status: 'completed' as const,
-      };
-      // Commit the outcome through the Authority so the runner's
-      // outcomePromise settles, mirroring real worker behavior.
-      void stubAuthority
-        .commitOutcome(
-          ctx.payload.executionAttemptId,
-          ctx.payload.config.executionId,
-          stubAuthority.canonicalizeOutcome(result),
-        )
-        .then((decision) =>
-          stubAuthority.settleOutcome(ctx.payload.executionAttemptId, {
-            ...requireCommittedOutcome(decision),
-            acceptance: 'projected',
-          }),
-        );
-      ctx.setResult({ executionAttemptId: ctx.payload.executionAttemptId, allocationRef: TEST_ALLOCATION_REF });
-    });
-    const runner = createNodeWorkflowRunner({
-      moduleDir: '/runtime/src',
-      defaultWorkerEntryMode: 'source',
-      runner: { mode: 'worker' },
-      bus,
-      authority: stubAuthority,
-    });
-
-    try {
-      if (runner === undefined) {
-        throw new Error('Expected worker runner');
-      }
-      const config = makeWorkerConfig();
-      const completion = await runner.run(createTestCall(), config, new AbortController().signal);
-
-      expect(runner).toBeInstanceOf(WorkerRunner);
-      expect(completion).toMatchObject({ state: 'authority-committed', result: { status: 'completed' } });
-      expect(capturedConfig).toEqual({ ...config, terminalAuthority: 'authority' });
-    } finally {
-      cleanup();
-    }
-  });
-
-  it('preserves omitted manifests for worker mode', async () => {
-    let capturedRequest: Parameters<WorkerDispatch>[1] | undefined;
-    const dispatch: WorkerDispatch = async (_call, request) => {
-      capturedRequest = request;
-      const result = {
-        executionId: 'wfx-1',
-        workflowId: 'workflow-1',
-        status: 'completed' as const,
-      };
-      // Commit the outcome through the Authority so the runner's
-      // outcomePromise settles, mirroring real worker behavior.
-      const decision = await stubAuthority.commitOutcome(
-        request.executionAttemptId,
-        request.config.executionId,
-        stubAuthority.canonicalizeOutcome(result),
-      );
-      stubAuthority.settleOutcome(request.executionAttemptId, {
-        ...requireCommittedOutcome(decision),
-        acceptance: 'projected',
-      });
-      return { executionAttemptId: request.executionAttemptId, allocationRef: TEST_ALLOCATION_REF };
-    };
-    const runner = createNodeWorkflowRunner({
-      moduleDir: '/runtime/src',
-      defaultWorkerEntryMode: 'source',
-      runner: {
-        mode: 'worker',
-        dispatch,
-      },
-      authority: stubAuthority,
-    });
-    const signal = new AbortController().signal;
-
-    if (runner === undefined) {
-      throw new Error('Expected worker runner');
-    }
-    expect(runner).toBeInstanceOf(WorkerRunner);
-    await runner.run(createTestCall(), makeWorkerConfig(), signal);
-
-    if (capturedRequest === undefined) {
-      throw new Error('Expected dispatch request');
-    }
-    expect('manifest' in capturedRequest).toBe(false);
   });
 
   it('creates an InProcessWorkflowRunner when runner mode is omitted but a runner object is present', () => {

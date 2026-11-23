@@ -25,11 +25,8 @@ const PACK_TIMEOUT_MS = 60_000;
 
 /** Suites that install the shared framework tarball, relative to this directory. */
 export const INSTALLED_PACKAGE_SUITES = [
-  'attempt-owner-recovery.integration.test.ts',
   'bus-single-copy.integration.test.ts',
   'call-context-declarations.integration.test.ts',
-  'local-git-workspace-preparation.integration.test.ts',
-  'postgres-attempt-package.integration.test.ts',
 ] as const;
 
 /**

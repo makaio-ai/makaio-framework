@@ -132,20 +132,8 @@ import { runBootExtensionMigrations } from './boot-extension-migrations.js';
 import { createBootE2EAuth } from './boot-e2e-auth.js';
 import { attachUpstreamTelemetry } from './upstream-telemetry.js';
 import { createCredentialBinder } from './credential-provider.js';
-import {
-  FrameworkContractNamespaces,
-  FrameworkStorageNamespaces,
-  BUILT_IN_THIN_WORKFLOW_PROVIDER_ID,
-  registerWorkerProvider,
-  unregisterWorkerProvider,
-} from '@makaio/contracts';
-import {
-  ThinWorkflowPiscinaRunner,
-  PiscinaThinWorkflowProvider,
-  createWorkflowLaunchResolver,
-  resolveWorkflowWorkerEntry,
-  createNodeWorkflowRunnerPackageOptions,
-} from './workflow-worker/index.js';
+import { FrameworkContractNamespaces, FrameworkStorageNamespaces } from '@makaio/contracts';
+import { createNodeWorkflowRunnerPackageOptions } from './workflow-worker/index.js';
 import type {
   BootMakaioRuntimeOptions,
   CoreBootOptions,
@@ -643,10 +631,6 @@ export async function bootMakaioRuntimeCore(
       const workflowEngine = coordinator.getExtensionService(WorkflowEngineToken);
       return workflowEngine?.resolveWorkspaceRoot(workspaceId);
     };
-    const resolveBuiltInPiscinaWorkspaceRoot = createCompositeWorkspaceRootResolver(
-      resolveDynamicPiscinaWorkspaceRoot,
-      options.piscinaWorkspaceRootResolver,
-    );
     const resolveWorkflowPiscinaWorkspaceRoot = createCompositeWorkspaceRootResolver(
       resolveDynamicPiscinaWorkspaceRoot,
       options.workflowRunner?.mode === 'piscina' ? options.workflowRunner.resolveWorkspaceRoot : undefined,
@@ -663,8 +647,6 @@ export async function bootMakaioRuntimeCore(
       workflowRunner,
       makaioHome,
       bus,
-      executionAttemptRepository: options.executionAttemptRepository,
-      executionAttemptBootstrapTimeoutMs: options.executionAttemptBootstrapTimeoutMs,
       workflowMaterializationSpecResolvers: options.workflowMaterializationSpecResolvers,
     });
 
@@ -863,57 +845,6 @@ export async function bootMakaioRuntimeCore(
     }
 
     adapterServiceRef.current = coordinator.getExtensionService(AdapterSubsystemToken);
-
-    // -----------------------------------------------------------------------
-    // Built-in thin Piscina workflow provider
-    //
-    // Register a PiscinaThinWorkflowProvider backed by a dedicated
-    // ThinWorkflowPiscinaRunner so that the worker-pool dispatch path can
-    // resolve 'piscina' environments without any external provider package.
-    // This path isolates workflow orchestration only; it is not the
-    // self-contained external Worker Runtime model.
-    // Registration happens after coordinator.startAll() so that
-    // CapabilityService has registered its capability.register handler.
-    // The provider uses the same worker-entry resolution logic as the
-    // workflow-level runner.
-    // -----------------------------------------------------------------------
-    const workflowAttemptAuthority = coordinator.getExtensionService(WorkflowEngineToken)?.executionAttemptAuthority;
-    if (workflowAttemptAuthority === undefined) {
-      console.info('[boot] Piscina workflow provider not registered: no ExecutionAttemptAuthority configured');
-    } else {
-      const piscinaWorkerEntry = resolveWorkflowWorkerEntry({
-        moduleDir: srcDir,
-        mode: path.basename(srcDir) === 'src' ? 'source' : 'dist',
-      });
-      const piscinaRunner = new ThinWorkflowPiscinaRunner({
-        workerEntry: piscinaWorkerEntry,
-        manifest: { contributionRefs: [] },
-        resolveWorkspaceRoot: resolveBuiltInPiscinaWorkspaceRoot,
-      });
-      const piscinaProvider = new PiscinaThinWorkflowProvider({
-        id: BUILT_IN_THIN_WORKFLOW_PROVIDER_ID,
-        displayName: 'Local (Piscina)',
-        runner: piscinaRunner,
-        bus,
-        launchResolver: createWorkflowLaunchResolver((input) => workflowAttemptAuthority.getInstruction(input)),
-      });
-      try {
-        await registerWorkerProvider(bus.own('start'), bus, piscinaProvider);
-      } catch (error) {
-        await piscinaRunner.dispose().catch(() => undefined);
-        throw error;
-      }
-      shutdownSteps.push(
-        resourceStep('worker pool', async () => {
-          try {
-            await unregisterWorkerProvider(bus.own('stop'), bus, piscinaProvider.id);
-          } finally {
-            await piscinaRunner.dispose().catch(() => undefined);
-          }
-        }),
-      );
-      console.info('[boot] Piscina thin workflow provider registered (id=%s)', piscinaProvider.id);
-    }
 
     shutdownSteps.push(
       localStep(

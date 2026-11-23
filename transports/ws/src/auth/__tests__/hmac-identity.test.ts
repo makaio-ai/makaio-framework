@@ -190,7 +190,7 @@ describe('HmacAuth — identity-bound mode', () => {
     const executionId = 'wfx-registry-1';
     const secret = 'per-execution-registry-secret';
     registerHmacIdentitySecret(attemptId, secret, {
-      partyKind: 'test.workflow-execution-attempt',
+      partyKind: 'test.job-run',
       attestingRole: 'job-run',
       claims: { executionId },
     });
@@ -210,7 +210,7 @@ describe('HmacAuth — identity-bound mode', () => {
       expect(serverAuth.getReceiveContext(socket)?.authenticated).toBe(true);
       expect(serverAuth.getReceiveContext(socket)?.attests).toBe('inbound');
       expect(serverAuth.getReceiveContext(socket)?.caller).toEqual({
-        kind: 'test.workflow-execution-attempt',
+        kind: 'test.job-run',
         id: attemptId,
         claims: { executionId },
       });

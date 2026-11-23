@@ -23,7 +23,7 @@ export const WorkerNamespace = createBusNamespace('worker', WorkerSchemas);
  * @example
  * ```typescript
  * bus.on(WorkerSubjects.lifecycle.ready, (payload) => {
- *   console.log('worker ready', payload.executionAttemptId);
+ *   console.log('worker ready', payload.executionId);
  * });
  * ```
  */

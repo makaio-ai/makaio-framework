@@ -190,14 +190,13 @@ describe('ContainerBootstrapConfigSchema', () => {
     expect(ContainerLocalSpawnRequestSchema.safeParse({ ...descriptor, executionId: 'execution-1' }).success).toBe(
       false,
     );
-    expect(ContainerLocalSpawnRequestSchema.safeParse({ ...descriptor, executionAttemptId: 'attempt-1' }).success).toBe(
+    expect(ContainerLocalSpawnRequestSchema.safeParse({ ...descriptor, unknownIdentity: 'unrecognized' }).success).toBe(
       false,
     );
     expect(
       ContainerLocalSpawnRequestSchema.safeParse({
         ...descriptor,
         executionId: 'execution-1',
-        executionAttemptId: 'attempt-1',
         bootstrapDeadlineAt: '2026-09-07T12:00:00.000Z',
       }).success,
     ).toBe(true);
@@ -207,7 +206,6 @@ describe('ContainerBootstrapConfigSchema', () => {
         ContainerLocalSpawnRequestSchema.safeParse({
           ...descriptor,
           executionId: 'execution-1',
-          executionAttemptId: 'attempt-1',
           bootstrapDeadlineAt,
         }).success,
       ).toBe(false);
@@ -219,9 +217,9 @@ describe('ContainerBootstrapConfigSchema', () => {
       }).success,
     ).toBe(false);
 
-    expectTypeOf<
-      Pick<Extract<ContainerLocalSpawnRequest, { executionId: string }>, 'executionId' | 'executionAttemptId'>
-    >().toEqualTypeOf<{ executionId: string; executionAttemptId: string }>();
+    expectTypeOf<Pick<Extract<ContainerLocalSpawnRequest, { executionId: string }>, 'executionId'>>().toEqualTypeOf<{
+      executionId: string;
+    }>();
   });
 
   it.each([
@@ -339,12 +337,12 @@ describe('ContainerBootstrapConfigSchema', () => {
         ...isolatedDescriptor,
         repoUrl: 'https://git.example.test/makaio.git',
         executionId: 'execution-1',
-        executionAttemptId: 'attempt-1',
+        unknownIdentity: 'unrecognized',
       });
 
       expect(result.success).toBe(false);
       expectTypeOf<Extract<ContainerIsolatedSpawnRequest, { executionId: unknown }>>().toBeNever();
-      expectTypeOf<Extract<ContainerIsolatedSpawnRequest, { executionAttemptId: unknown }>>().toBeNever();
+      expectTypeOf<Extract<ContainerIsolatedSpawnRequest, { unknownIdentity: unknown }>>().toBeNever();
       expectTypeOf<
         Extract<SpawnRequest, { mode: 'container-isolated' }>
       >().toEqualTypeOf<ContainerIsolatedSpawnRequest>();

@@ -6,18 +6,12 @@ import {
   resolveHmacIdentitySecret,
   rotateHmacIdentitySecret,
 } from '@makaio/bus-transport-websocket';
-import { getFullSubjectForSubjectDefinition, MAKAIO_JOB_RUN_PARTY_KIND } from '@makaio/core';
+import { getFullSubjectForSubjectDefinition, MAKAIO_JOB_RUN_PARTY_KIND, type CallClaim } from '@makaio/core';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
 import { WorkflowStorageSubjects } from '@makaio/subsystem-workflow-engine';
-import {
-  ArtifactSubjects,
-  ExecutionAttemptSubjects,
-  SubagentSubjects,
-  WorkerSubjects,
-  WorkflowSubjects,
-} from '@makaio/contracts';
+import { ArtifactSubjects, SubagentSubjects, WorkerSubjects, WorkflowSubjects } from '@makaio/contracts';
 
-/** Registered per-attempt HMAC secret and cleanup handle. */
+/** Registered per-identity HMAC secret and cleanup handle. */
 export interface WorkflowExecutionBusSecret {
   /** Secret sent to the workflow worker over its provider bootstrap channel. */
   readonly secret: string;
@@ -27,13 +21,8 @@ export interface WorkflowExecutionBusSecret {
 
 /** Parameters for minting a workflow execution bus secret. */
 export interface MintWorkflowExecutionBusSecretParams {
-  /**
-   * Authority-created attempt identifier used as the transport identity ID.
-   *
-   * Each dispatch attempt gets its own identity; revoking one attempt does
-   * not affect other attempts of the same execution.
-   */
-  readonly executionAttemptId: string;
+  /** Opaque key of the transport identity in the secret registry. */
+  readonly identityId: string;
   /**
    * Parent workflow execution identifier attached as a claim on the
    * authenticated party context.
@@ -42,21 +31,25 @@ export interface MintWorkflowExecutionBusSecretParams {
    * access without parsing the identity ID.
    */
   readonly executionId: string;
+  /** Optional host-owned claims for an execution protocol. */
+  readonly protocolClaims?: Readonly<Record<string, CallClaim>>;
   /**
-   * Optional outbound message restriction list for this execution attempt.
+   * Optional outbound message restriction list for this workflow execution.
    *
    * When omitted, the default message subjects from
-   * {@link buildExecutionAttemptSubjectAccess} are used.
+   * {@link buildWorkflowExecutionSubjectAccess} are used.
    */
   readonly allowedMessageSubjects?: readonly string[];
   /**
-   * Optional subscription restriction list for this execution attempt.
+   * Optional subscription restriction list for this workflow execution.
    *
    * When omitted, the default subscription subjects from
-   * {@link buildExecutionAttemptSubjectAccess} are used. Server-to-peer
+   * {@link buildWorkflowExecutionSubjectAccess} are used. Server-to-peer
    * request routing still requires a matching advertised subscription.
    */
   readonly allowedSubscriptionSubjects?: readonly string[];
+  /** Extra filters a subscription must carry, keyed by full subject. */
+  readonly requiredSubscriptionFilters?: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
 /** Parameters for registering a caller-provided workflow execution bus secret. */
@@ -67,30 +60,24 @@ export interface RegisterWorkflowExecutionBusSecretParams extends MintWorkflowEx
 
 /** Parameters for rotating an existing workflow execution bus secret. */
 export interface RotateWorkflowExecutionBusSecretParams {
-  /** Authority-created attempt identifier used as the transport identity ID. */
-  readonly executionAttemptId: string;
+  /** Opaque key of the existing transport identity. */
+  readonly identityId: string;
   /** Parent workflow execution identifier that must match the registered claim. */
   readonly executionId: string;
+  /** Optional host-owned claims for an execution protocol. */
+  readonly protocolClaims?: Readonly<Record<string, CallClaim>>;
 }
 
 // ---------------------------------------------------------------------------
-// Static subject lists for execution-attempt identities
+// Static subject lists for workflow execution identities
 // ---------------------------------------------------------------------------
 
 /** Static outbound execution subjects derived from their canonical definitions. */
 const STATIC_EXECUTION_MESSAGE_SUBJECTS = [
-  ExecutionAttemptSubjects.runtime.register,
-  ExecutionAttemptSubjects.bootstrap.awaitStart,
-  ExecutionAttemptSubjects.instruction.get,
-  ExecutionAttemptSubjects.operation.admit,
-  ExecutionAttemptSubjects.operation.report,
-  ExecutionAttemptSubjects.outcome.submit,
-  ExecutionAttemptSubjects.control.report,
   WorkerSubjects.runtime.inputs.get,
   WorkerSubjects.control.outcome.submit,
   WorkflowSubjects.getRunContext,
   AdapterSubsystemSubjects.listAdapters,
-  WorkflowSubjects.bootstrapAuthorityState,
   WorkflowSubjects.finalizeDelegateResult,
   WorkflowStorageSubjects.getExecution,
   WorkflowStorageSubjects.setFrame,
@@ -118,43 +105,24 @@ const STATIC_EXECUTION_MESSAGE_SUBJECTS = [
   SubagentSubjects.kill,
 ] as const;
 
-/** Static inbound endpoint subjects execution attempts may advertise. */
-const STATIC_EXECUTION_SUBSCRIPTION_SUBJECTS = [
-  ExecutionAttemptSubjects.operation.deliver,
-  ExecutionAttemptSubjects.control.deliver,
-] as const;
-
-/** Directional subject restrictions for an execution-attempt identity. */
-export interface ExecutionAttemptSubjectAccess {
-  /** Subjects the attempt may send to the authority. */
+/** Directional subject restrictions for a workflow execution identity. */
+export interface WorkflowExecutionSubjectAccess {
+  /** Subjects the identity may send to the authority. */
   readonly allowedMessageSubjects: readonly string[];
-  /** Subjects the attempt may advertise to receive from the authority. */
+  /** Subjects the identity may advertise to receive from the authority. */
   readonly allowedSubscriptionSubjects: readonly string[];
 }
 
 /**
- * Build the complete directional subject restrictions for a workflow execution
- * attempt.
- *
- * Message subjects include every static operation an attempt may originate.
- * Subscription subjects include only the authority-delivered operation and
- * control endpoints plus the dynamic per-execution cancellation endpoint.
- * Subjects are statically enumerable even when the workflow content does not
- * use every feature (e.g. state, delegation, artifacts, subagents) because
- * the transport restriction is deny-by-default: listing a subject that the
- * workflow never uses has no security impact. Delegate result finalization is
- * routed through the static Authority gateway; dynamic finalizer subjects are
- * never exposed to remote attempts.
- * @param executionId - Workflow execution identifier for the dynamic cancel subject.
- * @returns Complete directional subject restrictions for the execution attempt.
+ * Build the default directional restrictions of a remote workflow execution.
+ * Host protocols can add their own rights before minting the identity.
+ * @param executionId - Workflow execution identifier for the cancel subject.
+ * @returns Default allowed message and subscription subjects for the execution.
  */
-export function buildExecutionAttemptSubjectAccess(executionId: string): ExecutionAttemptSubjectAccess {
+export function buildWorkflowExecutionSubjectAccess(executionId: string): WorkflowExecutionSubjectAccess {
   return {
     allowedMessageSubjects: STATIC_EXECUTION_MESSAGE_SUBJECTS.map(getFullSubjectForSubjectDefinition),
-    allowedSubscriptionSubjects: [
-      ...STATIC_EXECUTION_SUBSCRIPTION_SUBJECTS.map(getFullSubjectForSubjectDefinition),
-      `workflow.${executionId}.cancel`,
-    ],
+    allowedSubscriptionSubjects: [`workflow.${executionId}.cancel`],
   };
 }
 
@@ -172,48 +140,45 @@ function assertNoRetiredAllowedSubjects(params: object): void {
 }
 
 /**
- * Register caller-provided bus access for one workflow execution attempt.
+ * Register caller-provided bus access for one workflow execution.
  *
  * Use this when a provider already owns secret delivery. The identity still
  * receives the canonical job run party kind, claim, and directional subject
  * restrictions.
- * @param params - Attempt identity, execution claim, secret, and optional directional restrictions.
+ * @param params - Transport identity, execution claim, secret, and optional directional restrictions.
  * @returns Registered secret plus cleanup handle.
  */
 export function registerWorkflowExecutionBusSecret(
   params: RegisterWorkflowExecutionBusSecretParams,
 ): WorkflowExecutionBusSecret {
   assertNoRetiredAllowedSubjects(params);
-  const { executionAttemptId, executionId, secret } = params;
-  const defaultAccess = buildExecutionAttemptSubjectAccess(executionId);
+  const { identityId, executionId, secret } = params;
+  const defaultAccess = buildWorkflowExecutionSubjectAccess(executionId);
   return {
     secret,
-    cleanup: registerHmacIdentitySecret(executionAttemptId, secret, {
+    cleanup: registerHmacIdentitySecret(identityId, secret, {
       partyKind: MAKAIO_JOB_RUN_PARTY_KIND,
       attestingRole: 'job-run',
-      claims: { executionId },
+      claims: { ...params.protocolClaims, executionId },
       allowedMessageSubjects: params.allowedMessageSubjects ?? defaultAccess.allowedMessageSubjects,
       allowedSubscriptionSubjects: params.allowedSubscriptionSubjects ?? defaultAccess.allowedSubscriptionSubjects,
-      requiredSubscriptionFilters: {
-        [getFullSubjectForSubjectDefinition(ExecutionAttemptSubjects.operation.deliver)]: { executionAttemptId },
-        [getFullSubjectForSubjectDefinition(ExecutionAttemptSubjects.control.deliver)]: { executionAttemptId },
-      },
+      requiredSubscriptionFilters: params.requiredSubscriptionFilters,
     }),
   };
 }
 
 /**
- * Mint and register an identity-bound HMAC secret for one workflow execution attempt.
+ * Mint and register an identity-bound HMAC secret for one workflow execution.
  *
- * The identity is keyed by `executionAttemptId` with the job run party kind
+ * The identity is keyed by `identityId` with the job run party kind
  * `MAKAIO_JOB_RUN_PARTY_KIND`. The parent `executionId` is attached as a
  * claim so bus handlers can verify execution-bound access via
  * `party.claims.executionId`.
  *
  * When directional restrictions are not provided, the default matrix from
- * {@link buildExecutionAttemptSubjectAccess} restricts the identity to the
+ * {@link buildWorkflowExecutionSubjectAccess} restricts the identity to the
  * minimum outbound and subscription subjects a worker needs.
- * @param params - Attempt and execution identifiers.
+ * @param params - Transport identity and execution identifiers.
  * @returns Secret plus cleanup handle.
  */
 export function mintWorkflowExecutionBusSecret(
@@ -225,49 +190,55 @@ export function mintWorkflowExecutionBusSecret(
 }
 
 /**
- * Rotate the HMAC secret for an already-registered workflow execution attempt.
+ * Rotate the HMAC secret for an already-registered workflow execution identity.
  *
- * Used by the bootstrap authorizer on repeat claims: the attempt identity
+ * Used by the bootstrap authorizer on repeat claims: the workflow identity
  * already has a registered secret from the first claim, so the new claim
  * rotates the secret and fences any socket authenticated with the old one.
  *
  * Rotation preserves the existing party metadata, so the registered identity
  * must already be a job run bound to the same execution.
- * @param params - Attempt and execution identifiers.
+ * @param params - Transport identity and execution identifiers.
  * @returns Secret plus cleanup handle.
- * @throws When no matching execution-attempt registration exists.
+ * @throws When no matching workflow execution registration exists.
  */
 export function rotateWorkflowExecutionBusSecret(
   params: RotateWorkflowExecutionBusSecretParams,
 ): WorkflowExecutionBusSecret {
-  const { executionAttemptId, executionId } = params;
-  const party = resolveHmacIdentityParty(executionAttemptId);
+  const { identityId, executionId } = params;
+  const party = resolveHmacIdentityParty(identityId);
   if (party?.kind !== MAKAIO_JOB_RUN_PARTY_KIND || party.claims?.executionId !== executionId) {
     throw new Error(
-      `Cannot rotate workflow execution bus secret: attempt "${executionAttemptId}" is not registered for execution "${executionId}"`,
+      `Cannot rotate workflow execution bus secret: identity "${identityId}" is not registered for execution "${executionId}"`,
     );
   }
   const secret = randomBytes(32).toString('hex');
   return {
     secret,
-    cleanup: rotateHmacIdentitySecret(executionAttemptId, secret),
+    cleanup: rotateHmacIdentitySecret(
+      identityId,
+      secret,
+      params.protocolClaims === undefined
+        ? undefined
+        : { claims: { ...party.claims, ...params.protocolClaims, executionId } },
+    ),
   };
 }
 
 /**
  * Mint or rotate a workflow execution bus secret.
  *
- * First claim for a given `executionAttemptId` mints a new registration.
+ * First claim for a given `identityId` mints a new registration.
  * Repeat claims rotate the existing registration, fencing any socket that
  * authenticated under the previous secret.
- * @param params - Attempt and execution identifiers.
+ * @param params - Transport identity and execution identifiers.
  * @returns Secret plus cleanup handle.
  */
 export function mintOrRotateWorkflowExecutionBusSecret(
   params: MintWorkflowExecutionBusSecretParams,
 ): WorkflowExecutionBusSecret {
   assertNoRetiredAllowedSubjects(params);
-  const existing = resolveHmacIdentitySecret(params.executionAttemptId);
+  const existing = resolveHmacIdentitySecret(params.identityId);
   if (existing !== null) {
     return rotateWorkflowExecutionBusSecret(params);
   }
@@ -282,33 +253,33 @@ export function mintOrRotateWorkflowExecutionBusSecret(
  * current generation without exposing its secret. A later rotation remains
  * intact if the captured cleanup is invoked afterwards.
  *
- * An unknown attempt has nothing to clean up. A registered identity for a
+ * An unknown identity has nothing to clean up. A registered identity for a
  * different party kind or execution is refused rather than being revoked.
- * @param params - Attempt and execution identifiers that must match the registration.
+ * @param params - Transport identity and execution identifiers that must match the registration.
  * @returns A generation-fenced cleanup handle, or undefined when unregistered.
- * @throws When the registered identity is not this workflow execution attempt.
+ * @throws When the registered identity is not bound to this workflow execution.
  */
 export function captureWorkflowExecutionBusSecretCleanup(
   params: RotateWorkflowExecutionBusSecretParams,
 ): (() => void) | undefined {
-  const { executionAttemptId, executionId } = params;
-  const party = resolveHmacIdentityParty(executionAttemptId);
+  const { identityId, executionId } = params;
+  const party = resolveHmacIdentityParty(identityId);
   if (party === null) {
     return undefined;
   }
   if (party.kind !== MAKAIO_JOB_RUN_PARTY_KIND || party.claims?.executionId !== executionId) {
     throw new Error(
-      `Cannot capture workflow execution bus secret cleanup: attempt "${executionAttemptId}" is not registered for execution "${executionId}"`,
+      `Cannot capture workflow execution bus secret cleanup: identity "${identityId}" is not registered for execution "${executionId}"`,
     );
   }
-  return captureHmacIdentitySecretCleanup(executionAttemptId);
+  return captureHmacIdentitySecretCleanup(identityId);
 }
 
 /**
- * Resolve a registered workflow execution HMAC secret by attempt ID.
- * @param executionAttemptId - Execution attempt identity.
- * @returns Secret, or undefined when no secret is registered for this attempt.
+ * Resolve a registered workflow execution HMAC secret by identity ID.
+ * @param identityId - Transport identity.
+ * @returns Secret, or undefined when no secret is registered for this identity.
  */
-export function resolveWorkflowExecutionBusSecret(executionAttemptId: string): string | undefined {
-  return resolveHmacIdentitySecret(executionAttemptId) ?? undefined;
+export function resolveWorkflowExecutionBusSecret(identityId: string): string | undefined {
+  return resolveHmacIdentitySecret(identityId) ?? undefined;
 }

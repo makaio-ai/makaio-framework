@@ -3,6 +3,7 @@ import { dirname, extname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { workflowEngineSchema } from '../storage/schema.variants.js';
 
 type ExportTarget = string | null | readonly ExportTarget[] | { readonly [key: string]: ExportTarget };
 
@@ -234,6 +235,21 @@ describe('retained workflow tables', () => {
     expect([...postgresImporters]).toEqual([]);
   });
 
+  it('excludes retained attempt tables from the runtime schema of either dialect', () => {
+    const retained = [
+      'activeExecutionAttempts',
+      'executionAttemptCancellations',
+      'executionAttemptControlEvidence',
+      'executionAttemptRequests',
+      'executionAttempts',
+      'providerOperations',
+    ];
+    for (const table of retained) {
+      expect(workflowEngineSchema.sqlite, table).not.toHaveProperty(table);
+      expect(workflowEngineSchema.postgres, table).not.toHaveProperty(table);
+    }
+  });
+
   it('keeps the retained modules private and registered for migration generation', () => {
     expect([...filesByArea.values()].flat()).toContain(retainedPostgres);
     const retainedExports = Object.entries(manifest.exports).filter(([, target]) =>
@@ -268,7 +284,7 @@ describe('retained workflow tables', () => {
   });
 
   it('resolves directory indexes and detects wildcard exports of retained modules', () => {
-    expect(resolveSource('../testing', probeFile)).toBe(resolve(sourceRoot, 'testing/index.ts'));
+    expect(resolveSource('..', probeFile)).toBe(resolve(sourceRoot, 'index.ts'));
     const exports = { './storage/*': './src/storage/*' };
     expect(resolveRetainedImports(probeFile, [`${manifest.name}/storage/retained-tables.js`], exports)).toEqual([
       retainedSqlite,

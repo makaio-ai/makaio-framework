@@ -1,23 +1,22 @@
 import type { CallContext } from '@makaio/core';
 import type { WorkflowExecution } from '@makaio/contracts';
-import type { WorkflowAttemptCancellation } from './workflow-attempt-outcome.js';
 import { cancelExecution, type FinalizerDeps } from './workflow-execution-finalizer.js';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 
 /**
  * Converge an already-committed cooperative cancellation through the owner lifecycle.
- * The Attempt reports that work has stopped; this is not another Worker cancel request.
+ * The authority reports that work has stopped.
  * @param call - Call context of the work that commits the cancellation.
  * @param deps - Existing executor lifecycle and resource-cleanup dependencies.
  * @param executionId - Durable authority-owned workflow execution.
- * @param cancellation - Canonical cancellation retained in Attempt storage.
+ * @param reason - Optional explanation supplied by the authority.
  * @returns The durable owner status after idempotent convergence.
  */
 export async function acceptWorkflowCancellation(
   call: CallContext,
   deps: FinalizerDeps,
   executionId: string,
-  cancellation: WorkflowAttemptCancellation,
+  reason?: string,
 ): Promise<{ accepted: boolean; status: WorkflowExecution['status'] }> {
   const [{ execution }, { runContext }] = await Promise.all([
     deps.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId }),
@@ -34,7 +33,7 @@ export async function acceptWorkflowCancellation(
   if (execution.status !== 'running') {
     throw new Error(`Authority cancellation conflicts with execution status: ${execution.status}`);
   }
-  await cancelExecution(call, deps, executionId, cancellation.reason);
+  await cancelExecution(call, deps, executionId, reason);
   const settled = await deps.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId });
   if (settled.execution?.status !== 'cancelled') {
     throw new Error('Authority cancellation did not settle as cancelled');

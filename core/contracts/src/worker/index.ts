@@ -4,6 +4,7 @@ export {
   WorkerBootstrapDeadlineAtSchema,
   WorkerBootstrapGrantedClaimResponseSchema,
   WorkerBootstrapClaimRefusalReasonSchema,
+  WorkerBootstrapStartRefusalReasonSchema,
   WorkerBootstrapClaimResponseSchema,
   WorkerCancelUndeliveredKindSchema,
   WorkerCancelUndeliveredSchema,

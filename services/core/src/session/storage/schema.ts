@@ -400,6 +400,8 @@ export const agentsDual = defineDualTable(
     ownerInstanceId: c.text('owner_instance_id'),
 
     /** Opaque fence for the recovery attempt currently driving this agent. */
+    // Agent recovery uses this live fence for reads and writes. Keeping a column in a migration-only
+    // module would require the schema generator to combine declarations for the same table.
     recoveryAttemptId: c.text('recovery_attempt_id'),
 
     /**

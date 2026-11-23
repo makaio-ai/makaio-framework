@@ -28,15 +28,15 @@ describe('@makaio/runtime-node outcome error exports', () => {
 
     expect(rootModule.AuthorityRequestDeliveryError).toBe(implementation.AuthorityRequestDeliveryError);
     expect(workerModule.AuthorityRequestDeliveryError).toBe(implementation.AuthorityRequestDeliveryError);
-    expect(rootModule.AttemptOutcomeDeliveryError).toBe(implementation.AttemptOutcomeDeliveryError);
-    expect(workerModule.AttemptOutcomeDeliveryError).toBe(implementation.AttemptOutcomeDeliveryError);
     expect(rootModule.OutcomeDeliveryError).toBe(implementation.OutcomeDeliveryError);
-    expect(rootModule.AttemptOutcomeDeliveryError).not.toBe(rootModule.OutcomeDeliveryError);
-    expect(rootModule.AuthorityRequestDeliveryError).not.toBe(rootModule.AttemptOutcomeDeliveryError);
     expect(rootModule.AuthorityRequestDeliveryError).not.toBe(rootModule.OutcomeDeliveryError);
     expect(rootModule).not.toHaveProperty('retryAuthorityRequest');
     expect(workerModule).not.toHaveProperty('retryAuthorityRequest');
     expect(rootModule).not.toHaveProperty('requestAuthorityWithRetry');
-    expect(workerModule).not.toHaveProperty('requestAuthorityWithRetry');
+    expect(workerModule.requestAuthorityWithRetry).toBe(implementation.requestAuthorityWithRetry);
+    for (const entrypoint of [rootModule, workerModule]) {
+      expect(entrypoint).not.toHaveProperty('runHeadlessWorkflowWorker');
+      expect(entrypoint).not.toHaveProperty('AttemptOutcomeDeliveryError');
+    }
   });
 });

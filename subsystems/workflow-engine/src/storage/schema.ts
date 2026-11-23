@@ -413,8 +413,8 @@ export const workflowRunContextsDual = defineDualTable(
       .$type<NonNullable<WorkflowRunContext['triggerMode']>>(),
     /** Explicit artifact reference supplied by the execution starter. */
     artifactRef: c.jsonCol<WorkflowRunContext['artifactRef']>('artifact_ref'),
-    /** Legacy column: kept with its data, nothing reads or writes it */
-    dispatchMetadata: c.jsonCol<Record<string, JsonValue>>('dispatch_metadata'),
+    /** Retained column for schema generation over existing databases. */
+    legacyDispatchColumn: c.jsonCol<Record<string, JsonValue>>('dispatch_metadata'),
     /** Scope type discriminant. */
     scopeType: c
       .textEnum('scope_type', { enum: ['global', 'workspace', 'session', 'external'] as const })
@@ -727,17 +727,3 @@ export type SelectWorkflowExecutionStateEvent = typeof workflowExecutionStateEve
 // Kept as a separate module so finalization persistence remains an explicit
 // lifecycle seam while the central schema discovery entrypoint still sees it.
 export { workflowFinalizationsDual, workflowFinalizations } from './finalization-schema.js';
-export {
-  executionAttemptsDual,
-  activeExecutionAttemptsDual,
-  executionAttemptRequestsDual,
-  providerOperationsDual,
-  executionAttemptCancellationsDual,
-  executionAttemptControlEvidenceDual,
-  executionAttempts,
-  activeExecutionAttempts,
-  executionAttemptRequests,
-  providerOperations,
-  executionAttemptCancellations,
-  executionAttemptControlEvidence,
-} from './execution-attempt-schema.js';

@@ -218,13 +218,10 @@ describe('workflow finalization storage', () => {
     MakaioBus.__resetHandlers?.();
     MakaioBus.registerNamespace(WorkflowStorageNamespace);
     const cleanupRestartedHandlers = registerDrizzleWorkflowStorage(MakaioBus, dbContext.db);
-    const restartedExecutor = new WorkflowExecutor(
-      MakaioBus,
-      createWorkflowTestNamespaceCapability(),
-      { stepCooldownMs: 0, stepTimeoutMs: 10_000 },
-      undefined,
-      undefined,
-    );
+    const restartedExecutor = new WorkflowExecutor(MakaioBus, createWorkflowTestNamespaceCapability(), {
+      stepCooldownMs: 0,
+      stepTimeoutMs: 10_000,
+    });
     await restartedExecutor.init();
     const { subjects } = createWorkflowFinalizerNamespace(claim.finalizerId);
     const stopFinalize = MakaioBus.on(subjects.finalize, () => {

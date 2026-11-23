@@ -1,11 +1,6 @@
 ---
-"@makaio/framework": minor
-"@makaio/storage-pg": minor
+"@makaio/storage-pg": major
 ---
 
-Add a PostgreSQL `ExecutionAttemptRepository` factory with durable, owner-fenced
-attempt, provider-operation, cancellation, and control-evidence persistence.
-The workflow-engine public schema now includes the central dual-dialect
-execution-attempt tables and correlated migrations. Hosts construct the adapter
-with their explicit PostgreSQL database handle and outcome codec; no pool or
-outcome policy is implicit.
+Remove the execution-attempt repository factory from the storage engine's public
+API. The PostgreSQL engine and the existing migration chain remain available.

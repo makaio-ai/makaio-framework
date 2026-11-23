@@ -13,14 +13,22 @@ import type { TransactionCallback } from './transaction';
 export type DriverTransaction = Parameters<TransactionCallback<unknown>>[0];
 
 /** Why a {@link HostTransactionError} was raised. */
-export type HostTransactionErrorCode = 'foreign-transaction' | 'transaction-finished';
+export type HostTransactionErrorCode =
+  | 'foreign-transaction'
+  | 'transaction-finished'
+  | 'transaction-dialect-unsupported'
+  | 'transaction-database-mismatch'
+  | 'transaction-result-invalid';
 
 /**
- * A `HostTransaction` was used outside the authorization it carries.
+ * An operation on a `HostTransaction` could not be executed or interpreted.
  *
  * - `foreign-transaction`: the value was not minted by `createHostDatabase`.
  * - `transaction-finished`: the `transaction(fn)` call that minted it already
  *   settled, so nothing may run in it any more.
+ * - `transaction-dialect-unsupported`: the host uses a dialect that does not support the operation.
+ * - `transaction-database-mismatch`: the transaction belongs to a different database handle than the adapter.
+ * - `transaction-result-invalid`: the driver did not return the expected result.
  */
 export class HostTransactionError extends Error {
   /** Machine-readable reason of the failure. */
