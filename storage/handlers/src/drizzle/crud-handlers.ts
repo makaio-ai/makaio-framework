@@ -161,7 +161,7 @@ function registerSetHandler<
 
     if (insertedRows.length > 0) {
       // Intentionally awaited: lifecycle emissions are part of the mutation contract.
-      await bus.emit(lifecycle.created, mapper(insertedRows[0]));
+      await bus.emit(ctx.call, lifecycle.created, mapper(insertedRows[0]));
       ctx.setResult({ id });
       return;
     }
@@ -177,7 +177,7 @@ function registerSetHandler<
 
     if (updatedRow) {
       // Intentionally awaited: lifecycle emissions are part of the mutation contract.
-      await bus.emit(lifecycle.updated, mapper(updatedRow));
+      await bus.emit(ctx.call, lifecycle.updated, mapper(updatedRow));
     }
 
     ctx.setResult({ id });
@@ -235,29 +235,28 @@ function registerDeleteLifecycleHandler<
   config: {
     table: TTable;
     idField: TIdField;
-    singularKey: TSingularKey;
-    getSubject: DrizzleCrudConfig<TTable, ApiType, TIdField, InputType, TSingularKey>['subjects']['get'];
     deleteSubject: DrizzleCrudConfig<TTable, ApiType, TIdField, InputType, TSingularKey>['subjects']['delete'];
     lifecycle: NonNullable<DrizzleCrudConfig<TTable, ApiType, TIdField, InputType, TSingularKey>['lifecycle']>;
   },
 ): () => void {
-  const { table, idField, singularKey, getSubject, deleteSubject, lifecycle } = config;
+  const { table, idField, deleteSubject, lifecycle } = config;
 
   return bus.on(deleteSubject, async (ctx: RequestContext<DeletePayload, DeleteResponse>) => {
     const { id } = ctx.payload;
     const column = getTableColumns(table)[idField];
-    const [existing] = await db.select({ id: column }).from(table).where(eq(column, id)).limit(1);
+    const selectRow = () => db.select({ id: column }).from(table).where(eq(column, id)).limit(1);
+    const [existing] = await selectRow();
 
     await ctx.next();
     if (!existing) {
       return;
     }
 
-    const entityResult = await bus.request(getSubject, { id });
-    if (entityResult[singularKey]) {
+    const [remaining] = await selectRow();
+    if (remaining) {
       return;
     }
-    await bus.emit(lifecycle.deleted, { id });
+    await bus.emit(ctx.call, lifecycle.deleted, { id });
   });
 }
 
@@ -318,8 +317,6 @@ export function createDrizzleCrudHandlers<
         registerDeleteLifecycleHandler(bus, db, {
           table,
           idField,
-          singularKey,
-          getSubject: subjects.get,
           deleteSubject: subjects.delete,
           lifecycle,
         }),

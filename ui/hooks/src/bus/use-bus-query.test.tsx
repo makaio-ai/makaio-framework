@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { type ReactNode } from 'react';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { createBusNamespace, localSubject, type SubjectDefinition } from '@makaio/core';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createBusNamespace, localSubject, type CallContext, type SubjectDefinition } from '@makaio/core';
 import { createBusInstance, MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import { createTestCall } from '@makaio/test-utils';
 import { z } from 'zod';
 import { BusProvider } from './bus-provider.js';
 import { useBusQuery } from './use-bus-query.js';
@@ -117,9 +118,18 @@ describe('useBusQuery', () => {
     expect(renderCount).toBeLessThanOrEqual(3);
   });
 
-  it('refetches when a configured event fires', async () => {
+  it('uses the bus carrier for mount, event, and manual queries', async () => {
+    const bus = createBusInstance();
+    const { caller } = bus.own('root');
+    const own = vi.spyOn(bus, 'own');
+    const calls: CallContext[] = [];
+    const eventCall = createTestCall({
+      principal: { kind: 'makaio.step-execution', id: 'refresh-initiator' },
+      attestedBy: { kind: 'makaio.host', id: 'event-attester' },
+    });
     let value = 'first';
-    MakaioBus.on(TestNamespace.subjects.getValue, (ctx) => {
+    bus.on(TestNamespace.subjects.getValue, (ctx) => {
+      calls.push(ctx.call);
       ctx.setResult({ value });
     });
 
@@ -130,21 +140,36 @@ describe('useBusQuery', () => {
           request: { id: 'a' },
           refetchOn: [TestNamespace.subjects.changed],
         }),
-      { wrapper: wrapper(MakaioBus) },
+      { wrapper: wrapper(bus) },
     );
 
     await waitFor(() => {
       expect(result.current.data).toEqual({ value: 'first' });
     });
+    expect(calls[0]).toMatchObject({ caller, principal: caller });
+    expect.soft(own).toHaveBeenLastCalledWith('shared-work');
+    own.mockClear();
 
     value = 'second';
     await act(async () => {
-      await MakaioBus.emit(TestNamespace.subjects.changed, { id: 'a' });
+      await bus.emit(eventCall, TestNamespace.subjects.changed, { id: 'a' });
     });
 
     await waitFor(() => {
       expect(result.current.data).toEqual({ value: 'second' });
     });
+    expect.soft(calls[1]).toStrictEqual({ caller, principal: caller });
+    expect.soft(own).toHaveBeenLastCalledWith('observer');
+    own.mockClear();
+
+    value = 'third';
+    await act(async () => {
+      result.current.refetch();
+    });
+
+    await waitFor(() => expect(result.current.data).toEqual({ value: 'third' }));
+    expect(calls[2]).toMatchObject({ caller, principal: caller });
+    expect(own).toHaveBeenLastCalledWith('root');
   });
 
   it('keeps previous data when skipped after a successful request', async () => {
@@ -189,7 +214,7 @@ describe('useBusQuery', () => {
     );
 
     await act(async () => {
-      await MakaioBus.emit(TestNamespace.subjects.changed, { id: 'a' });
+      await MakaioBus.emit(createTestCall(), TestNamespace.subjects.changed, { id: 'a' });
     });
 
     expect(requestCount).toBe(0);
@@ -261,7 +286,7 @@ describe('useBusQuery', () => {
 
     value = 'remote-refetch';
     await act(async () => {
-      await bus.emit(RemoteMetadataNamespace.subjects.changed, { id: 'a' });
+      await bus.emit(createTestCall(), RemoteMetadataNamespace.subjects.changed, { id: 'a' });
     });
 
     await waitFor(() => {
@@ -272,7 +297,7 @@ describe('useBusQuery', () => {
 
     value = 'local-refetch';
     await act(async () => {
-      await bus.emit(LocalMetadataNamespace.subjects.changed, { id: 'a' });
+      await bus.emit(createTestCall(), LocalMetadataNamespace.subjects.changed, { id: 'a' });
     });
 
     await waitFor(() => {

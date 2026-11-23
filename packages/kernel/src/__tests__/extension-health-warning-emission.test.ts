@@ -2,10 +2,12 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { createBusInstance } from '@makaio/bus-core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import { createBusNamespace } from '@makaio/core';
+import type { Party } from '@makaio/core';
 import type { ExtensionWarning } from '@makaio/contracts';
 import type { ToastPayload } from '@makaio/contracts/toast';
 import { ToastSubjects } from '@makaio/contracts/toast';
 import { BaseService } from '@makaio/service-base';
+import { createTestCall } from '@makaio/test-utils';
 import { z } from 'zod';
 import { ExtensionCoordinator } from '../extension/extension-coordinator.js';
 import type { ExtensionContextBase, KernelMakaioExtension as MakaioExtension } from '../extension/types.js';
@@ -469,8 +471,10 @@ describe('Extension warning toast action dispatch', () => {
     const subjects = registerWiringApplyNamespace(bus, 'test-client');
 
     const capturedPayloads: Array<Record<string, unknown>> = [];
+    const capturedPrincipals: Party[] = [];
     const cleanupHandler = bus.on(subjects.wiring.apply, (ctx) => {
       capturedPayloads.push(ctx.payload as Record<string, unknown>);
+      capturedPrincipals.push(ctx.call.principal);
       ctx.setResult({ applied: 2, skipped: 0 });
     });
 
@@ -489,11 +493,12 @@ describe('Extension warning toast action dispatch', () => {
     await coordinator.startAll();
 
     const toastId = 'wiring-pkg:Wiring needed:0';
+    const call = createTestCall({ principal: { kind: 'test.user', id: 'toast-user' } });
     const originalArgv = [...process.argv];
     process.argv[1] = '/host/entrypoint-that-must-not-leak';
 
     try {
-      await bus.emit(ToastSubjects.interacted, {
+      await bus.emit(call, ToastSubjects.interacted, {
         toastId,
         actionId: WARNING_ACTION_ID,
         timestamp: Date.now(),
@@ -508,6 +513,7 @@ describe('Extension warning toast action dispatch', () => {
 
     expect(capturedPayloads).toHaveLength(1);
     expect(capturedPayloads[0]).toMatchObject({ scope: 'user', makaioCommand: 'host-makaio' });
+    expect(capturedPrincipals).toEqual([call.principal]);
 
     await coordinator.shutdown();
   });
@@ -536,7 +542,7 @@ describe('Extension warning toast action dispatch', () => {
     coordinator.load([makePackage('failed-toast-pkg', { create: (ctx) => new HealthService(ctx.bus, [warning]) })]);
     await coordinator.startAll();
 
-    await bus.emit(ToastSubjects.interacted, {
+    await bus.emit(createTestCall(), ToastSubjects.interacted, {
       toastId: 'failed-toast-pkg:Toast failed:0',
       actionId: WARNING_ACTION_ID,
       timestamp: Date.now(),
@@ -564,7 +570,7 @@ describe('Extension warning toast action dispatch', () => {
     coordinator.load([makePackage('no-warning-pkg')]);
     await coordinator.startAll();
 
-    await bus.emit(ToastSubjects.interacted, {
+    await bus.emit(createTestCall(), ToastSubjects.interacted, {
       toastId: 'nonexistent:toast:0',
       actionId: WARNING_ACTION_ID,
       timestamp: Date.now(),
@@ -602,7 +608,7 @@ describe('Extension warning toast action dispatch', () => {
     // Shut down before interacting — map should be cleared.
     await coordinator.shutdown();
 
-    await bus.emit(ToastSubjects.interacted, {
+    await bus.emit(createTestCall(), ToastSubjects.interacted, {
       toastId: 'cleanup-pkg:Cleanup test:0',
       actionId: WARNING_ACTION_ID,
       timestamp: Date.now(),
@@ -652,7 +658,7 @@ describe('Extension warning toast action dispatch', () => {
     await coordinator.applyExtensionTransition('refresh-pkg', false);
     await coordinator.applyExtensionTransition('refresh-pkg', true);
 
-    await bus.emit(ToastSubjects.interacted, {
+    await bus.emit(createTestCall(), ToastSubjects.interacted, {
       toastId: 'refresh-pkg:Needs wiring:0',
       actionId: WARNING_ACTION_ID,
       timestamp: Date.now(),

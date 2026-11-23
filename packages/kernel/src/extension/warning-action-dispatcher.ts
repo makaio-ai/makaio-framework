@@ -17,6 +17,7 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { ExtensionWarningAction } from '@makaio/contracts';
 import { ToastSubjects } from '@makaio/contracts/toast';
+import type { CallContext } from '@makaio/core';
 
 // ---------------------------------------------------------------------------
 // Minimal wiring subject definition
@@ -156,7 +157,7 @@ export function registerWarningActionHandler(
     const action = actionMap.get(key);
     if (!action) return;
 
-    void dispatchWarningAction(bus, action, toastId, launcherCommand).catch((err) => {
+    void dispatchWarningAction(ctx.call, bus, action, toastId, launcherCommand).catch((err) => {
       console.error(`[ExtensionCoordinator] Warning action dispatch failed for toast "${toastId}":`, err);
     });
   });
@@ -172,12 +173,14 @@ export function registerWarningActionHandler(
  * Only `configure-integration` is routable from the runtime layer. Other kinds
  * are logged at info level because they require a UI surface or an external
  * runtime capability not available in the headless coordinator.
+ * @param call - Call context of the toast interaction.
  * @param bus - Bus instance used to dispatch the action.
  * @param action - Extension warning action to execute.
  * @param toastId - Toast identifier for diagnostic logging.
  * @param launcherCommand - Host-provided Makaio command written into client wiring.
  */
 async function dispatchWarningAction(
+  call: CallContext,
   bus: IMakaioBus,
   action: ExtensionWarningAction,
   toastId: string,
@@ -185,7 +188,7 @@ async function dispatchWarningAction(
 ): Promise<void> {
   switch (action.kind) {
     case 'configure-integration': {
-      await applyClientWiring(bus, action.clientId, toastId, launcherCommand);
+      await applyClientWiring(call, bus, action.clientId, toastId, launcherCommand);
       break;
     }
     case 'open-url': {
@@ -227,12 +230,14 @@ function assertNever(value: never): never {
  * Uses `requestOptional` so missing client handlers (e.g. the client package is
  * not loaded in headless mode) are non-fatal. The result is logged for
  * diagnostic purposes; errors are surfaced as console warnings.
+ * @param call - Call context of the toast interaction.
  * @param bus - Bus instance for the request.
  * @param clientId - Client identifier from the `configure-integration` action.
  * @param toastId - Toast identifier for diagnostic logging.
  * @param launcherCommand - Host-provided Makaio command written into client wiring.
  */
 async function applyClientWiring(
+  call: CallContext,
   bus: IMakaioBus,
   clientId: string,
   toastId: string,
@@ -240,7 +245,7 @@ async function applyClientWiring(
 ): Promise<void> {
   const subjectDef = buildWiringApplySubjectDef(clientId);
 
-  const result = await bus.requestOptional(subjectDef, {
+  const result = await bus.requestOptional(call, subjectDef, {
     scope: 'user',
     makaioCommand: launcherCommand,
   });

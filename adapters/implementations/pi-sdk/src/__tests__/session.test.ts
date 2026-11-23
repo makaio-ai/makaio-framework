@@ -1,7 +1,8 @@
 import { MessageHandle, UserMessageQueue, type NormalizedMessageInput } from '@makaio/ai-adapters-core';
+import type { CallContext } from '@makaio/contracts';
 import { createTestBusInstance, createTestCall } from '@makaio/test-utils';
 import type { AgentSession, AgentSessionEvent } from '@mariozechner/pi-coding-agent';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { PiSdkNamespace, PiSdkSubjects } from '../namespaces/index.js';
 import { PiConnectorSession } from '../session.js';
 
@@ -17,6 +18,11 @@ class FakePiSession {
   public readonly agent = {} as AgentSession['agent'];
   public readonly sessionId = 'pi-session-1';
 
+  /**
+   * Register the listener invoked by fake SDK events.
+   * @param listener - Connector callback for SDK events
+   * @returns Function that removes the listener
+   */
   public subscribe(listener: (event: AgentSessionEvent) => void): () => void {
     this.listener = listener;
     return () => {
@@ -46,6 +52,10 @@ class FakePiSession {
 
   public setThinkingLevel(): void {}
 
+  /**
+   * Deliver an event to the connector as the SDK would.
+   * @param event - SDK event to deliver
+   */
   public emit(event: AgentSessionEvent): void {
     this.listener?.(event);
   }
@@ -56,35 +66,59 @@ async function flushEvents(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
-describe('PiConnectorSession tool event ownership', () => {
+/**
+ * Build a connector session on a real bus with a controllable SDK session.
+ * @param piSession - Fake Pi session to inject
+ * @returns Initialized connector session and its event bus
+ */
+async function makeSession(piSession: FakePiSession) {
+  const parentBus = createTestBusInstance();
+  const bus = await PiSdkNamespace.scopedBus(parentBus);
+  const observer = parentBus.own('observer');
+  const session = new PiConnectorSession({
+    bus,
+    observerCall: () => observer,
+    agentId: 'agent-1',
+    adapterId: 'adapter-1',
+    adapterName: 'pi-sdk',
+    cwd: process.cwd(),
+    model: 'test-model',
+    env: {},
+    requestToolApproval: async () => ({ action: 'allow' }),
+    createPiSession: async () => piSession,
+  });
+  await session.initialize();
+  return { session, bus, observer };
+}
+
+describe('PiConnectorSession event call context', () => {
   it('keeps a delayed tool completion owned by the superseded message', async () => {
-    const bus = await PiSdkNamespace.scopedBus(createTestBusInstance());
     const piSession = new FakePiSession();
-    const session = new PiConnectorSession({
-      bus,
-      agentId: 'agent-1',
-      adapterId: 'adapter-1',
-      adapterName: 'pi-sdk',
-      cwd: process.cwd(),
-      model: 'test-model',
-      env: {},
-      requestToolApproval: async () => ({ action: 'allow' }),
-      createPiSession: async () => piSession,
-    });
+    const { session, bus } = await makeSession(piSession);
     const starts: Array<{ messageId: string; toolCallId: string }> = [];
-    const unsubscribeStarts = bus.on(PiSdkSubjects.tool_started, ({ payload }) => {
+    const principals: CallContext['principal'][] = [];
+    const unsubscribeStarts = bus.on(PiSdkSubjects.tool_started, ({ payload, call }) => {
       starts.push({ messageId: payload.messageId, toolCallId: payload.toolCallId });
+      principals.push(call.principal);
     });
     const completions: Array<{ messageId: string; toolCallId: string }> = [];
-    const unsubscribe = bus.on(PiSdkSubjects.tool_completed, ({ payload }) => {
+    const unsubscribe = bus.on(PiSdkSubjects.tool_completed, ({ payload, call }) => {
       completions.push({ messageId: payload.messageId, toolCallId: payload.toolCallId });
+      principals.push(call.principal);
+    });
+    const rawCompletionPrincipals: CallContext['principal'][] = [];
+    const unsubscribeRaw = bus.on(PiSdkSubjects.sdk.event, ({ payload, call }) => {
+      if (payload.type === 'tool_execution_end' && payload.toolCallId === 'tool-1') {
+        rawCompletionPrincipals.push(call.principal);
+      }
     });
 
     try {
-      await session.initialize();
       const queue = new UserMessageQueue();
-      const first = new MessageHandle(createTestCall(), 'message-old', TEST_MESSAGE, 'enqueue');
-      const replacement = new MessageHandle(createTestCall(), 'message-new', TEST_MESSAGE, 'immediate');
+      const original = createTestCall({ principal: { kind: 'test.user', id: 'original-requester' } });
+      const next = createTestCall({ principal: { kind: 'test.user', id: 'replacement-requester' } });
+      const first = new MessageHandle(original, 'message-old', TEST_MESSAGE, 'enqueue');
+      const replacement = new MessageHandle(next, 'message-new', TEST_MESSAGE, 'immediate');
       queue.enqueue(first);
       await session.processQueue(queue);
       await flushEvents();
@@ -125,9 +159,39 @@ describe('PiConnectorSession tool event ownership', () => {
       expect(first.supersededBy).toBe(replacement.messageId);
       expect(starts).toEqual([{ messageId: 'message-old', toolCallId: 'tool-1' }]);
       expect(completions).toEqual([{ messageId: 'message-old', toolCallId: 'tool-1' }]);
+      expect(principals).toEqual([original.principal, original.principal]);
+      expect(rawCompletionPrincipals).toEqual([original.principal]);
     } finally {
       unsubscribeStarts();
       unsubscribe();
+      unsubscribeRaw();
+      await session.close(createTestCall());
+    }
+  });
+
+  it('uses the bus observer for a provider queue update outside a turn', async () => {
+    const piSession = new FakePiSession();
+    const { session, bus, observer } = await makeSession(piSession);
+    // Local dispatch derives a new call, so check the explicit send argument as well.
+    const emit = vi.spyOn(bus, 'emit');
+    const calls: CallContext[] = [];
+    const unsubscribe = bus.on(PiSdkSubjects.queue_update, ({ call }) => {
+      calls.push(call);
+    });
+    try {
+      piSession.emit({ type: 'queue_update', steering: [], followUp: [] });
+      await flushEvents();
+
+      expect(calls).toEqual([{ caller: observer.caller, principal: observer.caller }]);
+      expect(emit).toHaveBeenCalledWith(observer, PiSdkSubjects.queue_update, expect.anything());
+      expect(emit).toHaveBeenCalledWith(
+        observer,
+        PiSdkSubjects.sdk.event,
+        expect.objectContaining({ type: 'queue_update' }),
+      );
+    } finally {
+      unsubscribe();
+      emit.mockRestore();
       await session.close(createTestCall());
     }
   });
@@ -135,30 +199,9 @@ describe('PiConnectorSession tool event ownership', () => {
 
 // Case 206 — no observed class survives a swallowed failure (I29).
 describe('PiConnectorSession teardown evidence', () => {
-  /**
-   * Build a session over a fake Pi session the test controls.
-   * @param piSession - Fake Pi session to inject.
-   * @returns The initialized connector session.
-   */
-  async function makeSession(piSession: FakePiSession): Promise<PiConnectorSession> {
-    const session = new PiConnectorSession({
-      bus: await PiSdkNamespace.scopedBus(createTestBusInstance()),
-      agentId: 'agent-1',
-      adapterId: 'adapter-1',
-      adapterName: 'pi-sdk',
-      cwd: process.cwd(),
-      model: 'test-model',
-      env: {},
-      requestToolApproval: async () => ({ action: 'allow' }),
-      createPiSession: async () => piSession,
-    });
-    await session.initialize();
-    return session;
-  }
-
   it('reports `released` when every stage was accounted for', async () => {
     const piSession = new FakePiSession();
-    const session = await makeSession(piSession);
+    const { session } = await makeSession(piSession);
 
     const report = await session.close(createTestCall());
 
@@ -171,7 +214,7 @@ describe('PiConnectorSession teardown evidence', () => {
   it('claims no observed class when its own abort failed unaccounted for', async () => {
     const piSession = new FakePiSession();
     piSession.abortFailure = new Error('pi abort rejected');
-    const session = await makeSession(piSession);
+    const { session } = await makeSession(piSession);
 
     const report = await session.close(createTestCall());
 

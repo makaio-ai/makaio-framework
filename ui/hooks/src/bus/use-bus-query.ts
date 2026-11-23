@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { SubjectDefinition } from '@makaio/core';
+import type { OwnWorkPurpose, SubjectDefinition } from '@makaio/core';
 import { useBus } from './bus-provider.js';
 
 /**
@@ -25,6 +25,14 @@ interface RequestSerializationState {
 }
 
 const NON_SERIALIZABLE_REQUEST_DEPENDENCY = 'non-serializable-request';
+
+// ORIGIN: A mount or dependency change loads data for the view, a manual refetch
+// starts a UI action, and a subscribed event invalidates the view's own data.
+const QUERY_WORK_PURPOSE = {
+  effect: 'shared-work',
+  manual: 'root',
+  event: 'observer',
+} as const;
 
 /**
  * Options for {@link useBusQuery}.
@@ -172,45 +180,55 @@ export function useBusQuery<Subject extends SubjectDefinition>({
   // a new request starts before the previous one resolves.
   const requestIdRef = useRef(0);
 
-  const refetch = useCallback(async () => {
-    const currentId = ++requestIdRef.current;
+  /**
+   * Dispatch the query and apply its result if it is still current.
+   * @param purpose - Origin of the query request.
+   */
+  const fetchQuery = useCallback(
+    async (purpose: OwnWorkPurpose) => {
+      const currentId = ++requestIdRef.current;
 
-    setLoading(true);
-    setError(undefined);
+      setLoading(true);
+      setError(undefined);
 
-    try {
-      if (!requestState.deserializable) {
-        throw new Error('useBusQuery request must be JSON-serializable.');
-      }
+      try {
+        if (!requestState.deserializable) {
+          throw new Error('useBusQuery request must be JSON-serializable.');
+        }
 
-      const result = (await bus.request(
-        subject as never,
-        requestForDispatch as Subject['$meta']['payload']['request'],
-      )) as Response;
+        const result = (await bus.request(
+          bus.own(purpose),
+          subject as never,
+          requestForDispatch as Subject['$meta']['payload']['request'],
+        )) as Response;
 
-      if (currentId === requestIdRef.current) {
-        setData(result);
+        if (currentId === requestIdRef.current) {
+          setData(result);
+        }
+      } catch (caught) {
+        if (currentId === requestIdRef.current) {
+          setError(caught instanceof Error ? caught : new Error(String(caught)));
+        }
+      } finally {
+        if (currentId === requestIdRef.current) {
+          setLoading(false);
+        }
       }
-    } catch (caught) {
-      if (currentId === requestIdRef.current) {
-        setError(caught instanceof Error ? caught : new Error(String(caught)));
-      }
-    } finally {
-      if (currentId === requestIdRef.current) {
-        setLoading(false);
-      }
-    }
-    // `request` is intentionally excluded: we depend on `requestDependency`
-    // (the JSON-serialized form) rather than the object reference to avoid
-    // infinite loops when the caller creates a new object literal each render.
-  }, [bus, subject, requestDependency, requestForDispatch, requestState.deserializable]);
+      // `request` is intentionally excluded: we depend on `requestDependency`
+      // (the JSON-serialized form) rather than the object reference to avoid
+      // infinite loops when the caller creates a new object literal each render.
+    },
+    [bus, subject, requestDependency, requestForDispatch, requestState.deserializable],
+  );
+
+  const refetch = useCallback(() => fetchQuery(QUERY_WORK_PURPOSE.manual), [fetchQuery]);
 
   // Fire the query whenever dependencies change (and skip → false).
   // `skip` is listed so that toggling from true → false triggers a fresh fetch.
   useEffect(() => {
     if (skip) return;
-    void refetch();
-  }, [refetch, skip]);
+    void fetchQuery(QUERY_WORK_PURPOSE.effect);
+  }, [fetchQuery, skip]);
 
   // Subscribe to refetch-trigger events.
   // `refetchOnKey` is a stable string derived from subject identities —
@@ -221,14 +239,14 @@ export function useBusQuery<Subject extends SubjectDefinition>({
     if (skip) return;
     if (refetchOnRef.current.length === 0) return;
     const unsubscribes = refetchOnRef.current.map((eventSubject) =>
-      bus.on(eventSubject as never, (() => void refetch()) as never),
+      bus.on(eventSubject as never, (() => void fetchQuery(QUERY_WORK_PURPOSE.event)) as never),
     );
     return () => {
       for (const unsubscribe of unsubscribes) unsubscribe();
     };
     // `refetchOnRef` intentionally excluded: it is a stable ref whose `.current`
     // is always up-to-date; re-subscribing is controlled by `refetchOnKey`.
-  }, [bus, refetchOnKey, refetch, skip]);
+  }, [bus, refetchOnKey, fetchQuery, skip]);
 
   return { data, loading, error, refetch };
 }
