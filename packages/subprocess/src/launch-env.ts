@@ -26,3 +26,22 @@ export function mergeEnvironment(
   const merged = { ...Object.fromEntries(kept), ...overrides };
   return Object.fromEntries(Object.entries(merged).filter((entry) => entry[1] !== undefined));
 }
+
+/**
+ * Build a replacement environment for the bounded launcher.
+ * Node copies its coverage directory into a custom environment unless the
+ * coverage key is an own property. An undefined value blocks the copy without
+ * adding the variable to the spawned process.
+ * @param env - Explicit environment for the child.
+ * @param platform - Name casing rules of the host.
+ * @returns The environment to pass to Node.
+ */
+export function replacementSpawnEnvironment(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): NodeJS.ProcessEnv {
+  const coverage = 'NODE_V8_COVERAGE';
+  const key = platform === 'win32' ? Object.keys(env).find((name) => name.toUpperCase() === coverage) : coverage;
+  const value = key === undefined ? undefined : env[key];
+  const prepared: NodeJS.ProcessEnv = { ...env, [coverage]: value };
+  if (key !== undefined && key !== coverage) delete prepared[key];
+  Object.setPrototypeOf(prepared, null);
+  return prepared;
+}

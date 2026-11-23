@@ -37,6 +37,30 @@ afterEach(() => {
   }
 });
 
+it.skipIf(process.platform === 'win32').each([
+  [false, 'SIGTERM'],
+  [true, 'SIGKILL'],
+])('selects the first stop signal with forceful policy %s', (forcefulFirst, signal) => {
+  const kill = vi.fn();
+  const stop = startStopEscalation({
+    pid: 2,
+    ownership: 'process-group',
+    killGraceMs: 0,
+    forcefulFirst,
+    exitObservationMs: 1000,
+    deadline: undefined,
+    port: { kill },
+    exitUnobserved: () => true,
+    onUnobserved: () => undefined,
+    onSignalFailure: () => undefined,
+  });
+  try {
+    expect(kill).toHaveBeenCalledWith(-2, signal);
+  } finally {
+    stop.cancel();
+  }
+});
+
 /**
  * Spawn a child that runs until killed, as the leader of its own group.
  * @returns The child's PID.

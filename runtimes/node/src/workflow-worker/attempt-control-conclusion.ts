@@ -3,7 +3,7 @@ import type {
   ExecutionAttemptOperationAdmitRefusalReason,
   ExecutionAttemptOperationKind,
 } from '@makaio/contracts';
-import type { LaunchGroupFacts, ProcessTreeEvidence, TreeQuiescenceGap } from '@makaio/subprocess';
+import type { LocalLaunchGroupFacts, ProcessTreeEvidence, TreeQuiescenceGap } from '@makaio/subprocess';
 
 // ─────────────────────────────────────────────────────────────
 // Observed facts
@@ -25,11 +25,11 @@ export type AdmittedOperationKind = Extract<
  *   the absence of a live group is proven, not unknown.
  * `'no-observation'`: the driver threw before handing over any result, so it
  *   supplied no process-group fact either way.
- * `LaunchGroupFacts`: the facts the launcher recorded about the group it owned.
+ * `LocalLaunchGroupFacts`: the facts the launcher recorded about the group it owned.
  *   A launch always owns its group and never reports `tree.kind === 'not-owned'`;
  *   should that ever arrive, it is concluded like `'no-observation'`.
  */
-export type SetupConclusion = 'not-started' | 'no-spawn' | 'no-observation' | LaunchGroupFacts;
+export type SetupConclusion = 'not-started' | 'no-spawn' | 'no-observation' | LocalLaunchGroupFacts;
 
 /**
  * The one terminal fact an admitted operation concludes with.

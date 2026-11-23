@@ -1,8 +1,8 @@
 /**
  * Bounded stop of one spawned child: signal, escalate, observe, give up.
  *
- * On POSIX the stop has two stages: `SIGTERM`, then `SIGKILL` after the kill
- * grace, then a bounded wait for the exit. On Windows every termination is
+ * On POSIX the default stop sends SIGTERM and then SIGKILL after the grace
+ * period. A forceful-first site starts with SIGKILL. Both use a bounded exit wait. On Windows every termination is
  * already forceful, so there is one stage followed by the bounded wait. When
  * the wait expires without an observed exit, the stop reports the exit as
  * unobserved; it never invents one.
@@ -67,6 +67,8 @@ export interface StopEscalationOptions {
   readonly ownership: StopOwnership;
   /** Time between the graceful and the forceful stage (POSIX only), in milliseconds. */
   readonly killGraceMs: number;
+  /** Start with the forceful signal instead of the graceful stage. */
+  readonly forcefulFirst?: boolean;
   /** Time the exit is awaited after the forceful stage, in milliseconds. */
   readonly exitObservationMs: number;
   /** Epoch milliseconds by which the stop must have reported; `undefined` for none. */
@@ -172,6 +174,9 @@ class Escalation implements StopEscalation {
         this.stage = 'forceful';
         this.send('SIGTERM');
       }
+    } else if (options.forcefulFirst === true) {
+      this.stage = 'forceful';
+      this.send('SIGKILL');
     } else {
       this.send('SIGTERM');
     }
