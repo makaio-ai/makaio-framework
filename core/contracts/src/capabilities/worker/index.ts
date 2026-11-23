@@ -62,3 +62,34 @@ export { boundedProviderEvidence } from './bounded-evidence.js';
 export { registerWorkerProvider, unregisterWorkerProvider } from './register.js';
 export { ISOLATION_LEVELS, IsolationLevelSchema, holdsAtLeast } from './isolation.js';
 export type { IsolationLevel } from './isolation.js';
+export {
+  WORKER_PROVIDER_ID_MAX_LENGTH,
+  WorkerProviderIdSchema,
+  WorkerProviderKeySchema,
+} from './provider-id.js';
+export type { WorkerProviderId } from './provider-id.js';
+export {
+  ALLOCATION_SCOPE_BLOCK_REASONS,
+  AllocationScopeBlockReasonSchema,
+  AllocationScopeValueSchema,
+} from './allocation-scope.js';
+export type { AllocationScope, AllocationScopeBlockReason } from './allocation-scope.js';
+export { AllocationScopeBlockSchema } from './allocation-scope-status.js';
+export type { AllocationScopeBlock, AllocationScopeStatus } from './allocation-scope-status.js';
+export {
+  ALLOCATION_LISTING_DEFAULT_LIMIT,
+  ALLOCATION_LISTING_MAX_LIMIT,
+  AllocationListingCompletenessSchema,
+  AllocationListingRequestSchema,
+  AllocationObservationPageSchema,
+  AllocationObservationSchema,
+} from './observation.js';
+export type {
+  AllocationListingCompleteness,
+  AllocationListingRequest,
+  AllocationObservation,
+  AllocationObservationPage,
+} from './observation.js';
+
+export { AllocationTerminationSchema, MaxRuntimeAssuranceSchema } from './allocation-lifecycle.js';
+export type { AllocationTermination, MaxRuntimeAssurance } from './allocation-lifecycle.js';
