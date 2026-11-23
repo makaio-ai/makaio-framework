@@ -6,33 +6,38 @@ import {
   ALLOCATION_LISTING_MAX_LIMIT,
   AllocationListingCompletenessSchema,
   AllocationObservationSchema,
+  UnknownAllocationListingCompletenessSchema,
 } from './observation.js';
 
-/**
- * One block: the activation of one contributing extension was refused because
- * its provider-managed instances have no confirmed scope.
- */
+const ScopeBlockBaseSchema = z.strictObject({
+  /** Contributing extension whose activation was refused. */
+  owner: ExtensionNameSchema,
+  /** Provider IDs in the refused set. */
+  blockedProviderIds: z.array(WorkerProviderIdSchema).min(1),
+});
+
+/** A refused activation, with observations only when a missing binding permits listing. */
 export const AllocationScopeBlockSchema = z
-  .object({
-    /** Name of the contributing extension whose activation was refused. */
-    owner: ExtensionNameSchema,
-    reason: AllocationScopeBlockReasonSchema,
-    /** Provider ids of the refused set. */
-    blockedProviderIds: z.array(WorkerProviderIdSchema).min(1),
-    /**
-     * Allocations observed under the operator's setting while the binding is
-     * missing, flattened over all pages, at most {@link ALLOCATION_LISTING_MAX_LIMIT}.
-     * Empty for every other reason: no scope value may be listed then.
-     */
-    observations: z.array(AllocationObservationSchema).max(ALLOCATION_LISTING_MAX_LIMIT),
-    /** Completeness of `observations`; `unknown` also when the cap was reached or no observation was made. */
-    completeness: AllocationListingCompletenessSchema,
-  })
-  .strict()
-  .refine(({ reason, observations }) => reason === 'binding-missing' || observations.length === 0, {
-    path: ['observations'],
-    message: 'Only a missing binding permits allocation observations',
-  })
+  .discriminatedUnion('reason', [
+    ScopeBlockBaseSchema.extend({
+      reason: z.literal('binding-missing'),
+      /** Allocations across all pages, up to the listing cap. */
+      observations: z.array(AllocationObservationSchema).max(ALLOCATION_LISTING_MAX_LIMIT),
+      /** Unknown when the cap is reached or no observation was made. */
+      completeness: AllocationListingCompletenessSchema,
+    }).refine(
+      ({ observations, completeness }) =>
+        observations.length < ALLOCATION_LISTING_MAX_LIMIT || completeness.kind === 'unknown',
+      { path: ['completeness'], message: 'Completeness is unknown when the observation cap is reached' },
+    ),
+    ScopeBlockBaseSchema.extend({
+      reason: AllocationScopeBlockReasonSchema.exclude(['binding-missing']),
+      /** Empty because this reason forbids listing. */
+      observations: z.array(z.never()).max(0),
+      /** No listing took place. */
+      completeness: UnknownAllocationListingCompletenessSchema,
+    }),
+  ])
   .refine(
     ({ blockedProviderIds, observations }) => {
       const blocked = new Set(blockedProviderIds);

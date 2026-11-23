@@ -5,6 +5,7 @@ import {
   WorkerProviderIdSchema,
   type AllocationScope,
   type AllocationScopeStatus,
+  type AllocationScopeBlock,
   type AllocationTermination,
   type MaxRuntimeAssurance,
   type WorkerProviderId,
@@ -21,6 +22,13 @@ describe('public worker provider contracts', () => {
   it('exports matching value and type shapes from the root and capability entry points', () => {
     expectTypeOf<WorkerProviderId>().toEqualTypeOf<Capabilities.WorkerProviderId>();
     expectTypeOf<AllocationScope>().toEqualTypeOf<Capabilities.AllocationScope>();
+    expectTypeOf<AllocationScopeBlock>().toEqualTypeOf<Capabilities.AllocationScopeBlock>();
+    expectTypeOf<Exclude<AllocationScopeBlock, { reason: 'binding-missing' }>['observations']>().toEqualTypeOf<
+      never[]
+    >();
+    expectTypeOf<
+      Exclude<AllocationScopeBlock, { reason: 'binding-missing' }>['completeness']['kind']
+    >().toEqualTypeOf<'unknown'>();
     expectTypeOf<AllocationScopeStatus>().toEqualTypeOf<Capabilities.AllocationScopeStatus>();
     expectTypeOf<MaxRuntimeAssurance['boundary']>().toEqualTypeOf<'platform' | 'provider-process'>();
     expectTypeOf<AllocationTermination['state']>().toEqualTypeOf<'ended' | 'ending'>();
