@@ -1,4 +1,4 @@
-import type { CallContext } from '@makaio/core';
+import type { CallContext, ExtensionName } from '@makaio/core';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { HostTransaction } from '../../host-database/index.js';
 import {
@@ -10,6 +10,7 @@ import {
   OutcomeSubmitResponseSchema,
   type JobRunCapability,
   type CloseJobRunInput,
+  type OutcomeSubmitResponse,
 } from '../job-run-outcome.js';
 
 const result = { status: 'completed', executionId: 'run', workflowId: 'workflow' };
@@ -58,6 +59,18 @@ describe('job run result contract', () => {
   });
 
   it('checks refusal ownership and requires retryability', () => {
+    type Unavailable = Extract<OutcomeSubmitResponse, { code: 'owner-unavailable' }>;
+    type OwnerRefusal = Extract<OutcomeSubmitResponse, { owner: ExtensionName }>;
+    expectTypeOf<Pick<Unavailable, 'decision' | 'retryable' | 'owner'>>().toEqualTypeOf<{
+      decision: 'refused';
+      retryable: true;
+      readonly owner?: never;
+    }>();
+    expectTypeOf<Pick<OwnerRefusal, 'code' | 'retryable' | 'owner'>>().toEqualTypeOf<{
+      code: string;
+      retryable: boolean;
+      owner: ExtensionName;
+    }>();
     const core = { decision: 'refused', code: 'outcome-conflict', retryable: false };
     expect(OutcomeSubmitResponseSchema.safeParse({ ...core, retryable: true }).success).toBe(false);
     const unavailable = { ...core, code: 'owner-unavailable', retryable: true };

@@ -51,7 +51,10 @@ export interface LocalModelOptions {
 /** A local model address valid for one agent session. */
 export interface LocalModelLease {
   readonly address: string;
-  /** @returns Rejects if closure is unconfirmed, including when no diagnostic sink is configured. */
+  /**
+   * Call this explicitly to observe unconfirmed closure, including without a diagnostic sink.
+   * @returns A promise that rejects if closure is unconfirmed.
+   */
   close(): Promise<void>;
 }
 
@@ -170,7 +173,7 @@ async function handleModel(
       const code = ModelFailureCodeSchema.safeParse(result.code);
       return fail(502, code.success ? code.data : 'upstream-failed');
     }
-    const output = AgentModelReplySchema.strict().safeParse(result.reply);
+    const output = AgentModelReplySchema.safeParse(result.reply);
     if (!output.success) return fail(502, 'reply-invalid');
     finish({ kind: 'completed', usage: output.data.usage });
     response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(output.data));

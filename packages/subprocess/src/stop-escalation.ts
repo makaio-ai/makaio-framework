@@ -2,8 +2,8 @@
  * Bounded stop of one spawned child: signal, escalate, observe, give up.
  *
  * On POSIX the default stop sends SIGTERM and then SIGKILL after the grace
- * period. A forceful-first site starts with SIGKILL. Both use a bounded exit wait. On Windows every termination is
- * already forceful, so there is one stage followed by the bounded wait. When
+ * period. A forceful-first site starts with SIGKILL. Both use a bounded exit wait.
+ * On Windows each termination is forceful, so one stage precedes the wait. When
  * the wait expires without an observed exit, the stop reports the exit as
  * unobserved; it never invents one.
  *
