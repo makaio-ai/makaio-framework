@@ -150,7 +150,7 @@ const emptyExpressionCtx = { inputs: {}, trigger: {}, frames: {}, previousSteps:
 // ─────────────────────────────────────────────────────────────
 
 describe('review workflow fixture — artifact data shape', () => {
-  it('aggregate station writes findings to the artifact via updateArtifact', async () => {
+  it('aggregate step writes findings to the artifact via updateArtifact', async () => {
     const capturedRevisions: Array<ArtifactRevision<ReviewArtifactData>> = [];
 
     const specFindings = [{ id: 'spec-1', severity: 'info' as const, message: 'Spec OK' }];
@@ -164,7 +164,7 @@ describe('review workflow fixture — artifact data shape', () => {
 
     let capturedFindings: ReviewFindings | undefined;
 
-    // Run only up to the 'aggregate' station (before the gate) to avoid
+    // Run only up to the 'aggregate' step (before the gate) to avoid
     // needing a gate responder. We test a sub-sequence directly.
     const built = buildReviewWorkflow({
       onSpec: async () => ({ findings: specFindings }),
@@ -363,7 +363,7 @@ describe('review workflow fixture — artifact data shape', () => {
         return { spec: [], quality: [], testCoverage: [] };
       },
       onFix: async () => {
-        throw new Error('fix station must not run for rejected triage');
+        throw new Error('fix step must not run for rejected triage');
       },
     });
 
@@ -399,7 +399,7 @@ describe('review workflow fixture — artifact data shape', () => {
     cleanupRevise();
   });
 
-  it('triage approve path writes triaged before the fix station writes fixed', async () => {
+  it('triage approve path writes triaged before the fix step writes fixed', async () => {
     const capturedRevisions: Array<ArtifactRevision<ReviewArtifactData>> = [];
 
     const bus = makeBus();
@@ -870,7 +870,7 @@ describe('review workflow fixture — functional updateArtifact', () => {
 });
 
 describe('review workflow fixture — no artifact binding', () => {
-  it('stations run normally when no artifact binding is configured', async () => {
+  it('steps run normally when no artifact binding is configured', async () => {
     const bus = makeBus();
 
     let aggregateCalled = false;

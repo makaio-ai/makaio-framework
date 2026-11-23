@@ -167,7 +167,7 @@ export type WorkflowArtifactBinding = z.infer<typeof WorkflowArtifactBindingSche
  * only serializable configuration consumed at execution time.
  */
 export const WorkflowArtifactWriteDeclarationSchema = z.object({
-  /** Artifact kind string (e.g. `'station-output'`). */
+  /** Artifact kind string (e.g. `'step-output'`). */
   kind: z.string().min(1),
   /** Schema version validated by the artifact service. */
   schemaVersion: ArtifactSchemaVersionSchema,
@@ -217,9 +217,8 @@ export type WorkflowSourceLocation = z.infer<typeof WorkflowSourceLocationSchema
 /**
  * Discriminant enum for all primitive workflow node types.
  *
- * - `station`        — atomic work unit (agent, shell, or bus-request task)
- * - `delegate-agent` — delegates to a named agent role for a subtask
- * - `delegate-role`  — delegates to a resolved product role
+ * - `code-step`      — runs the handler registered for the node ID
+ * - `agent-step`     — runs an agent for a named role with a templated prompt
  * - `parallel`       — runs child branches concurrently
  * - `gate`           — pauses execution awaiting human or automated approval
  * - `iterate`        — expands over a collection (fan-out then fan-in)
@@ -228,9 +227,8 @@ export type WorkflowSourceLocation = z.infer<typeof WorkflowSourceLocationSchema
  * - `sequence`       — ordered list of child nodes (the structural container)
  */
 export const WorkflowNodeTypeSchema = z.enum([
-  'station',
-  'delegate-agent',
-  'delegate-role',
+  'code-step',
+  'agent-step',
   'parallel',
   'gate',
   'iterate',
@@ -310,9 +308,8 @@ export interface WorkflowNode extends WorkflowNodeBase {
 export const WorkflowNodeSchema: z.ZodType<WorkflowNode> = z.lazy(
   (): z.ZodType<WorkflowNode> =>
     z.discriminatedUnion('type', [
-      WorkflowStationNodeSchema,
-      WorkflowDelegateAgentNodeSchema,
-      WorkflowDelegateRoleNodeSchema,
+      WorkflowCodeStepNodeSchema,
+      WorkflowAgentStepNodeSchema,
       WorkflowParallelNodeSchema,
       WorkflowGateNodeSchema,
       WorkflowIterateNodeSchema,
@@ -343,135 +340,57 @@ export const WorkflowSequenceNodeSchema = WorkflowNodeBaseSchema.extend({
 export type WorkflowSequenceNode = z.infer<typeof WorkflowSequenceNodeSchema>;
 
 // ─────────────────────────────────────────────────────────────
-// Station Node
+// Code-Step Node
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Station node — an atomic unit of work.
+ * Code step — runs the handler registered for this node ID.
  *
- * A station encapsulates a task prompt, an optional named role, optional
- * input/output schemas for structured data exchange, and an optional
- * timeout. It does not contain child nodes or functions.
- *
- * Runtime handlers are registered outside the persisted definition
- * (in the authoring object's step map); this schema is function-free.
+ * Handlers live outside the persisted definition (in the built workflow's handler
+ * map); this schema is function-free. A code step without a registered handler fails.
  */
-export const WorkflowStationNodeSchema = WorkflowNodeBaseSchema.extend({
+export const WorkflowCodeStepNodeSchema = WorkflowNodeBaseSchema.extend({
   /** Node type discriminant. */
-  type: z.literal('station'),
-  /**
-   * Task prompt for the station. Supports `{{ }}` template interpolation
-   * against the execution context at runtime.
-   */
-  prompt: z.string().min(1),
-  /**
-   * Named role reference. Resolved via the bus `resolveRole` RPC before
-   * execution so the executor obtains adapter, model, and harness configuration.
-   */
-  role: z.string().min(1).optional(),
-  /**
-   * JSON Schema for the expected station output.
-   * When set and the adapter supports `structuredOutput`, the executor
-   * requests structured output from the model.
-   */
+  type: z.literal('code-step'),
+  /** JSON Schema for the expected handler output. */
   outputSchema: JsonSchemaRecordSchema.optional(),
-  /**
-   * Timeout in milliseconds. Defaults to 300 000 ms (5 minutes) at execution
-   * time when omitted.
-   */
+  /** Timeout in milliseconds. */
   timeoutMs: z.number().int().positive().optional(),
-  /**
-   * Subagent completion mode. `'tool'` (default) waits for an explicit
-   * `completeTask` tool call; `'turn'` completes when the agent's first
-   * turn finishes — useful for tool-less, one-shot stations.
-   */
-  completion: CompletionModeSchema.optional(),
-});
+}).strict();
 
-export type WorkflowStationNode = z.infer<typeof WorkflowStationNodeSchema>;
+export type WorkflowCodeStepNode = z.infer<typeof WorkflowCodeStepNodeSchema>;
 
 // ─────────────────────────────────────────────────────────────
-// Delegate-Agent Node
+// Agent-Step Node
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Delegate-agent node — spawns a named agent for a sub-task.
+ * Agent step — runs an agent for a named role.
  *
- * The `agentId` references a registered agent definition. The agent
- * receives the `input` expression result as its invocation payload.
+ * The role is resolved through the `resolveRole` RPC before the node runs. The prompt
+ * supports `{{ }}` placeholders: structured values render as JSON, a missing path
+ * renders as an empty string, and a placeholder that fails to evaluate fails the node.
  */
-export const WorkflowDelegateAgentNodeSchema = WorkflowNodeBaseSchema.extend({
+export const WorkflowAgentStepNodeSchema = WorkflowNodeBaseSchema.extend({
   /** Node type discriminant. */
-  type: z.literal('delegate-agent'),
-  /**
-   * Identifier of the registered agent definition to invoke.
-   */
-  agentId: z.string().min(1),
-  /**
-   * jexl expression resolving to the agent input payload.
-   * Evaluated against the execution context at runtime.
-   * When omitted, the agent receives the full execution context as input.
-   */
-  inputExpression: z.string().optional(),
-  /**
-   * JSON Schema for the expected agent output.
-   * Used for structured output requests and UI contract display.
-   */
-  outputSchema: JsonSchemaRecordSchema.optional(),
-  /** Exact tool allowlist selected by the workflow authority for this delegate. */
-  allowedTools: z.array(z.string()).optional(),
-  /** Completion contract for the spawned subagent. Defaults to tool completion. */
-  completion: CompletionModeSchema.optional(),
-  /** Authority-owned finalizer applied to a successful result before frame persistence. */
-  resultFinalizerId: WorkflowDelegateResultFinalizerIdSchema.optional(),
-});
-
-export type WorkflowDelegateAgentNode = z.infer<typeof WorkflowDelegateAgentNodeSchema>;
-
-// ─────────────────────────────────────────────────────────────
-// Delegate-Role Node
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Delegate-role node — delegates a task to a product-resolved role.
- *
- * Similar to `delegate-agent` but resolves the executor via a named product
- * role rather than a fixed agent ID. The role is resolved via the bus
- * `resolveRole` RPC before the node runs.
- */
-export const WorkflowDelegateRoleNodeSchema = WorkflowNodeBaseSchema.extend({
-  /** Node type discriminant. */
-  type: z.literal('delegate-role'),
-  /**
-   * Named role reference. Resolved at execution time via the bus RPC.
-   */
+  type: z.literal('agent-step'),
+  /** Named role reference. Resolved at execution time via the bus RPC. */
   role: z.string().min(1),
-  /**
-   * Task prompt forwarded to the resolved role executor.
-   * Supports `{{ }}` template interpolation.
-   */
+  /** Task prompt forwarded to the agent. Supports `{{ }}` placeholders. */
   prompt: z.string().min(1),
-  /**
-   * JSON Schema for the expected output of this delegation.
-   */
+  /** JSON Schema for the expected agent output. */
   outputSchema: JsonSchemaRecordSchema.optional(),
-  /** Exact tool allowlist selected by the workflow authority for this delegate. */
+  /** Exact tool allowlist selected by the workflow authority for this step. */
   allowedTools: z.array(z.string()).optional(),
   /** Authority-owned finalizer applied to a successful result before frame persistence. */
   resultFinalizerId: WorkflowDelegateResultFinalizerIdSchema.optional(),
-  /**
-   * Timeout in milliseconds. Defaults to 300 000 ms (5 minutes) when omitted.
-   */
+  /** Timeout in milliseconds. Defaults to 300 000 ms (5 minutes) when omitted. */
   timeoutMs: z.number().int().positive().optional(),
-  /**
-   * Subagent completion mode. `'tool'` (default) waits for an explicit
-   * `completeTask` tool call; `'turn'` completes when the agent's first
-   * turn finishes — useful for tool-less, one-shot delegates.
-   */
+  /** Completion mode: `'tool'` (default) waits for `completeTask`; `'turn'` completes after the first turn. */
   completion: CompletionModeSchema.optional(),
-});
+}).strict();
 
-export type WorkflowDelegateRoleNode = z.infer<typeof WorkflowDelegateRoleNodeSchema>;
+export type WorkflowAgentStepNode = z.infer<typeof WorkflowAgentStepNodeSchema>;
 
 // ─────────────────────────────────────────────────────────────
 // Parallel Node
@@ -661,7 +580,7 @@ export const WorkflowLoopNodeSchema = WorkflowNodeBaseSchema.extend({
   maxRounds: z.number().int().positive(),
   /**
    * The sequence node executed on each loop iteration.
-   * Must be a `sequence` node; individual stations, delegates, etc.
+   * Must be a `sequence` node; individual code steps, agent steps, etc.
    * are placed inside the body sequence.
    */
   body: z.lazy((): z.ZodType<WorkflowSequenceNode> => WorkflowSequenceNodeSchema),
@@ -812,7 +731,7 @@ export type WorkflowDefinitionProvenance = z.infer<typeof WorkflowDefinitionProv
  * Optional state contract declared on a workflow definition.
  *
  * When present, the workflow engine initializes run-scoped mutable state
- * at execution start and exposes it to station handlers via `ctx.state`.
+ * at execution start and exposes it to code-step and agent-step handlers via `ctx.state`.
  * State is runtime-owned execution data — persisted as a current snapshot
  * plus an append-only mutation log, never through the artifact store.
  * Keep state as small run working memory; large context, evidence, and
@@ -868,96 +787,98 @@ const WorkflowExtensionsSchema = rejectingLossyJsonValues(z.record(ExtensionName
  * (validated by {@link JsonSchemaRecordSchema}) for type-safe parameterization
  * and output contracts.
  */
-export const WorkflowDefinitionSchema = z.object({
-  /** Unique workflow identifier. */
-  id: z.string().min(1),
-  /** Human-readable workflow name. */
-  name: z.string().optional(),
-  /** Human-readable description of what this workflow does. */
-  description: z.string().optional(),
-  /**
-   * JSON Schema for the workflow's input parameters.
-   * Validated at execution start; available as `ctx.inputs` during execution.
-   */
-  inputSchema: JsonSchemaRecordSchema.optional(),
-  /**
-   * JSON Schema for static workflow configuration.
-   * Configuration values are resolved once at workflow load time.
-   */
-  configSchema: JsonSchemaRecordSchema.optional(),
-  /**
-   * JSON Schema for the workflow's primary output.
-   * Validated when the root sequence completes.
-   */
-  outputSchema: JsonSchemaRecordSchema.optional(),
-  /**
-   * Optional state contract for run-scoped mutable state.
-   *
-   * When present, the workflow engine initializes the declared state at
-   * execution start and exposes it to station handlers via `ctx.state`.
-   * The `schema` field describes the shape; `initial` provides the
-   * starting value. Keep payloads small; this is not a large context or
-   * artifact storage channel.
-   */
-  state: WorkflowStateDefinitionSchema.optional(),
-  /**
-   * Primary artifact binding for this workflow.
-   * When set, the workflow's output is associated with an artifact kind and scope.
-   */
-  artifact: WorkflowArtifactBindingSchema.optional(),
-  /**
-   * Root sequence node containing the full pipeline topology.
-   * Replaces the old flat `steps` DAG with a structured node tree.
-   */
-  root: WorkflowSequenceNodeSchema,
-  /**
-   * Automation trigger bindings for this workflow.
-   *
-   * Multiple bindings may fire independently; one execution is created per
-   * firing binding. An empty or omitted list means the workflow is only started
-   * directly — direct invocation is an invocation mode, not a trigger type.
-   */
-  triggers: z.array(WorkflowAutomationTriggerBindingSchema).optional(),
-  /**
-   * Scope this workflow definition is bound to.
-   * Use `{ type: 'global' }` for framework-wide workflow definitions.
-   */
-  scope: WorkflowExecutionScopeSchema.default({ type: 'global' }),
-  /**
-   * Canvas layout hints for the visual editor.
-   * Stored as an opaque JSON record; ignored by the executor.
-   */
-  canvasLayout: z.record(z.string(), JsonValueSchema).optional(),
-  /**
-   * Declarations addressed to extensions, keyed by extension name.
-   *
-   * Each entry is an opaque JSON value that only the named extension validates and
-   * interprets; the workflow core stores and forwards it unchanged and interprets none.
-   * A storage write replaces the whole map: omitting it removes every entry.
-   * A record that could not be stored unchanged is rejected, not altered.
-   */
-  extensions: WorkflowExtensionsSchema.optional(),
-  /**
-   * Provenance record tracking how and where this workflow definition originated.
-   *
-   * When `source.kind === 'extension'`, the workflow was synced by an extension
-   * and must be treated as read-only by the editor. The runtime executes the
-   * materialized definition regardless of its provenance.
-   *
-   * Absent on locally-authored definitions.
-   */
-  source: WorkflowDefinitionProvenanceSchema.optional(),
-  /** Portable executable source for worker dispatch (see `ExecutableSourceSchema`). */
-  executableSource: ExecutableSourceSchema.optional(),
-  /** Resource requirements for Worker provider selection. */
-  requirements: WorkerRequirementsSchema.optional(),
-  /**
-   * Framework finalizer selected by the compiled workflow definition after a
-   * successful execution. This immutable definition-owned selector cannot be
-   * overridden by execution callers or dispatch metadata.
-   */
-  successFinalizerId: WorkflowFinalizerIdSchema.optional(),
-});
+export const WorkflowDefinitionSchema = z
+  .object({
+    /** Unique workflow identifier. */
+    id: z.string().min(1),
+    /** Human-readable workflow name. */
+    name: z.string().optional(),
+    /** Human-readable description of what this workflow does. */
+    description: z.string().optional(),
+    /**
+     * JSON Schema for the workflow's input parameters.
+     * Validated at execution start; available as `ctx.inputs` during execution.
+     */
+    inputSchema: JsonSchemaRecordSchema.optional(),
+    /**
+     * JSON Schema for static workflow configuration.
+     * Configuration values are resolved once at workflow load time.
+     */
+    configSchema: JsonSchemaRecordSchema.optional(),
+    /**
+     * JSON Schema for the workflow's primary output.
+     * Validated when the root sequence completes.
+     */
+    outputSchema: JsonSchemaRecordSchema.optional(),
+    /**
+     * Optional state contract for run-scoped mutable state.
+     *
+     * When present, the workflow engine initializes the declared state at
+     * execution start and exposes it to code-step and agent-step handlers via `ctx.state`.
+     * The `schema` field describes the shape; `initial` provides the
+     * starting value. Keep payloads small; this is not a large context or
+     * artifact storage channel.
+     */
+    state: WorkflowStateDefinitionSchema.optional(),
+    /**
+     * Primary artifact binding for this workflow.
+     * When set, the workflow's output is associated with an artifact kind and scope.
+     */
+    artifact: WorkflowArtifactBindingSchema.optional(),
+    /**
+     * Root sequence node containing the full pipeline topology.
+     * Replaces the old flat `steps` DAG with a structured node tree.
+     */
+    root: WorkflowSequenceNodeSchema,
+    /**
+     * Automation trigger bindings for this workflow.
+     *
+     * Multiple bindings may fire independently; one execution is created per
+     * firing binding. An empty or omitted list means the workflow is only started
+     * directly — direct invocation is an invocation mode, not a trigger type.
+     */
+    triggers: z.array(WorkflowAutomationTriggerBindingSchema).optional(),
+    /**
+     * Scope this workflow definition is bound to.
+     * Use `{ type: 'global' }` for framework-wide workflow definitions.
+     */
+    scope: WorkflowExecutionScopeSchema.default({ type: 'global' }),
+    /**
+     * Canvas layout hints for the visual editor.
+     * Stored as an opaque JSON record; ignored by the executor.
+     */
+    canvasLayout: z.record(z.string(), JsonValueSchema).optional(),
+    /**
+     * Declarations addressed to extensions, keyed by extension name.
+     *
+     * Each entry is an opaque JSON value that only the named extension validates and
+     * interprets; the workflow core stores and forwards it unchanged and interprets none.
+     * A storage write replaces the whole map: omitting it removes every entry.
+     * A record that could not be stored unchanged is rejected, not altered.
+     */
+    extensions: WorkflowExtensionsSchema.optional(),
+    /**
+     * Provenance record tracking how and where this workflow definition originated.
+     *
+     * When `source.kind === 'extension'`, the workflow was synced by an extension
+     * and must be treated as read-only by the editor. The runtime executes the
+     * materialized definition regardless of its provenance.
+     *
+     * Absent on locally-authored definitions.
+     */
+    source: WorkflowDefinitionProvenanceSchema.optional(),
+    /** Portable executable source for worker dispatch (see `ExecutableSourceSchema`). */
+    executableSource: ExecutableSourceSchema.optional(),
+    /** Resource requirements for Worker provider selection. */
+    requirements: WorkerRequirementsSchema.optional(),
+    /**
+     * Framework finalizer selected by the compiled workflow definition after a
+     * successful execution. This immutable definition-owned selector cannot be
+     * overridden by execution callers or dispatch metadata.
+     */
+    successFinalizerId: WorkflowFinalizerIdSchema.optional(),
+  })
+  .strict();
 
 /**
  * Workflow definition stored in the database.
@@ -965,6 +886,24 @@ export const WorkflowDefinitionSchema = z.object({
  * through the `z.lazy` boundary using the declared interface.
  */
 export type WorkflowDefinition = z.infer<typeof WorkflowDefinitionSchema>;
+
+/** A stored workflow definition that does not satisfy {@link WorkflowDefinitionSchema}; reported instead of listed. */
+export const RejectedWorkflowDefinitionSchema = z.object({
+  /** Identifier of the stored row, exactly as stored (an empty string is possible and must stay reportable). */
+  id: z.string(),
+  /** Why the stored row was rejected: one `<path>: <message>` entry per schema issue, joined by `; `. */
+  reason: z.string().min(1),
+});
+export type RejectedWorkflowDefinition = z.infer<typeof RejectedWorkflowDefinitionSchema>;
+
+/** Answer of `workflow.listDefinitions` and `storage:workflow.list`: readable definitions plus the rejected rows. */
+export const WorkflowDefinitionListSchema = z.object({
+  /** Readable definitions; a rejected row never hides them. */
+  workflows: z.array(WorkflowDefinitionSchema),
+  /** Stored rows that could not be read; empty when every row is readable. */
+  rejected: z.array(RejectedWorkflowDefinitionSchema),
+});
+export type WorkflowDefinitionList = z.infer<typeof WorkflowDefinitionListSchema>;
 
 // ─────────────────────────────────────────────────────────────
 // Execution State (runtime)
@@ -1138,7 +1077,7 @@ export const WorkflowGateInstanceSchema = z.object({
 export type WorkflowGateInstance = z.infer<typeof WorkflowGateInstanceSchema>;
 
 // ─────────────────────────────────────────────────────────────
-// Resolved Role (for delegate nodes)
+// Resolved Role (for agent-step nodes)
 // ─────────────────────────────────────────────────────────────
 
 /**
@@ -1183,18 +1122,6 @@ export const WorkflowResolvedRoleSchema = z.object({
 });
 
 export type WorkflowResolvedRole = z.infer<typeof WorkflowResolvedRoleSchema>;
-
-/**
- * Resolved explicit agent configuration returned by the `workflow.resolveAgent`
- * RPC.
- *
- * The payload intentionally matches {@link WorkflowResolvedRoleSchema}: explicit
- * agent and role references both resolve to the adapter/subagent configuration
- * the workflow runtime needs, while preserving distinct registry seams.
- */
-export const WorkflowResolvedAgentSchema = WorkflowResolvedRoleSchema;
-
-export type WorkflowResolvedAgent = WorkflowResolvedRole;
 
 // ─────────────────────────────────────────────────────────────
 // List Query

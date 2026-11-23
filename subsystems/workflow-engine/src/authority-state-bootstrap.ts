@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { CallContext, TransportReceiveContext } from '@makaio/core';
-import type { WorkflowDefinition, WorkflowRunContext } from '@makaio/contracts';
+import { requireExecutableRunContext, type WorkflowDefinition, type WorkflowRunContext } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import { WorkflowSubjects } from './namespace.js';
 import { getValidatedInitialWorkflowState } from './workflow-state-validation.js';
@@ -90,10 +90,11 @@ async function bootstrapAuthorityLoadedStateSnapshot(
   if (stored.runContext.executionId !== executionId) {
     throw new Error(`Authority bootstrap identity mismatch for '${executionId}'`);
   }
-  const storedSnapshot = stored.runContext.definitionSnapshot;
+  const executableRunContext = requireExecutableRunContext(stored.runContext);
+  const storedSnapshot = executableRunContext.definitionSnapshot;
   if (storedSnapshot === undefined) {
     await bus.request(call, WorkflowStorageSubjects.setRunContext, {
-      runContext: { ...stored.runContext, terminalAuthority: 'authority' },
+      runContext: { ...executableRunContext, terminalAuthority: 'authority' },
     });
     return undefined;
   }
@@ -103,7 +104,7 @@ async function bootstrapAuthorityLoadedStateSnapshot(
   const authoritativeDefinition = storedSnapshot;
   await bus.request(call, WorkflowStorageSubjects.setRunContext, {
     runContext: {
-      ...stored.runContext,
+      ...executableRunContext,
       terminalAuthority: 'authority',
       definitionSnapshot: authoritativeDefinition,
     },

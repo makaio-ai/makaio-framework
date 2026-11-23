@@ -13,7 +13,7 @@ describe('external execution contracts', () => {
       startedAt: 1_000,
       frame: {
         nodeId: 'review',
-        nodeType: 'delegate-role',
+        nodeType: 'agent-step',
         path: ['review'],
         startedAt: 1_010,
       },
@@ -51,7 +51,7 @@ describe('external execution contracts', () => {
       frame: {
         frameId: 'wfx-ext-direct-review-1:review',
         nodeId: 'review',
-        nodeType: 'delegate-role' as const,
+        nodeType: 'agent-step' as const,
         path: ['review'],
         startedAt: 1_000,
         durationMs: 250,
@@ -66,7 +66,7 @@ describe('external execution contracts', () => {
     const frame = {
       frameId: 'wfx-ext-direct-review-1:review',
       nodeId: 'review',
-      nodeType: 'delegate-role' as const,
+      nodeType: 'agent-step' as const,
       path: ['review'],
       startedAt: 1_000,
       durationMs: 100,

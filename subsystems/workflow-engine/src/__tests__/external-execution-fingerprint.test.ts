@@ -28,7 +28,7 @@ function buildCompletionFrame(executionId: string) {
   return {
     frameId: `${executionId}:review`,
     nodeId: 'review',
-    nodeType: 'delegate-role' as const,
+    nodeType: 'agent-step' as const,
     path: ['review'],
     startedAt,
     durationMs: completedAt - startedAt,
@@ -69,7 +69,7 @@ describe('external execution settlement fingerprint', () => {
             executionId,
             frameId: `${executionId}:review`,
             nodeId: 'review',
-            nodeType: 'delegate-role',
+            nodeType: 'agent-step',
             path: ['review'],
             status: 'failed',
             attempt: 0,
@@ -94,7 +94,7 @@ describe('external execution settlement fingerprint', () => {
         executionId,
         frameId: `${executionId}:review`,
         nodeId: 'review',
-        nodeType: 'delegate-role' as const,
+        nodeType: 'agent-step' as const,
         path: ['review'],
         status: 'failed' as const,
         attempt: 0,
@@ -147,6 +147,7 @@ describe('external execution settlement fingerprint', () => {
         executionId,
         frameId: `${executionId}:advisory`,
         nodeId: 'advisory',
+        nodeType: 'code-step',
         duration: completedAt - startedAt,
         completedAt,
       });
@@ -240,7 +241,7 @@ describe('external execution settlement fingerprint', () => {
         startedAt,
         frame: {
           nodeId: 'review',
-          nodeType: 'delegate-role',
+          nodeType: 'agent-step',
           path: ['review'],
           startedAt,
         },
@@ -255,7 +256,7 @@ describe('external execution settlement fingerprint', () => {
         executionId,
         frameId,
         nodeId: 'mismatched-advisory-node',
-        nodeType: 'station',
+        nodeType: 'code-step',
         path: ['mismatched'],
         startedAt: startedAt - 100,
       });
@@ -266,7 +267,7 @@ describe('external execution settlement fingerprint', () => {
       await expect(bus.request(WorkflowSubjects.worklog.frame.get, { frameId })).resolves.toMatchObject({
         frame: {
           nodeId: 'review',
-          nodeType: 'delegate-role',
+          nodeType: 'agent-step',
           path: ['review'],
           status: 'running',
           startedAt,
@@ -292,7 +293,7 @@ describe('external execution settlement fingerprint', () => {
         startedAt,
         frame: {
           nodeId: 'review',
-          nodeType: 'delegate-role',
+          nodeType: 'agent-step',
           path: ['review'],
           startedAt,
         },
@@ -301,7 +302,7 @@ describe('external execution settlement fingerprint', () => {
         executionId,
         frameId: `${executionId}:advisory`,
         nodeId: 'advisory',
-        nodeType: 'station',
+        nodeType: 'code-step',
         path: ['advisory'],
         startedAt,
       });
@@ -319,6 +320,7 @@ describe('external execution settlement fingerprint', () => {
         executionId,
         frameId: `${executionId}:advisory`,
         nodeId: 'advisory',
+        nodeType: 'code-step',
         duration: completedAt - startedAt,
         completedAt,
       });
@@ -345,7 +347,7 @@ describe('external execution settlement fingerprint', () => {
         executionId,
         frameId: `${executionId}:legacy`,
         nodeId: 'legacy',
-        nodeType: 'station',
+        nodeType: 'code-step',
         path: ['legacy'],
         startedAt,
       });
@@ -353,6 +355,7 @@ describe('external execution settlement fingerprint', () => {
         executionId,
         frameId: `${executionId}:legacy`,
         nodeId: 'legacy',
+        nodeType: 'code-step',
         duration: completedAt - startedAt,
         completedAt,
       });
@@ -392,6 +395,7 @@ describe('external execution settlement fingerprint', () => {
         executionId,
         frameId: `${executionId}:advisory`,
         nodeId: 'advisory',
+        nodeType: 'code-step',
         error: 'legacy failure',
         duration: completedAt - startedAt,
         completedAt,
@@ -429,7 +433,7 @@ describe('external execution settlement fingerprint', () => {
         startedAt,
         frame: {
           nodeId: 'review',
-          nodeType: 'delegate-role',
+          nodeType: 'agent-step',
           path: ['review'],
           startedAt,
         },

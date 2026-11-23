@@ -20,12 +20,20 @@ Used by framework packages to evaluate workflow expressions, rule predicates, tr
 - `compile(expr)` - Compile an expression for repeated evaluation (returns `CompiledExpression`)
 
 **Template:**
-- `resolveTemplate(template, context)` - Replace `{{ expr }}` placeholders in a string
+- `resolveTemplate(template, context)` - Replace `{{ expr }}` placeholders in a string, degrading a failed
+  placeholder to an empty string
+- `renderPromptTemplate(template, context)` - Replace `{{ expr }}` placeholders strictly for a prompt sent to an
+  agent: objects/arrays render as indented JSON, a missing value becomes an empty string, and a failed placeholder
+  throws `TemplatePlaceholderError` instead of degrading
+- `resolveTemplatesInObject(obj, context, options)` - Walk a JSON object tree and resolve `{{ }}` templates in every
+  string leaf
 
 **Types:**
 - `ExpressionContext` - Generic variable map passed to jexl
 - `WorkflowExpressionContext` - Workflow-specific context (`trigger`, `steps`, `inputs`, `item`, `index`)
 - `CompiledExpression` - Compiled expression with `eval()` and `evalSync()` methods
+- `TemplatePlaceholderError` - Raised by `renderPromptTemplate` when a placeholder fails to evaluate
+- `TEMPLATE_PLACEHOLDER_PATTERN` - The shared `{{ expr }}` regular expression used by every template resolver
 
 ## Basic Usage
 

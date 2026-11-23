@@ -541,7 +541,6 @@ describe('workflow execution bus access', () => {
       expect(allowedMessageSubjects).toContain('workflow.state.patch');
 
       // Delegation
-      expect(allowedMessageSubjects).toContain('workflow.resolveAgent');
       expect(allowedMessageSubjects).toContain('workflow.resolveRole');
 
       // Artifact subjects

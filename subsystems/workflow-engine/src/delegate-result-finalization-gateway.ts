@@ -2,9 +2,9 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { BaseMessageContext } from '@makaio/core';
 import {
   createWorkflowDelegateResultFinalizerNamespace,
+  requireExecutableRunContext,
   walkWorkflowDefinition,
-  type WorkflowDelegateAgentNode,
-  type WorkflowDelegateRoleNode,
+  type WorkflowAgentStepNode,
   type WorkflowDefinition,
 } from '@makaio/contracts';
 import { isExecutionBoundAccessAllowed } from './execution-bound-access.js';
@@ -32,25 +32,21 @@ export function registerDelegateResultFinalizationGateway(bus: IMakaioBus): () =
       throw new Error('delegate result finalization execution does not own the requested workflow');
     }
 
-    const { runContext } = await bus.request(ctx.call, WorkflowStorageSubjects.getRunContext, {
+    const { runContext: storedRunContext } = await bus.request(ctx.call, WorkflowStorageSubjects.getRunContext, {
       executionId: payload.executionId,
     });
     if (
-      runContext === null ||
-      runContext.executionId !== payload.executionId ||
-      runContext.workflowId !== payload.workflowId
+      storedRunContext === null ||
+      storedRunContext.executionId !== payload.executionId ||
+      storedRunContext.workflowId !== payload.workflowId
     ) {
       throw new Error('delegate result finalization run context does not own the requested workflow execution');
     }
+    const runContext = requireExecutableRunContext(storedRunContext);
     if (runContext.definitionSnapshot === undefined) {
       throw new Error('delegate result finalization requires an Authority-owned definition snapshot');
     }
-    assertAuthorizedDelegateFinalizer(
-      runContext.definitionSnapshot,
-      payload.nodeId,
-      payload.nodeType,
-      payload.finalizerId,
-    );
+    assertAuthorizedDelegateFinalizer(runContext.definitionSnapshot, payload.nodeId, payload.finalizerId);
 
     const { subjects } = createWorkflowDelegateResultFinalizerNamespace(payload.finalizerId);
     const result = await bus.request(ctx.call, subjects.finalize, {
@@ -58,7 +54,6 @@ export function registerDelegateResultFinalizationGateway(bus: IMakaioBus): () =
       workflowId: payload.workflowId,
       frameId: payload.frameId,
       nodeId: payload.nodeId,
-      nodeType: payload.nodeType,
       rawResult: payload.rawResult,
       toolObservations: payload.toolObservations,
       ...(payload.economics === undefined ? {} : { economics: payload.economics }),
@@ -79,31 +74,20 @@ function assertExecutionAttemptPeer(ctx: BaseMessageContext, executionId: string
 }
 
 /**
- * Confirm that the exact immutable delegate node selects the requested
- * finalizer. Node ID alone is insufficient because a caller must not switch
- * delegate type or use another node's finalizer.
+ * Confirm that the exact immutable agent-step node selects the requested
+ * finalizer. Node ID alone is insufficient because a caller must not use
+ * another node's finalizer.
  * @param definition - Authority-owned immutable workflow snapshot.
- * @param nodeId - Delegate node ID supplied by the worker.
- * @param nodeType - Delegate node type supplied by the worker.
+ * @param nodeId - Agent-step node ID supplied by the worker.
  * @param finalizerId - Requested finalizer identity.
  */
-function assertAuthorizedDelegateFinalizer(
-  definition: WorkflowDefinition,
-  nodeId: string,
-  nodeType: 'delegate-agent' | 'delegate-role',
-  finalizerId: string,
-): void {
+function assertAuthorizedDelegateFinalizer(definition: WorkflowDefinition, nodeId: string, finalizerId: string): void {
   let authorized = false;
   walkWorkflowDefinition(definition.root, {
     enter(node) {
-      if (
-        (node.type !== 'delegate-agent' && node.type !== 'delegate-role') ||
-        node.id !== nodeId ||
-        node.type !== nodeType
-      )
-        return;
-      const delegate = node as WorkflowDelegateAgentNode | WorkflowDelegateRoleNode;
-      if (delegate.resultFinalizerId === finalizerId) authorized = true;
+      if (node.type !== 'agent-step' || node.id !== nodeId) return;
+      const agentStep = node as WorkflowAgentStepNode;
+      if (agentStep.resultFinalizerId === finalizerId) authorized = true;
       return false;
     },
   });

@@ -8,7 +8,10 @@ import {
   WorkflowSubjects,
   WorkflowWorkerConfigSchema,
   WorkflowGateNodeSchema,
+  WorkflowDefinitionSchema,
+  JsonValueSchema,
   type CallContext,
+  type JsonValue,
   type WorkflowRunResult,
 } from '@makaio/contracts';
 import { getRawSqlExecutor } from '@makaio/storage-drizzle';
@@ -24,6 +27,28 @@ import { registerDrizzleWorkflowStorage } from '../storage/handler.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import { createSqliteAttemptRepository } from '../testing/sqlite.js';
 import { createWorkflowDefinition, createWorkflowExecution } from './shared.js';
+
+const legacySnapshot = {
+  ...createWorkflowDefinition({ id: 'cancel-gap-workflow' }),
+  root: {
+    id: 'root',
+    type: 'sequence',
+    nodes: [{ id: 'retired-review', type: 'station', role: 'review', prompt: 'Review' }], // legacy-input
+  },
+};
+
+const cancellationSnapshotCases: ReadonlyArray<{
+  title: string;
+  storedSnapshot: string;
+  expectedSnapshot: JsonValue;
+}> = [
+  {
+    title: 'an obsolete node snapshot',
+    storedSnapshot: JSON.stringify(legacySnapshot),
+    expectedSnapshot: JsonValueSchema.parse(legacySnapshot),
+  },
+  { title: 'invalid JSON snapshot text', storedSnapshot: '{', expectedSnapshot: '{' },
+];
 
 /**
  * Recompose the real owner and Authority over one persistent SQLite file.
@@ -137,6 +162,44 @@ async function seedOwner(
 }
 
 describe('workflow owner cancellation recovery', () => {
+  describe.each(['test', 'production'] as const)('in %s mode', (mode) => {
+    it.each(cancellationSnapshotCases)('cancels through the real executor with $title', async (snapshot) => {
+      expect(WorkflowDefinitionSchema.safeParse(snapshot.expectedSnapshot).success).toBe(false);
+      const previousNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = mode;
+      const store = createRestartableTempDb('workflow-owner-opaque-cancel');
+      const call = createTestCall();
+      let owner: Awaited<ReturnType<typeof connectOwner>> | undefined;
+      try {
+        owner = await connectOwner(store);
+        const { executionId } = await seedOwner(call, owner, 'completed');
+        await owner.raw.run(sql`UPDATE workflow_run_contexts
+          SET definition_snapshot = ${snapshot.storedSnapshot} WHERE execution_id = ${executionId}`);
+        const stored = await owner.bus.request(call, WorkflowStorageSubjects.getRunContext, { executionId });
+        expect(stored.runContext?.definitionSnapshot).toEqual(snapshot.expectedSnapshot);
+        const reason = 'Cancel without interpreting the stored definition';
+        await expect(
+          owner.executor.acceptAuthorityCancellation(call, executionId, { kind: 'cancelled', reason }),
+        ).resolves.toEqual({ accepted: true, status: 'cancelled' });
+        expect(
+          (await owner.bus.request(call, WorkflowStorageSubjects.getExecution, { executionId })).execution,
+        ).toMatchObject({ status: 'cancelled', reason });
+        expect(owner.events).toEqual(['cancelled']);
+      } finally {
+        try {
+          await owner?.close();
+        } finally {
+          try {
+            await store.close();
+          } finally {
+            if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+            else process.env.NODE_ENV = previousNodeEnv;
+          }
+        }
+      }
+    });
+  });
+
   it.each([
     'completed',
     'paused',

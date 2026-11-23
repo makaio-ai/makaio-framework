@@ -34,7 +34,7 @@ import {
 /**
  * JSON-serializable output produced by a completed gate node.
  *
- * Exposes the validated resume data so downstream station and delegate nodes
+ * Exposes the validated resume data so downstream code steps and agent steps
  * can reference it via the expression context (e.g., `frames.myGate.output.resumeData`).
  */
 export interface GateNodeOutput {

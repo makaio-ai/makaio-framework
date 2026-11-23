@@ -1,11 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { MakaioBus } from '@makaio/bus-core';
+import { MakaioBus, createBusInstance } from '@makaio/bus-core';
 import {
+  AutomationTriggerNamespace,
   AutomationTriggerSubjects,
   CRON_AUTOMATION_TRIGGER_KIND,
   CronAutomationTriggerParamsSchema,
   WorkflowSubjects,
+  type WorkflowDefinition,
   defineAutomationTrigger,
   toAutomationTriggerType,
 } from '@makaio/contracts';
@@ -15,9 +18,11 @@ import {
   AutomationTriggerRegistry,
 } from '@makaio/services-core/automation-trigger';
 import { WorkflowTriggerReconciler } from '../workflow-trigger-reconciler.js';
-import { WorkflowStorageSubjects } from '../storage/namespace.js';
+import { WorkflowNamespace } from '../namespace.js';
+import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import {
   createTestDb,
+  createTestDbForBus,
   createWorkflowDefinition,
   type TestDbContext,
   type WorkflowDefinitionOptions,
@@ -405,6 +410,18 @@ describe('WorkflowTriggerReconciler', () => {
     });
   }
 
+  /**
+   * Recreates historical trigger data without using the validated write boundary.
+   * @param id - Existing definition identity.
+   * @param triggers - Persisted bindings to replace through SQL.
+   */
+  async function overwriteStoredTriggers(
+    id: string,
+    triggers: NonNullable<WorkflowDefinitionOptions['triggers']>,
+  ): Promise<void> {
+    await dbContext.exec(sql`UPDATE workflow_definitions SET triggers = ${JSON.stringify(triggers)} WHERE id = ${id}`);
+  }
+
   it('shares one activation between two workflows and starts them independently', async () => {
     await store('wf-alpha', [
       { kind: TEST_KIND, params: { channel: 'main' }, when: { field: 'payload.value', operator: { $in: [1, 2] } } },
@@ -723,42 +740,47 @@ describe('WorkflowTriggerReconciler', () => {
     }
   });
 
-  it('keeps last-good subscriptions when a definition refresh carries an invalid binding', async () => {
+  it('releases subscriptions when a stored definition refresh contains a removed filter key', async () => {
     await store('wf-guard', [{ kind: TEST_KIND, params: { channel: 'good' } }]);
     await reconciler.init();
     expect(source.lifecycle).toEqual(['activate:good']);
+    const activation = source.live[0];
 
-    // A binding that fails schema parsing (here the removed `filterExpression`
-    // key) invalidates the whole refresh: the workflow keeps the subscriptions it already had. The broken
-    // definition is persisted first, because the refresh reads storage rather
-    // than trusting the event payload.
-    const broken = createWorkflowDefinition({
-      id: 'wf-guard',
-      triggers: [legacyBindings.filterExpression],
-    });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: broken });
-    await MakaioBus.emit(WorkflowSubjects.definition.updated, broken);
-
-    await vi.waitFor(() => expect(reconciler.activeConsumerCount()).toBe(1));
-    expect(source.lifecycle).toEqual(['activate:good']);
-
-    await emitOn(source, 'good', { channel: 'good', value: 1 });
-    await vi.waitFor(() => expect(starts).toHaveLength(1));
-    expect(starts[0]?.workflowId).toBe('wf-guard');
+    // Historical rows bypass current writes; rejecting one releases all its consumers.
+    const broken = createWorkflowDefinition({ id: 'wf-guard', triggers: [legacyBindings.filterExpression] });
+    await overwriteStoredTriggers(broken.id, broken.triggers ?? []);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await MakaioBus.emit(WorkflowSubjects.definition.updated, broken);
+      await vi.waitFor(() => {
+        expect(reconciler.activeConsumerCount()).toBe(0);
+        expect(source.lifecycle).toEqual(['activate:good', 'cleanup:good']);
+      });
+      expect(error).toHaveBeenCalledWith(expect.stringContaining('"wf-guard" rejected:'), expect.any(Error));
+      await activation.emit({ channel: 'good', value: 1 });
+      expect(starts).toHaveLength(0);
+    } finally {
+      error.mockRestore();
+    }
   });
 
-  it('activates valid persisted siblings when a cold-start binding carries a removed filter key', async () => {
-    await store('wf-cold-invalid-sibling', [legacyBindings.filter, { kind: TEST_KIND, params: { channel: 'valid' } }]);
+  it('rejects valid persisted siblings with a cold-start binding carrying a removed filter key', async () => {
+    await store('wf-cold-invalid-sibling', [{ kind: TEST_KIND, params: { channel: 'valid' } }]);
+    await overwriteStoredTriggers('wf-cold-invalid-sibling', [
+      legacyBindings.filter,
+      { kind: TEST_KIND, params: { channel: 'valid' } },
+    ]);
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     try {
       await reconciler.init();
 
-      expect(reconciler.activeConsumerCount()).toBe(1);
-      expect(source.lifecycle).toEqual(['activate:valid']);
-      await emitOn(source, 'valid', { channel: 'valid', value: 1 });
-      await vi.waitFor(() => expect(starts).toHaveLength(1));
-      expect(starts[0]?.workflowId).toBe('wf-cold-invalid-sibling');
+      expect(reconciler.activeConsumerCount()).toBe(0);
+      expect(source.lifecycle).toEqual([]);
+      expect(source.live).toHaveLength(0);
+      expect(starts).toHaveLength(0);
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error.mock.calls[0]?.[0]).toContain("'wf-cold-invalid-sibling': triggers.0.filter:");
     } finally {
       error.mockRestore();
     }
@@ -1034,21 +1056,23 @@ describe('WorkflowTriggerReconciler', () => {
       'filter',
       'filterExpression',
     ] as const)('rejects the removed `%s` key while parsing, before any event schema is consulted', async (key) => {
-      await store('wf-legacy', [legacyBindings[key], { kind: TEST_KIND, params: { channel: 'valid' } }]);
+      await store('wf-legacy', [{ kind: TEST_KIND, params: { channel: 'valid' } }]);
+      await overwriteStoredTriggers('wf-legacy', [
+        legacyBindings[key],
+        { kind: TEST_KIND, params: { channel: 'valid' } },
+      ]);
       const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const prepareBinding = vi.spyOn(runtime, 'prepareBinding');
 
       try {
         await reconciler.init();
 
-        expect(reconciler.activeConsumerCount()).toBe(1);
-        expect(source.live.map(({ channel }) => channel)).toEqual(['valid']);
-        expect(error).toHaveBeenCalledWith(
-          expect.stringContaining('leaving invalid trigger 0 of workflow "wf-legacy" inactive'),
-          expect.anything(),
-        );
-        // The legacy binding never reached the binding runtime.
-        expect(prepareBinding.mock.calls.map(([binding]) => binding.params)).toEqual([{ channel: 'valid' }]);
+        expect(reconciler.activeConsumerCount()).toBe(0);
+        expect(source.live.map(({ channel }) => channel)).toEqual([]);
+        expect(error).toHaveBeenCalledTimes(1);
+        expect(error.mock.calls[0]?.[0]).toContain(`'wf-legacy': triggers.0.${key}:`);
+        // The entire rejected row stays outside binding preparation.
+        expect(prepareBinding.mock.calls.map(([binding]) => binding.params)).toEqual([]);
       } finally {
         prepareBinding.mockRestore();
         error.mockRestore();
@@ -1265,7 +1289,7 @@ describe('WorkflowTriggerReconciler', () => {
     }
   });
 
-  it('replays one owner when an out-of-scope persisted sibling is invalid', async () => {
+  it('releases all consumers when owner replay finds an invalid out-of-scope persisted sibling', async () => {
     await registry.register(OTHER_OWNER, [createOtherOwnerType()]);
     const definition = createWorkflowDefinition({
       id: 'wf-scoped-invalid-sibling',
@@ -1280,8 +1304,7 @@ describe('WorkflowTriggerReconciler', () => {
     expect(source.live.map(({ channel }) => channel)).toEqual(['recover']);
 
     // Storage can contain an invalid binding before a registry signal arrives.
-    // Replaying TEST_OWNER must not compile OTHER_OWNER's binding: its existing
-    // consumer remains last-good while the stopped TEST_OWNER source recovers.
+    // Owner replay rejects the entire unreadable row, including its other owner's consumer.
     const invalidSibling = createWorkflowDefinition({
       id: definition.id,
       triggers: [
@@ -1289,23 +1312,25 @@ describe('WorkflowTriggerReconciler', () => {
         { ...legacyBindings.filterExpression, kind: OTHER_KIND, params: { channel: 'untouched' } },
       ],
     });
-    await MakaioBus.request(WorkflowStorageSubjects.set, { workflow: invalidSibling });
+    await overwriteStoredTriggers(invalidSibling.id, invalidSibling.triggers ?? []);
     await runtime.stopOwner(TEST_OWNER);
     expect(source.live).toHaveLength(0);
 
     const prepareBinding = vi.spyOn(runtime, 'prepareBinding');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       await registry.register(TEST_OWNER, source.types);
 
-      await vi.waitFor(() => expect(source.live.map(({ channel }) => channel)).toEqual(['recover']));
-      expect(prepareBinding.mock.calls.map(([binding]) => binding.kind)).toEqual([TEST_KIND]);
-      expect(reconciler.activeConsumerCount()).toBe(2);
-
-      await emitOn(source, 'recover', { channel: 'recover', value: 1 });
-      await vi.waitFor(() => expect(starts).toHaveLength(1));
-      expect(starts[0]?.workflowId).toBe(definition.id);
+      await vi.waitFor(() => expect(reconciler.activeConsumerCount()).toBe(0));
+      expect(source.live.map(({ channel }) => channel)).toEqual([]);
+      expect(prepareBinding.mock.calls.map(([binding]) => binding.kind)).toEqual([]);
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(error.mock.calls[0]?.[0]).toContain(`'${definition.id}': triggers.1.filterExpression:`);
+      expect(starts).toHaveLength(0);
+      expect(source.lifecycle).toEqual(['activate:recover', 'cleanup:recover']);
     } finally {
       prepareBinding.mockRestore();
+      error.mockRestore();
     }
   });
 
@@ -1452,5 +1477,221 @@ describe('WorkflowTriggerReconciler', () => {
     expect(reconciler.activeConsumerCount()).toBe(0);
     expect(source.live).toHaveLength(0);
     expect(source.lifecycle).toEqual(['activate:teardown', 'cleanup:teardown']);
+  });
+});
+
+/** Persisted corruption that bypasses the validated write contract. */
+interface StoredCorruption {
+  /** Description included in the parameterized test title. */
+  readonly title: string;
+  /** SQL assignments applied to a previously readable row. */
+  readonly assignments: string;
+}
+
+const storedCorruptions: readonly StoredCorruption[] = [
+  { title: 'invalid node', assignments: `root = '{"type":"invalid-node","id":"invalid"}'` },
+  { title: 'incomplete scope', assignments: "scope_type = 'external', scope_kind = 'project', scope_id = ''" },
+  { title: 'undecodable root', assignments: "root = '{'" },
+];
+
+describe.each(['test', 'production'] as const)('stored trigger reconciliation in %s mode', (mode) => {
+  let bus: ReturnType<typeof createBusInstance>;
+  let dbContext: TestDbContext;
+  let registry: AutomationTriggerRegistry;
+  let runtime: AutomationTriggerBindingRuntime;
+  let reconciler: WorkflowTriggerReconciler;
+  let source: TestSource;
+  let errors: MockInstance<typeof console.error>;
+
+  beforeEach(async () => {
+    vi.stubEnv('NODE_ENV', mode);
+    bus = createBusInstance();
+    bus.registerNamespace(WorkflowNamespace);
+    bus.registerNamespace(WorkflowStorageNamespace);
+    bus.registerNamespace(AutomationTriggerNamespace);
+    dbContext = await createTestDbForBus(bus);
+    registry = new AutomationTriggerRegistry(bus);
+    await registry.init();
+    source = createTestSource();
+    await registry.register(TEST_OWNER, source.types);
+    runtime = new AutomationTriggerBindingRuntime({
+      resolveRegistration: (kind) => registry.resolveRegistration(kind),
+    });
+    reconciler = new WorkflowTriggerReconciler(bus, () => runtime);
+    errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(async () => {
+    await reconciler.destroy();
+    await runtime.close();
+    await registry.destroy();
+    dbContext.cleanup();
+    errors.mockRestore();
+    vi.unstubAllEnvs();
+  });
+
+  /**
+   * Writes a readable definition through the real storage handler.
+   * @param id - Row and channel identity.
+   * @returns The persisted definition used for identity-only signals.
+   */
+  async function persist(id: string): Promise<WorkflowDefinition> {
+    const workflow = createWorkflowDefinition({ id, triggers: [{ kind: TEST_KIND, params: { channel: id } }] });
+    await bus.request(bus.own('start'), WorkflowStorageSubjects.set, { workflow });
+    return workflow;
+  }
+
+  /**
+   * Damages one row without going through the validated write contract.
+   * @param id - Stored row identifier.
+   * @param assignments - SQL assignments from the fixed corruption table.
+   */
+  async function corrupt(id: string, assignments: string): Promise<void> {
+    await dbContext.exec(sql`UPDATE workflow_definitions SET ${sql.raw(assignments)} WHERE id = ${id}`);
+  }
+
+  /**
+   * Asserts that startup reports exactly the rejected rows with their reasons.
+   * @param ids - Expected rejected row identities.
+   */
+  async function expectRejected(ids: readonly string[]): Promise<void> {
+    const result = await bus.request(bus.own('start'), WorkflowStorageSubjects.list, {});
+    expect(result.rejected.map(({ id }) => id).sort()).toEqual([...ids].sort());
+    expect(errors).toHaveBeenCalledTimes(1);
+    const message = errors.mock.calls[0]?.[0];
+    expect(message).not.toContain("'good'");
+    for (const { id, reason } of result.rejected) {
+      expect(reason.length).toBeGreaterThan(0);
+      expect(message).toContain(`'${id}': ${reason}`);
+    }
+  }
+
+  it('initializes readable triggers beside invalid nodes and incomplete scopes with one diagnostic', async () => {
+    await persist('good');
+    await persist('bad-node');
+    await persist('bad-scope');
+    await corrupt('bad-node', storedCorruptions[0].assignments);
+    await corrupt('bad-scope', storedCorruptions[1].assignments);
+
+    await expect(reconciler.init()).resolves.toBeUndefined();
+
+    expect(source.lifecycle).toEqual(['activate:good']);
+    expect(reconciler.activeConsumerCount()).toBe(1);
+    await expectRejected(['bad-node', 'bad-scope']);
+  });
+
+  it.each(storedCorruptions)('releases only the damaged consumer after $title and restores it without listing', async ({
+    assignments,
+  }) => {
+    await persist('good');
+    const damaged = await persist('damaged');
+    await reconciler.init();
+    expect(reconciler.activeConsumerCount()).toBe(2);
+    const goodActivation = source.live.find(({ channel }) => channel === 'good');
+    await corrupt(damaged.id, assignments);
+    const listed = vi.fn();
+    const stopCounting = bus.on(WorkflowStorageSubjects.list, listed, { priority: 10 });
+    try {
+      await bus.emit(bus.own('start'), WorkflowSubjects.definition.updated, damaged);
+      await vi.waitFor(() => {
+        expect(reconciler.activeConsumerCount()).toBe(1);
+        expect(source.lifecycle).toEqual(['activate:good', 'activate:damaged', 'cleanup:damaged']);
+        expect(source.live).toEqual([goodActivation]);
+      });
+      expect(errors).toHaveBeenCalledTimes(1);
+      expect(errors.mock.calls[0]?.[0]).toContain('"damaged" rejected:');
+      expect(errors.mock.calls[0]?.[1]).toBeInstanceOf(Error);
+      expect(errors.mock.calls[0]?.[0]).not.toContain('"good"');
+
+      await persist(damaged.id);
+      await vi.waitFor(() => {
+        expect(reconciler.activeConsumerCount()).toBe(2);
+        expect(source.lifecycle).toEqual(['activate:good', 'activate:damaged', 'cleanup:damaged', 'activate:damaged']);
+        expect(source.live.find(({ channel }) => channel === 'good')).toBe(goodActivation);
+      });
+      expect(listed).not.toHaveBeenCalled();
+      expect(errors).toHaveBeenCalledTimes(1);
+    } finally {
+      stopCounting();
+    }
+  });
+
+  it('deletes a damaged definition and releases its registered consumer through its own signal', async () => {
+    await persist('good');
+    await persist('damaged');
+    await reconciler.init();
+    await corrupt('damaged', storedCorruptions[0].assignments);
+
+    await expect(bus.request(bus.own('start'), WorkflowStorageSubjects.delete, { id: 'damaged' })).resolves.toEqual({
+      deleted: true,
+    });
+
+    await vi.waitFor(() => {
+      expect(reconciler.activeConsumerCount()).toBe(1);
+      expect(source.lifecycle).toEqual(['activate:good', 'activate:damaged', 'cleanup:damaged']);
+      expect(source.live.map(({ channel }) => channel)).toEqual(['good']);
+    });
+    expect(await bus.request(bus.own('start'), WorkflowStorageSubjects.get, { id: 'damaged' })).toEqual({
+      workflow: null,
+    });
+  });
+
+  it('propagates unrelated list failures during initialization', async () => {
+    await persist('good');
+    const stopFailure = bus.on(
+      WorkflowStorageSubjects.list,
+      () => {
+        throw new Error('storage unavailable');
+      },
+      { priority: 10 },
+    );
+    try {
+      await expect(reconciler.init()).rejects.toThrow('storage unavailable');
+      expect(reconciler.activeConsumerCount()).toBe(0);
+      expect(source.lifecycle).toEqual([]);
+    } finally {
+      stopFailure();
+    }
+  });
+
+  it('reports undecodable roots and empty identifiers beside readable triggers', async () => {
+    await persist('good');
+    await persist('broken-json');
+    await persist('empty-id');
+    await corrupt('broken-json', "root = '{'");
+    await corrupt('empty-id', "id = ''");
+
+    await expect(reconciler.init()).resolves.toBeUndefined();
+
+    expect(source.lifecycle).toEqual(['activate:good']);
+    expect(reconciler.activeConsumerCount()).toBe(1);
+    await expectRejected(['broken-json', '']);
+    await expect(bus.request(bus.own('start'), WorkflowStorageSubjects.delete, { id: 'broken-json' })).resolves.toEqual(
+      {
+        deleted: true,
+      },
+    );
+    expect(await bus.request(bus.own('start'), WorkflowStorageSubjects.get, { id: 'broken-json' })).toEqual({
+      workflow: null,
+    });
+  });
+
+  it('deletes an undecodable root and releases its previously registered consumer', async () => {
+    await persist('good');
+    await persist('broken-json');
+    await reconciler.init();
+    await corrupt('broken-json', "root = '{'");
+
+    await expect(bus.request(bus.own('start'), WorkflowStorageSubjects.delete, { id: 'broken-json' })).resolves.toEqual(
+      {
+        deleted: true,
+      },
+    );
+
+    await vi.waitFor(() => {
+      expect(reconciler.activeConsumerCount()).toBe(1);
+      expect(source.lifecycle).toEqual(['activate:good', 'activate:broken-json', 'cleanup:broken-json']);
+      expect(source.live.map(({ channel }) => channel)).toEqual(['good']);
+    });
   });
 });

@@ -1,6 +1,6 @@
 ---
 title: Creating Workflows
-description: Build typed, event-driven workflows using the factory pipeline API with stations, parallel delegates, gates, and iterators.
+description: Build typed, event-driven workflows using the factory pipeline API with code steps, agent steps, gates, and iterators.
 ---
 
 Workflows are multi-step automations that combine typed handler functions, agent delegations,
@@ -40,7 +40,7 @@ const workflow = defineWorkflow('hello', {
   triggers: [],
 });
 
-workflow.station('greet', async (ctx) => {
+workflow.codeStep('greet', async (ctx) => {
   return { message: `Hello from workflow ${ctx.workflowId}!` };
 });
 
@@ -59,30 +59,29 @@ echo '{}' | makaio workflow run .makaio/personal/workflows/hello.ts
 
 ---
 
-## The Seven Primitives
+## The Six Primitives
 
-Every workflow is composed from seven building blocks, each expressed as a method on the
+Every workflow is composed from six building blocks, each expressed as a method on the
 fluent builder or as a standalone factory function.
 
 | Primitive | Method / Factory | Purpose |
 |-----------|-----------------|---------|
-| Station | `.station()` / `station()` | Sequential handler step |
-| Delegate (agent) | `.delegateToAgent()` / `delegateToAgent()` | Explicit agent invocation |
-| Delegate (role) | `.delegateToRole()` / `delegateToRole()` | Role-resolved agent invocation |
+| Code Step | `.codeStep()` / `codeStep()` | Sequential handler step |
+| Agent Step | `.agentStep()` / `agentStep()` | Agent invocation for a named role |
 | Parallel | `.parallel()` | Fan-out; runs N branches concurrently |
 | Gate | `.gate()` / `gate()` | Human-in-the-loop suspend/resume |
 | Iterate | `.iterate()` / `iterate()` | Single handler mapped over a collection |
 | Iterate chain | `.iterateChain()` / `iterateChain()` | Static sub-chain mapped over a collection |
 
-Standalone factory functions (`station`, `delegateToAgent`, `delegateToRole`, `gate`,
-`iterate`, `iterateChain`) create nodes for embedding inside `.parallel()` or
-`.iterateChain()` calls. They carry the same options as their builder-method counterparts.
+Standalone factory functions (`codeStep`, `agentStep`, `gate`, `iterate`, `iterateChain`)
+create nodes for embedding inside `.parallel()` or `.iterateChain()` calls. They carry the
+same options as their builder-method counterparts.
 
-Station-owned child sessions that are not semantically subagents should use the existing
-session branch semantics. Use `branchKind: 'branch'` for generic workflow/station child
+Code-step-owned child sessions that are not semantically subagents should use the existing
+session branch semantics. Use `branchKind: 'branch'` for generic workflow/code-step child
 sessions and identify the owning workflow frame through `WorkflowSubjects.frame.sessionLinked`
 or explicit session metadata. `BranchKind` describes session lifecycle semantics;
-product-specific station identity belongs in frame links or metadata rather than a new branch
+product-specific step identity belongs in frame links or metadata rather than a new branch
 kind.
 
 ---
@@ -153,7 +152,7 @@ workflow
 
 ### `.artifact(options)`
 
-Binds a primary artifact to the workflow. The artifact is loaded before the first station
+Binds a primary artifact to the workflow. The artifact is loaded before the first step
 runs and available as `ctx.artifact` throughout execution. Handlers may update it via
 `ctx.artifact.updateArtifact()` and `ctx.artifact.updateStatus()`.
 
@@ -166,14 +165,14 @@ workflow.artifact({
 });
 ```
 
-### `.station(id, handler, options?)`
+### `.codeStep(id, handler, options?)`
 
-Appends a sequential work step. The handler receives a `StationContext` and must return a
+Appends a sequential work step. The handler receives a `CodeStepContext` and must return a
 JSON-serializable value. The return value is available as `ctx.previousSteps[id]` in
-subsequent stations.
+subsequent steps.
 
 ```typescript
-workflow.station('aggregate', async (ctx) => {
+workflow.codeStep('aggregate', async (ctx) => {
   const prev = ctx.previousSteps['reviews'];
   if (prev.status !== 'completed') return { findings: [] };
   return { findings: prev.output.flat() };
@@ -183,30 +182,22 @@ workflow.station('aggregate', async (ctx) => {
 Optional `when` and `skip` jexl expressions control conditional execution:
 
 ```typescript
-workflow.station('escalate', escalateHandler, {
+workflow.codeStep('escalate', escalateHandler, {
   when: 'output.blockers.length > 0',
 });
 ```
 
-### `.delegateToAgent(id, agentConfig, options?)`
+### `.agentStep(id, role, options?)`
 
-Appends an explicit agent invocation with fully declared metadata. The GUI can display adapter,
-model, and profile without executing the workflow.
+Appends an agent invocation for a named role. The role is resolved at runtime through the
+`resolveRole` bus RPC to determine the concrete agent configuration.
 
-```typescript
-workflow.delegateToAgent('implement', {
-  agentId: 'claude-code-implementer',
-  inputExpression: '{ task: input.description, branch: input.branch }',
-});
-```
-
-### `.delegateToRole(id, role, options?)`
-
-Appends a role-resolved agent invocation. The role name is looked up in the persona registry
-at runtime to determine the concrete agent configuration.
+The `prompt` supports `{{ expr }}` placeholders: a structured value (object or array) renders
+as JSON, a path that resolves to nothing renders as an empty string, and a placeholder whose
+expression fails to evaluate fails the step visibly rather than rendering silently empty.
 
 ```typescript
-workflow.delegateToRole('implement', 'implementer', {
+workflow.agentStep('implement', 'implementer', {
   prompt: 'Implement the plan described in {{ input.description }}',
   outputSchema: {
     type: 'object',
@@ -219,22 +210,22 @@ workflow.delegateToRole('implement', 'implementer', {
 ```
 
 `outputSchema` is a JSON Schema record forwarded to structured-output capable adapters.
-`timeoutMs` bounds the delegated execution. `completion: 'turn'` completes when the delegated
+`timeoutMs` bounds the agent step execution. `completion: 'turn'` completes when the
 agent's first turn finishes; omit it to use the default tool-completion contract.
 
 ### `.parallel(id, options, branches)`
 
 Appends a fan-out node. All branches run concurrently; the parallel node completes when all
-branches settle. Use the standalone `station()`, `delegateToAgent()`, or `delegateToRole()`
-factories to build branch nodes.
+branches settle. Use the standalone `codeStep()` or `agentStep()` factories to build branch
+nodes.
 
 ```typescript
-import { station, delegateToRole } from '@makaio/contracts';
+import { codeStep, agentStep } from '@makaio/contracts';
 
 workflow.parallel('reviews', {}, [
-  station('spec-review', specReviewHandler),
-  delegateToRole('quality-review', 'code-reviewer'),
-  station('test-coverage', coverageHandler),
+  codeStep('spec-review', specReviewHandler),
+  agentStep('quality-review', 'code-reviewer'),
+  codeStep('test-coverage', coverageHandler),
 ]);
 ```
 
@@ -245,8 +236,8 @@ Execution mode is controlled by `options.mode`:
 
 ```typescript
 workflow.parallel('providers', { mode: 'fail-fast' }, [
-  station('try-primary', primaryHandler),
-  station('try-secondary', secondaryHandler),
+  codeStep('try-primary', primaryHandler),
+  codeStep('try-secondary', secondaryHandler),
 ]);
 ```
 
@@ -254,7 +245,7 @@ workflow.parallel('providers', { mode: 'fail-fast' }, [
 
 Appends a human-in-the-loop suspend point. The workflow pauses until an external signal
 (`workflow.gate.respond`) arrives. The `resume` Zod schema validates the resume payload;
-resume data is available in subsequent stations through that gate node's `previousSteps` entry.
+resume data is available in subsequent steps through that gate node's `previousSteps` entry.
 
 ```typescript
 workflow.gate('approve', {
@@ -268,7 +259,7 @@ workflow.gate('approve', {
   }),
 });
 
-workflow.station('post-approval', async (ctx) => {
+workflow.codeStep('post-approval', async (ctx) => {
   const gate = ctx.previousSteps['approve'];
   if (gate?.status !== 'completed') return { verdict: 'rejected' };
   const resume = gate.output as { resumeData?: { decision?: string } };
@@ -321,14 +312,14 @@ requires multiple sequential steps. The sub-chain is a list of nodes built with 
 factory functions; all nodes see `ctx.item` bound to the current collection element.
 
 ```typescript
-import { station, delegateToRole } from '@makaio/contracts';
+import { codeStep, agentStep } from '@makaio/contracts';
 
 workflow.iterateChain('process-findings', [
-  delegateToRole('analyze-finding', 'code-reviewer', {
+  agentStep('analyze-finding', 'code-reviewer', {
     prompt: 'Analyze this finding: {{ item.description }}',
   }),
-  station('validate-analysis', validateAnalysisHandler),
-  station('apply-finding', applyFindingHandler),
+  codeStep('validate-analysis', validateAnalysisHandler),
+  codeStep('apply-finding', applyFindingHandler),
 ], {
   collection: 'output.findings',
 });
@@ -341,8 +332,8 @@ introspection without running the workflow.
 
 ## Real-World Example: Review Workflow
 
-This example shows a review workflow with three parallel delegates (spec, quality, test
-coverage), an `apply-findings` station that writes agent output back to the workflow Artifact,
+This example shows a review workflow with three parallel steps (spec, quality, test
+coverage), an `apply-findings` step that writes agent output back to the workflow Artifact,
 a typed gate for human approval, and an `iterateChain` that processes each finding through a
 multi-step sub-pipeline.
 
@@ -350,8 +341,8 @@ multi-step sub-pipeline.
 // .makaio/workflows/review.ts
 import {
   defineWorkflow,
-  station,
-  delegateToRole,
+  codeStep,
+  agentStep,
 } from '@makaio/contracts';
 import { z } from 'zod';
 
@@ -440,15 +431,15 @@ const reviewWorkflow = defineWorkflow('review', {
     statusPath: 'status',
   })
 
-  // Fan out to three parallel reviewer delegates
+  // Fan out to three parallel reviewer steps
   .parallel('delegate-reviews', {}, [
-    delegateToRole('spec-review', 'spec-reviewer', {
+    agentStep('spec-review', 'spec-reviewer', {
       prompt: 'Review spec compliance for branch {{ input.branch }}',
     }),
-    delegateToRole('quality-review', 'code-reviewer', {
+    agentStep('quality-review', 'code-reviewer', {
       prompt: 'Review code quality for branch {{ input.branch }}',
     }),
-    station('test-coverage', async (ctx) => {
+    codeStep('test-coverage', async (ctx) => {
       // Automated coverage check — no agent needed
       const coverage = await checkTestCoverage(String(ctx.inputs.branch));
       return { findings: coverage.violations };
@@ -456,14 +447,14 @@ const reviewWorkflow = defineWorkflow('review', {
   ])
 
   // Aggregate parallel results into a flat findings list
-  .station('aggregate-findings', aggregateFindingsHandler)
+  .codeStep('aggregate-findings', aggregateFindingsHandler)
 
   // Write each finding to the Artifact via a multi-step sub-chain
   .iterateChain('apply-findings', [
-    delegateToRole('enrich-finding', 'code-reviewer', {
+    agentStep('enrich-finding', 'code-reviewer', {
       prompt: 'Enrich this finding with a suggested fix: {{ item.description }}',
     }),
-    station('persist-finding', applyFindingsHandler),
+    codeStep('persist-finding', applyFindingsHandler),
   ], {
     collection: 'output.findings',
   })
@@ -482,7 +473,7 @@ const reviewWorkflow = defineWorkflow('review', {
   })
 
   // Apply the gate decision to the Artifact status
-  .station('finalize', postApprovalHandler);
+  .codeStep('finalize', postApprovalHandler);
 
 export default reviewWorkflow;
 ```
@@ -600,7 +591,7 @@ BusEventWorkflowTrigger({
 ```
 
 The trigger payload type is inferred from the subject's Zod schema — `ctx.trigger` is fully
-typed in station handlers.
+typed in step handlers.
 
 ### Cron Trigger
 
@@ -685,9 +676,9 @@ carries either one is rejected with an error that names `when`; the replacement 
 
 ---
 
-## Station Context
+## Step Context
 
-Every station handler receives a `StepContext`:
+Every step handler receives a `StepContext`:
 
 ```typescript
 interface StepContext {
@@ -738,7 +729,7 @@ const workflow = defineWorkflow('worktree-bootstrap', {
   triggers: [BusEventWorkflowTrigger({ subject: GitSubjects.checkout })],
 });
 
-workflow.station('resolve-worktrees', async (ctx) => {
+workflow.codeStep('resolve-worktrees', async (ctx) => {
   const { repoPath } = ctx.trigger as { repoPath: string };
   // One bounded command: no shell, a run-time limit and a limit on the captured output.
   const { result } = launch({
@@ -765,7 +756,7 @@ workflow.station('resolve-worktrees', async (ctx) => {
   return { mainWorktree, targetWorktree: repoPath, isNewWorktree: true };
 });
 
-workflow.station('copy-files', async (ctx) => {
+workflow.codeStep('copy-files', async (ctx) => {
   const resolved = ctx.previousSteps['resolve-worktrees'];
   if (resolved.status !== 'completed') return { copied: [], skipped: 'resolve step was skipped' };
 
@@ -884,7 +875,7 @@ progress.
 |---------|------|
 | `defineWorkflow`, standalone factories, trigger helpers | `framework/core/contracts/src/workflow/authoring.ts` |
 | Builder interface, `GateOptions`, `IterateOptions`, `ParallelOptions` | `framework/core/contracts/src/workflow/authoring-builder.ts` |
-| `StationContext`, `ArtifactContext`, `WorkflowContext` | `framework/core/contracts/src/workflow/authoring-context.ts` |
+| `CodeStepContext`, `ArtifactContext`, `WorkflowContext` | `framework/core/contracts/src/workflow/authoring-context.ts` |
 | `defineWorkflowBundle` | `framework/core/contracts/src/workflow/bundle.ts` |
 | `defineTransitionRule`, `TransitionEventType` | `framework/core/contracts/src/workflow/transition.ts` |
 | WorkLog projection schemas | `framework/core/contracts/src/workflow/worklog.ts` |

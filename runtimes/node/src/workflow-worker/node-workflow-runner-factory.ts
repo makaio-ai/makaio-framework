@@ -5,7 +5,7 @@ import type {
   StepRunnerPlatformDefaults,
   WorkerContributionManifest,
 } from '@makaio/contracts';
-import { WorkerSubjects } from '@makaio/contracts';
+import { requireExecutableRunContext, WorkerSubjects } from '@makaio/contracts';
 import type { CallContext } from '@makaio/core';
 import type { IMakaioBus } from '@makaio/bus-core';
 import {
@@ -253,8 +253,10 @@ export function createNodeWorkflowRunner(params: CreateNodeWorkflowRunnerParams)
         dispatch,
         authority: params.authority,
         ...(bus !== undefined && {
-          readRunContext: async (call: CallContext, executionId: string, signal: AbortSignal) =>
-            (await bus.request(call, WorkflowStorageSubjects.getRunContext, { executionId }, { signal })).runContext,
+          readRunContext: async (call: CallContext, executionId: string, signal: AbortSignal) => {
+            const stored = await bus.request(call, WorkflowStorageSubjects.getRunContext, { executionId }, { signal });
+            return stored.runContext === null ? null : requireExecutableRunContext(stored.runContext);
+          },
         }),
         ...(runner.manifest !== undefined && { manifest: runner.manifest }),
         ...(runner.requirements !== undefined && { requirements: runner.requirements }),

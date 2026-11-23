@@ -4,6 +4,7 @@ import { isInProcessCaller, type CallContext } from '@makaio/core';
 import {
   JsonPatchOperationSchema,
   EXTERNAL_EXECUTION_ID_PREFIX,
+  requireExecutableRunContext,
   type JsonValue,
   type WorkLogFrameEntry,
   type WorkflowDefinition,
@@ -91,10 +92,11 @@ async function loadStateWorkflowSnapshot(
   if (runContext === null) {
     throw new Error(`Run context not found for execution: ${executionId}`);
   }
-  if (runContext.definitionSnapshot !== undefined) {
-    return runContext.definitionSnapshot;
+  const executableRunContext = requireExecutableRunContext(runContext);
+  if (executableRunContext.definitionSnapshot !== undefined) {
+    return executableRunContext.definitionSnapshot;
   }
-  const { workflow } = await bus.request(call, WorkflowStorageSubjects.get, { id: runContext.workflowId });
+  const { workflow } = await bus.request(call, WorkflowStorageSubjects.get, { id: executableRunContext.workflowId });
   return workflow ?? undefined;
 }
 

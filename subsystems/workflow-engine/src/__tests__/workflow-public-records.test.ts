@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { type WorkflowGateNode, type WorkflowStationNode } from '@makaio/contracts';
+import { type WorkflowCodeStepNode, type WorkflowGateNode } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import {
@@ -66,9 +66,8 @@ describe('workflow public record subjects', () => {
         nodes: [
           {
             id: 'missing-handler',
-            type: 'station',
-            prompt: 'No handler is registered in-process',
-          } as WorkflowStationNode,
+            type: 'code-step',
+          } as WorkflowCodeStepNode,
         ],
       },
     });
@@ -171,7 +170,7 @@ describe('workflow public record subjects', () => {
         executionId,
         frameId: 'frame-echo',
         stepId: 'echo',
-        stepType: 'station',
+        stepType: 'code-step',
         status: 'completed',
       },
     });
@@ -269,7 +268,7 @@ describe('workflow public record subjects', () => {
       throw new Error('Workflow executor test setup did not initialize.');
     }
 
-    // An empty sequence run persists no frames, so use a station node that
+    // An empty sequence run persists no frames, so use a code step node that
     // starts a frame in the primitive runtime before failing on the missing
     // in-process handler — the frame rows are persisted either way.
     const workflow = createWorkflowDefinition({
@@ -280,10 +279,9 @@ describe('workflow public record subjects', () => {
         type: 'sequence',
         nodes: [
           {
-            id: 'frame-producing-station',
-            type: 'station',
-            prompt: 'This node fails after frame start in the primitive runtime',
-          } as WorkflowStationNode,
+            id: 'frame-producing-code-step',
+            type: 'code-step',
+          } as WorkflowCodeStepNode,
         ],
       },
     });
@@ -322,9 +320,8 @@ describe('workflow public record subjects', () => {
         nodes: [
           {
             id: 'missing-runtime-handler',
-            type: 'station',
-            prompt: 'This node fails after frame start in the primitive runtime',
-          } as WorkflowStationNode,
+            type: 'code-step',
+          } as WorkflowCodeStepNode,
         ],
       },
     });
@@ -346,7 +343,7 @@ describe('workflow public record subjects', () => {
       expect.objectContaining({
         executionId,
         stepId: 'missing-runtime-handler',
-        stepType: 'station',
+        stepType: 'code-step',
         status: 'failed',
         startedAt: expect.any(Number),
         completedAt: expect.any(Number),

@@ -15,77 +15,15 @@ type JsonSchemaRecord = Record<string, JsonValue>;
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Step block run mapping that compiles into a `station` primitive node.
+ * Step block run mapping that compiles into an `agent-step` primitive node.
  *
- * A station node is an atomic work unit executed by an AI agent or registered
- * runtime handler. The `prompt` is a template evaluated against the builder
- * form values; the optional `role` selects the executor role.
+ * An agent step is an atomic work unit executed by a named role. The `role`
+ * is resolved via the bus `resolveRole` RPC before execution; the `prompt`
+ * template is evaluated against the builder form values when compiling the node.
  */
-export interface StationNodeBlockRun {
+export interface AgentStepBlockRun {
   /** Run mapping discriminant. */
-  readonly type: 'station';
-  /**
-   * Task prompt template compiled into the station node.
-   * Supports `{{ config.<field> }}` and `{{ input.<field> }}` interpolation.
-   */
-  readonly prompt: string;
-  /**
-   * Named role reference forwarded to the compiled station node.
-   * Resolved via the bus `resolveRole` RPC before execution.
-   */
-  readonly role?: string;
-  /**
-   * JSON Schema for the expected station output.
-   * Forwarded verbatim to the compiled station node's `outputSchema` field.
-   */
-  readonly outputSchema?: JsonSchemaRecord;
-  /**
-   * Positive timeout in milliseconds forwarded to the compiled station node.
-   * Defaults to 300 000 ms at execution time when omitted.
-   */
-  readonly timeoutMs?: number;
-}
-
-/**
- * Step block run mapping that compiles into a `delegate-agent` primitive node.
- *
- * The `agentId` references a registered agent definition. The block builder
- * resolves `inputExpression` against the configured form values when compiling
- * the node.
- */
-export interface DelegateAgentNodeBlockRun {
-  /** Run mapping discriminant. */
-  readonly type: 'delegate-agent';
-  /**
-   * Identifier of the registered agent definition to invoke.
-   */
-  readonly agentId: string;
-  /**
-   * jexl expression template resolving to the agent input payload.
-   * Supports `{{ config.<field> }}` and `{{ input.<field> }}` interpolation
-   * that the builder resolves when compiling into a concrete node.
-   */
-  readonly inputExpression?: string;
-  /**
-   * JSON Schema for the expected agent output.
-   * Forwarded verbatim to the compiled node's `outputSchema` field.
-   */
-  readonly outputSchema?: JsonSchemaRecord;
-  /** Exact tool allowlist selected for this delegation. */
-  readonly allowedTools?: string[];
-  /** Authority-owned finalizer applied to the successful delegate result. */
-  readonly resultFinalizerId?: string;
-}
-
-/**
- * Step block run mapping that compiles into a `delegate-role` primitive node.
- *
- * The `role` is a product-resolved named executor. The `prompt` template is
- * evaluated against the builder form values when compiling the node.
- */
-export interface DelegateRoleNodeBlockRun {
-  /** Run mapping discriminant. */
-  readonly type: 'delegate-role';
+  readonly type: 'agent-step';
   /**
    * Named role reference resolved via the bus `resolveRole` RPC at execution time.
    */
@@ -96,13 +34,13 @@ export interface DelegateRoleNodeBlockRun {
    */
   readonly prompt: string;
   /**
-   * JSON Schema for the expected delegation output.
+   * JSON Schema for the expected agent output.
    * Forwarded verbatim to the compiled node's `outputSchema` field.
    */
   readonly outputSchema?: JsonSchemaRecord;
-  /** Exact tool allowlist selected for this delegation. */
+  /** Exact tool allowlist selected for this step. */
   readonly allowedTools?: string[];
-  /** Authority-owned finalizer applied to the successful delegate result. */
+  /** Authority-owned finalizer applied to the successful result. */
   readonly resultFinalizerId?: string;
   /**
    * Positive timeout in milliseconds forwarded to the compiled node.
@@ -112,15 +50,11 @@ export interface DelegateRoleNodeBlockRun {
 }
 
 /**
- * Discriminated union of all supported workflow step block run mappings.
- *
- * Each variant maps a declared step block to a concrete primitive node type.
- * The builder compiles the selected variant into the workflow definition as the
- * corresponding {@link WorkflowNode} subtype when the block is placed in the canvas.
+ * Run mappings a step block can compile into. A block is data and carries no handler.
  *
  * Extend this union when new primitive node types require builder support.
  */
-export type WorkflowStepBlockRun = StationNodeBlockRun | DelegateAgentNodeBlockRun | DelegateRoleNodeBlockRun;
+export type WorkflowStepBlockRun = AgentStepBlockRun;
 
 // ─────────────────────────────────────────────────────────────
 // Block Metadata and Collection Types
@@ -145,7 +79,7 @@ export interface WorkflowBlockMetadata {
  *
  * The `runs` field specifies which primitive node type this block compiles to
  * when placed in the workflow canvas. The builder reads `runs` to construct a
- * concrete {@link WorkflowNode} (station, delegate-agent, or delegate-role) for
+ * concrete agent-step {@link WorkflowNode} for
  * the persisted workflow definition.
  * @typeParam TConfig - Zod shape for the builder configuration form.
  * @typeParam TInput - Zod type for what this step expects from upstream.
@@ -168,8 +102,7 @@ export interface WorkflowStepBlock<
    * Primitive node compilation target for this step block.
    *
    * The builder reads this field and constructs the corresponding primitive
-   * node ({@link WorkflowStationNode}, {@link WorkflowDelegateAgentNode}, or
-   * {@link WorkflowDelegateRoleNode}) when the block is placed on the canvas.
+   * node ({@link WorkflowAgentStepNode}) when the block is placed on the canvas.
    */
   runs: WorkflowStepBlockRun;
 }

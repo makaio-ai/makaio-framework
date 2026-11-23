@@ -4,7 +4,7 @@ import type { JsonValue } from '../shared/json-value.js';
 import type { WorkflowArtifactBinding, WorkflowDefinition, WorkflowNode, WorkflowSourceLocation } from './schemas.js';
 import type { WorkflowFinalizerId } from './finalization.js';
 import type { CompletionMode } from '../subagent/schemas.js';
-import type { IterateHandler, PreviousStepOutput, StationHandler, StepContext } from './authoring-context.js';
+import type { CodeStepHandler, IterateHandler, PreviousStepOutput, StepContext } from './authoring-context.js';
 import type { WorkflowTriggerDef } from './authoring-triggers.js';
 import type { LoopGateHandler } from './loop.js';
 
@@ -29,53 +29,25 @@ export interface NodeOptions {
 }
 
 /**
- * Options for delegate-role nodes created via the fluent builder or standalone factory.
+ * Options for agent steps created via the fluent builder or the standalone factory.
  */
-export type DelegateToRoleOptions = NodeOptions & {
-  /** Prompt text passed to the role subagent. Defaults to the node ID. */
+export type AgentStepOptions = NodeOptions & {
+  /** Prompt text passed to the agent. Defaults to the node ID. */
   readonly prompt?: string;
-  /**
-   * JSON Schema for the expected role delegation output.
-   */
+  /** JSON Schema for the expected agent output. */
   readonly outputSchema?: Record<string, JsonValue>;
-  /** Timeout in milliseconds for the delegated role execution. */
+  /** Timeout in milliseconds for the agent step. */
   readonly timeoutMs?: number;
-  /** Completion behavior requested from the spawned role subagent. */
+  /** Completion behavior requested from the agent. */
   readonly completion?: CompletionMode;
   /**
-   * Exact tool allowlist selected for this delegation. Makaio tool names; format and
-   * semantics: `ToolLists` in `@makaio/contracts` tool-names.
+   * Exact tool allowlist (Makaio tool names; format: `ToolLists` in `@makaio/contracts`
+   * tool-names).
    */
   readonly allowedTools?: string[];
-  /** Authority-owned finalizer applied to the successful delegate result. */
+  /** Authority-owned finalizer applied to the successful result. */
   readonly resultFinalizerId?: string;
 };
-
-/**
- * Configuration for a delegate-agent node created via the fluent builder.
- */
-export interface AgentConfig {
-  /** Identifier of the registered agent definition to invoke. */
-  readonly agentId: string;
-  /**
-   * jexl expression resolving to the agent input payload.
-   * When omitted the agent receives the full execution context.
-   */
-  readonly inputExpression?: string;
-  /**
-   * JSON Schema for the expected agent output.
-   */
-  readonly outputSchema?: Record<string, JsonValue>;
-  /**
-   * Exact tool allowlist selected for this delegation, same Makaio tool names and rule
-   * syntax as {@link DelegateToRoleOptions.allowedTools}.
-   */
-  readonly allowedTools?: string[];
-  /** Completion contract for the spawned subagent. Defaults to tool completion. */
-  readonly completion?: CompletionMode;
-  /** Authority-owned finalizer applied to the successful delegate result. */
-  readonly resultFinalizerId?: string;
-}
 
 /**
  * Options for gate nodes, including the required resume schema.
@@ -293,7 +265,7 @@ export interface WorkflowStateAuthoringDefinition<TState extends JsonValue = Jso
  * The result of defining a workflow via the fluent builder.
  *
  * `definition` is fully serializable — it contains no functions.
- * Station handlers and dynamic factories are carried in the runtime maps,
+ * Code step handlers and dynamic factories are carried in the runtime maps,
  * which are consumed by the executor at runtime without persisting.
  */
 export interface BuiltWorkflow {
@@ -305,10 +277,10 @@ export interface BuiltWorkflow {
    */
   readonly definition: WorkflowDefinition;
   /**
-   * Station handler functions keyed by node ID.
-   * Populated by `.station()` calls and standalone `station()` factories.
+   * Code step handler functions keyed by node ID.
+   * Populated by `.codeStep()` calls and standalone `codeStep()` factories.
    */
-  readonly runtimeHandlers: ReadonlyMap<string, StationHandler>;
+  readonly runtimeHandlers: ReadonlyMap<string, CodeStepHandler>;
   /**
    * Dynamic region factory functions keyed by factory ID.
    * Empty while the v1 authoring surface exposes only static topology.
@@ -357,7 +329,7 @@ export interface DefineWorkflowOptions<
 /**
  * A fluent workflow builder returned by {@link defineWorkflow}.
  *
- * Collects trigger definitions, Zod schemas, and typed station registrations,
+ * Collects trigger definitions, Zod schemas, and typed code step registrations,
  * then exposes the serializable `WorkflowDefinition` alongside runtime maps
  * for the worker executor.
  *
@@ -411,7 +383,7 @@ export interface WorkflowBuilder<TTrigger = never, TState extends JsonValue | un
    *
    * The state definition specifies a JSON Schema and optional initial value.
    * At execution start, the engine initializes the state snapshot from
-   * `initial` (or `{}` when omitted). Station handlers access the state
+   * `initial` (or `{}` when omitted). Code step handlers access the state
    * via `ctx.state.get()` and `ctx.state.update()`.
    * @param definition - State contract with JSON Schema and optional initial value
    * @returns This builder for chaining
@@ -420,18 +392,18 @@ export interface WorkflowBuilder<TTrigger = never, TState extends JsonValue | un
     definition: WorkflowStateAuthoringDefinition<TNextState>,
   ): WorkflowBuilder<TTrigger, TNextState>;
   /**
-   * Appends a station node to the root sequence and registers the handler.
+   * Appends a code step node to the root sequence and registers the handler.
    *
-   * The handler is captured in `runtimeHandlers[id]`; the station node in
+   * The handler is captured in `runtimeHandlers[id]`; the code step node in
    * `definition.root.nodes` carries only serializable metadata.
-   * @param id - Unique station identifier within this workflow
-   * @param handler - Station handler function
+   * @param id - Unique code step identifier within this workflow
+   * @param handler - Code step handler function
    * @param options - Optional node conditions (`when`, `skip`)
    * @returns This builder for chaining
    */
-  station(
+  codeStep(
     id: string,
-    handler: StationHandler<
+    handler: CodeStepHandler<
       TTrigger,
       Record<string, PreviousStepOutput<JsonValue>>,
       Record<string, unknown>,
@@ -441,26 +413,18 @@ export interface WorkflowBuilder<TTrigger = never, TState extends JsonValue | un
     options?: NodeOptions,
   ): WorkflowBuilder<TTrigger, TState>;
   /**
-   * Appends a delegate-agent node to the root sequence.
+   * Appends an agent step node to the root sequence.
    * @param id - Unique node identifier
-   * @param agentConfig - Agent delegation configuration
-   * @param options - Optional node conditions
+   * @param role - Named product role to delegate the agent step to
+   * @param options - Optional node conditions and agent step settings; `prompt` defaults to the node ID
    * @returns This builder for chaining
    */
-  delegateToAgent(id: string, agentConfig: AgentConfig, options?: NodeOptions): WorkflowBuilder<TTrigger, TState>;
-  /**
-   * Appends a delegate-role node to the root sequence.
-   * @param id - Unique node identifier
-   * @param role - Named product role to delegate to
-   * @param options - Optional node conditions and role delegation settings; `prompt` defaults to the node ID
-   * @returns This builder for chaining
-   */
-  delegateToRole(id: string, role: string, options?: DelegateToRoleOptions): WorkflowBuilder<TTrigger, TState>;
+  agentStep(id: string, role: string, options?: AgentStepOptions): WorkflowBuilder<TTrigger, TState>;
   /**
    * Appends a parallel node with static branches to the root sequence.
    *
    * Each branch is a {@link WorkflowNode} produced by one of the standalone
-   * factory functions (`station`, `delegateToAgent`, `delegateToRole`, etc.).
+   * factory functions (`codeStep`, `agentStep`, etc.).
    * The nodes are wrapped in a sequence branch per entry in `branches`.
    * @param id - Unique parallel node identifier
    * @param options - Parallel execution options
@@ -482,7 +446,7 @@ export interface WorkflowBuilder<TTrigger = never, TState extends JsonValue | un
   /**
    * Appends an iterate node to the root sequence and registers the handler.
    * @param id - Unique iterate node identifier
-   * @param handler - Station handler executed for each collection item
+   * @param handler - Code step handler executed for each collection item
    * @param options - Iterate configuration including collection expression
    * @returns This builder for chaining
    */
@@ -513,7 +477,7 @@ export interface WorkflowBuilder<TTrigger = never, TState extends JsonValue | un
    *
    * The body nodes are executed on each iteration; the gate handler is
    * evaluated after each body pass to determine whether to loop, pass,
-   * or escalate. Station handlers from standalone `station()` factories
+   * or escalate. Code step handlers from standalone `codeStep()` factories
    * in the body are automatically collected into `runtimeHandlers`.
    *
    * V1 does not support nested loops; the builder validates this constraint

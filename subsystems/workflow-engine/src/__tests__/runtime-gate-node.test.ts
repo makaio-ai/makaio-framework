@@ -3,7 +3,7 @@ import { createBusInstance } from '@makaio/bus-core';
 import {
   WorkflowNamespace,
   type CallContext,
-  type StationHandler,
+  type CodeStepHandler,
   type WorkflowDefinition,
   type WorkflowExecution,
   type WorkflowGateNode,
@@ -77,7 +77,7 @@ function makeCtx(
     'workflow-gate-test',
     makeDefinition('workflow-gate-test'),
     makeExecution('workflow-gate-test'),
-    new Map<string, StationHandler>(),
+    new Map<string, CodeStepHandler>(),
     bus,
     signal,
     undefined,

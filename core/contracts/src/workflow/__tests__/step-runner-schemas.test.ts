@@ -17,16 +17,12 @@ import type { IStepRunner, StepRunConfig, StepRunResult } from '../step-runner.j
 // ─────────────────────────────────────────────────────────────
 
 describe('WorkflowStepTypeSchema', () => {
-  it('accepts station as a lifecycle node type', () => {
-    expect(WorkflowStepTypeSchema.parse('station')).toBe('station');
+  it('accepts code-step as a lifecycle node type', () => {
+    expect(WorkflowStepTypeSchema.parse('code-step')).toBe('code-step');
   });
 
-  it('accepts delegate-agent as a lifecycle node type', () => {
-    expect(WorkflowStepTypeSchema.parse('delegate-agent')).toBe('delegate-agent');
-  });
-
-  it('accepts delegate-role as a lifecycle node type', () => {
-    expect(WorkflowStepTypeSchema.parse('delegate-role')).toBe('delegate-role');
+  it('accepts agent-step as a lifecycle node type', () => {
+    expect(WorkflowStepTypeSchema.parse('agent-step')).toBe('agent-step');
   });
 
   it('accepts gate as a lifecycle node type', () => {
@@ -51,17 +47,16 @@ describe('WorkflowStepTypeSchema', () => {
 // ─────────────────────────────────────────────────────────────
 
 describe('WorkflowRunnerStepTypeSchema', () => {
-  it('accepts station as the only runner-executable type', () => {
-    expect(WorkflowRunnerStepTypeSchema.parse('station')).toBe('station');
+  it('accepts code-step as the only runner-executable type', () => {
+    expect(WorkflowRunnerStepTypeSchema.parse('code-step')).toBe('code-step');
   });
 
   it('rejects gate (gates are not runner-executable)', () => {
     expect(() => WorkflowRunnerStepTypeSchema.parse('gate')).toThrow();
   });
 
-  it('rejects delegation nodes (handled by the orchestrator)', () => {
-    expect(() => WorkflowRunnerStepTypeSchema.parse('delegate-agent')).toThrow();
-    expect(() => WorkflowRunnerStepTypeSchema.parse('delegate-role')).toThrow();
+  it('rejects agent-step (handled by the orchestrator)', () => {
+    expect(() => WorkflowRunnerStepTypeSchema.parse('agent-step')).toThrow();
   });
 
   it('rejects structural node types', () => {
@@ -120,50 +115,47 @@ describe('StepTelemetrySchema', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// StepRunConfig (station node dispatch)
+// StepRunConfig (code step node dispatch)
 // ─────────────────────────────────────────────────────────────
 
 describe('StepRunConfigSchema', () => {
-  /** Minimal valid station node config. */
+  /** Minimal valid code step node config. */
   const minimalConfig = {
     stepId: 'analyze-requirements',
     executionId: 'wfx-abc123',
     workflowId: 'requirements-analysis',
     coordinatorSessionId: 'sess-coord-1',
-    stepType: 'station',
+    stepType: 'code-step',
     stepDefinition: {
       id: 'analyze-requirements',
-      type: 'station',
-      prompt: 'Analyze the requirements for {{ inputs.project }}',
+      type: 'code-step',
     },
     resolvedInputs: {},
     platformDefaults: { cwd: '/workspace/project' },
     cancelSubject: 'workflow.wfx-abc123.step.analyze-requirements.cancel',
   };
 
-  it('accepts a minimal station node config', () => {
+  it('accepts a minimal code step node config', () => {
     const result = StepRunConfigSchema.parse(minimalConfig);
     expect(result.stepId).toBe('analyze-requirements');
     expect(result.executionId).toBe('wfx-abc123');
     expect(result.workflowId).toBe('requirements-analysis');
-    expect(result.stepType).toBe('station');
+    expect(result.stepType).toBe('code-step');
   });
 
-  it('accepts a station config with role and outputSchema', () => {
+  it('accepts a code step config with outputSchema', () => {
     const result = StepRunConfigSchema.parse({
       ...minimalConfig,
       stepDefinition: {
         id: 'analyze-requirements',
-        type: 'station',
-        prompt: 'Analyze the requirements',
-        role: 'requirements-analyst',
+        type: 'code-step',
         outputSchema: { type: 'object', properties: { findings: { type: 'array' } } },
       },
       resolvedInputs: {
         project: 'ranking-voucher-service',
       },
     });
-    expect(result.stepType).toBe('station');
+    expect(result.stepType).toBe('code-step');
     expect(result.resolvedInputs).toEqual({ project: 'ranking-voucher-service' });
   });
 
@@ -213,11 +205,11 @@ describe('StepRunConfigSchema', () => {
   });
 
   it('rejects mismatched stepType and stepDefinition.type', () => {
-    // stepType says 'station' but stepDefinition.type is something else
+    // stepType says 'code-step' but stepDefinition.type is something else
     expect(() =>
       StepRunConfigSchema.parse({
         ...minimalConfig,
-        stepType: 'station',
+        stepType: 'code-step',
         stepDefinition: {
           id: 'approval',
           type: 'gate',
@@ -440,8 +432,8 @@ describe('IStepRunner interface', () => {
           executionId: 'wfx-1',
           workflowId: 'wf-1',
           coordinatorSessionId: 'sess-1',
-          stepType: 'station',
-          stepDefinition: { id: 'test', type: 'station', prompt: 'Run the test suite' },
+          stepType: 'code-step',
+          stepDefinition: { id: 'test', type: 'code-step' },
           resolvedInputs: {},
           platformDefaults: { cwd: '/tmp' },
           cancelSubject: 'workflow.wfx-1.step.test.cancel',

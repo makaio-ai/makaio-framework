@@ -1,12 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { sql } from 'drizzle-orm';
+import { createBusInstance, MakaioBus } from '@makaio/bus-core';
 import { createTestCall } from '@makaio/test-utils';
 import {
   ExecutionAttemptNamespace,
   ExecutionAttemptSubjects,
   WorkerNamespace,
+  WorkflowNamespace,
   WorkflowWorkerConfigSchema,
   WorkflowRunContextSchema,
+  isDefinitionInvalidError,
   type ExecutionAttemptOutcome,
 } from '@makaio/contracts';
 import { ExecutionAttemptAuthority } from '../execution-attempt-authority.js';
@@ -18,11 +21,11 @@ import {
 } from '../workflow-attempt-outcome.js';
 import { WorkflowExecutor } from '../workflow-executor.js';
 import { WorkflowSubjects } from '../namespace.js';
-import { WorkflowStorageSubjects } from '../storage/namespace.js';
+import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import { createInMemoryAttemptRepository } from '../testing/in-memory-attempt-repository.js';
 import { driveTestAttemptToAllocated } from '../testing/attempt-fixtures.js';
 import { AttemptGateTransport, attemptPeer } from './execution-attempt-gate-harness.js';
-import { createWorkflowExecution } from './shared.js';
+import { createTestDbForBus, createWorkflowDefinition, createWorkflowExecution, type TestDbContext } from './shared.js';
 import {
   setupWorkflowExecutorTest,
   teardownWorkflowExecutorTest,
@@ -36,6 +39,114 @@ const failure: WorkflowAttemptTechnicalFailure = {
   stage: 'startup',
   message: 'Executable acquisition failed',
 };
+
+describe.each([
+  { mode: 'strict', nodeEnv: 'test' },
+  { mode: 'production', nodeEnv: 'production' },
+])('unreadable snapshot technical failure ($mode)', ({ nodeEnv }) => {
+  let bus: ReturnType<typeof createBusInstance>;
+  let dbContext: TestDbContext;
+  let executor: WorkflowExecutor;
+  let authority: ExecutionAttemptAuthority<WorkflowAttemptOutcome>;
+  let transport: AttemptGateTransport;
+  let runContext: ReturnType<typeof WorkflowRunContextSchema.parse>;
+
+  beforeEach(async () => {
+    vi.stubEnv('NODE_ENV', nodeEnv);
+    bus = createBusInstance();
+    bus.registerNamespaces([WorkflowNamespace, WorkflowStorageNamespace, WorkerNamespace, ExecutionAttemptNamespace]);
+    dbContext = await createTestDbForBus(bus);
+    authority = new ExecutionAttemptAuthority(createInMemoryAttemptRepository(workflowAttemptOutcomeCodec), {
+      bootstrapTimeoutMs: 60_000,
+    });
+    executor = new WorkflowExecutor(bus, undefined, undefined, authority);
+    transport = new AttemptGateTransport();
+    bus.registerTransport(transport);
+    await executor.init();
+    const workflow = createWorkflowDefinition({ id: workflowId });
+    runContext = WorkflowRunContextSchema.parse({
+      executionId,
+      workflowId,
+      source: { kind: 'definition', workflowId },
+      definitionSnapshot: workflow,
+      inputs: {},
+      scope: { type: 'global' },
+      triggerPayload: {},
+      coordinatorSessionId: 'owner-session',
+      cancelSubject: `workflow.${executionId}.cancel`,
+      env: {},
+      createdAt: 1,
+      terminalAuthority: 'authority',
+    });
+    await bus.request(bus.own('start'), WorkflowStorageSubjects.setExecutionStart, {
+      execution: createWorkflowExecution({ id: executionId, workflowId }),
+      runContext,
+    });
+  });
+
+  afterEach(async () => {
+    try {
+      await executor.destroy();
+    } finally {
+      bus.unregisterTransport(transport.name);
+      dbContext.cleanup();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('rejects an authority result with DEFINITION_INVALID but finalizes the same unreadable owner as failed through the real bus', async () => {
+    const instruction = buildWorkflowAttemptInstruction({
+      id: 'unreadable-instruction',
+      revision: '1',
+      preservation: { required: [] },
+      config: WorkflowWorkerConfigSchema.parse(runContext),
+      runContext,
+    });
+    const { executionAttemptId } = await authority.createAttempt(executionId, instruction);
+    await driveTestAttemptToAllocated(authority, executionAttemptId, executionId);
+    const registration = await authority.registerRuntime({
+      executionId,
+      executionAttemptId,
+      runtimeIncarnationId: 'unreadable-runtime',
+    });
+    if (registration.kind !== 'registered') throw new Error(registration.kind);
+    const definition = createWorkflowDefinition({ id: workflowId });
+    const snapshot = {
+      ...definition,
+      root: {
+        ...definition.root,
+        nodes: [
+          { type: 'delegate-agent', id: 'obsolete', agentId: 'obsolete-agent', inputExpression: '{}' }, // legacy-input
+        ],
+      },
+    };
+    await dbContext.exec(
+      sql`UPDATE workflow_run_contexts SET definition_snapshot = ${JSON.stringify(snapshot)} WHERE execution_id = ${executionId}`,
+    );
+    await expect(bus.request(bus.own('start'), WorkflowSubjects.getRunContext, { executionId })).resolves.toMatchObject(
+      { executionId, workflowId, definitionSnapshot: snapshot },
+    );
+    await expect(
+      bus.request(bus.own('start'), WorkflowSubjects.acceptAuthorityRunnerResult, {
+        executionId,
+        result: { executionId, workflowId, status: 'completed' },
+      }),
+    ).rejects.toSatisfy((error: unknown) => isDefinitionInvalidError(error));
+    const unchanged = await bus.request(bus.own('start'), WorkflowStorageSubjects.getExecution, { executionId });
+    expect(unchanged.execution).toMatchObject({ status: 'running' });
+    const subject = ExecutionAttemptSubjects.outcome.submit;
+    await expect(
+      transport.requestAs(
+        subject.$meta.namespace,
+        subject.subject as string,
+        { executionAttemptId, runtimeGeneration: registration.runtimeGeneration, outcome: failure },
+        attemptPeer(executionAttemptId, executionId),
+      ),
+    ).resolves.toMatchObject({ result: { decision: 'accepted' } });
+    const stored = await bus.request(bus.own('start'), WorkflowStorageSubjects.getExecution, { executionId });
+    expect(stored.execution).toMatchObject({ status: 'failed', error: 'startup: Executable acquisition failed' });
+  });
+});
 
 describe('workflow owner technical failure convergence', () => {
   let setup: WorkflowExecutorTestSetup;

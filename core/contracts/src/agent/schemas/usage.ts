@@ -57,7 +57,7 @@ export const UsageSchema = BaseAgentEventSchema.extend({
   llmCallId: observability.attribute(z.string(), 'makaio.llm_call.id').optional(),
   /** Workflow execution that caused the provider request, when known. */
   executionId: observability.attribute(z.string(), 'makaio.execution.id').optional(),
-  /** Workflow frame/station that caused the provider request, when known. */
+  /** Workflow frame/step that caused the provider request, when known. */
   frameId: observability.attribute(z.string(), 'makaio.frame.id').optional(),
   provider: observability.attribute(z.string(), 'llm.provider'),
   model: observability.attribute(z.string(), 'llm.model'),

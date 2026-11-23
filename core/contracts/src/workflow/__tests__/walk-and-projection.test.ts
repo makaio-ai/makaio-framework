@@ -2,14 +2,13 @@ import { describe, it, expect } from 'vitest';
 import type {
   WorkflowDefinition,
   WorkflowSequenceNode,
-  WorkflowStationNode,
+  WorkflowCodeStepNode,
   WorkflowGateNode,
   WorkflowParallelNode,
   WorkflowIterateNode,
   WorkflowIterateChainNode,
   WorkflowLoopNode,
-  WorkflowDelegateAgentNode,
-  WorkflowDelegateRoleNode,
+  WorkflowAgentStepNode,
   WorkflowNode,
 } from '../schemas.js';
 import { walkWorkflowDefinition } from '../walk.js';
@@ -17,20 +16,16 @@ import { projectWorkflowGraph } from '../projection.js';
 
 // ── Fixtures ─────────────────────────────────────────────────
 
-function mkStation(id: string): WorkflowStationNode {
-  return { type: 'station', id, prompt: `do ${id}` };
+function mkCodeStep(id: string): WorkflowCodeStepNode {
+  return { type: 'code-step', id };
 }
 
 function mkGate(id: string): WorkflowGateNode {
   return { type: 'gate', id, prompt: 'approve?', autoAction: 'reject', timeoutMs: 60_000 };
 }
 
-function mkDelegateAgent(id: string): WorkflowDelegateAgentNode {
-  return { type: 'delegate-agent', id, agentId: 'test-agent' };
-}
-
-function mkDelegateRole(id: string): WorkflowDelegateRoleNode {
-  return { type: 'delegate-role', id, role: 'reviewer', prompt: 'review this' };
+function mkAgentStep(id: string): WorkflowAgentStepNode {
+  return { type: 'agent-step', id, role: 'reviewer', prompt: 'review this' };
 }
 
 function mkSequence(id: string, nodes: WorkflowNode[]): WorkflowSequenceNode {
@@ -61,14 +56,14 @@ function mkDefinition(root: WorkflowSequenceNode): WorkflowDefinition {
 
 describe('walkWorkflowDefinition', () => {
   it('visits a flat sequence in DFS order', () => {
-    const root = mkSequence('root', [mkStation('a'), mkStation('b'), mkStation('c')]);
+    const root = mkSequence('root', [mkCodeStep('a'), mkCodeStep('b'), mkCodeStep('c')]);
     const visited: string[] = [];
     walkWorkflowDefinition(root, { enter: (node) => void visited.push(node.id) });
     expect(visited).toEqual(['root', 'a', 'b', 'c']);
   });
 
   it('provides correct relationship and index for sequence children', () => {
-    const root = mkSequence('root', [mkStation('a'), mkStation('b')]);
+    const root = mkSequence('root', [mkCodeStep('a'), mkCodeStep('b')]);
     const entries: Array<{ id: string; relationship: string; index?: number }> = [];
     walkWorkflowDefinition(root, {
       enter(node, ctx) {
@@ -85,8 +80,8 @@ describe('walkWorkflowDefinition', () => {
   it('visits parallel branches with branchKey and relationship', () => {
     const root = mkSequence('root', [
       mkParallel('par', {
-        frontend: mkSequence('fe-seq', [mkStation('fe-task')]),
-        backend: mkSequence('be-seq', [mkStation('be-task')]),
+        frontend: mkSequence('fe-seq', [mkCodeStep('fe-task')]),
+        backend: mkSequence('be-seq', [mkCodeStep('be-task')]),
       }),
     ]);
     const entries: Array<{ id: string; relationship: string; branchKey?: string }> = [];
@@ -100,7 +95,7 @@ describe('walkWorkflowDefinition', () => {
   });
 
   it('visits iterate body with correct relationship', () => {
-    const body = mkSequence('body', [mkStation('item')]);
+    const body = mkSequence('body', [mkCodeStep('item')]);
     const root = mkSequence('root', [mkIterate('iter', body)]);
     const entries: Array<{ id: string; relationship: string }> = [];
     walkWorkflowDefinition(root, {
@@ -112,7 +107,7 @@ describe('walkWorkflowDefinition', () => {
   });
 
   it('visits iterate-chain body with correct relationship', () => {
-    const body = mkSequence('chain-body', [mkStation('step')]);
+    const body = mkSequence('chain-body', [mkCodeStep('step')]);
     const root = mkSequence('root', [mkIterateChain('chain', body)]);
     const entries: Array<{ id: string; relationship: string }> = [];
     walkWorkflowDefinition(root, {
@@ -124,7 +119,7 @@ describe('walkWorkflowDefinition', () => {
   });
 
   it('walks loop node body with loop-body relationship', () => {
-    const root = mkSequence('root', [mkLoop('loop-1', mkSequence('loop-1__body', [mkStation('inner')]))]);
+    const root = mkSequence('root', [mkLoop('loop-1', mkSequence('loop-1__body', [mkCodeStep('inner')]))]);
     const visited: Array<{ id: string; relationship: string; depth: number }> = [];
     walkWorkflowDefinition(root, {
       enter(node, ctx) {
@@ -139,8 +134,8 @@ describe('walkWorkflowDefinition', () => {
   it('prunes subtree when enter returns false', () => {
     const root = mkSequence('root', [
       mkParallel('par', {
-        a: mkSequence('a-seq', [mkStation('a1'), mkStation('a2')]),
-        b: mkSequence('b-seq', [mkStation('b1')]),
+        a: mkSequence('a-seq', [mkCodeStep('a1'), mkCodeStep('a2')]),
+        b: mkSequence('b-seq', [mkCodeStep('b1')]),
       }),
     ]);
     const visited: string[] = [];
@@ -157,7 +152,7 @@ describe('walkWorkflowDefinition', () => {
   });
 
   it('calls leave after all children are visited', () => {
-    const root = mkSequence('root', [mkStation('a'), mkStation('b')]);
+    const root = mkSequence('root', [mkCodeStep('a'), mkCodeStep('b')]);
     const events: string[] = [];
     walkWorkflowDefinition(root, {
       enter: (node) => void events.push(`enter:${node.id}`),
@@ -167,7 +162,7 @@ describe('walkWorkflowDefinition', () => {
   });
 
   it('does not call leave when enter prunes', () => {
-    const root = mkSequence('root', [mkStation('pruned')]);
+    const root = mkSequence('root', [mkCodeStep('pruned')]);
     const events: string[] = [];
     walkWorkflowDefinition(root, {
       enter(node) {
@@ -182,7 +177,7 @@ describe('walkWorkflowDefinition', () => {
   it('tracks depth and ancestors correctly through nesting', () => {
     const root = mkSequence('root', [
       mkParallel('par', {
-        a: mkSequence('a-seq', [mkStation('deep')]),
+        a: mkSequence('a-seq', [mkCodeStep('deep')]),
       }),
     ]);
     const depths: Record<string, number> = {};
@@ -200,12 +195,11 @@ describe('walkWorkflowDefinition', () => {
     expect(ancestorPaths['deep']).toEqual(['root', 'par', 'a-seq']);
   });
 
-  it('visits all 9 node types', () => {
+  it('visits all 8 node types', () => {
     const root = mkSequence('root', [
-      mkStation('s'),
+      mkCodeStep('s'),
       mkGate('g'),
-      mkDelegateAgent('da'),
-      mkDelegateRole('dr'),
+      mkAgentStep('dr'),
       mkParallel('p', { b: mkSequence('p-seq', []) }),
       mkIterate('i', mkSequence('i-body', [])),
       mkIterateChain('ic', mkSequence('ic-body', [])),
@@ -214,17 +208,7 @@ describe('walkWorkflowDefinition', () => {
     const types = new Set<string>();
     walkWorkflowDefinition(root, { enter: (node) => void types.add(node.type) });
     expect(types).toEqual(
-      new Set([
-        'sequence',
-        'station',
-        'gate',
-        'delegate-agent',
-        'delegate-role',
-        'parallel',
-        'iterate',
-        'iterate-chain',
-        'loop',
-      ]),
+      new Set(['sequence', 'code-step', 'gate', 'agent-step', 'parallel', 'iterate', 'iterate-chain', 'loop']),
     );
   });
 });
@@ -233,7 +217,7 @@ describe('walkWorkflowDefinition', () => {
 
 describe('projectWorkflowGraph', () => {
   it('projects a flat sequence into nodes and edges', () => {
-    const def = mkDefinition(mkSequence('root', [mkStation('a'), mkStation('b'), mkStation('c')]));
+    const def = mkDefinition(mkSequence('root', [mkCodeStep('a'), mkCodeStep('b'), mkCodeStep('c')]));
     const { nodes, edges } = projectWorkflowGraph(def);
 
     expect(nodes).toHaveLength(4);
@@ -254,10 +238,9 @@ describe('projectWorkflowGraph', () => {
   it('classifies node roles correctly', () => {
     const def = mkDefinition(
       mkSequence('root', [
-        mkStation('s'),
+        mkCodeStep('s'),
         mkGate('g'),
-        mkDelegateAgent('da'),
-        mkDelegateRole('dr'),
+        mkAgentStep('dr'),
         mkParallel('p', { b: mkSequence('p-seq', []) }),
         mkIterate('i', mkSequence('i-body', [])),
         mkIterateChain('ic', mkSequence('ic-body', [])),
@@ -270,7 +253,6 @@ describe('projectWorkflowGraph', () => {
     expect(roleMap['root']).toBe('structural');
     expect(roleMap['s']).toBe('leaf');
     expect(roleMap['g']).toBe('leaf');
-    expect(roleMap['da']).toBe('leaf');
     expect(roleMap['dr']).toBe('leaf');
     expect(roleMap['p']).toBe('control');
     expect(roleMap['i']).toBe('control');
@@ -286,8 +268,8 @@ describe('projectWorkflowGraph', () => {
     const def = mkDefinition(
       mkSequence('root', [
         mkParallel('par', {
-          fe: mkSequence('fe-seq', [mkStation('fe-task')]),
-          be: mkSequence('be-seq', [mkStation('be-task')]),
+          fe: mkSequence('fe-seq', [mkCodeStep('fe-task')]),
+          be: mkSequence('be-seq', [mkCodeStep('be-task')]),
         }),
       ]),
     );
@@ -309,8 +291,8 @@ describe('projectWorkflowGraph', () => {
   it('emits body edges for iterate and iterate-chain nodes', () => {
     const def = mkDefinition(
       mkSequence('root', [
-        mkIterate('iter', mkSequence('iter-body', [mkStation('item')])),
-        mkIterateChain('chain', mkSequence('chain-body', [mkStation('step')])),
+        mkIterate('iter', mkSequence('iter-body', [mkCodeStep('item')])),
+        mkIterateChain('chain', mkSequence('chain-body', [mkCodeStep('step')])),
       ]),
     );
     const { nodes, edges } = projectWorkflowGraph(def);
@@ -327,7 +309,7 @@ describe('projectWorkflowGraph', () => {
   });
 
   it('projects loop node as control with body edge', () => {
-    const def = mkDefinition(mkSequence('root', [mkLoop('loop-1', mkSequence('loop-1__body', [mkStation('inner')]))]));
+    const def = mkDefinition(mkSequence('root', [mkLoop('loop-1', mkSequence('loop-1__body', [mkCodeStep('inner')]))]));
     const { nodes, edges } = projectWorkflowGraph(def);
 
     const loopNode = nodes.find((n) => n.nodeId === 'loop-1');
@@ -344,9 +326,9 @@ describe('projectWorkflowGraph', () => {
     const def = mkDefinition(
       mkSequence('root', [
         mkParallel('par', {
-          a: mkSequence('branch-seq', [mkStation('task')]),
+          a: mkSequence('branch-seq', [mkCodeStep('task')]),
         }),
-        mkIterate('iter', mkSequence('body-seq', [mkStation('item')])),
+        mkIterate('iter', mkSequence('body-seq', [mkCodeStep('item')])),
       ]),
     );
     const { nodes } = projectWorkflowGraph(def);
@@ -368,7 +350,7 @@ describe('projectWorkflowGraph', () => {
     const def = mkDefinition(
       mkSequence('root', [
         mkParallel('par', {
-          fe: mkSequence('fe-seq', [mkStation('fe-task')]),
+          fe: mkSequence('fe-seq', [mkCodeStep('fe-task')]),
         }),
       ]),
     );
@@ -387,7 +369,7 @@ describe('projectWorkflowGraph', () => {
   });
 
   it('sets parentKey correctly through nesting', () => {
-    const def = mkDefinition(mkSequence('root', [mkStation('a')]));
+    const def = mkDefinition(mkSequence('root', [mkCodeStep('a')]));
     const { nodes } = projectWorkflowGraph(def);
 
     const rootNode = nodes.find((n) => n.nodeId === 'root')!;
@@ -398,7 +380,7 @@ describe('projectWorkflowGraph', () => {
   });
 
   it('derives parentKey from traversal position when node IDs repeat', () => {
-    const def = mkDefinition(mkSequence('dup', [mkSequence('container', [mkStation('dup')]), mkStation('after')]));
+    const def = mkDefinition(mkSequence('dup', [mkSequence('container', [mkCodeStep('dup')]), mkCodeStep('after')]));
     const { nodes, edges } = projectWorkflowGraph(def);
 
     const rootNode = nodes[0]!;
@@ -409,7 +391,7 @@ describe('projectWorkflowGraph', () => {
   });
 
   it('generates distinct keys when sibling node IDs repeat', () => {
-    const def = mkDefinition(mkSequence('root', [mkStation('dup'), mkStation('dup')]));
+    const def = mkDefinition(mkSequence('root', [mkCodeStep('dup'), mkCodeStep('dup')]));
     const { nodes, edges } = projectWorkflowGraph(def);
 
     const duplicateNodes = nodes.filter((n) => n.nodeId === 'dup');

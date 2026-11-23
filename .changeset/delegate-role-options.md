@@ -3,4 +3,4 @@
 "@makaio/framework": patch
 ---
 
-Preserve delegate-role output schema and timeout options in workflow authoring helpers.
+Preserve agent step output schema and timeout options in workflow authoring helpers.

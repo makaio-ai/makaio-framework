@@ -15,8 +15,9 @@ export {
   WorkflowConditionSchema,
   WorkflowDefinitionProvenanceSchema,
   WorkflowDefinitionSchema,
-  WorkflowDelegateAgentNodeSchema,
-  WorkflowDelegateRoleNodeSchema,
+  RejectedWorkflowDefinitionSchema,
+  WorkflowDefinitionListSchema,
+  WorkflowAgentStepNodeSchema,
   WorkflowDynamicRegionSchema,
   WorkflowExecutionSchema,
   WorkflowExecutionScopeSchema,
@@ -34,12 +35,11 @@ export {
   WorkflowNodeTypeSchema,
   WorkflowParallelModeSchema,
   WorkflowParallelNodeSchema,
-  WorkflowResolvedAgentSchema,
   WorkflowResolvedRoleSchema,
   WorkflowSequenceNodeSchema,
   WorkflowSourceLocationSchema,
   WorkflowStateDefinitionSchema,
-  WorkflowStationNodeSchema,
+  WorkflowCodeStepNodeSchema,
   WorkflowAutomationTriggerBindingSchema,
 } from './schemas.js';
 export {
@@ -68,9 +68,10 @@ export type {
   WorkflowArtifactWriteDeclaration,
   WorkflowCondition,
   WorkflowDefinition,
+  RejectedWorkflowDefinition,
+  WorkflowDefinitionList,
   WorkflowDefinitionProvenance,
-  WorkflowDelegateAgentNode,
-  WorkflowDelegateRoleNode,
+  WorkflowAgentStepNode,
   WorkflowDynamicRegion,
   WorkflowExecution,
   WorkflowExecutionScope,
@@ -88,12 +89,11 @@ export type {
   WorkflowNodeType,
   WorkflowParallelMode,
   WorkflowParallelNode,
-  WorkflowResolvedAgent,
   WorkflowResolvedRole,
   WorkflowSequenceNode,
   WorkflowSourceLocation,
   WorkflowStateDefinition,
-  WorkflowStationNode,
+  WorkflowCodeStepNode,
   WorkflowAutomationTriggerBinding,
 } from './schemas.js';
 export {
@@ -134,7 +134,7 @@ export {
   ExecutionLinkListQuerySchema,
 } from './span.js';
 export type { SpanStatus, SpanRecord, ExecutionLinkType, ExecutionLink, ExecutionLinkListQuery } from './span.js';
-export { WorkflowError, WorkflowErrorCode } from './errors.js';
+export { isDefinitionInvalidError, WorkflowError, WorkflowErrorCode } from './errors.js';
 export type { WorkflowErrorCode as WorkflowErrorCodeType } from './errors.js';
 export { JsonPatchOperationSchema } from './json-patch.js';
 export type { JsonPatchOperation } from './json-patch.js';
@@ -159,10 +159,8 @@ export type {
   ContextBundle,
 } from './context.js';
 export type {
-  DelegateAgentNodeBlockRun,
-  DelegateRoleNodeBlockRun,
+  AgentStepBlockRun,
   RegisteredStepBlock,
-  StationNodeBlockRun,
   WorkflowBlockCollection,
   WorkflowBlockMetadata,
   WorkflowStepBlock,
@@ -171,8 +169,12 @@ export type {
 export { WorkflowNamespace, WorkflowProgressUpdateSchema, WorkflowSchemas, WorkflowSubjects } from './namespace.js';
 export { WorkflowArtifactRefSchema, serializeArtifactRef, parseArtifactRef } from './artifact-ref.js';
 export type { WorkflowArtifactRef } from './artifact-ref.js';
-export { WorkflowRunContextSchema } from './run-context.js';
-export type { WorkflowRunContext, WorkflowRunContextSource } from './run-context.js';
+export {
+  requireExecutableRunContext,
+  StoredWorkflowRunContextSchema,
+  WorkflowRunContextSchema,
+} from './run-context.js';
+export type { StoredWorkflowRunContext, WorkflowRunContext, WorkflowRunContextSource } from './run-context.js';
 export {
   WorkflowTerminalStatusSchema,
   WorkflowFinalizationIntentSchema,
@@ -254,31 +256,31 @@ export type {
   WorkLogDynamicNodeMaterialization,
 } from './worklog.js';
 export {
+  agentStep,
   AutomationWorkflowTrigger,
   BusEventWorkflowTrigger,
   BUS_EVENT_AUTOMATION_TRIGGER_KIND,
+  codeStep,
   CronAutomationTriggerParamsSchema,
   CronWorkflowTrigger,
   CRON_AUTOMATION_TRIGGER_KIND,
   DEFAULT_CRON_TIMEZONE,
-  delegateToAgent,
-  delegateToRole,
   gate,
   iterate,
   iterateChain,
   loop,
   payloadField,
-  station,
 } from './authoring-exports.js';
 export { defineWorkflow } from './authoring.js';
 export type {
-  AgentConfig,
   ArtifactBindingOptions,
   ArtifactContext,
   ArtifactPatch,
   ArtifactUpdateOperation,
   ArtifactUpdater,
   BuiltWorkflow,
+  CodeStepContext,
+  CodeStepHandler,
   CronTriggerPayload,
   DefineWorkflowOptions,
   ExtractTriggerPayload,
@@ -291,8 +293,6 @@ export type {
   ParallelMode,
   ParallelOptions,
   PreviousStepOutput,
-  StationHandler,
-  StationStepContext,
   StepContext,
   WorkflowBuilder,
   WorkflowContext,

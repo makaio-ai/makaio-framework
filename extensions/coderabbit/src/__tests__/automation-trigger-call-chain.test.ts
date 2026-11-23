@@ -23,7 +23,7 @@ it('preserves each findings arrival principal through the lookup and workflow st
   const lookups: Party[] = [];
   const starts: Array<{ workflowId: string; principal: Party }> = [];
   const unsubscribe = [
-    bus.on(WorkflowStorageSubjects.list, (ctx) => ctx.setResult({ workflows: [workflow] })),
+    bus.on(WorkflowStorageSubjects.list, (ctx) => ctx.setResult({ workflows: [workflow], rejected: [] })),
     bus.on(ReviewSubjects.findings.list, (ctx) => {
       lookups.push(ctx.call.principal);
       ctx.setResult({ findings: [] });

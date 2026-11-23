@@ -188,8 +188,6 @@ const runContext = WorkflowRunContextSchema.parse({
     name: 'Auth Test Workflow',
     root: { id: 'wf-auth__root', type: 'sequence', nodes: [] },
     scope: { type: 'global' },
-    createdAt: 1,
-    updatedAt: 1,
   },
   workerManifest: { contributionRefs: [] },
   inputs: {},
@@ -397,7 +395,6 @@ describe('workflow.finalizeDelegateResult authority gateway', () => {
     readonly encrypted?: boolean;
     readonly executionId?: string;
     readonly nodeId?: string;
-    readonly nodeType?: 'delegate-agent' | 'delegate-role';
     readonly finalizerId?: string;
   }): Promise<BusMessage | undefined> {
     const bus = createWorkflowTestBus();
@@ -411,9 +408,9 @@ describe('workflow.finalizeDelegateResult authority gateway', () => {
           nodes: [
             {
               id: 'delegate-read',
-              type: 'delegate-agent',
-              agentId: 'repository-reader',
-              inputExpression: '"Read"',
+              type: 'agent-step',
+              role: 'repository-reader',
+              prompt: 'Read',
               resultFinalizerId: 'artifact.read-wrap',
             },
           ],
@@ -442,7 +439,6 @@ describe('workflow.finalizeDelegateResult authority gateway', () => {
         workflowId: runContext.workflowId,
         frameId: 'frame-1',
         nodeId: input.nodeId ?? 'delegate-read',
-        nodeType: input.nodeType ?? 'delegate-agent',
         rawResult: 'raw',
         toolObservations: [],
       },
@@ -695,7 +691,7 @@ describe('attempt-scoped raw workflow storage authorization', () => {
           frame: {
             frameId: `frame-${targetExecutionId}`,
             nodeId: 'node-storage',
-            nodeType: 'station',
+            nodeType: 'code-step',
             path: ['node-storage'],
             status: 'running',
             attempt: 0,
@@ -709,7 +705,7 @@ describe('attempt-scoped raw workflow storage authorization', () => {
             executionId: targetExecutionId,
             frameId: `frame-${targetExecutionId}`,
             stepId: 'node-storage',
-            stepType: 'station',
+            stepType: 'code-step',
             status: 'running',
             startedAt: 1,
           },

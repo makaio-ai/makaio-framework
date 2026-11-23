@@ -4,8 +4,8 @@ import type { IMakaioBus } from '@makaio/bus-core';
 import type { CallContext } from '@makaio/core';
 import {
   WORKFLOW_CANCELLED_REASON,
+  CodeStepHandler,
   LoopGateHandler,
-  StationHandler,
   WorkflowZodSchemas,
   WorkflowDefinition,
   WorkflowExecution,
@@ -35,7 +35,7 @@ import { buildWorkflowRunResult, type RuntimeSequenceResult } from './workflow-r
  * The resolved workflow module produced by a workflow file loader.
  *
  * Contains the serializable workflow definition and the runtime handler map
- * that the worker executor uses to dispatch station nodes.
+ * that the worker executor uses to dispatch code step nodes.
  */
 export interface LoadedWorkflow {
   /** Serializable workflow definition (safe to persist or display in the UI). */
@@ -43,10 +43,10 @@ export interface LoadedWorkflow {
   /** Optional Zod schemas retained from file-loaded workflow builders. */
   readonly zodSchemas?: WorkflowZodSchemas;
   /**
-   * Runtime station handler functions keyed by node ID.
-   * Used by the orchestrator to dispatch `station`-type nodes.
+   * Runtime code step handler functions keyed by node ID.
+   * Used by the orchestrator to dispatch `codeStep`-type nodes.
    */
-  readonly runtimeHandlers: ReadonlyMap<string, StationHandler>;
+  readonly runtimeHandlers: ReadonlyMap<string, CodeStepHandler>;
   /** Loop gate handler functions keyed by handler name. */
   readonly runtimeLoopGates?: ReadonlyMap<string, LoopGateHandler>;
 }
@@ -275,7 +275,7 @@ async function buildPreRuntimeTerminalExecution(
  * @param definition - Workflow definition to execute.
  * @param liveExecution - The live execution record.
  * @param runContext - Durable run-context snapshot for this execution.
- * @param runtimeHandlers - Station handler map for dispatch.
+ * @param runtimeHandlers - Code step handler map for dispatch.
  * @param runtimeLoopGates - Loop gate handler map for convergence checks.
  * @param bus - Worker-local bus.
  * @param signal - Cancellation signal.
@@ -288,7 +288,7 @@ async function runRuntimeSequence(
   definition: WorkflowDefinition,
   liveExecution: WorkflowExecution,
   runContext: WorkflowRunContext,
-  runtimeHandlers: Map<string, StationHandler>,
+  runtimeHandlers: Map<string, CodeStepHandler>,
   runtimeLoopGates: ReadonlyMap<string, LoopGateHandler>,
   bus: IMakaioBus,
   signal: AbortSignal,
@@ -507,7 +507,7 @@ async function emitTerminalExecutionEvent(
  * - Parallel branch execution via `parallel` nodes
  * - Iterate/iterate-chain for collection processing
  * - Gate nodes with suspend/resume lifecycle
- * - Station nodes dispatched via `runtimeHandlers`
+ * - Code step nodes dispatched via `runtimeHandlers`
  *
  * ### Cancellation
  * When `signal` is already aborted before execution begins, returns a
@@ -544,7 +544,7 @@ export async function runWorkflowOrchestrator(params: WorkflowOrchestratorParams
     await persistLoadedExecutionStart(call, bus, liveExecution, runContext, definition);
   else await persistAuthorityLoadedState(call, bus, runContext, definition);
 
-  const runtimeHandlers = new Map<string, StationHandler>(loaded.runtimeHandlers);
+  const runtimeHandlers = new Map<string, CodeStepHandler>(loaded.runtimeHandlers);
   const runtimeLoopGates = loaded.runtimeLoopGates ?? new Map<string, LoopGateHandler>();
   const activeExecutions = new Map<string, ActiveExecution>();
   const shellAbortControllers = new Map<string, AbortController>();

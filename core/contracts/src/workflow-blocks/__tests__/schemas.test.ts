@@ -18,7 +18,8 @@ describe('WorkflowBlocksSchemas', () => {
           inputSchema: { type: 'object' },
           outputSchema: { type: 'object' },
           runs: {
-            type: 'station',
+            type: 'agent-step',
+            role: 'reviewer',
             prompt: 'Review {{ input.target }}',
             timeoutMs: 1,
           },
@@ -27,7 +28,8 @@ describe('WorkflowBlocksSchemas', () => {
     });
 
     expect(response.steps[0]?.runs).toEqual({
-      type: 'station',
+      type: 'agent-step',
+      role: 'reviewer',
       prompt: 'Review {{ input.target }}',
       timeoutMs: 1,
     });
@@ -43,10 +45,30 @@ describe('WorkflowBlocksSchemas', () => {
             inputSchema: { type: 'object' },
             outputSchema: { type: 'object' },
             runs: {
-              type: 'delegate-role',
+              type: 'agent-step',
               role: 'reviewer',
               prompt: 'Review',
               timeoutMs: 0,
+            },
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
+  it('rejects a legacy station run type', () => {
+    expect(() =>
+      WorkflowBlocksSchemas.list.response.parse({
+        steps: [
+          {
+            metadata: StepMetadata,
+            configSchema: { type: 'object' },
+            inputSchema: { type: 'object' },
+            outputSchema: { type: 'object' },
+            runs: {
+              type: 'station', // legacy-input
+              prompt: 'Review {{ input.target }}',
+              timeoutMs: 1,
             },
           },
         ],

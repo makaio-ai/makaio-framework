@@ -515,7 +515,7 @@ describe('handleWorkflowRun with --verbose', () => {
     await bus.emit(createTestCall(), WorkflowSubjects.step.started, {
       executionId: 'exec-verbose-1',
       stepId: 'step-1',
-      stepType: 'station',
+      stepType: 'agent-step',
     });
 
     await bus.emit(createTestCall(), WorkflowSubjects.execution.completed, {

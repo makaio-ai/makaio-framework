@@ -5,7 +5,7 @@
 Enforce the caller's tool allowlist and forward the denylist to the Claude Agent SDK.
 
 `allowedTools` / `disallowedTools` on the connector config (for example from a
-workflow `delegateToRole({ allowedTools })`) previously never reached the SDK
+workflow `agentStep({ allowedTools })`) previously never reached the SDK
 query, so a delegate could use every tool. With an allowlist, the SDK query now
 exposes only the listed built-in tools (SDK `tools`), and the `canUseTool`
 handler denies any tool call, built-in or `mcp__*`, whose name is not on the

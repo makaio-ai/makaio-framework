@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { EventMessagePayload, SubjectDefinition } from '@makaio/core';
 import { splitSubjectKey } from '@makaio/core';
-import { WorkflowStationNodeSchema } from './schemas.js';
+import { WorkflowCodeStepNodeSchema, WorkflowNodeTypeSchema } from './schemas.js';
 import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.js';
 
 // ─────────────────────────────────────────────────────────────
@@ -9,14 +9,14 @@ import { JsonObjectContractSchema, JsonValueSchema } from '../shared/json-value.
 // ─────────────────────────────────────────────────────────────
 
 /**
- * Discriminant for all workflow node types that produce lifecycle events.
- * Used by lifecycle events and span records.
+ * Node types that produce lifecycle events and span records.
+ * Derived from {@link WorkflowNodeTypeSchema}.
  *
  * Structural nodes (`sequence`, `parallel`, `iterate`, `iterate-chain`) are
  * excluded — they emit lifecycle events only as parent frames, not as runner
  * targets. `gate` is included because gate resolution events are observable.
  */
-export const WorkflowStepTypeSchema = z.enum(['station', 'delegate-agent', 'delegate-role', 'gate']);
+export const WorkflowStepTypeSchema = WorkflowNodeTypeSchema.extract(['code-step', 'agent-step', 'gate']);
 
 export type WorkflowStepType = z.infer<typeof WorkflowStepTypeSchema>;
 
@@ -26,10 +26,11 @@ export type WorkflowStepType = z.infer<typeof WorkflowStepTypeSchema>;
 
 /**
  * Node types that are dispatchable to a {@link IStepRunner}.
- * Gates and delegation nodes are coordination steps handled by the orchestrator,
+ * Derived from {@link WorkflowStepTypeSchema}.
+ * Gates and agent steps are coordination steps handled by the orchestrator,
  * not dispatched to runners.
  */
-export const WorkflowRunnerStepTypeSchema = z.enum(['station']);
+export const WorkflowRunnerStepTypeSchema = WorkflowStepTypeSchema.extract(['code-step']);
 
 export type WorkflowRunnerStepType = z.infer<typeof WorkflowRunnerStepTypeSchema>;
 
@@ -205,7 +206,7 @@ export function createWorkflowCancelSubject(fullSubject: string): WorkflowCancel
  * `iterate`, `iterate-chain`) are orchestrator coordination nodes and are
  * never dispatched to runners.
  *
- * Uses {@link WorkflowRunnerStepTypeSchema} (`station`) — all other node
+ * Uses {@link WorkflowRunnerStepTypeSchema} (`code-step`) — all other node
  * types are handled by the orchestrator directly.
  */
 export const StepRunConfigSchema = z
@@ -220,8 +221,8 @@ export const StepRunConfigSchema = z
     coordinatorSessionId: z.string().min(1),
     /** Node type discriminant (runner-executable types only). */
     stepType: WorkflowRunnerStepTypeSchema,
-    /** Resolved runner-executable station node definition. */
-    stepDefinition: WorkflowStationNodeSchema,
+    /** Resolved runner-executable code-step node definition. */
+    stepDefinition: WorkflowCodeStepNodeSchema,
     /** Expression context values resolved from previous node outputs and workflow inputs. */
     resolvedInputs: JsonObjectContractSchema,
     /** Bus server WebSocket URL for the worker to connect to. */

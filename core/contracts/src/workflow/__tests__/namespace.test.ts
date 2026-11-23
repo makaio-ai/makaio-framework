@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { getObservabilitySchemaPolicy } from '@makaio/core';
 import {
-  WorkflowResolvedAgentSchema,
   WorkflowResolvedRoleSchema,
-  WorkflowStationNodeSchema,
-  WorkflowDelegateAgentNodeSchema,
-  WorkflowDelegateRoleNodeSchema,
+  WorkflowAgentStepNodeSchema,
+  WorkflowCodeStepNodeSchema,
   WorkflowGateNodeSchema,
   WorkflowParallelNodeSchema,
   WorkflowIterateNodeSchema,
@@ -13,6 +11,7 @@ import {
   WorkflowSequenceNodeSchema,
   WorkflowNodeSchema,
   WorkflowDefinitionSchema,
+  WorkflowDefinitionListSchema,
   WorkflowArtifactBindingSchema,
   WorkflowFrameStateSchema,
   WorkflowGateInstanceSchema,
@@ -171,28 +170,13 @@ describe('WorkflowSubjects.resolveRole', () => {
   });
 });
 
-describe('WorkflowSubjects.resolveAgent', () => {
-  it('exposes the resolveAgent subject', () => {
-    expect(WorkflowSubjects.resolveAgent.subject).toBe('resolveAgent');
-  });
-});
-
 // ─────────────────────────────────────────────────────────────
 // WorkflowNodeTypeSchema
 // ─────────────────────────────────────────────────────────────
 
 describe('WorkflowNodeTypeSchema', () => {
   it('accepts all 8 node types', () => {
-    const validTypes = [
-      'station',
-      'delegate-agent',
-      'delegate-role',
-      'parallel',
-      'gate',
-      'iterate',
-      'iterate-chain',
-      'sequence',
-    ];
+    const validTypes = ['code-step', 'agent-step', 'parallel', 'gate', 'iterate', 'iterate-chain', 'loop', 'sequence'];
     for (const t of validTypes) {
       expect(WorkflowNodeTypeSchema.parse(t)).toBe(t);
     }
@@ -204,6 +188,11 @@ describe('WorkflowNodeTypeSchema', () => {
     expect(() => WorkflowNodeTypeSchema.parse('function')).toThrow();
     expect(() => WorkflowNodeTypeSchema.parse('for-each')).toThrow();
     expect(() => WorkflowNodeTypeSchema.parse('bus-request')).toThrow();
+  });
+
+  it('rejects retired workflow node types', () => {
+    expect(() => WorkflowNodeTypeSchema.parse('station')).toThrow(); // legacy-input
+    expect(() => WorkflowNodeTypeSchema.parse('delegate-agent')).toThrow(); // legacy-input
   });
 });
 
@@ -225,25 +214,26 @@ describe('WorkflowArtifactBindingSchema', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// WorkflowStationNodeSchema
+// WorkflowAgentStepNodeSchema
 // ─────────────────────────────────────────────────────────────
 
-describe('WorkflowStationNodeSchema', () => {
-  it('accepts a minimal station node with id and prompt', () => {
-    const node = WorkflowStationNodeSchema.parse({
+describe('WorkflowAgentStepNodeSchema', () => {
+  it('accepts a minimal agent-step node with id, role, and prompt', () => {
+    const node = WorkflowAgentStepNodeSchema.parse({
       id: 'analyze',
-      type: 'station',
+      type: 'agent-step',
+      role: 'requirements-analyst',
       prompt: 'Analyze the requirements document',
     });
-    expect(node.type).toBe('station');
+    expect(node.type).toBe('agent-step');
     expect(node.id).toBe('analyze');
     expect(node.prompt).toBe('Analyze the requirements document');
   });
 
-  it('accepts a station with optional role and outputSchema', () => {
-    const node = WorkflowStationNodeSchema.parse({
+  it('accepts an agent-step with optional outputSchema and timeoutMs', () => {
+    const node = WorkflowAgentStepNodeSchema.parse({
       id: 'review',
-      type: 'station',
+      type: 'agent-step',
       prompt: 'Review the implementation plan',
       role: 'requirements-analyst',
       outputSchema: { type: 'object', properties: { status: { type: 'string' } } },
@@ -255,9 +245,10 @@ describe('WorkflowStationNodeSchema', () => {
   });
 
   it('accepts when and skip conditions', () => {
-    const node = WorkflowStationNodeSchema.parse({
+    const node = WorkflowAgentStepNodeSchema.parse({
       id: 'conditional',
-      type: 'station',
+      type: 'agent-step',
+      role: 'requirements-analyst',
       prompt: 'Run only if env is production',
       when: "ctx.inputs.env == 'production'",
       skip: 'ctx.inputs.dryRun == true',
@@ -266,58 +257,12 @@ describe('WorkflowStationNodeSchema', () => {
     expect(node.skip).toBe('ctx.inputs.dryRun == true');
   });
 
-  it('rejects a station with empty id', () => {
-    expect(() => WorkflowStationNodeSchema.parse({ id: '', type: 'station', prompt: 'Do something' })).toThrow();
-  });
-
-  it('rejects a station with empty prompt', () => {
-    expect(() => WorkflowStationNodeSchema.parse({ id: 'step', type: 'station', prompt: '' })).toThrow();
-  });
-
-  it('rejects functions in outputSchema (must be JSON-safe)', () => {
-    expect(() =>
-      WorkflowStationNodeSchema.parse({
-        id: 'bad',
-        type: 'station',
-        prompt: 'Run',
-        outputSchema: { validator: () => undefined },
-      }),
-    ).toThrow();
-  });
-});
-
-// ─────────────────────────────────────────────────────────────
-// WorkflowDelegateAgentNodeSchema
-// ─────────────────────────────────────────────────────────────
-
-describe('WorkflowDelegateAgentNodeSchema', () => {
-  it('accepts a minimal delegate-agent node', () => {
-    const node = WorkflowDelegateAgentNodeSchema.parse({
-      id: 'delegate-1',
-      type: 'delegate-agent',
-      agentId: 'code-review-agent',
-    });
-    expect(node.type).toBe('delegate-agent');
-    expect(node.agentId).toBe('code-review-agent');
-  });
-
-  it('accepts delegate-agent with inputExpression and outputSchema', () => {
-    const node = WorkflowDelegateAgentNodeSchema.parse({
-      id: 'delegate-1',
-      type: 'delegate-agent',
-      agentId: 'code-review-agent',
-      inputExpression: 'ctx.frames["build"].output',
-      outputSchema: { type: 'object' },
-    });
-    expect(node.inputExpression).toBe('ctx.frames["build"].output');
-    expect(node.outputSchema).toBeDefined();
-  });
-
-  it('serializes turn completion with exact tools and an authority result finalizer', () => {
-    const node = WorkflowDelegateAgentNodeSchema.parse({
-      id: 'delegate-1',
-      type: 'delegate-agent',
-      agentId: 'code-review-agent',
+  it('accepts exact allowed tools, turn completion, and an authority result finalizer', () => {
+    const node = WorkflowAgentStepNodeSchema.parse({
+      id: 'role-delegate',
+      type: 'agent-step',
+      role: 'senior-reviewer',
+      prompt: 'Review the PR and provide feedback',
       allowedTools: ['artifact.read'],
       completion: 'turn',
       resultFinalizerId: 'artifact.read-wrap',
@@ -327,37 +272,60 @@ describe('WorkflowDelegateAgentNodeSchema', () => {
     expect(node.completion).toBe('turn');
     expect(node.resultFinalizerId).toBe('artifact.read-wrap');
   });
+
+  it('rejects an agent-step with empty id', () => {
+    expect(() =>
+      WorkflowAgentStepNodeSchema.parse({ id: '', type: 'agent-step', role: 'r', prompt: 'Do something' }),
+    ).toThrow();
+  });
+
+  it('rejects an agent-step with empty prompt', () => {
+    expect(() =>
+      WorkflowAgentStepNodeSchema.parse({ id: 'step', type: 'agent-step', role: 'r', prompt: '' }),
+    ).toThrow();
+  });
+
+  it('rejects an agent-step without a role', () => {
+    expect(() =>
+      WorkflowAgentStepNodeSchema.parse({ id: 'step', type: 'agent-step', prompt: 'Do something' }),
+    ).toThrow();
+  });
+
+  it('rejects functions in outputSchema (must be JSON-safe)', () => {
+    expect(() =>
+      WorkflowAgentStepNodeSchema.parse({
+        id: 'bad',
+        type: 'agent-step',
+        role: 'r',
+        prompt: 'Run',
+        outputSchema: { validator: () => undefined },
+      }),
+    ).toThrow();
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
-// WorkflowDelegateRoleNodeSchema
+// WorkflowCodeStepNodeSchema
 // ─────────────────────────────────────────────────────────────
 
-describe('WorkflowDelegateRoleNodeSchema', () => {
-  it('accepts a minimal delegate-role node', () => {
-    const node = WorkflowDelegateRoleNodeSchema.parse({
-      id: 'role-delegate',
-      type: 'delegate-role',
-      role: 'senior-reviewer',
-      prompt: 'Review the PR and provide feedback',
+describe('WorkflowCodeStepNodeSchema', () => {
+  it('accepts a minimal code-step node', () => {
+    const node = WorkflowCodeStepNodeSchema.parse({
+      id: 'collect',
+      type: 'code-step',
     });
-    expect(node.type).toBe('delegate-role');
-    expect(node.role).toBe('senior-reviewer');
-    expect(node.prompt).toBe('Review the PR and provide feedback');
+    expect(node.type).toBe('code-step');
+    expect(node.id).toBe('collect');
   });
 
-  it('accepts exact allowed tools and an authority result finalizer', () => {
-    const node = WorkflowDelegateRoleNodeSchema.parse({
-      id: 'role-delegate',
-      type: 'delegate-role',
-      role: 'senior-reviewer',
-      prompt: 'Review the PR and provide feedback',
-      allowedTools: ['artifact.read'],
-      resultFinalizerId: 'artifact.read-wrap',
-    });
-
-    expect(node.allowedTools).toEqual(['artifact.read']);
-    expect(node.resultFinalizerId).toBe('artifact.read-wrap');
+  it('rejects a code-step carrying role (.strict())', () => {
+    expect(() =>
+      WorkflowCodeStepNodeSchema.parse({
+        id: 'bad',
+        type: 'code-step',
+        role: 'requirements-analyst',
+      }),
+    ).toThrow();
   });
 });
 
@@ -524,7 +492,7 @@ describe('WorkflowSequenceNodeSchema', () => {
       id: 'root',
       type: 'sequence',
       nodes: [
-        { id: 'step-1', type: 'station', prompt: 'Analyze' },
+        { id: 'step-1', type: 'agent-step', role: 'analyst', prompt: 'Analyze' },
         {
           id: 'gate-1',
           type: 'gate',
@@ -532,13 +500,13 @@ describe('WorkflowSequenceNodeSchema', () => {
           autoAction: 'reject',
           timeoutMs: null,
         },
-        { id: 'step-2', type: 'station', prompt: 'Deploy' },
+        { id: 'step-2', type: 'agent-step', role: 'deployer', prompt: 'Deploy' },
       ],
     });
     expect(node.nodes).toHaveLength(3);
-    expect(node.nodes[0]?.type).toBe('station');
+    expect(node.nodes[0]?.type).toBe('agent-step');
     expect(node.nodes[1]?.type).toBe('gate');
-    expect(node.nodes[2]?.type).toBe('station');
+    expect(node.nodes[2]?.type).toBe('agent-step');
   });
 
   it('accepts deeply nested sequences', () => {
@@ -553,7 +521,7 @@ describe('WorkflowSequenceNodeSchema', () => {
             a: {
               id: 'branch-a',
               type: 'sequence',
-              nodes: [{ id: 'inner-station', type: 'station', prompt: 'Inner work' }],
+              nodes: [{ id: 'inner-step', type: 'agent-step', role: 'reviewer', prompt: 'Inner work' }],
             },
           },
         },
@@ -573,8 +541,9 @@ describe('WorkflowSequenceNodeSchema', () => {
         type: 'sequence',
         nodes: [
           {
-            id: 'bad-station',
-            type: 'station',
+            id: 'bad-step',
+            type: 'agent-step',
+            role: 'r',
             prompt: 'Run',
             outputSchema: { transform: () => undefined },
           },
@@ -589,13 +558,14 @@ describe('WorkflowSequenceNodeSchema', () => {
 // ─────────────────────────────────────────────────────────────
 
 describe('WorkflowNodeSchema', () => {
-  it('routes station nodes by type discriminant', () => {
+  it('routes agent-step nodes by type discriminant', () => {
     const node = WorkflowNodeSchema.parse({
-      id: 'station-1',
-      type: 'station',
+      id: 'step-1',
+      type: 'agent-step',
+      role: 'r',
       prompt: 'Do work',
     });
-    expect(node.type).toBe('station');
+    expect(node.type).toBe('agent-step');
   });
 
   it('routes gate nodes by type discriminant', () => {
@@ -615,6 +585,11 @@ describe('WorkflowNodeSchema', () => {
 
   it('rejects unknown node types', () => {
     expect(() => WorkflowNodeSchema.parse({ id: 'bad', type: 'unknown-type' })).toThrow();
+  });
+
+  it('rejects retired workflow node shapes', () => {
+    expect(() => WorkflowNodeSchema.parse({ id: 'bad', type: 'station', prompt: 'Do work' })).toThrow(); // legacy-input
+    expect(() => WorkflowNodeSchema.parse({ id: 'bad', type: 'delegate-agent', agentId: 'a' })).toThrow(); // legacy-input
   });
 });
 
@@ -649,7 +624,7 @@ describe('WorkflowDefinitionSchema', () => {
         id: 'root',
         type: 'sequence',
         nodes: [
-          { id: 'analyze', type: 'station', prompt: 'Analyze' },
+          { id: 'analyze', type: 'agent-step', role: 'analyst', prompt: 'Analyze' },
           {
             id: 'approve',
             type: 'gate',
@@ -657,7 +632,7 @@ describe('WorkflowDefinitionSchema', () => {
             autoAction: 'reject',
             timeoutMs: null,
           },
-          { id: 'implement', type: 'station', prompt: 'Implement' },
+          { id: 'implement', type: 'agent-step', role: 'implementer', prompt: 'Implement' },
         ],
       },
       triggers: [{ kind: 'makaio.cron', params: { schedule: '0 * * * *', timezone: 'UTC' } }],
@@ -687,7 +662,8 @@ describe('WorkflowDefinitionSchema', () => {
           nodes: [
             {
               id: 'bad',
-              type: 'station',
+              type: 'agent-step',
+              role: 'r',
               prompt: 'Run',
               outputSchema: { handler: () => undefined },
             },
@@ -775,16 +751,15 @@ describe('WorkflowDefinitionSchema', () => {
       expect('extensions' in def).toBe(false);
     });
 
-    it('drops an unknown top-level key silently while keeping extensions', () => {
-      const def = WorkflowDefinitionSchema.parse({
+    it('rejects a definition with an unknown top-level key instead of dropping it (.strict())', () => {
+      const result = WorkflowDefinitionSchema.safeParse({
         id: 'unknown-key',
         root,
         extensions: { gateway: { lane: 'review' } },
-        notADefinitionField: 'dropped',
+        extension: { lane: 'review' },
       });
 
-      expect(def.extensions).toEqual({ gateway: { lane: 'review' } });
-      expect('notADefinitionField' in def).toBe(false);
+      expect(result.success).toBe(false);
     });
 
     it('rejects an own "__proto__" key of the extensions record instead of dropping it', () => {
@@ -884,6 +859,44 @@ describe('WorkflowDefinitionSchema', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
+// WorkflowDefinitionListSchema
+// ─────────────────────────────────────────────────────────────
+
+describe('WorkflowDefinitionListSchema', () => {
+  it('accepts a list with readable definitions and an empty rejected array', () => {
+    const list = WorkflowDefinitionListSchema.parse({
+      workflows: [WorkflowDefinitionSchema.parse({ id: 'ok', root: { id: 'root', type: 'sequence', nodes: [] } })],
+      rejected: [],
+    });
+    expect(list.workflows).toHaveLength(1);
+    expect(list.rejected).toEqual([]);
+  });
+
+  it('requires the rejected field', () => {
+    expect(() => WorkflowDefinitionListSchema.parse({ workflows: [] })).toThrow();
+  });
+
+  it('rejects a rejected-row reason that is an empty string', () => {
+    expect(() =>
+      WorkflowDefinitionListSchema.parse({
+        workflows: [],
+        rejected: [{ id: 'bad-flow', reason: '' }],
+      }),
+    ).toThrow();
+  });
+
+  it('accepts a rejected row with a non-empty reason', () => {
+    const list = WorkflowDefinitionListSchema.parse({
+      workflows: [],
+      rejected: [{ id: 'bad-flow', reason: "root.nodes.0.type: Invalid literal value, expected 'agent-step'" }],
+    });
+    expect(list.rejected).toEqual([
+      { id: 'bad-flow', reason: "root.nodes.0.type: Invalid literal value, expected 'agent-step'" },
+    ]);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
 // WorkflowFrameStateSchema
 // ─────────────────────────────────────────────────────────────
 
@@ -892,7 +905,7 @@ describe('WorkflowFrameStateSchema', () => {
     const frame = WorkflowFrameStateSchema.parse({
       frameId: 'frame-1',
       nodeId: 'analyze',
-      nodeType: 'station',
+      nodeType: 'agent-step',
       path: ['frame-root', 'frame-1'],
       status: 'pending',
       attempt: 0,
@@ -917,7 +930,7 @@ describe('WorkflowFrameStateSchema', () => {
     const frame = WorkflowFrameStateSchema.parse({
       frameId: 'frame-3',
       nodeId: 'analyze',
-      nodeType: 'station',
+      nodeType: 'agent-step',
       path: ['frame-root', 'frame-3'],
       status: 'completed',
       attempt: 0,
@@ -934,7 +947,7 @@ describe('WorkflowFrameStateSchema', () => {
     const frame = WorkflowFrameStateSchema.parse({
       frameId: 'frame-4',
       nodeId: 'process',
-      nodeType: 'station',
+      nodeType: 'agent-step',
       path: ['root', 'iterate', 'frame-4'],
       status: 'running',
       attempt: 0,
@@ -947,7 +960,7 @@ describe('WorkflowFrameStateSchema', () => {
     const frame = WorkflowFrameStateSchema.parse({
       frameId: 'frame-5',
       nodeId: 'security-check',
-      nodeType: 'station',
+      nodeType: 'agent-step',
       path: ['root', 'parallel', 'frame-5'],
       status: 'running',
       attempt: 0,
@@ -974,7 +987,7 @@ describe('WorkflowFrameStateSchema', () => {
       WorkflowFrameStateSchema.parse({
         frameId: 'f',
         nodeId: 'x',
-        nodeType: 'station',
+        nodeType: 'agent-step',
         path: [],
         status: 'expanding',
         attempt: 0,
@@ -1151,22 +1164,6 @@ describe('WorkflowResolvedRoleSchema', () => {
   });
 });
 
-describe('WorkflowResolvedAgentSchema', () => {
-  it('uses the same executable adapter config shape as resolved roles', () => {
-    const agent = WorkflowResolvedAgentSchema.parse({
-      adapterName: 'claudeCode',
-      model: 'sonnet',
-      harnessId: 'implementation-harness',
-    });
-
-    expect(agent).toEqual({
-      adapterName: 'claudeCode',
-      model: 'sonnet',
-      harnessId: 'implementation-harness',
-    });
-  });
-});
-
 // ─────────────────────────────────────────────────────────────
 // Namespace bus schemas
 // ─────────────────────────────────────────────────────────────
@@ -1176,7 +1173,7 @@ describe('step.completed JSON result', () => {
     const payload = WorkflowSchemas['step.completed'].parse({
       executionId: 'wfx-1',
       stepId: 'collect',
-      stepType: 'station',
+      stepType: 'code-step',
       result: { copied: ['.env'], count: 1 },
       duration: 12,
     });
@@ -1206,7 +1203,7 @@ describe('gate.awaitApproval subject', () => {
     const gatePayload = {
       executionId: 'wfx-1',
       stepId: 'approve',
-      stepType: 'station',
+      stepType: 'code-step',
       workflowId: 'wf-1',
       workflowName: 'Workflow One',
       title: 'Approve',
@@ -1344,13 +1341,13 @@ describe('frame lifecycle events', () => {
       executionId: 'wfx-1',
       frameId: 'frame-analyze',
       nodeId: 'analyze',
-      nodeType: 'station',
+      nodeType: 'agent-step',
       path: ['frame-root', 'frame-analyze'],
       parentFrameId: 'frame-root',
       startedAt: 1000,
     });
     expect(payload.frameId).toBe('frame-analyze');
-    expect(payload.nodeType).toBe('station');
+    expect(payload.nodeType).toBe('agent-step');
     expect(payload.path).toEqual(['frame-root', 'frame-analyze']);
     expect(payload.parentFrameId).toBe('frame-root');
     expect(payload.startedAt).toBe(1000);
@@ -1384,6 +1381,7 @@ describe('frame lifecycle events', () => {
       executionId: 'wfx-1',
       frameId: 'frame-analyze',
       nodeId: 'analyze',
+      nodeType: 'agent-step',
       output: { findings: 3 },
       duration: 1500,
       completedAt: 2500,
@@ -1398,6 +1396,7 @@ describe('frame lifecycle events', () => {
       executionId: 'wfx-1',
       frameId: 'frame-gate',
       nodeId: 'gate-1',
+      nodeType: 'gate',
     });
     expect(payload.output).toBeUndefined();
     expect(payload.duration).toBeUndefined();
@@ -1409,7 +1408,18 @@ describe('frame lifecycle events', () => {
         executionId: 'wfx-1',
         frameId: 'f',
         nodeId: 'n',
+        nodeType: 'code-step',
         duration: -1,
+      }),
+    ).toThrow();
+  });
+
+  it('rejects frame.completed without nodeType', () => {
+    expect(() =>
+      WorkflowSchemas['frame.completed'].parse({
+        executionId: 'wfx-1',
+        frameId: 'f',
+        nodeId: 'n',
       }),
     ).toThrow();
   });
@@ -1419,6 +1429,7 @@ describe('frame lifecycle events', () => {
       executionId: 'wfx-1',
       frameId: 'frame-deploy',
       nodeId: 'deploy',
+      nodeType: 'agent-step',
       error: 'Timeout exceeded',
       duration: 300000,
       completedAt: 301000,
@@ -1426,6 +1437,17 @@ describe('frame lifecycle events', () => {
     expect(payload.error).toBe('Timeout exceeded');
     expect(payload.duration).toBe(300000);
     expect(payload.completedAt).toBe(301000);
+  });
+
+  it('rejects frame.failed without nodeType', () => {
+    expect(() =>
+      WorkflowSchemas['frame.failed'].parse({
+        executionId: 'wfx-1',
+        frameId: 'f',
+        nodeId: 'n',
+        error: 'Timeout exceeded',
+      }),
+    ).toThrow();
   });
 });
 
@@ -1685,7 +1707,7 @@ describe('worklog.frame.get RPC', () => {
       executionId: 'wfx-1',
       frameId: 'frame-1',
       nodeId: 'review',
-      nodeType: 'station',
+      nodeType: 'agent-step',
       path: ['frame-1'],
       status: 'completed',
       attempt: 0,

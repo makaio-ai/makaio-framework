@@ -1,5 +1,4 @@
 import type { CallContext } from '@makaio/core';
-import { resolveTemplate } from '@makaio/expression';
 import {
   SubagentSubjects,
   createWorkflowDelegateResultFinalizerNamespace,
@@ -10,11 +9,7 @@ import {
   type WorkflowResolvedRole,
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
-import {
-  buildRuntimeExpressionScope,
-  type PrimitiveExpressionContext,
-  type RuntimeContext,
-} from './runtime-context.js';
+import type { RuntimeContext } from './runtime-context.js';
 import type { NodeOutcome } from './node-execution.js';
 import { buildDelegateEconomics } from './delegate-economics.js';
 
@@ -27,21 +22,19 @@ const SESSION_LINK_POLL_ATTEMPTS = 5;
 const SESSION_LINK_POLL_DELAY_MS = 20;
 const SESSION_LINK_POLL_TIMEOUT_MS = 25;
 
-export interface ExecuteRoleSubagentNodeParams {
+export interface ExecuteResolvedSubagentNodeParams {
   /** Node identifier used in diagnostics and child cancellation reasons. */
   readonly nodeId: string;
-  /** Human-readable node type label, e.g. `station node` or `delegate-role node`. */
+  /** Human-readable node type label, e.g. `Agent step`. */
   readonly nodeLabel: string;
-  /** Role ID resolved through the workflow role registry. */
-  readonly roleId: string;
-  /** Prompt template resolved against the current workflow expression scope. */
-  readonly prompt: string;
+  /** Fully resolved task prompt for the child subagent. */
+  readonly task: string;
+  /** Resolved adapter/model/provider configuration for the child subagent. */
+  readonly resolvedConfig: WorkflowResolvedRole;
   /** Optional structured-output schema forwarded to the subagent runtime. */
   readonly outputSchema?: ResponseSchemaDescriptor;
   /** Optional await timeout for the spawned subagent. */
   readonly timeoutMs?: number;
-  /** Error emitted when no role resolver handles the requested role. */
-  readonly unresolvedRoleError: string;
   /** Error emitted when the subagent spawn subject has no runtime handler. */
   readonly unavailableRuntimeError: string;
   /** Error emitted when the subagent await subject has no runtime handler. */
@@ -50,32 +43,18 @@ export interface ExecuteRoleSubagentNodeParams {
   readonly cancellationLabel: string;
   /** Runtime frame that owns the spawned child session. */
   readonly frameId?: string;
-  /** Completion mode from the workflow node definition. */
-  readonly completion?: WorkflowResolvedRole['completion'];
-}
-
-export interface ExecuteResolvedSubagentNodeParams
-  extends Omit<ExecuteRoleSubagentNodeParams, 'roleId' | 'prompt' | 'unresolvedRoleError' | 'completion'> {
-  /** Fully resolved task prompt for the child subagent. */
-  readonly task: string;
-  /** Resolved adapter/model/provider configuration for the child subagent. */
-  readonly resolvedConfig: WorkflowResolvedRole;
-  /** Authority-owned finalizer selected by the serialized delegate node. */
+  /** Authority-owned finalizer selected by the serialized agent step node. */
   readonly resultFinalizerId?: string;
-  /** Delegate node type used by the authority finalizer contract. */
-  readonly delegateNodeType?: 'delegate-agent' | 'delegate-role';
 }
 
 /** Identity and authority policy for one delegate result finalization. */
 export interface DelegateResultFinalizationParams {
-  /** Delegate node identifier. */
+  /** Agent step node identifier. */
   readonly nodeId: string;
   /** Runtime frame that owns the delegate. */
   readonly frameId?: string;
-  /** Authority-owned finalizer selected by the serialized delegate node. */
+  /** Authority-owned finalizer selected by the serialized agent step node. */
   readonly resultFinalizerId?: string;
-  /** Delegate node type used by the authority finalizer contract. */
-  readonly delegateNodeType?: 'delegate-agent' | 'delegate-role';
   /** Actual resolved runtime binding used for this delegate execution. */
   readonly resolvedConfig?: WorkflowResolvedRole;
   /** Authoritative child-runtime tool outcomes carried by the await contract. */
@@ -85,57 +64,13 @@ export interface DelegateResultFinalizationParams {
 }
 
 /**
- * Resolve a workflow role, spawn a subagent for the node prompt, and await its
- * terminal result.
+ * Spawn a subagent from an already-resolved workflow role config and await
+ * its terminal result.
  *
- * Serialized station nodes and delegate-role nodes share the same executable
- * invariant: a role reference is resolved by the workflow seam, then execution
- * happens through the framework subagent runtime. Keeping that path centralized
- * prevents role-backed stations and delegate-role primitives from drifting.
- * @param call - Call context of the handled message this node execution serves.
- * @param params - Node-specific labels, role, prompt, and output options.
- * @param ctx - Execution-wide runtime context.
- * @param expressionCtx - Current primitive expression context.
- * @returns Terminal node outcome derived from the child subagent result.
- */
-export async function executeRoleSubagentNode(
-  call: CallContext,
-  params: ExecuteRoleSubagentNodeParams,
-  ctx: RuntimeContext,
-  expressionCtx: PrimitiveExpressionContext,
-): Promise<NodeOutcome> {
-  if (ctx.signal.aborted) {
-    return { status: 'cancelled' };
-  }
-
-  const roleResult = await ctx.bus.requestOptional(call, WorkflowSubjects.resolveRole, {
-    roleId: params.roleId,
-  });
-  if (!roleResult.handled) {
-    return { status: 'failed', error: params.unresolvedRoleError };
-  }
-
-  const task = resolveTemplate(params.prompt, buildRuntimeExpressionScope(expressionCtx));
-  const resolvedConfig =
-    params.completion !== undefined ? { ...roleResult.data, completion: params.completion } : roleResult.data;
-  return executeResolvedSubagentNode(
-    call,
-    {
-      ...params,
-      task,
-      resolvedConfig,
-    },
-    ctx,
-  );
-}
-
-/**
- * Spawn a subagent from an already-resolved workflow role/agent config and
- * await its terminal result.
- *
- * This lower-level helper is shared by `delegate-agent` and role-backed nodes:
- * both paths differ only in how they resolve the adapter configuration and
- * build the task prompt.
+ * This lower-level helper is the shared execution path for the agent step
+ * node: `delegate-node.ts` resolves the role and renders the prompt, then
+ * hands the resolved config and task off here for spawn, await, and result
+ * finalization.
  * @param call - Call context of the handled message this node execution serves.
  * @param params - Resolved execution config, task, labels, and timeout.
  * @param ctx - Execution-wide runtime context.
@@ -241,10 +176,8 @@ export async function finalizeDelegateResult(
   durationMs = 0,
 ): Promise<JsonValue> {
   if (params.resultFinalizerId === undefined) return rawResult;
-  if (params.frameId === undefined || params.delegateNodeType === undefined) {
-    throw new Error(
-      `Delegate result finalizer '${params.resultFinalizerId}' requires frame and delegate node identity`,
-    );
+  if (params.frameId === undefined) {
+    throw new Error(`Delegate result finalizer '${params.resultFinalizerId}' requires frame identity`);
   }
   const request = {
     finalizerId: params.resultFinalizerId,
@@ -252,7 +185,6 @@ export async function finalizeDelegateResult(
     workflowId: ctx.workflowId,
     frameId: params.frameId,
     nodeId: params.nodeId,
-    nodeType: params.delegateNodeType,
     rawResult,
     toolObservations: [...(params.toolObservations ?? [])],
     ...(params.resolvedConfig === undefined
@@ -404,7 +336,7 @@ async function requestChildStatus(
 }
 
 /**
- * Await a role-backed subagent while honoring workflow cancellation.
+ * Await an agent-step subagent while honoring workflow cancellation.
  *
  * The await RPC may block until the child reaches a terminal state. Workflow
  * cancellation owns the parent execution lifetime, so the runtime races the
@@ -477,7 +409,7 @@ async function awaitResolvedSubagent(
 }
 
 /**
- * Best-effort child cancellation for role-backed workflow nodes.
+ * Best-effort child cancellation for agent-step workflow nodes.
  * @param call - Call context of the handled message this node execution serves.
  * @param params - Node labels used in the cancellation reason.
  * @param ctx - Execution-wide runtime context.
@@ -508,6 +440,7 @@ async function killResolvedSubagent(
   }
 }
 
+/** Spawn configuration used only by the resolved workflow subagent path. */
 interface ResolvedSubagentConfigInput {
   readonly task: string;
   readonly adapterName: string;

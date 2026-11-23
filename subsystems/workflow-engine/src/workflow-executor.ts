@@ -13,6 +13,7 @@ import {
   type WorkflowExecution,
   type WorkflowRunResult,
   createWorkflowFinalizerNamespace,
+  requireExecutableRunContext,
 } from '@makaio/contracts';
 import { BaseService } from '@makaio/service-base';
 import { WorkflowSubjects } from './namespace.js';
@@ -806,10 +807,13 @@ export class WorkflowExecutor extends BaseService {
    * @param executionId - Execution to resume.
    */
   private async resumePausedExecution(call: CallContext, executionId: string): Promise<void> {
-    const { runContext } = await this.bus.request(call, WorkflowStorageSubjects.getRunContext, { executionId });
-    if (runContext === null) {
+    const { runContext: storedRunContext } = await this.bus.request(call, WorkflowStorageSubjects.getRunContext, {
+      executionId,
+    });
+    if (storedRunContext === null) {
       throw new Error(`[WorkflowExecutor] Run context not found for paused execution: ${executionId}`);
     }
+    const runContext = requireExecutableRunContext(storedRunContext);
 
     const definition: WorkflowDefinition =
       runContext.definitionSnapshot ??

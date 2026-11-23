@@ -418,7 +418,7 @@ export const workflowExecutionLinksDual = defineDualTable(
       .references(() => workflowExecutionsDual.columnPair('id'), { onDelete: 'cascade' }),
     /** Relationship type. */
     linkType: c.text('link_type').$type<ExecutionLinkType>().notNull(),
-    /** Optional metadata (e.g., reason, target station). */
+    /** Optional metadata (e.g., reason, target step). */
     metadata: c.jsonCol<Record<string, unknown>>('metadata'),
   }),
   {
@@ -581,11 +581,11 @@ export const worklogSummariesDual = defineDualTable(
     completedAt: c.epochMs('completed_at'),
     /** Wall-clock duration in milliseconds. Present once execution completes. */
     durationMs: c.int4('duration_ms'),
-    /** Aggregated input tokens across all station frames. */
+    /** Aggregated input tokens across all agent step frames. */
     totalInputTokens: c.int4('total_input_tokens'),
-    /** Aggregated output tokens across all station frames. */
+    /** Aggregated output tokens across all agent step frames. */
     totalOutputTokens: c.int4('total_output_tokens'),
-    /** Aggregated estimated cost in USD across all station frames. */
+    /** Aggregated estimated cost in USD across all agent step frames. */
     totalEstimatedCost: c.float8('total_estimated_cost'),
     /** Human-readable error message when `status` is `'failed'`. */
     error: c.text('error'),
@@ -657,11 +657,11 @@ export const worklogFrameEntriesDual = defineDualTable(
     completedAt: c.epochMs('completed_at'),
     /** Wall-clock duration in milliseconds. */
     durationMs: c.int4('duration_ms'),
-    /** Input tokens consumed (station frames with LLM execution). */
+    /** Input tokens consumed (agent step frames with LLM execution). */
     inputTokens: c.int4('input_tokens'),
-    /** Output tokens produced (station frames with LLM execution). */
+    /** Output tokens produced (agent step frames with LLM execution). */
     outputTokens: c.int4('output_tokens'),
-    /** Estimated cost in USD (station frames with LLM execution). */
+    /** Estimated cost in USD (agent step frames with LLM execution). */
     estimatedCost: c.float8('estimated_cost'),
     /** Human-readable error message when `status` is `'failed'`. */
     error: c.text('error'),

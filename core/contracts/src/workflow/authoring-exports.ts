@@ -19,10 +19,10 @@ export type {
   ArtifactPatch,
   ArtifactUpdateOperation,
   ArtifactUpdater,
+  CodeStepContext,
+  CodeStepHandler,
   IterateHandler,
   PreviousStepOutput,
-  StationHandler,
-  StationStepContext,
   StepContext,
   WorkflowContext,
   WorkflowContextBase,
@@ -30,7 +30,7 @@ export type {
   WorkflowStateContext,
 } from './authoring-context.js';
 export type {
-  AgentConfig,
+  AgentStepOptions,
   ArtifactBindingOptions,
   BuiltWorkflow,
   DefineWorkflowOptions,
@@ -46,12 +46,4 @@ export type {
   WorkflowZodSchemas,
 } from './authoring-builder.js';
 export type { LoopGateHandler } from './loop.js';
-export {
-  delegateToAgent,
-  delegateToRole,
-  gate,
-  iterate,
-  iterateChain,
-  loop,
-  station,
-} from './authoring-node-factories.js';
+export { agentStep, codeStep, gate, iterate, iterateChain, loop } from './authoring-node-factories.js';

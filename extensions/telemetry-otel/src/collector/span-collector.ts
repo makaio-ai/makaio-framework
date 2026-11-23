@@ -100,8 +100,8 @@ export interface FrameStartedPayload {
 /**
  * Payload shape for `workflow.frame.completed`.
  *
- * `nodeType` and `path` are absent (not part of the real schema). The collector
- * reads those from the frame record snapshot taken at `frame.started`.
+ * The real schema also carries `nodeType`, but not `path`. The collector still
+ * reads both from the frame record snapshot taken at `frame.started`, unchanged.
  */
 export interface FrameCompletedPayload {
   readonly executionId: string;
@@ -297,8 +297,8 @@ export class SpanCollector {
   /**
    * Closes the frame record as successfully completed.
    *
-   * `nodeType` and `path` are NOT on the real `frame.completed` schema; the
-   * collector preserves those from the `frame.started` snapshot.
+   * The real `frame.completed` schema also carries `nodeType`, but not `path`;
+   * the collector still preserves both from the `frame.started` snapshot.
    * @param payload - `workflow.frame.completed` event payload.
    * @param endedAt - Event timestamp in Unix milliseconds.
    */

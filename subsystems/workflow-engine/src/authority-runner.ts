@@ -1,6 +1,11 @@
 import type { IMakaioBus } from '@makaio/bus-core';
 import type { CallContext } from '@makaio/core';
-import type { WorkflowDefinition, WorkflowExecution, WorkflowRunResult } from '@makaio/contracts';
+import {
+  requireExecutableRunContext,
+  type WorkflowDefinition,
+  type WorkflowExecution,
+  type WorkflowRunResult,
+} from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import type { ActiveExecution } from './types.js';
 import { isAcceptedRunnerResultStatus, type FinalizerDeps } from './workflow-execution-finalizer.js';
@@ -53,13 +58,14 @@ export async function loadAuthorityRunnerContext(
   if (runContext.terminalAuthority !== 'authority') {
     throw new Error('authority runner result requires terminalAuthority=authority');
   }
+  const executableRunContext = requireExecutableRunContext(runContext);
   const workflow =
-    runContext.definitionSnapshot ??
-    (await bus.request(call, WorkflowStorageSubjects.get, { id: runContext.workflowId })).workflow;
+    executableRunContext.definitionSnapshot ??
+    (await bus.request(call, WorkflowStorageSubjects.get, { id: executableRunContext.workflowId })).workflow;
   if (!workflow || workflow.id !== workflowId) {
     throw new Error('authority runner workflow definition is unavailable or mismatched');
   }
-  return { runContext, workflow };
+  return { runContext: executableRunContext, workflow };
 }
 
 /**

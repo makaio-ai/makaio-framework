@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type {
+  WorkflowAgentStepNode,
   WorkflowDefinition,
   WorkflowGateNode,
-  WorkflowStationNode,
   WorkflowWorkerConfig,
 } from '@makaio/contracts';
 
@@ -129,7 +129,12 @@ describe('loadWorkflowFromConfig — definition source', () => {
         id: 'root',
         type: 'sequence',
         nodes: [
-          { id: 'analyze', type: 'station' as const, prompt: 'Analyze' } as WorkflowStationNode,
+          {
+            id: 'analyze',
+            type: 'agent-step' as const,
+            role: 'analyzer',
+            prompt: 'Analyze',
+          } as WorkflowAgentStepNode,
           {
             id: 'gate-1',
             type: 'gate' as const,

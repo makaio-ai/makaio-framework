@@ -6,9 +6,8 @@ import {
   BusEventWorkflowTrigger,
   CronWorkflowTrigger,
   defineWorkflow,
-  station,
-  delegateToAgent,
-  delegateToRole,
+  codeStep,
+  agentStep,
   gate,
   iterate,
   iterateChain,
@@ -280,30 +279,30 @@ describe('defineWorkflow', () => {
     expect(Reflect.get(workflow, 'extensions')).not.toBeTypeOf('function');
   });
 
-  it('station appends station nodes to the root sequence', () => {
+  it('codeStep appends code-step nodes to the root sequence', () => {
     const workflow = defineWorkflow('fn-flow');
-    workflow.station('compute', () => ({ value: 42 }));
+    workflow.codeStep('compute', () => ({ value: 42 }));
     expect(workflow.definition.root.nodes).toHaveLength(1);
-    const stationNode = workflow.definition.root.nodes[0];
-    expect(stationNode?.type).toBe('station');
-    expect(stationNode?.id).toBe('compute');
+    const codeStepNode = workflow.definition.root.nodes[0];
+    expect(codeStepNode?.type).toBe('code-step');
+    expect(codeStepNode?.id).toBe('compute');
   });
 
   it('registers the handler in runtimeHandlers', () => {
     const workflow = defineWorkflow('fn-flow-3');
-    workflow.station('compute', () => ({ value: 42 }));
+    workflow.codeStep('compute', () => ({ value: 42 }));
     expect(workflow.runtimeHandlers.has('compute')).toBe(true);
   });
 
-  it('throws on duplicate station IDs', () => {
+  it('throws on duplicate code step IDs', () => {
     const workflow = defineWorkflow('dup-flow');
-    workflow.station('step-a', () => null);
-    expect(() => workflow.station('step-a', () => null)).toThrow('Duplicate step ID: step-a');
+    workflow.codeStep('step-a', () => null);
+    expect(() => workflow.codeStep('step-a', () => null)).toThrow('Duplicate step ID: step-a');
   });
 
-  it('throws on duplicate IDs when addNode reuses an id already claimed by station', () => {
+  it('throws on duplicate IDs when addNode reuses an id already claimed by codeStep', () => {
     const workflow = defineWorkflow('dup-node-flow');
-    workflow.station('step-a', () => null);
+    workflow.codeStep('step-a', () => null);
     const gateNode: WorkflowGateNode = {
       id: 'step-a',
       type: 'gate',
@@ -339,7 +338,7 @@ describe('defineWorkflow', () => {
       BusEventWorkflowTrigger({ subject: GitNamespace.subjects.checkout }),
     );
 
-    workflow.station('uses-trigger', (ctx) => {
+    workflow.codeStep('uses-trigger', (ctx) => {
       const trigger = ctx.trigger as { worktreePath: string };
       return { worktreePath: trigger.worktreePath };
     });
@@ -349,7 +348,7 @@ describe('defineWorkflow', () => {
 
   it('accepts gate nodes via addNode', () => {
     const workflow = defineWorkflow('gate-flow');
-    workflow.station('analyze', () => ({ findings: [] }));
+    workflow.codeStep('analyze', () => ({ findings: [] }));
     const approvalNode: WorkflowGateNode = {
       id: 'approval',
       type: 'gate',
@@ -358,7 +357,7 @@ describe('defineWorkflow', () => {
       timeoutMs: null,
     };
     workflow.addNode(approvalNode);
-    workflow.station('implement', () => ({ done: true }));
+    workflow.codeStep('implement', () => ({ done: true }));
 
     expect(workflow.definition.root.nodes).toHaveLength(3);
     expect(workflow.definition.root.nodes[1]?.type).toBe('gate');
@@ -385,7 +384,7 @@ describe('defineWorkflow', () => {
 
   it('serializes the definition as a JSON-safe tree (no functions)', () => {
     const workflow = defineWorkflow('json-safe-flow');
-    workflow.station('do-work', () => ({ done: true }));
+    workflow.codeStep('do-work', () => ({ done: true }));
 
     // The definition should be JSON-serializable (no functions)
     const serialized = JSON.stringify(workflow.definition);
@@ -509,13 +508,13 @@ describe('fluent builder — state typing', () => {
     required: ['tier', 'selectedReviewers'],
   } as const;
 
-  it('types workflow state in station handlers after state declaration', () => {
+  it('types workflow state in code step handlers after state declaration', () => {
     const workflow = defineWorkflow('typed-state-flow')
       .state<ReviewState>({
         schema: ReviewStateSchema,
         initial: { tier: 'T1', selectedReviewers: [] },
       })
-      .station('select-reviewer', async (ctx) => {
+      .codeStep('select-reviewer', async (ctx) => {
         expectTypeOf(ctx.state.get()).toEqualTypeOf<Promise<ReviewState>>();
         const current = await ctx.state.get();
         expectTypeOf(current.tier).toEqualTypeOf<ReviewState['tier']>();
@@ -547,7 +546,7 @@ describe('fluent builder — state typing', () => {
       })
       .addTrigger(BusEventWorkflowTrigger({ subject: GitNamespace.subjects.checkout }));
 
-    workflow.station('uses-trigger-and-state', async (ctx) => {
+    workflow.codeStep('uses-trigger-and-state', async (ctx) => {
       expectTypeOf(ctx.state.get()).toEqualTypeOf<Promise<ReviewState>>();
       expectTypeOf(ctx.trigger.worktreePath).toEqualTypeOf<string>();
       return { tier: (await ctx.state.get()).tier, worktreePath: ctx.trigger.worktreePath };
@@ -557,7 +556,7 @@ describe('fluent builder — state typing', () => {
   });
 
   it('keeps no-state workflow handlers ergonomic', () => {
-    const workflow = defineWorkflow('no-state-flow').station('do-work', (ctx) => {
+    const workflow = defineWorkflow('no-state-flow').codeStep('do-work', (ctx) => {
       expectTypeOf(ctx.state).toEqualTypeOf<undefined>();
       return { workflowId: ctx.workflowId };
     });
@@ -566,27 +565,27 @@ describe('fluent builder — state typing', () => {
   });
 });
 
-describe('fluent builder — station nodes', () => {
-  it('appends a station node to the root sequence', () => {
+describe('fluent builder — code step nodes', () => {
+  it('appends a code-step node to the root sequence', () => {
     const handler = () => ({ done: true }) as const;
-    const workflow = defineWorkflow('station-flow').station('do-work', handler);
+    const workflow = defineWorkflow('code-step-flow').codeStep('do-work', handler);
 
     expect(workflow.definition.root.nodes).toHaveLength(1);
     const node = workflow.definition.root.nodes[0];
     expect(node?.id).toBe('do-work');
-    expect(node?.type).toBe('station');
+    expect(node?.type).toBe('code-step');
   });
 
   it('registers the handler in runtimeHandlers', () => {
     const handler = () => ({ done: true }) as const;
-    const workflow = defineWorkflow('handler-flow').station('do-work', handler);
+    const workflow = defineWorkflow('handler-flow').codeStep('do-work', handler);
 
     expect(workflow.runtimeHandlers.has('do-work')).toBe(true);
     expect(workflow.runtimeHandlers.get('do-work')).toBe(handler);
   });
 
-  it('applies when/skip conditions to station nodes', () => {
-    const workflow = defineWorkflow('cond-flow').station('conditional', () => null, {
+  it('applies when/skip conditions to code step nodes', () => {
+    const workflow = defineWorkflow('cond-flow').codeStep('conditional', () => null, {
       when: "ctx.inputs.run == 'true'",
       skip: "ctx.inputs.skip == 'true'",
     });
@@ -596,75 +595,53 @@ describe('fluent builder — station nodes', () => {
     expect(node?.skip).toBe("ctx.inputs.skip == 'true'");
   });
 
-  it('station node in definition does not contain function bodies', () => {
-    const workflow = defineWorkflow('no-fn-station').station('work', () => null);
+  it('code-step node in definition does not contain function bodies', () => {
+    const workflow = defineWorkflow('no-fn-code-step').codeStep('work', () => null);
     const serialized = JSON.stringify(workflow.definition);
     expect(() => JSON.parse(serialized)).not.toThrow();
     expect(serialized).not.toContain('function');
   });
 
-  it('throws on duplicate station IDs', () => {
+  it('throws on duplicate code step IDs', () => {
     expect(() =>
-      defineWorkflow('dup-station')
-        .station('a', () => null)
-        .station('a', () => null),
+      defineWorkflow('dup-code-step')
+        .codeStep('a', () => null)
+        .codeStep('a', () => null),
     ).toThrow('Duplicate step ID: a');
   });
 });
 
-describe('fluent builder — delegateToAgent nodes', () => {
-  it('appends a delegate-agent node to the root sequence', () => {
-    const workflow = defineWorkflow('delegate-agent-flow').delegateToAgent('sub-task', {
-      agentId: 'code-writer',
-      completion: 'turn',
-    });
+describe('fluent builder — agentStep nodes', () => {
+  it('appends an agent-step node with the given role', () => {
+    const workflow = defineWorkflow('agent-step-flow').agentStep('review', 'code-reviewer');
 
     const node = workflow.definition.root.nodes[0];
-    expect(node?.type).toBe('delegate-agent');
-    expect(node?.id).toBe('sub-task');
-    expect((node as { agentId?: string }).agentId).toBe('code-writer');
-    expect((node as { completion?: string }).completion).toBe('turn');
-  });
-
-  it('does not add to runtimeHandlers for delegate-agent nodes', () => {
-    const workflow = defineWorkflow('no-handler-agent').delegateToAgent('sub', {
-      agentId: 'writer',
-    });
-    expect(workflow.runtimeHandlers.has('sub')).toBe(false);
-  });
-});
-
-describe('fluent builder — delegateToRole nodes', () => {
-  it('appends a delegate-role node with the given role', () => {
-    const workflow = defineWorkflow('delegate-role-flow').delegateToRole('review', 'code-reviewer');
-
-    const node = workflow.definition.root.nodes[0];
-    expect(node?.type).toBe('delegate-role');
+    expect(node?.type).toBe('agent-step');
     expect(node?.id).toBe('review');
     expect((node as { role?: string }).role).toBe('code-reviewer');
   });
 
   it('defaults prompt to node ID when not provided', () => {
-    const workflow = defineWorkflow('role-prompt-default').delegateToRole('analyze', 'analyst');
+    const workflow = defineWorkflow('role-prompt-default').agentStep('analyze', 'analyst');
     const node = workflow.definition.root.nodes[0];
     expect((node as { prompt?: string }).prompt).toBe('analyze');
   });
 
   it('accepts a custom prompt override', () => {
-    const workflow = defineWorkflow('role-prompt-override').delegateToRole('analyze', 'analyst', {
+    const workflow = defineWorkflow('role-prompt-override').agentStep('analyze', 'analyst', {
       prompt: 'Perform a detailed analysis',
     });
     const node = workflow.definition.root.nodes[0];
     expect((node as { prompt?: string }).prompt).toBe('Perform a detailed analysis');
   });
 
-  it('preserves role delegation schema, timeout, and completion settings', () => {
+  it('preserves agent step schema, timeout, and completion settings', () => {
     const outputSchema = {
       type: 'object',
       properties: { verdict: { type: 'string' } },
       required: ['verdict'],
     };
-    const workflow = defineWorkflow('role-contract-options').delegateToRole('review', 'analyst', {
+    const workflow = defineWorkflow('role-contract-options').agentStep('review', 'analyst', {
       outputSchema,
       timeoutMs: 120_000,
       completion: 'turn',
@@ -673,7 +650,7 @@ describe('fluent builder — delegateToRole nodes', () => {
     });
 
     expect(workflow.definition.root.nodes[0]).toMatchObject({
-      type: 'delegate-role',
+      type: 'agent-step',
       outputSchema,
       timeoutMs: 120_000,
       completion: 'turn',
@@ -686,8 +663,8 @@ describe('fluent builder — delegateToRole nodes', () => {
 describe('fluent builder — parallel nodes', () => {
   it('appends a parallel node with branches from standalone factories', () => {
     const workflow = defineWorkflow('parallel-fluent').parallel('reviews', { mode: 'all-settled' }, [
-      station('spec-review', () => null),
-      delegateToRole('quality-review', 'code-reviewer'),
+      codeStep('spec-review', () => null),
+      agentStep('quality-review', 'code-reviewer'),
     ]);
 
     expect(workflow.definition.root.nodes).toHaveLength(1);
@@ -698,8 +675,8 @@ describe('fluent builder — parallel nodes', () => {
 
   it('creates one branch per entry in the branches array', () => {
     const workflow = defineWorkflow('parallel-branches').parallel('par', {}, [
-      station('step-a', () => null),
-      station('step-b', () => null),
+      codeStep('step-a', () => null),
+      codeStep('step-b', () => null),
     ]);
 
     const node = workflow.definition.root.nodes[0];
@@ -708,38 +685,38 @@ describe('fluent builder — parallel nodes', () => {
   });
 
   it('parallel node definition is JSON-serializable', () => {
-    const workflow = defineWorkflow('parallel-serializable').parallel('par', {}, [station('x', () => null)]);
+    const workflow = defineWorkflow('parallel-serializable').parallel('par', {}, [codeStep('x', () => null)]);
     expect(() => JSON.stringify(workflow.definition)).not.toThrow();
   });
 
   it('serializes all-settled as the default parallel mode', () => {
-    const workflow = defineWorkflow('parallel-default-mode').parallel('par', {}, [station('x', () => null)]);
+    const workflow = defineWorkflow('parallel-default-mode').parallel('par', {}, [codeStep('x', () => null)]);
     const node = workflow.definition.root.nodes[0];
     expect((node as WorkflowParallelNode | undefined)?.mode).toBe('all-settled');
   });
 
   it('serializes fail-fast parallel mode', () => {
     const workflow = defineWorkflow('parallel-fail-fast').parallel('par', { mode: 'fail-fast' }, [
-      station('x', () => null),
+      codeStep('x', () => null),
     ]);
     const node = workflow.definition.root.nodes[0];
     expect((node as WorkflowParallelNode | undefined)?.mode).toBe('fail-fast');
   });
 
-  it('registers handlers from standalone station() branches in runtimeHandlers', () => {
+  it('registers handlers from standalone codeStep() branches in runtimeHandlers', () => {
     const specHandler = () => ({ ok: true }) as const;
     const workflow = defineWorkflow('parallel-handler-reg').parallel('reviews', { mode: 'all-settled' }, [
-      station('spec-review', specHandler),
-      delegateToRole('quality-review', 'code-reviewer'),
+      codeStep('spec-review', specHandler),
+      agentStep('quality-review', 'code-reviewer'),
     ]);
 
     expect(workflow.runtimeHandlers.has('spec-review')).toBe(true);
     expect(workflow.runtimeHandlers.get('spec-review')).toBe(specHandler);
-    // delegate-role nodes have no handler
+    // agent-step nodes have no handler
     expect(workflow.runtimeHandlers.has('quality-review')).toBe(false);
   });
 
-  it('registers standalone iterate branch handlers under executable body stations', () => {
+  it('registers standalone iterate branch handlers under executable body code steps', () => {
     const handler = () => ({ processed: true }) as const;
     const workflow = defineWorkflow('parallel-iterate-handler-reg').parallel('fanout', {}, [
       iterate('loop', handler, { collection: 'ctx.inputs.items' }),
@@ -748,23 +725,23 @@ describe('fluent builder — parallel nodes', () => {
     const parallelNode = workflow.definition.root.nodes[0] as WorkflowParallelNode | undefined;
     const branchNode = parallelNode?.branches['loop']?.nodes[0];
     const body = (branchNode as { body?: { nodes?: { id: string; type: string }[] } } | undefined)?.body;
-    expect(body?.nodes).toEqual([{ id: 'loop__item', type: 'station', prompt: 'loop__item' }]);
+    expect(body?.nodes).toEqual([{ id: 'loop__item', type: 'code-step' }]);
     expect(workflow.runtimeHandlers.get('loop__item')).toBe(handler);
     expect(workflow.runtimeHandlers.has('loop')).toBe(false);
   });
 
   it('throws on duplicate branch IDs when parallel() branch reuses an existing id', () => {
     const workflow = defineWorkflow('parallel-dup-branch');
-    workflow.station('existing', () => null);
-    expect(() => workflow.parallel('par', {}, [station('existing', () => null)])).toThrow(
+    workflow.codeStep('existing', () => null);
+    expect(() => workflow.parallel('par', {}, [codeStep('existing', () => null)])).toThrow(
       'Duplicate step ID: existing',
     );
   });
 
   it('throws when a synthesized parallel branch sequence ID reuses an existing ID', () => {
     const workflow = defineWorkflow('parallel-dup-branch-sequence');
-    workflow.station('fanout__review', () => null);
-    expect(() => workflow.parallel('fanout', {}, [station('review', () => null)])).toThrow(
+    workflow.codeStep('fanout__review', () => null);
+    expect(() => workflow.parallel('fanout', {}, [codeStep('review', () => null)])).toThrow(
       'Duplicate step ID: fanout__review',
     );
   });
@@ -853,14 +830,14 @@ describe('fluent builder — iterate nodes', () => {
     expect((node as { collection?: string }).collection).toBe('ctx.outputs.list');
   });
 
-  it('iterate node body contains a station wrapping the handler', () => {
+  it('iterate node body contains a code step wrapping the handler', () => {
     const workflow = defineWorkflow('iterate-body').iterate('loop', () => null, {
       collection: 'ctx.inputs.items',
     });
 
     const node = workflow.definition.root.nodes[0];
     const body = (node as { body?: { nodes?: { type: string }[] } }).body;
-    expect(body?.nodes?.[0]?.type).toBe('station');
+    expect(body?.nodes?.[0]?.type).toBe('code-step');
   });
 
   it('registers the handler in runtimeHandlers', () => {
@@ -868,7 +845,7 @@ describe('fluent builder — iterate nodes', () => {
     const workflow = defineWorkflow('iterate-handler').iterate('loop', handler, {
       collection: 'ctx.inputs.items',
     });
-    // The handler is registered under a synthetic station ID
+    // The handler is registered under a synthetic code step ID
     expect(workflow.runtimeHandlers.size).toBe(1);
   });
 
@@ -881,7 +858,7 @@ describe('fluent builder — iterate nodes', () => {
 
   it('throws when a synthesized iterate body sequence ID reuses an existing ID', () => {
     const workflow = defineWorkflow('iterate-dup-body-sequence');
-    workflow.station('loop__body', () => null);
+    workflow.codeStep('loop__body', () => null);
     expect(() =>
       workflow.iterate('loop', () => null, {
         collection: 'ctx.inputs.items',
@@ -892,7 +869,7 @@ describe('fluent builder — iterate nodes', () => {
 
 describe('fluent builder — iterateChain nodes', () => {
   it('appends an iterate-chain node to the root sequence', () => {
-    const chain = [station('step-a', () => null), delegateToRole('step-b', 'analyst')];
+    const chain = [codeStep('step-a', () => null), agentStep('step-b', 'analyst')];
     const workflow = defineWorkflow('iterate-chain-flow').iterateChain('chain-loop', chain, {
       collection: 'ctx.inputs.items',
     });
@@ -903,7 +880,7 @@ describe('fluent builder — iterateChain nodes', () => {
   });
 
   it('stores the sub-chain nodes in body.nodes', () => {
-    const chain = [station('step-a', () => null), station('step-b', () => null)];
+    const chain = [codeStep('step-a', () => null), codeStep('step-b', () => null)];
     const workflow = defineWorkflow('iterate-chain-body').iterateChain('chain', chain, {
       collection: 'ctx.inputs.items',
     });
@@ -914,7 +891,7 @@ describe('fluent builder — iterateChain nodes', () => {
   });
 
   it('iterate-chain body sub-chain is introspectable', () => {
-    const chain = [station('review', () => null), delegateToRole('apply', 'coder')];
+    const chain = [codeStep('review', () => null), agentStep('apply', 'coder')];
     const workflow = defineWorkflow('iterate-chain-introspect').iterateChain('chain', chain, {
       collection: 'ctx.inputs.items',
     });
@@ -923,35 +900,35 @@ describe('fluent builder — iterateChain nodes', () => {
     const body = (node as { body?: { nodes?: { id: string; type: string }[] } }).body;
     expect(body?.nodes?.[0]?.id).toBe('review');
     expect(body?.nodes?.[1]?.id).toBe('apply');
-    expect(body?.nodes?.[1]?.type).toBe('delegate-role');
+    expect(body?.nodes?.[1]?.type).toBe('agent-step');
   });
 
   it('iterate-chain node is JSON-serializable', () => {
-    const workflow = defineWorkflow('iterate-chain-serial').iterateChain('chain', [station('s', () => null)], {
+    const workflow = defineWorkflow('iterate-chain-serial').iterateChain('chain', [codeStep('s', () => null)], {
       collection: 'ctx.inputs.items',
     });
     expect(() => JSON.stringify(workflow.definition)).not.toThrow();
   });
 
-  it('registers handlers from standalone station() nodes in the chain in runtimeHandlers', () => {
+  it('registers handlers from standalone codeStep() nodes in the chain in runtimeHandlers', () => {
     const reviewHandler = () => ({ reviewed: true }) as const;
     const workflow = defineWorkflow('iterate-chain-handler-reg').iterateChain(
       'process',
-      [station('review', reviewHandler), delegateToRole('apply', 'coder')],
+      [codeStep('review', reviewHandler), agentStep('apply', 'coder')],
       { collection: 'ctx.inputs.items' },
     );
 
     expect(workflow.runtimeHandlers.has('review')).toBe(true);
     expect(workflow.runtimeHandlers.get('review')).toBe(reviewHandler);
-    // delegate-role nodes have no handler
+    // agent-step nodes have no handler
     expect(workflow.runtimeHandlers.has('apply')).toBe(false);
   });
 
   it('throws on duplicate IDs when iterateChain() chain reuses an existing id', () => {
     const workflow = defineWorkflow('iterate-chain-dup');
-    workflow.station('existing', () => null);
+    workflow.codeStep('existing', () => null);
     expect(() =>
-      workflow.iterateChain('chain', [station('existing', () => null)], {
+      workflow.iterateChain('chain', [codeStep('existing', () => null)], {
         collection: 'ctx.inputs.items',
       }),
     ).toThrow('Duplicate step ID: existing');
@@ -959,9 +936,9 @@ describe('fluent builder — iterateChain nodes', () => {
 
   it('throws when a synthesized iterate-chain body sequence ID reuses an existing ID', () => {
     const workflow = defineWorkflow('iterate-chain-dup-body-sequence');
-    workflow.station('chain__body', () => null);
+    workflow.codeStep('chain__body', () => null);
     expect(() =>
-      workflow.iterateChain('chain', [station('step-a', () => null)], {
+      workflow.iterateChain('chain', [codeStep('step-a', () => null)], {
         collection: 'ctx.inputs.items',
       }),
     ).toThrow('Duplicate step ID: chain__body');
@@ -983,12 +960,12 @@ describe('fluent builder — full chain with all node types', () => {
     .config(ConfigSchema)
     .artifact({ kind: 'review', schemaVersion: 1, scope: { level: 'global' }, schema: ArtifactSchema })
     .parallel('reviews', { mode: 'all-settled' }, [
-      station('spec-review', () => null),
-      delegateToRole('quality-review', 'code-reviewer'),
+      codeStep('spec-review', () => null),
+      agentStep('quality-review', 'code-reviewer'),
     ])
-    .station('analyze', analyzeHandler)
+    .codeStep('analyze', analyzeHandler)
     .gate('triage', { prompt: 'Triage findings', resume: TriageSchema, autoAction: 'reject', timeoutMs: null })
-    .iterateChain('apply', [station('apply-item', applyHandler)], { collection: 'ctx.outputs.findings' })
+    .iterateChain('apply', [codeStep('apply-item', applyHandler)], { collection: 'ctx.outputs.findings' })
     .output(OutputSchema);
 
   it('produces correct node count in root sequence', () => {
@@ -997,7 +974,7 @@ describe('fluent builder — full chain with all node types', () => {
 
   it('has correct node types in order', () => {
     const types = workflow.definition.root.nodes.map((n) => n.type);
-    expect(types).toEqual(['parallel', 'station', 'gate', 'iterate-chain']);
+    expect(types).toEqual(['parallel', 'code-step', 'gate', 'iterate-chain']);
   });
 
   it('definition is fully JSON-serializable (no functions)', () => {
@@ -1015,18 +992,18 @@ describe('fluent builder — full chain with all node types', () => {
     expect(workflow.zodSchemas.gates['triage']).toBe(TriageSchema);
   });
 
-  it('runtimeHandlers contains builder station handler and standalone factory handlers', () => {
-    // builder .station() registers directly
+  it('runtimeHandlers contains builder code step handler and standalone factory handlers', () => {
+    // builder .codeStep() registers directly
     expect(workflow.runtimeHandlers.has('analyze')).toBe(true);
     expect(workflow.runtimeHandlers.get('analyze')).toBe(analyzeHandler);
-    // standalone station() inside parallel() — handler must be extracted
+    // standalone codeStep() inside parallel() — handler must be extracted
     expect(workflow.runtimeHandlers.has('spec-review')).toBe(true);
-    // standalone station() inside iterateChain() — handler must be extracted
+    // standalone codeStep() inside iterateChain() — handler must be extracted
     expect(workflow.runtimeHandlers.has('apply-item')).toBe(true);
     expect(workflow.runtimeHandlers.get('apply-item')).toBe(applyHandler);
   });
 
-  it('runtimeHandlers does not contain gate or delegate-role entries', () => {
+  it('runtimeHandlers does not contain gate or agent-step entries', () => {
     expect(workflow.runtimeHandlers.has('triage')).toBe(false);
     expect(workflow.runtimeHandlers.has('quality-review')).toBe(false);
   });
@@ -1037,24 +1014,24 @@ describe('fluent builder — full chain with all node types', () => {
 });
 
 describe('fluent builder — Resolvable<T> in when/skip conditions', () => {
-  it('accepts a when jexl expression on station', () => {
-    const workflow = defineWorkflow('when-flow').station('step', () => null, {
+  it('accepts a when jexl expression on code step', () => {
+    const workflow = defineWorkflow('when-flow').codeStep('step', () => null, {
       when: "ctx.inputs.enabled == 'true'",
     });
     const node = workflow.definition.root.nodes[0];
     expect(node?.when).toBe("ctx.inputs.enabled == 'true'");
   });
 
-  it('accepts a skip jexl expression on station', () => {
-    const workflow = defineWorkflow('skip-flow').station('step', () => null, {
+  it('accepts a skip jexl expression on code step', () => {
+    const workflow = defineWorkflow('skip-flow').codeStep('step', () => null, {
       skip: "ctx.inputs.skip == 'true'",
     });
     const node = workflow.definition.root.nodes[0];
     expect(node?.skip).toBe("ctx.inputs.skip == 'true'");
   });
 
-  it('accepts when on delegateToRole node', () => {
-    const workflow = defineWorkflow('when-role').delegateToRole('review', 'analyst', {
+  it('accepts when on agentStep node', () => {
+    const workflow = defineWorkflow('when-role').agentStep('review', 'analyst', {
       when: "ctx.inputs.mode == 'full'",
     });
     const node = workflow.definition.root.nodes[0];
@@ -1063,7 +1040,7 @@ describe('fluent builder — Resolvable<T> in when/skip conditions', () => {
 
   it('accepts when on parallel node', () => {
     const workflow = defineWorkflow('when-parallel').parallel('par', { when: "ctx.inputs.parallel == 'true'" }, [
-      station('x', () => null),
+      codeStep('x', () => null),
     ]);
     const node = workflow.definition.root.nodes[0];
     expect(node?.when).toBe("ctx.inputs.parallel == 'true'");
@@ -1074,54 +1051,37 @@ describe('fluent builder — Resolvable<T> in when/skip conditions', () => {
 // Standalone node factory functions
 // ─────────────────────────────────────────────────────────────
 
-describe('standalone factory — station()', () => {
-  it('creates a station node with the correct shape', () => {
-    const node = station('my-step', () => null);
+describe('standalone factory — codeStep()', () => {
+  it('creates a code-step node with the correct shape', () => {
+    const node = codeStep('my-step', () => null);
     expect(node.id).toBe('my-step');
-    expect(node.type).toBe('station');
-    expect(node.prompt).toBe('my-step');
+    expect(node.type).toBe('code-step');
+    expect(node).not.toHaveProperty('prompt');
   });
 
   it('applies when/skip options', () => {
-    const node = station('s', () => null, { when: 'x', skip: 'y' });
+    const node = codeStep('s', () => null, { when: 'x', skip: 'y' });
     expect(node.when).toBe('x');
     expect(node.skip).toBe('y');
   });
 
   it('returns a JSON-serializable node', () => {
-    const node = station('s', () => null);
+    const node = codeStep('s', () => null);
     expect(() => JSON.stringify(node)).not.toThrow();
   });
 });
 
-describe('standalone factory — delegateToAgent()', () => {
-  it('creates a delegate-agent node with agentId', () => {
-    const node = delegateToAgent('sub', { agentId: 'writer' });
-    expect(node.id).toBe('sub');
-    expect(node.type).toBe('delegate-agent');
-    expect(node.agentId).toBe('writer');
-  });
-
-  it('includes inputExpression when provided', () => {
-    const node = delegateToAgent('sub', {
-      agentId: 'writer',
-      inputExpression: 'ctx.outputs.spec',
-    });
-    expect(node.inputExpression).toBe('ctx.outputs.spec');
-  });
-});
-
-describe('standalone factory — delegateToRole()', () => {
-  it('creates a delegate-role node', () => {
-    const node = delegateToRole('review', 'code-reviewer');
+describe('standalone factory — agentStep()', () => {
+  it('creates an agent-step node', () => {
+    const node = agentStep('review', 'code-reviewer');
     expect(node.id).toBe('review');
-    expect(node.type).toBe('delegate-role');
+    expect(node.type).toBe('agent-step');
     expect(node.role).toBe('code-reviewer');
     expect(node.prompt).toBe('review');
   });
 
   it('accepts a custom prompt', () => {
-    const node = delegateToRole('r', 'analyst', { prompt: 'Custom prompt' });
+    const node = agentStep('r', 'analyst', { prompt: 'Custom prompt' });
     expect(node.prompt).toBe('Custom prompt');
   });
 
@@ -1131,7 +1091,7 @@ describe('standalone factory — delegateToRole()', () => {
       properties: { summary: { type: 'string' } },
       required: ['summary'],
     };
-    const node = delegateToRole('r', 'analyst', {
+    const node = agentStep('r', 'analyst', {
       outputSchema,
       timeoutMs: 45_000,
       completion: 'turn',
@@ -1189,7 +1149,7 @@ describe('standalone factory — iterate()', () => {
     expect(node.concurrency).toBe(5);
   });
 
-  it('serializes addNode iterate handlers as executable body stations', () => {
+  it('serializes addNode iterate handlers as executable body code steps', () => {
     const handler = () => ({ processed: true }) as const;
     const workflow = defineWorkflow('standalone-iterate-add-node');
 
@@ -1197,7 +1157,7 @@ describe('standalone factory — iterate()', () => {
 
     const node = workflow.definition.root.nodes[0];
     const body = (node as { body?: { nodes?: { id: string; type: string }[] } }).body;
-    expect(body?.nodes).toEqual([{ id: 'loop__item', type: 'station', prompt: 'loop__item' }]);
+    expect(body?.nodes).toEqual([{ id: 'loop__item', type: 'code-step' }]);
     expect(workflow.runtimeHandlers.get('loop__item')).toBe(handler);
     expect(workflow.runtimeHandlers.has('loop')).toBe(false);
   });
@@ -1205,7 +1165,7 @@ describe('standalone factory — iterate()', () => {
 
 describe('standalone factory — iterateChain()', () => {
   it('creates an iterate-chain node with sub-chain', () => {
-    const chain = [station('a', () => null), delegateToRole('b', 'analyst')];
+    const chain = [codeStep('a', () => null), agentStep('b', 'analyst')];
     const node = iterateChain('chain', chain, { collection: 'ctx.inputs.items' });
     expect(node.id).toBe('chain');
     expect(node.type).toBe('iterate-chain');
@@ -1213,14 +1173,14 @@ describe('standalone factory — iterateChain()', () => {
   });
 
   it('iterate-chain body nodes are introspectable', () => {
-    const chain = [station('first', () => null), station('second', () => null)];
+    const chain = [codeStep('first', () => null), codeStep('second', () => null)];
     const node = iterateChain('ic', chain, { collection: 'ctx.inputs.items' });
     expect(node.body.nodes[0]?.id).toBe('first');
     expect(node.body.nodes[1]?.id).toBe('second');
   });
 
   it('iterate-chain node is JSON-serializable', () => {
-    const node = iterateChain('ic', [station('s', () => null)], {
+    const node = iterateChain('ic', [codeStep('s', () => null)], {
       collection: 'ctx.inputs.items',
     });
     expect(() => JSON.stringify(node)).not.toThrow();
@@ -1261,7 +1221,7 @@ describe('defineWorkflowBundle', () => {
   });
 
   it('bundle workflows carry serializable definitions', () => {
-    const wf = defineWorkflow('bundle-serial').station('do', () => null);
+    const wf = defineWorkflow('bundle-serial').codeStep('do', () => null);
     const bundle = defineWorkflowBundle({ workflows: [wf] });
 
     const allDefs = bundle.workflows.map((w) => w.definition);
@@ -1290,7 +1250,7 @@ describe('WorkflowDefinitionSchema — loop node', () => {
             body: {
               id: 'converge__body',
               type: 'sequence',
-              nodes: [{ id: 'aggregate', type: 'station', prompt: 'Aggregate findings' }],
+              nodes: [{ id: 'aggregate', type: 'code-step' }],
             },
             gate: {
               handler: 'no-open-blockers',
@@ -1325,7 +1285,7 @@ describe('WorkflowDefinitionSchema — loop node', () => {
             body: {
               id: 'retry__body',
               type: 'sequence',
-              nodes: [{ id: 'attempt', type: 'station', prompt: 'Try again' }],
+              nodes: [{ id: 'attempt', type: 'code-step' }],
             },
             gate: {
               handler: 'check-success',
@@ -1351,7 +1311,7 @@ describe('validateNoNestedLoops', () => {
       body: {
         id: 'outer__body',
         type: 'sequence',
-        nodes: [{ id: 'step', type: 'station', prompt: 'Do work' }],
+        nodes: [{ id: 'step', type: 'code-step' }],
       },
       gate: { handler: 'check' },
     });
@@ -1374,7 +1334,7 @@ describe('validateNoNestedLoops', () => {
             body: {
               id: 'inner__body',
               type: 'sequence',
-              nodes: [{ id: 'step', type: 'station', prompt: 'work' }],
+              nodes: [{ id: 'step', type: 'code-step' }],
             },
             gate: { handler: 'check' },
           },
@@ -1412,7 +1372,7 @@ describe('validateNoNestedLoops', () => {
                     body: {
                       id: 'deep__body',
                       type: 'sequence',
-                      nodes: [{ id: 'x', type: 'station', prompt: 'x' }],
+                      nodes: [{ id: 'x', type: 'code-step' }],
                     },
                     gate: { handler: 'check' },
                   },
@@ -1453,7 +1413,7 @@ describe('validateNoNestedLoops', () => {
                   body: {
                     id: 'nested__body',
                     type: 'sequence',
-                    nodes: [{ id: 'y', type: 'station', prompt: 'y' }],
+                    nodes: [{ id: 'y', type: 'code-step' }],
                   },
                   gate: { handler: 'check' },
                 },
@@ -1493,7 +1453,7 @@ describe('validateNoNestedLoops', () => {
                   body: {
                     id: 'nested-chain__body',
                     type: 'sequence',
-                    nodes: [{ id: 'z', type: 'station', prompt: 'z' }],
+                    nodes: [{ id: 'z', type: 'code-step' }],
                   },
                   gate: { handler: 'check' },
                 },
@@ -1516,7 +1476,7 @@ describe('validateNoNestedLoops', () => {
 
 describe('fluent builder — loop nodes', () => {
   it('appends a serializable loop node and stores gate handler', () => {
-    const workflow = defineWorkflow('review-loop').loop('converge', [station('aggregate', () => ({ blockers: [] }))], {
+    const workflow = defineWorkflow('review-loop').loop('converge', [codeStep('aggregate', () => ({ blockers: [] }))], {
       maxRounds: 3,
       gate: {
         handler: 'no-open-blockers',
@@ -1531,12 +1491,12 @@ describe('fluent builder — loop nodes', () => {
       gate: { handler: 'no-open-blockers' },
     });
     expect(workflow.runtimeLoopGates.get('no-open-blockers')).toBeTypeOf('function');
-    // body station handler should be collected
+    // body code step handler should be collected
     expect(workflow.runtimeHandlers.get('aggregate')).toBeTypeOf('function');
   });
 
   it('creates the body sequence with correct ID convention', () => {
-    const workflow = defineWorkflow('loop-body-id').loop('retry', [station('attempt', () => null)], {
+    const workflow = defineWorkflow('loop-body-id').loop('retry', [codeStep('attempt', () => null)], {
       maxRounds: 5,
       gate: {
         handler: 'check-success',
@@ -1552,7 +1512,7 @@ describe('fluent builder — loop nodes', () => {
   });
 
   it('serializes gate input, config, and escalation', () => {
-    const workflow = defineWorkflow('loop-full-gate').loop('converge', [station('work', () => null)], {
+    const workflow = defineWorkflow('loop-full-gate').loop('converge', [codeStep('work', () => null)], {
       maxRounds: 3,
       gate: {
         handler: 'checker',
@@ -1580,7 +1540,7 @@ describe('fluent builder — loop nodes', () => {
   });
 
   it('applies when/skip conditions to loop nodes', () => {
-    const workflow = defineWorkflow('loop-conditions').loop('retry', [station('attempt', () => null)], {
+    const workflow = defineWorkflow('loop-conditions').loop('retry', [codeStep('attempt', () => null)], {
       maxRounds: 2,
       gate: {
         handler: 'check',
@@ -1596,7 +1556,7 @@ describe('fluent builder — loop nodes', () => {
   });
 
   it('loop node definition is JSON-serializable', () => {
-    const workflow = defineWorkflow('loop-serial').loop('converge', [station('work', () => null)], {
+    const workflow = defineWorkflow('loop-serial').loop('converge', [codeStep('work', () => null)], {
       maxRounds: 3,
       gate: {
         handler: 'checker',
@@ -1608,9 +1568,9 @@ describe('fluent builder — loop nodes', () => {
 
   it('throws on duplicate loop ID', () => {
     const workflow = defineWorkflow('loop-dup');
-    workflow.station('converge', () => null);
+    workflow.codeStep('converge', () => null);
     expect(() =>
-      workflow.loop('converge', [station('work', () => null)], {
+      workflow.loop('converge', [codeStep('work', () => null)], {
         maxRounds: 3,
         gate: {
           handler: 'check',
@@ -1622,9 +1582,9 @@ describe('fluent builder — loop nodes', () => {
 
   it('throws on duplicate body node ID', () => {
     const workflow = defineWorkflow('loop-dup-body');
-    workflow.station('work', () => null);
+    workflow.codeStep('work', () => null);
     expect(() =>
-      workflow.loop('converge', [station('work', () => null)], {
+      workflow.loop('converge', [codeStep('work', () => null)], {
         maxRounds: 3,
         gate: {
           handler: 'check',
@@ -1636,9 +1596,9 @@ describe('fluent builder — loop nodes', () => {
 
   it('throws when synthesized body sequence ID reuses an existing ID', () => {
     const workflow = defineWorkflow('loop-dup-body-seq');
-    workflow.station('retry__body', () => null);
+    workflow.codeStep('retry__body', () => null);
     expect(() =>
-      workflow.loop('retry', [station('attempt', () => null)], {
+      workflow.loop('retry', [codeStep('attempt', () => null)], {
         maxRounds: 2,
         gate: {
           handler: 'check',
@@ -1649,7 +1609,7 @@ describe('fluent builder — loop nodes', () => {
   });
 
   it('does not register the loop node itself in runtimeHandlers', () => {
-    const workflow = defineWorkflow('loop-no-handler').loop('converge', [station('work', () => null)], {
+    const workflow = defineWorkflow('loop-no-handler').loop('converge', [codeStep('work', () => null)], {
       maxRounds: 3,
       gate: {
         handler: 'checker',
@@ -1661,7 +1621,7 @@ describe('fluent builder — loop nodes', () => {
   });
 
   it('runtimeLoopGates is empty when no loop nodes are present', () => {
-    const workflow = defineWorkflow('no-loop').station('work', () => null);
+    const workflow = defineWorkflow('no-loop').codeStep('work', () => null);
     expect(workflow.runtimeLoopGates.size).toBe(0);
   });
 });
@@ -1672,7 +1632,7 @@ describe('fluent builder — loop nodes', () => {
 
 describe('standalone factory — loop()', () => {
   it('is exported from the root package barrel with loop schemas', () => {
-    const loopNode = rootLoop('converge', [station('aggregate', () => null)], {
+    const loopNode = rootLoop('converge', [codeStep('aggregate', () => null)], {
       maxRounds: 2,
       gate: { handler: 'check', evaluate: () => ({ kind: 'pass' as const }) },
     });
@@ -1682,7 +1642,7 @@ describe('standalone factory — loop()', () => {
   });
 
   it('creates a serializable loop node', () => {
-    const loopNode = loop('converge', [station('aggregate', () => ({ blockers: [] }))], {
+    const loopNode = loop('converge', [codeStep('aggregate', () => ({ blockers: [] }))], {
       maxRounds: 3,
       gate: {
         handler: 'no-open-blockers',
@@ -1703,7 +1663,7 @@ describe('standalone factory — loop()', () => {
   });
 
   it('applies when/skip to the standalone loop node', () => {
-    const loopNode = loop('retry', [station('attempt', () => null)], {
+    const loopNode = loop('retry', [codeStep('attempt', () => null)], {
       maxRounds: 2,
       gate: {
         handler: 'check',
@@ -1717,7 +1677,7 @@ describe('standalone factory — loop()', () => {
   });
 
   it('is JSON-serializable', () => {
-    const loopNode = loop('retry', [station('attempt', () => null)], {
+    const loopNode = loop('retry', [codeStep('attempt', () => null)], {
       maxRounds: 2,
       gate: {
         handler: 'check',
@@ -1728,7 +1688,7 @@ describe('standalone factory — loop()', () => {
   });
 
   it('serializes gate input, config, and escalation on standalone node', () => {
-    const loopNode = loop('converge', [station('work', () => null)], {
+    const loopNode = loop('converge', [codeStep('work', () => null)], {
       maxRounds: 3,
       gate: {
         handler: 'checker',
@@ -1755,7 +1715,7 @@ describe('standalone factory — loop()', () => {
       loop(
         'outer',
         [
-          loop('inner', [station('work', () => null)], {
+          loop('inner', [codeStep('work', () => null)], {
             maxRounds: 2,
             gate: { handler: 'inner-check', evaluate: () => ({ kind: 'pass' as const }) },
           }),
@@ -1772,7 +1732,7 @@ describe('standalone factory — loop()', () => {
     const gateEvaluate = () => ({ kind: 'pass' as const });
     const workflow = defineWorkflow('standalone-loop-addnode');
     workflow.addNode(
-      loop('converge', [station('aggregate', () => null)], {
+      loop('converge', [codeStep('aggregate', () => null)], {
         maxRounds: 3,
         gate: {
           handler: 'blocker-check',
@@ -1785,11 +1745,11 @@ describe('standalone factory — loop()', () => {
     expect(workflow.runtimeHandlers.get('aggregate')).toBeTypeOf('function');
   });
 
-  it('addNode collects standalone loop body station handlers into runtimeHandlers', () => {
+  it('addNode collects standalone loop body code step handlers into runtimeHandlers', () => {
     const bodyHandler = () => ({ processed: true }) as const;
     const workflow = defineWorkflow('standalone-loop-body-handlers');
     workflow.addNode(
-      loop('converge', [station('work', bodyHandler), delegateToRole('review', 'analyst')], {
+      loop('converge', [codeStep('work', bodyHandler), agentStep('review', 'analyst')], {
         maxRounds: 3,
         gate: {
           handler: 'check',

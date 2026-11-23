@@ -1,43 +1,30 @@
 import { eq, and, getTableColumns, sql } from 'drizzle-orm';
 import type { SQLiteUpdateSetSource } from 'drizzle-orm/sqlite-core';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { JsonValue, WorkflowDefinition } from '@makaio/contracts';
-import { resolveSchema, serializeDatabaseOperation, type MakaioDatabase } from '@makaio/storage-drizzle';
+import type {
+  JsonValue,
+  RejectedWorkflowDefinition,
+  WorkflowDefinition,
+  WorkflowDefinitionList,
+} from '@makaio/contracts';
+import { WorkflowDefinitionSchema, WorkflowError, WorkflowErrorCode } from '@makaio/contracts';
+import {
+  executeTransaction,
+  resolveSchema,
+  serializeDatabaseOperation,
+  type MakaioDatabase,
+} from '@makaio/storage-drizzle';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects, type WorkflowListQuery } from './namespace.js';
 import type { InsertWorkflowDefinition } from './schema.js';
 import { workflowEngineSchema } from './schema.variants.js';
-import { buildScopePredicates, toScopeColumns, fromScopeColumns } from './scope-helpers.js';
-
-type WorkflowDefinitionsTable = typeof workflowEngineSchema.sqlite.workflowDefinitions;
-type DbDefinitionRow = WorkflowDefinitionsTable['$inferSelect'];
-
-/**
- * Maps a database row to the `WorkflowDefinition` API type.
- * @param row - Database row from `workflow_definitions`
- * @returns Mapped `WorkflowDefinition` with optional fields normalised
- */
-function mapDefinition(row: DbDefinitionRow): WorkflowDefinition {
-  return {
-    id: row.id,
-    name: row.name,
-    description: row.description ?? undefined,
-    root: row.root,
-    inputSchema: (row.inputSchema as WorkflowDefinition['inputSchema']) ?? undefined,
-    configSchema: (row.configSchema as WorkflowDefinition['configSchema']) ?? undefined,
-    outputSchema: (row.outputSchema as WorkflowDefinition['outputSchema']) ?? undefined,
-    state: (row.state as WorkflowDefinition['state']) ?? undefined,
-    artifact: row.artifact ?? undefined,
-    triggers: row.triggers ?? undefined,
-    scope: fromScopeColumns(row),
-    canvasLayout: (row.canvasLayout as WorkflowDefinition['canvasLayout']) ?? undefined,
-    extensions: row.extensions ?? undefined,
-    source: (row.source as WorkflowDefinition['source']) ?? undefined,
-    executableSource: (row.executableSource as WorkflowDefinition['executableSource']) ?? undefined,
-    requirements: (row.requirements as WorkflowDefinition['requirements']) ?? undefined,
-    successFinalizerId: row.successFinalizerId ?? undefined,
-  };
-}
+import { buildScopePredicates, toScopeColumns } from './scope-helpers.js';
+import {
+  describeWorkflowDefinitionIssues,
+  readStoredDefinition,
+  storedDefinitionSelection,
+  type WorkflowDefinitionsTable,
+} from './stored-definition.js';
 
 /**
  * Maps a `WorkflowDefinition` to database column values for insert/update.
@@ -88,7 +75,8 @@ function definitionEventSubject(
  * Per-column rule: `name`, `root`, `updatedAt`, `state`, `extensions`, `executableSource`, `requirements`,
  * `successFinalizerId` and the scope columns always take the incoming value; `description`, `inputSchema`,
  * `configSchema`, `outputSchema`, `artifact`, `triggers`, `canvasLayout` and `source` keep the stored value when the
- * incoming value is null; `createdAt` is always preserved.
+ * incoming value is null; `createdAt` is always preserved. This is the only place the "missing value keeps the
+ * stored value" rule lives — the re-check in {@link writeDefinition} never reimplements it.
  * @param values - Incoming column values from {@link toDefinitionDbValues}
  * @param columns - Table columns, used to reference the stored values
  * @param now - Current epoch milliseconds for `updatedAt`
@@ -126,6 +114,143 @@ function toDefinitionUpdateSet(
 }
 
 /**
+ * Reads one stored workflow definition, checked against the schema.
+ * @param db - Database handle to query on.
+ * @param table - Resolved `workflow_definitions` table.
+ * @param columns - Table columns, used for the stored-text selection.
+ * @param id - Identifier of the row to read.
+ * @returns The checked definition, or `undefined` when no row exists for `id`.
+ * @throws WorkflowError With code `DEFINITION_INVALID` when the stored row does not satisfy
+ * {@link WorkflowDefinitionSchema}.
+ */
+async function readDefinition(
+  db: MakaioDatabase,
+  table: WorkflowDefinitionsTable,
+  columns: WorkflowDefinitionsTable['_']['columns'],
+  id: string,
+): Promise<WorkflowDefinition | undefined> {
+  const [row] = await db.select(storedDefinitionSelection(columns)).from(table).where(eq(table.id, id)).limit(1);
+  if (!row) return undefined;
+  const checked = readStoredDefinition(row);
+  if ('rejected' in checked) {
+    throw new WorkflowError(
+      WorkflowErrorCode.DEFINITION_INVALID,
+      `Stored workflow definition '${checked.rejected.id}' does not satisfy WorkflowDefinitionSchema: ${checked.rejected.reason}`,
+    );
+  }
+  return checked.definition;
+}
+
+/**
+ * Lists stored workflow definitions matching an optional scope filter.
+ *
+ * Readable rows are returned in `workflows`; unreadable rows are reported in `rejected` — this never
+ * throws and never deletes a row.
+ * @param db - Database handle to query on.
+ * @param table - Resolved `workflow_definitions` table.
+ * @param columns - Table columns, used for the stored-text selection.
+ * @param query - List query, optionally scoped.
+ * @returns The readable definitions and the rejected rows.
+ */
+async function listDefinitions(
+  db: MakaioDatabase,
+  table: WorkflowDefinitionsTable,
+  columns: WorkflowDefinitionsTable['_']['columns'],
+  query: WorkflowListQuery,
+): Promise<WorkflowDefinitionList> {
+  const predicates = query.scope ? buildScopePredicates(table, query.scope) : [];
+  const rows =
+    predicates.length > 0
+      ? await db
+          .select(storedDefinitionSelection(columns))
+          .from(table)
+          .where(and(...predicates))
+      : await db.select(storedDefinitionSelection(columns)).from(table);
+
+  const workflows: WorkflowDefinition[] = [];
+  const rejected: RejectedWorkflowDefinition[] = [];
+  for (const row of rows) {
+    const checked = readStoredDefinition(row);
+    if ('rejected' in checked) {
+      rejected.push(checked.rejected);
+    } else {
+      workflows.push(checked.definition);
+    }
+  }
+  return { workflows, rejected };
+}
+
+/**
+ * Writes a workflow definition (insert or update) and returns the checked event payload.
+ *
+ * Validates the incoming definition before any column mapping or serialization, then writes and
+ * re-reads the resulting row inside one {@link executeTransaction} (steps 1-3): a row that fails the re-check rolls
+ * the insert or update back, so nothing is persisted. The caller sends the lifecycle event only after this
+ * transaction has committed, with the checked definition.
+ * @param db - Database handle.
+ * @param table - Resolved `workflow_definitions` table.
+ * @param columns - Table columns.
+ * @param workflow - Incoming workflow definition.
+ * @param now - Current epoch milliseconds for timestamp columns.
+ * @returns The write kind and the checked definition, or `undefined` when neither an insert nor an update touched
+ * a row.
+ * @throws WorkflowError With code `DEFINITION_INVALID` when the incoming definition, or the definition rebuilt from
+ * the resulting stored row, does not satisfy {@link WorkflowDefinitionSchema}.
+ */
+async function writeDefinition(
+  db: MakaioDatabase,
+  table: WorkflowDefinitionsTable,
+  columns: WorkflowDefinitionsTable['_']['columns'],
+  workflow: WorkflowDefinition,
+  now: number,
+): Promise<{ readonly kind: 'created' | 'updated'; readonly definition: WorkflowDefinition } | undefined> {
+  const incomingCheck = WorkflowDefinitionSchema.safeParse(workflow);
+  if (!incomingCheck.success) {
+    throw new WorkflowError(
+      WorkflowErrorCode.DEFINITION_INVALID,
+      `Workflow definition '${workflow.id}' does not satisfy WorkflowDefinitionSchema: ${describeWorkflowDefinitionIssues(incomingCheck.error)}`,
+    );
+  }
+
+  const values = toDefinitionDbValues(workflow, now);
+
+  return executeTransaction(db, async (tx) => {
+    const insertedRows = await tx
+      .insert(table)
+      .values(values)
+      .onConflictDoNothing({ target: table.id })
+      .returning({ id: table.id });
+
+    const written: { readonly kind: 'created' | 'updated'; readonly id: string } | undefined =
+      insertedRows.length > 0
+        ? { kind: 'created', id: insertedRows[0]!.id }
+        : await (async () => {
+            const [updatedRow] = await tx
+              .update(table)
+              .set(toDefinitionUpdateSet(values, columns, now, workflow.scope))
+              .where(eq(table.id, workflow.id))
+              .returning({ id: table.id });
+            return updatedRow ? { kind: 'updated' as const, id: updatedRow.id } : undefined;
+          })();
+    if (!written) return undefined;
+
+    const [row] = await tx
+      .select(storedDefinitionSelection(columns))
+      .from(table)
+      .where(eq(table.id, written.id))
+      .limit(1);
+    const checked = readStoredDefinition(row!);
+    if ('rejected' in checked) {
+      throw new WorkflowError(
+        WorkflowErrorCode.DEFINITION_INVALID,
+        `Workflow definition '${workflow.id}' cannot be stored: the resulting definition does not satisfy WorkflowDefinitionSchema: ${checked.rejected.reason}`,
+      );
+    }
+    return { kind: written.kind, definition: checked.definition };
+  });
+}
+
+/**
  * Registers all workflow definition bus handlers (get, set, delete, list).
  * @param bus - Message bus to subscribe on.
  * @param db - Drizzle database instance.
@@ -136,40 +261,26 @@ export function registerDefinitionHandlers(bus: IMakaioBus, db: MakaioDatabase):
   const columns = getTableColumns(workflowDefinitions);
 
   const unsubGet = bus.on(WorkflowStorageSubjects.get, async (ctx) => {
-    const rows = await db.select().from(workflowDefinitions).where(eq(workflowDefinitions.id, ctx.payload.id)).limit(1);
-    ctx.setResult({ workflow: rows[0] ? mapDefinition(rows[0]) : null });
+    const workflow = await readDefinition(db, workflowDefinitions, columns, ctx.payload.id);
+    ctx.setResult({ workflow: workflow ?? null });
   });
 
   const unsubSet = bus.on(WorkflowStorageSubjects.set, async (ctx) => {
     const workflow = ctx.payload.workflow as WorkflowDefinition;
     const now = Date.now();
-    const values = toDefinitionDbValues(workflow, now);
-
-    const event = await serializeDatabaseOperation(db, async () => {
-      const insertedRows = await db
-        .insert(workflowDefinitions)
-        .values(values)
-        .onConflictDoNothing({ target: workflowDefinitions.id })
-        .returning();
-      if (insertedRows.length > 0) return { kind: 'created' as const, row: insertedRows[0] };
-
-      const [updatedRow] = await db
-        .update(workflowDefinitions)
-        .set(toDefinitionUpdateSet(values, columns, now, workflow.scope))
-        .where(eq(workflowDefinitions.id, workflow.id))
-        .returning();
-      return updatedRow ? { kind: 'updated' as const, row: updatedRow } : undefined;
-    });
-
+    const event = await writeDefinition(db, workflowDefinitions, columns, workflow, now);
     if (event) {
-      await bus.emit(ctx.call, definitionEventSubject(event.kind), mapDefinition(event.row));
+      await bus.emit(ctx.call, definitionEventSubject(event.kind), event.definition);
     }
     ctx.setResult({ id: workflow.id });
   });
 
   const unsubDelete = bus.on(WorkflowStorageSubjects.delete, async (ctx) => {
     const deletedRows = await serializeDatabaseOperation(db, () =>
-      db.delete(workflowDefinitions).where(eq(workflowDefinitions.id, ctx.payload.id)).returning(),
+      db
+        .delete(workflowDefinitions)
+        .where(eq(workflowDefinitions.id, ctx.payload.id))
+        .returning({ id: workflowDefinitions.id }),
     );
     const deleted = deletedRows.length > 0;
     if (deleted) {
@@ -180,17 +291,8 @@ export function registerDefinitionHandlers(bus: IMakaioBus, db: MakaioDatabase):
 
   const unsubList = bus.on(WorkflowStorageSubjects.list, async (ctx) => {
     const payload = ctx.payload as WorkflowListQuery;
-    const predicates = payload.scope ? buildScopePredicates(workflowDefinitions, payload.scope) : [];
-
-    const rows =
-      predicates.length > 0
-        ? await db
-            .select()
-            .from(workflowDefinitions)
-            .where(and(...predicates))
-        : await db.select().from(workflowDefinitions);
-
-    ctx.setResult({ workflows: rows.map(mapDefinition) });
+    const result = await listDefinitions(db, workflowDefinitions, columns, payload);
+    ctx.setResult(result);
   });
 
   return () => {

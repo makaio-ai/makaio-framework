@@ -88,7 +88,7 @@ describe('bootstrapAuthorityLoadedState', () => {
     ).resolves.toBe(true);
 
     expect(writes).toHaveLength(1);
-    expect(writes[0]?.runContext.definitionSnapshot).toBe(storedRunContext.definitionSnapshot);
+    expect(writes[0]?.runContext.definitionSnapshot).toEqual(storedRunContext.definitionSnapshot);
     expect(writes[0]?.initialState).toEqual(storedDefinition.state?.initial);
   });
 

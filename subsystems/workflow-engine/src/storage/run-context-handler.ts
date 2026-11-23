@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, getTableColumns } from 'drizzle-orm';
 import {
   executeTransaction,
   resolveSchema,
@@ -6,11 +6,19 @@ import {
   type TransactionCallback,
 } from '@makaio/storage-drizzle';
 import type { IMakaioBus } from '@makaio/bus-core';
-import type { JsonPatchOperation, JsonValue, WorkflowRunContext, WorkflowWorkerSource } from '@makaio/contracts';
+import type {
+  JsonPatchOperation,
+  JsonValue,
+  StoredWorkflowRunContext,
+  WorkflowRunContext,
+  WorkflowWorkerSource,
+} from '@makaio/contracts';
+import { JsonValueSchema } from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './namespace.js';
 import type { InsertWorkflowRunContext } from './schema.js';
 import { workflowEngineSchema } from './schema.variants.js';
 import { toScopeColumns, fromScopeColumns } from './scope-helpers.js';
+import { decodeStoredJson, storedJsonText } from './stored-definition.js';
 import { toWorkflowStateJsonColumnValue } from './state-json-column.js';
 
 type WorkflowRunContextsTable = typeof workflowEngineSchema.sqlite.workflowRunContexts;
@@ -69,17 +77,44 @@ type DbRunContextRow = WorkflowRunContextsTable['$inferSelect'];
 type RunContextStorageExecutor = MakaioDatabase | Parameters<TransactionCallback<void>>[0];
 
 /**
- * Map a database row to a {@link WorkflowRunContext}.
- * @param row - Database row from `workflow_run_contexts`.
- * @returns Mapped run context.
+ * A `workflow_run_contexts` row as {@link getRunContext} selects it: every column
+ * unchanged except `definitionSnapshot`, read as stored text instead of the
+ * driver-decoded definition.
  */
-function mapRunContext(row: DbRunContextRow): WorkflowRunContext {
+type StoredRunContextRow = Omit<DbRunContextRow, 'definitionSnapshot'> & { definitionSnapshot: string | null };
+
+/**
+ * Decode a stored run-context snapshot without interpreting it as a workflow definition.
+ *
+ * `null` (no snapshot persisted) decodes to `undefined`. When the stored text decodes as
+ * JSON and satisfies {@link JsonValueSchema}, the decoded value is the result; otherwise the
+ * stored text itself is kept as a string, so neither cancellation nor technical
+ * failure handling ever fails on a snapshot that is no longer a valid definition.
+ * @param text - Stored text of the `definition_snapshot` column, or null.
+ * @returns The decoded snapshot value, the raw text, or `undefined` when nothing was stored.
+ */
+function decodeRunContextSnapshot(text: string | null): JsonValue | undefined {
+  if (text === null) return undefined;
+  const decoded = decodeStoredJson(text);
+  if (decoded.ok) {
+    const parsed = JsonValueSchema.safeParse(decoded.value);
+    if (parsed.success) return parsed.data;
+  }
+  return text;
+}
+
+/**
+ * Map a database row to a {@link StoredWorkflowRunContext}.
+ * @param row - Row selected with `definitionSnapshot` as stored text (see {@link StoredRunContextRow}).
+ * @returns Mapped run context, read without interpreting the snapshot.
+ */
+function mapRunContext(row: StoredRunContextRow): StoredWorkflowRunContext {
   return {
     executionId: row.executionId,
     workflowId: row.workflowId,
     coordinatorSessionId: row.coordinatorSessionId,
     source: fromSourceColumns(row),
-    definitionSnapshot: row.definitionSnapshot ?? undefined,
+    definitionSnapshot: decodeRunContextSnapshot(row.definitionSnapshot),
     workerManifest: row.workerManifest,
     inputs: row.inputs,
     config: (row.config as Record<string, unknown> | null) ?? {},
@@ -196,7 +231,11 @@ export function registerRunContextHandlers(bus: IMakaioBus, db: MakaioDatabase):
 
   const unsubGet = bus.on(WorkflowStorageSubjects.getRunContext, async (ctx) => {
     const { executionId } = ctx.payload;
-    const rows = await db.select().from(workflowRunContexts).where(eq(workflowRunContexts.executionId, executionId));
+    const columns = getTableColumns(workflowRunContexts);
+    const rows = await db
+      .select({ ...columns, definitionSnapshot: storedJsonText(columns.definitionSnapshot) })
+      .from(workflowRunContexts)
+      .where(eq(workflowRunContexts.executionId, executionId));
     const runContext = rows[0] ? mapRunContext(rows[0]) : null;
     ctx.setResult({ runContext });
   });

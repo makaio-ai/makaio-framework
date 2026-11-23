@@ -121,7 +121,7 @@ function visitNode(
       visitNode(loop.body, visitor, node, childDepth, childAncestors, 'loop-body', undefined, undefined);
       break;
     }
-    // Leaf nodes: station, delegate-agent, delegate-role, gate — no children.
+    // Leaf nodes: code-step, agent-step, gate — no children.
   }
 
   visitor.leave?.(node, ctx);

@@ -41,7 +41,7 @@ function makePackage(): KernelMakaioExtension {
             inputSchema: z.object({ body: z.string() }),
             outputSchema: z.object({ issueId: z.string() }),
             runs: {
-              type: 'station',
+              type: 'agent-step',
               prompt: 'Create an issue with title {{ config.title }} and body {{ input.body }}.',
               role: 'alpha.issue-creator',
             },
@@ -61,7 +61,7 @@ describe('createWorkflowBlockContributionProcessor', () => {
     await processor.processActivated('alpha', makePackage(), makeContext(registry));
     expect(registry.listSteps().map((step) => step.metadata.name)).toEqual(['alpha.create-issue']);
     expect(registry.listSteps()[0]?.runs).toEqual({
-      type: 'station',
+      type: 'agent-step',
       prompt: 'Create an issue with title {{ config.title }} and body {{ input.body }}.',
       role: 'alpha.issue-creator',
     });

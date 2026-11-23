@@ -6,7 +6,7 @@ import type {
   WorkflowDefinition,
   WorkflowFrameState,
   WorkflowSequenceNode,
-  WorkflowStationNode,
+  WorkflowAgentStepNode,
   WorkflowAutomationTriggerBinding,
 } from '@makaio/contracts';
 import type { WorkflowExecution as StorageWorkflowExecution } from '../storage/namespace.js';
@@ -72,7 +72,7 @@ export interface WorkflowDefinitionOptions {
  * - `root`: a ready-made `WorkflowSequenceNode` tree, or
  * - `steps`: a legacy flat steps array (converted to a sequence node).
  *
- * When neither is provided, a default three-station sequence is used.
+ * When neither is provided, a default three-agent-step sequence is used.
  *
  * Note: Default name includes the generated ID to satisfy (name, scope) unique
  * constraint in the database.
@@ -101,13 +101,14 @@ export function createWorkflowDefinition(options: WorkflowDefinitionOptions = {}
           };
         }
         // agent, shell, function, bus-request and other DAG types all
-        // map to 'station' in the primitive runtime.  Tests that exercise
+        // map to 'agent-step' in the primitive runtime.  Tests that exercise
         // pure DAG-scheduler paths (workflow-scheduler.*) access the
         // underlying step objects directly through stepMap and do not run
         // these nodes through the primitive runtime.
         return {
-          type: 'station' as const,
+          type: 'agent-step' as const,
           id: step.id,
+          role: step.role ?? step.id,
           prompt: step.prompt ?? `${step.type} step`,
         };
       }),
@@ -117,9 +118,19 @@ export function createWorkflowDefinition(options: WorkflowDefinitionOptions = {}
       type: 'sequence',
       id: `${id}__root`,
       nodes: [
-        { type: 'station' as const, id: 'plan', prompt: 'Plan the work' } as WorkflowStationNode,
-        { type: 'station' as const, id: 'implement', prompt: 'Implement the work' } as WorkflowStationNode,
-        { type: 'station' as const, id: 'review', prompt: 'Review the work' } as WorkflowStationNode,
+        { type: 'agent-step' as const, id: 'plan', role: 'plan', prompt: 'Plan the work' } as WorkflowAgentStepNode,
+        {
+          type: 'agent-step' as const,
+          id: 'implement',
+          role: 'implement',
+          prompt: 'Implement the work',
+        } as WorkflowAgentStepNode,
+        {
+          type: 'agent-step' as const,
+          id: 'review',
+          role: 'review',
+          prompt: 'Review the work',
+        } as WorkflowAgentStepNode,
       ],
     };
   }

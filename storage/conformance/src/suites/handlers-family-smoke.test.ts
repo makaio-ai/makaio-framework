@@ -93,7 +93,7 @@ function makeWorkflowDefinition(id?: string) {
     root: {
       type: 'sequence' as const,
       id: `${wfId}__root`,
-      nodes: [{ type: 'station' as const, id: 'step-1', prompt: 'Do the work' }],
+      nodes: [{ type: 'code-step' as const, id: 'step-1' }],
     },
     scope: { type: 'global' as const },
   };
@@ -152,7 +152,7 @@ describeStorageConformance('handlers-family-smoke', (config) => {
 
     it('registers and settles an external execution with an exact WorkLog frame', async () => {
       const executionId = `wfx-ext-conformance-${crypto.randomUUID()}`;
-      const frameId = `${executionId}:station`;
+      const frameId = `${executionId}:step`;
       await MakaioBus.request(WorkflowStorageSubjects.setExternalExecutionStart, {
         execution: {
           id: executionId,
@@ -165,8 +165,8 @@ describeStorageConformance('handlers-family-smoke', (config) => {
         frame: {
           executionId,
           frameId,
-          nodeId: 'station',
-          nodeType: 'station',
+          nodeId: 'step',
+          nodeType: 'code-step',
           path: [frameId],
           status: 'running',
           attempt: 0,
@@ -182,8 +182,8 @@ describeStorageConformance('handlers-family-smoke', (config) => {
           frame: {
             executionId,
             frameId,
-            nodeId: 'station',
-            nodeType: 'station',
+            nodeId: 'step',
+            nodeType: 'code-step',
             path: [frameId],
             status: 'completed',
             attempt: 0,

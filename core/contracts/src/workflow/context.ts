@@ -66,7 +66,7 @@ export type ContextSource = z.infer<typeof ContextSourceSchema>;
  */
 export const ArtifactPublishTargetSchema = z.object({
   type: z.literal('artifact'),
-  /** Artifact kind string (e.g. `'station-output'`, `'implementation-plan'`). */
+  /** Artifact kind string (e.g. `'step-output'`, `'implementation-plan'`). */
   kind: z.string().min(1),
   /** Schema version that the artifact service will use to validate the `data` payload. */
   schemaVersion: ArtifactSchemaVersionSchema,

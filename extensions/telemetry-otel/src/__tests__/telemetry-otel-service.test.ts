@@ -86,7 +86,7 @@ describe('TelemetryOtelService', () => {
         executionId: 'wfx-1',
         frameId: 'frame-1',
         nodeId: 'analyze',
-        nodeType: 'station',
+        nodeType: 'agent-step',
         path: ['frame-1'],
       });
       await MakaioBus.emit(WorkflowSubjects.frame.sessionLinked, {
@@ -300,7 +300,7 @@ describe('TelemetryOtelService', () => {
         executionId: 'wfx-frame-time',
         frameId: 'frame-time',
         nodeId: 'analyze',
-        nodeType: 'station',
+        nodeType: 'agent-step',
         path: ['frame-time'],
         startedAt: 1200,
       });
@@ -308,6 +308,7 @@ describe('TelemetryOtelService', () => {
         executionId: 'wfx-frame-time',
         frameId: 'frame-time',
         nodeId: 'analyze',
+        nodeType: 'agent-step',
         duration: 300,
         completedAt: 1500,
       });
@@ -352,7 +353,7 @@ describe('TelemetryOtelService', () => {
         executionId: 'wfx-tool-service',
         frameId: 'frame-1',
         nodeId: 'analyze',
-        nodeType: 'station',
+        nodeType: 'agent-step',
         path: ['frame-1'],
       });
       await MakaioBus.emit(WorkflowSubjects.frame.sessionLinked, {

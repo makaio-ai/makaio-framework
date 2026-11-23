@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { asc, eq, sql } from 'drizzle-orm';
-import { MakaioBus } from '@makaio/bus-core';
-import { WorkflowSubjects } from '../namespace.js';
+import { asc, eq, getTableColumns, sql } from 'drizzle-orm';
+import { createBusInstance, MakaioBus, ValidationError, type IMakaioBus } from '@makaio/bus-core';
+import { WorkflowNamespace, WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageNamespace, WorkflowStorageSubjects } from '../storage/namespace.js';
 import {
   EXECUTION_LIST_DEFAULT_LIMIT,
@@ -13,15 +13,101 @@ import {
   ExecutionsByArtifactRefsQuerySchema,
   CRON_AUTOMATION_TRIGGER_KIND,
   WorkflowExecutionScopeSchema,
+  WorkflowDefinitionListSchema,
   ExecutionListQuerySchema,
   WorkflowRunContextSchema,
+  isDefinitionInvalidError,
   serializeArtifactRef,
   parseArtifactRef,
   type WorkflowDefinition,
   type WorkflowGateInstance,
 } from '@makaio/contracts';
-import { createTestDb, createWorkflowDefinition, createWorkflowExecution, type TestDbContext } from './shared.js';
-import { workflowExecutionStateEvents } from '../storage/schema.js';
+import {
+  createTestDb,
+  createTestDbForBus,
+  createWorkflowDefinition,
+  createWorkflowExecution,
+  type TestDbContext,
+} from './shared.js';
+import { workflowDefinitions, workflowExecutionStateEvents } from '../storage/schema.js';
+import { storedDefinitionSelection } from '../storage/stored-definition.js';
+
+/**
+ * Inserts a `workflow_definitions` row directly via SQL, bypassing `WorkflowStorageSubjects.set`
+ * and its incoming-definition validation, to construct unreadable stored rows.
+ * @param dbContext - Test database context providing raw SQL execution.
+ * @param row - Column overrides; `root` is stored as given, even when it is not valid JSON.
+ */
+async function insertRawDefinitionRow(
+  dbContext: TestDbContext,
+  row: {
+    readonly id: string;
+    readonly root: string;
+    readonly scopeType?: 'global' | 'external' | 'workspace' | 'session';
+    readonly scopeKind?: string;
+    readonly scopeId?: string;
+    readonly inputSchema?: string;
+  },
+): Promise<void> {
+  const now = 1_700_000_000_000;
+  await dbContext.exec(sql`
+    INSERT INTO workflow_definitions (
+      id, name, root, scope_type, scope_kind, scope_id, created_at, updated_at, input_schema
+    )
+    VALUES (
+      ${row.id}, ${row.id}, ${row.root}, ${row.scopeType ?? 'global'}, ${row.scopeKind ?? ''}, ${row.scopeId ?? ''},
+      ${now}, ${now}, ${row.inputSchema ?? null}
+    )
+  `);
+}
+
+/**
+ * Reads every stored column without decoding JSON so rejected operations can be checked for data loss.
+ * @param context - Database containing the definition rows.
+ * @returns All definition rows, including their exact JSON text and timestamps.
+ */
+async function readRawDefinitionRows(context: TestDbContext) {
+  return context.db
+    .select(storedDefinitionSelection(getTableColumns(workflowDefinitions)))
+    .from(workflowDefinitions)
+    .orderBy(asc(workflowDefinitions.id));
+}
+
+type StorageValidationMode = {
+  readonly name: 'strict' | 'production';
+  readonly nodeEnv: 'test' | 'production';
+};
+
+const STORAGE_VALIDATION_MODES: readonly StorageValidationMode[] = [
+  { name: 'strict', nodeEnv: 'test' },
+  { name: 'production', nodeEnv: 'production' },
+];
+
+type InvalidDefinitionCase = {
+  readonly name: string;
+  readonly makeWorkflow: (id: string) => unknown;
+};
+
+const INVALID_DEFINITION_CASES: readonly InvalidDefinitionCase[] = [
+  {
+    name: 'removed node type',
+    makeWorkflow: (id) => ({
+      ...createWorkflowDefinition({ id }),
+      root: { type: 'sequence', id: 'root', nodes: [{ type: 'delegate-agent', id: 'removed' }] }, // legacy-input
+    }),
+  },
+  {
+    name: 'unexpected top-level field',
+    makeWorkflow: (id) => ({ ...createWorkflowDefinition({ id }), unexpected: true }),
+  },
+  {
+    name: 'Date inside extensions',
+    makeWorkflow: (id) => ({
+      ...createWorkflowDefinition({ id }),
+      extensions: { gateway: { scheduledFor: new Date('2026-01-01T00:00:00.000Z') } },
+    }),
+  },
+];
 
 describe('WorkflowExecutionScopeSchema', () => {
   it('parses global scope', () => {
@@ -480,7 +566,7 @@ describe('workflow storage handlers', () => {
       executionId: execution.id,
       workflowId: workflow.id,
       source: { kind: 'definition', workflowId: workflow.id },
-      definitionSnapshot: { ...workflow, createdAt: now, updatedAt: now },
+      definitionSnapshot: workflow,
       inputs: {},
       triggerPayload: {},
       scope: { type: 'global' },
@@ -521,7 +607,7 @@ describe('workflow storage handlers', () => {
       executionId: execution.id,
       workflowId: workflow.id,
       source: { kind: 'definition', workflowId: workflow.id },
-      definitionSnapshot: { ...workflow, createdAt: now, updatedAt: now },
+      definitionSnapshot: workflow,
       inputs: {},
       triggerPayload: {},
       scope: { type: 'global' },
@@ -570,7 +656,7 @@ describe('workflow storage handlers', () => {
       executionId: execution.id,
       workflowId: workflow.id,
       source: { kind: 'definition', workflowId: workflow.id },
-      definitionSnapshot: { ...workflow, createdAt: now, updatedAt: now },
+      definitionSnapshot: workflow,
       inputs: {},
       triggerPayload: {},
       scope: { type: 'global' },
@@ -607,7 +693,7 @@ describe('workflow storage handlers', () => {
       executionId: execution.id,
       workflowId: workflow.id,
       source: { kind: 'definition', workflowId: workflow.id },
-      definitionSnapshot: { ...workflow, createdAt: now, updatedAt: now },
+      definitionSnapshot: workflow,
       inputs: {},
       triggerPayload: {},
       scope: { type: 'global' },
@@ -660,7 +746,7 @@ describe('workflow storage handlers', () => {
       executionId: execution.id,
       workflowId: workflow.id,
       source: { kind: 'definition', workflowId: workflow.id },
-      definitionSnapshot: { ...workflow, createdAt: now, updatedAt: now },
+      definitionSnapshot: workflow,
       inputs: {},
       triggerPayload: {},
       scope: { type: 'global' },
@@ -801,7 +887,7 @@ describe('workflow storage handlers', () => {
       executionId: execution.id,
       workflowId: workflow.id,
       source: { kind: 'definition', workflowId: workflow.id },
-      definitionSnapshot: { ...workflow, createdAt: now, updatedAt: now },
+      definitionSnapshot: workflow,
       inputs: {},
       triggerPayload: {},
       scope: { type: 'global' },
@@ -878,7 +964,7 @@ describe('workflow storage handlers', () => {
     ).rejects.toThrow();
     const afterFailure = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId: execution.id });
     const stateAfterFailure = await MakaioBus.request(WorkflowStorageSubjects.getState, { executionId: execution.id });
-    expect(afterFailure.runContext?.definitionSnapshot?.description).toBe('old');
+    expect(afterFailure.runContext?.definitionSnapshot).toMatchObject({ description: 'old' });
     expect(stateAfterFailure.state).toBeNull();
 
     await dbContext.exec(sql.raw('DROP TRIGGER fail_authority_state_event'));
@@ -888,7 +974,7 @@ describe('workflow storage handlers', () => {
     });
     const afterRetry = await MakaioBus.request(WorkflowStorageSubjects.getRunContext, { executionId: execution.id });
     const stateAfterRetry = await MakaioBus.request(WorkflowStorageSubjects.getState, { executionId: execution.id });
-    expect(afterRetry.runContext?.definitionSnapshot?.description).toBe('loaded');
+    expect(afterRetry.runContext?.definitionSnapshot).toMatchObject({ description: 'loaded' });
     expect(stateAfterRetry.state?.value).toEqual({ ready: true });
   });
 
@@ -901,7 +987,7 @@ describe('workflow storage handlers', () => {
       executionId: 'different-execution-id',
       workflowId: workflow.id,
       source: { kind: 'definition', workflowId: workflow.id },
-      definitionSnapshot: { ...workflow, createdAt: now, updatedAt: now },
+      definitionSnapshot: workflow,
       inputs: {},
       triggerPayload: {},
       scope: { type: 'global' },
@@ -1189,7 +1275,7 @@ describe('workflow storage handlers', () => {
         executionId: execution.id,
         frameId: 'frame-plan',
         stepId: 'plan',
-        stepType: 'station',
+        stepType: 'code-step',
         status: 'completed',
         startedAt: 10,
         completedAt: 20,
@@ -1207,7 +1293,7 @@ describe('workflow storage handlers', () => {
         executionId: execution.id,
         frameId: 'frame-review',
         stepId: 'review',
-        stepType: 'station',
+        stepType: 'code-step',
         status: 'completed',
         startedAt: 30,
       },
@@ -1217,7 +1303,7 @@ describe('workflow storage handlers', () => {
         executionId: execution.id,
         frameId: 'frame-implement',
         stepId: 'implement',
-        stepType: 'station',
+        stepType: 'code-step',
         status: 'completed',
         startedAt: 20,
       },
@@ -1249,7 +1335,7 @@ describe('workflow storage handlers', () => {
         executionId: execution.id,
         frameId: 'frame-review-1',
         stepId: 'repeat-review',
-        stepType: 'station',
+        stepType: 'code-step',
         status: 'completed',
         startedAt: 40,
       },
@@ -1259,7 +1345,7 @@ describe('workflow storage handlers', () => {
         executionId: execution.id,
         frameId: 'frame-review-2',
         stepId: 'repeat-review',
-        stepType: 'station',
+        stepType: 'code-step',
         status: 'completed',
         startedAt: 50,
       },
@@ -1308,7 +1394,7 @@ describe('workflow storage handlers', () => {
       frame: {
         frameId: 'frame-without-output',
         nodeId: 'pending-node',
-        nodeType: 'station',
+        nodeType: 'code-step',
         path: ['frame-without-output'],
         status: 'running',
         attempt: 0,
@@ -1319,7 +1405,7 @@ describe('workflow storage handlers', () => {
       frame: {
         frameId: 'frame-null-output',
         nodeId: 'null-node',
-        nodeType: 'station',
+        nodeType: 'code-step',
         path: ['frame-null-output'],
         status: 'completed',
         attempt: 0,
@@ -1761,7 +1847,7 @@ describe('workflow storage handlers', () => {
       frame: {
         frameId: 'frame-b',
         nodeId: 'b',
-        nodeType: 'station',
+        nodeType: 'code-step',
         path: ['frame-b'],
         status: 'completed',
         startedAt: 2,
@@ -1773,7 +1859,7 @@ describe('workflow storage handlers', () => {
       frame: {
         frameId: 'frame-a',
         nodeId: 'a',
-        nodeType: 'station',
+        nodeType: 'code-step',
         path: ['frame-a'],
         status: 'completed',
         startedAt: 1,
@@ -1835,5 +1921,263 @@ describe('workflow storage handlers', () => {
       expect(handler).toHaveBeenCalledTimes(1);
       expect(handler).toHaveBeenCalledWith({ id: 'lc-wf-3' });
     });
+  });
+});
+
+describe.each(STORAGE_VALIDATION_MODES)('stored definition validation ($name)', ({ name, nodeEnv }) => {
+  let bus: IMakaioBus;
+  let context: TestDbContext;
+  let definitionEvents: string[];
+  let cleanups: Array<() => void>;
+
+  beforeEach(async () => {
+    vi.stubEnv('NODE_ENV', nodeEnv);
+    bus = createBusInstance();
+    bus.registerNamespace(WorkflowStorageNamespace);
+    bus.registerNamespace(WorkflowNamespace);
+    context = await createTestDbForBus(bus);
+    definitionEvents = [];
+    cleanups = [
+      bus.on(WorkflowSubjects.definition.created, () => {
+        definitionEvents.push('created');
+      }),
+      bus.on(WorkflowSubjects.definition.updated, () => {
+        definitionEvents.push('updated');
+      }),
+      bus.on(WorkflowSubjects.definition.deleted, () => {
+        definitionEvents.push('deleted');
+      }),
+    ];
+  });
+
+  afterEach(() => {
+    for (const cleanup of cleanups) cleanup();
+    context.cleanup();
+    vi.unstubAllEnvs();
+  });
+
+  it('rejects get with identifier and node path, lists incomplete scope beside it, and preserves readable definitions', async () => {
+    const readable = createWorkflowDefinition({ id: 'readable-among-rejected' });
+    await bus.request(bus.own('start'), WorkflowStorageSubjects.set, { workflow: readable });
+    await insertRawDefinitionRow(context, {
+      id: 'removed-node',
+      root: JSON.stringify({ type: 'sequence', id: 'root', nodes: [{ type: 'delegate-agent', id: 'n1' }] }), // legacy-input
+    });
+    await insertRawDefinitionRow(context, {
+      id: 'incomplete-external-scope',
+      root: JSON.stringify({ type: 'sequence', id: 'root', nodes: [] }),
+      scopeType: 'external',
+      scopeKind: '',
+      scopeId: 'project-1',
+    });
+    const before = await readRawDefinitionRows(context);
+
+    await expect(bus.request(bus.own('start'), WorkflowStorageSubjects.get, { id: 'removed-node' })).rejects.toSatisfy(
+      (error: unknown) =>
+        isDefinitionInvalidError(error) &&
+        error.message.includes('removed-node') &&
+        error.message.includes('root.nodes.0.type'),
+    );
+    await expect(bus.request(bus.own('start'), WorkflowStorageSubjects.get, { id: readable.id })).resolves.toEqual({
+      workflow: readable,
+    });
+    const result = await bus.request(bus.own('start'), WorkflowStorageSubjects.list, {});
+    expect(result.workflows).toEqual([readable]);
+    expect(result.rejected).toHaveLength(2);
+    expect(result.rejected).toContainEqual({
+      id: 'removed-node',
+      reason: expect.stringContaining('root.nodes.0.type'),
+    });
+    expect(result.rejected).toContainEqual({
+      id: 'incomplete-external-scope',
+      reason: expect.stringMatching(/scopeKind and scopeId are required/),
+    });
+    expect(await readRawDefinitionRows(context)).toEqual(before);
+  });
+
+  it('reports undecodable root text alongside a readable definition with a trigger, and rejects get', async () => {
+    const readable = createWorkflowDefinition({
+      id: 'readable-with-trigger',
+      triggers: [{ kind: CRON_AUTOMATION_TRIGGER_KIND, params: { schedule: '0 9 * * 1' } }],
+    });
+    await bus.request(bus.own('start'), WorkflowStorageSubjects.set, { workflow: readable });
+    await insertRawDefinitionRow(context, { id: 'undecodable-root', root: '{' });
+    const before = await readRawDefinitionRows(context);
+    await expect(bus.request(bus.own('start'), WorkflowStorageSubjects.list, {})).resolves.toEqual({
+      workflows: [readable],
+      rejected: [{ id: 'undecodable-root', reason: 'root: stored value is not valid JSON' }],
+    });
+    await expect(
+      bus.request(bus.own('start'), WorkflowStorageSubjects.get, { id: 'undecodable-root' }),
+    ).rejects.toSatisfy((error: unknown) => isDefinitionInvalidError(error));
+    expect(await readRawDefinitionRows(context)).toEqual(before);
+  });
+
+  it('reports an empty stored identifier in a schema-valid list response', async () => {
+    await insertRawDefinitionRow(context, {
+      id: '',
+      root: JSON.stringify({ type: 'sequence', id: 'root', nodes: [] }),
+    });
+    const result = await bus.request(bus.own('start'), WorkflowStorageSubjects.list, {});
+    expect(result.workflows).toEqual([]);
+    expect(result.rejected).toEqual([{ id: '', reason: expect.any(String) }]);
+    expect(WorkflowDefinitionListSchema.safeParse(result).success).toBe(true);
+  });
+
+  it('lists two invalid rows with schema paths without deleting, and returns no rejections for a readable scope', async () => {
+    const readable = createWorkflowDefinition({
+      id: 'readable-scoped',
+      scope: { type: 'external', kind: 'project', id: 'readable-project' },
+    });
+    await bus.request(bus.own('start'), WorkflowStorageSubjects.set, { workflow: readable });
+    await insertRawDefinitionRow(context, {
+      id: 'invalid-node-type',
+      root: JSON.stringify({ type: 'sequence', id: 'root', nodes: [{ type: 'delegate-agent', id: 'n1' }] }), // legacy-input
+    });
+    await insertRawDefinitionRow(context, {
+      id: 'missing-root-id',
+      root: JSON.stringify({ type: 'sequence', nodes: [] }),
+    });
+    const before = await readRawDefinitionRows(context);
+    const result = await bus.request(bus.own('start'), WorkflowStorageSubjects.list, {});
+    expect(result.workflows).toEqual([readable]);
+    expect(result.rejected).toHaveLength(2);
+    expect(result.rejected).toContainEqual({
+      id: 'invalid-node-type',
+      reason: expect.stringContaining('root.nodes.0.type'),
+    });
+    expect(result.rejected).toContainEqual({ id: 'missing-root-id', reason: expect.stringContaining('root.id') });
+    await expect(
+      bus.request(bus.own('start'), WorkflowStorageSubjects.list, { scope: readable.scope }),
+    ).resolves.toEqual({ workflows: [readable], rejected: [] });
+    expect(await readRawDefinitionRows(context)).toEqual(before);
+  });
+
+  it('deletes undecodable root text and emits definition.deleted', async () => {
+    await insertRawDefinitionRow(context, { id: 'undecodable-delete', root: '{' });
+    const deleted: Array<{ id: string }> = [];
+    const unsubscribe = bus.on(WorkflowSubjects.definition.deleted, (ctx) => {
+      deleted.push(ctx.payload);
+    });
+    try {
+      await expect(
+        bus.request(bus.own('start'), WorkflowStorageSubjects.delete, { id: 'undecodable-delete' }),
+      ).resolves.toEqual({ deleted: true });
+      expect(deleted).toEqual([{ id: 'undecodable-delete' }]);
+      expect(definitionEvents).toEqual(['deleted']);
+      expect(await readRawDefinitionRows(context)).toEqual([]);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  describe.each(INVALID_DEFINITION_CASES)('incoming $name', ({ makeWorkflow }) => {
+    it.each([
+      false,
+      true,
+    ])('rejects set with existing row %s without changing any column or emitting an event', async (existing) => {
+      const id = 'invalid-incoming-definition';
+      await bus.request(bus.own('start'), WorkflowStorageSubjects.set, {
+        workflow: createWorkflowDefinition({ id: existing ? id : 'unchanged-sentinel' }),
+      });
+      const before = await readRawDefinitionRows(context);
+      definitionEvents.length = 0;
+      const request = bus.request(bus.own('start'), WorkflowStorageSubjects.set, {
+        workflow: makeWorkflow(id),
+      } as never);
+      if (name === 'strict') {
+        await expect(request).rejects.toBeInstanceOf(ValidationError);
+      } else {
+        await expect(request).rejects.toSatisfy((error: unknown) => isDefinitionInvalidError(error));
+      }
+      expect(await readRawDefinitionRows(context)).toEqual(before);
+      expect(definitionEvents).toEqual([]);
+    });
+  });
+
+  it('rejects an update retaining invalid inputSchema without changing any column or emitting an event, then heals it explicitly', async () => {
+    const id = 'stored-invalid-input-schema';
+    await insertRawDefinitionRow(context, {
+      id,
+      root: JSON.stringify({ type: 'sequence', id: 'root', nodes: [] }),
+      inputSchema: '1',
+    });
+    const before = await readRawDefinitionRows(context);
+    const workflow = createWorkflowDefinition({ id, description: 'must roll back with the invalid retained schema' });
+    await expect(bus.request(bus.own('start'), WorkflowStorageSubjects.set, { workflow })).rejects.toSatisfy(
+      (error: unknown) => isDefinitionInvalidError(error),
+    );
+    expect(await readRawDefinitionRows(context)).toEqual(before);
+    expect(definitionEvents).toEqual([]);
+
+    const healingUpdate: WorkflowDefinition = { ...workflow, inputSchema: { type: 'object' } };
+    await expect(
+      bus.request(bus.own('start'), WorkflowStorageSubjects.set, { workflow: healingUpdate }),
+    ).resolves.toEqual({ id });
+    await expect(bus.request(bus.own('start'), WorkflowStorageSubjects.get, { id })).resolves.toEqual({
+      workflow: healingUpdate,
+    });
+    expect(definitionEvents).toEqual(['updated']);
+  });
+
+  it('rejects unresolved frame and span node types on every read entry point', async () => {
+    const workflow = createWorkflowDefinition({ id: 'unresolved-node-types' });
+    await bus.request(bus.own('start'), WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-unresolved-node-types', workflowId: workflow.id });
+    await bus.request(bus.own('start'), WorkflowStorageSubjects.setExecution, { execution });
+    await context.exec(sql`
+      INSERT INTO workflow_execution_frames (frame_id, execution_id, node_id, node_type, path)
+      VALUES ('unresolved-frame', ${execution.id}, 'unresolved-node', 'station', '["unresolved-frame"]') -- legacy-input
+    `);
+    await context.exec(sql`
+      INSERT INTO workflow_step_spans (execution_id, frame_id, step_id, step_type, status)
+      VALUES (${execution.id}, 'unresolved-frame', 'unresolved-step', 'station', 'completed') -- legacy-input
+    `);
+    await expect(
+      bus.request(bus.own('start'), WorkflowStorageSubjects.getFrame, { frameId: 'unresolved-frame' }),
+    ).rejects.toThrow();
+    await expect(
+      bus.request(bus.own('start'), WorkflowStorageSubjects.listFrames, { executionId: execution.id }),
+    ).rejects.toThrow();
+    await expect(
+      bus.request(bus.own('start'), WorkflowStorageSubjects.listSpans, { executionId: execution.id }),
+    ).rejects.toThrow();
+  });
+
+  it.each([
+    {
+      name: 'non-executable JSON',
+      text: JSON.stringify({ type: 'not-a-definition', obsolete: true }),
+      snapshot: { type: 'not-a-definition', obsolete: true },
+    },
+    { name: 'undecodable text', text: '{', snapshot: '{' },
+  ])('returns the complete stored run context with $name as its opaque snapshot', async ({ text, snapshot }) => {
+    const workflow = createWorkflowDefinition({ id: 'opaque-snapshot' });
+    await bus.request(bus.own('start'), WorkflowStorageSubjects.set, { workflow });
+    const execution = createWorkflowExecution({ id: 'execution-opaque-snapshot', workflowId: workflow.id });
+    const runContext = WorkflowRunContextSchema.parse({
+      executionId: execution.id,
+      workflowId: workflow.id,
+      source: { kind: 'definition', workflowId: workflow.id },
+      definitionSnapshot: workflow,
+      inputs: {},
+      triggerPayload: {},
+      scope: { type: 'global' },
+      coordinatorSessionId: 'session-opaque-snapshot',
+      cancelSubject: `workflow.${execution.id}.cancel`,
+      env: {},
+      createdAt: Date.now(),
+    });
+    await bus.request(bus.own('start'), WorkflowStorageSubjects.setExecutionStart, { execution, runContext });
+    const original = await bus.request(bus.own('start'), WorkflowStorageSubjects.getRunContext, {
+      executionId: execution.id,
+    });
+    expect(original.runContext).not.toBeNull();
+    await context.exec(
+      sql`UPDATE workflow_run_contexts SET definition_snapshot = ${text} WHERE execution_id = ${execution.id}`,
+    );
+    await expect(
+      bus.request(bus.own('start'), WorkflowStorageSubjects.getRunContext, { executionId: execution.id }),
+    ).resolves.toEqual({ runContext: { ...original.runContext, definitionSnapshot: snapshot } });
   });
 });

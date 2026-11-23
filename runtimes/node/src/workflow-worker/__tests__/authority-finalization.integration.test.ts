@@ -3,21 +3,28 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import { createBusInstance, MakaioBus, ValidationError } from '@makaio/bus-core';
 import { HmacAuth, WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import {
   createWorkflowFinalizerNamespace,
   createWorkflowDelegateResultFinalizerNamespace,
+  isDefinitionInvalidError,
+  requireExecutableRunContext,
   ExecutionAttemptSubjects,
   FrameworkContractNamespaces,
   FrameworkStorageNamespaces,
+  WorkflowRunContextSchema,
   WorkflowSubjects,
   AgentSubjects,
   AdapterSubjects,
   SubagentSubjects,
   createClientDefinition,
 } from '@makaio/contracts';
-import type { ProviderAllocationRef, WorkflowDelegateAgentNode } from '@makaio/contracts';
+import type {
+  ProviderAllocationRef,
+  WorkflowAgentStepNode,
+  WorkflowDelegateResultFinalizationGatewayRequest,
+} from '@makaio/contracts';
 import { readOnlyFilesystemToolset } from '@makaio/extension-filesystem';
 import { buildDeterministicAdapterId } from '@makaio/services-core/adapter-runtime';
 import { AdapterSubsystemSubjects } from '@makaio/services-core/adapter-subsystem';
@@ -31,12 +38,20 @@ import {
   WorkflowExecutor,
 } from '@makaio/subsystem-workflow-engine';
 import { runWorkflowOrchestrator } from '@makaio/subsystem-workflow-engine/workflow-orchestrator';
-import { WorkflowStorageSubjects } from '../../../../../subsystems/workflow-engine/src/storage/namespace.js';
+import { WorkflowNamespace } from '../../../../../subsystems/workflow-engine/src/namespace.js';
+import { registerDelegateResultFinalizationGateway } from '../../../../../subsystems/workflow-engine/src/delegate-result-finalization-gateway.js';
+import {
+  WorkflowStorageNamespace,
+  WorkflowStorageSubjects,
+} from '../../../../../subsystems/workflow-engine/src/storage/namespace.js';
 import {
   setupWorkflowExecutorWithSubagentServiceTest,
   teardownWorkflowExecutorWithSubagentServiceTest,
 } from '../../../../../subsystems/workflow-engine/src/__tests__/workflow-executor.test-setup.js';
-import { createWorkflowDefinition } from '../../../../../subsystems/workflow-engine/src/__tests__/shared.js';
+import {
+  createWorkflowDefinition,
+  createWorkflowExecution,
+} from '../../../../../subsystems/workflow-engine/src/__tests__/shared.js';
 import { BusServerTransportProvider } from '../../bus-server-transport.js';
 import { closeHttpServer, listenOnLoopback } from '../../__tests__/http-test-helpers.js';
 import { createIsolatedWorkflowRuntime } from '../isolated-workflow-runtime.js';
@@ -172,8 +187,10 @@ describe('authority Worker finalization integration', () => {
     });
     const runner = new WorkerRunner({
       authority,
-      readRunContext: async (call, executionId, signal) =>
-        (await MakaioBus.request(call, WorkflowStorageSubjects.getRunContext, { executionId }, { signal })).runContext,
+      readRunContext: async (call, executionId, signal) => {
+        const saved = await MakaioBus.request(call, WorkflowStorageSubjects.getRunContext, { executionId }, { signal });
+        return saved.runContext === null ? null : requireExecutableRunContext(saved.runContext);
+      },
       manifest: { contributionRefs: [] },
       dispatch: async (call, request, signal) => {
         attemptExecutionIds.set(request.executionAttemptId, request.config.executionId);
@@ -306,9 +323,11 @@ describe('authority Worker finalization integration', () => {
               runtimeIncarnationId,
             }),
           );
-          const { definitionSnapshot } = await runtime.bus.request(call, WorkflowSubjects.getRunContext, {
-            executionId: request.config.executionId,
-          });
+          const { definitionSnapshot } = requireExecutableRunContext(
+            await runtime.bus.request(call, WorkflowSubjects.getRunContext, {
+              executionId: request.config.executionId,
+            }),
+          );
           if (definitionSnapshot === undefined)
             throw new Error('Authority did not provide a trusted workflow snapshot');
           const result = await runWorkflowOrchestrator({
@@ -385,7 +404,7 @@ describe('authority Worker finalization integration', () => {
         ctx.setResult({ output: { rawResult: ctx.payload.rawResult, provenance: 'authority' } });
       }),
     );
-    const offAgent = MakaioBus.on(WorkflowSubjects.resolveAgent, (ctx) =>
+    const offRole = MakaioBus.on(WorkflowSubjects.resolveRole, (ctx) =>
       ctx.setResult({
         adapterName: 'workflow-test-adapter',
         providerConfigId: 'deterministic-provider-config',
@@ -408,12 +427,12 @@ describe('authority Worker finalization integration', () => {
         allowedDirectories: [cwd],
       }),
     );
-    cleanups.push(offAgent);
-    const agentStation: WorkflowDelegateAgentNode = {
+    cleanups.push(offRole);
+    const agentStep: WorkflowAgentStepNode = {
       id: 'read',
-      type: 'delegate-agent',
-      agentId: 'repository-reader',
-      inputExpression: '"Read input.txt"',
+      type: 'agent-step',
+      role: 'repository-reader',
+      prompt: 'Read input.txt',
       completion: 'turn',
       allowedTools: ['read_file'],
       resultFinalizerId: 'test.artifact-read-wrap',
@@ -425,7 +444,7 @@ describe('authority Worker finalization integration', () => {
         root: {
           id: 'root',
           type: 'sequence',
-          nodes: [agentStation],
+          nodes: [agentStep],
         },
       }),
       successFinalizerId: finalizerId,
@@ -465,7 +484,6 @@ describe('authority Worker finalization integration', () => {
       workflowId: workflow.id,
       frameId: expect.any(String),
       nodeId: 'read',
-      nodeType: 'delegate-agent',
       rawResult: expect.any(String),
       toolObservations: [],
       economics: {
@@ -502,4 +520,141 @@ describe('authority Worker finalization integration', () => {
     expect(adapterCapture.extensionDestroyed).toBe(true);
     expect(adapterCapture.connectorClosed).toBe(true);
   }, 20_000);
+});
+
+/**
+ * Create a bus with the workflow namespaces registered so the gateway's
+ * subject routing and request/response validation match real host boot
+ * behavior, isolated from the heavy, module-level `MakaioBus` used above.
+ * @returns Registered test bus.
+ */
+function createGatewayTestBus(): ReturnType<typeof createBusInstance> {
+  const bus = createBusInstance();
+  bus.registerNamespace(WorkflowNamespace);
+  bus.registerNamespace(WorkflowStorageNamespace);
+  return bus;
+}
+
+describe('authority delegate result finalization gateway', () => {
+  it('rejects finalization for a node that is not an agent step', async () => {
+    const bus = createGatewayTestBus();
+    const executionId = 'wfx-gateway-non-agent-step';
+    const workflow = createWorkflowDefinition({
+      id: 'wf-gateway-non-agent-step',
+      root: { id: 'root', type: 'sequence', nodes: [{ id: 'code-only', type: 'code-step' }] },
+    });
+    const runContext = WorkflowRunContextSchema.parse({
+      executionId,
+      workflowId: workflow.id,
+      source: { kind: 'definition', workflowId: workflow.id },
+      definitionSnapshot: workflow,
+      workerManifest: { contributionRefs: [] },
+      inputs: {},
+      scope: { type: 'global' },
+      triggerPayload: {},
+      coordinatorSessionId: 'session-gateway-non-agent-step',
+      cancelSubject: `workflow.${executionId}.cancel`,
+      env: {},
+      createdAt: 1,
+    });
+    bus.on(WorkflowStorageSubjects.getExecution, (ctx) =>
+      ctx.setResult({ execution: createWorkflowExecution({ id: executionId, workflowId: workflow.id }) }),
+    );
+    bus.on(WorkflowStorageSubjects.getRunContext, (ctx) => ctx.setResult({ runContext }));
+    const cleanup = registerDelegateResultFinalizationGateway(bus);
+    try {
+      await expect(
+        bus.request(WorkflowSubjects.finalizeDelegateResult, {
+          finalizerId: 'test.gateway-non-agent-step',
+          executionId,
+          workflowId: workflow.id,
+          frameId: 'frame-1',
+          nodeId: 'code-only',
+          rawResult: 'raw',
+          toolObservations: [],
+        }),
+      ).rejects.toThrow('delegate result finalizer is not selected by the requested durable delegate node');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('rejects a finalization request carrying the removed nodeType field', async () => {
+    const bus = createGatewayTestBus();
+    const cleanup = registerDelegateResultFinalizationGateway(bus);
+    type LegacyFinalizationRequest = WorkflowDelegateResultFinalizationGatewayRequest & {
+      readonly nodeType: 'agent-step';
+    };
+    const legacyRequest: LegacyFinalizationRequest = {
+      finalizerId: 'test.gateway-legacy-node-type',
+      executionId: 'wfx-gateway-legacy-node-type',
+      workflowId: 'wf-gateway-legacy-node-type',
+      frameId: 'frame-1',
+      nodeId: 'read',
+      rawResult: 'raw',
+      toolObservations: [],
+      nodeType: 'agent-step', // legacy-input
+    };
+    try {
+      await expect(bus.request(WorkflowSubjects.finalizeDelegateResult, legacyRequest)).rejects.toBeInstanceOf(
+        ValidationError,
+      );
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('rejects a stored snapshot carrying a legacy station node with a role instead of silently reclassifying it', async () => {
+    const bus = createGatewayTestBus();
+    const executionId = 'wfx-gateway-legacy-snapshot';
+    const workflowId = 'wf-gateway-legacy-snapshot';
+    bus.on(WorkflowStorageSubjects.getExecution, (ctx) =>
+      ctx.setResult({ execution: createWorkflowExecution({ id: executionId, workflowId }) }),
+    );
+    bus.on(WorkflowStorageSubjects.getRunContext, (ctx) =>
+      ctx.setResult({
+        runContext: {
+          executionId,
+          workflowId,
+          source: { kind: 'definition', workflowId },
+          definitionSnapshot: {
+            id: workflowId,
+            name: 'Legacy station snapshot',
+            root: {
+              id: 'root',
+              type: 'sequence',
+              nodes: [{ id: 'legacy-station', type: 'station', role: 'repository-reader' }], // legacy-input
+            },
+            scope: { type: 'global' },
+          },
+          workerManifest: { contributionRefs: [] },
+          inputs: {},
+          scope: { type: 'global' },
+          triggerPayload: {},
+          coordinatorSessionId: 'session-gateway-legacy-snapshot',
+          cancelSubject: `workflow.${executionId}.cancel`,
+          env: {},
+          createdAt: 1,
+          suspensionStrategy: 'wait-in-process' as const,
+        },
+      }),
+    );
+    const cleanup = registerDelegateResultFinalizationGateway(bus);
+    try {
+      const error = await bus
+        .request(WorkflowSubjects.finalizeDelegateResult, {
+          finalizerId: 'test.gateway-legacy-snapshot',
+          executionId,
+          workflowId,
+          frameId: 'frame-1',
+          nodeId: 'legacy-station',
+          rawResult: 'raw',
+          toolObservations: [],
+        })
+        .catch((caught: unknown) => caught);
+      expect(isDefinitionInvalidError(error)).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
 });

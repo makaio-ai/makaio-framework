@@ -370,6 +370,30 @@ describe('portable WorkflowWorkerConfig', () => {
     expect(config.workflowId).toBe('wf-1');
   });
 
+  it('rejects a path-sourced definition with a legacy role node and reports its path', () => {
+    const result = WorkflowWorkerConfigSchema.safeParse(
+      minimalWorkerConfig({
+        source: { kind: 'path', path: 'src/workflow.ts' },
+        definition: {
+          id: 'wf-1',
+          root: {
+            id: 'root',
+            type: 'sequence',
+            nodes: [{ id: 'review', type: 'station', role: 'reviewer', prompt: 'Review' }], // legacy-input
+          },
+        },
+      }),
+    );
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({ path: ['definition', 'root', 'nodes', 0, 'type'] }),
+      );
+      expect(result.error.message).toMatch(/"definition",\s*"root",\s*"nodes",\s*0,\s*"type"/);
+    }
+  });
+
   it('does not accept a durable context with Authority-local fields', () => {
     // Providing the old context object should be rejected because the
     // field no longer exists in the schema.

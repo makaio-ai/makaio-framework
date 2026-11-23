@@ -1,5 +1,12 @@
 import type { CallContext } from '@makaio/core';
-import { WorkflowError, WorkflowErrorCode, type WorkflowDefinition, type WorkflowRunContext } from '@makaio/contracts';
+import {
+  WorkflowError,
+  WorkflowErrorCode,
+  requireExecutableRunContext,
+  type StoredWorkflowRunContext,
+  type WorkflowDefinition,
+  type WorkflowRunContext,
+} from '@makaio/contracts';
 import { WorkflowStorageSubjects } from './storage/namespace.js';
 import type { DefinitionStartOptions, StartExecutionDeps } from './workflow-execution-start.js';
 import { startExecution, startFileExecution, startResolvedDefinitionExecution } from './workflow-execution-start.js';
@@ -18,17 +25,22 @@ export interface RerunExecutionOptions extends DefinitionStartOptions {
 
 /**
  * Load the original run context for the execution being rerun.
+ *
+ * Returns the stored context as read back from storage: the
+ * `definitionSnapshot` stays opaque JSON, unread, so a snapshot that is no
+ * longer a valid definition keeps the context itself readable. Callers that
+ * need an executable snapshot call {@link requireExecutableRunContext}.
  * @param call - Call context of the message that triggered the rerun.
  * @param deps - Executor dependencies providing the bus.
  * @param executionId - Execution to look up.
- * @returns The persisted run context.
+ * @returns The persisted, stored run context.
  * @throws When the run context is not found.
  */
 async function loadOriginalRunContext(
   call: CallContext,
   deps: StartExecutionDeps,
   executionId: string,
-): Promise<WorkflowRunContext> {
+): Promise<StoredWorkflowRunContext> {
   const { runContext } = await deps.bus.request(call, WorkflowStorageSubjects.getRunContext, {
     executionId,
   });
@@ -117,11 +129,14 @@ export async function rerunExecution(
  * and stored a snapshot, rerunning that snapshot should dispatch under the
  * loaded definition's ID. Definition-backed executions already have a stable
  * workflow ID and keep it unchanged.
- * @param originalRunContext - Durable context for the execution being rerun.
+ * @param originalRunContext - Stored context for the execution being rerun.
  * @param workflow - Snapshot definition selected for replay.
  * @returns Logical workflow ID for the new rerun execution.
  */
-function resolveSnapshotRerunWorkflowId(originalRunContext: WorkflowRunContext, workflow: WorkflowDefinition): string {
+function resolveSnapshotRerunWorkflowId(
+  originalRunContext: StoredWorkflowRunContext,
+  workflow: WorkflowDefinition,
+): string {
   if (isEphemeralSourceBacked(originalRunContext)) {
     return workflow.id;
   }
@@ -130,16 +145,16 @@ function resolveSnapshotRerunWorkflowId(originalRunContext: WorkflowRunContext, 
 
 /**
  * Check whether a run context came from an ephemeral source-backed start.
- * @param runContext - Durable context for the execution being rerun.
+ * @param runContext - Stored context for the execution being rerun.
  * @returns True when the logical workflow ID was the original execution ID.
  */
-function isEphemeralSourceBacked(runContext: WorkflowRunContext): boolean {
+function isEphemeralSourceBacked(runContext: StoredWorkflowRunContext): boolean {
   return runContext.source.kind !== 'definition' && runContext.workflowId === runContext.executionId;
 }
 
 /**
  * Return the persisted definition snapshot or fail with the public rerun error.
- * @param runContext - Durable context for the execution being rerun.
+ * @param runContext - Executable context for the execution being rerun.
  * @returns Persisted workflow definition snapshot.
  * @throws When the original execution has no definition snapshot.
  */
@@ -158,18 +173,20 @@ function requireDefinitionSnapshot(runContext: WorkflowRunContext): WorkflowDefi
  * Execute a snapshot-mode rerun using the original definition snapshot.
  * @param call - Call context of the message that triggered the rerun.
  * @param deps - Shared executor state and callbacks.
- * @param originalRunContext - The original execution's run context.
+ * @param originalRunContext - The original execution's stored run context.
  * @param overrides - Caller-supplied option overrides.
  * @returns The new execution ID.
- * @throws When the original execution has no definition snapshot.
+ * @throws When the stored context does not hold an executable definition
+ * snapshot, or when the original execution has no definition snapshot.
  */
 async function rerunSnapshot(
   call: CallContext,
   deps: StartExecutionDeps,
-  originalRunContext: WorkflowRunContext,
+  originalRunContext: StoredWorkflowRunContext,
   overrides: DefinitionStartOptions,
 ): Promise<string> {
-  const workflow = requireDefinitionSnapshot(originalRunContext);
+  const executableRunContext = requireExecutableRunContext(originalRunContext);
+  const workflow = requireDefinitionSnapshot(executableRunContext);
 
   return startResolvedDefinitionExecution(call, deps, resolveSnapshotRerunWorkflowId(originalRunContext, workflow), {
     workflow,
@@ -198,15 +215,16 @@ async function rerunSnapshot(
  * the current source module and owns the executable topology.
  * @param call - Call context of the message that triggered the rerun.
  * @param deps - Shared executor state and callbacks.
- * @param originalRunContext - The original execution's run context.
+ * @param originalRunContext - The original execution's stored run context.
  * @param overrides - Caller-supplied option overrides.
  * @returns The new execution ID.
- * @throws When the original source cannot be reloaded and has no definition snapshot.
+ * @throws When the original source cannot be reloaded and the stored context
+ * does not hold an executable definition snapshot.
  */
 async function rerunCurrentSourceBacked(
   call: CallContext,
   deps: StartExecutionDeps,
-  originalRunContext: WorkflowRunContext,
+  originalRunContext: StoredWorkflowRunContext,
   overrides: DefinitionStartOptions,
 ): Promise<string> {
   if (originalRunContext.definitionSnapshot === undefined && originalRunContext.source.kind === 'path') {
@@ -219,7 +237,8 @@ async function rerunCurrentSourceBacked(
       materializationSpec,
     });
   }
-  const workflow = requireDefinitionSnapshot(originalRunContext);
+  const executableRunContext = requireExecutableRunContext(originalRunContext);
+  const workflow = requireDefinitionSnapshot(executableRunContext);
 
   // Current source reruns preserve an Authority-owned snapshot on the durable
   // context while the path-source launch deliberately omits `definition` from

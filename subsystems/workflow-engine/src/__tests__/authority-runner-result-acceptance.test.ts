@@ -6,6 +6,7 @@ import {
   WorkerSubjects,
   createWorkflowFinalizerNamespace,
   WorkflowWorkerConfigSchema,
+  requireExecutableRunContext,
   type WorkflowRunResult,
 } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
@@ -258,7 +259,7 @@ describe('authority runner result acceptance', () => {
       buildWorkflowAttemptInstruction({
         id: `instruction-${executionId}`,
         revision: '1',
-        runContext,
+        runContext: requireExecutableRunContext(runContext),
         config: WorkflowWorkerConfigSchema.parse({ ...runContext, definition: workflow }),
         preservation: { required: [] },
       }),
@@ -329,7 +330,7 @@ describe('outcome submission handler', () => {
       id: `instruction-${executionId}`,
       revision: '1',
       config: WorkflowWorkerConfigSchema.parse({ ...runContext, definition: runContext.definitionSnapshot }),
-      runContext,
+      runContext: requireExecutableRunContext(runContext),
       preservation: { required: [] },
     });
   }

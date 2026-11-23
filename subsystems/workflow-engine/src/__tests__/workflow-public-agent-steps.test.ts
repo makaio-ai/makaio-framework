@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { type WorkflowDelegateRoleNode, type WorkflowStationNode } from '@makaio/contracts';
+import { type WorkflowAgentStepNode } from '@makaio/contracts';
 import { WorkflowSubjects } from '../namespace.js';
 import { WorkflowStorageSubjects } from '../storage/namespace.js';
 import {
@@ -10,7 +10,7 @@ import {
 } from './workflow-executor.test-setup.js';
 import { createWorkflowDefinition } from './shared.js';
 
-describe('workflow public station subjects', () => {
+describe('workflow public agent step subjects', () => {
   let setup: WorkflowExecutorTestSetup | undefined;
 
   beforeEach(async () => {
@@ -24,7 +24,7 @@ describe('workflow public station subjects', () => {
     }
   });
 
-  it('runs stored role-backed stations through the subagent seam', async () => {
+  it('runs stored agent steps through the subagent seam', async () => {
     if (!setup) {
       throw new Error('Workflow executor test setup did not initialize.');
     }
@@ -40,20 +40,20 @@ describe('workflow public station subjects', () => {
       }),
     );
 
-    const roleStation: WorkflowStationNode = {
+    const agentStep: WorkflowAgentStepNode = {
       id: 'review',
-      type: 'station',
+      type: 'agent-step',
       prompt: 'Review {{ input.title }} for {{ config.repository }}',
       role: 'reviewer',
     };
 
     const workflow = createWorkflowDefinition({
-      id: 'public-start-role-station',
-      name: 'Public Start Role Station',
+      id: 'public-start-agent-step',
+      name: 'Public Start Agent Step',
       root: {
-        id: 'public-start-role-station-root',
+        id: 'public-start-agent-step-root',
         type: 'sequence',
-        nodes: [roleStation],
+        nodes: [agentStep],
       },
     });
     await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
@@ -76,14 +76,14 @@ describe('workflow public station subjects', () => {
     expect(frames).toEqual([
       expect.objectContaining({
         nodeId: 'review',
-        nodeType: 'station',
+        nodeType: 'agent-step',
         status: 'completed',
         output: 'completed:Review the plan for workflow-api',
       }),
     ]);
   });
 
-  it('emits frame.sessionLinked when a role-backed station spawns a child session', async () => {
+  it('emits frame.sessionLinked when an agent step spawns a child session', async () => {
     if (!setup) {
       throw new Error('Workflow executor test setup did not initialize.');
     }
@@ -98,9 +98,9 @@ describe('workflow public station subjects', () => {
       }),
     );
 
-    const analyzeStation: WorkflowStationNode = {
+    const analyzeAgentStep: WorkflowAgentStepNode = {
       id: 'analyze',
-      type: 'station',
+      type: 'agent-step',
       prompt: 'Analyze the plan',
       role: 'reviewer',
     };
@@ -111,7 +111,7 @@ describe('workflow public station subjects', () => {
       root: {
         id: 'public-session-linked-root',
         type: 'sequence',
-        nodes: [analyzeStation],
+        nodes: [analyzeAgentStep],
       },
     });
     await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
@@ -148,7 +148,7 @@ describe('workflow public station subjects', () => {
     }
   });
 
-  it('runs stored delegate-role nodes through the public start subject', async () => {
+  it('runs stored agent-step nodes through the public start subject', async () => {
     if (!setup) {
       throw new Error('Workflow executor test setup did not initialize.');
     }
@@ -164,20 +164,20 @@ describe('workflow public station subjects', () => {
       }),
     );
 
-    const delegateRole: WorkflowDelegateRoleNode = {
+    const agentStepNode: WorkflowAgentStepNode = {
       id: 'review-delegate',
-      type: 'delegate-role',
+      type: 'agent-step',
       role: 'reviewer',
       prompt: 'Review {{ ctx.inputs.title }}',
     };
 
     const workflow = createWorkflowDefinition({
-      id: 'public-start-delegate-role',
-      name: 'Public Start Delegate Role',
+      id: 'public-start-agent-step-node',
+      name: 'Public Start Agent Step Node',
       root: {
-        id: 'public-start-delegate-role-root',
+        id: 'public-start-agent-step-node-root',
         type: 'sequence',
-        nodes: [delegateRole],
+        nodes: [agentStepNode],
       },
     });
     await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });
@@ -199,14 +199,14 @@ describe('workflow public station subjects', () => {
     expect(frames).toEqual([
       expect.objectContaining({
         nodeId: 'review-delegate',
-        nodeType: 'delegate-role',
+        nodeType: 'agent-step',
         status: 'completed',
         output: 'completed:Review delegate execution',
       }),
     ]);
   });
 
-  it('emits frame.sessionLinked when a delegate-role node creates a child session', async () => {
+  it('emits frame.sessionLinked when an agent-step node creates a child session', async () => {
     if (!setup) {
       throw new Error('Workflow executor test setup did not initialize.');
     }
@@ -220,21 +220,21 @@ describe('workflow public station subjects', () => {
       }),
     );
 
-    const delegateRole: WorkflowDelegateRoleNode = {
+    const linkedAgentStep: WorkflowAgentStepNode = {
       id: 'linked-review-delegate',
-      type: 'delegate-role',
+      type: 'agent-step',
       role: 'reviewer',
       prompt: 'Review linked session',
       completion: 'turn',
     };
 
     const workflow = createWorkflowDefinition({
-      id: 'public-delegate-session-linked',
-      name: 'Public Delegate Session Linked',
+      id: 'public-agent-step-session-linked',
+      name: 'Public Agent Step Session Linked',
       root: {
-        id: 'public-delegate-session-linked-root',
+        id: 'public-agent-step-session-linked-root',
         type: 'sequence',
-        nodes: [delegateRole],
+        nodes: [linkedAgentStep],
       },
     });
     await MakaioBus.request(WorkflowSubjects.setDefinition, { workflow });

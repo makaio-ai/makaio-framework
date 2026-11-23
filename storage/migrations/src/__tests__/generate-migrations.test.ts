@@ -260,4 +260,72 @@ describe('generateMigrations', () => {
       }),
     ).rejects.toThrow(/Cross-chain naming mismatch/);
   });
+
+  it('forwards --custom to every generate leg when custom is set', async () => {
+    const { commands, internals } = makeInternals({ engineRoot: '/fake/engine' });
+
+    await generateMigrations({
+      name: 'data_rewrite',
+      custom: true,
+      drizzleKitBin: '/fake/bin.cjs',
+      logger: { info: vi.fn(), warn: vi.fn() },
+      __internals: internals,
+    });
+
+    const generateCommands = commands.filter((c) => c.args.includes('generate'));
+    expect(generateCommands).toHaveLength(2);
+    for (const command of generateCommands) {
+      expect(command.args).toContain('--custom');
+    }
+  });
+
+  it('rejects custom combined with fresh before running any leg', async () => {
+    const { commands, internals } = makeInternals({ engineRoot: '/fake/engine' });
+
+    await expect(
+      generateMigrations({
+        name: 'data_rewrite',
+        custom: true,
+        fresh: true,
+        drizzleKitBin: '/fake/bin.cjs',
+        logger: { info: vi.fn(), warn: vi.fn() },
+        __internals: internals,
+      }),
+    ).rejects.toThrow(/custom cannot be combined with fresh/);
+    expect(commands).toHaveLength(0);
+  });
+
+  it('does not forward --custom unless custom is set', async () => {
+    const { commands, internals } = makeInternals({ engineRoot: '/fake/engine' });
+
+    await generateMigrations({
+      name: 'schema_change',
+      drizzleKitBin: '/fake/bin.cjs',
+      logger: { info: vi.fn(), warn: vi.fn() },
+      __internals: internals,
+    });
+
+    for (const command of commands.filter((c) => c.args.includes('generate'))) {
+      expect(command.args).not.toContain('--custom');
+    }
+  });
+
+  it('fails loudly when a leg does not advance its journal under --custom', async () => {
+    // Installed drizzle-kit catches generation errors internally and still exits 0, so a leg that
+    // silently appended nothing under --custom would otherwise look identical to a successful run.
+    const { internals } = makeInternals({
+      engineRoot: '/fake/engine',
+      behaviorByChain: { drizzle: 'no-diff', 'drizzle-postgres': 'append-name' },
+    });
+
+    await expect(
+      generateMigrations({
+        name: 'data_rewrite',
+        custom: true,
+        drizzleKitBin: '/fake/bin.cjs',
+        logger: { info: vi.fn(), warn: vi.fn() },
+        __internals: internals,
+      }),
+    ).rejects.toThrow(/--custom did not append a migration to the sqlite chain/);
+  });
 });

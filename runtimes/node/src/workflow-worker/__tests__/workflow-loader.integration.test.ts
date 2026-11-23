@@ -112,7 +112,7 @@ const definition = {
   id: 'wf-path-001',
   name: 'Path Workflow',
   root: { id: 'wf-path-001__root', type: 'sequence', nodes: [
-    { id: 'step1', type: 'station', prompt: 'Do step 1' },
+    { id: 'step1', type: 'code-step' },
   ] },
   triggers: [],
   scope: { type: 'global' },
@@ -144,7 +144,7 @@ const definition = {
   id: 'wf-source-002',
   name: 'Source With Handlers',
   root: { id: 'wf-source-002__root', type: 'sequence', nodes: [
-    { id: 'analyze', type: 'station', prompt: 'Analyze' },
+    { id: 'analyze', type: 'code-step' },
   ] },
   triggers: [],
   scope: { type: 'global' },

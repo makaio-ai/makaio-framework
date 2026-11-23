@@ -51,12 +51,15 @@ function isTerminalFrameStatus(status: string): boolean {
  * Safe defaults are used when the `frame.started` row is absent (missed event).
  * @param existing - Row from the worklog frame entries table, or `null`.
  * @param fallbackNodeId - `nodeId` from the terminal event payload.
+ * @param fallbackNodeType - `nodeType` from the terminal event payload: used
+ *   only when the `frame.started` row is absent, since there is no other source.
  * @param fallbackStartedAt - Derived `startedAt` from event duration, or null.
  * @returns Resolved metadata fields ready to merge into the upsert payload.
  */
 function resolveFrameStartedMetadata(
   existing: SelectWorklogFrameEntry | null,
   fallbackNodeId: string,
+  fallbackNodeType: SelectWorklogFrameEntry['nodeType'],
   fallbackStartedAt: number | null,
 ): FrameStartedMetadata {
   if (existing !== null) {
@@ -75,7 +78,7 @@ function resolveFrameStartedMetadata(
   }
   return {
     nodeId: fallbackNodeId,
-    nodeType: 'station',
+    nodeType: fallbackNodeType,
     path: [],
     attempt: 0,
     iteration: null,
@@ -104,6 +107,7 @@ function resolveFrameStartedMetadata(
  * @param executionId - Execution identifier.
  * @param frameId - Frame identifier.
  * @param nodeId - Node identifier from the event payload (fallback only).
+ * @param nodeType - Node type from the event payload (fallback only).
  * @param duration - Wall-clock frame duration in milliseconds.
  * @param completedAt - Runtime-recorded terminal timestamp in Unix milliseconds.
  */
@@ -114,6 +118,7 @@ async function projectFrameCompleted(
   executionId: string,
   frameId: string,
   nodeId: string,
+  nodeType: SelectWorklogFrameEntry['nodeType'],
   duration: number | undefined,
   completedAt: number | undefined,
 ): Promise<void> {
@@ -121,7 +126,7 @@ async function projectFrameCompleted(
   const existing = await getWorklogFrameEntryRow(db, frameId);
   if (existing !== null && isTerminalFrameStatus(existing.status)) return;
   const fallbackStartedAt = duration !== undefined ? resolvedCompletedAt - duration : null;
-  const meta = resolveFrameStartedMetadata(existing, nodeId, fallbackStartedAt);
+  const meta = resolveFrameStartedMetadata(existing, nodeId, nodeType, fallbackStartedAt);
   await upsertAdvisoryWorklogFrameEntry(db, {
     frameId,
     executionId,
@@ -148,6 +153,7 @@ async function projectFrameCompleted(
  * @param executionId - Execution identifier.
  * @param frameId - Frame identifier.
  * @param nodeId - Node identifier from the event payload (fallback only).
+ * @param nodeType - Node type from the event payload (fallback only).
  * @param error - Human-readable failure reason.
  * @param duration - Wall-clock frame duration in milliseconds.
  * @param completedAt - Runtime-recorded terminal timestamp in Unix milliseconds.
@@ -159,6 +165,7 @@ async function projectFrameFailed(
   executionId: string,
   frameId: string,
   nodeId: string,
+  nodeType: SelectWorklogFrameEntry['nodeType'],
   error: string,
   duration: number | undefined,
   completedAt: number | undefined,
@@ -167,7 +174,7 @@ async function projectFrameFailed(
   const existing = await getWorklogFrameEntryRow(db, frameId);
   if (existing !== null && isTerminalFrameStatus(existing.status)) return;
   const fallbackStartedAt = duration !== undefined ? resolvedCompletedAt - duration : null;
-  const meta = resolveFrameStartedMetadata(existing, nodeId, fallbackStartedAt);
+  const meta = resolveFrameStartedMetadata(existing, nodeId, nodeType, fallbackStartedAt);
   await upsertAdvisoryWorklogFrameEntry(db, {
     frameId,
     executionId,
@@ -219,15 +226,15 @@ export function registerFrameProjections(bus: IMakaioBus, db: MakaioDatabase): A
       });
     }),
     bus.on(WorkflowSubjects.frame.completed, async (ctx) => {
-      const { executionId, frameId, nodeId, duration, completedAt } = ctx.payload;
+      const { executionId, frameId, nodeId, nodeType, duration, completedAt } = ctx.payload;
       await safeProject(`frame.completed[${frameId}]`, () =>
-        projectFrameCompleted(ctx.call, bus, db, executionId, frameId, nodeId, duration, completedAt),
+        projectFrameCompleted(ctx.call, bus, db, executionId, frameId, nodeId, nodeType, duration, completedAt),
       );
     }),
     bus.on(WorkflowSubjects.frame.failed, async (ctx) => {
-      const { executionId, frameId, nodeId, error, duration, completedAt } = ctx.payload;
+      const { executionId, frameId, nodeId, nodeType, error, duration, completedAt } = ctx.payload;
       await safeProject(`frame.failed[${frameId}]`, () =>
-        projectFrameFailed(ctx.call, bus, db, executionId, frameId, nodeId, error, duration, completedAt),
+        projectFrameFailed(ctx.call, bus, db, executionId, frameId, nodeId, nodeType, error, duration, completedAt),
       );
     }),
   ];

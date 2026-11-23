@@ -2,8 +2,8 @@ import type { CallContext } from '@makaio/core';
 import { evaluateSync } from '@makaio/expression';
 import type {
   JsonValue,
-  WorkflowDelegateAgentNode,
-  WorkflowDelegateRoleNode,
+  WorkflowAgentStepNode,
+  WorkflowCodeStepNode,
   WorkflowFrameState,
   WorkflowGateNode,
   WorkflowIterateChainNode,
@@ -12,15 +12,14 @@ import type {
   WorkflowNode,
   WorkflowParallelNode,
   WorkflowSequenceNode,
-  WorkflowStationNode,
 } from '@makaio/contracts';
 import {
   buildRuntimeExpressionScope,
   type PrimitiveExpressionContext,
   type RuntimeContext,
 } from './runtime-context.js';
-import { executeStationNode } from './station-node.js';
-import { executeDelegateAgentNode, executeDelegateRoleNode } from './delegate-node.js';
+import { executeCodeStepNode } from './code-step-node.js';
+import { executeAgentStepNode } from './delegate-node.js';
 import { executeParallelNode } from './parallel-node.js';
 import { executeGateNode } from './gate-node.js';
 import { executeIterateNode } from './iterate-node.js';
@@ -198,8 +197,8 @@ export type ExecuteSequenceFn = (
  * Dispatch a workflow node to its type-specific executor.
  *
  * This is the central dispatch table for the primitive runtime. All node
- * types are implemented: `sequence`, `station`, `delegate-agent`,
- * `delegate-role`, `parallel`, `gate`, `iterate`, `iterate-chain`, and `loop`.
+ * types are implemented: `sequence`, `code-step`, `agent-step`, `parallel`,
+ * `gate`, `iterate`, `iterate-chain`, and `loop`.
  *
  * The `executeSequenceFn` parameter is injected by `primitive-runtime.ts` to
  * avoid a circular module-level import between this file and
@@ -236,14 +235,11 @@ export async function executeNode(
     case 'sequence':
       return executeSequenceFn(call, node as WorkflowSequenceNode, ctx, expressionCtx, currentFrameId, parentPath);
 
-    case 'station':
-      return executeStationNode(call, node as WorkflowStationNode, ctx, expressionCtx, currentFrameId);
+    case 'code-step':
+      return executeCodeStepNode(call, node as WorkflowCodeStepNode, ctx, expressionCtx, currentFrameId);
 
-    case 'delegate-agent':
-      return executeDelegateAgentNode(call, node as WorkflowDelegateAgentNode, ctx, expressionCtx, currentFrameId);
-
-    case 'delegate-role':
-      return executeDelegateRoleNode(call, node as WorkflowDelegateRoleNode, ctx, expressionCtx, currentFrameId);
+    case 'agent-step':
+      return executeAgentStepNode(call, node as WorkflowAgentStepNode, ctx, expressionCtx, currentFrameId);
 
     case 'parallel':
       // The parallel node's own frame is created by the sequence loop in

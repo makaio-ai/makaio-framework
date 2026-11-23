@@ -217,7 +217,7 @@ function seedDefinitionExecution(
     ...(runContext.artifactRef !== undefined ? { artifactRef: runContext.artifactRef } : {}),
     scope: resolvedScope,
   };
-  // Definition-backed executions have no in-process station handlers.
+  // Definition-backed executions have no in-process code step handlers.
   // Handler-bearing executions (e.g. runFile) supply runtimeHandlers separately.
   activeExecutions.set(executionId, {
     execution,

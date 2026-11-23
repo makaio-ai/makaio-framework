@@ -1,9 +1,7 @@
 import { evaluateSync } from './engine.js';
-import { resolveTemplate } from './template.js';
+import { resolveTemplate, TEMPLATE_PLACEHOLDER_PATTERN } from './template.js';
 import type { ExpressionContext } from './types.js';
 
-/** Finds template placeholders using the same expression boundary rules as resolveTemplate. */
-const TEMPLATE_EXPRESSION_RE = /\{\{\s*([^}]+?)\s*\}\}/g;
 const OMIT_OBJECT_PROPERTY = Symbol('omit-object-property');
 
 /** Options for resolving templates in object payloads. */
@@ -24,7 +22,7 @@ export interface ResolveTemplatesInObjectOptions {
  */
 function getSingleWholeValueExpression(value: string): string | undefined {
   const trimmed = value.trim();
-  const matches = Array.from(trimmed.matchAll(TEMPLATE_EXPRESSION_RE));
+  const matches = Array.from(trimmed.matchAll(TEMPLATE_PLACEHOLDER_PATTERN));
   if (matches.length !== 1) {
     return undefined;
   }

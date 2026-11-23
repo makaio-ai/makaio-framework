@@ -48,8 +48,9 @@ export interface AgentUsagePayload {
  * Metadata captured from a `workflow.frame.started` event and retained for the
  * duration of the frame.
  *
- * `frame.completed` and `frame.failed` do not carry `nodeType` or `path`, so
- * the collector keeps this snapshot to fill those fields on the output span.
+ * `frame.completed` and `frame.failed` carry `nodeType`, but not `path`; the
+ * collector keeps this snapshot and still reads `nodeType` from it (unchanged
+ * behavior) while using it to fill `path` on the output span.
  */
 export interface FrameRecord {
   /** Unique frame identifier within the execution. */

@@ -135,7 +135,7 @@ describe('telemetry-langfuse integration', () => {
         executionId: 'wfx-integration',
         frameId: 'frame-integration',
         nodeId: 'llm-node',
-        nodeType: 'station',
+        nodeType: 'agent-step',
         path: ['frame-integration'],
       });
 
