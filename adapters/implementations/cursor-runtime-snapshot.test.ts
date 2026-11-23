@@ -3,7 +3,7 @@ import { MakaioBus } from '@makaio/bus-core';
 import { ExtensionSubjects } from '@makaio/kernel';
 import type { ProviderRuntimeSnapshot } from '@makaio/services-core/adapter-subsystem';
 import type { LoadedAdapter } from '@makaio/subsystem-adapter';
-import { createTestCall } from '@makaio/test-utils';
+import { createTestCall, makeStubExtensionBus } from '@makaio/test-utils';
 import { resolveAdapterRuntimeSnapshot } from '../../subsystems/adapter/src/adapter-runtime-snapshot.js';
 import { providerDefinition } from '../../providers/cursor/src/definition.js';
 import { adapterDefinition } from './cursor-sdk/src/definition.js';
@@ -57,6 +57,7 @@ function loadedCursorAdapter(): LoadedAdapter {
   return {
     name: adapterDefinition.name,
     packageName: '@makaio/adapter-cursor-sdk',
+    carrierBus: makeStubExtensionBus(MakaioBus, '@makaio/adapter-cursor-sdk'),
     factory: async () => ({}),
     options: {},
     providerDefinitionIds: [cursorProviderRef.definitionId],

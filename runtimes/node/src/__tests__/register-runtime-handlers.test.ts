@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { makeStubExtensionBus } from '@makaio/test-utils';
 import { z } from 'zod';
 import { createChannelEndpoint, MakaioBus, NoHandlerError, type ChannelEndpoint } from '@makaio/bus-core';
 import {
@@ -98,6 +99,7 @@ describe('registerRuntimeHandlers', () => {
       {
         name: 'claude-agent-sdk',
         packageName: '@makaio/adapter-claude-agent-sdk',
+        carrierBus: makeStubExtensionBus(MakaioBus, '@makaio/adapter-claude-agent-sdk'),
         factory: async () => ({}),
         options: {},
         providerDefinitionIds: ['anthropic-oauth'],
@@ -117,6 +119,7 @@ describe('registerRuntimeHandlers', () => {
       {
         name: 'codex-app-server',
         packageName: '@makaio/adapter-codex-app-server',
+        carrierBus: makeStubExtensionBus(MakaioBus, '@makaio/adapter-codex-app-server'),
         factory: async () => ({}),
         options: {},
         providerDefinitionIds: ['openai-codex'],
@@ -221,6 +224,7 @@ describe('registerRuntimeHandlers', () => {
         name: 'wrong-adapter',
         protocol: 'anthropic',
         packageName: 'wrong-package',
+        carrierBus: makeStubExtensionBus(MakaioBus, 'wrong-package'),
         factory: async () => ({ adapterId: 'wrong-adapter-id' }),
         options: { adapterId: 'wrong-adapter-id' },
         providerDefinitionIds: [providerDefinition.id],
@@ -231,6 +235,7 @@ describe('registerRuntimeHandlers', () => {
         name: 'bound-adapter',
         protocol: 'anthropic',
         packageName: 'bound-package',
+        carrierBus: makeStubExtensionBus(MakaioBus, 'bound-package'),
         factory: async () => ({ adapterId: 'bound-adapter-id' }),
         options: { adapterId: 'bound-adapter-id' },
         providerDefinitionIds: [providerDefinition.id],
@@ -241,6 +246,7 @@ describe('registerRuntimeHandlers', () => {
         name: 'no-fetch-adapter',
         protocol: 'openai',
         packageName: 'no-fetch-package',
+        carrierBus: makeStubExtensionBus(MakaioBus, 'no-fetch-package'),
         factory: async () => ({ adapterId: 'no-fetch-adapter-id' }),
         options: { adapterId: 'no-fetch-adapter-id' },
         providerDefinitionIds: [providerDefinition.id],
@@ -409,6 +415,7 @@ describe('registerRuntimeHandlers', () => {
       name: 'compatible-but-unbound',
       protocol: 'openai',
       packageName: 'compatible-package',
+      carrierBus: makeStubExtensionBus(MakaioBus, 'compatible-package'),
       factory: async () => ({ adapterId: 'compatible-adapter-id' }),
       options: { adapterId: 'compatible-adapter-id' },
       providerDefinitionIds: [providerDefinition.id],

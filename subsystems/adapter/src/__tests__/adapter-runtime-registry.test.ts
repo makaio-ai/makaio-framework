@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { MakaioBus } from '@makaio/bus-core';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
+import { makeStubExtensionBus, makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
 import {
   AdapterSubjects,
   ProviderDefinitionSchema,
@@ -223,11 +223,18 @@ describe('cloneAdapterClientRefs', () => {
   });
 });
 
+/**
+ * Create a loaded adapter fixture on its package's carrier.
+ * @param name - Adapter driver name.
+ * @param packageName - Contributing extension name.
+ * @returns Adapter fixture ready for registration.
+ */
 function createLoadedAdapter(name: string, packageName: string): LoadedAdapter {
   return {
     name,
     displayName: name,
     packageName,
+    carrierBus: makeStubExtensionBus(MakaioBus, packageName),
     factory: async (options?: unknown) => ({ adapterId: readAdapterFactoryOptions(options).adapterId }),
     options: {
       adapterId: buildDeterministicAdapterId(TEST_MACHINE_ID, name),
@@ -1399,6 +1406,8 @@ describe('AdapterContributionProcessor rollback', () => {
     });
     await service.init();
 
+    const adapterCarrier = makeStubExtensionBus(MakaioBus, '@owner/adapter-package');
+    const providerCarrier = makeStubExtensionBus(MakaioBus, '@owner/provider-package');
     const providers: ProviderDefinitionInput[] = [];
     const lateProviderDefinition = createTestAuthProviderDefinition('late-provider', 'Late Provider');
     const adapterProviderAuth = createTestProviderAuth('late-provider');
@@ -1425,7 +1434,7 @@ describe('AdapterContributionProcessor rollback', () => {
             { definitionId: 'late-provider', auth: adapterProviderAuth },
           ]),
         ]),
-        TEST_EXTENSION_CONTEXT,
+        { ...TEST_EXTENSION_CONTEXT, bus: adapterCarrier },
       );
 
       await expect(
@@ -1441,7 +1450,7 @@ describe('AdapterContributionProcessor rollback', () => {
       await service.processAdapterContributions(
         '@owner/provider-package',
         createExtension('@owner/provider-package', [], providers),
-        TEST_EXTENSION_CONTEXT,
+        { ...TEST_EXTENSION_CONTEXT, bus: providerCarrier },
       );
 
       await expect(
@@ -1458,6 +1467,7 @@ describe('AdapterContributionProcessor rollback', () => {
       });
       expect(service.getAdapterInstances().size).toBe(1);
       expect(factory).toHaveBeenCalledOnce();
+      expect(getFactoryInitOptions(factory, 0).globalBus).toBe(adapterCarrier);
       expect(getFactoryInitOptions(factory, 0).definitionProviders?.[0]?.definition.id).toBe('late-provider');
       expect(getFactoryInitOptions(factory, 0).definitionProviders?.[0]?.auth).toEqual(adapterProviderAuth);
     } finally {
@@ -2304,7 +2314,7 @@ describe('AdapterContributionProcessor rollback', () => {
     }
   });
 
-  it('passes the runtime bus as globalBus to the adapter factory', async () => {
+  it('passes the contributing extension carrier and runtime owner to the adapter factory', async () => {
     const adapterId = buildDeterministicAdapterId(TEST_MACHINE_ID, 'bus-check-adapter');
     const registry = new AdapterRuntimeRegistry({
       bus: MakaioBus,
@@ -2331,7 +2341,7 @@ describe('AdapterContributionProcessor rollback', () => {
       registry.registerAdapter(adapter, '@owner/bus-check-package');
       await registry.initializeAdapter(adapter, TEST_PLATFORM_DEFAULTS);
 
-      expect(capturedGlobalBus).toBe(MakaioBus);
+      expect(capturedGlobalBus).toBe(adapter.carrierBus);
       expect(capturedOwnerInstanceId).toBe('test-owner-instance');
     } finally {
       offGetConfig();

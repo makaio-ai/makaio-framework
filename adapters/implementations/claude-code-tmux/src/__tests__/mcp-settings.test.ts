@@ -1,14 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { ClaudeCodeClientSubjects } from '@makaio/client-claude-code/runtime';
-import { createTestCall } from '@makaio/test-utils';
+import { createTestBusInstance, createTestCall, makeStubExtensionBus } from '@makaio/test-utils';
 import { addMcpServerToProject, removeMcpServerFromProject } from '../utils/mcp-settings.js';
 
 describe('mcp-settings', () => {
+  const carrier = { kind: 'makaio.extension', id: 'claude-code-tmux' };
+  let carrierBus: IMakaioBus;
   let cleanup: Array<() => void>;
 
   beforeEach(() => {
-    MakaioBus.__resetHandlers?.();
+    carrierBus = makeStubExtensionBus(createTestBusInstance(), carrier.id);
     cleanup = [];
   });
 
@@ -16,21 +18,22 @@ describe('mcp-settings', () => {
     for (const unsubscribe of cleanup) {
       unsubscribe();
     }
-    MakaioBus.__resetHandlers?.();
   });
 
   describe('addMcpServerToProject', () => {
     it('dispatches config.mcpServers.add with projectDir, name, and server', async () => {
       const capturedPayloads: unknown[] = [];
+      const call = createTestCall({ principal: { kind: 'makaio.extension', id: 'requesting-extension' } });
 
       cleanup.push(
-        MakaioBus.on(ClaudeCodeClientSubjects.config.mcpServers.add, (ctx) => {
+        carrierBus.on(ClaudeCodeClientSubjects.config.mcpServers.add, (ctx) => {
           capturedPayloads.push(ctx.payload);
+          expect(ctx.call).toMatchObject({ caller: carrier, principal: call.principal });
           ctx.setResult({ added: true, replaced: false });
         }),
       );
 
-      const handled = await addMcpServerToProject(createTestCall(), '/workspace/my-project', 'makaio-tools', {
+      const handled = await addMcpServerToProject(carrierBus, call, '/workspace/my-project', 'makaio-tools', {
         type: 'http',
         url: 'http://localhost:3000',
       });
@@ -47,13 +50,13 @@ describe('mcp-settings', () => {
       const capturedPayloads: unknown[] = [];
 
       cleanup.push(
-        MakaioBus.on(ClaudeCodeClientSubjects.config.mcpServers.add, (ctx) => {
+        carrierBus.on(ClaudeCodeClientSubjects.config.mcpServers.add, (ctx) => {
           capturedPayloads.push(ctx.payload);
           ctx.setResult({ added: true, replaced: false });
         }),
       );
 
-      const handled = await addMcpServerToProject(createTestCall(), '/project', 'stdio-server', {
+      const handled = await addMcpServerToProject(carrierBus, createTestCall(), '/project', 'stdio-server', {
         type: 'stdio',
         command: 'node',
         args: ['server.js'],
@@ -69,13 +72,13 @@ describe('mcp-settings', () => {
       const capturedPayloads: unknown[] = [];
 
       cleanup.push(
-        MakaioBus.on(ClaudeCodeClientSubjects.config.mcpServers.add, (ctx) => {
+        carrierBus.on(ClaudeCodeClientSubjects.config.mcpServers.add, (ctx) => {
           capturedPayloads.push(ctx.payload);
           ctx.setResult({ added: false, replaced: false });
         }),
       );
 
-      const handled = await addMcpServerToProject(createTestCall(), '/project', 'existing-server', {
+      const handled = await addMcpServerToProject(carrierBus, createTestCall(), '/project', 'existing-server', {
         type: 'http',
         url: 'http://already-there',
       });
@@ -86,7 +89,10 @@ describe('mcp-settings', () => {
 
     it('resolves false when no config service is registered', async () => {
       await expect(
-        addMcpServerToProject(createTestCall(), '/project', 'makaio', { type: 'http', url: 'http://localhost:3000' }),
+        addMcpServerToProject(carrierBus, createTestCall(), '/project', 'makaio', {
+          type: 'http',
+          url: 'http://localhost:3000',
+        }),
       ).resolves.toBe(false);
     });
   });
@@ -96,13 +102,15 @@ describe('mcp-settings', () => {
       const capturedPayloads: unknown[] = [];
 
       cleanup.push(
-        MakaioBus.on(ClaudeCodeClientSubjects.config.mcpServers.remove, (ctx) => {
+        carrierBus.on(ClaudeCodeClientSubjects.config.mcpServers.remove, (ctx) => {
           capturedPayloads.push(ctx.payload);
+          expect(ctx.call).toMatchObject({ caller: carrier, principal: carrier });
           ctx.setResult({ removed: true });
         }),
       );
 
-      const handled = await removeMcpServerFromProject('/workspace/my-project', 'makaio-tools');
+      const call = carrierBus.own('stop');
+      const handled = await removeMcpServerFromProject(carrierBus, call, '/workspace/my-project', 'makaio-tools');
 
       expect(handled).toBe(true);
       expect(capturedPayloads).toHaveLength(1);
@@ -113,29 +121,33 @@ describe('mcp-settings', () => {
 
     it('resolves even when the server does not exist (removed: false)', async () => {
       cleanup.push(
-        MakaioBus.on(ClaudeCodeClientSubjects.config.mcpServers.remove, (ctx) => {
+        carrierBus.on(ClaudeCodeClientSubjects.config.mcpServers.remove, (ctx) => {
           ctx.setResult({ removed: false });
         }),
       );
 
-      await expect(removeMcpServerFromProject('/project', 'missing-server')).resolves.toBe(true);
+      await expect(
+        removeMcpServerFromProject(carrierBus, carrierBus.own('stop'), '/project', 'missing-server'),
+      ).resolves.toBe(true);
     });
 
     it('resolves false when no config service is registered', async () => {
-      await expect(removeMcpServerFromProject('/project', 'makaio')).resolves.toBe(false);
+      await expect(removeMcpServerFromProject(carrierBus, carrierBus.own('stop'), '/project', 'makaio')).resolves.toBe(
+        false,
+      );
     });
   });
 
   describe('error handling', () => {
     it('propagates bus errors', async () => {
       cleanup.push(
-        MakaioBus.on(ClaudeCodeClientSubjects.config.mcpServers.add, () => {
+        carrierBus.on(ClaudeCodeClientSubjects.config.mcpServers.add, () => {
           throw new Error('service unavailable');
         }),
       );
 
       await expect(
-        addMcpServerToProject(createTestCall(), '/project', 'my-server', { type: 'http', url: 'http://x' }),
+        addMcpServerToProject(carrierBus, createTestCall(), '/project', 'my-server', { type: 'http', url: 'http://x' }),
       ).rejects.toThrow('service unavailable');
     });
   });

@@ -1,4 +1,4 @@
-import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { McpSubjects, type CallContext } from '@makaio/contracts';
 import type { ClaudeSessionConfig } from './types/index.js';
 
@@ -27,8 +27,12 @@ export class McpSessionRegistration {
   /**
    * Create a registration bound to one session's config.
    * @param config - Session config supplying agent/adapter identity, context overrides and the seeded port
+   * @param requestBus - Adapter carrier that sends registration and teardown requests
    */
-  public constructor(config: ClaudeSessionConfig) {
+  public constructor(
+    config: ClaudeSessionConfig,
+    private readonly requestBus: Pick<IMakaioBus, 'requestOptional'>,
+  ) {
     this.config = config;
     this.port = config.mcpServerPort;
   }
@@ -45,9 +49,6 @@ export class McpSessionRegistration {
 
   /**
    * Register a provider session with the bridge service via bus RPC.
-   *
-   * MakaioBus (global singleton) is intentional here — MCP subjects live in the
-   * `mcp` namespace, which is unreachable from the adapter's scoped bus.
    * @param call - Received operation call to forward to the MCP bridge
    * @param adapterSessionId - Provider session ID to register; no-op without one
    * @returns Whether registration produced a port that differs from the previous one
@@ -59,7 +60,7 @@ export class McpSessionRegistration {
     const previousPort = this.port;
     this.registeredSessionId = adapterSessionId;
     const makaioSessionId = this.config.sessionId ?? adapterSessionId;
-    const result = await MakaioBus.requestOptional(call, McpSubjects.session.register, {
+    const result = await this.requestBus.requestOptional(call, McpSubjects.session.register, {
       adapterSessionId,
       agentId: this.config.agentId,
       adapterId: this.config.adapterId,
@@ -90,7 +91,7 @@ export class McpSessionRegistration {
    *
    * Fire-and-forget: errors are swallowed to avoid masking the close/abort path.
    * @param call - Call of the work that retires the registration: the operation's call
-   *   during a query rotation, the host's own `stop` context on teardown.
+   *   during a query rotation, the adapter carrier's own `stop` context on teardown.
    */
   public unregister(call: CallContext): void {
     const adapterSessionId = this.registeredSessionId;
@@ -99,10 +100,12 @@ export class McpSessionRegistration {
     }
     this.registeredSessionId = undefined;
     this.port = this.config.mcpServerPort;
-    void MakaioBus.requestOptional(call, McpSubjects.session.unregister, {
-      adapterSessionId,
-    }).catch(() => {
-      // Best-effort cleanup — ignore bridge failures during teardown.
-    });
+    void this.requestBus
+      .requestOptional(call, McpSubjects.session.unregister, {
+        adapterSessionId,
+      })
+      .catch(() => {
+        // Best-effort cleanup — ignore bridge failures during teardown.
+      });
   }
 }

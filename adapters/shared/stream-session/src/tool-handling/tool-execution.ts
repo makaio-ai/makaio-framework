@@ -55,7 +55,7 @@ export async function executeTool(
     // Parse arguments from JSON string (assembled by stream-bridge from delta fragments)
     const input: unknown = JSON.parse(toolCall.function.arguments);
 
-    // Execute tool via bus RPC (cross-namespace request via global MakaioBus).
+    // Execute the tool with a cross-namespace request on the bus the caller passed (the adapter's carrier).
     // Inject toolCallId so tools can access the originating tool call ID.
     const result = await bus.request(call, ToolSubjects.execute, {
       toolName: toolCall.function.name,

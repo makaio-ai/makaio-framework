@@ -90,6 +90,8 @@ export interface AdapterRuntimeInitOptions extends AdapterInitOptions {
   ownerInstanceId: string;
   /** Stable machine identity hosting this adapter runtime. */
   machineId: string;
+  /** Bus carrying the extension that contributed this adapter. */
+  globalBus: IMakaioBus;
 }
 
 /**
@@ -165,6 +167,8 @@ export interface LoadedAdapter {
   description?: string;
   /** NPM package name the adapter was loaded from. */
   packageName: string;
+  /** Carrier of the extension that contributed this adapter. */
+  readonly carrierBus: IMakaioBus;
   /**
    * Factory function that creates a live adapter instance.
    *

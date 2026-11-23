@@ -47,7 +47,8 @@ the global bus. Adapters register and unregister their per-session context throu
 ```typescript
 import { McpSubjects } from '@makaio/contracts';
 
-const { handled, data } = await MakaioBus.requestOptional(McpSubjects.session.register, {
+// `globalBus` is the adapter's carrier bus; `call` is the call of the session start the registration works for.
+const { handled, data } = await globalBus.requestOptional(call, McpSubjects.session.register, {
   adapterSessionId: 'adapter-session-1',
   agentId: 'agent-1',
   adapterId: 'adapter-1',

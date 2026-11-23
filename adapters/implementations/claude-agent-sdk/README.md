@@ -7,16 +7,17 @@ Claude Agent SDK adapter using the three-layer architecture.
 ```typescript
 import { createClaudeAdapter, ClaudeCodeAdapter } from '@makaio/adapter-claude-agent-sdk';
 import { AdapterSubjects } from '@makaio/contracts';
-import { MakaioBus } from '@makaio/bus-core';
 
+// `globalBus` is the carrier bus the adapter subsystem hands to the adapter; it is required.
 // Using the factory (recommended)
-const adapter = await createClaudeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
+const adapter = await createClaudeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner', globalBus });
 
 // Or instantiate directly
-const directAdapter = new ClaudeCodeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
+const directAdapter = new ClaudeCodeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner', globalBus });
 await directAdapter.init();
 
-const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+const call = globalBus.own('root');
+const result = await globalBus.request(call, AdapterSubjects.startAgent, {
   adapterId: adapter.adapterId,
   role: 'lead',
   initialMessage: 'Build a todo app',

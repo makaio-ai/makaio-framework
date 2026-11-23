@@ -14,6 +14,12 @@ export function createToolContributionProcessor(): ContributionProcessor {
   return {
     filter: (pkg) => !!pkg.tools?.createToolsets,
 
+    /**
+     * Register toolsets with the carrier of the extension that contributed them.
+     * @param name - Activated extension name.
+     * @param pkg - Activated extension package.
+     * @param ctx - Runtime context of the contributing extension.
+     */
     async processActivated(name, pkg, ctx) {
       const toolRegistry = ctx.getService(ToolRegistryToken);
       if (!toolRegistry) {
@@ -27,7 +33,7 @@ export function createToolContributionProcessor(): ContributionProcessor {
 
       try {
         for (const toolset of toolsets) {
-          await toolRegistry.register(toolset);
+          await toolRegistry.register(toolset, { bus: ctx.bus });
           registered.push(() => toolRegistry.deregister(toolset.metadata.name));
         }
       } catch (error) {

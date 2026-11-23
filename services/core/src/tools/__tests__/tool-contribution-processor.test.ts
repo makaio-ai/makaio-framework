@@ -1,8 +1,14 @@
+import assert from 'node:assert/strict';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createBusInstance } from '@makaio/bus-core';
-import { makeStubNodeExtensionContext, stubExtensionIdentity } from '@makaio/test-utils';
-import type { ExtensionToken } from '@makaio/contracts';
+import {
+  createTestCall,
+  makeStubExtensionBus,
+  makeStubNodeExtensionContext,
+  stubExtensionIdentity,
+} from '@makaio/test-utils';
+import { WorkflowSubjects, type ExtensionToken } from '@makaio/contracts';
 import type { KernelExtensionContext, KernelMakaioExtension } from '@makaio/kernel/extension';
 import { defineTool, defineToolset, toolSuccess } from '@makaio/tools-core';
 import type { Toolset } from '@makaio/tools-core';
@@ -35,11 +41,11 @@ function makeToolset(name: string): Toolset {
 /**
  * Build a minimal ExtensionContext for test purposes.
  * @param registry - Optional ToolRegistry to expose via getService.
+ * @param bus - Bus context shared by the registry and the contributing extension.
  * @returns Minimal context stub satisfying the ExtensionContext contract.
  */
-function makeContext(registry?: ToolRegistry): KernelExtensionContext {
-  const bus = createBusInstance();
-  return makeStubNodeExtensionContext(bus, {
+function makeContext(registry?: ToolRegistry, bus = createBusInstance()): KernelExtensionContext {
+  return makeStubNodeExtensionContext(makeStubExtensionBus(bus, 'pkg-tools'), {
     identity: stubExtensionIdentity('pkg-tools'),
     platform: 'linux',
     homedir: '/home/test',
@@ -71,6 +77,51 @@ describe('createToolContributionProcessor', () => {
     expect(registry.listToolsets()).toEqual([]);
 
     registry.dispose();
+  });
+
+  it('uses the contributing extension as the caller of a tool request', async () => {
+    const bus = createBusInstance();
+    const registry = new ToolRegistry({ bus });
+    const processor = createToolContributionProcessor();
+    const captureCall = vi.fn();
+    const unsubscribe = bus.on(WorkflowSubjects.getExecution, (ctx) => {
+      captureCall(ctx.call);
+      ctx.setResult({ execution: null });
+    });
+    const tool = defineTool({
+      name: 'lookup-execution',
+      description: 'Look up a workflow execution',
+      inputSchema: z.object({ executionId: z.string() }),
+      outputSchema: z.object({ found: z.boolean() }),
+      execute: async (input, { bus, call }) => {
+        assert(bus, 'The registry must supply an execution bus');
+        const { execution } = await bus.request(call, WorkflowSubjects.getExecution, input);
+        return toolSuccess({ found: execution !== null });
+      },
+    });
+    const toolset = defineToolset({ name: 'lookup', description: 'Lookup tools', version: '1.0.0', tools: [tool] });
+    const pkg = {
+      name: 'pkg-tools',
+      displayName: 'Tools Package',
+      version: '0.1.0',
+      tools: { createToolsets: () => [toolset] },
+    } satisfies KernelMakaioExtension;
+    const principal = { kind: 'makaio.host', id: 'tool-requester' } as const;
+
+    try {
+      await processor.processActivated('pkg-tools', pkg, makeContext(registry, bus));
+
+      const result = await registry.execute(createTestCall({ principal }), 'lookup-execution', { executionId: 'run' });
+
+      expect(result).toEqual({ success: true, data: { found: false } });
+      expect(captureCall).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ caller: { kind: 'makaio.extension', id: 'pkg-tools' }, principal }),
+      );
+    } finally {
+      await processor.processStopped?.('pkg-tools');
+      unsubscribe();
+      registry.dispose();
+    }
   });
 
   it('rolls back already registered toolsets when a later register fails', async () => {

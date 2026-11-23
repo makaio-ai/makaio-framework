@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { MakaioBus } from '@makaio/bus-core';
-import { createTestCall } from '@makaio/test-utils';
+import { createTestCall, makeStubExtensionBus } from '@makaio/test-utils';
 import { ExtensionSubjects } from '@makaio/kernel';
 import { VersionRangeSchema, defineAdapterProviderAuth } from '@makaio/contracts';
 import { ClientDefinitionSchema } from '@makaio/contracts/client';
@@ -86,6 +86,7 @@ function loadedAdapter(): LoadedAdapter {
   return {
     name: 'claude-code',
     packageName: '@makaio/adapter-claude-code',
+    carrierBus: makeStubExtensionBus(MakaioBus, '@makaio/adapter-claude-code'),
     factory: async () => ({}),
     options: {},
     providerDefinitionIds: ['anthropic', 'openai'],

@@ -6,7 +6,7 @@ import {
 } from '@makaio/ai-adapters-core';
 import { MakaioBus } from '@makaio/bus-core';
 import { McpSubjects, type CallContext } from '@makaio/contracts';
-import { createTestCall } from '@makaio/test-utils';
+import { createTestBusInstance, createTestCall, makeStubExtensionBus } from '@makaio/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CursorSdkNamespace } from '../namespaces/index.js';
 import type { CursorSdkProviderConfig } from '../schemas.js';
@@ -110,11 +110,17 @@ const TEST_MESSAGE: NormalizedMessageInput = {
  * Create a Cursor SDK session configured for unit tests.
  * @param call - Call initializing the session.
  * @param providerConfig - Optional Cursor SDK provider configuration.
+ * @param globalBus - Carrier bus for the session.
  * @returns Session instance.
  */
-async function createSession(call: CallContext, providerConfig?: CursorSdkProviderConfig): Promise<CursorSdkSession> {
+async function createSession(
+  call: CallContext,
+  providerConfig?: CursorSdkProviderConfig,
+  globalBus = MakaioBus,
+): Promise<CursorSdkSession> {
   const session = new CursorSdkSession({
-    bus: await CursorSdkNamespace.scopedBus(MakaioBus),
+    bus: await CursorSdkNamespace.scopedBus(globalBus),
+    globalBus,
     agentId: 'agent-1',
     adapterId: 'adapter-1',
     adapterName: 'cursor-sdk',
@@ -367,19 +373,20 @@ describe('CursorSdkSession', () => {
     sdkControls.failCreate = true;
     const PERSON = { kind: 'acme.person', id: 'cursor-initializer' };
     const call = createTestCall({ principal: PERSON });
+    const carrierBus = makeStubExtensionBus(createTestBusInstance(), 'cursor-sdk');
     const registrations: Array<{ adapterSessionId: string; principal: CallContext['principal'] }> = [];
     const unregistrations: typeof registrations = [];
-    const offRegister = MakaioBus.on(McpSubjects.session.register, (ctx) => {
+    const offRegister = carrierBus.on(McpSubjects.session.register, (ctx) => {
       registrations.push({ adapterSessionId: ctx.payload.adapterSessionId, principal: ctx.call.principal });
       ctx.setResult({ port: 12_345 });
     });
-    const offUnregister = MakaioBus.on(McpSubjects.session.unregister, (ctx) => {
+    const offUnregister = carrierBus.on(McpSubjects.session.unregister, (ctx) => {
       unregistrations.push({ adapterSessionId: ctx.payload.adapterSessionId, principal: ctx.call.principal });
       ctx.setResult({});
     });
 
     try {
-      await expect(createSession(call)).rejects.toThrow('cursor init failed');
+      await expect(createSession(call, undefined, carrierBus)).rejects.toThrow('cursor init failed');
       expect(registrations).toEqual([{ adapterSessionId: expect.stringMatching(/^cursor-/), principal: PERSON }]);
       expect(unregistrations).toEqual(registrations);
     } finally {

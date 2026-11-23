@@ -3,7 +3,6 @@ import { WebSocketClientTransport } from '@makaio/bus-transport-websocket';
 import { FrameworkContractNamespaces, FrameworkStorageNamespaces, type WorkflowWorkerBusAuth } from '@makaio/contracts';
 import { McpServerBridgeService } from '@makaio/subsystem-mcp-http-server';
 import { ToolRegistry } from '@makaio/services-core/tools';
-import type { Toolset } from '@makaio/tools-core';
 import type { WorkerRuntimeContributions } from './worker-contributions.js';
 import { createWorkerBusAuth } from '../worker-bus-auth.js';
 import type { BootstrapRuntimeConnection } from '../bootstrap-start-client.js';
@@ -144,8 +143,8 @@ export async function bootWorkerRuntime(
   try {
     await mcpBridge.init();
 
-    for (const toolset of contributions.toolsets) {
-      await registerWorkerToolset(toolRegistry, toolset);
+    for (const { toolset, bus } of contributions.toolsets) {
+      await toolRegistry.register(toolset, { bus });
     }
   } catch (error) {
     await closeRuntime();
@@ -153,13 +152,4 @@ export async function bootWorkerRuntime(
   }
 
   return { close: closeRuntime };
-}
-
-/**
- * Register one worker-local toolset.
- * @param registry - Worker-local tool registry.
- * @param toolset - Toolset loaded from the worker manifest.
- */
-async function registerWorkerToolset(registry: ToolRegistry, toolset: Toolset): Promise<void> {
-  await registry.register(toolset);
 }

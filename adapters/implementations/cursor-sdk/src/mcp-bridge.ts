@@ -1,4 +1,4 @@
-import { MakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { McpSubjects, type CallContext } from '@makaio/contracts';
 import type { CursorSessionConfig } from './types/index.js';
 
@@ -11,21 +11,21 @@ export interface McpRegistrationResult {
 /**
  * Register an MCP session with the bridge service for tool injection.
  *
- * Uses `MakaioBus.requestOptional` so graceful degradation occurs when the
+ * Uses `requestOptional` so graceful degradation occurs when the
  * MCP bridge service is not running (e.g., in tests or CLI-only environments).
+ * @param bus - Adapter carrier bus for MCP requests.
  * @param call - Call of the operation initializing the session.
  * @param config - Session configuration for context overrides.
  * @param adapterSessionId - The Cursor agent ID used as session identifier.
  * @returns Registration result with port (or undefined if bridge unavailable).
  */
 export async function registerMcpSession(
+  bus: Pick<IMakaioBus, 'requestOptional'>,
   call: CallContext,
   config: CursorSessionConfig,
   adapterSessionId: string,
 ): Promise<McpRegistrationResult> {
-  // MakaioBus (global singleton) is intentional here — MCP subjects live in
-  // the `mcp` namespace, which is unreachable from the adapter's scoped bus.
-  const result = await MakaioBus.requestOptional(call, McpSubjects.session.register, {
+  const result = await bus.requestOptional(call, McpSubjects.session.register, {
     adapterSessionId,
     agentId: config.agentId,
     adapterId: config.adapterId,
@@ -73,12 +73,17 @@ export function buildMcpServerConfig(
  *
  * Best-effort: if the bridge service is not available or the call fails,
  * the stale mapping will be cleaned up by the bridge's own session expiry.
+ * @param bus - Adapter carrier bus for MCP requests.
  * @param call - Call of the operation or teardown that retires the registration.
  * @param adapterSessionId - The session to unregister.
  */
-export async function unregisterMcpSession(call: CallContext, adapterSessionId: string): Promise<void> {
+export async function unregisterMcpSession(
+  bus: Pick<IMakaioBus, 'requestOptional'>,
+  call: CallContext,
+  adapterSessionId: string,
+): Promise<void> {
   try {
-    await MakaioBus.requestOptional(call, McpSubjects.session.unregister, {
+    await bus.requestOptional(call, McpSubjects.session.unregister, {
       adapterSessionId,
     });
   } catch {

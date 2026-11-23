@@ -11,7 +11,7 @@ import {
   type MessageHandle,
 } from '@makaio/ai-adapters-core';
 import type { CallContext } from '@makaio/core';
-import { MakaioBus, type IMakaioBus } from '@makaio/bus-core';
+import type { IMakaioBus } from '@makaio/bus-core';
 import { DeferredPromise } from '@makaio/utils';
 import { AsyncQuerySource } from '@makaio/ai-adapters-claude-shared';
 import { ClaudeConnectorTurn } from './turn.js';
@@ -72,15 +72,15 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
   /**
    * Create a session whose observer origins belong to the adapter's carrier.
    * @param config - SDK session configuration and scoped adapter bus
-   * @param originBus - Parent of the scoped adapter bus, used to mint observer origins
+   * @param originBus - Adapter carrier used to mint observer origins and send MCP requests
    */
   public constructor(
     config: ClaudeSessionConfig,
-    private readonly originBus: Pick<IMakaioBus, 'own'>,
+    private readonly originBus: Pick<IMakaioBus, 'own' | 'requestOptional'>,
   ) {
     super(config);
     this.lifecycle = new SessionLifecycle();
-    this.mcpRegistration = new McpSessionRegistration(config);
+    this.mcpRegistration = new McpSessionRegistration(config, originBus);
   }
 
   /**
@@ -709,12 +709,12 @@ export class ClaudeConnectorSession extends BaseConnectorSession<ClaudeSessionCo
    * Gracefully close the session (interrupt, not abort).
    * Sets the closing flag to prevent new turns from starting, then
    * unregisters MCP context and absorbs interrupt errors.
-   * @param _call - Operation call; MCP teardown creates its own host-carrier origin
+   * @param _call - Operation call; MCP teardown creates its own adapter-carrier origin
    */
   public async close(_call: CallContext): Promise<void> {
     this.closing = true;
-    // ORIGIN: session teardown retires the MCP registration on the host carrier.
-    this.mcpRegistration.unregister(MakaioBus.own('stop'));
+    // ORIGIN: session teardown retires the MCP registration on the adapter carrier.
+    this.mcpRegistration.unregister(this.originBus.own('stop'));
     const activeQuery = this.queryInstance;
     const queryGeneration = this.queryGeneration;
     const terminalResultDrain =

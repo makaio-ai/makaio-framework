@@ -142,6 +142,7 @@ export class CursorSdkConnector extends ProceduralAgentConnector<CursorSdkBus, C
       systemPrompt: resolvedSystemPrompt,
       providerConfig: this.config.providerConfig,
       bus: this.config.bus,
+      globalBus: this.globalBus,
       onTurnStart: (handle) => {
         this.pendingMessageHandle = handle;
       },

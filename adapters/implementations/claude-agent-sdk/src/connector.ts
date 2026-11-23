@@ -17,7 +17,7 @@ import {
   resolveClaudeProcessEnv,
 } from '@makaio/ai-adapters-claude-process-shared';
 import { type SDKMessage } from '@makaio/ai-adapters-claude-shared';
-import { MakaioBus, NoHandlerError, RequestError } from '@makaio/bus-core';
+import { NoHandlerError, RequestError } from '@makaio/bus-core';
 import {
   McpSubjects,
   type ConnectorTeardownResult,
@@ -313,7 +313,7 @@ export class ClaudeSdkConnector extends AIAgentConnector<ClaudeCodeConnectorBus>
     }
 
     try {
-      const resolved = await MakaioBus.request(call, McpSubjects.session.resolve, {
+      const resolved = await this.globalBus.request(call, McpSubjects.session.resolve, {
         sessionId: mcpSessionContext.sessionId,
         projectId: mcpSessionContext.projectId,
         profileId: mcpSessionContext.profileId,

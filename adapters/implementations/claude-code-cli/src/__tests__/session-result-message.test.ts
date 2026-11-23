@@ -100,6 +100,7 @@ async function makeActiveSession() {
   const onTurnComplete = vi.fn();
   const session = new ClaudeCliSession({
     bus,
+    globalBus: MakaioBus,
     adapterId: 'adapter-test',
     adapterName: 'claude-code-cli',
     agentId: 'agent-test',
@@ -127,6 +128,7 @@ describe('ClaudeCliSession result message handling', () => {
     const onTurnComplete = vi.fn();
     const session = new ClaudeCliSession({
       bus,
+      globalBus: MakaioBus,
       adapterId: 'adapter-test',
       adapterName: 'claude-code-cli',
       agentId: 'agent-test',
@@ -172,6 +174,7 @@ describe('ClaudeCliSession result message handling', () => {
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const session = new ClaudeCliSession({
       bus,
+      globalBus: MakaioBus,
       adapterId: 'adapter-test',
       adapterName: 'claude-code-cli',
       agentId: 'agent-test',

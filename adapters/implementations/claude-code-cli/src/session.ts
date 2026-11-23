@@ -1,6 +1,5 @@
 import { isKnownSdkMessageForRouting, type SDKMessage } from '@makaio/client-claude-code';
 import { McpSubjects, type ConnectorTeardownResult, type McpTransportConfig } from '@makaio/contracts';
-import { MakaioBus } from '@makaio/bus-core';
 import type { CallContext } from '@makaio/core';
 import {
   BaseConnectorSession,
@@ -243,11 +242,7 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     call: CallContext,
     sessionIdForMcp: string,
   ): Promise<{ config: string; hasBridge: boolean } | undefined> {
-    // MakaioBus (global singleton) is intentional here — MCP subjects live in
-    // the `mcp` namespace, which is unreachable from the adapter's scoped bus.
-    // Same pattern used by ToolSubjects.execute and AgentSubjects throughout
-    // the adapter layer for all cross-namespace RPCs.
-    const result = await MakaioBus.requestOptional(call, McpSubjects.session.register, {
+    const result = await this.config.globalBus.requestOptional(call, McpSubjects.session.register, {
       adapterSessionId: sessionIdForMcp,
       agentId: this.config.agentId,
       adapterId: this.config.adapterId,
@@ -304,11 +299,13 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
     }
     const sessionId = this.registeredMcpSessionId;
     this.registeredMcpSessionId = undefined;
-    void MakaioBus.requestOptional(call, McpSubjects.session.unregister, {
-      adapterSessionId: sessionId,
-    }).catch(() => {
-      // Best-effort cleanup — ignore bridge failures during teardown.
-    });
+    void this.config.globalBus
+      .requestOptional(call, McpSubjects.session.unregister, {
+        adapterSessionId: sessionId,
+      })
+      .catch(() => {
+        // Best-effort cleanup — ignore bridge failures during teardown.
+      });
   }
 
   /**
@@ -760,7 +757,8 @@ export class ClaudeCliSession extends BaseConnectorSession<ClaudeCliSessionConfi
         console.error('[Session] Failed to close transport during close', error);
         unaccounted.push(stageFailure('transport close', error));
       }
-      this.unregisterMcpSession(MakaioBus.own('stop'));
+      // ORIGIN: Session close retires the MCP registration on the adapter carrier.
+      this.unregisterMcpSession(this.config.globalBus.own('stop'));
     }
 
     const unaccountedReport = reportBestEffortStages('Claude CLI close', unaccounted);

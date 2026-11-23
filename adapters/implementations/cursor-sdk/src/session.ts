@@ -13,7 +13,7 @@ import {
   type UserMessageQueue,
 } from '@makaio/ai-adapters-core';
 import type { CallContext, ConnectorTeardownResult } from '@makaio/contracts';
-import { MakaioBus, type EmitSubject } from '@makaio/bus-core';
+import type { EmitSubject, IMakaioBus } from '@makaio/bus-core';
 import type { ScopedSubjectDefinition } from '@makaio/core';
 import { registerMcpSession, buildMcpServerConfig, unregisterMcpSession } from './mcp-bridge.js';
 import {
@@ -33,12 +33,14 @@ import type { CursorSdkProviderConfig } from './schemas.js';
 /**
  * Session initialization configuration for {@link CursorSdkSession}.
  *
- * Extends the base {@link CursorSessionConfig} with the scoped bus and
+ * Extends the base {@link CursorSessionConfig} with the buses and
  * turn lifecycle callbacks needed by the connector layer.
  */
 export interface CursorSdkSessionConfig extends CursorSessionConfig {
   /** Scoped bus for emitting turn lifecycle events to the agent layer. */
   bus: CursorSdkBus;
+  /** Adapter carrier bus for MCP session lifecycle requests. */
+  globalBus: Pick<IMakaioBus, 'own' | 'requestOptional'>;
   /**
    * Callback invoked when a new turn starts.
    * Used by the connector to set `pendingMessageHandle` for lifecycle tracking.
@@ -327,7 +329,7 @@ export class CursorSdkSession {
     const stableId = `cursor-${crypto.randomUUID()}`;
     this.cursorAgentId = stableId;
 
-    const mcpResult = await registerMcpSession(call, this.config, stableId);
+    const mcpResult = await registerMcpSession(this.config.globalBus, call, this.config, stableId);
     this.mcpServerPort = mcpResult.port;
 
     const mcpServers = buildMcpServerConfig(this.mcpServerPort, stableId);
@@ -345,7 +347,7 @@ export class CursorSdkSession {
 
       this.cursorAgent = agent;
     } catch (error) {
-      await unregisterMcpSession(call, stableId);
+      await unregisterMcpSession(this.config.globalBus, call, stableId);
       this.cursorAgentId = undefined;
       this.mcpServerPort = undefined;
       throw error;
@@ -768,8 +770,9 @@ export class CursorSdkSession {
     // initialization has at least started — covers both fully initialized and
     // in-flight-at-close() scenarios.
     if (this.cursorAgentId) {
-      // ORIGIN: Session teardown unregisters on the global MCP carrier.
-      await unregisterMcpSession(MakaioBus.own('stop'), this.cursorAgentId);
+      const { globalBus } = this.config;
+      // ORIGIN: Session teardown retires the MCP registration on the adapter carrier.
+      await unregisterMcpSession(globalBus, globalBus.own('stop'), this.cursorAgentId);
     }
 
     this.cursorAgent = undefined;

@@ -180,7 +180,7 @@ export class AdapterContributionProcessor {
    * observers with a false live-registration event.
    * @param packageName - Name of the package that transitioned to `active`.
    * @param pkg - Extension manifest with `adapters` contributions.
-   * @param ctx - Per-extension context containing the boot bus.
+   * @param ctx - Per-extension context containing the contributing extension’s carrier bus.
    */
   public async onPackageActivated(
     packageName: string,
@@ -259,7 +259,7 @@ export class AdapterContributionProcessor {
    * @param call - Call context under which the provider and client lookups are sent.
    * @param packageName - Owning package name.
    * @param contribution - Adapter contribution from the package manifest.
-   * @param bus - Bus used to resolve registry-populated provider models.
+   * @param bus - Contributing extension carrier used for provider model lookups and adapter runtime sends.
    */
   public async processAdapterContribution(
     call: CallContext,
@@ -291,7 +291,7 @@ export class AdapterContributionProcessor {
    * @param call - Call context under which the provider and client lookups are sent.
    * @param packageName - Owning package name.
    * @param contribution - Adapter contribution from the package manifest.
-   * @param bus - Bus used to resolve registry-populated provider models.
+   * @param bus - Contributing extension carrier used for provider model lookups and adapter runtime sends.
    * @param providerModelCache - Per-batch cache deduplicating provider model bus calls.
    * @param providerDefinitionCache - Pre-built provider definition map from the batch caller.
    * @param clientCatalog - Pre-built active client catalog from the batch caller.
@@ -473,7 +473,7 @@ export class AdapterContributionProcessor {
    * @param call - Call context under which the catalog, provider and client lookups are sent.
    * @param packageName - Package that declared this contribution.
    * @param contribution - Adapter manifest and definition pair.
-   * @param bus - Bus used to resolve provider model catalogs from the model registry.
+   * @param bus - Contributing extension carrier used for provider model lookups and adapter runtime sends.
    * @param providerModelCache - Optional per-batch cache deduplicating provider model bus calls.
    * @param providerDefinitionCache - Optional per-batch cache deduplicating catalog bus calls.
    *   When supplied, the catalog RPC is skipped and provider definitions are resolved from this map.
@@ -510,6 +510,7 @@ export class AdapterContributionProcessor {
       displayName: def.displayName ?? manifest.displayName,
       description: def.description,
       packageName,
+      carrierBus: bus,
       factory: def.createAdapter as LoadedAdapter['factory'],
       options: {
         adapterId: buildDeterministicAdapterId(this.machineId, adapterName),

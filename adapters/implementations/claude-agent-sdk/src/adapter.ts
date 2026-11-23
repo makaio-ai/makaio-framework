@@ -1,5 +1,4 @@
 import { AIAdapter, type AIAdapterRuntimeConfig } from '@makaio/ai-adapters-core';
-import { MakaioBus } from '@makaio/bus-core';
 import { clientDefinition as claudeClientDefinition } from '@makaio/client-claude-code';
 
 import { ClaudeCodeAgent } from './agent.js';
@@ -48,11 +47,11 @@ export type ClaudeCodeAdapterConfig = AIAdapterRuntimeConfig;
  * @example
  * ```typescript
  * // Using the class directly
- * const adapter = new ClaudeCodeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
+ * const adapter = new ClaudeCodeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner', globalBus });
  * await adapter.init();
  *
  * // Using the convenience factory
- * const adapter = await createClaudeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
+ * const adapter = await createClaudeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner', globalBus });
  *
  * // Subscribe to assistant text content
  * adapter.on(ClaudeCodeSubjects.assistant.text, (payload) => {
@@ -60,7 +59,7 @@ export type ClaudeCodeAdapterConfig = AIAdapterRuntimeConfig;
  * });
  *
  * // Create an agent via startAgent RPC
- * const result = await MakaioBus.request(AdapterSubjects.startAgent, {
+ * const result = await globalBus.request(AdapterSubjects.startAgent, {
  *   adapterId: adapter.adapterId,
  *   mode: 'create',
  *   initialMessage: 'Build a todo app',
@@ -69,8 +68,12 @@ export type ClaudeCodeAdapterConfig = AIAdapterRuntimeConfig;
  * ```
  */
 export class ClaudeCodeAdapter extends AIAdapter<ClaudeCodeConnectorBus, ClaudeSdkConnector, ClaudeCodeAgent> {
+  /**
+   * Create a Claude Code adapter on its supplied carrier.
+   * @param config - Adapter runtime configuration and carrier bus
+   */
   public constructor(config: ClaudeCodeAdapterConfig) {
-    const globalBus = config.globalBus ?? MakaioBus;
+    const { globalBus } = config;
     super({
       ...config,
       name: ClaudeCodeAdapterName,
@@ -116,10 +119,10 @@ export class ClaudeCodeAdapter extends AIAdapter<ClaudeCodeConnectorBus, ClaudeS
  * @returns Initialized ClaudeCodeAdapter instance
  * @example
  * ```typescript
- * const adapter = await createClaudeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner' });
+ * const adapter = await createClaudeAdapter({ machineId: 'runtime-machine', ownerInstanceId: 'runtime-owner', globalBus });
  *
  * // Adapter is ready to handle requests via bus
- * // e.g., MakaioBus.request(AdapterSubjects.startAgent, { adapterId: adapter.adapterId, ... })
+ * // e.g., globalBus.request(AdapterSubjects.startAgent, { adapterId: adapter.adapterId, ... })
  * ```
  */
 export async function createClaudeAdapter(config: ClaudeCodeAdapterConfig): Promise<ClaudeCodeAdapter> {
